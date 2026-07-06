@@ -1,9 +1,10 @@
 # WOM-kit Capability Matrix
 
-Status: v0.3.186 adopt stop-after-plan and doctor mint-receipt continuation progress checkpoint
+Status: v0.3.187 AI artifact lifecycle inventory checkpoint
 Date: 2026-07-07
-Version: v0.3.186, release candidate
+Version: v0.3.187, release candidate
 
+Previous checkpoint: Status: v0.3.186 adopt stop-after-plan and doctor mint-receipt continuation progress checkpoint
 Previous checkpoint: Status: v0.3.185 adopt nonmatching resume diagnostics and doctor mint-link progress checkpoint
 Previous checkpoint: Status: v0.3.184 zet frontmatter viewer contract checkpoint
 Previous checkpoint: Status: v0.3.183 adopt resume-gap diagnostics and doctor frontmatter progress checkpoint
@@ -95,12 +96,12 @@ This matrix is a plain-language map of what WOM-kit can do today and what is onl
 
 Read it as a safety label. A row marked `read-only preview` means WOM-kit can inspect or plan something and return JSON, but it does not write files. A row marked `approval-gated write` means the CLI has a human-reviewed write path with explicit approval fields. A row marked `documented-only` means the idea is described, but no product command exists yet.
 
-Current checkpoint note (v0.3.186): basoon's v0.3.185 revalidation confirmed the
-nonmatching-provider summary and narrowed the next doctor stall to after
-`target mint receipt link ok`. Adopt now offers `--stop-after-plan` for a read-only
-approve-shaped diagnostic run and reports same-store `wom_uploaded` raw-vs-gating
-counts, while `doctor --progress` shows the first three mint receipts in detail and
-prints `completed receipt checks` for detailed receipt scans.
+Current checkpoint note (v0.3.187): WOM now has a read-only AI artifact lifecycle
+inventory. `archive ai-artifact-inventory --dry-run` scans only allowlisted AI
+artifact/scratch roots, reports `unreviewed_ai_artifact` versus
+`source_intake_recorded` AI artifact candidates, and recommends preserve-as-objet / derived-text / draft-zet /
+defer / discard-with-receipt fates without reading file bodies, writing files,
+calling providers, or echoing archive-relative paths by default.
 
 ## Status Legend
 
@@ -185,6 +186,7 @@ prints `completed receipt checks` for detailed receipt scans.
 | Runtime canonical entrypoints | `read-only preview` | none | Runtime-context field `canonical_entrypoints` names `archive.yml` as the start-here file and lists archive-relative authoritative files/directories such as `AGENTS.md`, `source-bindings.yml`, `provider-bindings.yml`, `zettels/`, `inbox/`, object and derived-text manifests, views, and schema context. It also returns `ai_runtime_order`, `recommended_first_commands`, and `material_link_routes` so AI runtimes can discover the `runtime-context` -> `AGENTS.md` -> `ai-response-concept-guide` handoff, the read-only `operator-feedback-plan` friction-recording route (v0.3.160, appended entries only), and choose read-only Notion material-link routes without inventing provider calls. It reads no file bodies, writes nothing, calls no providers, reads no secrets, and echoes no local absolute paths by default. |
 | AI operational context rehydration | `approval-gated write` | dry-run reads first; CLI approve writes `ops/operational-context.yml` plus one receipt | Runtime-context field `operational_context` reads the bounded archive-internal `ops/operational-context.yml` record so AI runtimes can rehydrate mission, scope, state, gotchas, reviewed decisions, and next actions before broad archive reads. CLI `archive operational-context <archive-root> --dry-run --format json` reads the current record or validates a staged candidate. CLI `archive operational-context <archive-root> --record workbench/operational-context.next.yml --approve --reviewed-by <actor> --format json` replaces the record and writes `receipts/operational-context/*.operational-context.json`. Candidate values that contain provider URLs, local paths, email-like account labels, tokens, or secret-like values are blocked before write. It does not replace zets or receipts, scan broad archive bodies, call providers, read secrets, auto-resolve contradictory notes, or expose an MCP write tool. |
 | AI usage observability | `approval-gated write` | dry-run estimates/reports; CLI approve writes token usage receipt only | `archive ai-usage-plan --dry-run` estimates explicitly included archive-relative UTF-8 context files against a token budget without echoing file contents, and blocks source/object byte-store paths. `archive ai-usage-record --dry-run|--approve` writes reviewed non-secret token usage receipts under `receipts/ai-usage/` with task id, runtime, model, purpose, input/output/total tokens, optional cached/reasoning counters, and optional budget/planned-token metadata. `archive ai-usage-report --dry-run` aggregates receipts by runtime, model, and purpose. This is a local usage ledger baseline: it stores no prompts or responses, calls no LLM providers, retrieves no live billing/usage from providers, reads no source object bytes, reads no secrets, writes no zets, and does not enforce hard runtime budgets yet. |
+| AI artifact lifecycle inventory | `read-only preview` | none | `archive ai-artifact-inventory --dry-run`, aliases `archive ai-artifact-status` and `archive ai-residue-inventory`, inventories AI-generated artifact candidates only under allowlisted roots (`.wom-scratch/`, `workbench/ai-scratch/`, `staging/ai/inbox/`, `staging/ai/reviewed/`). It classifies likely artifact kinds such as JSONL chat logs, AI plans, working notes, summaries, report drafts, and patch notes by metadata only; gives each listed item an `artifact_ref`; marks whether a matching AI artifact `source-intake-record` already exists; and recommends possible fates: preserve raw bytes as an objet, register derived text, distill to a draft zet, link to an existing zet, defer review, or discard only with receipt evidence. It reads no file bodies, calculates no content hashes, writes no files, deletes nothing, creates no zets, calls no providers, and does not echo archive-relative paths unless `--show-relative-paths` is explicitly used for local operator review. |
 | Profile registry list/resolve | `read-only preview` | none | Resolves the intended WOM profile before runtime-context or draft work. |
 | Profile wallet preview | `read-only preview` | none | Wallet-ready identity model only. No keys, signing, or blockchain calls. |
 | GitHub repository setup plan | `approval-gated write` | CLI approve writes local provider metadata/receipt only | Does not create a repository, configure remotes, push, call GitHub APIs, or run OAuth. |

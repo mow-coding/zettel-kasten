@@ -95,7 +95,9 @@ and receipts before any cleanup.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.3.7` | current public pre-release | `wom-kit/docs/releases/v0.3.7.md` |
+| `v0.3.187` | current public pre-release | `wom-kit/docs/releases/v0.3.187.md` |
+| `v0.3.186` | superseded public pre-release | `wom-kit/docs/releases/v0.3.186.md` |
+| `v0.3.7` | superseded public pre-release | `wom-kit/docs/releases/v0.3.7.md` |
 | `v0.3.6` | superseded public pre-release | `wom-kit/docs/releases/v0.3.6.md` |
 | `v0.3.5` | superseded public pre-release | `wom-kit/docs/releases/v0.3.5.md` |
 | `v0.3.4` | superseded public pre-release | `wom-kit/docs/releases/v0.3.4.md` |
@@ -162,6 +164,25 @@ and receipts before any cleanup.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.3.186` To `v0.3.187`
+
+One additive AI artifact lifecycle inventory patch. No migration is required.
+
+Operator-visible notes:
+
+- `archive ai-artifact-inventory <archive-root> --dry-run --format json` inventories AI-generated
+  artifact candidates under allowlisted roots only: `.wom-scratch/`, `workbench/ai-scratch/`,
+  `staging/ai/inbox/`, and `staging/ai/reviewed/`.
+- The inventory reports whether candidates are still `unreviewed_ai_artifact` or already have a
+  matching AI artifact `source-intake-record`.
+- JSONL chat logs and other AI-generated files are treated as possible raw evidence to preserve as
+  objets, not as canonical zet bodies. The safe path is raw artifact -> objet/source evidence ->
+  derived/distilled text -> draft zet -> human review -> canonical zet.
+- The command reads no file bodies, calculates no content hashes, writes nothing, deletes nothing,
+  creates no zets, calls no providers, and hides archive-relative paths unless
+  `--show-relative-paths` is explicitly used for local operator review.
+- See `wom-kit/docs/releases/v0.3.187.md`.
 
 ## From `v0.3.185` To `v0.3.186`
 

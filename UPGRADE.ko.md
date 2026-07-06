@@ -87,7 +87,9 @@ zet, receipt로 보존해야 합니다.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.3.4` | current public pre-release | `wom-kit/docs/releases/v0.3.4.md` |
+| `v0.3.187` | current public pre-release | `wom-kit/docs/releases/v0.3.187.md` |
+| `v0.3.186` | superseded public pre-release | `wom-kit/docs/releases/v0.3.186.md` |
+| `v0.3.4` | superseded public pre-release | `wom-kit/docs/releases/v0.3.4.md` |
 | `v0.3.3` | superseded public pre-release | `wom-kit/docs/releases/v0.3.3.md` |
 | `v0.3.2` | superseded public pre-release | `wom-kit/docs/releases/v0.3.2.md` |
 | `v0.3.1` | superseded public pre-release | `wom-kit/docs/releases/v0.3.1.md` |
@@ -151,6 +153,25 @@ zet, receipt로 보존해야 합니다.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.3.186` To `v0.3.187`
+
+AI artifact lifecycle inventory를 추가하는 additive patch입니다. 마이그레이션은 필요 없습니다.
+
+운영자가 볼 변화:
+
+- `archive ai-artifact-inventory <archive-root> --dry-run --format json`은 정해진 AI artifact
+  root만 점검합니다: `.wom-scratch/`, `workbench/ai-scratch/`, `staging/ai/inbox/`,
+  `staging/ai/reviewed/`.
+- 후보가 아직 `unreviewed_ai_artifact`인지, 아니면 matching AI artifact
+  `source-intake-record`가 이미 있는지 보여줍니다.
+- JSONL 대화 로그와 다른 AI 생성 파일은 canonical zet 본문으로 바로 넣는 대상이 아니라,
+  필요하면 raw evidence로 objet 보존할 수 있는 후보입니다. 안전한 경로는 raw artifact ->
+  objet/source evidence -> derived/distilled text -> draft zet -> human review -> canonical zet입니다.
+- 이 명령은 파일 본문을 읽지 않고, content hash를 계산하지 않고, 파일을 쓰거나 지우지 않고,
+  zet을 만들지 않고, provider를 호출하지 않으며, `--show-relative-paths`를 명시하지 않는 한
+  archive-relative path도 출력하지 않습니다.
+- `wom-kit/docs/releases/v0.3.187.md`를 보세요.
 
 ## From `v0.3.185` To `v0.3.186`
 

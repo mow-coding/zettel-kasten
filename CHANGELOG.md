@@ -6,6 +6,23 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.187 - 2026-07-07
+
+AI artifact lifecycle inventory checkpoint. Additive; no migration.
+
+- **AI artifact inventory.** Added read-only `archive ai-artifact-inventory --dry-run`
+  (aliases `ai-artifact-status`, `ai-residue-inventory`) for bounded inventories of
+  AI-generated working files and chat logs under `.wom-scratch/`,
+  `workbench/ai-scratch/`, `staging/ai/inbox/`, and `staging/ai/reviewed/`.
+- **Fate-oriented status board.** The inventory reports `unreviewed_ai_artifact` versus
+  `source_intake_recorded` candidates, artifact kinds such as `ai_chat_log_jsonl`,
+  and safe next fates: preserve raw bytes as an objet, register derived text, distill
+  to a draft zet, link to an existing zet, defer review, or discard with receipt evidence.
+- **Privacy boundary.** The command reads no file bodies, calculates no content hashes,
+  writes nothing, deletes nothing, creates no zets, calls no providers, and hides
+  archive-relative paths unless `--show-relative-paths` is explicitly used for local
+  operator review.
+
 ## v0.3.186 - 2026-07-07
 
 Basoon v0.3.185 revalidation follow-up for read-only adopt diagnostics and the next doctor mint-receipt progress gap. Additive; no migration.

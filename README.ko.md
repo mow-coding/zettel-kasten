@@ -31,10 +31,10 @@ tag 목록을 여기서 다시 키우지 않습니다.
 현재 공개 기준:
 
 ```text
-v0.3.186 pre-release
+v0.3.187 pre-release
 ```
 
-이전 공개 기준: v0.3.185 pre-release.
+이전 공개 기준: v0.3.186 pre-release.
 
 전체 릴리스 이력은 [CHANGELOG.md](CHANGELOG.md)와 [wom-kit/docs/releases/](wom-kit/docs/releases/)를 보세요.
 
@@ -84,7 +84,7 @@ Roadmap 요약: `v0.1.x`는 아이디어/프로토콜 언어 라인, `v0.2.x`는
 
 ### Privacy와 redaction
 
-- `zet-self-contained-check`와 AI scratch lifecycle 관리. 공개 외부 인용 URL은 zet 본문이나 `source_refs`에 남길 수 있고, private provider locator와 원본 파일 위치는 여전히 durable WOM ref가 필요하며, `.wom-scratch/`와 `workbench/ai-scratch/`는 git-ignore되는 scratch 영역입니다. 승인된 mint는 명시된 scratch ref를 canonical zet에서 제거하고 cleanup receipt를 남기며 해당 scratch 파일을 소비할 수 있습니다.
+- `zet-self-contained-check`, AI scratch lifecycle 관리, read-only AI artifact inventory. 공개 외부 인용 URL은 zet 본문이나 `source_refs`에 남길 수 있고, private provider locator와 원본 파일 위치는 여전히 durable WOM ref가 필요하며, `.wom-scratch/`, `workbench/ai-scratch/`, `staging/ai/inbox/`, `staging/ai/reviewed/`는 제한된 AI artifact/scratch 표면입니다. `archive ai-artifact-inventory --dry-run`은 파일 본문을 읽지 않고 기본적으로 경로를 출력하지 않으며, 파일 쓰기/삭제, zet 생성, provider 호출 없이 AI 산출물 후보의 운명 후보를 보여줍니다. 승인된 mint는 명시된 scratch ref를 canonical zet에서 제거하고 cleanup receipt를 남기며 해당 scratch 파일을 소비할 수 있습니다.
 - read-only `archive secret-signal-taxonomy --dry-run`으로 AI 운영자가 harmless concept word와 safe ref를 실제 secret-like value, private locator, account identifier, unknown sensitive context와 구분하게 합니다.
 
 ### AI operator 계약과 runtime handoff

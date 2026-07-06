@@ -9137,6 +9137,46 @@ def command_ai_scratch_gc(args: argparse.Namespace) -> int:
     return 0 if result.get("ok", True) else 1
 
 
+def command_ai_artifact_inventory(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("ai-artifact-inventory is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.ai_artifact_inventory(
+            Path(args.archive_root),
+            include_roots=args.include_root,
+            max_items=args.max_items,
+            show_relative_paths=args.show_relative_paths,
+            dry_run=True,
+        )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        state = result.get("inventory_state") or "unknown"
+        print(f"AI artifact inventory {state}.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Candidates: {result.get('total_candidate_count', 0)}")
+        print(f"Listed: {result.get('item_count', 0)}")
+        counts = result.get("fate_counts") if isinstance(result.get("fate_counts"), dict) else {}
+        if counts:
+            print("Fates:")
+            for key in sorted(counts):
+                print(f"- {key}: {counts[key]}")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result.get("ok", True) else 1
+
+
 def command_retire_draft(args: argparse.Namespace) -> int:
     if args.dry_run and args.approve:
         print("Use either --dry-run or --approve, not both.", file=sys.stderr)
@@ -15804,6 +15844,27 @@ def build_parser() -> argparse.ArgumentParser:
     ai_scratch_gc.add_argument("--reviewed-by", help="Reviewer id required when --approve is used, e.g. person:me.")
     ai_scratch_gc.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     ai_scratch_gc.set_defaults(func=command_ai_scratch_gc)
+
+    ai_artifact_inventory = subcommands.add_parser(
+        "ai-artifact-inventory",
+        aliases=["ai-artifact-status", "ai-residue-inventory"],
+        help="Read-only inventory of AI-generated artifact candidates in allowlisted scratch/staging folders.",
+    )
+    ai_artifact_inventory.add_argument("archive_root", help="Archive root to inspect.")
+    ai_artifact_inventory.add_argument(
+        "--include-root",
+        action="append",
+        help="Archive-relative AI artifact root to include; must stay under .wom-scratch/, workbench/ai-scratch/, staging/ai/inbox/, or staging/ai/reviewed/.",
+    )
+    ai_artifact_inventory.add_argument("--max-items", type=int, default=100, help="Maximum listed candidates; capped at 1000.")
+    ai_artifact_inventory.add_argument(
+        "--show-relative-paths",
+        action="store_true",
+        help="Show archive-relative paths for local operator review; default output uses artifact refs only.",
+    )
+    ai_artifact_inventory.add_argument("--dry-run", action="store_true", help="Required; read-only inventory.")
+    ai_artifact_inventory.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    ai_artifact_inventory.set_defaults(func=command_ai_artifact_inventory)
 
     mint_batch = subcommands.add_parser(
         "mint-zet-batch",
