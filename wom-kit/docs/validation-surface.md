@@ -71,6 +71,11 @@ and never deletes. Its process exit status is also a safety signal:
 Automation should still read the JSON report for the detailed file statuses, and
 must treat cleanup as approved only when `safe_to_cleanup` is `true`.
 
+Use `--progress` when a large staged folder or large source/store file could make
+the command appear silent. Progress goes to stderr and contains only stage names,
+counts, and large-file byte totals; it does not add staged file names, object ids,
+local absolute paths, provider URLs, tokens, or secret values.
+
 ## What none of these commands do
 
 Doctor/validate/preflight are read-only. `repair-gitignore --approve` appends

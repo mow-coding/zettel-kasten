@@ -6,6 +6,18 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.181 - 2026-07-06
+
+Staged cleanup operator progress. Additive; no migration.
+
+- **`archive staged-cleanup-check --progress`.** The report-only cleanup verifier can now
+  stream content-free stage progress to stderr while it loads object records, scans zettel
+  references, walks staged entries, verifies files, and hashes large source/store files.
+- **Large-file liveness.** `sha256_path` gained an optional progress callback; existing callers
+  keep the same digest behavior, while staged cleanup uses it only for large-file hash progress.
+- **Regression tests.** Added coverage for content-free staged-cleanup progress, CLI progress
+  output, and digest-preserving hash progress callbacks.
+
 ## v0.3.180 - 2026-07-06
 
 Large-archive performance hardening for adopt planning and doctor receipt checks. Additive; no

@@ -152,6 +152,20 @@ zet, receipt로 보존해야 합니다.
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
 
+## From `v0.3.180` To `v0.3.181`
+
+additive operator-progress patch입니다. 마이그레이션은 필요 없습니다.
+
+운영자가 볼 변화:
+
+- `archive staged-cleanup-check <root> --staged <folder> --dry-run --progress`가 manifest
+  로딩, zettel reference 스캔, staged entry walk, file verify, 큰 staged/store file hash 중
+  content-free 진행률을 stderr로 출력합니다.
+- `--progress`를 생략하면 기존 기본 출력과 result JSON은 그대로입니다.
+- progress line에는 stage name과 count/byte total만 들어갑니다. staged file name, object id,
+  local absolute path, provider URL, token, secret value는 새로 넣지 않습니다.
+- `wom-kit/docs/releases/v0.3.181.md`를 보세요.
+
 ## From `v0.3.179` To `v0.3.180`
 
 성능을 단단하게 만든 additive 패치입니다. 마이그레이션은 필요 없습니다.

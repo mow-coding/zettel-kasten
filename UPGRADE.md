@@ -163,6 +163,20 @@ and receipts before any cleanup.
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
 
+## From `v0.3.180` To `v0.3.181`
+
+One additive operator-progress patch. No migration is required.
+
+Operator-visible notes:
+
+- `archive staged-cleanup-check <root> --staged <folder> --dry-run --progress` now streams
+  content-free progress to stderr while it loads manifests, scans zettel references, walks staged
+  entries, verifies files, and hashes large staged/store files.
+- Default command output and result JSON are unchanged when `--progress` is omitted.
+- Progress lines include stage names and counts/byte totals only. They do not add staged file
+  names, object ids, local absolute paths, provider URLs, tokens, or secret values.
+- See `wom-kit/docs/releases/v0.3.181.md`.
+
 ## From `v0.3.179` To `v0.3.180`
 
 One additive performance-hardening patch. No migration is required.
