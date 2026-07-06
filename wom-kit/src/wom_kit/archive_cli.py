@@ -849,6 +849,9 @@ class Doctor:
         self.progress_callback = progress_callback
         self.use_zettel_index_cache = use_zettel_index_cache
         self._zettel_index_cache: dict[str, dict[str, Any] | None] = {}
+        self._file_sha256_cache: dict[str, str] = {}
+        self._zettel_frontmatter_cache: dict[str, dict[str, Any] | None] = {}
+        self._zettel_bom_cache: dict[str, bool] = {}
 
     def run(self) -> list[Diagnostic]:
         if not self.archive_root.exists():
@@ -935,6 +938,60 @@ class Doctor:
     def _progress(self, stage: str, message: str, current: int | None, total: int | None) -> None:
         if self.progress_callback is not None:
             self.progress_callback(stage, message, current, total)
+
+    def _file_cache_key(self, path: Path) -> str:
+        try:
+            return archive_relative_path(path, self.archive_root)
+        except (ArchivePathError, OSError, RuntimeError, ValueError):
+            try:
+                return str(path.resolve())
+            except (OSError, RuntimeError, ValueError):
+                return str(path)
+
+    def _sha256_file_cached(self, path: Path) -> str:
+        key = self._file_cache_key(path)
+        if key not in self._file_sha256_cache:
+            self._file_sha256_cache[key] = sha256_file(path)
+        return self._file_sha256_cache[key]
+
+    def _remember_zettel_frontmatter(
+        self,
+        path: Path,
+        data: dict[str, Any] | None,
+        *,
+        bom: bool | None = None,
+    ) -> None:
+        key = self._file_cache_key(path)
+        self._zettel_frontmatter_cache[key] = data
+        if bom is not None:
+            self._zettel_bom_cache[key] = bom
+
+    def _load_zettel_frontmatter_cached(self, path: Path) -> dict[str, Any] | None:
+        key = self._file_cache_key(path)
+        if key in self._zettel_frontmatter_cache:
+            return self._zettel_frontmatter_cache[key]
+        text = path.read_text(encoding="utf-8-sig")
+        self._zettel_has_bom_cached(path)
+        frontmatter = parse_frontmatter(text)
+        if frontmatter is None:
+            self._zettel_frontmatter_cache[key] = None
+            return None
+        data = self._load_yaml_text(frontmatter, path)
+        if isinstance(data, dict):
+            self._remember_zettel_frontmatter(path, data)
+            return data
+        self._zettel_frontmatter_cache[key] = None
+        return None
+
+    def _zettel_has_bom_cached(self, path: Path) -> bool:
+        key = self._file_cache_key(path)
+        if key not in self._zettel_bom_cache:
+            try:
+                with path.open("rb") as handle:
+                    self._zettel_bom_cache[key] = handle.read(3) == b"\xef\xbb\xbf"
+            except OSError:
+                self._zettel_bom_cache[key] = False
+        return self._zettel_bom_cache[key]
 
     def error(
         self,
@@ -1546,10 +1603,12 @@ class Doctor:
         cached = self._indexed_zettel_cache_for_path(path)
         if cached is not None:
             data = cached["frontmatter"]
+            self._remember_zettel_frontmatter(path, data)
             if cached.get("forbidden_location_reference_found"):
                 self.error("provider_url_in_zettel", "Zettel appears to contain a provider URL or local absolute path.", path)
         else:
             text = path.read_text(encoding="utf-8")
+            self._zettel_bom_cache[self._file_cache_key(path)] = text.startswith("\ufeff")
             if contains_forbidden_location_reference(text):
                 self.error("provider_url_in_zettel", "Zettel appears to contain a provider URL or local absolute path.", path)
 
@@ -1562,6 +1621,7 @@ class Doctor:
             if not isinstance(data, dict):
                 self.error("zettel_frontmatter_invalid", "Zettel frontmatter must be a YAML object.", path)
                 return
+            self._remember_zettel_frontmatter(path, data)
             self._warn_unquoted_yaml_timestamps(data, path)
         self._check_schema(data, "zettel-frontmatter.schema.json", path)
 
@@ -1836,25 +1896,19 @@ class Doctor:
             self._check_mint_receipt_file_ref(data, path, "snapshot")
 
             if target_path is not None:
-                frontmatter = parse_frontmatter(target_path.read_text(encoding="utf-8-sig"))
-                if frontmatter is None:
+                target_data = self._load_zettel_frontmatter_cached(target_path)
+                if target_data is None:
                     self.error("mint_receipt_target_frontmatter_missing", "Mint receipt target has no zettel frontmatter.", path)
                     continue
                 # R7: BOM stays visible. A UTF-8 BOM is real byte drift that also
                 # drifts the mint-receipt sha, so name the cause as a WARN advisory
                 # (not info, which doctor filters out of --strict).
-                try:
-                    if target_path.read_bytes().startswith(b"\xef\xbb\xbf"):
-                        self.warn(
-                            "zettel_has_bom",
-                            "File has a UTF-8 BOM; WOM does not write BOMs. Run archive remint-reconcile after confirming content.",
-                            target_path,
-                        )
-                except OSError:
-                    pass
-                target_data = self._load_yaml_text(frontmatter, target_path)
-                if not isinstance(target_data, dict):
-                    continue
+                if self._zettel_has_bom_cached(target_path):
+                    self.warn(
+                        "zettel_has_bom",
+                        "File has a UTF-8 BOM; WOM does not write BOMs. Run archive remint-reconcile after confirming content.",
+                        target_path,
+                    )
                 mint = target_data.get("mint") if isinstance(target_data.get("mint"), dict) else {}
                 receipt_relative = self._display_path(path)
                 if mint.get("receipt_path") != receipt_relative:
@@ -2162,7 +2216,7 @@ class Doctor:
         if not isinstance(expected_sha, str) or not SHA256_RE.match(expected_sha):
             self.error("mint_retired_draft_sha_invalid", f"Retired draft receipt {section}.sha256 must be a lowercase SHA-256 hex digest.", path)
             return
-        actual_sha = sha256_file(resolved)
+        actual_sha = self._sha256_file_cached(resolved)
         if actual_sha != expected_sha:
             if section == "target" and self._target_sha_evolved_by_edge_receipts(data, resolved, expected_sha):
                 self.info(
@@ -2239,7 +2293,7 @@ class Doctor:
         if not isinstance(expected_sha, str) or not SHA256_RE.match(expected_sha):
             self.error("mint_receipt_sha_invalid", f"Mint receipt {section}.sha256 must be a lowercase SHA-256 hex digest.", path)
             return resolved
-        actual_sha = sha256_file(resolved)
+        actual_sha = self._sha256_file_cached(resolved)
         if actual_sha != expected_sha:
             if section == "target" and self._target_sha_evolved_by_edge_receipts(data, resolved, expected_sha):
                 self.info(

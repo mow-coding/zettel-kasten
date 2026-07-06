@@ -152,6 +152,21 @@ zet, receipt로 보존해야 합니다.
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
 
+## From `v0.3.179` To `v0.3.180`
+
+성능을 단단하게 만든 additive 패치입니다. 마이그레이션은 필요 없습니다.
+
+운영자가 볼 변화:
+
+- **대형 `object-storage-adopt-existing --key-map` plan resolution이 object마다 manifest를
+  다시 스캔하지 않습니다.** adopt plan은 실행마다 manifest index를 한 번 만들고 object-id를
+  O(1)로 찾습니다. 기존 first-record-wins 의미는 유지합니다.
+- **`archive doctor` receipt stage가 실행별 파일 증거 cache를 재사용합니다.** 같은 doctor
+  실행 안에서 파일 SHA-256, zettel frontmatter, BOM 확인 결과를 재사용하여 `mint-receipts`
+  같은 receipt 검사 단계의 반복 디스크 읽기를 줄입니다.
+- 기존 명령 형태, progress 출력, result JSON, receipt 형식은 바뀌지 않습니다.
+- `wom-kit/docs/releases/v0.3.180.md`를 보세요.
+
 ## From `v0.3.178` To `v0.3.179`
 
 내용을 줄인 진단 출력만 추가된 릴리즈입니다. 마이그레이션은 필요 없습니다.
