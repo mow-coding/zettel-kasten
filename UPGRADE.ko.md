@@ -152,6 +152,22 @@ zet, receipt로 보존해야 합니다.
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
 
+## From `v0.3.183` To `v0.3.184`
+
+사람이 읽는 zet viewer 표면을 보강한 additive patch입니다. 마이그레이션은 필요 없습니다.
+
+운영자가 볼 변화:
+
+- `archive read-zettel --section document`는 한 zet을 WOM 문서 화면으로 읽습니다.
+  frontmatter detail은 숨기고 text output은 본문만 출력합니다.
+- JSON output에는 `viewer_mode`, `frontmatter_hidden`,
+  `raw_frontmatter_delimiters_echoed: false`가 들어갑니다. 단순 viewer가 저장 metadata와
+  문서 본문을 추측 없이 분리할 수 있게 하기 위한 신호입니다.
+- canonical Markdown 파일 형식에는 여전히 id, provenance, edge, visibility, receipt를 위한
+  YAML frontmatter가 있습니다. 이번 변경은 저장 형식이 아니라 읽기 표면에 대한 변경입니다.
+- `wom-kit/docs/zet-frontmatter-viewer-contract.md`와
+  `wom-kit/docs/releases/v0.3.184.md`를 보세요.
+
 ## From `v0.3.182` To `v0.3.183`
 
 resume 진단과 progress를 보강한 additive patch입니다. 마이그레이션은 필요 없습니다.

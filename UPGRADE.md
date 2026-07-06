@@ -163,6 +163,22 @@ and receipts before any cleanup.
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
 
+## From `v0.3.183` To `v0.3.184`
+
+One additive human-readable zet viewer patch. No migration is required.
+
+Operator-visible notes:
+
+- `archive read-zettel --section document` now gives a WOM-rendered document read of one zet:
+  frontmatter details are hidden and text output prints only the body.
+- JSON output includes `viewer_mode`, `frontmatter_hidden`, and
+  `raw_frontmatter_delimiters_echoed: false` so simple viewers can separate storage metadata from
+  document content.
+- The canonical Markdown file format still uses YAML frontmatter for ids, provenance, edges,
+  visibility, and receipts. The change is about the reading surface, not the storage format.
+- See `wom-kit/docs/zet-frontmatter-viewer-contract.md` and
+  `wom-kit/docs/releases/v0.3.184.md`.
+
 ## From `v0.3.182` To `v0.3.183`
 
 One additive resume-diagnostics and progress patch. No migration is required.

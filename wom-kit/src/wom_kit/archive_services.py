@@ -2534,7 +2534,7 @@ FRONTMATTER_V03_MIGRATION_COMMAND = (
 )
 FRONTMATTER_V03_LEGACY_REF_TYPE = "legacy_provenance_source"
 FRONTMATTER_V03_LEGACY_REF_ROLE = "legacy_provenance_source"
-ZETTEL_READ_SECTIONS = {"overview", "body", "details", "all"}
+ZETTEL_READ_SECTIONS = {"overview", "body", "document", "details", "all"}
 ZETTEL_OVERVIEW_GIST_CHAR_LIMIT = 360
 ZETTEL_OVERVIEW_FRONTMATTER_FIELDS = ("gist", "summary", "abstract", "description", "overview")
 ZETTEL_EDGE_EXTERNAL_REF_RE = re.compile(r"^zet:(?P<source>[A-Za-z0-9_-]+):(?P<external_id>[A-Za-z0-9_-]+)$")
@@ -4931,7 +4931,7 @@ def read_zettel(
     if not zettel_id and not relative_path:
         raise ArchiveServiceError("Provide zettel_id or path.")
     if section not in ZETTEL_READ_SECTIONS:
-        raise ArchiveServiceError("section must be one of: overview, body, details, all")
+        raise ArchiveServiceError("section must be one of: overview, body, document, details, all")
 
     path = resolve_zettel_path(root, zettel_id=zettel_id, relative_path=relative_path)
     frontmatter, body = split_zettel_text(path.read_text(encoding="utf-8"))
@@ -4946,11 +4946,14 @@ def read_zettel(
             "body": "",
             "section": section,
             "overview": overview,
+            "viewer_mode": "redacted",
+            "frontmatter_hidden": True,
+            "raw_frontmatter_delimiters_echoed": False,
             "redacted": True,
             "warnings": overview_warnings,
         }
     overview, overview_warnings = zettel_first_read_summary(frontmatter, body)
-    include_body = section in {"body", "all"}
+    include_body = section in {"body", "document", "all"}
     include_full_frontmatter = section in {"body", "details", "all"}
     return {
         "path": archive_relative_path(path, root),
@@ -4960,6 +4963,9 @@ def read_zettel(
         "overview": overview,
         "body_omitted": not include_body,
         "details_omitted": not include_full_frontmatter,
+        "viewer_mode": "human_document" if section == "document" else "structured_read",
+        "frontmatter_hidden": not include_full_frontmatter,
+        "raw_frontmatter_delimiters_echoed": False,
         "redacted": False,
         "warnings": unique_preserve_order(overview_warnings),
     }
@@ -37508,6 +37514,8 @@ def ai_response_concept_guide(
             "escalate_link_type_model_gaps_before_mapping": True,
             "range_tilde_requires_single_tilde_with_spaces": True,
             "double_tilde_reserved_for_markdown_strikethrough": True,
+            "frontmatter_is_storage_metadata_not_document_body": True,
+            "prefer_document_view_for_human_reading": True,
             "translate_git_infra_jargon_for_humans": True,
         },
         "sections": sections,
@@ -37582,6 +37590,10 @@ def ai_response_concept_guide(
                 "command": "archive zet-markdown-style-guide <archive-root> --topic range_tilde --dry-run --format json",
             },
             {
+                "human_intent": "show a canonical zet as a human-readable document",
+                "command": "archive read-zettel <archive-root> --zettel-id <id> --section document",
+            },
+            {
                 "human_intent": "look up plain-language phrasing for git/infrastructure jargon before answering a human",
                 "command": "archive ai-response-concept-guide <archive-root> --topic git_infra_terms --locale en-US --dry-run --format json",
             },
@@ -37631,6 +37643,7 @@ def ai_response_concept_guide(
             "notion_client_fixture_request_package_available": True,
             "zet_markdown_style_guide_available": True,
             "range_tilde_strikethrough_guard_available": True,
+            "zet_document_view_available": True,
             "git_infra_term_translation_available": True,
             "mcp_tool_available": False,
             "object_upload_adapter_implemented": False,
@@ -37699,13 +37712,22 @@ def zet_markdown_style_section() -> dict[str, Any]:
             "avoid_examples": ["A~~B", "A ~~ B", "A~B"],
             "why": "Many Markdown renderers treat double tilde as strikethrough, so range notation must not look like a strikethrough marker.",
         },
+        "frontmatter_viewer_rule": {
+            "rule_id": "frontmatter_storage_metadata_document_view_hidden",
+            "plain_meaning": "YAML frontmatter is canonical storage metadata; it is not the human document body.",
+            "recommended_read_command": "archive read-zettel <archive-root> --zettel-id <id> --section document",
+            "viewer_expectation": "Human-facing viewers should hide frontmatter by default or show it in a folded metadata panel.",
+            "ai_guidance": "When presenting a zet as a document, show the body first and mention metadata only when the user asks or it affects a decision.",
+        },
         "authoring_contract": {
             "range_tilde_requires_single_tilde_with_spaces": True,
             "double_tilde_reserved_for_intentional_strikethrough": True,
             "literal_tilde_inside_code_may_use_code_span": True,
             "prefer_words_when_space_would_be_ambiguous": True,
+            "frontmatter_is_storage_metadata_not_document_body": True,
+            "human_document_view_hides_frontmatter": True,
         },
-        "safe_script": "For ranges, write `A ~ B`. Do not write `A~~B` or `A ~~ B` unless you intentionally want Markdown strikethrough.",
+        "safe_script": "For ranges, write `A ~ B`. For human reading, use `read-zettel --section document` so YAML frontmatter stays metadata instead of document prose.",
     }
 
 

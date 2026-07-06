@@ -33,10 +33,10 @@ wom-kit/docs/releases/ - do not re-grow baseline ladders or tag lists here.
 Current public baseline:
 
 ```text
-v0.3.183 pre-release
+v0.3.184 pre-release
 ```
 
-Previous public baseline: v0.3.182 pre-release.
+Previous public baseline: v0.3.183 pre-release.
 
 Full release history: see [CHANGELOG.md](CHANGELOG.md) and [wom-kit/docs/releases/](wom-kit/docs/releases/).
 
@@ -88,7 +88,7 @@ approval-gated write, or docs-only), see the
 
 ### Retrieval & views
 
-- read-only preview layers for runtime context, profiles, source/objet intake, overview-first zet reading, block headers with first-read summaries, and prompt boundaries,
+- read-only preview layers for runtime context, profiles, source/objet intake, overview-first zet reading plus a human document view that hides raw YAML frontmatter, block headers with first-read summaries, and prompt boundaries,
 - generated index health checks, saved view health, facet role diagnostics, saved view recommendations,
 - read-only objet reference resolution, presigned URL planning, and zettel objet link previews for mapping `sha256:<hex>` refs to safe local/external candidates,
 
@@ -272,6 +272,7 @@ For the full design philosophy, including the human data primitive model, AX rat
 - [Tiro Import Plan](wom-kit/docs/tiro-import-plan.md)
 - [Tiro Lossless Recovery](wom-kit/docs/tiro-lossless-recovery.md)
 - [zet Markdown Style Guide](wom-kit/docs/zet-markdown-style-guide.md)
+- [zet Frontmatter Viewer Contract](wom-kit/docs/zet-frontmatter-viewer-contract.md)
 - [Connected Accounts](wom-kit/docs/connected-accounts.md)
 - [Credential Semantic Extraction Recipe](wom-kit/docs/credential-semantic-extraction-recipe.md)
 - [Credential Plaintext Migration Plan](wom-kit/docs/credential-plaintext-migration-plan.md)
