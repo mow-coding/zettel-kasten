@@ -2549,6 +2549,18 @@ AI_SCRATCH_REFERENCE_RE = re.compile(
     r"(?<![A-Za-z0-9_./-])(?P<path>(?:\.wom-scratch|workbench/ai-scratch)/[A-Za-z0-9._/@+=,-]+)"
 )
 AI_SCRATCH_GC_RECEIPTS_DIR = "receipts/scratch-gc"
+AI_ARTIFACT_INVENTORY_ALLOWED_ROOT_PREFIXES = (
+    ".wom-scratch/",
+    "workbench/ai-scratch/",
+    "staging/ai/inbox/",
+    "staging/ai/reviewed/",
+)
+AI_ARTIFACT_INVENTORY_DEFAULT_ROOTS = (
+    ".wom-scratch/",
+    "workbench/ai-scratch/",
+    "staging/ai/inbox/",
+    "staging/ai/reviewed/",
+)
 ZET_QUALITY_RULES_FILENAME = "zet-quality-rules.yml"
 ZET_QUALITY_DOCUMENT_TYPES = {
     "raw_note",
@@ -12437,6 +12449,231 @@ def zettel_source_refs_without_ai_scratch(frontmatter: dict[str, Any]) -> list[d
         return None
     kept = [item for item in source_refs if not (isinstance(item, dict) and source_ref_is_ai_scratch(item))]
     return [json_safe(item) if isinstance(item, dict) else {"value": str(item)} for item in kept]
+
+
+def ai_artifact_inventory_normalize_root(raw_root: str, blockers: list[str]) -> str | None:
+    if Path(str(raw_root or "")).is_absolute():
+        blockers.append("AI artifact inventory roots must be archive-relative.")
+        return None
+    try:
+        normalized = normalize_archive_relative_path(raw_root)
+    except ArchivePathError as exc:
+        blockers.append(f"AI artifact inventory root is unsafe: {exc}.")
+        return None
+    folder = normalized.rstrip("/") + "/"
+    if not any(folder.startswith(prefix) for prefix in AI_ARTIFACT_INVENTORY_ALLOWED_ROOT_PREFIXES):
+        blockers.append(
+            "AI artifact inventory roots must stay under allowlisted AI folders: "
+            + ", ".join(AI_ARTIFACT_INVENTORY_ALLOWED_ROOT_PREFIXES)
+        )
+        return None
+    return folder
+
+
+def ai_artifact_ref_for_relative_path(relative: str) -> str:
+    digest = sha256_text(relative.replace("\\", "/"))
+    return f"ai-artifact:{digest[:24]}"
+
+
+def ai_artifact_kind_for_relative_path(relative: str) -> str:
+    path = PurePosixPath(relative.replace("\\", "/"))
+    name = path.name.lower()
+    suffix = path.suffix.lower()
+    if suffix == ".jsonl":
+        return "ai_chat_log_jsonl" if re.search(r"(chat|conversation|session|transcript|log)", name) else "ai_artifact_jsonl"
+    if suffix == ".json":
+        return "ai_chat_log_json" if re.search(r"(chat|conversation|session|transcript|log)", name) else "ai_artifact_json"
+    if suffix in {".md", ".markdown", ".txt"}:
+        if "plan" in name:
+            return "ai_plan"
+        if "report" in name:
+            return "ai_report_draft"
+        if "summary" in name:
+            return "ai_summary"
+        return "ai_working_note"
+    if suffix in {".patch", ".diff"}:
+        return "ai_code_patch_note"
+    if suffix in {".html", ".htm", ".pdf"} or "report" in name:
+        return "external_report_draft"
+    return "ai_artifact_file"
+
+
+def source_intake_recorded_ai_artifact_refs(root: Path) -> set[str]:
+    receipts_root = archive_internal_path(root, SOURCE_SCAN_RECEIPTS_DIR)
+    refs: set[str] = set()
+    if not receipts_root.is_dir():
+        return refs
+    for path in safe_archive_glob(receipts_root, "*.source-intake-plan.json", root, recursive=True):
+        try:
+            data = read_json_object(path, "source intake plan")
+        except ArchiveServiceError:
+            continue
+        if data.get("source_kind") != "ai_artifact":
+            continue
+        for ref in data.get("source_refs_for_draft") or []:
+            if not isinstance(ref, dict):
+                continue
+            if str(ref.get("type") or "") == "ai_artifact":
+                value = str(ref.get("value") or "").strip()
+                if value:
+                    refs.add(value)
+    return refs
+
+
+def ai_artifact_inventory_next_actions(*, has_unreviewed: bool, has_intake_recorded: bool) -> list[str]:
+    actions: list[str] = []
+    if has_unreviewed:
+        actions.extend(
+            [
+                "Review each unreviewed AI artifact with the human before deleting or minting anything.",
+                "If the raw AI file or chat log should remain durable evidence, preserve it as an objet through source-intake, source-intake-record, objet-capture-selection, and objet-capture.",
+                "For JSONL chat logs, keep the raw log as an objet/source and distill only reviewed decisions, corrections, or durable facts toward derived text and draft zets.",
+            ]
+        )
+    if has_intake_recorded:
+        actions.append("For intake-recorded AI artifact refs, continue with derived text review or create-draft; do not paste raw logs directly into canonical zet bodies.")
+    if not actions:
+        actions.append("No AI artifact candidates were found in the allowlisted roots.")
+    actions.append("Use staged-cleanup-check or ai-scratch-gc only after preservation or discard evidence exists; this inventory never deletes files.")
+    return actions
+
+
+def ai_artifact_inventory(
+    archive_root: Path | str,
+    *,
+    include_roots: list[str] | None = None,
+    max_items: int = 100,
+    show_relative_paths: bool = False,
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if not dry_run:
+        blockers.append("ai-artifact-inventory is read-only and requires --dry-run.")
+    try:
+        limit = int(max_items)
+    except (TypeError, ValueError):
+        limit = 100
+        blockers.append("max_items must be an integer.")
+    if limit < 1:
+        blockers.append("max_items must be at least 1.")
+        limit = 1
+    if limit > 1000:
+        warnings.append("max_items was capped at 1000.")
+        limit = 1000
+
+    normalized_roots: list[str] = []
+    for raw_root in include_roots or list(AI_ARTIFACT_INVENTORY_DEFAULT_ROOTS):
+        normalized = ai_artifact_inventory_normalize_root(raw_root, blockers)
+        if normalized and normalized not in normalized_roots:
+            normalized_roots.append(normalized)
+
+    recorded_refs = source_intake_recorded_ai_artifact_refs(root)
+    items: list[dict[str, Any]] = []
+    total_candidates = 0
+    skipped_non_plain_file_count = 0
+    for relative_root in normalized_roots:
+        folder = archive_internal_path(root, relative_root)
+        if not folder.exists():
+            continue
+        if not folder.is_dir():
+            warnings.append(f"AI artifact inventory root is not a directory: {relative_root}")
+            continue
+        for path in sorted(folder.rglob("*")):
+            if not is_path_within_root(path, root):
+                continue
+            if path.is_dir():
+                continue
+            if not ai_scratch_path_is_plain_file(path):
+                skipped_non_plain_file_count += 1
+                continue
+            total_candidates += 1
+            if len(items) >= limit:
+                continue
+            relative = archive_relative_path(path, root).replace("\\", "/")
+            artifact_ref = ai_artifact_ref_for_relative_path(relative)
+            kind = ai_artifact_kind_for_relative_path(relative)
+            stat_result = path.stat()
+            fate_state = "source_intake_recorded" if artifact_ref in recorded_refs else "unreviewed_ai_artifact"
+            item = {
+                "artifact_ref": artifact_ref,
+                "artifact_kind": kind,
+                "fate_state": fate_state,
+                "root": relative_root,
+                "extension": path.suffix.lower(),
+                "bytes": stat_result.st_size,
+                "modified_at": datetime.fromtimestamp(stat_result.st_mtime).astimezone().replace(microsecond=0).isoformat(),
+                "body_read": False,
+                "content_hash_calculated": False,
+                "recommended_fates": [
+                    "preserve_as_objet",
+                    "register_derived_text",
+                    "distill_to_draft_zet",
+                    "link_to_existing_zet",
+                    "defer_review",
+                    "discard_with_receipt",
+                ],
+            }
+            if show_relative_paths:
+                item["relative_path"] = relative
+            items.append(item)
+
+    fate_counts: dict[str, int] = {}
+    kind_counts: dict[str, int] = {}
+    for item in items:
+        fate = str(item.get("fate_state") or "unknown")
+        kind = str(item.get("artifact_kind") or "unknown")
+        fate_counts[fate] = fate_counts.get(fate, 0) + 1
+        kind_counts[kind] = kind_counts.get(kind, 0) + 1
+    if total_candidates > len(items):
+        warnings.append("AI artifact inventory reached max_items; rerun with a larger --max-items for the full listing.")
+
+    has_unreviewed = bool(fate_counts.get("unreviewed_ai_artifact"))
+    has_intake_recorded = bool(fate_counts.get("source_intake_recorded"))
+    return {
+        "ok": not blockers,
+        "dry_run": bool(dry_run),
+        "lifecycle_action": "ai_artifact_inventory",
+        "archive_id": archive_id,
+        "inventory_state": "blocked" if blockers else ("needs_review" if has_unreviewed else "clear_or_recorded"),
+        "scan_policy": {
+            "allowlisted_roots_only": True,
+            "roots": normalized_roots,
+            "broad_archive_sweep": False,
+            "root_recursion_outside_allowlist": False,
+        },
+        "item_count": len(items),
+        "total_candidate_count": total_candidates,
+        "truncated": total_candidates > len(items),
+        "skipped_non_plain_file_count": skipped_non_plain_file_count,
+        "fate_counts": fate_counts,
+        "artifact_kind_counts": kind_counts,
+        "items": items,
+        "next_safe_actions": ai_artifact_inventory_next_actions(
+            has_unreviewed=has_unreviewed,
+            has_intake_recorded=has_intake_recorded,
+        ),
+        "closed_actions": {
+            "file_bodies_read": False,
+            "content_hashes_calculated": False,
+            "files_written": False,
+            "provider_api_called": False,
+            "cleanup_performed": False,
+            "zets_written": False,
+        },
+        "privacy_guards": {
+            "body_text_echoed": False,
+            "relative_paths_echoed": bool(show_relative_paths),
+            "local_absolute_paths_echoed": False,
+            "provider_urls_echoed": False,
+            "secrets_read": False,
+        },
+        "would_change": [],
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+    }
 
 
 def zettel_self_contained_assessment(frontmatter: dict[str, Any], body: str) -> dict[str, Any]:

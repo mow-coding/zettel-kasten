@@ -917,6 +917,49 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, release_text)
 
+    def test_ai_artifact_lifecycle_inventory_is_documented_without_body_logging(self) -> None:
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        readme_ko_text = (REPO_ROOT / "README.ko.md").read_text(encoding="utf-8")
+        changelog_text = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+        upgrade_text = (REPO_ROOT / "UPGRADE.md").read_text(encoding="utf-8")
+        release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.187.md").read_text(encoding="utf-8")
+        decision_log_text = (
+            KIT_ROOT / "docs" / "archive-infra-decision-log-2026-07-07-v03187-ai-artifact-lifecycle-inventory.md"
+        ).read_text(encoding="utf-8")
+        for phrase in (
+            "Status: v0.3.187 AI artifact lifecycle inventory checkpoint",
+            "AI artifact lifecycle inventory",
+            "archive ai-artifact-inventory --dry-run",
+            "unreviewed_ai_artifact",
+            "source_intake_recorded",
+            "preserve raw bytes as an objet",
+            "reads no file bodies",
+            "does not echo archive-relative paths unless `--show-relative-paths`",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, matrix_text)
+        for phrase in (
+            "v0.3.187 pre-release",
+            "read-only AI artifact inventory",
+            "archive ai-artifact-inventory --dry-run",
+            "calling providers",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, readme_text)
+        for phrase in (
+            "v0.3.187 pre-release",
+            "AI artifact inventory",
+            "파일 본문을 읽지 않고",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, readme_ko_text)
+        for text in (changelog_text, upgrade_text, release_text, decision_log_text):
+            with self.subTest(document=text[:40]):
+                self.assertIn("ai-artifact-inventory", text)
+                self.assertIn("objet", text)
+                self.assertIn("file bodies", text)
+
     def test_containment_link_type_is_documented_with_model_gap_guardrail(self) -> None:
         matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
         readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")

@@ -3303,6 +3303,110 @@ state:
             self.assertTrue(any("runtime must be a safe non-secret scalar" in item for item in result["blockers"]))
             self.assertFalse((archive_root / "receipts" / "ai-usage").exists())
 
+    def test_ai_artifact_inventory_reports_unreviewed_candidates_without_echoing_bodies(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            chat_log = archive_root / ".wom-scratch" / "session" / "codex-chat-log.jsonl"
+            plan_note = archive_root / "workbench" / "ai-scratch" / "draft-plan.md"
+            report_note = archive_root / "staging" / "ai" / "inbox" / "client-report.txt"
+            chat_log.parent.mkdir(parents=True, exist_ok=True)
+            plan_note.parent.mkdir(parents=True, exist_ok=True)
+            report_note.parent.mkdir(parents=True, exist_ok=True)
+            chat_log.write_text('{"message":"PRIVATE CHAT BODY SHOULD NOT ECHO"}\n', encoding="utf-8")
+            plan_note.write_text("PRIVATE PLAN BODY SHOULD NOT ECHO\n", encoding="utf-8")
+            report_note.write_text("PRIVATE REPORT BODY SHOULD NOT ECHO\n", encoding="utf-8")
+
+            code, output = self.run_cli(
+                [
+                    "ai-artifact-inventory",
+                    str(archive_root),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["lifecycle_action"], "ai_artifact_inventory")
+            self.assertEqual(result["inventory_state"], "needs_review")
+            self.assertEqual(result["total_candidate_count"], 3)
+            self.assertEqual(result["fate_counts"]["unreviewed_ai_artifact"], 3)
+            self.assertFalse(result["closed_actions"]["file_bodies_read"])
+            self.assertFalse(result["closed_actions"]["content_hashes_calculated"])
+            self.assertFalse(result["privacy_guards"]["relative_paths_echoed"])
+            self.assertTrue(all("relative_path" not in item for item in result["items"]))
+            self.assertIn("ai_chat_log_jsonl", result["artifact_kind_counts"])
+            self.assertIn("preserve it as an objet", "\n".join(result["next_safe_actions"]))
+            self.assertIn("raw log as an objet/source", "\n".join(result["next_safe_actions"]))
+            self.assertNotIn("PRIVATE CHAT BODY SHOULD NOT ECHO", output)
+            self.assertNotIn("PRIVATE PLAN BODY SHOULD NOT ECHO", output)
+            self.assertNotIn("codex-chat-log.jsonl", output)
+            self.assertNotIn(str(archive_root), output)
+
+            no_dry_code, no_dry_output = self.run_cli(["ai-artifact-inventory", str(archive_root), "--format", "json"])
+            self.assertEqual(no_dry_code, 1)
+            self.assertIn("requires --dry-run", no_dry_output)
+
+    def test_ai_artifact_inventory_marks_source_intake_recorded_ref(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            chat_log = archive_root / ".wom-scratch" / "session" / "codex-chat-log.jsonl"
+            chat_log.parent.mkdir(parents=True, exist_ok=True)
+            chat_log.write_text('{"message":"raw log preserved separately"}\n', encoding="utf-8")
+
+            inventory_code, inventory_output = self.run_cli(
+                ["ai-artifact-inventory", str(archive_root), "--dry-run", "--format", "json"]
+            )
+            inventory = json.loads(inventory_output)
+            self.assertEqual(inventory_code, 0, inventory_output)
+            artifact_ref = inventory["items"][0]["artifact_ref"]
+
+            plan_code, plan_output = self.run_cli(
+                [
+                    "source-intake",
+                    str(archive_root),
+                    "--ai-artifact-ref",
+                    artifact_ref,
+                    "--runtime",
+                    "codex",
+                    "--artifact-kind",
+                    "ai_chat_log_jsonl",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(plan_code, 0, plan_output)
+            plan_path = Path(tmp) / "source-intake-plan.json"
+            plan_path.write_text(plan_output, encoding="utf-8")
+
+            record_code, record_output = self.run_cli(
+                [
+                    "source-intake-record",
+                    str(archive_root),
+                    "--source-intake-plan",
+                    str(plan_path),
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test-reviewer",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(record_code, 0, record_output)
+
+            second_code, second_output = self.run_cli(
+                ["ai-artifact-inventory", str(archive_root), "--dry-run", "--format", "json"]
+            )
+            second = json.loads(second_output)
+            self.assertEqual(second_code, 0, second_output)
+            self.assertEqual(second["fate_counts"]["source_intake_recorded"], 1)
+            self.assertEqual(second["items"][0]["fate_state"], "source_intake_recorded")
+            self.assertIn("derived text review", "\n".join(second["next_safe_actions"]))
+            self.assertNotIn(str(archive_root), second_output)
+
     def test_runtime_context_expected_archive_id_mismatch_blocks(self) -> None:
         archive_root = KIT_ROOT / "examples" / "fake-life-archive"
         code, output = self.run_cli(

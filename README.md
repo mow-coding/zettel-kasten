@@ -33,10 +33,10 @@ wom-kit/docs/releases/ - do not re-grow baseline ladders or tag lists here.
 Current public baseline:
 
 ```text
-v0.3.186 pre-release
+v0.3.187 pre-release
 ```
 
-Previous public baseline: v0.3.185 pre-release.
+Previous public baseline: v0.3.186 pre-release.
 
 Full release history: see [CHANGELOG.md](CHANGELOG.md) and [wom-kit/docs/releases/](wom-kit/docs/releases/).
 
@@ -99,7 +99,7 @@ approval-gated write, or docs-only), see the
 
 ### Privacy & redaction
 
-- zet self-contained checks and AI scratch lifecycle management: public external citation URLs may stay in zet bodies or `source_refs`, private provider locators and original-file locations still require durable WOM refs, `.wom-scratch/` and `workbench/ai-scratch/` are ignored scratch areas, and approved mint can remove explicit scratch refs from the canonical zet while consuming those scratch files through a cleanup receipt,
+- zet self-contained checks, AI scratch lifecycle management, and read-only AI artifact inventory: public external citation URLs may stay in zet bodies or `source_refs`, private provider locators and original-file locations still require durable WOM refs, `.wom-scratch/`, `workbench/ai-scratch/`, `staging/ai/inbox/`, and `staging/ai/reviewed/` are treated as bounded AI artifact/scratch surfaces, `archive ai-artifact-inventory --dry-run` can list candidate fates without reading file bodies, echoing paths by default, writing files, deleting files, creating zets, or calling providers, and approved mint can remove explicit scratch refs from the canonical zet while consuming those scratch files through a cleanup receipt,
 - read-only `archive secret-signal-taxonomy --dry-run` for AI operators that need to distinguish harmless secret/credential/token concept words and safe refs from actual secret-like values, private locators, account identifiers, or unknown sensitive context,
 
 ### AI-operator contracts & runtime handoff
