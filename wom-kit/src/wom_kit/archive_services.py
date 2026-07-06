@@ -59433,6 +59433,7 @@ def object_storage_adopt_existing_run(
     key_map_path: Path | None = None,
     accept_unverified_adopt: bool = False,
     content_hash_verify: bool = False,
+    skip_existing_wom_uploaded: bool = False,
     approve: bool = False,
     dry_run: bool = False,
     transport: ObjectStorageTransport | None = None,
@@ -59476,6 +59477,10 @@ def object_storage_adopt_existing_run(
         blockers.append("Use either --dry-run or --approve, not both.")
     if not dry_run and not approve:
         blockers.append("object-storage-adopt-existing requires exactly one of --dry-run or --approve.")
+    if skip_existing_wom_uploaded and content_hash_verify:
+        blockers.append(
+            "skip_existing_wom_uploaded_conflicts_content_hash_verify: resume skip cannot also request fresh content-hash verification."
+        )
 
     normalized_provider = str(provider_kind or "").strip().lower()
     if normalized_provider not in OBJECT_STORAGE_ALLOWED_PROVIDERS:
@@ -59583,6 +59588,7 @@ def object_storage_adopt_existing_run(
     mapped_but_no_manifest_size_count = 0
     present_row_count = 0
     ext_unrecoverable_present_count = 0
+    existing_wom_uploaded_count = 0
     if not blockers:
         manifest_record_index = manifest_records_by_object_id(root)
         _progress("adopt-plan", "start", None, None)
@@ -59634,6 +59640,18 @@ def object_storage_adopt_existing_run(
                     key_error = str(exc)
             size_bytes = record.get("size_bytes") if isinstance(record, dict) else None
             normalized_size = size_bytes if isinstance(size_bytes, int) else None
+            existing_wom_uploaded = None
+            if isinstance(record, dict) and remote_key:
+                locations = record.get("locations") if isinstance(record.get("locations"), list) else []
+                existing_wom_uploaded = object_storage_wom_uploaded_location_match(
+                    locations,
+                    provider_kind=normalized_provider,
+                    store_ref=normalized_store_ref,
+                    digest=digest,
+                    expected_remote_key=remote_key,
+                )
+                if existing_wom_uploaded is not None:
+                    existing_wom_uploaded_count += 1
             if key_source == "map" and normalized_size is None:
                 # A mapped object present at its key must NEVER adopt on presence
                 # alone when the manifest has no size to gate on (A3/B5). Report a
@@ -59648,6 +59666,7 @@ def object_storage_adopt_existing_run(
                     "key_source": key_source,
                     "size_bytes": normalized_size,
                     "record_present": isinstance(record, dict),
+                    "existing_wom_uploaded": existing_wom_uploaded,
                 }
             )
         _progress("adopt-plan", "done", None, None)
@@ -59656,6 +59675,7 @@ def object_storage_adopt_existing_run(
     adopted_count = 0
     not_adopted_count = 0
     declared_count = 0
+    skipped_existing_wom_uploaded_count = 0
     manifest_updates = 0
     total_objects = len(plan_rows)
 
@@ -59681,6 +59701,13 @@ def object_storage_adopt_existing_run(
             "see wom-kit/docs/object-storage-adopt-existing-key-map-runbook.md. A lossy "
             "mime-derived extension (extension_from_mime_hint over the stored manifest mime) "
             "is a fallback only — it can HEAD-404 on .jpg vs .jpeg or octet-stream."
+        )
+
+    if existing_wom_uploaded_count and not skip_existing_wom_uploaded and not accept_unverified_adopt:
+        warnings.append(
+            f"resume_hint: {existing_wom_uploaded_count} objects already have matching wom_uploaded "
+            "manifest locations for this provider/store/key; when intentionally resuming a prior "
+            "verified adopt, pass --skip-existing-wom-uploaded to avoid re-HEADing those objects."
         )
 
     result = _object_storage_upload_base_result(
@@ -59788,11 +59815,11 @@ def object_storage_adopt_existing_run(
 
                     _progress("adopt-verify", "start", None, None)
                     for index, row in enumerate(plan_rows, start=1):
-                        if _progress_step(index, total_objects):
-                            _progress("adopt-verify", "checked remote key", index, total_objects)
                         if blockers:
                             break
                         if not row["remote_key"]:
+                            if _progress_step(index, total_objects):
+                                _progress("adopt-verify", "processed unresolved key", index, total_objects)
                             not_adopted_count += 1
                             adopt_results.append(
                                 {
@@ -59808,6 +59835,32 @@ def object_storage_adopt_existing_run(
                         # GetObject-rehash of the whole object). Only the explicit
                         # per-object --content-hash-verify opt-in downloads the body
                         # to hash it. Adopting 158 GB must not cost 158 GB of egress.
+                        if skip_existing_wom_uploaded and row.get("existing_wom_uploaded"):
+                            if _progress_step(index, total_objects):
+                                _progress(
+                                    "adopt-verify",
+                                    "skipped existing wom_uploaded manifest location",
+                                    index,
+                                    total_objects,
+                                )
+                            existing = row["existing_wom_uploaded"]
+                            skipped_existing_wom_uploaded_count += 1
+                            adopt_results.append(
+                                {
+                                    "object_id": row["object_id"],
+                                    "adopt_status": "already_wom_uploaded_manifest",
+                                    "remote_key": row["remote_key"],
+                                    "gating": True,
+                                    "remote_key_verification": existing.get("remote_key_verification"),
+                                    "caveat": (
+                                        "matching wom_uploaded manifest location already exists; "
+                                        "remote HEAD skipped by explicit resume option."
+                                    ),
+                                }
+                            )
+                            continue
+                        if _progress_step(index, total_objects):
+                            _progress("adopt-verify", "checked remote key", index, total_objects)
                         head = resolved_transport.head_object(
                             key=row["remote_key"], presence_only=not content_hash_verify
                         )
@@ -59924,21 +59977,28 @@ def object_storage_adopt_existing_run(
             access_value = None
             secret_value = None
 
-    would_reupload = max(total_objects - adopted_count - declared_count, 0)
+    would_reupload = max(total_objects - adopted_count - declared_count - skipped_existing_wom_uploaded_count, 0)
     # Thread the plan-row key_source into each adopt_results row (B11) so a partial
     # or wrong map is visible per-object. object_ids are unique from the resolver.
     key_source_by_object_id = {row["object_id"]: row.get("key_source", "template") for row in plan_rows}
     for adopt_row in adopt_results:
         adopt_row["key_source"] = key_source_by_object_id.get(adopt_row.get("object_id"), "template")
+    skipped_existing_report = (
+        f"{skipped_existing_wom_uploaded_count} skipped as existing wom_uploaded; "
+        if skipped_existing_wom_uploaded_count
+        else ""
+    )
     if key_map_used:
         report = (
             f"{adopted_count} of {total_objects} adopted (presence+size); "
+            f"{skipped_existing_report}"
             f"{mapped_count} mapped, {unmapped_count} unmapped (no --key-map entry), "
             f"{map_rejected_count} map entries refused; {would_reupload} will re-upload."
         )
     elif not accept_unverified_adopt:
         report = (
             f"{adopted_count} of {total_objects} adopted (presence+size); "
+            f"{skipped_existing_report}"
             f"{would_reupload} will re-upload."
         )
     else:
@@ -59957,6 +60017,9 @@ def object_storage_adopt_existing_run(
                 "total_objects": total_objects,
                 "adopted_count": adopted_count,
                 "declared_count": declared_count,
+                "existing_wom_uploaded_count": existing_wom_uploaded_count,
+                "skipped_existing_wom_uploaded_count": skipped_existing_wom_uploaded_count,
+                "skip_existing_wom_uploaded": bool(skip_existing_wom_uploaded),
                 "not_adopted_count": not_adopted_count,
                 "would_reupload_count": would_reupload,
                 # §4/§6.4: key-map coverage counts so a partial or wrong map is

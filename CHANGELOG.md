@@ -6,6 +6,22 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.182 - 2026-07-06
+
+Basoon v0.3.180 revalidation follow-up for adopt resume and doctor receipt progress. Additive; no
+migration.
+
+- **`object-storage-adopt-existing --skip-existing-wom-uploaded`.** Verified adopt now has an
+  explicit resume helper: when a matching `wom_uploaded` manifest location already exists for the
+  same provider/store/key, the command can skip the remote HEAD for that object and report
+  `already_wom_uploaded_manifest`. The default still re-HEADs, and the option is refused with
+  `--content-hash-verify`.
+- **Resume visibility.** Adopt planning now counts matching existing `wom_uploaded` locations and
+  emits a `resume_hint` warning when they exist but the resume skip option is not enabled.
+- **Doctor `mint-receipts` sub-step progress.** `doctor --progress` now shows internal
+  `mint-receipts` sub-steps for the sampled receipt positions and prints a cache summary for file
+  SHA-256, zettel frontmatter, and BOM evidence.
+
 ## v0.3.181 - 2026-07-06
 
 Staged cleanup operator progress. Additive; no migration.

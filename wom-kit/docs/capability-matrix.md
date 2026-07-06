@@ -1,9 +1,10 @@
 # WOM-kit Capability Matrix
 
-Status: v0.3.181 staged cleanup progress checkpoint
+Status: v0.3.182 adopt resume and doctor mint-receipts progress checkpoint
 Date: 2026-07-06
-Version: v0.3.181, release candidate
+Version: v0.3.182, release candidate
 
+Previous checkpoint: Status: v0.3.181 staged cleanup progress checkpoint
 Previous checkpoint: Status: v0.3.180 adopt-plan and doctor receipt cache checkpoint
 Previous checkpoint: Status: v0.3.179 remint diagnostic-only redaction checkpoint
 Previous checkpoint: Status: v0.3.178 operator progress for doctor and adopt checkpoint
@@ -90,11 +91,11 @@ This matrix is a plain-language map of what WOM-kit can do today and what is onl
 
 Read it as a safety label. A row marked `read-only preview` means WOM-kit can inspect or plan something and return JSON, but it does not write files. A row marked `approval-gated write` means the CLI has a human-reviewed write path with explicit approval fields. A row marked `documented-only` means the idea is described, but no product command exists yet.
 
-Current checkpoint note (v0.3.181): `archive staged-cleanup-check --progress` now streams
-content-free stage/count progress while loading manifests, scanning zettel references, walking
-staged entries, verifying files, and hashing large source/store files. This is additive operator
-liveness hardening: default command output, result JSON, receipt formats, and report-only cleanup
-semantics are unchanged.
+Current checkpoint note (v0.3.182): basoon's v0.3.180 revalidation confirmed the adopt-plan
+manifest index and exposed the next operator bottlenecks. `object-storage-adopt-existing` now has
+an explicit `--skip-existing-wom-uploaded` resume helper for already-adopted manifest rows, and
+`doctor --progress` reports sampled `mint-receipts` sub-steps plus cache hit/miss summaries.
+Defaults remain conservative: verified adopt still re-HEADs unless the resume option is supplied.
 
 ## Status Legend
 

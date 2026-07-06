@@ -163,6 +163,24 @@ and receipts before any cleanup.
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
 
+## From `v0.3.181` To `v0.3.182`
+
+One additive basoon revalidation follow-up. No migration is required.
+
+Operator-visible notes:
+
+- `archive object-storage-adopt-existing ... --approve --skip-existing-wom-uploaded` is a
+  resume helper for interrupted verified adopts. Objects that already have a matching
+  `wom_uploaded` manifest location for the same provider/store/key are reported as
+  `already_wom_uploaded_manifest` and are not remote-HEADed again.
+- The default remains conservative: without `--skip-existing-wom-uploaded`, verified adopt still
+  re-HEADs each resolved key. The resume option is refused with `--content-hash-verify`.
+- Adopt planning now reports how many matching existing `wom_uploaded` locations it found and
+  emits a `resume_hint` warning when the count is nonzero but the resume option is not enabled.
+- `archive doctor --strict --progress` now prints sampled `mint-receipts` sub-steps and a cache
+  summary for file SHA-256, zettel frontmatter, and BOM evidence.
+- See `wom-kit/docs/releases/v0.3.182.md`.
+
 ## From `v0.3.180` To `v0.3.181`
 
 One additive operator-progress patch. No migration is required.

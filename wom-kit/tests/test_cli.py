@@ -607,6 +607,24 @@ class ArchiveCliTests(unittest.TestCase):
 
         self.assertEqual(sha_calls.count(target_path.resolve()), 1)
 
+    def test_doctor_mint_receipts_progress_reports_substeps_and_cache_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            self._mint_lunch_for_reconcile(archive_root)
+            events: list[tuple[str, str, int | None, int | None]] = []
+            doctor = archive_cli.Doctor(
+                archive_root,
+                progress_callback=lambda stage, message, current, total: events.append(
+                    (stage, message, current, total)
+                ),
+            )
+            doctor._check_mint_receipts()
+
+        messages = [message for stage, message, _current, _total in events if stage == "mint-receipts"]
+        self.assertIn("loading receipt json", messages)
+        self.assertIn("checking target file ref", messages)
+        self.assertTrue(any(message.startswith("cache summary ") for message in messages))
+
     def test_doctor_zettel_frontmatter_cache_reuses_first_read(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
@@ -13193,6 +13211,59 @@ state:
         self.assertIn(("adopt-verify", "checked remote key", 1, 1), events)
         self.assertIn(("adopt-verify", "done", None, None), events)
         self.assertFalse(any(_FAKE_SHA_A in str(event) or self._BASOON_PREFIX in str(event) for event in events))
+
+    def test_object_storage_adopt_skip_existing_wom_uploaded_avoids_remote_head(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            key = archive_services.object_storage_remote_key(
+                strategy="prefix", key_prefix=self._BASOON_PREFIX, digest=_FAKE_SHA_A
+            )
+            first_transport = _FakeObjectStorageTransport()
+            first_transport.store[key] = {"size": 151, "sha": _FAKE_SHA_A}
+
+            with self._adopt_env():
+                first = self._adopt_run(
+                    archive_root,
+                    only=f"sha256:{_FAKE_SHA_A}",
+                    max_objects=1,
+                    reviewed_by="kim",
+                    key_strategy="prefix",
+                    key_prefix=self._BASOON_PREFIX,
+                    approve=True,
+                    transport=first_transport,
+                )
+            self.assertTrue(first["ok"], first)
+            self.assertEqual(first["adopt_summary"]["adopted_count"], 1)
+
+            resume_transport = _FakeObjectStorageTransport()
+            events = []
+            with self._adopt_env():
+                resumed = self._adopt_run(
+                    archive_root,
+                    only=f"sha256:{_FAKE_SHA_A}",
+                    max_objects=1,
+                    reviewed_by="kim",
+                    key_strategy="prefix",
+                    key_prefix=self._BASOON_PREFIX,
+                    approve=True,
+                    transport=resume_transport,
+                    skip_existing_wom_uploaded=True,
+                    progress_callback=lambda stage, message, current, total: events.append(
+                        (stage, message, current, total)
+                    ),
+                )
+
+        self.assertTrue(resumed["ok"], resumed)
+        self.assertEqual(resume_transport.heads, [])
+        self.assertFalse(resumed["closed_actions"]["provider_api_called"])
+        self.assertEqual(resumed["adopt_summary"]["existing_wom_uploaded_count"], 1)
+        self.assertEqual(resumed["adopt_summary"]["skipped_existing_wom_uploaded_count"], 1)
+        self.assertEqual(resumed["adopt_summary"]["would_reupload_count"], 0)
+        self.assertEqual(resumed["adopt_results"][0]["adopt_status"], "already_wom_uploaded_manifest")
+        self.assertIn(
+            ("adopt-verify", "skipped existing wom_uploaded manifest location", 1, 1),
+            events,
+        )
 
     def test_object_storage_adopt_plan_uses_manifest_index_not_per_object_scan(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

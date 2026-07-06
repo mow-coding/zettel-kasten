@@ -122,6 +122,28 @@ archive object-storage-adopt-existing <archive-root> \
   --approve --progress --format json
 ```
 
+**Resume an interrupted batch (v0.3.182+).** If a prior verified batch was stopped
+after writing some `wom_uploaded` manifest locations, re-run with
+`--skip-existing-wom-uploaded` to avoid remote-HEADing those already adopted rows:
+
+```bash
+archive object-storage-adopt-existing <archive-root> \
+  --provider-kind cloudflare-r2 \
+  --store-ref <store-ref> \
+  --access-key-id-ref env:WOM_R2_ACCESS_KEY_ID \
+  --secret-access-key-ref env:WOM_R2_SECRET_ACCESS_KEY \
+  --endpoint-host <account>.r2.cloudflarestorage.com \
+  --bucket <bucket> \
+  --key-map ./key-map.jsonl \
+  --reviewed-by person:me \
+  --approve --skip-existing-wom-uploaded --progress --format json
+```
+
+The default remains conservative: without `--skip-existing-wom-uploaded`, verified
+adopt re-HEADs every resolved key. The resume option is refused with
+`--content-hash-verify`, because a fresh content-hash verification request must not
+turn into a manifest-only skip.
+
 **Why two steps, and the in-band signal.** A batch verified adopt on a store with no
 prior verified adopt fails closed with the blocker `adopt_tiny_first_unmet`; the
 message names Step A as the exact remedy. Since v0.3.174 the adopt gate is DECOUPLED

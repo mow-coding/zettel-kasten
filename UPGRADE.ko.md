@@ -152,6 +152,24 @@ zet, receipt로 보존해야 합니다.
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
 
+## From `v0.3.181` To `v0.3.182`
+
+basoon 재검증 후속 additive patch입니다. 마이그레이션은 필요 없습니다.
+
+운영자가 볼 변화:
+
+- `archive object-storage-adopt-existing ... --approve --skip-existing-wom-uploaded`는 중단된
+  verified adopt를 다시 이어갈 때 쓰는 resume helper입니다. 같은 provider/store/key에 대해 이미
+  matching `wom_uploaded` manifest location이 있는 object는 `already_wom_uploaded_manifest`로
+  보고하고 remote HEAD를 다시 치지 않습니다.
+- 기본값은 계속 보수적입니다. `--skip-existing-wom-uploaded`를 생략하면 verified adopt는 기존처럼
+  resolved key마다 다시 HEAD합니다. 이 resume option은 `--content-hash-verify`와 함께 쓰면 거절됩니다.
+- adopt planning은 matching existing `wom_uploaded` location 개수를 보고하고, 개수가 있는데 resume
+  option이 꺼져 있으면 `resume_hint` warning을 냅니다.
+- `archive doctor --strict --progress`는 `mint-receipts` 내부 sub-step과 file SHA-256,
+  zettel frontmatter, BOM evidence cache summary를 출력합니다.
+- `wom-kit/docs/releases/v0.3.182.md`를 보세요.
+
 ## From `v0.3.180` To `v0.3.181`
 
 additive operator-progress patch입니다. 마이그레이션은 필요 없습니다.
