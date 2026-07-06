@@ -46,6 +46,7 @@ archive remint-reconcile <archive-root> (--zettel-id <id> | --path <rel>)
         [--reviewed-by <actor>]
         [--content-changed-ack]
         [--strip-bom]
+        [--diagnostic-only]
         [--format text|json]
 ```
 
@@ -53,6 +54,8 @@ archive remint-reconcile <archive-root> (--zettel-id <id> | --path <rel>)
 - `--approve` re-issues the receipt after review; it requires `--reviewed-by`.
 - `--content-changed-ack` is required to approve a `content_change`.
 - `--strip-bom` (opt-in) removes a single leading UTF-8 BOM; see below.
+- `--diagnostic-only` is dry-run JSON only. It omits canonical body text and
+  frontmatter values while keeping drift and body-diff diagnostics; see below.
 
 This command family is CLI-only. There is no MCP surface for reconcile, by design.
 
@@ -257,6 +260,23 @@ required) in the dry-run exactly as it does at apply — the strip never launder
 change. **`retire-draft-reconcile` has the same dry-run parity**: its `--strip-bom`
 dry-run previews the strip-intent metadata for the target canonical, and its
 per-ref classification is likewise untouched.
+
+## `--diagnostic-only` JSON (redacted dry-run)
+
+`archive remint-reconcile --diagnostic-only --format json` returns a redacted dry-run
+projection for operator diagnostics. It keeps:
+
+- `drift_class`, `classification_basis`, and `content_change_ack_required`;
+- `body_changed` and the content-free `body_diff_diagnostic`;
+- blockers, warnings, next safe actions, and write status;
+- frontmatter field names/counts.
+
+It omits `current_canonical_text` and the full `frontmatter_field_changes` value list. This
+lets an operator inspect which residual body-diff category they have without copying the
+canonical body into a JSON transcript.
+
+`--diagnostic-only` is refused with `--approve`. Approval must remain review-visible: the
+operator has to see the current on-disk content before recomputing receipt hashes.
 
 ## Scope note: contract-preview vs run-outcome (adapter honesty)
 

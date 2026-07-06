@@ -30137,6 +30137,83 @@ state:
             for ln in body_diff_lines:
                 self.assertNotIn(marker, ln)
 
+    def test_remint_reconcile_diagnostic_only_json_omits_body_and_frontmatter_values(self) -> None:
+        body_marker = "DIAGNOSTICBODYSECRET"
+        title_marker = "DIAGNOSTICTITLESECRET"
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            mint = self._mint_lunch_for_reconcile(archive_root, title="Diagnostic original title")
+            zid = mint["zettel_id"]
+            canonical = archive_root / mint["canonical_path"]
+            text = canonical.read_text(encoding="utf-8")
+            text = text.replace("Diagnostic original title", title_marker, 1)
+            canonical.write_text(text + f"\n{body_marker} edit\n", encoding="utf-8")
+
+            code, output = self.run_cli(
+                [
+                    "remint-reconcile",
+                    str(archive_root),
+                    "--zettel-id",
+                    zid,
+                    "--dry-run",
+                    "--diagnostic-only",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            serialized = json.dumps(result, ensure_ascii=False)
+
+        self.assertTrue(result["diagnostic_only"])
+        self.assertEqual(result["drift_class"], "content_change")
+        self.assertIn("body_diff_diagnostic", result)
+        self.assertNotIn("current_canonical_text", result)
+        self.assertNotIn("frontmatter_field_changes", result)
+        self.assertIn("current_canonical_text", result["omitted_fields"])
+        self.assertIn("frontmatter_field_changes", result["omitted_fields"])
+        self.assertEqual(result["frontmatter_field_change_fields"], ["title"])
+        self.assertNotIn(body_marker, serialized)
+        self.assertNotIn(title_marker, serialized)
+
+    def test_remint_reconcile_diagnostic_only_refuses_approve_or_text_output(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            mint = self._mint_lunch_for_reconcile(archive_root)
+            zid = mint["zettel_id"]
+
+            code, output = self.run_cli(
+                [
+                    "remint-reconcile",
+                    str(archive_root),
+                    "--zettel-id",
+                    zid,
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--diagnostic-only",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertNotEqual(code, 0, output)
+            self.assertIn("dry-run only", output)
+
+            code, output = self.run_cli(
+                [
+                    "remint-reconcile",
+                    str(archive_root),
+                    "--zettel-id",
+                    zid,
+                    "--dry-run",
+                    "--diagnostic-only",
+                    "--format",
+                    "text",
+                ]
+            )
+            self.assertNotEqual(code, 0, output)
+            self.assertIn("requires --format json", output)
+
     def test_body_diff_diag_T19_dict_keys_are_exactly_the_locked_set(self) -> None:
         expected_keys = {
             "differs",
