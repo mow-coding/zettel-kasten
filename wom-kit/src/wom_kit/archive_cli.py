@@ -975,21 +975,38 @@ class Doctor:
         if bom is not None:
             self._zettel_bom_cache[key] = bom
 
-    def _load_zettel_frontmatter_cached(self, path: Path) -> dict[str, Any] | None:
+    def _load_zettel_frontmatter_cached(
+        self,
+        path: Path,
+        *,
+        progress_callback: Callable[[str], None] | None = None,
+    ) -> dict[str, Any] | None:
         key = self._file_cache_key(path)
         if key in self._zettel_frontmatter_cache:
             self._zettel_frontmatter_cache_hits += 1
+            if progress_callback is not None:
+                progress_callback("target frontmatter cache hit")
             return self._zettel_frontmatter_cache[key]
         self._zettel_frontmatter_cache_misses += 1
+        if progress_callback is not None:
+            progress_callback("target frontmatter reading text")
         text = path.read_text(encoding="utf-8-sig")
+        if progress_callback is not None:
+            progress_callback("target frontmatter checking bom")
         self._zettel_has_bom_cached(path)
+        if progress_callback is not None:
+            progress_callback("target frontmatter parsing fence")
         frontmatter = parse_frontmatter(text)
         if frontmatter is None:
             self._zettel_frontmatter_cache[key] = None
             return None
+        if progress_callback is not None:
+            progress_callback("target frontmatter loading yaml")
         data = self._load_yaml_text(frontmatter, path)
         if isinstance(data, dict):
             self._remember_zettel_frontmatter(path, data)
+            if progress_callback is not None:
+                progress_callback("target frontmatter loaded")
             return data
         self._zettel_frontmatter_cache[key] = None
         return None
@@ -1924,19 +1941,24 @@ class Doctor:
 
             if target_path is not None:
                 receipt_progress("loading target frontmatter")
-                target_data = self._load_zettel_frontmatter_cached(target_path)
+                target_data = self._load_zettel_frontmatter_cached(
+                    target_path,
+                    progress_callback=receipt_progress,
+                )
                 if target_data is None:
                     self.error("mint_receipt_target_frontmatter_missing", "Mint receipt target has no zettel frontmatter.", path)
                     continue
                 # R7: BOM stays visible. A UTF-8 BOM is real byte drift that also
                 # drifts the mint-receipt sha, so name the cause as a WARN advisory
                 # (not info, which doctor filters out of --strict).
+                receipt_progress("checking target bom cache")
                 if self._zettel_has_bom_cached(target_path):
                     self.warn(
                         "zettel_has_bom",
                         "File has a UTF-8 BOM; WOM does not write BOMs. Run archive remint-reconcile after confirming content.",
                         target_path,
                     )
+                receipt_progress("checking target mint receipt link")
                 mint = target_data.get("mint") if isinstance(target_data.get("mint"), dict) else {}
                 receipt_relative = self._display_path(path)
                 if mint.get("receipt_path") != receipt_relative:

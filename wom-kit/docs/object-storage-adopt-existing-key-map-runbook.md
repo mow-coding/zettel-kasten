@@ -144,6 +144,17 @@ adopt re-HEADs every resolved key. The resume option is refused with
 `--content-hash-verify`, because a fresh content-hash verification request must not
 turn into a manifest-only skip.
 
+Since v0.3.183, `--progress` also prints a plan-time resume summary before the
+remote HEAD loop:
+
+```text
+[object-storage-adopt] adopt-plan: resume summary matching_locations=<n> wom_uploaded=<n> declared_uploaded=<n> other=<n> skip_existing_wom_uploaded=on
+```
+
+Only matching `wom_uploaded` rows can be skipped. Matching `declared_uploaded`
+rows are visible in the summary and warning output, but they are not WOM-verified;
+verified adopt must still HEAD them before promoting them to `wom_uploaded`.
+
 **Why two steps, and the in-band signal.** A batch verified adopt on a store with no
 prior verified adopt fails closed with the blocker `adopt_tiny_first_unmet`; the
 message names Step A as the exact remedy. Since v0.3.174 the adopt gate is DECOUPLED

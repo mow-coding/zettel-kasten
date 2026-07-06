@@ -57694,6 +57694,47 @@ def object_storage_wom_uploaded_location_matches(
     return match["remote_key"] if match else None
 
 
+def object_storage_matching_remote_key_location_summary(
+    locations: list[Any],
+    *,
+    provider_kind: str,
+    store_ref: str,
+    digest: str,
+    expected_remote_key: str,
+) -> dict[str, int]:
+    clean_digest = str(digest or "").removeprefix("sha256:").lower()
+    summary = {"total": 0, "wom_uploaded": 0, "declared_uploaded": 0, "other": 0}
+    if not SHA256_RE.match(clean_digest):
+        return summary
+    for location in locations:
+        if not isinstance(location, dict):
+            continue
+        if location.get("provider") != "object_storage":
+            continue
+        if str(location.get("provider_kind") or "") != provider_kind:
+            continue
+        if str(location.get("store_ref") or "") != store_ref:
+            continue
+        remote_key = location.get("remote_key")
+        if remote_key is None:
+            remote_key = location.get("key_hint")
+        if remote_key != expected_remote_key:
+            continue
+        if not isinstance(remote_key, str) or not safe_object_storage_remote_key(remote_key):
+            continue
+        if clean_digest not in remote_key:
+            continue
+        availability = str(location.get("availability") or "")
+        summary["total"] += 1
+        if availability == "wom_uploaded":
+            summary["wom_uploaded"] += 1
+        elif availability == "declared_uploaded":
+            summary["declared_uploaded"] += 1
+        else:
+            summary["other"] += 1
+    return summary
+
+
 def _object_storage_wom_uploaded_remote_key_present(
     locations: list[Any],
     *,
@@ -59588,7 +59629,10 @@ def object_storage_adopt_existing_run(
     mapped_but_no_manifest_size_count = 0
     present_row_count = 0
     ext_unrecoverable_present_count = 0
+    existing_matching_location_count = 0
     existing_wom_uploaded_count = 0
+    existing_declared_uploaded_count = 0
+    existing_other_location_count = 0
     if not blockers:
         manifest_record_index = manifest_records_by_object_id(root)
         _progress("adopt-plan", "start", None, None)
@@ -59641,8 +59685,19 @@ def object_storage_adopt_existing_run(
             size_bytes = record.get("size_bytes") if isinstance(record, dict) else None
             normalized_size = size_bytes if isinstance(size_bytes, int) else None
             existing_wom_uploaded = None
+            existing_location_summary = {"total": 0, "wom_uploaded": 0, "declared_uploaded": 0, "other": 0}
             if isinstance(record, dict) and remote_key:
                 locations = record.get("locations") if isinstance(record.get("locations"), list) else []
+                existing_location_summary = object_storage_matching_remote_key_location_summary(
+                    locations,
+                    provider_kind=normalized_provider,
+                    store_ref=normalized_store_ref,
+                    digest=digest,
+                    expected_remote_key=remote_key,
+                )
+                existing_matching_location_count += existing_location_summary["total"]
+                existing_declared_uploaded_count += existing_location_summary["declared_uploaded"]
+                existing_other_location_count += existing_location_summary["other"]
                 existing_wom_uploaded = object_storage_wom_uploaded_location_match(
                     locations,
                     provider_kind=normalized_provider,
@@ -59667,9 +59722,21 @@ def object_storage_adopt_existing_run(
                     "size_bytes": normalized_size,
                     "record_present": isinstance(record, dict),
                     "existing_wom_uploaded": existing_wom_uploaded,
+                    "existing_location_summary": existing_location_summary,
                 }
             )
         _progress("adopt-plan", "done", None, None)
+        _progress(
+            "adopt-plan",
+            "resume summary "
+            f"matching_locations={existing_matching_location_count} "
+            f"wom_uploaded={existing_wom_uploaded_count} "
+            f"declared_uploaded={existing_declared_uploaded_count} "
+            f"other={existing_other_location_count} "
+            f"skip_existing_wom_uploaded={'on' if skip_existing_wom_uploaded else 'off'}",
+            None,
+            None,
+        )
 
     adopt_results: list[dict[str, Any]] = []
     adopted_count = 0
@@ -59708,6 +59775,13 @@ def object_storage_adopt_existing_run(
             f"resume_hint: {existing_wom_uploaded_count} objects already have matching wom_uploaded "
             "manifest locations for this provider/store/key; when intentionally resuming a prior "
             "verified adopt, pass --skip-existing-wom-uploaded to avoid re-HEADing those objects."
+        )
+    if existing_declared_uploaded_count and not accept_unverified_adopt:
+        warnings.append(
+            f"declared_upload_resume_gap: {existing_declared_uploaded_count} objects have matching "
+            "declared_uploaded provider/store/key locations, but they are not WOM-verified and cannot "
+            "be skipped by --skip-existing-wom-uploaded; verified adopt must still HEAD them to promote "
+            "them to wom_uploaded."
         )
 
     result = _object_storage_upload_base_result(
@@ -60018,6 +60092,12 @@ def object_storage_adopt_existing_run(
                 "adopted_count": adopted_count,
                 "declared_count": declared_count,
                 "existing_wom_uploaded_count": existing_wom_uploaded_count,
+                "existing_matching_location_count": existing_matching_location_count,
+                "existing_declared_uploaded_count": existing_declared_uploaded_count,
+                "existing_other_location_count": existing_other_location_count,
+                "expected_resume_skip_count": (
+                    existing_wom_uploaded_count if skip_existing_wom_uploaded else 0
+                ),
                 "skipped_existing_wom_uploaded_count": skipped_existing_wom_uploaded_count,
                 "skip_existing_wom_uploaded": bool(skip_existing_wom_uploaded),
                 "not_adopted_count": not_adopted_count,
