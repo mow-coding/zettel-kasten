@@ -10206,6 +10206,8 @@ state:
             self.assertTrue(result["guide_contract"]["translate_operational_terms_before_asking_user_to_choose"])
             self.assertTrue(result["guide_contract"]["range_tilde_requires_single_tilde_with_spaces"])
             self.assertTrue(result["guide_contract"]["double_tilde_reserved_for_markdown_strikethrough"])
+            self.assertTrue(result["guide_contract"]["frontmatter_is_storage_metadata_not_document_body"])
+            self.assertTrue(result["guide_contract"]["prefer_document_view_for_human_reading"])
             self.assertEqual(result["locale"], "ko-KR")
             section_ids = [section["section_id"] for section in result["sections"]]
             self.assertEqual(section_ids, ["sha256_identity", "manifest_vs_zet", "three_layers", "operational_terms", "zet_markdown_style", "git_infra_terms"])
@@ -10256,6 +10258,7 @@ state:
             self.assertTrue(any("notion-client-issue-verification-plan" in route["command"] for route in result["safe_routing"]))
             self.assertTrue(any("notion-client-fixture-request-plan" in route["command"] for route in result["safe_routing"]))
             self.assertTrue(any("zet-markdown-style-guide" in route["command"] for route in result["safe_routing"]))
+            self.assertTrue(any("--section document" in route["command"] for route in result["safe_routing"]))
             self.assertFalse(result["closed_actions"]["source_bytes_read"])
             self.assertFalse(result["closed_actions"]["provider_api_called"])
             self.assertFalse(result["closed_actions"]["upload_performed"])
@@ -10279,6 +10282,7 @@ state:
             self.assertTrue(result["current_capability"]["notion_client_fixture_request_package_available"])
             self.assertTrue(result["current_capability"]["zet_markdown_style_guide_available"])
             self.assertTrue(result["current_capability"]["range_tilde_strikethrough_guard_available"])
+            self.assertTrue(result["current_capability"]["zet_document_view_available"])
             self.assertFalse(result["current_capability"]["object_upload_adapter_implemented"])
             self.assertEqual(result["would_change"], [])
             self.assertNotIn("C:\\", serialized)
@@ -10388,6 +10392,11 @@ state:
             self.assertIn("A~~B", rule["avoid_examples"])
             self.assertTrue(section["authoring_contract"]["range_tilde_requires_single_tilde_with_spaces"])
             self.assertTrue(section["authoring_contract"]["double_tilde_reserved_for_intentional_strikethrough"])
+            frontmatter_rule = section["frontmatter_viewer_rule"]
+            self.assertEqual(frontmatter_rule["rule_id"], "frontmatter_storage_metadata_document_view_hidden")
+            self.assertIn("--section document", frontmatter_rule["recommended_read_command"])
+            self.assertTrue(section["authoring_contract"]["frontmatter_is_storage_metadata_not_document_body"])
+            self.assertTrue(section["authoring_contract"]["human_document_view_hides_frontmatter"])
             self.assertFalse(result["closed_actions"]["files_written"])
             self.assertFalse(result["privacy_guards"]["zet_body_text_read"])
             self.assertEqual(result["would_change"], [])
@@ -26946,6 +26955,48 @@ state:
         self.assertEqual(result["overview"]["gist_source"], "body.first_safe_paragraph")
         self.assertEqual(result["overview"]["facets"]["domain"], "personal")
         self.assertEqual(result["overview"]["tie_summary"]["edge_count"], 0)
+
+    def test_read_zettel_document_section_hides_frontmatter_for_human_view(self) -> None:
+        archive_root = KIT_ROOT / "examples" / "fake-life-archive"
+        zettel_id = "zet_20240504_fake_lunch_thought"
+        code, output = self.run_cli(
+            [
+                "read-zettel",
+                str(archive_root),
+                "--zettel-id",
+                zettel_id,
+                "--section",
+                "document",
+                "--format",
+                "json",
+            ]
+        )
+        self.assertEqual(code, 0, output)
+        result = json.loads(output)
+        self.assertEqual(result["section"], "document")
+        self.assertEqual(result["viewer_mode"], "human_document")
+        self.assertFalse(result["body_omitted"])
+        self.assertTrue(result["details_omitted"])
+        self.assertTrue(result["frontmatter_hidden"])
+        self.assertFalse(result["raw_frontmatter_delimiters_echoed"])
+        self.assertIn("private personal reflection", result["body"])
+        self.assertEqual(result["frontmatter"]["id"], zettel_id)
+
+        text_code, text_output = self.run_cli(
+            [
+                "read-zettel",
+                str(archive_root),
+                "--zettel-id",
+                zettel_id,
+                "--section",
+                "document",
+            ]
+        )
+        self.assertEqual(text_code, 0, text_output)
+        self.assertIn("private personal reflection", text_output)
+        self.assertNotIn("---", text_output)
+        self.assertNotIn("Path:", text_output)
+        self.assertNotIn("ID:", text_output)
 
     def test_read_zettel_overview_skips_unsafe_url_paragraph(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

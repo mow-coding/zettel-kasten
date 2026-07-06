@@ -6,6 +6,20 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.184 - 2026-07-06
+
+Human document view for canonical zet frontmatter. Additive; no migration.
+
+- **Document read mode.** `archive read-zettel --section document` now returns the zet body with
+  frontmatter details hidden, and text output prints only the document body. This gives operators
+  and AI runtimes a clear WOM-rendered reading surface distinct from raw Markdown files.
+- **Viewer contract flags.** `read-zettel` output now marks `viewer_mode`, `frontmatter_hidden`,
+  and `raw_frontmatter_delimiters_echoed: false` so caller UIs can distinguish metadata panels from
+  document content without guessing.
+- **Frontmatter viewer guidance.** New public docs clarify that YAML frontmatter remains part of the
+  canonical storage format, while human-facing viewers should hide it by default or show it in a
+  folded metadata panel. `ai-response-concept-guide` exposes the same rule for AI runtimes.
+
 ## v0.3.183 - 2026-07-06
 
 Adopt resume-gap diagnostics and deeper doctor frontmatter progress. Additive; no migration.

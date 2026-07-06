@@ -1,6 +1,6 @@
 # zet Markdown Style Guide
 
-Status: v0.3.139 zet Markdown range-tilde authoring checkpoint
+Status: v0.3.184 zet Markdown authoring and frontmatter viewer checkpoint
 
 WOM zets are Markdown-compatible today. That is useful for authoring and import
 compatibility, but it means AI writers must avoid punctuation that Markdown
@@ -52,6 +52,21 @@ AI runtimes drafting or reviewing zets should follow this contract:
 
 `archive ai-response-concept-guide --topic all --dry-run` now includes the same
 rule so the AI runtime can discover it during normal WOM concept handoff.
+
+## Frontmatter Viewer Rule
+
+Canonical zets may contain YAML frontmatter fenced by `---`. That frontmatter is
+storage metadata, not document prose.
+
+When a user wants to read a zet as a document, use:
+
+```powershell
+archive read-zettel <archive-root> --zettel-id <id> --section document
+```
+
+Human-facing viewers should hide frontmatter by default or show it in a folded
+metadata panel. AI assistants should lead with the body or overview and mention
+frontmatter only when it affects the user's decision.
 
 ## Safety Boundary
 

@@ -639,11 +639,13 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, tiro_text)
         for phrase in (
-            "Status: v0.3.139 zet Markdown range-tilde authoring checkpoint",
+            "Status: v0.3.184 zet Markdown authoring and frontmatter viewer checkpoint",
             "archive zet-markdown-style-guide <archive-root> --topic range_tilde --dry-run --format json",
             "A ~ B",
             "A~~B",
             "Double tilde is used only when the human explicitly wants Markdown",
+            "archive read-zettel <archive-root> --zettel-id <id> --section document",
+            "storage metadata, not document prose",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, style_text)

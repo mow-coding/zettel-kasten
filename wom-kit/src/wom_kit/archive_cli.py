@@ -7430,6 +7430,12 @@ def command_read_zettel(args: argparse.Namespace) -> int:
     if args.format == "json":
         print_json(result)
     else:
+        if result.get("section") == "document":
+            if result.get("body_omitted"):
+                print("(body omitted)")
+            else:
+                print(result["body"].rstrip())
+            return 0
         frontmatter = result["frontmatter"]
         print(f"Path: {result['path']}")
         if isinstance(frontmatter, dict):
@@ -15029,9 +15035,9 @@ def build_parser() -> argparse.ArgumentParser:
     read_target.add_argument("--path", help="Archive-relative zettel path to read.")
     read_zettel.add_argument(
         "--section",
-        choices=["overview", "body", "details", "all"],
+        choices=["overview", "body", "document", "details", "all"],
         default="body",
-        help="Read only the cheap first-read overview, the body, frontmatter details, or all sections.",
+        help="Read only the cheap first-read overview, the compatibility body read, a human document view, frontmatter details, or all sections.",
     )
     read_zettel.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     read_zettel.set_defaults(func=command_read_zettel)
