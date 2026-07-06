@@ -1959,14 +1959,24 @@ class Doctor:
                         target_path,
                     )
                 receipt_progress("checking target mint receipt link")
-                mint = target_data.get("mint") if isinstance(target_data.get("mint"), dict) else {}
+                receipt_progress("reading target mint block")
+                raw_mint = target_data.get("mint")
+                receipt_progress("validating target mint block")
+                mint = raw_mint if isinstance(raw_mint, dict) else {}
+                receipt_progress("reading target mint receipt_path")
+                target_receipt_path = mint.get("receipt_path")
+                receipt_progress("formatting mint receipt relative path")
                 receipt_relative = self._display_path(path)
-                if mint.get("receipt_path") != receipt_relative:
+                receipt_progress("comparing target mint receipt_path")
+                if target_receipt_path != receipt_relative:
+                    receipt_progress("recording target mint receipt link error")
                     self.error(
                         "mint_receipt_canonical_link_missing",
                         "Mint receipt target zettel does not link back through mint.receipt_path.",
                         path,
                     )
+                else:
+                    receipt_progress("target mint receipt link ok")
         self._progress(
             "mint-receipts",
             "cache summary "
@@ -2802,6 +2812,12 @@ def command_version(args: argparse.Namespace) -> int:
         print(f"WOM-kit {result['version_label']}")
         print(f"CLI: {result['cli_entrypoint']}")
         print(f"Consistency: {result['consistency_state']}")
+        import_origin = result.get("import_origin") if isinstance(result.get("import_origin"), dict) else {}
+        module_path = import_origin.get("module_path")
+        if module_path:
+            print(f"Import module: {module_path}")
+        elif import_origin.get("module_path_redacted"):
+            print("Import module: redacted (pass --no-redact-local-paths to inspect)")
         project_pin = result.get("project_pin") if isinstance(result.get("project_pin"), dict) else {}
         if project_pin.get("checked"):
             installed = project_pin.get("installed_version") or "-"

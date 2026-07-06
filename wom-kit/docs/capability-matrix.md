@@ -1,9 +1,10 @@
 # WOM-kit Capability Matrix
 
-Status: v0.3.184 zet frontmatter viewer contract checkpoint
+Status: v0.3.185 adopt nonmatching resume diagnostics and doctor mint-link progress checkpoint
 Date: 2026-07-06
-Version: v0.3.184, release candidate
+Version: v0.3.185, release candidate
 
+Previous checkpoint: Status: v0.3.184 zet frontmatter viewer contract checkpoint
 Previous checkpoint: Status: v0.3.183 adopt resume-gap diagnostics and doctor frontmatter progress checkpoint
 Previous checkpoint: Status: v0.3.182 adopt resume and doctor mint-receipts progress checkpoint
 Previous checkpoint: Status: v0.3.181 staged cleanup progress checkpoint
@@ -93,10 +94,11 @@ This matrix is a plain-language map of what WOM-kit can do today and what is onl
 
 Read it as a safety label. A row marked `read-only preview` means WOM-kit can inspect or plan something and return JSON, but it does not write files. A row marked `approval-gated write` means the CLI has a human-reviewed write path with explicit approval fields. A row marked `documented-only` means the idea is described, but no product command exists yet.
 
-Current checkpoint note (v0.3.184): a separate real-use feedback note showed that raw YAML
-frontmatter delimiters make canonical zets look broken when a human expects a document. WOM now
-keeps frontmatter as canonical storage metadata but exposes `read-zettel --section document` as the
-human document view that hides raw frontmatter and prints only the body in text mode.
+Current checkpoint note (v0.3.185): basoon's v0.3.183 revalidation confirmed the matching resume
+summary and showed that legacy same-provider declared locations under a nonmatching store/key need
+their own explanation. Adopt now reports those nonmatching same-provider counts separately, while
+`doctor --progress` breaks the target mint receipt link check into field-level sub-steps and
+`archive version` makes import-origin drift easier to diagnose.
 
 ## Status Legend
 

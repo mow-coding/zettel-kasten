@@ -152,6 +152,28 @@ zet, receipt로 보존해야 합니다.
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
 
+## From `v0.3.184` To `v0.3.185`
+
+진단을 보강한 additive patch입니다. 마이그레이션은 필요 없습니다.
+
+운영자가 볼 변화:
+
+- `object-storage-adopt-existing --progress`는 v0.3.183의 matching resume summary를 계속
+  출력합니다. 이제 같은 provider/digest location이 있지만 현재 실행의 `store_ref` 또는
+  resolved `remote_key`와 맞지 않으면 `resume nonmatching-provider summary`도 출력합니다.
+- `adopt_summary`에 `same_provider_nonmatching_location_count`,
+  `same_provider_nonmatching_declared_uploaded_count`, `same_provider_store_ref_mismatch_count`,
+  `same_provider_remote_key_mismatch_count`가 추가됩니다.
+- `provider_location_mismatch_gap` warning은 legacy/nonmatching `declared_uploaded` location이
+  evidence이긴 하지만 현재 store/key run의 `--skip-existing-wom-uploaded` 후보는 아니라는 점을
+  설명합니다.
+- `doctor --strict --progress`는 `checking target mint receipt link`를 target mint block,
+  receipt-path, relative-path, comparison, ok/error sub-step으로 더 잘게 보여줍니다.
+- `archive version <root>` text output은 import module redaction line을 보여줍니다.
+  source mirror와 editable/global install drift를 볼 때는 `--no-redact-local-paths`로 실제
+  module path를 확인할 수 있습니다.
+- `wom-kit/docs/releases/v0.3.185.md`를 보세요.
+
 ## From `v0.3.183` To `v0.3.184`
 
 사람이 읽는 zet viewer 표면을 보강한 additive patch입니다. 마이그레이션은 필요 없습니다.

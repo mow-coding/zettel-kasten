@@ -625,6 +625,10 @@ class ArchiveCliTests(unittest.TestCase):
         self.assertIn("checking target file ref", messages)
         self.assertIn("target frontmatter reading text", messages)
         self.assertIn("target frontmatter loading yaml", messages)
+        self.assertIn("reading target mint block", messages)
+        self.assertIn("reading target mint receipt_path", messages)
+        self.assertIn("comparing target mint receipt_path", messages)
+        self.assertIn("target mint receipt link ok", messages)
         self.assertTrue(any(message.startswith("cache summary ") for message in messages))
 
     def test_doctor_zettel_frontmatter_cache_reuses_first_read(self) -> None:
@@ -906,6 +910,8 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(result["version_label"], f"v{archive_cli.__version__}")
             self.assertEqual(result["source_of_truth"], "wom_kit.__version__")
             self.assertTrue(result["pyproject_matches_package_version"])
+            self.assertTrue(result["import_origin"]["module_path_redacted"])
+            self.assertNotIn("module_path", result["import_origin"])
             self.assertEqual(result["project_pin"]["status"], "present")
             self.assertEqual(result["project_pin"]["path"], ".zettel-kasten/source/installed-version.txt")
             self.assertEqual(result["project_pin"]["pin_root"], "inspection_root")
@@ -1846,6 +1852,10 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(mirror["pyproject_version"], "0.3.109")
             self.assertFalse(mirror["source_matches_running_version"])
             self.assertTrue(mirror["pin_matches_source_version"])
+            self.assertTrue(result["import_origin"]["module_path_redacted"])
+            self.assertTrue(
+                any("active archive command is importing a different WOM-kit module" in warning for warning in result["warnings"])
+            )
             self.assertNotIn(str(project_root), output)
             if git_available:
                 self.assertEqual(mirror["latest_fetched_tag"], "v0.3.136")
@@ -1853,6 +1863,18 @@ class ArchiveCliTests(unittest.TestCase):
                 self.assertEqual(result["consistency_state"], "project_source_mirror_behind_latest_fetched_tag")
             else:
                 self.assertEqual(result["consistency_state"], "project_source_mirror_mismatch")
+
+            text_code, text_output = self.run_cli(["version", str(project_root)])
+            self.assertEqual(text_code, 1, text_output)
+            self.assertIn("Import module: redacted", text_output)
+            self.assertNotIn(str(project_root), text_output)
+
+            visible_code, visible_output = self.run_cli(
+                ["version", str(project_root), "--no-redact-local-paths"]
+            )
+            self.assertEqual(visible_code, 1, visible_output)
+            self.assertIn("Import module:", visible_output)
+            self.assertIn("archive_services.py", visible_output)
 
     def test_tiro_import_plan_manifest_preserves_structure_without_echoing_text(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -13314,12 +13336,65 @@ state:
         self.assertEqual(summary["existing_matching_location_count"], 1)
         self.assertEqual(summary["existing_wom_uploaded_count"], 0)
         self.assertEqual(summary["existing_declared_uploaded_count"], 1)
+        self.assertEqual(summary["same_provider_nonmatching_declared_uploaded_count"], 0)
         self.assertEqual(summary["expected_resume_skip_count"], 0)
         self.assertTrue(any("declared_upload_resume_gap" in warning for warning in result["warnings"]))
         self.assertIn(
             (
                 "adopt-plan",
                 "resume summary matching_locations=1 wom_uploaded=0 declared_uploaded=1 other=0 skip_existing_wom_uploaded=on",
+                None,
+                None,
+            ),
+            events,
+        )
+
+    def test_object_storage_adopt_plan_reports_same_provider_nonmatching_location_gap(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            key = archive_services.object_storage_remote_key(
+                strategy="prefix", key_prefix=self._BASOON_PREFIX, digest=_FAKE_SHA_A
+            )
+            changed = archive_services._object_storage_apply_declared_adopt_location(
+                archive_root,
+                object_id=f"sha256:{_FAKE_SHA_A}",
+                provider_kind="cloudflare-r2",
+                store_ref="legacy-r2-basoon",
+                digest=_FAKE_SHA_A,
+                key_strategy="prefix",
+                remote_key=key,
+                registered_at="2026-07-06T00:00:00Z",
+            )
+            self.assertEqual(changed, 1)
+            events = []
+
+            result = self._adopt_run(
+                archive_root,
+                only=f"sha256:{_FAKE_SHA_A}",
+                max_objects=1,
+                reviewed_by="kim",
+                key_strategy="prefix",
+                key_prefix=self._BASOON_PREFIX,
+                dry_run=True,
+                skip_existing_wom_uploaded=True,
+                progress_callback=lambda stage, message, current, total: events.append(
+                    (stage, message, current, total)
+                ),
+            )
+
+        self.assertTrue(result["ok"], result)
+        summary = result["adopt_summary"]
+        self.assertEqual(summary["existing_matching_location_count"], 0)
+        self.assertEqual(summary["existing_declared_uploaded_count"], 0)
+        self.assertEqual(summary["same_provider_nonmatching_location_count"], 1)
+        self.assertEqual(summary["same_provider_nonmatching_declared_uploaded_count"], 1)
+        self.assertEqual(summary["same_provider_store_ref_mismatch_count"], 1)
+        self.assertEqual(summary["same_provider_remote_key_mismatch_count"], 0)
+        self.assertTrue(any("provider_location_mismatch_gap" in warning for warning in result["warnings"]))
+        self.assertIn(
+            (
+                "adopt-plan",
+                "resume nonmatching-provider summary same_provider_nonmatching_locations=1 wom_uploaded=0 declared_uploaded=1 other=0 store_ref_mismatch=1 remote_key_mismatch=0",
                 None,
                 None,
             ),

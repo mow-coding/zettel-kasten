@@ -6,6 +6,23 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.185 - 2026-07-06
+
+Basoon v0.3.183 revalidation follow-up for adopt resume diagnostics, doctor mint-link progress, and version import-origin warnings. Additive; no migration.
+
+- **Same-provider nonmatching adopt diagnostics.** `object-storage-adopt-existing --progress` now
+  reports a second resume diagnostic when digest-bound same-provider object-storage locations exist
+  but do not match this run's `store_ref` or resolved `remote_key`. The JSON summary includes
+  nonmatching location counts split by availability plus store-ref/key mismatch counts, and
+  `provider_location_mismatch_gap` explains why legacy declared rows are not resume-skip candidates.
+- **Doctor mint-link sub-steps.** `doctor --strict --progress` now splits `checking target mint
+  receipt link` into target mint block read, block validation, receipt-path read, relative-path
+  formatting, comparison, and ok/error recording. This narrows the next large-archive stall point.
+- **Version import-origin warning.** `archive version <root>` text output now identifies whether the
+  imported module path is redacted and points operators to `--no-redact-local-paths`; mismatch
+  warnings now explain that the active `archive` command may be importing a different WOM-kit module
+  than the project-local source mirror.
+
 ## v0.3.184 - 2026-07-06
 
 Human document view for canonical zet frontmatter. Additive; no migration.
