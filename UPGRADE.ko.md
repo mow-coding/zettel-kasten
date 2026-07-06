@@ -152,6 +152,25 @@ zet, receipt로 보존해야 합니다.
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
 
+## From `v0.3.182` To `v0.3.183`
+
+resume 진단과 progress를 보강한 additive patch입니다. 마이그레이션은 필요 없습니다.
+
+운영자가 볼 변화:
+
+- `object-storage-adopt-existing --progress`가 verified remote HEAD loop에 들어가기 전에
+  `adopt-plan` resume summary를 출력합니다. matching provider/store/key location을
+  `wom_uploaded`, `declared_uploaded`, other로 나누어 보여줍니다.
+- `adopt_summary`에 `existing_matching_location_count`,
+  `existing_declared_uploaded_count`, `existing_other_location_count`,
+  `expected_resume_skip_count`가 추가됩니다.
+- matching `declared_uploaded` location이 있으면 `declared_upload_resume_gap` warning을 냅니다.
+  이 location들은 WOM이 검증한 `wom_uploaded`가 아니므로 `--skip-existing-wom-uploaded`로
+  skip할 수 없고, verified adopt HEAD로 승격해야 합니다.
+- `doctor --strict --progress`는 target frontmatter loading을 read/BOM/fence/YAML/load와
+  mint-link sub-step으로 더 잘게 보여줍니다.
+- `wom-kit/docs/releases/v0.3.183.md`를 보세요.
+
 ## From `v0.3.181` To `v0.3.182`
 
 basoon 재검증 후속 additive patch입니다. 마이그레이션은 필요 없습니다.

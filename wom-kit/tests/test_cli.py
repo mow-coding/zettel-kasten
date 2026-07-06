@@ -623,6 +623,8 @@ class ArchiveCliTests(unittest.TestCase):
         messages = [message for stage, message, _current, _total in events if stage == "mint-receipts"]
         self.assertIn("loading receipt json", messages)
         self.assertIn("checking target file ref", messages)
+        self.assertIn("target frontmatter reading text", messages)
+        self.assertIn("target frontmatter loading yaml", messages)
         self.assertTrue(any(message.startswith("cache summary ") for message in messages))
 
     def test_doctor_zettel_frontmatter_cache_reuses_first_read(self) -> None:
@@ -13262,6 +13264,56 @@ state:
         self.assertEqual(resumed["adopt_results"][0]["adopt_status"], "already_wom_uploaded_manifest")
         self.assertIn(
             ("adopt-verify", "skipped existing wom_uploaded manifest location", 1, 1),
+            events,
+        )
+
+    def test_object_storage_adopt_plan_reports_declared_uploaded_resume_gap(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            key = archive_services.object_storage_remote_key(
+                strategy="prefix", key_prefix=self._BASOON_PREFIX, digest=_FAKE_SHA_A
+            )
+            changed = archive_services._object_storage_apply_declared_adopt_location(
+                archive_root,
+                object_id=f"sha256:{_FAKE_SHA_A}",
+                provider_kind="cloudflare-r2",
+                store_ref="r2-basoon-20260704",
+                digest=_FAKE_SHA_A,
+                key_strategy="prefix",
+                remote_key=key,
+                registered_at="2026-07-06T00:00:00Z",
+            )
+            self.assertEqual(changed, 1)
+            events = []
+
+            result = self._adopt_run(
+                archive_root,
+                only=f"sha256:{_FAKE_SHA_A}",
+                max_objects=1,
+                reviewed_by="kim",
+                key_strategy="prefix",
+                key_prefix=self._BASOON_PREFIX,
+                dry_run=True,
+                skip_existing_wom_uploaded=True,
+                progress_callback=lambda stage, message, current, total: events.append(
+                    (stage, message, current, total)
+                ),
+            )
+
+        self.assertTrue(result["ok"], result)
+        summary = result["adopt_summary"]
+        self.assertEqual(summary["existing_matching_location_count"], 1)
+        self.assertEqual(summary["existing_wom_uploaded_count"], 0)
+        self.assertEqual(summary["existing_declared_uploaded_count"], 1)
+        self.assertEqual(summary["expected_resume_skip_count"], 0)
+        self.assertTrue(any("declared_upload_resume_gap" in warning for warning in result["warnings"]))
+        self.assertIn(
+            (
+                "adopt-plan",
+                "resume summary matching_locations=1 wom_uploaded=0 declared_uploaded=1 other=0 skip_existing_wom_uploaded=on",
+                None,
+                None,
+            ),
             events,
         )
 

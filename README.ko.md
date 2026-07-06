@@ -31,10 +31,10 @@ tag 목록을 여기서 다시 키우지 않습니다.
 현재 공개 기준:
 
 ```text
-v0.3.182 pre-release
+v0.3.183 pre-release
 ```
 
-이전 공개 기준: v0.3.181 pre-release.
+이전 공개 기준: v0.3.182 pre-release.
 
 전체 릴리스 이력은 [CHANGELOG.md](CHANGELOG.md)와 [wom-kit/docs/releases/](wom-kit/docs/releases/)를 보세요.
 

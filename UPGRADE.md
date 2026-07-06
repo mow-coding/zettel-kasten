@@ -163,6 +163,25 @@ and receipts before any cleanup.
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
 
+## From `v0.3.182` To `v0.3.183`
+
+One additive resume-diagnostics and progress patch. No migration is required.
+
+Operator-visible notes:
+
+- `object-storage-adopt-existing --progress` now prints an `adopt-plan` resume summary with
+  matching provider/store/key location counts split into `wom_uploaded`, `declared_uploaded`, and
+  other. This appears before the verified remote-HEAD loop.
+- `adopt_summary` now includes `existing_matching_location_count`,
+  `existing_declared_uploaded_count`, `existing_other_location_count`, and
+  `expected_resume_skip_count`.
+- Matching `declared_uploaded` locations now emit `declared_upload_resume_gap`: they explain a
+  partial state where many provider/store/key locations exist but cannot be skipped by
+  `--skip-existing-wom-uploaded` because they are not WOM-verified `wom_uploaded` locations.
+- `doctor --strict --progress` now breaks target frontmatter loading into read/BOM/fence/YAML/load
+  and mint-link sub-steps.
+- See `wom-kit/docs/releases/v0.3.183.md`.
+
 ## From `v0.3.181` To `v0.3.182`
 
 One additive basoon revalidation follow-up. No migration is required.

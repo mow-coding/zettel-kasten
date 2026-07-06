@@ -6,6 +6,22 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.183 - 2026-07-06
+
+Adopt resume-gap diagnostics and deeper doctor frontmatter progress. Additive; no migration.
+
+- **Adopt resume state counts.** `object-storage-adopt-existing` now counts matching existing
+  provider/store/key manifest locations by availability: total, `wom_uploaded`,
+  `declared_uploaded`, and other. `--progress` emits a content-free `adopt-plan` resume summary
+  before the verified HEAD loop starts.
+- **Declared-upload gap warning.** If matching `declared_uploaded` locations exist, adopt emits
+  `declared_upload_resume_gap` to explain why `--skip-existing-wom-uploaded` cannot skip them:
+  they are not WOM-verified and still need verified adopt HEADs before promotion to
+  `wom_uploaded`.
+- **Doctor frontmatter sub-steps.** `doctor --progress` now breaks target frontmatter loading into
+  text read, BOM check, frontmatter fence parse, YAML load, loaded/cache-hit, target BOM cache, and
+  mint-link checks.
+
 ## v0.3.182 - 2026-07-06
 
 Basoon v0.3.180 revalidation follow-up for adopt resume and doctor receipt progress. Additive; no
