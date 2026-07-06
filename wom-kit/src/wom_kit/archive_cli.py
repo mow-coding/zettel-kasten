@@ -852,6 +852,12 @@ class Doctor:
         self._file_sha256_cache: dict[str, str] = {}
         self._zettel_frontmatter_cache: dict[str, dict[str, Any] | None] = {}
         self._zettel_bom_cache: dict[str, bool] = {}
+        self._file_sha256_cache_hits = 0
+        self._file_sha256_cache_misses = 0
+        self._zettel_frontmatter_cache_hits = 0
+        self._zettel_frontmatter_cache_misses = 0
+        self._zettel_bom_cache_hits = 0
+        self._zettel_bom_cache_misses = 0
 
     def run(self) -> list[Diagnostic]:
         if not self.archive_root.exists():
@@ -950,7 +956,10 @@ class Doctor:
 
     def _sha256_file_cached(self, path: Path) -> str:
         key = self._file_cache_key(path)
-        if key not in self._file_sha256_cache:
+        if key in self._file_sha256_cache:
+            self._file_sha256_cache_hits += 1
+        else:
+            self._file_sha256_cache_misses += 1
             self._file_sha256_cache[key] = sha256_file(path)
         return self._file_sha256_cache[key]
 
@@ -969,7 +978,9 @@ class Doctor:
     def _load_zettel_frontmatter_cached(self, path: Path) -> dict[str, Any] | None:
         key = self._file_cache_key(path)
         if key in self._zettel_frontmatter_cache:
+            self._zettel_frontmatter_cache_hits += 1
             return self._zettel_frontmatter_cache[key]
+        self._zettel_frontmatter_cache_misses += 1
         text = path.read_text(encoding="utf-8-sig")
         self._zettel_has_bom_cached(path)
         frontmatter = parse_frontmatter(text)
@@ -985,7 +996,10 @@ class Doctor:
 
     def _zettel_has_bom_cached(self, path: Path) -> bool:
         key = self._file_cache_key(path)
-        if key not in self._zettel_bom_cache:
+        if key in self._zettel_bom_cache:
+            self._zettel_bom_cache_hits += 1
+        else:
+            self._zettel_bom_cache_misses += 1
             try:
                 with path.open("rb") as handle:
                     self._zettel_bom_cache[key] = handle.read(3) == b"\xef\xbb\xbf"
@@ -1872,11 +1886,19 @@ class Doctor:
             paths.append(path)
         total = len(paths)
         for index, path in enumerate(paths, start=1):
-            if index == 1 or index == total or index % 250 == 0:
+            emit_detail_progress = index == 1 or index == total or index % 250 == 0
+
+            def receipt_progress(message: str) -> None:
+                if emit_detail_progress:
+                    self._progress("mint-receipts", message, index, total)
+
+            if emit_detail_progress:
                 self._progress("mint-receipts", self._display_path(path) or "mint receipt", index, total)
+            receipt_progress("loading receipt json")
             data = self._load_json_file(path)
             if not isinstance(data, dict):
                 continue
+            receipt_progress("checking schema")
             self._check_schema(data, "mint-receipt.schema.json", path)
             if data.get("action") != "mint_zettel":
                 self.error("mint_receipt_action_invalid", "Mint receipt action must be mint_zettel.", path)
@@ -1888,14 +1910,20 @@ class Doctor:
                 if not isinstance(data.get(field), dict):
                     self.error("mint_receipt_field_missing", f"Mint receipt must contain object field: {field}.", path)
 
+            receipt_progress("checking source status")
             self._check_mint_receipt_status(data, path, "source", "draft")
+            receipt_progress("checking target status")
             self._check_mint_receipt_status(data, path, "target", "canonical")
             if not self._mint_receipt_source_is_retired(data, path):
+                receipt_progress("checking source file ref")
                 self._check_mint_receipt_file_ref(data, path, "source")
+            receipt_progress("checking target file ref")
             target_path = self._check_mint_receipt_file_ref(data, path, "target")
+            receipt_progress("checking snapshot file ref")
             self._check_mint_receipt_file_ref(data, path, "snapshot")
 
             if target_path is not None:
+                receipt_progress("loading target frontmatter")
                 target_data = self._load_zettel_frontmatter_cached(target_path)
                 if target_data is None:
                     self.error("mint_receipt_target_frontmatter_missing", "Mint receipt target has no zettel frontmatter.", path)
@@ -1917,6 +1945,15 @@ class Doctor:
                         "Mint receipt target zettel does not link back through mint.receipt_path.",
                         path,
                     )
+        self._progress(
+            "mint-receipts",
+            "cache summary "
+            f"file_sha256 hits={self._file_sha256_cache_hits} misses={self._file_sha256_cache_misses}; "
+            f"frontmatter hits={self._zettel_frontmatter_cache_hits} misses={self._zettel_frontmatter_cache_misses}; "
+            f"bom hits={self._zettel_bom_cache_hits} misses={self._zettel_bom_cache_misses}",
+            None,
+            None,
+        )
 
     def _mint_receipt_source_is_retired(self, data: dict[str, Any], path: Path) -> bool:
         zettel = data.get("zettel") if isinstance(data.get("zettel"), dict) else {}
@@ -5596,6 +5633,7 @@ def command_object_storage_adopt_existing(args: argparse.Namespace) -> int:
             key_map_path=Path(args.key_map) if getattr(args, "key_map", None) else None,
             accept_unverified_adopt=accept_unverified,
             content_hash_verify=bool(getattr(args, "content_hash_verify", False)),
+            skip_existing_wom_uploaded=bool(getattr(args, "skip_existing_wom_uploaded", False)),
             approve=approve,
             dry_run=bool(args.dry_run),
             send=send,
@@ -13902,6 +13940,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     object_storage_adopt_existing.add_argument("--accept-unverified-adopt", action="store_true", help="Record a NON-gating declared_uploaded adopt without a live HEAD (will NOT skip a PUT).")
     object_storage_adopt_existing.add_argument("--content-hash-verify", action="store_true", help="Per-object opt-in: additionally GetObject-and-rehash (costly; NOT the default presence-only HEAD check).")
+    object_storage_adopt_existing.add_argument("--skip-existing-wom-uploaded", action="store_true", help="Resume helper: skip remote HEAD for objects that already have a matching wom_uploaded manifest location for this provider/store/key.")
     object_storage_adopt_existing.add_argument("--progress", action="store_true", help="Stream adopt planning and remote-HEAD progress to stderr.")
     object_storage_adopt_existing.add_argument("--reviewed-by", help="Safe reviewer id required when --approve is used.")
     object_storage_adopt_existing.add_argument("--dry-run", action="store_true", help="Preview the adopt plan without provider calls, byte reads, or secret reads.")
