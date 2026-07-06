@@ -163,6 +163,27 @@ and receipts before any cleanup.
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
 
+## From `v0.3.184` To `v0.3.185`
+
+One additive diagnostics patch. No migration is required.
+
+Operator-visible notes:
+
+- `object-storage-adopt-existing --progress` still prints the v0.3.183 matching resume summary.
+  It now also prints a `resume nonmatching-provider summary` when same-provider digest-bound
+  locations exist but do not match this run's `store_ref` or resolved `remote_key`.
+- `adopt_summary` now includes `same_provider_nonmatching_location_count`,
+  `same_provider_nonmatching_declared_uploaded_count`, `same_provider_store_ref_mismatch_count`,
+  and `same_provider_remote_key_mismatch_count`.
+- `provider_location_mismatch_gap` warns that legacy/nonmatching `declared_uploaded` locations are
+  evidence, but not `--skip-existing-wom-uploaded` candidates for the current store/key run.
+- `doctor --strict --progress` now splits `checking target mint receipt link` into target mint block,
+  receipt-path, relative-path, comparison, and ok/error sub-steps.
+- `archive version <root>` text output now includes an import-module redaction line, and
+  `--no-redact-local-paths` can show the active module path when diagnosing source-mirror/editor
+  install drift.
+- See `wom-kit/docs/releases/v0.3.185.md`.
+
 ## From `v0.3.183` To `v0.3.184`
 
 One additive human-readable zet viewer patch. No migration is required.

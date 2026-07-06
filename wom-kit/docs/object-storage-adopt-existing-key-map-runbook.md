@@ -155,6 +155,20 @@ Only matching `wom_uploaded` rows can be skipped. Matching `declared_uploaded`
 rows are visible in the summary and warning output, but they are not WOM-verified;
 verified adopt must still HEAD them before promoting them to `wom_uploaded`.
 
+Since v0.3.185, `--progress` can also print a same-provider nonmatching summary:
+
+```text
+[object-storage-adopt] adopt-plan: resume nonmatching-provider summary same_provider_nonmatching_locations=<n> wom_uploaded=<n> declared_uploaded=<n> other=<n> store_ref_mismatch=<n> remote_key_mismatch=<n>
+```
+
+This means WOM found digest-bound object-storage locations for the same provider,
+but they do not match the current run's `store_ref` or resolved `remote_key`.
+Those rows are useful history, but they are not `--skip-existing-wom-uploaded`
+proof for the current store/key run. If the old store ref is the intended store,
+run adopt against that store identity; otherwise continue verified adopt for the
+current store ref so new `wom_uploaded` rows are written under the intended
+identity. v0.3.185 intentionally does not add an automatic store-ref migration.
+
 **Why two steps, and the in-band signal.** A batch verified adopt on a store with no
 prior verified adopt fails closed with the blocker `adopt_tiny_first_unmet`; the
 message names Step A as the exact remedy. Since v0.3.174 the adopt gate is DECOUPLED

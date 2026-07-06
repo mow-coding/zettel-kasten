@@ -54483,7 +54483,13 @@ def wom_kit_project_source_mirror_info(
     if normalized_source is not None and normalized_package is not None:
         summary["source_matches_running_version"] = normalized_source == normalized_package
         if summary["source_matches_running_version"] is False:
-            warnings.append("WOM-kit project source mirror differs from the running CLI version.")
+            warnings.append(
+                "WOM-kit project source mirror differs from the running CLI version; the active "
+                "archive command is importing a different WOM-kit module than the project-local "
+                "source mirror. Run archive version <root> --no-redact-local-paths to inspect the "
+                "imported module path, or set PYTHONPATH to the intended source mirror before "
+                "running archive."
+            )
     if normalized_pin is not None and normalized_source is not None:
         summary["pin_matches_source_version"] = normalized_pin == normalized_source
         if summary["pin_matches_source_version"] is False:
@@ -54600,6 +54606,15 @@ def wom_kit_version_info(
         "source_of_truth": "wom_kit.__version__",
         "pyproject_version": pyproject_version,
         "pyproject_matches_package_version": pyproject_matches,
+        "import_origin": {
+            "module_version": package_version,
+            "module_path_redacted": bool(redact_local_paths),
+            "module_path_hint": (
+                "pass --no-redact-local-paths to inspect the imported wom_kit module path"
+                if redact_local_paths
+                else None
+            ),
+        },
         "project_pin": pin_summary,
         "project_source_mirror": source_mirror,
         "consistency_state": consistency_state,
@@ -54625,6 +54640,7 @@ def wom_kit_version_info(
         "blockers": [],
     }
     if not redact_local_paths:
+        result["import_origin"]["module_path"] = str(service_path)
         local_paths: dict[str, str | None] = {
             "module": str(service_path),
             "kit_root": str(kit_root),
@@ -57757,6 +57773,58 @@ def object_storage_matching_remote_key_location_summary(
     return summary
 
 
+def object_storage_same_provider_nonmatching_location_summary(
+    locations: list[Any],
+    *,
+    provider_kind: str,
+    store_ref: str,
+    digest: str,
+    expected_remote_key: str,
+) -> dict[str, int]:
+    clean_digest = str(digest or "").removeprefix("sha256:").lower()
+    summary = {
+        "total": 0,
+        "wom_uploaded": 0,
+        "declared_uploaded": 0,
+        "other": 0,
+        "store_ref_mismatch": 0,
+        "remote_key_mismatch": 0,
+    }
+    if not SHA256_RE.match(clean_digest):
+        return summary
+    for location in locations:
+        if not isinstance(location, dict):
+            continue
+        if location.get("provider") != "object_storage":
+            continue
+        if str(location.get("provider_kind") or "") != provider_kind:
+            continue
+        remote_key = location.get("remote_key")
+        if remote_key is None:
+            remote_key = location.get("key_hint")
+        if not isinstance(remote_key, str) or not safe_object_storage_remote_key(remote_key):
+            continue
+        if clean_digest not in remote_key:
+            continue
+        store_matches = str(location.get("store_ref") or "") == store_ref
+        key_matches = remote_key == expected_remote_key
+        if store_matches and key_matches:
+            continue
+        summary["total"] += 1
+        if not store_matches:
+            summary["store_ref_mismatch"] += 1
+        if not key_matches:
+            summary["remote_key_mismatch"] += 1
+        availability = str(location.get("availability") or "")
+        if availability == "wom_uploaded":
+            summary["wom_uploaded"] += 1
+        elif availability == "declared_uploaded":
+            summary["declared_uploaded"] += 1
+        else:
+            summary["other"] += 1
+    return summary
+
+
 def _object_storage_wom_uploaded_remote_key_present(
     locations: list[Any],
     *,
@@ -59655,6 +59723,12 @@ def object_storage_adopt_existing_run(
     existing_wom_uploaded_count = 0
     existing_declared_uploaded_count = 0
     existing_other_location_count = 0
+    same_provider_nonmatching_location_count = 0
+    same_provider_nonmatching_wom_uploaded_count = 0
+    same_provider_nonmatching_declared_uploaded_count = 0
+    same_provider_nonmatching_other_count = 0
+    same_provider_store_ref_mismatch_count = 0
+    same_provider_remote_key_mismatch_count = 0
     if not blockers:
         manifest_record_index = manifest_records_by_object_id(root)
         _progress("adopt-plan", "start", None, None)
@@ -59708,6 +59782,14 @@ def object_storage_adopt_existing_run(
             normalized_size = size_bytes if isinstance(size_bytes, int) else None
             existing_wom_uploaded = None
             existing_location_summary = {"total": 0, "wom_uploaded": 0, "declared_uploaded": 0, "other": 0}
+            same_provider_nonmatching_summary = {
+                "total": 0,
+                "wom_uploaded": 0,
+                "declared_uploaded": 0,
+                "other": 0,
+                "store_ref_mismatch": 0,
+                "remote_key_mismatch": 0,
+            }
             if isinstance(record, dict) and remote_key:
                 locations = record.get("locations") if isinstance(record.get("locations"), list) else []
                 existing_location_summary = object_storage_matching_remote_key_location_summary(
@@ -59720,6 +59802,19 @@ def object_storage_adopt_existing_run(
                 existing_matching_location_count += existing_location_summary["total"]
                 existing_declared_uploaded_count += existing_location_summary["declared_uploaded"]
                 existing_other_location_count += existing_location_summary["other"]
+                same_provider_nonmatching_summary = object_storage_same_provider_nonmatching_location_summary(
+                    locations,
+                    provider_kind=normalized_provider,
+                    store_ref=normalized_store_ref,
+                    digest=digest,
+                    expected_remote_key=remote_key,
+                )
+                same_provider_nonmatching_location_count += same_provider_nonmatching_summary["total"]
+                same_provider_nonmatching_wom_uploaded_count += same_provider_nonmatching_summary["wom_uploaded"]
+                same_provider_nonmatching_declared_uploaded_count += same_provider_nonmatching_summary["declared_uploaded"]
+                same_provider_nonmatching_other_count += same_provider_nonmatching_summary["other"]
+                same_provider_store_ref_mismatch_count += same_provider_nonmatching_summary["store_ref_mismatch"]
+                same_provider_remote_key_mismatch_count += same_provider_nonmatching_summary["remote_key_mismatch"]
                 existing_wom_uploaded = object_storage_wom_uploaded_location_match(
                     locations,
                     provider_kind=normalized_provider,
@@ -59745,6 +59840,7 @@ def object_storage_adopt_existing_run(
                     "record_present": isinstance(record, dict),
                     "existing_wom_uploaded": existing_wom_uploaded,
                     "existing_location_summary": existing_location_summary,
+                    "same_provider_nonmatching_location_summary": same_provider_nonmatching_summary,
                 }
             )
         _progress("adopt-plan", "done", None, None)
@@ -59759,6 +59855,19 @@ def object_storage_adopt_existing_run(
             None,
             None,
         )
+        if same_provider_nonmatching_location_count:
+            _progress(
+                "adopt-plan",
+                "resume nonmatching-provider summary "
+                f"same_provider_nonmatching_locations={same_provider_nonmatching_location_count} "
+                f"wom_uploaded={same_provider_nonmatching_wom_uploaded_count} "
+                f"declared_uploaded={same_provider_nonmatching_declared_uploaded_count} "
+                f"other={same_provider_nonmatching_other_count} "
+                f"store_ref_mismatch={same_provider_store_ref_mismatch_count} "
+                f"remote_key_mismatch={same_provider_remote_key_mismatch_count}",
+                None,
+                None,
+            )
 
     adopt_results: list[dict[str, Any]] = []
     adopted_count = 0
@@ -59804,6 +59913,15 @@ def object_storage_adopt_existing_run(
             "declared_uploaded provider/store/key locations, but they are not WOM-verified and cannot "
             "be skipped by --skip-existing-wom-uploaded; verified adopt must still HEAD them to promote "
             "them to wom_uploaded."
+        )
+    if same_provider_nonmatching_declared_uploaded_count and not accept_unverified_adopt:
+        warnings.append(
+            "provider_location_mismatch_gap: "
+            f"{same_provider_nonmatching_declared_uploaded_count} same-provider declared_uploaded locations "
+            "bind the object digest but do not match this run's store_ref/remote_key. They are legacy or "
+            "nonmatching location evidence, not --skip-existing-wom-uploaded candidates; continue verified "
+            "adopt for the intended store_ref/key map, or intentionally run against the legacy store_ref if "
+            "that is the store identity being resumed."
         )
 
     result = _object_storage_upload_base_result(
@@ -60117,6 +60235,12 @@ def object_storage_adopt_existing_run(
                 "existing_matching_location_count": existing_matching_location_count,
                 "existing_declared_uploaded_count": existing_declared_uploaded_count,
                 "existing_other_location_count": existing_other_location_count,
+                "same_provider_nonmatching_location_count": same_provider_nonmatching_location_count,
+                "same_provider_nonmatching_wom_uploaded_count": same_provider_nonmatching_wom_uploaded_count,
+                "same_provider_nonmatching_declared_uploaded_count": same_provider_nonmatching_declared_uploaded_count,
+                "same_provider_nonmatching_other_count": same_provider_nonmatching_other_count,
+                "same_provider_store_ref_mismatch_count": same_provider_store_ref_mismatch_count,
+                "same_provider_remote_key_mismatch_count": same_provider_remote_key_mismatch_count,
                 "expected_resume_skip_count": (
                     existing_wom_uploaded_count if skip_existing_wom_uploaded else 0
                 ),
