@@ -6,6 +6,23 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.186 - 2026-07-07
+
+Basoon v0.3.185 revalidation follow-up for read-only adopt diagnostics and the next doctor mint-receipt progress gap. Additive; no migration.
+
+- **Adopt stop-after-plan diagnostic mode.** `object-storage-adopt-existing` now accepts
+  `--stop-after-plan`, so an operator can reuse an `--approve` command shape, resolve the
+  key-map/resume summaries, and stop before credential value reads, provider HEADs, manifest
+  updates, or execution receipt writes. The final JSON/text result stays on stdout; optional
+  progress stays on stderr.
+- **Same-store `wom_uploaded` gating diagnostics.** Adopt summaries now distinguish raw
+  same-`store_ref` `wom_uploaded` location counts from the stricter skip candidates that match
+  this run's content-addressed key hint, resolved `remote_key`, and digest binding. This explains
+  why a simple manifest count can be higher than the matching resume skip count.
+- **Doctor mint-receipt continuation progress.** `doctor --strict --progress` now emits detailed
+  mint-receipt sub-steps for the first three receipts and records `completed receipt checks`, so a
+  stall after `target mint receipt link ok` is distinguishable from a slow next receipt.
+
 ## v0.3.185 - 2026-07-06
 
 Basoon v0.3.183 revalidation follow-up for adopt resume diagnostics, doctor mint-link progress, and version import-origin warnings. Additive; no migration.

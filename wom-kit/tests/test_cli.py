@@ -629,6 +629,7 @@ class ArchiveCliTests(unittest.TestCase):
         self.assertIn("reading target mint receipt_path", messages)
         self.assertIn("comparing target mint receipt_path", messages)
         self.assertIn("target mint receipt link ok", messages)
+        self.assertIn("completed receipt checks", messages)
         self.assertTrue(any(message.startswith("cache summary ") for message in messages))
 
     def test_doctor_zettel_frontmatter_cache_reuses_first_read(self) -> None:
@@ -13400,6 +13401,124 @@ state:
             ),
             events,
         )
+
+    def test_object_storage_adopt_plan_reports_same_store_wom_uploaded_non_gating_gap(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            expected_key = archive_services.object_storage_remote_key(
+                strategy="prefix", key_prefix=self._BASOON_PREFIX, digest=_FAKE_SHA_A
+            )
+            stale_key = f"{self._BASOON_PREFIX}/{_FAKE_SHA_A}/legacy"
+            changed = archive_services._object_storage_apply_wom_uploaded_location(
+                archive_root,
+                object_id=f"sha256:{_FAKE_SHA_A}",
+                provider_kind="cloudflare-r2",
+                store_ref="r2-basoon-20260704",
+                digest=_FAKE_SHA_A,
+                execution_receipt_ref="receipts/providers/object-storage-executions/expected.json",
+                uploaded_at="2026-07-06T00:00:00Z",
+                key_strategy="prefix",
+                remote_key=expected_key,
+                remote_key_verification="presence_size",
+                remote_size=151,
+            )
+            self.assertEqual(changed, 1)
+            changed = archive_services._object_storage_apply_wom_uploaded_location(
+                archive_root,
+                object_id=f"sha256:{_FAKE_SHA_A}",
+                provider_kind="cloudflare-r2",
+                store_ref="r2-basoon-20260704",
+                digest=_FAKE_SHA_A,
+                execution_receipt_ref="receipts/providers/object-storage-executions/stale.json",
+                uploaded_at="2026-07-06T00:00:01Z",
+                key_strategy="prefix",
+                remote_key=stale_key,
+                remote_key_verification="presence_size",
+                remote_size=151,
+            )
+            self.assertEqual(changed, 1)
+            events = []
+
+            result = self._adopt_run(
+                archive_root,
+                only=f"sha256:{_FAKE_SHA_A}",
+                max_objects=1,
+                reviewed_by="kim",
+                key_strategy="prefix",
+                key_prefix=self._BASOON_PREFIX,
+                dry_run=True,
+                skip_existing_wom_uploaded=True,
+                progress_callback=lambda stage, message, current, total: events.append(
+                    (stage, message, current, total)
+                ),
+            )
+
+        self.assertTrue(result["ok"], result)
+        summary = result["adopt_summary"]
+        self.assertEqual(summary["existing_wom_uploaded_count"], 1)
+        self.assertEqual(summary["existing_matching_wom_uploaded_location_count"], 1)
+        self.assertEqual(summary["same_store_wom_uploaded_location_count"], 2)
+        self.assertEqual(summary["same_store_wom_uploaded_gating_location_count"], 1)
+        self.assertEqual(summary["same_store_wom_uploaded_non_gating_location_count"], 1)
+        self.assertEqual(summary["same_store_wom_uploaded_remote_key_mismatch_count"], 1)
+        self.assertTrue(any("same_store_wom_uploaded_non_gating_gap" in warning for warning in result["warnings"]))
+        self.assertIn(
+            (
+                "adopt-plan",
+                "resume same-store wom_uploaded diagnostic store_ref_wom_uploaded_locations=2 gating_locations=1 non_gating_locations=1 key_hint_mismatch=0 remote_key_mismatch=1 remote_key_unsafe=0 digest_unbound=0",
+                None,
+                None,
+            ),
+            events,
+        )
+
+    def test_object_storage_adopt_stop_after_plan_approve_is_read_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            key = archive_services.object_storage_remote_key(
+                strategy="prefix", key_prefix=self._BASOON_PREFIX, digest=_FAKE_SHA_A
+            )
+            transport = _FakeObjectStorageTransport()
+            transport.store[key] = {"size": 151, "sha": _FAKE_SHA_A}
+            manifest_path = archive_root / "objects" / "manifests" / "files.jsonl"
+            manifest_before = manifest_path.read_text(encoding="utf-8")
+            receipt_dir = archive_root / "receipts" / "providers" / "object-storage-executions"
+            receipts_before = sorted(str(path.relative_to(archive_root)) for path in receipt_dir.glob("*.json"))
+            events = []
+
+            result = self._adopt_run(
+                archive_root,
+                only=f"sha256:{_FAKE_SHA_A}",
+                max_objects=1,
+                reviewed_by="kim",
+                key_strategy="prefix",
+                key_prefix=self._BASOON_PREFIX,
+                approve=True,
+                stop_after_plan=True,
+                transport=transport,
+                progress_callback=lambda stage, message, current, total: events.append(
+                    (stage, message, current, total)
+                ),
+            )
+
+            manifest_after = manifest_path.read_text(encoding="utf-8")
+            receipts_after = sorted(str(path.relative_to(archive_root)) for path in receipt_dir.glob("*.json"))
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["execution_status"], "plan_only")
+        self.assertTrue(result["plan_only"])
+        self.assertEqual(result["planned_stop_after_stage"], "adopt-plan")
+        self.assertFalse(result["closed_actions"]["credential_value_read"])
+        self.assertFalse(result["closed_actions"]["provider_api_called"])
+        self.assertFalse(result["closed_actions"]["files_written"])
+        self.assertEqual(transport.heads, [])
+        self.assertEqual(manifest_before, manifest_after)
+        self.assertEqual(receipts_before, receipts_after)
+        self.assertEqual(result["adopt_results"], [])
+        self.assertEqual(result["adopt_summary"]["plan_only_stop_stage"], "adopt-plan")
+        self.assertEqual(result["adopt_summary"]["planned_remote_head_count"], 1)
+        self.assertTrue(any("stop_after_plan" in warning for warning in result["warnings"]))
+        self.assertFalse(any(stage == "adopt-verify" for stage, _message, _current, _total in events))
 
     def test_object_storage_adopt_plan_uses_manifest_index_not_per_object_scan(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

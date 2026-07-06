@@ -1903,7 +1903,7 @@ class Doctor:
             paths.append(path)
         total = len(paths)
         for index, path in enumerate(paths, start=1):
-            emit_detail_progress = index == 1 or index == total or index % 250 == 0
+            emit_detail_progress = index <= 3 or index == total or index % 250 == 0
 
             def receipt_progress(message: str) -> None:
                 if emit_detail_progress:
@@ -1977,6 +1977,7 @@ class Doctor:
                     )
                 else:
                     receipt_progress("target mint receipt link ok")
+            receipt_progress("completed receipt checks")
         self._progress(
             "mint-receipts",
             "cache summary "
@@ -5651,7 +5652,8 @@ def command_object_storage_adopt_existing(args: argparse.Namespace) -> int:
     # A verified adopt needs the live send seam; a declared (unverified) adopt
     # does not touch the network. Only wire the sender for a verified --approve.
     accept_unverified = bool(getattr(args, "accept_unverified_adopt", False))
-    send = archive_services._default_urllib_sender() if (approve and not accept_unverified) else None
+    stop_after_plan = bool(getattr(args, "stop_after_plan", False))
+    send = archive_services._default_urllib_sender() if (approve and not accept_unverified and not stop_after_plan) else None
     progress_callback = make_stage_progress_callback(
         bool(getattr(args, "progress", False)), label="object-storage-adopt"
     )
@@ -5674,6 +5676,7 @@ def command_object_storage_adopt_existing(args: argparse.Namespace) -> int:
             skip_existing_wom_uploaded=bool(getattr(args, "skip_existing_wom_uploaded", False)),
             approve=approve,
             dry_run=bool(args.dry_run),
+            stop_after_plan=stop_after_plan,
             send=send,
             endpoint_host=getattr(args, "endpoint_host", None),
             bucket=getattr(args, "bucket", None),
@@ -13985,7 +13988,8 @@ def build_parser() -> argparse.ArgumentParser:
     object_storage_adopt_existing.add_argument("--accept-unverified-adopt", action="store_true", help="Record a NON-gating declared_uploaded adopt without a live HEAD (will NOT skip a PUT).")
     object_storage_adopt_existing.add_argument("--content-hash-verify", action="store_true", help="Per-object opt-in: additionally GetObject-and-rehash (costly; NOT the default presence-only HEAD check).")
     object_storage_adopt_existing.add_argument("--skip-existing-wom-uploaded", action="store_true", help="Resume helper: skip remote HEAD for objects that already have a matching wom_uploaded manifest location for this provider/store/key.")
-    object_storage_adopt_existing.add_argument("--progress", action="store_true", help="Stream adopt planning and remote-HEAD progress to stderr.")
+    object_storage_adopt_existing.add_argument("--stop-after-plan", action="store_true", help="Diagnostic mode: resolve the adopt plan and summaries, then stop before credential value reads, provider HEADs, manifest updates, or receipt writes. The final JSON/text result is still written to stdout.")
+    object_storage_adopt_existing.add_argument("--progress", action="store_true", help="Stream adopt planning and remote-HEAD progress to stderr; stdout remains reserved for the final --format result.")
     object_storage_adopt_existing.add_argument("--reviewed-by", help="Safe reviewer id required when --approve is used.")
     object_storage_adopt_existing.add_argument("--dry-run", action="store_true", help="Preview the adopt plan without provider calls, byte reads, or secret reads.")
     object_storage_adopt_existing.add_argument("--approve", action="store_true", help="Perform the adopt. Verified adopt HEADs each key presence-only (presence+size, no download); a bulk first-live adopt refuses until a tiny-first --only object proves the store; declared adopt needs --accept-unverified-adopt.")

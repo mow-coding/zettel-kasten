@@ -152,6 +152,18 @@ zet, receipt로 보존해야 합니다.
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
 
+## From `v0.3.185` To `v0.3.186`
+
+운영자 진단을 보강하는 additive patch입니다. 마이그레이션은 필요 없습니다.
+
+운영자가 볼 변화:
+
+- `object-storage-adopt-existing`에 `--stop-after-plan`이 추가되었습니다. `--approve` 명령 모양을 그대로 쓰면서 key-map/resume plan만 계산하고, credential 값 읽기, provider HEAD, manifest 갱신, execution receipt 쓰기 전에 멈춥니다.
+- 최종 `--format json` 또는 text 결과는 stdout으로 나갑니다. 선택형 `--progress` heartbeat는 stderr로 나가므로, 구조화된 결과를 보는 script는 stdout을 보거나 stderr를 따로 redirect해야 합니다.
+- `adopt_summary`에 `plan_only`, `plan_only_stop_stage`, `planned_remote_head_count`, `unresolved_remote_key_count`, `existing_matching_wom_uploaded_location_count`, 그리고 같은 store의 `wom_uploaded` raw count와 실제 gating count가 추가되었습니다. 그래서 단순 `store_ref` manifest count가 실제 resume skip 후보보다 큰 이유를 설명할 수 있습니다.
+- `doctor --strict --progress`는 처음 세 개 mint receipt에 대해 더 자세한 sub-step을 출력하고, detailed receipt마다 `completed receipt checks`를 찍습니다. `target mint receipt link ok` 이후 멈춤이 다음 receipt 문제인지 더 잘 좁힐 수 있습니다.
+- `wom-kit/docs/releases/v0.3.186.md`를 보세요.
+
 ## From `v0.3.184` To `v0.3.185`
 
 진단을 보강한 additive patch입니다. 마이그레이션은 필요 없습니다.

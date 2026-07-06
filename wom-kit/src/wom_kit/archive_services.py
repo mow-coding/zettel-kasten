@@ -57825,6 +57825,63 @@ def object_storage_same_provider_nonmatching_location_summary(
     return summary
 
 
+def object_storage_same_store_wom_uploaded_location_diagnostic(
+    locations: list[Any],
+    *,
+    provider_kind: str,
+    store_ref: str,
+    digest: str,
+    expected_remote_key: str,
+) -> dict[str, int]:
+    clean_digest = str(digest or "").removeprefix("sha256:").lower()
+    summary = {
+        "total": 0,
+        "gating": 0,
+        "non_gating": 0,
+        "key_hint_mismatch": 0,
+        "remote_key_mismatch": 0,
+        "remote_key_unsafe": 0,
+        "digest_unbound": 0,
+    }
+    if not SHA256_RE.match(clean_digest):
+        return summary
+    expected_key_hint = object_storage_content_addressed_key_hint(clean_digest)
+    for location in locations:
+        if not isinstance(location, dict):
+            continue
+        if location.get("provider") != "object_storage":
+            continue
+        if str(location.get("provider_kind") or "") != provider_kind:
+            continue
+        if str(location.get("store_ref") or "") != store_ref:
+            continue
+        if location.get("availability") != "wom_uploaded":
+            continue
+        summary["total"] += 1
+        non_gating = False
+        if location.get("key_hint") != expected_key_hint:
+            summary["key_hint_mismatch"] += 1
+            non_gating = True
+        remote_key = location.get("remote_key")
+        if remote_key is None:
+            remote_key = location.get("key_hint")
+        if not isinstance(remote_key, str) or not safe_object_storage_remote_key(remote_key):
+            summary["remote_key_unsafe"] += 1
+            non_gating = True
+        else:
+            if clean_digest not in remote_key:
+                summary["digest_unbound"] += 1
+                non_gating = True
+            if remote_key != expected_remote_key:
+                summary["remote_key_mismatch"] += 1
+                non_gating = True
+        if non_gating:
+            summary["non_gating"] += 1
+        else:
+            summary["gating"] += 1
+    return summary
+
+
 def _object_storage_wom_uploaded_remote_key_present(
     locations: list[Any],
     *,
@@ -59567,6 +59624,7 @@ def object_storage_adopt_existing_run(
     skip_existing_wom_uploaded: bool = False,
     approve: bool = False,
     dry_run: bool = False,
+    stop_after_plan: bool = False,
     transport: ObjectStorageTransport | None = None,
     send: Callable[..., dict[str, Any]] | None = None,
     endpoint_host: str | None = None,
@@ -59655,7 +59713,7 @@ def object_storage_adopt_existing_run(
 
     # A verified adopt needs a live HEAD; a declared adopt does not. Enforce the
     # distinct opt-in for the non-gating declared path (§6.2).
-    if approve:
+    if approve and not stop_after_plan:
         access_ref = str(access_key_id_ref or "").strip()
         secret_ref = str(secret_access_key_ref or "").strip()
         if not accept_unverified_adopt:
@@ -59729,6 +59787,14 @@ def object_storage_adopt_existing_run(
     same_provider_nonmatching_other_count = 0
     same_provider_store_ref_mismatch_count = 0
     same_provider_remote_key_mismatch_count = 0
+    existing_matching_wom_uploaded_location_count = 0
+    same_store_wom_uploaded_location_count = 0
+    same_store_wom_uploaded_gating_location_count = 0
+    same_store_wom_uploaded_non_gating_location_count = 0
+    same_store_wom_uploaded_key_hint_mismatch_count = 0
+    same_store_wom_uploaded_remote_key_mismatch_count = 0
+    same_store_wom_uploaded_remote_key_unsafe_count = 0
+    same_store_wom_uploaded_digest_unbound_count = 0
     if not blockers:
         manifest_record_index = manifest_records_by_object_id(root)
         _progress("adopt-plan", "start", None, None)
@@ -59790,6 +59856,15 @@ def object_storage_adopt_existing_run(
                 "store_ref_mismatch": 0,
                 "remote_key_mismatch": 0,
             }
+            same_store_wom_uploaded_summary = {
+                "total": 0,
+                "gating": 0,
+                "non_gating": 0,
+                "key_hint_mismatch": 0,
+                "remote_key_mismatch": 0,
+                "remote_key_unsafe": 0,
+                "digest_unbound": 0,
+            }
             if isinstance(record, dict) and remote_key:
                 locations = record.get("locations") if isinstance(record.get("locations"), list) else []
                 existing_location_summary = object_storage_matching_remote_key_location_summary(
@@ -59800,6 +59875,7 @@ def object_storage_adopt_existing_run(
                     expected_remote_key=remote_key,
                 )
                 existing_matching_location_count += existing_location_summary["total"]
+                existing_matching_wom_uploaded_location_count += existing_location_summary["wom_uploaded"]
                 existing_declared_uploaded_count += existing_location_summary["declared_uploaded"]
                 existing_other_location_count += existing_location_summary["other"]
                 same_provider_nonmatching_summary = object_storage_same_provider_nonmatching_location_summary(
@@ -59815,6 +59891,20 @@ def object_storage_adopt_existing_run(
                 same_provider_nonmatching_other_count += same_provider_nonmatching_summary["other"]
                 same_provider_store_ref_mismatch_count += same_provider_nonmatching_summary["store_ref_mismatch"]
                 same_provider_remote_key_mismatch_count += same_provider_nonmatching_summary["remote_key_mismatch"]
+                same_store_wom_uploaded_summary = object_storage_same_store_wom_uploaded_location_diagnostic(
+                    locations,
+                    provider_kind=normalized_provider,
+                    store_ref=normalized_store_ref,
+                    digest=digest,
+                    expected_remote_key=remote_key,
+                )
+                same_store_wom_uploaded_location_count += same_store_wom_uploaded_summary["total"]
+                same_store_wom_uploaded_gating_location_count += same_store_wom_uploaded_summary["gating"]
+                same_store_wom_uploaded_non_gating_location_count += same_store_wom_uploaded_summary["non_gating"]
+                same_store_wom_uploaded_key_hint_mismatch_count += same_store_wom_uploaded_summary["key_hint_mismatch"]
+                same_store_wom_uploaded_remote_key_mismatch_count += same_store_wom_uploaded_summary["remote_key_mismatch"]
+                same_store_wom_uploaded_remote_key_unsafe_count += same_store_wom_uploaded_summary["remote_key_unsafe"]
+                same_store_wom_uploaded_digest_unbound_count += same_store_wom_uploaded_summary["digest_unbound"]
                 existing_wom_uploaded = object_storage_wom_uploaded_location_match(
                     locations,
                     provider_kind=normalized_provider,
@@ -59841,6 +59931,7 @@ def object_storage_adopt_existing_run(
                     "existing_wom_uploaded": existing_wom_uploaded,
                     "existing_location_summary": existing_location_summary,
                     "same_provider_nonmatching_location_summary": same_provider_nonmatching_summary,
+                    "same_store_wom_uploaded_location_summary": same_store_wom_uploaded_summary,
                 }
             )
         _progress("adopt-plan", "done", None, None)
@@ -59865,6 +59956,20 @@ def object_storage_adopt_existing_run(
                 f"other={same_provider_nonmatching_other_count} "
                 f"store_ref_mismatch={same_provider_store_ref_mismatch_count} "
                 f"remote_key_mismatch={same_provider_remote_key_mismatch_count}",
+                None,
+                None,
+            )
+        if same_store_wom_uploaded_non_gating_location_count:
+            _progress(
+                "adopt-plan",
+                "resume same-store wom_uploaded diagnostic "
+                f"store_ref_wom_uploaded_locations={same_store_wom_uploaded_location_count} "
+                f"gating_locations={same_store_wom_uploaded_gating_location_count} "
+                f"non_gating_locations={same_store_wom_uploaded_non_gating_location_count} "
+                f"key_hint_mismatch={same_store_wom_uploaded_key_hint_mismatch_count} "
+                f"remote_key_mismatch={same_store_wom_uploaded_remote_key_mismatch_count} "
+                f"remote_key_unsafe={same_store_wom_uploaded_remote_key_unsafe_count} "
+                f"digest_unbound={same_store_wom_uploaded_digest_unbound_count}",
                 None,
                 None,
             )
@@ -59923,6 +60028,18 @@ def object_storage_adopt_existing_run(
             "adopt for the intended store_ref/key map, or intentionally run against the legacy store_ref if "
             "that is the store identity being resumed."
         )
+    if same_store_wom_uploaded_non_gating_location_count and not accept_unverified_adopt:
+        warnings.append(
+            "same_store_wom_uploaded_non_gating_gap: "
+            f"{same_store_wom_uploaded_non_gating_location_count} wom_uploaded locations share this store_ref "
+            "but fail this run's key_hint/remote_key/digest-binding gate. A raw store_ref count can therefore "
+            "be higher than the matching resume skip candidates."
+        )
+    if stop_after_plan and not blockers:
+        warnings.append(
+            "stop_after_plan: read-only diagnostic stopped after adopt-plan; no credential values were read, "
+            "no provider HEADs were issued, and no manifest or receipt files were written."
+        )
 
     result = _object_storage_upload_base_result(
         lifecycle_action="object_storage_adopt_existing",
@@ -59933,7 +60050,9 @@ def object_storage_adopt_existing_run(
         approve=approve,
     )
 
-    if approve and not blockers and accept_unverified_adopt:
+    if stop_after_plan and not blockers:
+        pass
+    elif approve and not blockers and accept_unverified_adopt:
         # DECLARED (unverified) adopt — non-gating, no network, no secret read.
         registered_at = _object_storage_now_iso()
         _progress("adopt-declare", "start", None, None)
@@ -60192,6 +60311,9 @@ def object_storage_adopt_existing_run(
             secret_value = None
 
     would_reupload = max(total_objects - adopted_count - declared_count - skipped_existing_wom_uploaded_count, 0)
+    expected_resume_skip_count = existing_wom_uploaded_count if skip_existing_wom_uploaded else 0
+    unresolved_remote_key_count = sum(1 for row in plan_rows if not row.get("remote_key"))
+    planned_remote_head_count = max(total_objects - expected_resume_skip_count - unresolved_remote_key_count, 0)
     # Thread the plan-row key_source into each adopt_results row (B11) so a partial
     # or wrong map is visible per-object. object_ids are unique from the resolver.
     key_source_by_object_id = {row["object_id"]: row.get("key_source", "template") for row in plan_rows}
@@ -60202,7 +60324,13 @@ def object_storage_adopt_existing_run(
         if skipped_existing_wom_uploaded_count
         else ""
     )
-    if key_map_used:
+    if stop_after_plan:
+        report = (
+            f"plan-only: {total_objects} resolved; {expected_resume_skip_count} expected resume skips; "
+            f"{planned_remote_head_count} would enter remote HEAD/verify; no credential values, "
+            "provider calls, manifest updates, or receipts written."
+        )
+    elif key_map_used:
         report = (
             f"{adopted_count} of {total_objects} adopted (presence+size); "
             f"{skipped_existing_report}"
@@ -60220,12 +60348,14 @@ def object_storage_adopt_existing_run(
     result.update(
         {
             "ok": not blockers,
-            "execution_status": "blocked" if blockers else ("preview" if dry_run else "executed"),
+            "execution_status": "blocked" if blockers else ("plan_only" if stop_after_plan else ("preview" if dry_run else "executed")),
             "key_strategy": normalized_strategy,
             "reviewed_by": normalized_reviewer or None,
             "credential_refs": credential_summary,
             "adopt_mode": "declared_unverified" if accept_unverified_adopt else "verified_presence_size",
             "content_hash_verify": bool(content_hash_verify),
+            "plan_only": bool(stop_after_plan),
+            "planned_stop_after_stage": "adopt-plan" if stop_after_plan else None,
             "adopt_results": adopt_results,
             "adopt_summary": {
                 "total_objects": total_objects,
@@ -60233,6 +60363,7 @@ def object_storage_adopt_existing_run(
                 "declared_count": declared_count,
                 "existing_wom_uploaded_count": existing_wom_uploaded_count,
                 "existing_matching_location_count": existing_matching_location_count,
+                "existing_matching_wom_uploaded_location_count": existing_matching_wom_uploaded_location_count,
                 "existing_declared_uploaded_count": existing_declared_uploaded_count,
                 "existing_other_location_count": existing_other_location_count,
                 "same_provider_nonmatching_location_count": same_provider_nonmatching_location_count,
@@ -60241,9 +60372,18 @@ def object_storage_adopt_existing_run(
                 "same_provider_nonmatching_other_count": same_provider_nonmatching_other_count,
                 "same_provider_store_ref_mismatch_count": same_provider_store_ref_mismatch_count,
                 "same_provider_remote_key_mismatch_count": same_provider_remote_key_mismatch_count,
-                "expected_resume_skip_count": (
-                    existing_wom_uploaded_count if skip_existing_wom_uploaded else 0
-                ),
+                "same_store_wom_uploaded_location_count": same_store_wom_uploaded_location_count,
+                "same_store_wom_uploaded_gating_location_count": same_store_wom_uploaded_gating_location_count,
+                "same_store_wom_uploaded_non_gating_location_count": same_store_wom_uploaded_non_gating_location_count,
+                "same_store_wom_uploaded_key_hint_mismatch_count": same_store_wom_uploaded_key_hint_mismatch_count,
+                "same_store_wom_uploaded_remote_key_mismatch_count": same_store_wom_uploaded_remote_key_mismatch_count,
+                "same_store_wom_uploaded_remote_key_unsafe_count": same_store_wom_uploaded_remote_key_unsafe_count,
+                "same_store_wom_uploaded_digest_unbound_count": same_store_wom_uploaded_digest_unbound_count,
+                "expected_resume_skip_count": expected_resume_skip_count,
+                "planned_remote_head_count": planned_remote_head_count,
+                "unresolved_remote_key_count": unresolved_remote_key_count,
+                "plan_only": bool(stop_after_plan),
+                "plan_only_stop_stage": "adopt-plan" if stop_after_plan else None,
                 "skipped_existing_wom_uploaded_count": skipped_existing_wom_uploaded_count,
                 "skip_existing_wom_uploaded": bool(skip_existing_wom_uploaded),
                 "not_adopted_count": not_adopted_count,
