@@ -6,6 +6,24 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.177 - 2026-07-06
+
+Force-reupload ledger-only hardening for the object-storage upload adapter. Additive; no
+migration; default behavior is unchanged.
+
+- **`--force-reupload` now outranks the resume ledger even when the manifest is not
+  `already_uploaded`.** A post-crash or handoff state can leave a terminal
+  `resume-ledger` row while the manifest no longer has a `wom_uploaded` location. In that
+  state, v0.3.176 could still return `skipped_already_present` with 0 provider PUTs even
+  though the operator requested `--force-reupload`. v0.3.177 passes the force decision into
+  the executor for that ledger-only state, so a reviewed force run reaches the provider PUT
+  path (including forced small multipart) after the same pre-PUT
+  `sha256(local)==object_id` check.
+- **Zero-PUT force attempts fail closed.** Force runs now mark per-object execution output
+  with `forced_reupload: true`; if no provider PUT call is attempted, the run reports
+  `force_reupload_not_performed` and `ok:false` instead of a misleading success. Existing
+  default skip/idempotency behavior is unchanged when the flag is absent.
+
 ## v0.3.176 - 2026-07-06
 
 A content-free reconcile body-diff diagnostic (DX-only). Additive; **no classification or

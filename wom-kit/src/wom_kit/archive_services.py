@@ -58016,8 +58016,9 @@ def object_storage_execute_one_upload(
     object is already done. When the HEAD-before does run it is authoritative
     (Layer B), so a deleted-remote is correctly re-uploaded on a full-HEAD sweep.
 
-    force_upload (F1): when the caller has ALREADY proved the object absent under
-    a live HEAD (the F0-b re-HEAD in object_storage_upload_run), the ledger's
+    force_upload (F1/FORCE): when the caller has ALREADY decided the object must
+    reach a PUT (for example a live re-HEAD proved absence, or --force-reupload
+    deliberately asks for a new PUT at a digest-bound key), the ledger's
     terminal-success short-circuit — a second recorded-skip authority keyed on
     object_id only, with no presence field, that persists across a remote wipe —
     would otherwise silently skip the re-upload. force_upload bypasses that stale
@@ -59150,9 +59151,18 @@ def object_storage_upload_run(
                         result["closed_actions"]["object_file_bytes_read"] = True
                         local_digest = sha256_path(local_path)
                         if local_digest != digest:
-                            execution_results.append(
-                                _object_storage_failed_result(object_id, row["key_hint"], "failed_upload", 0)
+                            failed = _object_storage_failed_result(
+                                object_id, row["key_hint"], "failed_upload", 0
                             )
+                            if force_reupload:
+                                failed["forced_reupload"] = True
+                                failed["force_reupload_not_performed"] = True
+                                blockers.append(
+                                    "force_reupload_not_performed: --force-reupload was requested but the "
+                                    f"local bytes for {object_id[:20]} failed the pre-upload sha256 check, "
+                                    "so no provider PUT was attempted."
+                                )
+                            execution_results.append(failed)
                             continue
                         size = local_path.stat().st_size
                         case_id = object_storage_execution_case_id(archive_id, digest, _object_storage_now_iso())
@@ -59188,6 +59198,13 @@ def object_storage_upload_run(
                         # redundant HEAD-before — a proven-absent object is
                         # re-uploaded, never ledger-skipped, and we do not pay a
                         # second full HEAD (GetObject-rehash on R2) for it.
+                        # v0.3.177: force re-upload outranks the resume ledger even
+                        # when the manifest row is not currently already_uploaded.
+                        # Post-crash/handoff states can leave a terminal ledger row
+                        # without a wom_uploaded manifest location; the forced proof
+                        # must still reach a provider PUT instead of returning a
+                        # ledger-only skipped_already_present result.
+                        force_upload_for_executor = bool(force_reupload or force_upload_after_absent)
                         one = object_storage_execute_one_upload(
                             transport=resolved_transport,
                             key=remote_key,
@@ -59199,7 +59216,7 @@ def object_storage_upload_run(
                             ledger=ledger,
                             sleep=sleep,
                             rng=rng,
-                            force_upload=force_upload_after_absent,
+                            force_upload=force_upload_for_executor,
                             multipart_part_size_bytes=effective_multipart_part_size_bytes,
                         )
                         # The executor reports the key it used under "key_hint"; the
@@ -59207,6 +59224,14 @@ def object_storage_upload_run(
                         # carry the actual key in remote_key. Normalize here.
                         one["remote_key"] = remote_key
                         one["key_hint"] = row["key_hint"]
+                        if force_reupload:
+                            one["forced_reupload"] = True
+                            if int(one.get("put_calls") or 0) <= 0:
+                                one["force_reupload_not_performed"] = True
+                                blockers.append(
+                                    "force_reupload_not_performed: --force-reupload was requested but no "
+                                    f"provider PUT call was attempted for {object_id[:20]}."
+                                )
                         total_put_calls += int(one.get("put_calls") or 0)
                         backoff_ms_run_total += int(one.get("backoff_ms_total") or 0)
                         result["closed_actions"]["provider_api_called"] = True

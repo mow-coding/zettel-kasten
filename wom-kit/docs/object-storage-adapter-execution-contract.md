@@ -89,15 +89,18 @@ falsely skipped).
 
 Since v0.3.175, `object-storage-upload --force-reupload` lets an operator RE-PUT an
 already-present, size/hash-matching object for LIVE verification (e.g. a forced small
-multipart). A forced re-PUT bypasses exactly two short-circuits — the present+match
-skip (`skipped_remote_same`) and the resume-ledger terminal-success short-circuit —
-but PRESERVES the pre-PUT local `sha256(local)==object_id` re-verify (a corrupt local
-file is refused before any PUT) and the HEAD-after re-download-and-hash verification
-(a re-PUT is verified exactly like a first PUT, with SA-5 delete-on-mismatch and the
-cumulative PUT ceiling still in force). It requires `--approve` AND `--reviewed-by`, is
-inert under `--dry-run`, and is REFUSED for any non-sha-derived `--key-strategy` (the
-conflict-guard bypass is safe only when the remote key embeds the object digest). The
-execution receipt records a top-level `forced_reupload` boolean.
+multipart). A forced re-PUT bypasses the present+match skip (`skipped_remote_same`) and
+the resume-ledger terminal-success short-circuit, but PRESERVES the pre-PUT local
+`sha256(local)==object_id` re-verify (a corrupt local file is refused before any PUT)
+and the HEAD-after re-download-and-hash verification (a re-PUT is verified exactly like a
+first PUT, with SA-5 delete-on-mismatch and the cumulative PUT ceiling still in force).
+Since v0.3.177, that ledger bypass also applies when a post-crash/handoff state has a
+terminal resume-ledger row but no `wom_uploaded` manifest location, and a forced result
+with `put_calls == 0` fails closed as `force_reupload_not_performed`. It requires
+`--approve` AND `--reviewed-by`, is inert under `--dry-run`, and is REFUSED for any
+non-sha-derived `--key-strategy` (the conflict-guard bypass is safe only when the remote
+key embeds the object digest). The execution receipt records a top-level
+`forced_reupload` boolean.
 
 ### Adopt-existing (the 158 GB false-skip fix)
 

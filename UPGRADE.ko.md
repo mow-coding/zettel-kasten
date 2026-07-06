@@ -152,6 +152,24 @@ zet, receipt로 보존해야 합니다.
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
 
+## From `v0.3.176` To `v0.3.177`
+
+object-storage 업로드 어댑터의 `--force-reupload`에 대한 추가적(additive) 안전 패치입니다.
+마이그레이션이 필요 없고, 기본 idempotency 동작은 바뀌지 않습니다.
+
+운영자에게 보이는 변경:
+
+- **`--force-reupload`가 이제 resume-ledger-only skip도 우회합니다.** post-crash 또는
+  handoff 상태에서 terminal resume-ledger row는 남아 있지만 manifest에는 현재 `wom_uploaded`
+  위치가 없을 수 있습니다. 이때 검토된 force 실행은 더 이상 `skipped_already_present`로
+  끝나지 않고 provider PUT 경로까지 갑니다.
+- **강제 실행에서 PUT이 0회면 차단됩니다.** force 실행 출력은 `forced_reupload: true`를
+  포함하고, provider PUT이 시도되지 않으면 `ok:false`와 `force_reupload_not_performed`를
+  반환합니다.
+- **마이그레이션 없음; 기본 동작 변경 없음.** `--force-reupload`가 없으면 기존
+  resume-ledger/idempotency skip은 그대로 동작합니다.
+- `wom-kit/docs/releases/v0.3.177.md`를 보세요.
+
 ## From `v0.3.175` To `v0.3.176`
 
 추가적(additive)이며 DX 전용인 reconcile 본문-diff 진단 하나입니다. **동작이나 분류 변경 없음,
