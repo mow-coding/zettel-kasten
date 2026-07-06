@@ -105,7 +105,9 @@ archive object-storage-adopt-existing <archive-root> \
 ```
 
 **Step B — the full batch.** Once Step A has adopted one object, re-run WITHOUT
-`--only` (the full `--key-map` batch of all 19,054 objects now proceeds):
+`--only` (the full `--key-map` batch of all 19,054 objects now proceeds). For large
+batches, add `--progress` so WOM streams safe stage/count heartbeats to stderr while
+it resolves rows and performs presence-only HEAD checks:
 
 ```bash
 archive object-storage-adopt-existing <archive-root> \
@@ -117,7 +119,7 @@ archive object-storage-adopt-existing <archive-root> \
   --bucket <bucket> \
   --key-map ./key-map.jsonl \
   --reviewed-by person:me \
-  --approve --format json
+  --approve --progress --format json
 ```
 
 **Why two steps, and the in-band signal.** A batch verified adopt on a store with no

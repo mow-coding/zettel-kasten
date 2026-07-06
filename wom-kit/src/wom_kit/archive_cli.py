@@ -800,7 +800,7 @@ def build_validation_scope(root: Path, since_refs: list[str] | None, raw_scope_f
     return scope
 
 
-def make_validate_progress_callback(enabled: bool) -> ProgressCallback | None:
+def make_stage_progress_callback(enabled: bool, *, label: str) -> ProgressCallback | None:
     if not enabled:
         return None
     started = time.monotonic()
@@ -812,14 +812,22 @@ def make_validate_progress_callback(enabled: bool) -> ProgressCallback | None:
             remaining = max(0, total - current)
             eta = remaining / rate if rate else 0.0
             print(
-                f"[validate] {stage}: {current}/{total} {message} elapsed={elapsed:.1f}s eta={eta:.1f}s",
+                f"[{label}] {stage}: {current}/{total} {message} elapsed={elapsed:.1f}s eta={eta:.1f}s",
                 file=sys.stderr,
                 flush=True,
             )
         else:
-            print(f"[validate] {stage}: {message} elapsed={elapsed:.1f}s", file=sys.stderr, flush=True)
+            print(f"[{label}] {stage}: {message} elapsed={elapsed:.1f}s", file=sys.stderr, flush=True)
 
     return progress
+
+
+def make_validate_progress_callback(enabled: bool) -> ProgressCallback | None:
+    return make_stage_progress_callback(enabled, label="validate")
+
+
+def make_doctor_progress_callback(enabled: bool) -> ProgressCallback | None:
+    return make_stage_progress_callback(enabled, label="doctor")
 
 
 class Doctor:
@@ -2654,7 +2662,8 @@ def sha256_file(path: Path) -> str:
 
 
 def command_doctor(args: argparse.Namespace) -> int:
-    doctor = Doctor(Path(args.archive_root))
+    progress_callback = make_doctor_progress_callback(bool(getattr(args, "progress", False)))
+    doctor = Doctor(Path(args.archive_root), progress_callback=progress_callback)
     diagnostics = doctor.run()
     errors = [item for item in diagnostics if item.severity == "ERROR"]
     warnings = [item for item in diagnostics if item.severity == "WARN"]
@@ -5514,6 +5523,9 @@ def command_object_storage_adopt_existing(args: argparse.Namespace) -> int:
     # does not touch the network. Only wire the sender for a verified --approve.
     accept_unverified = bool(getattr(args, "accept_unverified_adopt", False))
     send = archive_services._default_urllib_sender() if (approve and not accept_unverified) else None
+    progress_callback = make_stage_progress_callback(
+        bool(getattr(args, "progress", False)), label="object-storage-adopt"
+    )
     try:
         result = archive_services.object_storage_adopt_existing_run(
             Path(args.archive_root),
@@ -5536,6 +5548,7 @@ def command_object_storage_adopt_existing(args: argparse.Namespace) -> int:
             endpoint_host=getattr(args, "endpoint_host", None),
             bucket=getattr(args, "bucket", None),
             region=getattr(args, "region", None),
+            progress_callback=progress_callback,
         )
     except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
         print(str(exc), file=sys.stderr)
@@ -13093,6 +13106,7 @@ def build_parser() -> argparse.ArgumentParser:
     doctor.add_argument("archive_root", nargs="?", default=".", help="Archive root to inspect.")
     doctor.add_argument("--strict", action="store_true", help="Treat warnings as a failing result.")
     doctor.add_argument("--json", action="store_true", help="Print diagnostics as JSON.")
+    doctor.add_argument("--progress", action="store_true", help="Stream stage progress to stderr.")
     doctor.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     doctor.set_defaults(func=command_doctor)
 
@@ -13820,6 +13834,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     object_storage_adopt_existing.add_argument("--accept-unverified-adopt", action="store_true", help="Record a NON-gating declared_uploaded adopt without a live HEAD (will NOT skip a PUT).")
     object_storage_adopt_existing.add_argument("--content-hash-verify", action="store_true", help="Per-object opt-in: additionally GetObject-and-rehash (costly; NOT the default presence-only HEAD check).")
+    object_storage_adopt_existing.add_argument("--progress", action="store_true", help="Stream adopt planning and remote-HEAD progress to stderr.")
     object_storage_adopt_existing.add_argument("--reviewed-by", help="Safe reviewer id required when --approve is used.")
     object_storage_adopt_existing.add_argument("--dry-run", action="store_true", help="Preview the adopt plan without provider calls, byte reads, or secret reads.")
     object_storage_adopt_existing.add_argument("--approve", action="store_true", help="Perform the adopt. Verified adopt HEADs each key presence-only (presence+size, no download); a bulk first-live adopt refuses until a tiny-first --only object proves the store; declared adopt needs --accept-unverified-adopt.")

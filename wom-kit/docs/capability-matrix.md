@@ -1,9 +1,10 @@
 # WOM-kit Capability Matrix
 
-Status: v0.3.177 force-reupload ledger-only hardening checkpoint
+Status: v0.3.178 operator progress for doctor and adopt checkpoint
 Date: 2026-07-06
-Version: v0.3.177, release candidate
+Version: v0.3.178, release candidate
 
+Previous checkpoint: Status: v0.3.177 force-reupload ledger-only hardening checkpoint
 Previous checkpoint: Status: v0.3.176 content-free reconcile body-diff diagnostic (DX-only) checkpoint
 Previous checkpoint: Status: v0.3.175 force-reupload for live multipart and multipart-proven upload tier2 checkpoint
 Previous checkpoint: Status: v0.3.174 adopt tier decoupled from the upload 5 GiB proof checkpoint
@@ -86,10 +87,10 @@ This matrix is a plain-language map of what WOM-kit can do today and what is onl
 
 Read it as a safety label. A row marked `read-only preview` means WOM-kit can inspect or plan something and return JSON, but it does not write files. A row marked `approval-gated write` means the CLI has a human-reviewed write path with explicit approval fields. A row marked `documented-only` means the idea is described, but no product command exists yet.
 
-Current checkpoint note (v0.3.177): the object-storage upload adapter's
-`--force-reupload` path now also outranks resume-ledger-only skips, and a forced run with zero
-provider PUT calls fails closed as `force_reupload_not_performed` / `ok:false`. Default
-idempotency behavior is unchanged when the flag is absent.
+Current checkpoint note (v0.3.178): `archive doctor --progress` and
+`archive object-storage-adopt-existing --progress` stream safe stage/count heartbeats to stderr
+for long operator runs. The progress output carries no object ids, remote keys, bucket names,
+provider URLs, exact credential refs, tokens, or secret values.
 
 ## Status Legend
 

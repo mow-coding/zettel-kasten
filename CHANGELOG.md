@@ -6,6 +6,21 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.178 - 2026-07-06
+
+Operator progress output for long archive checks and large object-storage adopts. Additive; no
+migration.
+
+- **`archive doctor --progress`.** Doctor already had internal stage progress plumbing; the CLI
+  now exposes it. A long `doctor --strict` run can stream `[doctor] <stage>: start/done` lines
+  to stderr, so an operator can tell which validation stage is active without changing JSON or
+  text diagnostic output.
+- **`object-storage-adopt-existing --progress`.** Large verified adopt/key-map batches now have
+  optional progress callbacks for plan resolution, declared adopt, and verified remote-HEAD
+  loops. CLI progress streams safe stage/count heartbeats to stderr with no object ids,
+  remote keys, bucket names, provider URLs, exact credential refs, tokens, or secret values.
+  Reporting is throttled to the first item, every 100th item, and the last item per loop.
+
 ## v0.3.177 - 2026-07-06
 
 Force-reupload ledger-only hardening for the object-storage upload adapter. Additive; no

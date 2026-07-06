@@ -59390,6 +59390,7 @@ def object_storage_adopt_existing_run(
     endpoint_host: str | None = None,
     bucket: str | None = None,
     region: str | None = None,
+    progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
 ) -> dict[str, Any]:
     """Adopt objects already present at the client's own key layout (§6 — the
     158 GB false-skip fix).
@@ -59413,6 +59414,13 @@ def object_storage_adopt_existing_run(
     archive_id = read_archive_id(root)
     blockers: list[str] = []
     warnings: list[str] = []
+
+    def _progress(stage: str, message: str, current: int | None = None, total: int | None = None) -> None:
+        if progress_callback is not None:
+            progress_callback(stage, message, current, total)
+
+    def _progress_step(index: int, total: int) -> bool:
+        return index == 1 or index == total or index % 100 == 0
 
     if dry_run and approve:
         blockers.append("Use either --dry-run or --approve, not both.")
@@ -59526,7 +59534,10 @@ def object_storage_adopt_existing_run(
     present_row_count = 0
     ext_unrecoverable_present_count = 0
     if not blockers:
-        for object_id in object_ids:
+        _progress("adopt-plan", "start", None, None)
+        for index, object_id in enumerate(object_ids, start=1):
+            if _progress_step(index, len(object_ids)):
+                _progress("adopt-plan", "resolved object", index, len(object_ids))
             digest = str(object_id).removeprefix("sha256:").lower()
             record = find_manifest_record(root, object_id)
             recovered_ext_for_row = _object_storage_recovered_extension(record)
@@ -59588,6 +59599,7 @@ def object_storage_adopt_existing_run(
                     "record_present": isinstance(record, dict),
                 }
             )
+        _progress("adopt-plan", "done", None, None)
 
     adopt_results: list[dict[str, Any]] = []
     adopted_count = 0
@@ -59632,7 +59644,10 @@ def object_storage_adopt_existing_run(
     if approve and not blockers and accept_unverified_adopt:
         # DECLARED (unverified) adopt — non-gating, no network, no secret read.
         registered_at = _object_storage_now_iso()
-        for row in plan_rows:
+        _progress("adopt-declare", "start", None, None)
+        for index, row in enumerate(plan_rows, start=1):
+            if _progress_step(index, total_objects):
+                _progress("adopt-declare", "declared object", index, total_objects)
             if not row["remote_key"]:
                 not_adopted_count += 1
                 adopt_results.append(
@@ -59666,6 +59681,7 @@ def object_storage_adopt_existing_run(
                     "caveat": "claimed, not verified — will NOT skip a PUT.",
                 }
             )
+        _progress("adopt-declare", "done", None, None)
         if manifest_updates:
             result["closed_actions"]["manifest_updated"] = True
             result["closed_actions"]["files_written"] = True
@@ -59719,7 +59735,10 @@ def object_storage_adopt_existing_run(
                     def _adopt_leak_guard(serialized_delta: str) -> list[str]:
                         return assert_no_secret_or_location_leak(serialized_delta, key_values=guard_key_values)
 
-                    for row in plan_rows:
+                    _progress("adopt-verify", "start", None, None)
+                    for index, row in enumerate(plan_rows, start=1):
+                        if _progress_step(index, total_objects):
+                            _progress("adopt-verify", "checked remote key", index, total_objects)
                         if blockers:
                             break
                         if not row["remote_key"]:
@@ -59849,6 +59868,7 @@ def object_storage_adopt_existing_run(
                                 ),
                             }
                         )
+                    _progress("adopt-verify", "done", None, None)
         finally:
             access_value = None
             secret_value = None
