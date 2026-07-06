@@ -152,6 +152,20 @@ zet, receipt로 보존해야 합니다.
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
 
+## From `v0.3.177` To `v0.3.178`
+
+운영자 진행률 출력에 대한 추가적(additive) 패치입니다. 마이그레이션은 필요 없습니다.
+
+운영자에게 보이는 변경:
+
+- **`archive doctor --progress`**는 오래 도는 doctor 실행 중 stage start/done 줄을 stderr로
+  출력합니다. JSON/text 진단 출력은 바뀌지 않습니다.
+- **`object-storage-adopt-existing --progress`**는 plan 해석과 adopt HEAD loop에 대해 안전한
+  stage/count heartbeat를 출력합니다. object id, remote key, bucket name, provider URL, 정확한
+  credential ref, token, secret value는 출력하지 않습니다.
+- **마이그레이션 없음; 기본 출력 변경 없음.** `--progress`를 넘길 때만 새 출력이 생깁니다.
+- `wom-kit/docs/releases/v0.3.178.md`를 보세요.
+
 ## From `v0.3.176` To `v0.3.177`
 
 object-storage 업로드 어댑터의 `--force-reupload`에 대한 추가적(additive) 안전 패치입니다.

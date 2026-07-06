@@ -577,6 +577,13 @@ class ArchiveCliTests(unittest.TestCase):
         self.assertEqual(code, 0, output)
         self.assertIn("0 error(s), 0 warning(s)", output)
 
+    def test_doctor_progress_streams_stage_names(self) -> None:
+        archive_root = KIT_ROOT / "examples" / "fake-life-archive"
+        code, output = self.run_cli(["doctor", str(archive_root), "--strict", "--progress"])
+        self.assertEqual(code, 0, output)
+        self.assertIn("[doctor] symlink-boundaries: start", output)
+        self.assertIn("[doctor] local-profile-secret-safety: done", output)
+
     def doctor_warning_codes(self, archive_root: Path) -> list[str]:
         code, output = self.run_cli(["doctor", str(archive_root), "--format", "json"])
         self.assertEqual(code, 0, output)
@@ -13114,6 +13121,41 @@ state:
         )
         defaults.update(kwargs)
         return archive_services.object_storage_adopt_existing_run(root, **defaults)
+
+    def test_object_storage_adopt_progress_reports_plan_and_verify_stages(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            key = archive_services.object_storage_remote_key(
+                strategy="prefix", key_prefix=self._BASOON_PREFIX, digest=_FAKE_SHA_A
+            )
+            transport = _FakeObjectStorageTransport()
+            transport.store[key] = {"size": 151, "sha": _FAKE_SHA_A}
+            events = []
+
+            def progress(stage, message, current, total):
+                events.append((stage, message, current, total))
+
+            with self._adopt_env():
+                result = self._adopt_run(
+                    archive_root,
+                    only=f"sha256:{_FAKE_SHA_A}",
+                    max_objects=1,
+                    reviewed_by="kim",
+                    key_strategy="prefix",
+                    key_prefix=self._BASOON_PREFIX,
+                    approve=True,
+                    transport=transport,
+                    progress_callback=progress,
+                )
+
+        self.assertTrue(result["ok"], result)
+        self.assertIn(("adopt-plan", "start", None, None), events)
+        self.assertIn(("adopt-plan", "resolved object", 1, 1), events)
+        self.assertIn(("adopt-plan", "done", None, None), events)
+        self.assertIn(("adopt-verify", "start", None, None), events)
+        self.assertIn(("adopt-verify", "checked remote key", 1, 1), events)
+        self.assertIn(("adopt-verify", "done", None, None), events)
+        self.assertFalse(any(_FAKE_SHA_A in str(event) or self._BASOON_PREFIX in str(event) for event in events))
 
     # --- §12.1/§12.2 prefix key byte-exact + edge matrix ---
 

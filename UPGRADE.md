@@ -163,6 +163,21 @@ and receipts before any cleanup.
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
 
+## From `v0.3.177` To `v0.3.178`
+
+One additive operator-progress patch. No migration is required.
+
+Operator-visible notes:
+
+- **`archive doctor --progress`** streams stage start/done lines to stderr during long doctor
+  runs. JSON/text diagnostic output is unchanged.
+- **`object-storage-adopt-existing --progress`** streams safe stage/count heartbeats for plan
+  resolution and adopt HEAD loops. It does not print object ids, remote keys, bucket names,
+  provider URLs, exact credential refs, tokens, or secret values.
+- **No migration; default output unchanged.** The new output appears only when `--progress` is
+  passed.
+- See `wom-kit/docs/releases/v0.3.178.md`.
+
 ## From `v0.3.176` To `v0.3.177`
 
 One additive force-reupload hardening patch for the object-storage upload adapter. No migration is
