@@ -2527,6 +2527,11 @@ class Doctor:
                         f"Retired draft receipt {section}.sha256 does not match, but bytes differ only by "
                         "newline/BOM (suspected format drift, UNVERIFIED). Run retire-draft-reconcile to classify and clear.",
                         path,
+                        hint=(
+                            "Run retire-draft-reconcile as a dry-run first. It classifies the retired-draft "
+                            "receipt drift without deleting drafts, editing zets, calling providers, or approving "
+                            "a sha update."
+                        ),
                         suggested_command=f"archive retire-draft-reconcile <archive-root> --zettel-id {zettel_id} --dry-run",
                     )
                     return
@@ -2534,6 +2539,11 @@ class Doctor:
                 "mint_retired_draft_sha_mismatch",
                 f"Retired draft receipt {section}.sha256 does not match the referenced file.",
                 path,
+                hint=(
+                    "Run retire-draft-reconcile as a dry-run before any repair. It is the read-only classifier "
+                    "for retired-draft receipt drift; approve only after the drift class and current referenced "
+                    "file are reviewed."
+                ),
                 suggested_command=f"archive retire-draft-reconcile <archive-root> --zettel-id {zettel_id} --dry-run",
             )
 
@@ -13408,7 +13418,12 @@ def doctor_summary_payload(
         result["output"] = {
             "written": True,
             "path": output_path,
+            "path_kind": "archive_relative",
+            "relative_to": "archive_root",
+            "absolute_path_echoed": False,
             "contains": "full_diagnostics",
+            "tracking_policy": "local_diagnostic_artifact_not_archive_receipt",
+            "git_guidance": "Do not commit by default; keep locally, summarize into feedback, or delete after review.",
         }
     return result
 
@@ -13442,6 +13457,8 @@ def print_doctor_summary_text(summary: dict[str, Any]) -> None:
     output = summary.get("output") if isinstance(summary.get("output"), dict) else None
     if output:
         print(f"Full diagnostics written to: {output.get('path')}")
+        print(f"Output path kind: {output.get('path_kind')} (relative_to={output.get('relative_to')})")
+        print(f"Tracking policy: {output.get('tracking_policy')}")
 
 
 def print_diagnostics(diagnostics: list[Diagnostic], errors: list[Diagnostic], warnings: list[Diagnostic]) -> None:

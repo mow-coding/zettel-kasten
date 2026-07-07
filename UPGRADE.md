@@ -95,7 +95,8 @@ and receipts before any cleanup.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.3.194` | current public pre-release | `wom-kit/docs/releases/v0.3.194.md` |
+| `v0.3.195` | current public pre-release | `wom-kit/docs/releases/v0.3.195.md` |
+| `v0.3.194` | superseded public pre-release | `wom-kit/docs/releases/v0.3.194.md` |
 | `v0.3.193` | superseded public pre-release | `wom-kit/docs/releases/v0.3.193.md` |
 | `v0.3.192` | superseded public pre-release | `wom-kit/docs/releases/v0.3.192.md` |
 | `v0.3.191` | superseded public pre-release | `wom-kit/docs/releases/v0.3.191.md` |
@@ -171,6 +172,21 @@ and receipts before any cleanup.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.3.194` To `v0.3.195`
+
+One additive doctor output path-policy clarification patch. No migration is required.
+
+Operator-visible notes:
+
+- `doctor --output <path>` summary output now marks the path as archive-relative and relative to
+  the archive root.
+- The summary labels full doctor result files as local diagnostic artifacts, not archive receipts,
+  and says not to commit them by default.
+- `mint_retired_draft_sha_mismatch` now includes a hint explaining why
+  `retire-draft-reconcile --dry-run` is the safe first step.
+- Default `doctor` behavior and exit-code semantics are unchanged.
+- See `wom-kit/docs/releases/v0.3.195.md`.
 
 ## From `v0.3.193` To `v0.3.194`
 
