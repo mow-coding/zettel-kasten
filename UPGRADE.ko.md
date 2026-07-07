@@ -87,7 +87,8 @@ zet, receipt로 보존해야 합니다.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.3.191` | current public pre-release | `wom-kit/docs/releases/v0.3.191.md` |
+| `v0.3.192` | current public pre-release | `wom-kit/docs/releases/v0.3.192.md` |
+| `v0.3.191` | superseded public pre-release | `wom-kit/docs/releases/v0.3.191.md` |
 | `v0.3.190` | superseded public pre-release | `wom-kit/docs/releases/v0.3.190.md` |
 | `v0.3.189` | superseded public pre-release | `wom-kit/docs/releases/v0.3.189.md` |
 | `v0.3.188` | superseded public pre-release | `wom-kit/docs/releases/v0.3.188.md` |
@@ -157,6 +158,20 @@ zet, receipt로 보존해야 합니다.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.3.191` To `v0.3.192`
+
+doctor progress 출력량을 제어하는 additive patch입니다. 마이그레이션은 필요 없습니다.
+
+운영자가 볼 변화:
+
+- `doctor --progress`는 이제 기본으로 compact stderr progress를 사용합니다. stage 시작/완료,
+  receipt milestone, 긴 무출력 방지 heartbeat, 핵심 edge-index lifecycle event를 남깁니다.
+- 전체 상세 receipt trace가 필요하면 `doctor --progress --progress-detail verbose`를 사용합니다.
+- `doctor --progress-log <path>`는 모든 progress event를 JSONL로 씁니다. stderr는 계속 compact일 수
+  있고, `--progress` 없이 log 파일만 남기는 것도 가능합니다.
+- result JSON, diagnostics, receipts, manifests, archive 파일은 바뀌지 않습니다.
+- `wom-kit/docs/releases/v0.3.192.md`를 보세요.
 
 ## From `v0.3.190` To `v0.3.191`
 

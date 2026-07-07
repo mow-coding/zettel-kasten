@@ -6,6 +6,19 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.192 - 2026-07-07
+
+Doctor progress volume-control checkpoint. Additive; no migration.
+
+- **Compact doctor progress by default.** `doctor --progress` now keeps stderr bounded by
+  preserving stage start/done, receipt milestones, quiet-interval heartbeats, and key edge-index
+  lifecycle events instead of printing every receipt sub-step.
+- **Verbose trace preserved.** Operators can opt back into the full receipt-level trace with
+  `doctor --progress --progress-detail verbose`.
+- **Full progress JSONL log.** `doctor --progress-log <path>` writes every progress event as JSONL
+  while stderr still obeys `--progress-detail`, and it can be used without `--progress` when only a
+  file trace is desired.
+
 ## v0.3.191 - 2026-07-07
 
 Doctor target edge-receipt evolution progress checkpoint. Additive; no migration.

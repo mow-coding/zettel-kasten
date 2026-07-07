@@ -800,17 +800,48 @@ def build_validation_scope(root: Path, since_refs: list[str] | None, raw_scope_f
     return scope
 
 
-def make_stage_progress_callback(enabled: bool, *, label: str) -> ProgressCallback | None:
-    if not enabled:
+def make_stage_progress_callback(
+    enabled: bool,
+    *,
+    label: str,
+    detail: str = "verbose",
+    progress_log_path: str | Path | None = None,
+) -> ProgressCallback | None:
+    log_path = Path(progress_log_path) if progress_log_path is not None else None
+    if log_path is not None:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.write_text("", encoding="utf-8")
+    if not enabled and log_path is None:
         return None
     started = time.monotonic()
     stage_started: dict[str, float] = {}
+    last_stderr_by_stage: dict[str, float] = {}
+
+    def should_print_to_stderr(stage: str, message: str, current: int | None, total: int | None, now: float) -> bool:
+        if not enabled:
+            return False
+        if detail == "verbose":
+            return True
+        if message in {"start", "done"} or current is None or not total:
+            return True
+        if current in {1, total} or current % 250 == 0:
+            return True
+        if (
+            message in {"loading edge receipt index", "listing edge receipts", "loaded edge receipt index"}
+            or message.startswith("scanning edge receipts 0/")
+            or message.startswith("edge receipt index ready ")
+            or message.startswith("still scanning edge receipts ")
+        ):
+            return True
+        previous = last_stderr_by_stage.get(stage, stage_started.get(stage, now))
+        return now - previous >= 30.0
 
     def progress(stage: str, message: str, current: int | None, total: int | None) -> None:
         now = time.monotonic()
         elapsed = max(0.0, now - started)
         if message == "start" or stage not in stage_started:
             stage_started[stage] = now
+        eta_text: str | None = None
         if current is not None and total:
             stage_elapsed = max(0.0, now - stage_started.get(stage, now))
             eta_text = "0.0s"
@@ -822,6 +853,28 @@ def make_stage_progress_callback(enabled: bool, *, label: str) -> ProgressCallba
                     remaining = max(0, total - current)
                     eta = remaining / rate if rate else 0.0
                     eta_text = f"{eta:.1f}s"
+        if log_path is not None:
+            with log_path.open("a", encoding="utf-8") as handle:
+                handle.write(
+                    json.dumps(
+                        {
+                            "label": label,
+                            "stage": stage,
+                            "message": message,
+                            "current": current,
+                            "total": total,
+                            "elapsed_seconds": round(elapsed, 3),
+                            "eta": eta_text,
+                        },
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    )
+                    + "\n"
+                )
+        if not should_print_to_stderr(stage, message, current, total, now):
+            return
+        last_stderr_by_stage[stage] = now
+        if current is not None and total:
             print(
                 f"[{label}] {stage}: {current}/{total} {message} elapsed={elapsed:.1f}s eta={eta_text}",
                 file=sys.stderr,
@@ -837,8 +890,18 @@ def make_validate_progress_callback(enabled: bool) -> ProgressCallback | None:
     return make_stage_progress_callback(enabled, label="validate")
 
 
-def make_doctor_progress_callback(enabled: bool) -> ProgressCallback | None:
-    return make_stage_progress_callback(enabled, label="doctor")
+def make_doctor_progress_callback(
+    enabled: bool,
+    *,
+    detail: str = "compact",
+    progress_log_path: str | Path | None = None,
+) -> ProgressCallback | None:
+    return make_stage_progress_callback(
+        enabled,
+        label="doctor",
+        detail=detail,
+        progress_log_path=progress_log_path,
+    )
 
 
 class Doctor:
@@ -2926,7 +2989,11 @@ def sha256_file(
 
 
 def command_doctor(args: argparse.Namespace) -> int:
-    progress_callback = make_doctor_progress_callback(bool(getattr(args, "progress", False)))
+    progress_callback = make_doctor_progress_callback(
+        bool(getattr(args, "progress", False)),
+        detail=str(getattr(args, "progress_detail", "compact")),
+        progress_log_path=getattr(args, "progress_log", None),
+    )
     doctor = Doctor(Path(args.archive_root), progress_callback=progress_callback)
     diagnostics = doctor.run()
     errors = [item for item in diagnostics if item.severity == "ERROR"]
@@ -13439,7 +13506,17 @@ def build_parser() -> argparse.ArgumentParser:
     doctor.add_argument("archive_root", nargs="?", default=".", help="Archive root to inspect.")
     doctor.add_argument("--strict", action="store_true", help="Treat warnings as a failing result.")
     doctor.add_argument("--json", action="store_true", help="Print diagnostics as JSON.")
-    doctor.add_argument("--progress", action="store_true", help="Stream stage progress to stderr.")
+    doctor.add_argument("--progress", action="store_true", help="Stream compact stage progress to stderr.")
+    doctor.add_argument(
+        "--progress-detail",
+        choices=["compact", "verbose"],
+        default="compact",
+        help="Control stderr progress volume. compact is the default; verbose preserves the full receipt trace.",
+    )
+    doctor.add_argument(
+        "--progress-log",
+        help="Write the full progress event stream as JSONL while stderr obeys --progress-detail.",
+    )
     doctor.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     doctor.set_defaults(func=command_doctor)
 
