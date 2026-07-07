@@ -601,6 +601,11 @@ class ArchiveCliTests(unittest.TestCase):
             summary = json.loads(output)
             self.assertEqual(summary["summary"]["error_count"], 1)
             self.assertEqual(summary["output"]["path"], "logs/doctor-result.json")
+            self.assertEqual(summary["output"]["path_kind"], "archive_relative")
+            self.assertEqual(summary["output"]["relative_to"], "archive_root")
+            self.assertFalse(summary["output"]["absolute_path_echoed"])
+            self.assertEqual(summary["output"]["tracking_policy"], "local_diagnostic_artifact_not_archive_receipt")
+            self.assertIn("Do not commit by default", summary["output"]["git_guidance"])
             self.assertNotIn("diagnostics", summary)
             full = json.loads((archive_root / "logs" / "doctor-result.json").read_text(encoding="utf-8"))
             self.assertIn("secret_value_detected", {item["code"] for item in full})
@@ -30548,6 +30553,10 @@ state:
             )
             routed = [i for i in items if i["code"].startswith("mint_retired_draft") and "suggested_command" in i]
             self.assertTrue(any("retire-draft-reconcile" in i.get("suggested_command", "") for i in routed), items)
+            self.assertTrue(
+                any("dry-run" in i.get("hint", "") and "retired-draft receipt drift" in i.get("hint", "") for i in routed),
+                items,
+            )
             # dry-run reconcile: snapshot ref is format_drift, overall format_drift.
             code, output = self.run_cli(
                 ["retire-draft-reconcile", str(archive_root), "--zettel-id", zid, "--dry-run", "--format", "json"]

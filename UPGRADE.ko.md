@@ -87,7 +87,8 @@ zet, receipt로 보존해야 합니다.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.3.194` | current public pre-release | `wom-kit/docs/releases/v0.3.194.md` |
+| `v0.3.195` | current public pre-release | `wom-kit/docs/releases/v0.3.195.md` |
+| `v0.3.194` | superseded public pre-release | `wom-kit/docs/releases/v0.3.194.md` |
 | `v0.3.193` | superseded public pre-release | `wom-kit/docs/releases/v0.3.193.md` |
 | `v0.3.192` | superseded public pre-release | `wom-kit/docs/releases/v0.3.192.md` |
 | `v0.3.191` | superseded public pre-release | `wom-kit/docs/releases/v0.3.191.md` |
@@ -160,6 +161,18 @@ zet, receipt로 보존해야 합니다.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.3.194` To `v0.3.195`
+
+doctor output path-policy를 더 명확히 하는 additive patch입니다. 마이그레이션은 필요 없습니다.
+
+운영자가 볼 변화:
+
+- `doctor --output <path>` summary가 해당 path가 archive root 기준 archive-relative path임을 명시합니다.
+- full doctor result 파일을 archive receipt가 아닌 local diagnostic artifact로 표시하고, 기본적으로 commit하지 말라고 안내합니다.
+- `mint_retired_draft_sha_mismatch`에 `retire-draft-reconcile --dry-run`이 왜 안전한 첫 단계인지 설명하는 hint가 붙습니다.
+- 기본 `doctor` 동작과 exit code 의미는 그대로입니다.
+- `wom-kit/docs/releases/v0.3.195.md`를 보세요.
 
 ## From `v0.3.193` To `v0.3.194`
 

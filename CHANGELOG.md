@@ -6,6 +6,17 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.195 - 2026-07-08
+
+Doctor output path-policy clarification checkpoint. Additive; no migration.
+
+- **Output path semantics.** `doctor --output` summaries now mark result files as
+  `archive_relative`, `relative_to: archive_root`, and `absolute_path_echoed: false`.
+- **Local artifact policy.** Doctor summaries now label full result files as local diagnostic
+  artifacts that should not be committed by default.
+- **Retired-draft drift hint.** `mint_retired_draft_sha_mismatch` diagnostics now explain why
+  `retire-draft-reconcile --dry-run` is the safe first step.
+
 ## v0.3.194 - 2026-07-08
 
 Doctor result capture and strict-diagnostic guidance checkpoint. Additive; no migration.
