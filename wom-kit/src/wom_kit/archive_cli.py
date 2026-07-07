@@ -815,7 +815,7 @@ def make_stage_progress_callback(enabled: bool, *, label: str) -> ProgressCallba
             stage_elapsed = max(0.0, now - stage_started.get(stage, now))
             eta_text = "0.0s"
             if current < total:
-                if current < 5 or stage_elapsed < 1.0:
+                if current < 10 or stage_elapsed < 30.0:
                     eta_text = "warming_up"
                 else:
                     rate = current / stage_elapsed
@@ -965,13 +965,39 @@ class Doctor:
             except (OSError, RuntimeError, ValueError):
                 return str(path)
 
-    def _sha256_file_cached(self, path: Path) -> str:
+    def _sha256_file_cached(
+        self,
+        path: Path,
+        *,
+        progress_callback: Callable[[str], None] | None = None,
+        progress_label: str = "file",
+    ) -> str:
         key = self._file_cache_key(path)
         if key in self._file_sha256_cache:
             self._file_sha256_cache_hits += 1
         else:
             self._file_sha256_cache_misses += 1
-            self._file_sha256_cache[key] = sha256_file(path)
+            try:
+                file_size = path.stat().st_size
+            except OSError:
+                file_size = None
+            report_hash_progress = progress_callback is not None and (
+                file_size is None or file_size >= 64 * 1024 * 1024
+            )
+            if report_hash_progress and progress_callback is not None:
+                progress_callback(f"hashing {progress_label} file bytes")
+
+            def hash_progress(_bytes_read: int) -> None:
+                if progress_callback is not None:
+                    progress_callback(f"still hashing {progress_label} file bytes")
+
+            self._file_sha256_cache[key] = sha256_file(
+                path,
+                progress_callback=hash_progress if report_hash_progress else None,
+                progress_step_bytes=64 * 1024 * 1024,
+            )
+            if report_hash_progress and progress_callback is not None:
+                progress_callback(f"hashed {progress_label} file bytes")
         return self._file_sha256_cache[key]
 
     def _remember_zettel_frontmatter(
@@ -1920,7 +1946,11 @@ class Doctor:
                 if emit_detail_progress:
                     self._progress("mint-receipts", message, index, total)
 
+            def receipt_liveness(message: str) -> None:
+                self._progress("mint-receipts", message, index, total)
+
             self._progress("mint-receipts", self._display_path(path) or "mint receipt", index, total)
+            receipt_liveness("started receipt checks")
             receipt_progress("loading receipt json")
             data = self._load_json_file(path)
             if not isinstance(data, dict):
@@ -1942,12 +1972,27 @@ class Doctor:
             receipt_progress("checking target status")
             self._check_mint_receipt_status(data, path, "target", "canonical")
             if not self._mint_receipt_source_is_retired(data, path):
-                receipt_progress("checking source file ref")
-                self._check_mint_receipt_file_ref(data, path, "source")
-            receipt_progress("checking target file ref")
-            target_path = self._check_mint_receipt_file_ref(data, path, "target")
-            receipt_progress("checking snapshot file ref")
-            self._check_mint_receipt_file_ref(data, path, "snapshot")
+                receipt_liveness("checking source file ref")
+                self._check_mint_receipt_file_ref(
+                    data,
+                    path,
+                    "source",
+                    progress_callback=receipt_liveness,
+                )
+            receipt_liveness("checking target file ref")
+            target_path = self._check_mint_receipt_file_ref(
+                data,
+                path,
+                "target",
+                progress_callback=receipt_liveness,
+            )
+            receipt_liveness("checking snapshot file ref")
+            self._check_mint_receipt_file_ref(
+                data,
+                path,
+                "snapshot",
+                progress_callback=receipt_liveness,
+            )
 
             if target_path is not None:
                 receipt_progress("loading target frontmatter")
@@ -1987,11 +2032,11 @@ class Doctor:
                     )
                 else:
                     receipt_progress("target mint receipt link ok")
-            receipt_progress("completed receipt checks")
+            receipt_liveness("completed receipt checks")
             if index == 4 and total > 4:
                 self._progress(
                     "mint-receipts",
-                    "continuing with receipt heartbeat; detailed substeps every 250 receipts",
+                    "continuing with receipt heartbeat; minimal file-ref liveness every receipt; detailed substeps every 250 receipts",
                     index,
                     total,
                 )
@@ -2363,7 +2408,14 @@ class Doctor:
                 path,
             )
 
-    def _check_mint_receipt_file_ref(self, data: dict[str, Any], path: Path, section: str) -> Path | None:
+    def _check_mint_receipt_file_ref(
+        self,
+        data: dict[str, Any],
+        path: Path,
+        section: str,
+        *,
+        progress_callback: Callable[[str], None] | None = None,
+    ) -> Path | None:
         section_data = data.get(section)
         if not isinstance(section_data, dict):
             return None
@@ -2380,7 +2432,11 @@ class Doctor:
         if not isinstance(expected_sha, str) or not SHA256_RE.match(expected_sha):
             self.error("mint_receipt_sha_invalid", f"Mint receipt {section}.sha256 must be a lowercase SHA-256 hex digest.", path)
             return resolved
-        actual_sha = self._sha256_file_cached(resolved)
+        actual_sha = self._sha256_file_cached(
+            resolved,
+            progress_callback=progress_callback,
+            progress_label=section,
+        )
         if actual_sha != expected_sha:
             if section == "target" and self._target_sha_evolved_by_edge_receipts(data, resolved, expected_sha):
                 self.info(
@@ -2794,11 +2850,27 @@ def parse_frontmatter(text: str) -> str | None:
     return match.group(1)
 
 
-def sha256_file(path: Path) -> str:
+def sha256_file(
+    path: Path,
+    *,
+    progress_callback: Callable[[int], None] | None = None,
+    progress_step_bytes: int = 64 * 1024 * 1024,
+) -> str:
     digest = hashlib.sha256()
+    bytes_read = 0
+    next_report = max(1, progress_step_bytes)
+    last_reported = 0
     with path.open("rb") as file:
         for chunk in iter(lambda: file.read(1024 * 1024), b""):
+            bytes_read += len(chunk)
             digest.update(chunk)
+            if progress_callback is not None and bytes_read >= next_report:
+                progress_callback(bytes_read)
+                last_reported = bytes_read
+                while next_report <= bytes_read:
+                    next_report += max(1, progress_step_bytes)
+    if progress_callback is not None and bytes_read != last_reported:
+        progress_callback(bytes_read)
     return digest.hexdigest()
 
 

@@ -95,7 +95,8 @@ and receipts before any cleanup.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.3.188` | current public pre-release | `wom-kit/docs/releases/v0.3.188.md` |
+| `v0.3.189` | current public pre-release | `wom-kit/docs/releases/v0.3.189.md` |
+| `v0.3.188` | superseded public pre-release | `wom-kit/docs/releases/v0.3.188.md` |
 | `v0.3.187` | superseded public pre-release | `wom-kit/docs/releases/v0.3.187.md` |
 | `v0.3.186` | superseded public pre-release | `wom-kit/docs/releases/v0.3.186.md` |
 | `v0.3.7` | superseded public pre-release | `wom-kit/docs/releases/v0.3.7.md` |
@@ -165,6 +166,22 @@ and receipts before any cleanup.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.3.188` To `v0.3.189`
+
+One additive doctor liveness patch. No migration is required.
+
+Operator-visible notes:
+
+- `doctor --strict --progress` now emits `started receipt checks`, source/target/snapshot file-ref
+  check names, and `completed receipt checks` for every mint receipt.
+- Large mint-receipt file SHA checks can emit content-free `hashing ... file bytes`,
+  `still hashing ... file bytes`, and `hashed ... file bytes` liveness.
+- The heartbeat-mode transition message now says minimal file-ref liveness is emitted every receipt.
+- Counted-stage ETA stays `eta=warming_up` through the first nine samples or first 30 seconds of a
+  stage.
+- Result JSON, diagnostics, receipts, manifests, and archive files are unchanged.
+- See `wom-kit/docs/releases/v0.3.189.md`.
 
 ## From `v0.3.187` To `v0.3.188`
 

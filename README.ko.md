@@ -31,10 +31,10 @@ tag 목록을 여기서 다시 키우지 않습니다.
 현재 공개 기준:
 
 ```text
-v0.3.188 pre-release
+v0.3.189 pre-release
 ```
 
-이전 공개 기준: v0.3.187 pre-release.
+이전 공개 기준: v0.3.188 pre-release.
 
 전체 릴리스 이력은 [CHANGELOG.md](CHANGELOG.md)와 [wom-kit/docs/releases/](wom-kit/docs/releases/)를 보세요.
 
@@ -59,7 +59,7 @@ Roadmap 요약: `v0.1.x`는 아이디어/프로토콜 언어 라인, `v0.2.x`는
 - read-only `archive zet-quality-check --dry-run`으로 mint 전 entity-term, document-type, OCR/parse metadata, table-structure, correction-event, source-rights, audience, derived-artifact dependency 위험을 점검합니다. 선택적 `zet-quality-rules.yml` 프로젝트 규칙은 matched term을 출력하지 않으면서 금지 entity alias를 mint blocker로 만들 수 있습니다.
 - read-only `archive status-board --dry-run`으로 canonical zet, active draft, retire 대기 minted draft, document/audience metadata gap, source metadata gap, derived-artifact sync gap, 선택적 quality count를 한 번에 요약합니다. title/body/source value/provider URL/local path는 출력하지 않습니다.
 - read-only `archive derived-artifact-staleness --dry-run`으로 `derived_artifacts`가 마지막 검토 sync 이후 더 최신 source zet을 놓치고 있는지 확인합니다. 외부 보고서 본문은 열지 않고, artifact ref/title/body/provider URL/local path는 출력하지 않습니다.
-- 오래 도는 `validate`, `doctor --strict`, 대형 `object-storage-adopt-existing` 실행을 위한 선택형 stage/count progress 출력. 진행률은 stderr로만 나가며 object id, remote key, bucket name, provider URL, 정확한 credential ref, token, secret value를 싣지 않습니다. 대형 adopt plan resolution은 이제 실행별 manifest index를 쓰고, read-only `--stop-after-plan`, matching resume count, same-provider nonmatching store/key 진단, 같은 store_ref의 `wom_uploaded` raw count와 실제 skip 후보 count 차이를 함께 보여주며, doctor는 receipt 검사 중 파일 SHA/frontmatter cache, mint-link sub-step, receipt 완료 progress, receipt별 heartbeat, 초기 ETA warm-up을 더 잘게 보여줍니다. `read-zettel --section document`는 사람이 읽는 문서 화면에서 raw YAML frontmatter를 숨기는 read-only 보기 모드를 제공합니다.
+- 오래 도는 `validate`, `doctor --strict`, 대형 `object-storage-adopt-existing` 실행을 위한 선택형 stage/count progress 출력. 진행률은 stderr로만 나가며 object id, remote key, bucket name, provider URL, 정확한 credential ref, token, secret value를 싣지 않습니다. 대형 adopt plan resolution은 이제 실행별 manifest index를 쓰고, read-only `--stop-after-plan`, matching resume count, same-provider nonmatching store/key 진단, 같은 store_ref의 `wom_uploaded` raw count와 실제 skip 후보 count 차이를 함께 보여주며, doctor는 receipt 검사 중 파일 SHA/frontmatter cache, mint-link sub-step, receipt 완료 progress, receipt별 heartbeat, receipt별 file-ref liveness, 큰 파일 hash liveness, 초기 ETA warm-up을 더 잘게 보여줍니다. `read-zettel --section document`는 사람이 읽는 문서 화면에서 raw YAML frontmatter를 숨기는 read-only 보기 모드를 제공합니다.
 
 ### Capture와 intake
 
@@ -84,7 +84,7 @@ Roadmap 요약: `v0.1.x`는 아이디어/프로토콜 언어 라인, `v0.2.x`는
 
 ### Privacy와 redaction
 
-- `zet-self-contained-check`, AI scratch lifecycle 관리, read-only AI artifact inventory. 공개 외부 인용 URL은 zet 본문이나 `source_refs`에 남길 수 있고, private provider locator와 원본 파일 위치는 여전히 durable WOM ref가 필요하며, `.wom-scratch/`, `workbench/ai-scratch/`, `staging/ai/inbox/`, `staging/ai/reviewed/`는 제한된 AI artifact/scratch 표면입니다. `archive ai-artifact-inventory --dry-run`은 파일 본문을 읽지 않고 기본적으로 경로를 출력하지 않으며, 파일 쓰기/삭제, zet 생성, provider 호출 없이 AI 산출물 후보의 운명 후보를 보여줍니다. 승인된 mint는 명시된 scratch ref를 canonical zet에서 제거하고 cleanup receipt를 남기며 해당 scratch 파일을 소비할 수 있습니다.
+- `zet-self-contained-check`, AI scratch lifecycle 관리, v0.3.187 pre-release에서 도입된 read-only AI artifact inventory. 공개 외부 인용 URL은 zet 본문이나 `source_refs`에 남길 수 있고, private provider locator와 원본 파일 위치는 여전히 durable WOM ref가 필요하며, `.wom-scratch/`, `workbench/ai-scratch/`, `staging/ai/inbox/`, `staging/ai/reviewed/`는 제한된 AI artifact/scratch 표면입니다. `archive ai-artifact-inventory --dry-run`은 파일 본문을 읽지 않고 기본적으로 경로를 출력하지 않으며, 파일 쓰기/삭제, zet 생성, provider 호출 없이 AI 산출물 후보의 운명 후보를 보여줍니다. 승인된 mint는 명시된 scratch ref를 canonical zet에서 제거하고 cleanup receipt를 남기며 해당 scratch 파일을 소비할 수 있습니다.
 - read-only `archive secret-signal-taxonomy --dry-run`으로 AI 운영자가 harmless concept word와 safe ref를 실제 secret-like value, private locator, account identifier, unknown sensitive context와 구분하게 합니다.
 
 ### AI operator 계약과 runtime handoff

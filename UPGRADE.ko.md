@@ -87,7 +87,8 @@ zet, receipt로 보존해야 합니다.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.3.188` | current public pre-release | `wom-kit/docs/releases/v0.3.188.md` |
+| `v0.3.189` | current public pre-release | `wom-kit/docs/releases/v0.3.189.md` |
+| `v0.3.188` | superseded public pre-release | `wom-kit/docs/releases/v0.3.188.md` |
 | `v0.3.187` | superseded public pre-release | `wom-kit/docs/releases/v0.3.187.md` |
 | `v0.3.186` | superseded public pre-release | `wom-kit/docs/releases/v0.3.186.md` |
 | `v0.3.4` | superseded public pre-release | `wom-kit/docs/releases/v0.3.4.md` |
@@ -154,6 +155,21 @@ zet, receipt로 보존해야 합니다.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.3.188` To `v0.3.189`
+
+doctor liveness를 보강하는 additive patch입니다. 마이그레이션은 필요 없습니다.
+
+운영자가 볼 변화:
+
+- `doctor --strict --progress`가 모든 mint receipt에 대해 `started receipt checks`,
+  source/target/snapshot file-ref check 이름, `completed receipt checks`를 출력합니다.
+- 큰 mint-receipt file SHA 검사에서는 내용 없는 `hashing ... file bytes`,
+  `still hashing ... file bytes`, `hashed ... file bytes` liveness를 출력할 수 있습니다.
+- heartbeat mode 전환 메시지는 receipt마다 최소 file-ref liveness가 나온다는 점을 명시합니다.
+- counted stage ETA는 stage의 처음 9개 샘플 또는 처음 30초 동안 `eta=warming_up`으로 유지됩니다.
+- result JSON, diagnostics, receipts, manifests, archive 파일은 바뀌지 않습니다.
+- `wom-kit/docs/releases/v0.3.189.md`를 보세요.
 
 ## From `v0.3.187` To `v0.3.188`
 
