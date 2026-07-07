@@ -861,6 +861,47 @@ class ArchiveCliTests(unittest.TestCase):
         messages = [message for stage, message, _current, _total in events if stage == "mint-receipts"]
         self.assertIn("source file ref skipped; source retired", messages)
 
+    def test_doctor_local_profile_secret_safety_reports_progress_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            events: list[tuple[str, str, int | None, int | None]] = []
+            doctor = archive_cli.Doctor(
+                archive_root,
+                progress_callback=lambda stage, message, current, total: events.append(
+                    (stage, message, current, total)
+                ),
+            )
+
+            doctor._check_local_profile_and_secret_safety()
+
+        messages = [message for stage, message, _current, _total in events if stage == "local-profile-secret-safety"]
+        self.assertIn("checking gitignore secret patterns", messages)
+        self.assertIn("walking archive files", messages)
+        self.assertTrue(any(message.startswith("checked archive files files=") for message in messages))
+        self.assertTrue(any(message.startswith("local profile secret safety summary ") for message in messages))
+
+    def test_doctor_local_profile_secret_safety_chunk_scan_detects_secret_values(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            secret_path = archive_root / "settings.txt"
+            secret_path.write_text("api_key=abcdefghijklmnop\n", encoding="utf-8")
+            doctor = archive_cli.Doctor(archive_root)
+
+            with patch.object(archive_cli, "SECRET_SAFETY_READ_CHUNK_SIZE", 5):
+                doctor._check_local_profile_and_secret_safety()
+
+        codes = {item.code for item in doctor.diagnostics}
+        self.assertIn("secret_value_detected", codes)
+
+    def test_doctor_ignored_scan_path_allows_outside_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            outside_path = Path(tmp) / "outside.txt"
+            outside_path.write_text("note\n", encoding="utf-8")
+            doctor = archive_cli.Doctor(archive_root)
+
+            self.assertFalse(doctor._is_ignored_scan_path(outside_path))
+
     def test_sha256_file_reports_byte_progress(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "bytes.bin"

@@ -95,7 +95,8 @@ and receipts before any cleanup.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.3.192` | current public pre-release | `wom-kit/docs/releases/v0.3.192.md` |
+| `v0.3.193` | current public pre-release | `wom-kit/docs/releases/v0.3.193.md` |
+| `v0.3.192` | superseded public pre-release | `wom-kit/docs/releases/v0.3.192.md` |
 | `v0.3.191` | superseded public pre-release | `wom-kit/docs/releases/v0.3.191.md` |
 | `v0.3.190` | superseded public pre-release | `wom-kit/docs/releases/v0.3.190.md` |
 | `v0.3.189` | superseded public pre-release | `wom-kit/docs/releases/v0.3.189.md` |
@@ -169,6 +170,22 @@ and receipts before any cleanup.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.3.192` To `v0.3.193`
+
+One additive doctor local-profile secret-safety progress patch. No migration is required.
+
+Operator-visible notes:
+
+- `doctor --progress` now emits internal progress for `local-profile-secret-safety`: gitignore
+  checks, archive walking, checked-file counts, content-scan counts, local-profile counts,
+  skipped-dir counts, and a final summary.
+- Large archive walks can emit `still checking local profile secret safety` heartbeats.
+- Eligible config/text secret-content checks now stream in chunks and can emit
+  `still scanning secret content ...` for long reads.
+- Result JSON, diagnostics, receipts, manifests, and archive files are unchanged except for any
+  pre-existing diagnostics the stage already reported.
+- See `wom-kit/docs/releases/v0.3.193.md`.
 
 ## From `v0.3.191` To `v0.3.192`
 

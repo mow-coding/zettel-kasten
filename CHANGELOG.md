@@ -6,6 +6,18 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.193 - 2026-07-07
+
+Doctor local profile secret-safety progress checkpoint. Additive; no migration.
+
+- **Secret-safety liveness.** `doctor --progress` now reports progress inside
+  `local-profile-secret-safety`, including gitignore checks, archive walking, checked-file counts,
+  content-scan counts, local-profile counts, skipped-dir counts, and a final summary.
+- **Long scan heartbeat.** The stage can emit `still checking local profile secret safety` while it
+  walks large archives and `still scanning secret content ...` while it streams a large text config.
+- **Chunked content scanning.** Secret-like content checks now stream eligible config/text files in
+  chunks instead of reading the whole file into memory at once; diagnostics remain content-free.
+
 ## v0.3.192 - 2026-07-07
 
 Doctor progress volume-control checkpoint. Additive; no migration.
