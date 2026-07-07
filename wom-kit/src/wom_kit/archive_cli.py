@@ -423,6 +423,16 @@ SECRET_SAFETY_IGNORED_DIRS = {
 SECRET_SAFETY_PROGRESS_EVERY_FILES = 250
 SECRET_SAFETY_PROGRESS_SECONDS = 30.0
 SECRET_SAFETY_READ_CHUNK_SIZE = 1024 * 1024
+DIAGNOSTIC_SEVERITIES = ("ERROR", "WARN", "INFO")
+DIAGNOSTIC_LEVEL_ALIASES = {
+    "ERROR": "ERROR",
+    "ERRORS": "ERROR",
+    "WARN": "WARN",
+    "WARNING": "WARN",
+    "WARNINGS": "WARN",
+    "INFO": "INFO",
+    "INFOS": "INFO",
+}
 
 
 def contains_secret_value(text: str) -> bool:
@@ -1159,8 +1169,18 @@ class Doctor:
             )
         )
 
-    def warn(self, code: str, message: str, path: Path | str | None = None) -> None:
-        self.diagnostics.append(Diagnostic("WARN", code, message, self._display_path(path)))
+    def warn(
+        self,
+        code: str,
+        message: str,
+        path: Path | str | None = None,
+        *,
+        hint: str | None = None,
+        suggested_command: str | None = None,
+    ) -> None:
+        self.diagnostics.append(
+            Diagnostic("WARN", code, message, self._display_path(path), hint, suggested_command)
+        )
 
     def info(self, code: str, message: str, path: Path | str | None = None) -> None:
         self.diagnostics.append(Diagnostic("INFO", code, message, self._display_path(path)))
@@ -2115,6 +2135,14 @@ class Doctor:
                         "zettel_has_bom",
                         "File has a UTF-8 BOM; WOM does not write BOMs. Run archive remint-reconcile after confirming content.",
                         target_path,
+                        hint=(
+                            "Use remint-reconcile --strip-bom first as a dry-run; approve only after "
+                            "the diagnostic class is understood."
+                        ),
+                        suggested_command=(
+                            "archive remint-reconcile <archive-root> --zettel-id <id> "
+                            "--dry-run --strip-bom --diagnostic-only --format json"
+                        ),
                     )
                 receipt_progress("checking target mint receipt link")
                 receipt_progress("reading target mint block")
@@ -2362,6 +2390,16 @@ class Doctor:
                             "object_storage_upload_wom_location_missing",
                             "No wom_uploaded manifest location links to this execution receipt.",
                             path,
+                            hint=(
+                                "The execution receipt and objects/manifests/files.jsonl disagree. "
+                                "Preserve a full doctor JSON result, then repair through the owning "
+                                "object-storage upload/adopt/reconcile workflow rather than hand-editing "
+                                "the receipt."
+                            ),
+                            suggested_command=(
+                                "archive doctor <archive-root> --strict --summary "
+                                "--output logs/doctor-result.json"
+                            ),
                         )
                     else:
                         location_errors = archive_services.object_storage_wom_uploaded_audit_location_errors(
@@ -2741,6 +2779,22 @@ class Doctor:
                     suggested_command=archive_services.FRONTMATTER_V03_MIGRATION_COMMAND,
                     compatibility_target=archive_services.FRONTMATTER_V03_TARGET,
                 )
+            elif (
+                schema_name == "zettel-frontmatter.schema.json"
+                and issue.code == "schema_enum"
+                and issue.data_path == "$.provenance.creation_mode"
+            ):
+                self.error(
+                    issue.code,
+                    f"{schema_name}: {issue.message}",
+                    path,
+                    hint=(
+                        "Set provenance.creation_mode to one of: human_written, ai_assisted, "
+                        "ai_generated, imported, derived. Use ai_assisted when a human-authored "
+                        "zet was assisted by AI; use ai_generated only for AI-authored material."
+                    ),
+                    suggested_command="archive doctor <archive-root> --strict --summary",
+                )
             else:
                 self.error(issue.code, f"{schema_name}: {issue.message}", path)
 
@@ -3076,20 +3130,52 @@ def sha256_file(
 
 
 def command_doctor(args: argparse.Namespace) -> int:
+    try:
+        diagnostic_levels, diagnostic_level_label = parse_diagnostic_level_filter(
+            "ERROR" if bool(getattr(args, "errors_only", False)) else getattr(args, "diagnostic_level", "all")
+        )
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     progress_callback = make_doctor_progress_callback(
         bool(getattr(args, "progress", False)),
         detail=str(getattr(args, "progress_detail", "compact")),
         progress_log_path=getattr(args, "progress_log", None),
     )
-    doctor = Doctor(Path(args.archive_root), progress_callback=progress_callback)
+    archive_root = Path(args.archive_root)
+    doctor = Doctor(archive_root, progress_callback=progress_callback)
     diagnostics = doctor.run()
     errors = [item for item in diagnostics if item.severity == "ERROR"]
     warnings = [item for item in diagnostics if item.severity == "WARN"]
+    shown_diagnostics = filter_diagnostics_by_level(diagnostics, diagnostic_levels)
+    output_path = None
+    if getattr(args, "output", None):
+        try:
+            output_path = write_doctor_output_file(str(args.output), archive_root, diagnostics)
+        except (OSError, ValueError) as exc:
+            print(f"Failed to write doctor output file: {exc}", file=sys.stderr)
+            return 1
 
-    if args.json or getattr(args, "format", "text") == "json":
-        print_json([item.as_dict() for item in diagnostics])
+    summary_only = bool(getattr(args, "summary", False) or output_path is not None)
+    summary = doctor_summary_payload(
+        diagnostics=diagnostics,
+        strict=bool(args.strict),
+        shown_diagnostics=shown_diagnostics,
+        diagnostic_level=diagnostic_level_label,
+        output_path=output_path,
+    )
+
+    if summary_only:
+        if args.json or getattr(args, "format", "text") == "json":
+            print_json(summary)
+        else:
+            print_doctor_summary_text(summary)
+    elif args.json or getattr(args, "format", "text") == "json":
+        print_json([item.as_dict() for item in shown_diagnostics])
     else:
-        print_diagnostics(diagnostics, errors, warnings)
+        shown_errors = [item for item in shown_diagnostics if item.severity == "ERROR"]
+        shown_warnings = [item for item in shown_diagnostics if item.severity == "WARN"]
+        print_diagnostics(shown_diagnostics, shown_errors, shown_warnings)
 
     if errors or (args.strict and warnings):
         return 1
@@ -13266,6 +13352,98 @@ def print_json(data: Any) -> None:
     print(json.dumps(data, indent=2, ensure_ascii=False, default=str))
 
 
+def parse_diagnostic_level_filter(value: str | None) -> tuple[set[str], str]:
+    raw = (value or "all").strip()
+    if not raw or raw.lower() == "all":
+        return set(DIAGNOSTIC_SEVERITIES), "all"
+    levels: set[str] = set()
+    for item in raw.split(","):
+        normalized = item.strip().upper().replace("-", "_")
+        if not normalized:
+            continue
+        level = DIAGNOSTIC_LEVEL_ALIASES.get(normalized)
+        if level is None:
+            raise ValueError(f"Unsupported diagnostic level: {item.strip()}")
+        levels.add(level)
+    if not levels:
+        return set(DIAGNOSTIC_SEVERITIES), "all"
+    ordered = [severity for severity in DIAGNOSTIC_SEVERITIES if severity in levels]
+    return set(ordered), ",".join(ordered)
+
+
+def diagnostic_severity_counts(diagnostics: list[Diagnostic]) -> dict[str, int]:
+    return {
+        severity: sum(1 for item in diagnostics if item.severity == severity)
+        for severity in DIAGNOSTIC_SEVERITIES
+    }
+
+
+def filter_diagnostics_by_level(diagnostics: list[Diagnostic], levels: set[str]) -> list[Diagnostic]:
+    return [item for item in diagnostics if item.severity in levels]
+
+
+def doctor_summary_payload(
+    *,
+    diagnostics: list[Diagnostic],
+    strict: bool,
+    shown_diagnostics: list[Diagnostic],
+    diagnostic_level: str,
+    output_path: str | None,
+) -> dict[str, Any]:
+    counts = diagnostic_severity_counts(diagnostics)
+    ok = counts["ERROR"] == 0 and not (strict and counts["WARN"] > 0)
+    result: dict[str, Any] = {
+        "ok": ok,
+        "strict": strict,
+        "summary": {
+            "diagnostic_count": len(diagnostics),
+            "error_count": counts["ERROR"],
+            "warning_count": counts["WARN"],
+            "info_count": counts["INFO"],
+            "shown_diagnostic_count": len(shown_diagnostics),
+            "diagnostic_level": diagnostic_level,
+        },
+    }
+    if output_path is not None:
+        result["output"] = {
+            "written": True,
+            "path": output_path,
+            "contains": "full_diagnostics",
+        }
+    return result
+
+
+def display_output_path(path: Path, archive_root: Path) -> str:
+    try:
+        return archive_relative_path(path, archive_root)
+    except (ArchivePathError, OSError, ValueError):
+        return "<output-file>"
+
+
+def write_doctor_output_file(path_arg: str, archive_root: Path, diagnostics: list[Diagnostic]) -> str:
+    output_path = resolve_archive_relative_path(archive_root, path_arg)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = [item.as_dict() for item in diagnostics]
+    output_path.write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False, default=str) + "\n",
+        encoding="utf-8",
+    )
+    return display_output_path(output_path, archive_root)
+
+
+def print_doctor_summary_text(summary: dict[str, Any]) -> None:
+    data = summary["summary"]
+    print(
+        "Summary: "
+        f"{data['error_count']} error(s), {data['warning_count']} warning(s), "
+        f"{data['info_count']} info(s), {data['diagnostic_count']} diagnostic(s)."
+    )
+    print(f"OK: {str(summary['ok']).lower()}")
+    output = summary.get("output") if isinstance(summary.get("output"), dict) else None
+    if output:
+        print(f"Full diagnostics written to: {output.get('path')}")
+
+
 def print_diagnostics(diagnostics: list[Diagnostic], errors: list[Diagnostic], warnings: list[Diagnostic]) -> None:
     for item in diagnostics:
         location = f" [{item.path}]" if item.path else ""
@@ -13603,6 +13781,17 @@ def build_parser() -> argparse.ArgumentParser:
     doctor.add_argument(
         "--progress-log",
         help="Write the full progress event stream as JSONL while stderr obeys --progress-detail.",
+    )
+    doctor.add_argument(
+        "--output",
+        help="Write full diagnostics JSON to an archive-relative file; stdout prints only a small summary.",
+    )
+    doctor.add_argument("--summary", action="store_true", help="Print only a compact doctor summary to stdout.")
+    doctor.add_argument("--errors-only", action="store_true", help="Only print ERROR diagnostics on stdout.")
+    doctor.add_argument(
+        "--diagnostic-level",
+        default="all",
+        help="Comma-separated stdout diagnostic severities to print: ERROR,WARN,INFO, or all. Exit status still uses all diagnostics.",
     )
     doctor.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     doctor.set_defaults(func=command_doctor)

@@ -6,6 +6,18 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.194 - 2026-07-08
+
+Doctor result capture and strict-diagnostic guidance checkpoint. Additive; no migration.
+
+- **Result capture without terminal overflow.** `doctor --output <path>` now writes full
+  diagnostics JSON to a file and prints a compact stdout summary instead.
+- **Summary and severity filters.** `doctor --summary`, `--errors-only`, and
+  `--diagnostic-level ERROR,WARN` let AI operators inspect large strict runs without dumping every
+  INFO/WARN/ERROR line into a narrow terminal.
+- **Repair guidance.** Creation-mode schema enum errors, object-storage receipt/manifest link gaps,
+  and BOM zettel warnings now include safer next-action hints.
+
 ## v0.3.193 - 2026-07-07
 
 Doctor local profile secret-safety progress checkpoint. Additive; no migration.

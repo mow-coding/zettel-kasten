@@ -87,7 +87,8 @@ zet, receipt로 보존해야 합니다.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.3.193` | current public pre-release | `wom-kit/docs/releases/v0.3.193.md` |
+| `v0.3.194` | current public pre-release | `wom-kit/docs/releases/v0.3.194.md` |
+| `v0.3.193` | superseded public pre-release | `wom-kit/docs/releases/v0.3.193.md` |
 | `v0.3.192` | superseded public pre-release | `wom-kit/docs/releases/v0.3.192.md` |
 | `v0.3.191` | superseded public pre-release | `wom-kit/docs/releases/v0.3.191.md` |
 | `v0.3.190` | superseded public pre-release | `wom-kit/docs/releases/v0.3.190.md` |
@@ -159,6 +160,18 @@ zet, receipt로 보존해야 합니다.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.3.193` To `v0.3.194`
+
+doctor result capture와 diagnostic guidance를 보강하는 additive patch입니다. 마이그레이션은 필요 없습니다.
+
+운영자가 볼 변화:
+
+- `doctor --output <path>`는 전체 diagnostics JSON array를 파일에 쓰고 stdout에는 작은 summary만 출력합니다.
+- `doctor --summary`, `--errors-only`, `--diagnostic-level ERROR,WARN`은 exit code 의미를 바꾸지 않고 stdout 출력량만 줄입니다.
+- `provenance.creation_mode` enum 오류, object-storage receipt/manifest link gap, BOM zettel warning에 더 안전한 next-action hint가 붙습니다.
+- 새 옵션을 쓰지 않으면 기본 `doctor` 출력은 그대로입니다.
+- `wom-kit/docs/releases/v0.3.194.md`를 보세요.
 
 ## From `v0.3.192` To `v0.3.193`
 

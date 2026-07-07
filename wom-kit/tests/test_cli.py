@@ -584,6 +584,65 @@ class ArchiveCliTests(unittest.TestCase):
         self.assertIn("[doctor] symlink-boundaries: start", output)
         self.assertIn("[doctor] local-profile-secret-safety: done", output)
 
+    def test_doctor_output_writes_full_json_and_prints_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "personal-archive"
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:doctor-output")
+            self.assertEqual(init_code, 0, init_output)
+            config = archive_root / "workbench" / "local-config.yml"
+            config.parent.mkdir(parents=True, exist_ok=True)
+            config.write_text("api_key: sk_test_1234567890abcdef\n", encoding="utf-8")
+
+            code, output = self.run_cli(
+                ["doctor", str(archive_root), "--format", "json", "--output", "logs/doctor-result.json"]
+            )
+
+            self.assertEqual(code, 1, output)
+            summary = json.loads(output)
+            self.assertEqual(summary["summary"]["error_count"], 1)
+            self.assertEqual(summary["output"]["path"], "logs/doctor-result.json")
+            self.assertNotIn("diagnostics", summary)
+            full = json.loads((archive_root / "logs" / "doctor-result.json").read_text(encoding="utf-8"))
+            self.assertIn("secret_value_detected", {item["code"] for item in full})
+
+    def test_doctor_diagnostic_level_filters_stdout_not_exit_code(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "personal-archive"
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:doctor-filter")
+            self.assertEqual(init_code, 0, init_output)
+            (archive_root / ".git").mkdir()
+            config = archive_root / "workbench" / "local-config.yml"
+            config.parent.mkdir(parents=True, exist_ok=True)
+            config.write_text("api_key: sk_test_1234567890abcdef\n", encoding="utf-8")
+
+            code, output = self.run_cli(
+                ["doctor", str(archive_root), "--format", "json", "--diagnostic-level", "ERROR"]
+            )
+
+            self.assertEqual(code, 1, output)
+            diagnostics = json.loads(output)
+            self.assertTrue(diagnostics)
+            self.assertTrue(all(item["severity"] == "ERROR" for item in diagnostics))
+            self.assertIn("secret_value_detected", {item["code"] for item in diagnostics})
+            self.assertNotIn("git_marker_incomplete", {item["code"] for item in diagnostics})
+
+            alias_code, alias_output = self.run_cli(["doctor", str(archive_root), "--format", "json", "--errors-only"])
+            self.assertEqual(alias_code, 1, alias_output)
+            alias_diagnostics = json.loads(alias_output)
+            self.assertEqual(alias_diagnostics, diagnostics)
+
+    def test_doctor_output_requires_archive_relative_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "personal-archive"
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:doctor-output-safe")
+            self.assertEqual(init_code, 0, init_output)
+
+            code, output = self.run_cli(["doctor", str(archive_root), "--output", "../doctor-result.json"])
+
+            self.assertEqual(code, 1)
+            self.assertIn("Archive-relative path", output)
+            self.assertFalse((Path(tmp) / "doctor-result.json").exists())
+
     def test_progress_eta_warms_up_before_enough_stage_samples(self) -> None:
         stream = io.StringIO()
         with patch.object(archive_cli.time, "monotonic", side_effect=[100.0, 100.0, 101.0, 102.0, 112.0, 145.0]):
@@ -36765,6 +36824,38 @@ state:
             self.assertEqual(code, 1)
             self.assertIn("schema_type", output)
             self.assertIn("$.actions", output)
+
+    def test_doctor_creation_mode_schema_enum_has_repair_hint(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            path = archive_root / "zettels" / "zet_20240504_fake_lunch_thought.md"
+            text = path.read_text(encoding="utf-8")
+            match = archive_cli.FRONTMATTER_RE.match(text)
+            self.assertIsNotNone(match)
+            assert match is not None
+            frontmatter = archive_cli.load_yaml(match.group(1))
+            frontmatter["provenance"]["creation_mode"] = "robot_written"
+            path.write_text(
+                "---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + text[match.end():].lstrip(),
+                encoding="utf-8",
+            )
+
+            code, output = self.run_cli(
+                ["doctor", str(archive_root), "--format", "json", "--diagnostic-level", "ERROR"]
+            )
+
+            self.assertEqual(code, 1, output)
+            diagnostics = json.loads(output)
+            issue = next(
+                item
+                for item in diagnostics
+                if item["code"] == "schema_enum" and "creation_mode" in item["message"]
+            )
+            self.assertIn("Set provenance.creation_mode", issue["hint"])
+            self.assertEqual(
+                issue["suggested_command"],
+                "archive doctor <archive-root> --strict --summary",
+            )
 
     # --- v0.3.168: draft-time identity hygiene, attributed affirmation, continues ---
 

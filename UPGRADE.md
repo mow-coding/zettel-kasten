@@ -95,7 +95,8 @@ and receipts before any cleanup.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.3.193` | current public pre-release | `wom-kit/docs/releases/v0.3.193.md` |
+| `v0.3.194` | current public pre-release | `wom-kit/docs/releases/v0.3.194.md` |
+| `v0.3.193` | superseded public pre-release | `wom-kit/docs/releases/v0.3.193.md` |
 | `v0.3.192` | superseded public pre-release | `wom-kit/docs/releases/v0.3.192.md` |
 | `v0.3.191` | superseded public pre-release | `wom-kit/docs/releases/v0.3.191.md` |
 | `v0.3.190` | superseded public pre-release | `wom-kit/docs/releases/v0.3.190.md` |
@@ -170,6 +171,21 @@ and receipts before any cleanup.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.3.193` To `v0.3.194`
+
+One additive doctor result-capture and diagnostic-guidance patch. No migration is required.
+
+Operator-visible notes:
+
+- `doctor --output <path>` writes the full diagnostics JSON array to a file and prints a compact
+  stdout summary.
+- `doctor --summary`, `--errors-only`, and `--diagnostic-level ERROR,WARN` reduce stdout volume
+  without changing exit-code semantics.
+- `provenance.creation_mode` enum errors, object-storage receipt/manifest link gaps, and BOM
+  zettel warnings now include safer next-action hints.
+- Default `doctor` output is unchanged unless the new options are used.
+- See `wom-kit/docs/releases/v0.3.194.md`.
 
 ## From `v0.3.192` To `v0.3.193`
 
