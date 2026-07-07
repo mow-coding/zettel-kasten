@@ -87,7 +87,8 @@ zet, receipt로 보존해야 합니다.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.3.190` | current public pre-release | `wom-kit/docs/releases/v0.3.190.md` |
+| `v0.3.191` | current public pre-release | `wom-kit/docs/releases/v0.3.191.md` |
+| `v0.3.190` | superseded public pre-release | `wom-kit/docs/releases/v0.3.190.md` |
 | `v0.3.189` | superseded public pre-release | `wom-kit/docs/releases/v0.3.189.md` |
 | `v0.3.188` | superseded public pre-release | `wom-kit/docs/releases/v0.3.188.md` |
 | `v0.3.187` | superseded public pre-release | `wom-kit/docs/releases/v0.3.187.md` |
@@ -156,6 +157,22 @@ zet, receipt로 보존해야 합니다.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.3.190` To `v0.3.191`
+
+doctor edge-evolution progress를 보강하는 additive patch입니다. 마이그레이션은 필요 없습니다.
+
+운영자가 볼 변화:
+
+- mint target sha mismatch 뒤 `doctor --strict --progress`가 target edge-receipt evolution 대상
+  archive-relative path를 출력합니다.
+- edge receipt index 작업이 loading, scan count, ready count, cache hit, target candidate count를
+  출력합니다.
+- target evolution replay가 target zettel read, cutoff 없음/no-edge-list skip, strict/inclusive
+  history check, ok/no-match 결과를 출력합니다.
+- 긴 edge receipt scan에서는 `still scanning edge receipts` liveness가 나올 수 있습니다.
+- result JSON, diagnostics, receipts, manifests, archive 파일은 바뀌지 않습니다.
+- `wom-kit/docs/releases/v0.3.191.md`를 보세요.
 
 ## From `v0.3.189` To `v0.3.190`
 

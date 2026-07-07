@@ -95,7 +95,8 @@ and receipts before any cleanup.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.3.190` | current public pre-release | `wom-kit/docs/releases/v0.3.190.md` |
+| `v0.3.191` | current public pre-release | `wom-kit/docs/releases/v0.3.191.md` |
+| `v0.3.190` | superseded public pre-release | `wom-kit/docs/releases/v0.3.190.md` |
 | `v0.3.189` | superseded public pre-release | `wom-kit/docs/releases/v0.3.189.md` |
 | `v0.3.188` | superseded public pre-release | `wom-kit/docs/releases/v0.3.188.md` |
 | `v0.3.187` | superseded public pre-release | `wom-kit/docs/releases/v0.3.187.md` |
@@ -167,6 +168,22 @@ and receipts before any cleanup.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.3.190` To `v0.3.191`
+
+One additive doctor edge-evolution progress patch. No migration is required.
+
+Operator-visible notes:
+
+- `doctor --strict --progress` now names the target edge-receipt evolution target with an
+  archive-relative path after a mint target sha mismatch.
+- Edge receipt index work now reports loading, scan counts, ready counts, cache hits, and target
+  candidate counts.
+- Target evolution replay now reports target zettel reads, missing-cutoff/no-edge-list skips,
+  strict/inclusive history checks, and ok/no-match results.
+- Long edge receipt scans can emit `still scanning edge receipts` liveness.
+- Result JSON, diagnostics, receipts, manifests, and archive files are unchanged.
+- See `wom-kit/docs/releases/v0.3.191.md`.
 
 ## From `v0.3.189` To `v0.3.190`
 

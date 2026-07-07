@@ -1125,9 +1125,23 @@ class Doctor:
         with_blank = "---\n" + dumped + "---\n\n" + body.rstrip() + "\n"
         return list(dict.fromkeys([no_blank, with_blank]))
 
-    def _edge_receipts_for_source(self, source_relative: str) -> list[dict[str, Any]]:
+    def _edge_receipts_for_source(
+        self,
+        source_relative: str,
+        *,
+        progress_callback: Callable[[str], None] | None = None,
+    ) -> list[dict[str, Any]]:
         if self.edge_receipts_by_source is None:
-            self.edge_receipts_by_source = archive_services.edge_receipts_by_source(self.archive_root)
+            if progress_callback is not None:
+                progress_callback("loading edge receipt index")
+            self.edge_receipts_by_source = archive_services.edge_receipts_by_source(
+                self.archive_root,
+                progress_callback=progress_callback,
+            )
+            if progress_callback is not None:
+                progress_callback("loaded edge receipt index")
+        elif progress_callback is not None:
+            progress_callback("edge receipt index cache hit")
         return self.edge_receipts_by_source.get(source_relative, [])
 
     def _target_sha_evolved_by_edge_receipts(
@@ -1135,17 +1149,28 @@ class Doctor:
         receipt_data: dict[str, Any],
         target_path: Path,
         expected_sha: str,
+        *,
+        progress_callback: Callable[[str], None] | None = None,
     ) -> bool:
         try:
             target_relative = archive_relative_path(target_path, self.archive_root)
         except (ArchivePathError, OSError, ValueError):
+            if progress_callback is not None:
+                progress_callback("target edge evolution path unresolved")
             return False
+        if progress_callback is not None:
+            progress_callback(f"target edge evolution target {target_relative}")
+            progress_callback("loading target edge receipt candidates")
+        edge_receipts = self._edge_receipts_for_source(target_relative, progress_callback=progress_callback)
+        if progress_callback is not None:
+            progress_callback(f"checking target edge receipt candidates {len(edge_receipts)}")
         return archive_services.target_sha_evolved_by_edge_receipts(
             self.archive_root,
             receipt_data,
             target_path,
             expected_sha,
-            edge_receipts=self._edge_receipts_for_source(target_relative),
+            edge_receipts=edge_receipts,
+            progress_callback=progress_callback,
         )
 
     def _scope_includes_relative(self, relative: str, selected: set[str]) -> bool:
@@ -2450,7 +2475,12 @@ class Doctor:
             if section == "target":
                 if progress_callback is not None:
                     progress_callback("checking target edge-receipt evolution")
-                if self._target_sha_evolved_by_edge_receipts(data, resolved, expected_sha):
+                if self._target_sha_evolved_by_edge_receipts(
+                    data,
+                    resolved,
+                    expected_sha,
+                    progress_callback=progress_callback,
+                ):
                     self.info(
                         "mint_receipt_target_sha_evolved_by_edge_receipts",
                         "Mint receipt target.sha256 is historical; current target differs only by approved zettel-edge receipts.",

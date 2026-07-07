@@ -9202,16 +9202,43 @@ def candidate_zettel_texts(frontmatter: dict[str, Any], body: str) -> list[str]:
     return list(dict.fromkeys([no_blank, with_blank]))
 
 
-def edge_receipts_for_source(archive_root: Path, source_relative: str) -> list[dict[str, Any]]:
-    return edge_receipts_by_source(archive_root).get(source_relative, [])
+def edge_receipts_for_source(
+    archive_root: Path,
+    source_relative: str,
+    *,
+    progress_callback: Callable[[str], None] | None = None,
+) -> list[dict[str, Any]]:
+    return edge_receipts_by_source(archive_root, progress_callback=progress_callback).get(source_relative, [])
 
 
-def edge_receipts_by_source(archive_root: Path) -> dict[str, list[dict[str, Any]]]:
+def edge_receipts_by_source(
+    archive_root: Path,
+    *,
+    progress_callback: Callable[[str], None] | None = None,
+) -> dict[str, list[dict[str, Any]]]:
     root = archive_root / ZETTEL_EDGE_RECEIPTS_DIR
     if not root.is_dir():
+        if progress_callback is not None:
+            progress_callback("edge receipt directory missing")
         return {}
+    if progress_callback is not None:
+        progress_callback("listing edge receipts")
+    paths = safe_archive_glob(root, "*.zettel-edge.json", archive_root)
+    total = len(paths)
+    if progress_callback is not None:
+        progress_callback(f"scanning edge receipts 0/{total}")
     by_source: dict[str, list[dict[str, Any]]] = {}
-    for path in safe_archive_glob(root, "*.zettel-edge.json", archive_root):
+    indexed = 0
+    last_liveness = time.monotonic()
+    for index, path in enumerate(paths, start=1):
+        if progress_callback is not None and (index == 1 or index % 250 == 0 or index == total):
+            progress_callback(f"scanning edge receipts {index}/{total}")
+            last_liveness = time.monotonic()
+        elif progress_callback is not None:
+            now = time.monotonic()
+            if now - last_liveness >= 30.0:
+                progress_callback(f"still scanning edge receipts {index}/{total}")
+                last_liveness = now
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, UnicodeError, json.JSONDecodeError):
@@ -9226,6 +9253,7 @@ def edge_receipts_by_source(archive_root: Path) -> dict[str, list[dict[str, Any]
         created_at = parse_receipt_time(data.get("created_at"))
         if created_at is None:
             continue
+        indexed += 1
         by_source.setdefault(source_relative, []).append(
             {
                 "receipt_path": archive_relative_path(path, archive_root),
@@ -9234,6 +9262,8 @@ def edge_receipts_by_source(archive_root: Path) -> dict[str, list[dict[str, Any]
                 "created_at_raw": data.get("created_at"),
             }
         )
+    if progress_callback is not None:
+        progress_callback(f"edge receipt index ready sources={len(by_source)} receipts={indexed}/{total}")
     return by_source
 
 
@@ -9244,28 +9274,51 @@ def target_sha_evolved_by_edge_receipts(
     expected_sha: str,
     *,
     edge_receipts: list[dict[str, Any]] | None = None,
+    progress_callback: Callable[[str], None] | None = None,
 ) -> bool:
     try:
         target_relative = archive_relative_path(target_path, archive_root)
     except (ArchivePathError, OSError, ValueError):
+        if progress_callback is not None:
+            progress_callback("target edge evolution path unresolved")
         return False
+    if progress_callback is not None:
+        progress_callback(f"target edge evolution target {target_relative}")
     cutoff = receipt_cutoff_time(receipt_data)
     if cutoff is None:
+        if progress_callback is not None:
+            progress_callback("target edge evolution skipped; receipt cutoff missing")
         return False
 
     try:
+        if progress_callback is not None:
+            progress_callback("reading target zettel for edge evolution")
         target_text = target_path.read_text(encoding="utf-8")
         frontmatter, body = split_zettel_text(target_text)
     except (OSError, UnicodeError, ArchiveServiceError):
+        if progress_callback is not None:
+            progress_callback("target edge evolution skipped; target read failed")
         return False
     edges = frontmatter.get("edges")
     if not isinstance(edges, list):
+        if progress_callback is not None:
+            progress_callback("target edge evolution skipped; target has no edge list")
         return False
 
     if edge_receipts is None:
-        edge_receipts = edge_receipts_for_source(archive_root, target_relative)
+        if progress_callback is not None:
+            progress_callback("loading target edge receipt index")
+        edge_receipts = edge_receipts_for_source(
+            archive_root,
+            target_relative,
+            progress_callback=progress_callback,
+        )
     if not edge_receipts:
+        if progress_callback is not None:
+            progress_callback("target edge receipt candidates 0")
         return False
+    if progress_callback is not None:
+        progress_callback(f"target edge receipt candidates {len(edge_receipts)}")
 
     mint = frontmatter.get("mint") if isinstance(frontmatter.get("mint"), dict) else {}
     updated_at_candidates: list[str] = [
@@ -9288,6 +9341,9 @@ def target_sha_evolved_by_edge_receipts(
         updated_at_candidates.append(str(latest["created_at_raw"]))
 
     for inclusive in [False, True]:
+        if progress_callback is not None:
+            mode = "inclusive" if inclusive else "strict"
+            progress_callback(f"checking target evolution history {mode}")
         removable = [
             item
             for item in edge_receipts
@@ -9319,7 +9375,11 @@ def target_sha_evolved_by_edge_receipts(
             candidate_frontmatter["updated_at"] = updated_at
             for candidate_text in candidate_zettel_texts(candidate_frontmatter, body):
                 if expected_sha in text_sha256_candidates(candidate_text):
+                    if progress_callback is not None:
+                        progress_callback("target edge-receipt evolution ok")
                     return True
+    if progress_callback is not None:
+        progress_callback("target edge-receipt evolution no match")
     return False
 
 
