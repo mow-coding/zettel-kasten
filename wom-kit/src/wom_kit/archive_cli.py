@@ -3173,6 +3173,7 @@ def command_doctor(args: argparse.Namespace) -> int:
         shown_diagnostics=shown_diagnostics,
         diagnostic_level=diagnostic_level_label,
         output_path=output_path,
+        progress_log_path=str(args.progress_log) if getattr(args, "progress_log", None) else None,
     )
 
     if summary_only:
@@ -13399,6 +13400,7 @@ def doctor_summary_payload(
     shown_diagnostics: list[Diagnostic],
     diagnostic_level: str,
     output_path: str | None,
+    progress_log_path: str | None,
 ) -> dict[str, Any]:
     counts = diagnostic_severity_counts(diagnostics)
     ok = counts["ERROR"] == 0 and not (strict and counts["WARN"] > 0)
@@ -13423,6 +13425,26 @@ def doctor_summary_payload(
             "absolute_path_echoed": False,
             "contains": "full_diagnostics",
             "tracking_policy": "local_diagnostic_artifact_not_archive_receipt",
+            "git_guidance": "Do not commit by default; keep locally, summarize into feedback, or delete after review.",
+        }
+    if progress_log_path is not None:
+        progress_log = Path(progress_log_path)
+        if progress_log.is_absolute():
+            path_display = "<absolute-progress-log-path>"
+            path_kind = "absolute_input_redacted"
+            relative_to = "not_relative"
+        else:
+            path_display = progress_log_path
+            path_kind = "cwd_relative"
+            relative_to = "current_working_directory"
+        result["progress_log"] = {
+            "written": True,
+            "path": path_display,
+            "path_kind": path_kind,
+            "relative_to": relative_to,
+            "absolute_path_echoed": False,
+            "contains": "progress_events_jsonl",
+            "tracking_policy": "local_progress_artifact_not_archive_receipt",
             "git_guidance": "Do not commit by default; keep locally, summarize into feedback, or delete after review.",
         }
     return result
@@ -13459,6 +13481,11 @@ def print_doctor_summary_text(summary: dict[str, Any]) -> None:
         print(f"Full diagnostics written to: {output.get('path')}")
         print(f"Output path kind: {output.get('path_kind')} (relative_to={output.get('relative_to')})")
         print(f"Tracking policy: {output.get('tracking_policy')}")
+    progress_log = summary.get("progress_log") if isinstance(summary.get("progress_log"), dict) else None
+    if progress_log:
+        print(f"Progress log written to: {progress_log.get('path')}")
+        print(f"Progress log path kind: {progress_log.get('path_kind')} (relative_to={progress_log.get('relative_to')})")
+        print(f"Progress log tracking policy: {progress_log.get('tracking_policy')}")
 
 
 def print_diagnostics(diagnostics: list[Diagnostic], errors: list[Diagnostic], warnings: list[Diagnostic]) -> None:

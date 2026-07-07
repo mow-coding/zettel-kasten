@@ -6,6 +6,17 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.196 - 2026-07-08
+
+Doctor progress-log path-policy clarification checkpoint. Additive; no migration.
+
+- **Progress-log path semantics.** `doctor --progress-log <path>` summaries now mark relative
+  progress-log paths as `cwd_relative` and `relative_to: current_working_directory`.
+- **Progress-log artifact policy.** Doctor summaries now label progress logs as local progress
+  artifacts, not archive receipts, and say not to commit them by default.
+- **Absolute-path non-echo.** Absolute progress-log inputs are redacted in summaries while still
+  reporting their path kind.
+
 ## v0.3.195 - 2026-07-08
 
 Doctor output path-policy clarification checkpoint. Additive; no migration.

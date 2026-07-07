@@ -5,6 +5,7 @@ import base64
 import hashlib
 import itertools
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -609,6 +610,42 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertNotIn("diagnostics", summary)
             full = json.loads((archive_root / "logs" / "doctor-result.json").read_text(encoding="utf-8"))
             self.assertIn("secret_value_detected", {item["code"] for item in full})
+
+    def test_doctor_progress_log_summary_marks_cwd_relative_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "workspace"
+            workspace.mkdir()
+            archive_root = Path(tmp) / "personal-archive"
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:doctor-progress-log")
+            self.assertEqual(init_code, 0, init_output)
+
+            old_cwd = Path.cwd()
+            try:
+                os.chdir(workspace)
+                code, output = self.run_cli(
+                    [
+                        "doctor",
+                        str(archive_root),
+                        "--format",
+                        "json",
+                        "--summary",
+                        "--progress-log",
+                        "logs/doctor-progress.jsonl",
+                    ]
+                )
+            finally:
+                os.chdir(old_cwd)
+
+            self.assertEqual(code, 0, output)
+            summary = json.loads(output)
+            self.assertEqual(summary["progress_log"]["path"], "logs/doctor-progress.jsonl")
+            self.assertEqual(summary["progress_log"]["path_kind"], "cwd_relative")
+            self.assertEqual(summary["progress_log"]["relative_to"], "current_working_directory")
+            self.assertFalse(summary["progress_log"]["absolute_path_echoed"])
+            self.assertEqual(summary["progress_log"]["tracking_policy"], "local_progress_artifact_not_archive_receipt")
+            self.assertIn("Do not commit by default", summary["progress_log"]["git_guidance"])
+            self.assertTrue((workspace / "logs" / "doctor-progress.jsonl").exists())
+            self.assertFalse((archive_root / "logs" / "doctor-progress.jsonl").exists())
 
     def test_doctor_diagnostic_level_filters_stdout_not_exit_code(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
