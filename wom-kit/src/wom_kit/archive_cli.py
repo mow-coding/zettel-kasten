@@ -411,6 +411,18 @@ SECRET_SCAN_EXTENSIONS = {
     ".yaml",
     ".yml",
 }
+SECRET_SAFETY_IGNORED_DIRS = {
+    ".git",
+    "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    ".venv",
+    "venv",
+}
+SECRET_SAFETY_PROGRESS_EVERY_FILES = 250
+SECRET_SAFETY_PROGRESS_SECONDS = 30.0
+SECRET_SAFETY_READ_CHUNK_SIZE = 1024 * 1024
 
 
 def contains_secret_value(text: str) -> bool:
@@ -2793,24 +2805,70 @@ class Doctor:
         )
 
     def _check_local_profile_and_secret_safety(self) -> None:
+        stage = "local-profile-secret-safety"
+        self._progress(stage, "checking gitignore secret patterns", None, None)
         self._check_gitignore_secret_patterns()
-        for path in sorted(self.archive_root.rglob("*")):
-            if not path.is_file() or not self._path_stays_inside_archive(path) or self._is_ignored_scan_path(path):
+        self._progress(stage, "walking archive files", None, None)
+        checked_files = 0
+        skipped_dirs = 0
+        secret_content_files = 0
+        local_profile_files = 0
+        last_progress = time.monotonic()
+        for dirpath, dirnames, filenames in os.walk(self.archive_root):
+            dir_path = Path(dirpath)
+            if not is_path_within_root(dir_path, self.archive_root):
+                dirnames[:] = []
                 continue
-            relative = self._display_path(path) or str(path)
-            name = path.name.lower()
-            if self._is_secret_filename(path):
-                self.error("secret_file_detected", f"Secret-like local file should not live in the archive: {relative}", path)
-                continue
-            if self._should_scan_secret_content(path):
-                try:
-                    text = path.read_text(encoding="utf-8")
-                except UnicodeDecodeError:
+            before_dirs = len(dirnames)
+            dirnames[:] = [name for name in dirnames if name not in SECRET_SAFETY_IGNORED_DIRS]
+            skipped_dirs += before_dirs - len(dirnames)
+            for filename in filenames:
+                path = dir_path / filename
+                if self._is_ignored_scan_path(path):
                     continue
-                if contains_secret_value(text):
-                    self.error("secret_value_detected", f"Secret-like value found in archive file: {relative}", path)
-            if self._is_local_profile_path(path):
-                self._check_local_profile_file(path)
+                checked_files += 1
+                now = time.monotonic()
+                if checked_files == 1 or checked_files % SECRET_SAFETY_PROGRESS_EVERY_FILES == 0:
+                    self._progress(
+                        stage,
+                        "checked archive files "
+                        f"files={checked_files} content={secret_content_files} "
+                        f"profiles={local_profile_files} skipped_dirs={skipped_dirs}",
+                        checked_files,
+                        None,
+                    )
+                    last_progress = now
+                elif now - last_progress >= SECRET_SAFETY_PROGRESS_SECONDS:
+                    self._progress(
+                        stage,
+                        "still checking local profile secret safety "
+                        f"files={checked_files} content={secret_content_files} "
+                        f"profiles={local_profile_files} skipped_dirs={skipped_dirs}",
+                        checked_files,
+                        None,
+                    )
+                    last_progress = now
+                if not path.is_file() or not self._path_stays_inside_archive(path) or self._is_ignored_scan_path(path):
+                    continue
+                relative = self._display_path(path) or str(path)
+                if self._is_secret_filename(path):
+                    self.error("secret_file_detected", f"Secret-like local file should not live in the archive: {relative}", path)
+                    continue
+                if self._should_scan_secret_content(path):
+                    secret_content_files += 1
+                    if self._file_contains_secret_value(path, stage=stage, progress_label=relative):
+                        self.error("secret_value_detected", f"Secret-like value found in archive file: {relative}", path)
+                if self._is_local_profile_path(path):
+                    local_profile_files += 1
+                    self._check_local_profile_file(path)
+        self._progress(
+            stage,
+            "local profile secret safety summary "
+            f"checked_files={checked_files} content_scanned={secret_content_files} "
+            f"local_profiles={local_profile_files} skipped_dirs={skipped_dirs}",
+            None,
+            None,
+        )
 
     def _check_gitignore_secret_patterns(self) -> None:
         path = self.archive_root / ".gitignore"
@@ -2831,9 +2889,11 @@ class Doctor:
             )
 
     def _is_ignored_scan_path(self, path: Path) -> bool:
-        relative_parts = path.resolve().relative_to(self.archive_root).parts
-        ignored_dirs = {".git", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".venv", "venv"}
-        return any(part in ignored_dirs for part in relative_parts)
+        try:
+            relative_parts = path.resolve().relative_to(self.archive_root).parts
+        except ValueError:
+            return False
+        return any(part in SECRET_SAFETY_IGNORED_DIRS for part in relative_parts)
 
     def _is_secret_filename(self, path: Path) -> bool:
         relative = self._display_path(path) or path.name
@@ -2855,6 +2915,33 @@ class Doctor:
     def _is_local_profile_path(self, path: Path) -> bool:
         relative = (self._display_path(path) or "").replace("\\", "/")
         return relative.endswith(".local.yml") or relative.endswith(".local.yaml") or relative.startswith(LOCAL_PROFILE_ROOTS)
+
+    def _file_contains_secret_value(self, path: Path, *, stage: str, progress_label: str) -> bool:
+        bytes_read = 0
+        tail = ""
+        last_progress = time.monotonic()
+        try:
+            with path.open("r", encoding="utf-8") as handle:
+                while True:
+                    chunk = handle.read(SECRET_SAFETY_READ_CHUNK_SIZE)
+                    if not chunk:
+                        return False
+                    bytes_read += len(chunk.encode("utf-8", errors="ignore"))
+                    text = tail + chunk
+                    if contains_secret_value(text):
+                        return True
+                    tail = text[-512:]
+                    now = time.monotonic()
+                    if now - last_progress >= SECRET_SAFETY_PROGRESS_SECONDS:
+                        self._progress(
+                            stage,
+                            f"still scanning secret content {progress_label} bytes={bytes_read}",
+                            None,
+                            None,
+                        )
+                        last_progress = now
+        except UnicodeDecodeError:
+            return False
 
     def _check_local_profile_file(self, path: Path) -> None:
         data = self._load_yaml_file(path, missing_ok=True) if path.suffix.lower() in {".yml", ".yaml"} else None

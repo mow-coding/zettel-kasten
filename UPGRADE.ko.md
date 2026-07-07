@@ -87,7 +87,8 @@ zet, receipt로 보존해야 합니다.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.3.192` | current public pre-release | `wom-kit/docs/releases/v0.3.192.md` |
+| `v0.3.193` | current public pre-release | `wom-kit/docs/releases/v0.3.193.md` |
+| `v0.3.192` | superseded public pre-release | `wom-kit/docs/releases/v0.3.192.md` |
 | `v0.3.191` | superseded public pre-release | `wom-kit/docs/releases/v0.3.191.md` |
 | `v0.3.190` | superseded public pre-release | `wom-kit/docs/releases/v0.3.190.md` |
 | `v0.3.189` | superseded public pre-release | `wom-kit/docs/releases/v0.3.189.md` |
@@ -158,6 +159,21 @@ zet, receipt로 보존해야 합니다.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.3.192` To `v0.3.193`
+
+doctor local-profile secret-safety progress를 보강하는 additive patch입니다. 마이그레이션은 필요 없습니다.
+
+운영자가 볼 변화:
+
+- `doctor --progress`가 `local-profile-secret-safety` 내부 progress를 출력합니다: gitignore
+  check, archive walk, checked-file count, content-scan count, local-profile count, skipped-dir
+  count, 최종 summary.
+- 큰 archive walk에서는 `still checking local profile secret safety` heartbeat가 나올 수 있습니다.
+- config/text secret-content check는 파일 전체를 한 번에 올리지 않고 chunk 단위로 읽으며, 긴 읽기에서는
+  `still scanning secret content ...`를 출력할 수 있습니다.
+- result JSON, diagnostics, receipts, manifests, archive 파일은 기존 stage가 원래 보고하던 진단 외에는 바뀌지 않습니다.
+- `wom-kit/docs/releases/v0.3.193.md`를 보세요.
 
 ## From `v0.3.191` To `v0.3.192`
 
