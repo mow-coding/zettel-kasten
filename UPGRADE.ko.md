@@ -87,7 +87,8 @@ zet, receipt로 보존해야 합니다.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.3.187` | current public pre-release | `wom-kit/docs/releases/v0.3.187.md` |
+| `v0.3.188` | current public pre-release | `wom-kit/docs/releases/v0.3.188.md` |
+| `v0.3.187` | superseded public pre-release | `wom-kit/docs/releases/v0.3.187.md` |
 | `v0.3.186` | superseded public pre-release | `wom-kit/docs/releases/v0.3.186.md` |
 | `v0.3.4` | superseded public pre-release | `wom-kit/docs/releases/v0.3.4.md` |
 | `v0.3.3` | superseded public pre-release | `wom-kit/docs/releases/v0.3.3.md` |
@@ -153,6 +154,19 @@ zet, receipt로 보존해야 합니다.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.3.187` To `v0.3.188`
+
+doctor progress를 보강하는 additive patch입니다. 마이그레이션은 필요 없습니다.
+
+운영자가 볼 변화:
+
+- `doctor --strict --progress`가 검사한 모든 mint receipt에 대해 receipt 단위 heartbeat를 출력합니다.
+- 자세한 mint-receipt sub-step은 4번째 receipt까지 출력한 뒤, 이후에는 250개마다 그리고 마지막 receipt에서 출력합니다.
+- 4번째 receipt 뒤에는 receipt heartbeat로 계속 진행하며 detailed substep은 샘플링한다는 메시지를 명시합니다.
+- counted stage ETA는 stage별 시간을 쓰고, 처음 몇 개 샘플만 있는 동안에는 과장된 ETA 대신 `eta=warming_up`을 출력합니다.
+- result JSON, diagnostics, receipts, manifests, archive 파일은 바뀌지 않습니다.
+- `wom-kit/docs/releases/v0.3.188.md`를 보세요.
 
 ## From `v0.3.186` To `v0.3.187`
 

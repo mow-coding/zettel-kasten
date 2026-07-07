@@ -804,15 +804,26 @@ def make_stage_progress_callback(enabled: bool, *, label: str) -> ProgressCallba
     if not enabled:
         return None
     started = time.monotonic()
+    stage_started: dict[str, float] = {}
 
     def progress(stage: str, message: str, current: int | None, total: int | None) -> None:
-        elapsed = max(0.0, time.monotonic() - started)
+        now = time.monotonic()
+        elapsed = max(0.0, now - started)
+        if message == "start" or stage not in stage_started:
+            stage_started[stage] = now
         if current is not None and total:
-            rate = current / elapsed if elapsed else 0.0
-            remaining = max(0, total - current)
-            eta = remaining / rate if rate else 0.0
+            stage_elapsed = max(0.0, now - stage_started.get(stage, now))
+            eta_text = "0.0s"
+            if current < total:
+                if current < 5 or stage_elapsed < 1.0:
+                    eta_text = "warming_up"
+                else:
+                    rate = current / stage_elapsed
+                    remaining = max(0, total - current)
+                    eta = remaining / rate if rate else 0.0
+                    eta_text = f"{eta:.1f}s"
             print(
-                f"[{label}] {stage}: {current}/{total} {message} elapsed={elapsed:.1f}s eta={eta:.1f}s",
+                f"[{label}] {stage}: {current}/{total} {message} elapsed={elapsed:.1f}s eta={eta_text}",
                 file=sys.stderr,
                 flush=True,
             )
@@ -1903,14 +1914,13 @@ class Doctor:
             paths.append(path)
         total = len(paths)
         for index, path in enumerate(paths, start=1):
-            emit_detail_progress = index <= 3 or index == total or index % 250 == 0
+            emit_detail_progress = index <= 4 or index == total or index % 250 == 0
 
             def receipt_progress(message: str) -> None:
                 if emit_detail_progress:
                     self._progress("mint-receipts", message, index, total)
 
-            if emit_detail_progress:
-                self._progress("mint-receipts", self._display_path(path) or "mint receipt", index, total)
+            self._progress("mint-receipts", self._display_path(path) or "mint receipt", index, total)
             receipt_progress("loading receipt json")
             data = self._load_json_file(path)
             if not isinstance(data, dict):
@@ -1978,6 +1988,13 @@ class Doctor:
                 else:
                     receipt_progress("target mint receipt link ok")
             receipt_progress("completed receipt checks")
+            if index == 4 and total > 4:
+                self._progress(
+                    "mint-receipts",
+                    "continuing with receipt heartbeat; detailed substeps every 250 receipts",
+                    index,
+                    total,
+                )
         self._progress(
             "mint-receipts",
             "cache summary "

@@ -95,7 +95,8 @@ and receipts before any cleanup.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.3.187` | current public pre-release | `wom-kit/docs/releases/v0.3.187.md` |
+| `v0.3.188` | current public pre-release | `wom-kit/docs/releases/v0.3.188.md` |
+| `v0.3.187` | superseded public pre-release | `wom-kit/docs/releases/v0.3.187.md` |
 | `v0.3.186` | superseded public pre-release | `wom-kit/docs/releases/v0.3.186.md` |
 | `v0.3.7` | superseded public pre-release | `wom-kit/docs/releases/v0.3.7.md` |
 | `v0.3.6` | superseded public pre-release | `wom-kit/docs/releases/v0.3.6.md` |
@@ -164,6 +165,22 @@ and receipts before any cleanup.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.3.187` To `v0.3.188`
+
+One additive doctor progress patch. No migration is required.
+
+Operator-visible notes:
+
+- `doctor --strict --progress` now emits a mint-receipt entry for every checked mint receipt.
+- Detailed mint-receipt sub-steps now run through receipt 4, then resume every 250 receipts and
+  for the final receipt.
+- After receipt 4, progress explicitly says it is continuing with receipt heartbeat and sampled
+  detailed substeps.
+- Counted-stage ETA uses per-stage timing and reports `eta=warming_up` for the first few samples
+  instead of projecting from too little data.
+- Result JSON, diagnostics, receipts, manifests, and archive files are unchanged.
+- See `wom-kit/docs/releases/v0.3.188.md`.
 
 ## From `v0.3.186` To `v0.3.187`
 

@@ -6,6 +6,19 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.188 - 2026-07-07
+
+Doctor mint-receipt progress heartbeat and ETA warm-up checkpoint. Additive; no migration.
+
+- **Fourth receipt transition visibility.** `doctor --strict --progress` now emits detailed
+  mint-receipt sub-steps through the fourth receipt, then announces that it is continuing with
+  receipt-level heartbeats and sampled detailed sub-steps every 250 receipts.
+- **Receipt-level heartbeat.** `mint-receipts` progress now prints a receipt entry for every
+  checked mint receipt, so operators can see that doctor advanced beyond the initial detailed
+  samples even when later receipts do not emit every internal sub-step.
+- **ETA warm-up.** Progress ETA now uses per-stage timing and reports `eta=warming_up` for the
+  first few samples instead of projecting a misleading multi-day ETA from one to four receipts.
+
 ## v0.3.187 - 2026-07-07
 
 AI artifact lifecycle inventory checkpoint. Additive; no migration.

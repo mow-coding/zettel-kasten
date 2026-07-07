@@ -584,6 +584,22 @@ class ArchiveCliTests(unittest.TestCase):
         self.assertIn("[doctor] symlink-boundaries: start", output)
         self.assertIn("[doctor] local-profile-secret-safety: done", output)
 
+    def test_progress_eta_warms_up_before_enough_stage_samples(self) -> None:
+        stream = io.StringIO()
+        with patch.object(archive_cli.time, "monotonic", side_effect=[100.0, 100.0, 101.0, 102.0, 112.0]):
+            progress = archive_cli.make_stage_progress_callback(True, label="doctor")
+            assert progress is not None
+            with redirect_stderr(stream):
+                progress("mint-receipts", "start", None, None)
+                progress("mint-receipts", "first receipt", 1, 8583)
+                progress("mint-receipts", "fourth receipt", 4, 8583)
+                progress("mint-receipts", "fifth receipt", 5, 8583)
+
+        output = stream.getvalue()
+        self.assertIn("1/8583 first receipt elapsed=1.0s eta=warming_up", output)
+        self.assertIn("4/8583 fourth receipt elapsed=2.0s eta=warming_up", output)
+        self.assertRegex(output, r"5/8583 fifth receipt elapsed=12\.0s eta=\d+\.\d+s")
+
     def test_doctor_mint_receipt_file_sha_is_cached_per_run(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
@@ -631,6 +647,33 @@ class ArchiveCliTests(unittest.TestCase):
         self.assertIn("target mint receipt link ok", messages)
         self.assertIn("completed receipt checks", messages)
         self.assertTrue(any(message.startswith("cache summary ") for message in messages))
+
+    def test_doctor_mint_receipts_progress_reports_fourth_receipt_and_heartbeat(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            mint = self._mint_lunch_for_reconcile(archive_root)
+            receipt_path = archive_root / mint["mint_receipt_path"]
+            for index in range(2, 6):
+                shutil.copy2(
+                    receipt_path,
+                    receipt_path.with_name(f"zet_20260519_draft_ai_lunch_note_copy_{index}.mint.json"),
+                )
+            events: list[tuple[str, str, int | None, int | None]] = []
+            doctor = archive_cli.Doctor(
+                archive_root,
+                progress_callback=lambda stage, message, current, total: events.append(
+                    (stage, message, current, total)
+                ),
+            )
+            doctor._check_mint_receipts()
+
+        mint_events = [(message, current, total) for stage, message, current, total in events if stage == "mint-receipts"]
+        self.assertTrue(any(current == 4 and total == 5 for _message, current, total in mint_events))
+        self.assertTrue(any(current == 5 and total == 5 for _message, current, total in mint_events))
+        self.assertIn(
+            ("continuing with receipt heartbeat; detailed substeps every 250 receipts", 4, 5),
+            mint_events,
+        )
 
     def test_doctor_zettel_frontmatter_cache_reuses_first_read(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
