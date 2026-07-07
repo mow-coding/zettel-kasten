@@ -602,6 +602,56 @@ class ArchiveCliTests(unittest.TestCase):
         self.assertIn("5/8583 fifth receipt elapsed=12.0s eta=warming_up", output)
         self.assertRegex(output, r"10/8583 tenth receipt elapsed=45\.0s eta=\d+\.\d+s")
 
+    def test_doctor_progress_compact_filters_receipt_liveness_flood(self) -> None:
+        stream = io.StringIO()
+        progress = archive_cli.make_doctor_progress_callback(True, detail="compact")
+        assert progress is not None
+        with redirect_stderr(stream):
+            progress("mint-receipts", "start", None, None)
+            progress("mint-receipts", "started receipt checks", 9, 8583)
+            progress("mint-receipts", "edge receipt index cache hit", 523, 8583)
+            progress("mint-receipts", "checking target edge receipt candidates 1", 523, 8583)
+            progress("mint-receipts", "receipts/mint/example-250.mint.json", 250, 8583)
+
+        output = stream.getvalue()
+        self.assertIn("[doctor] mint-receipts: start", output)
+        self.assertIn("250/8583 receipts/mint/example-250.mint.json", output)
+        self.assertNotIn("9/8583 started receipt checks", output)
+        self.assertNotIn("523/8583 edge receipt index cache hit", output)
+        self.assertNotIn("523/8583 checking target edge receipt candidates 1", output)
+
+    def test_doctor_progress_verbose_preserves_receipt_liveness_trace(self) -> None:
+        stream = io.StringIO()
+        progress = archive_cli.make_doctor_progress_callback(True, detail="verbose")
+        assert progress is not None
+        with redirect_stderr(stream):
+            progress("mint-receipts", "started receipt checks", 9, 8583)
+
+        self.assertIn("9/8583 started receipt checks", stream.getvalue())
+
+    def test_doctor_progress_log_records_full_events_without_stderr(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_path = Path(tmp) / "doctor-progress.jsonl"
+            stream = io.StringIO()
+            progress = archive_cli.make_doctor_progress_callback(
+                False,
+                detail="compact",
+                progress_log_path=log_path,
+            )
+            assert progress is not None
+            with redirect_stderr(stream):
+                progress("mint-receipts", "edge receipt index cache hit", 523, 8583)
+            lines = log_path.read_text(encoding="utf-8").splitlines()
+
+        self.assertEqual(stream.getvalue(), "")
+        self.assertEqual(len(lines), 1)
+        event = json.loads(lines[0])
+        self.assertEqual(event["label"], "doctor")
+        self.assertEqual(event["stage"], "mint-receipts")
+        self.assertEqual(event["message"], "edge receipt index cache hit")
+        self.assertEqual(event["current"], 523)
+        self.assertEqual(event["total"], 8583)
+
     def test_doctor_mint_receipt_file_sha_is_cached_per_run(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")

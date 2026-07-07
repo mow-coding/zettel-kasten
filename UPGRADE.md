@@ -95,7 +95,8 @@ and receipts before any cleanup.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.3.191` | current public pre-release | `wom-kit/docs/releases/v0.3.191.md` |
+| `v0.3.192` | current public pre-release | `wom-kit/docs/releases/v0.3.192.md` |
+| `v0.3.191` | superseded public pre-release | `wom-kit/docs/releases/v0.3.191.md` |
 | `v0.3.190` | superseded public pre-release | `wom-kit/docs/releases/v0.3.190.md` |
 | `v0.3.189` | superseded public pre-release | `wom-kit/docs/releases/v0.3.189.md` |
 | `v0.3.188` | superseded public pre-release | `wom-kit/docs/releases/v0.3.188.md` |
@@ -168,6 +169,20 @@ and receipts before any cleanup.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.3.191` To `v0.3.192`
+
+One additive doctor progress volume-control patch. No migration is required.
+
+Operator-visible notes:
+
+- `doctor --progress` now uses compact stderr progress by default, keeping stage start/done,
+  receipt milestones, quiet-interval heartbeats, and key edge-index lifecycle events.
+- Use `doctor --progress --progress-detail verbose` to preserve the full detailed receipt trace.
+- Use `doctor --progress-log <path>` to write every progress event as JSONL while stderr remains
+  compact; the log option can also be used without `--progress`.
+- Result JSON, diagnostics, receipts, manifests, and archive files are unchanged.
+- See `wom-kit/docs/releases/v0.3.192.md`.
 
 ## From `v0.3.190` To `v0.3.191`
 
