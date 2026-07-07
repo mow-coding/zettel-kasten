@@ -87,7 +87,8 @@ zet, receipt로 보존해야 합니다.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.3.195` | current public pre-release | `wom-kit/docs/releases/v0.3.195.md` |
+| `v0.3.196` | current public pre-release | `wom-kit/docs/releases/v0.3.196.md` |
+| `v0.3.195` | superseded public pre-release | `wom-kit/docs/releases/v0.3.195.md` |
 | `v0.3.194` | superseded public pre-release | `wom-kit/docs/releases/v0.3.194.md` |
 | `v0.3.193` | superseded public pre-release | `wom-kit/docs/releases/v0.3.193.md` |
 | `v0.3.192` | superseded public pre-release | `wom-kit/docs/releases/v0.3.192.md` |
@@ -161,6 +162,18 @@ zet, receipt로 보존해야 합니다.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.3.195` To `v0.3.196`
+
+doctor progress-log path-policy를 더 명확히 하는 additive patch입니다. 마이그레이션은 필요 없습니다.
+
+운영자가 볼 변화:
+
+- `doctor --progress-log <path>` summary가 상대 progress-log path는 현재 작업 디렉토리 기준 cwd-relative path임을 명시합니다.
+- progress log 파일을 archive receipt가 아닌 local progress artifact로 표시하고, 기본적으로 commit하지 말라고 안내합니다.
+- absolute progress-log input은 summary에 그대로 출력하지 않습니다.
+- 기본 `doctor` 동작, progress-log 작성 동작, exit code 의미는 그대로입니다.
+- `wom-kit/docs/releases/v0.3.196.md`를 보세요.
 
 ## From `v0.3.194` To `v0.3.195`
 

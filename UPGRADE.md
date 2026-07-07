@@ -95,7 +95,8 @@ and receipts before any cleanup.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.3.195` | current public pre-release | `wom-kit/docs/releases/v0.3.195.md` |
+| `v0.3.196` | current public pre-release | `wom-kit/docs/releases/v0.3.196.md` |
+| `v0.3.195` | superseded public pre-release | `wom-kit/docs/releases/v0.3.195.md` |
 | `v0.3.194` | superseded public pre-release | `wom-kit/docs/releases/v0.3.194.md` |
 | `v0.3.193` | superseded public pre-release | `wom-kit/docs/releases/v0.3.193.md` |
 | `v0.3.192` | superseded public pre-release | `wom-kit/docs/releases/v0.3.192.md` |
@@ -172,6 +173,20 @@ and receipts before any cleanup.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.3.195` To `v0.3.196`
+
+One additive doctor progress-log path-policy clarification patch. No migration is required.
+
+Operator-visible notes:
+
+- `doctor --progress-log <path>` summary output now marks relative progress-log paths as
+  cwd-relative and relative to the current working directory.
+- The summary labels progress logs as local progress artifacts, not archive receipts, and says
+  not to commit them by default.
+- Absolute progress-log inputs are not echoed in the summary.
+- Default `doctor` behavior, progress-log write behavior, and exit-code semantics are unchanged.
+- See `wom-kit/docs/releases/v0.3.196.md`.
 
 ## From `v0.3.194` To `v0.3.195`
 
