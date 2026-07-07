@@ -741,6 +741,60 @@ class ArchiveCliTests(unittest.TestCase):
 
         self.assertIn("hashing target file bytes", events)
 
+    def test_edge_receipts_by_source_reports_scan_progress(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "archive"
+            edge_root = archive_root / archive_services.ZETTEL_EDGE_RECEIPTS_DIR
+            edge_root.mkdir(parents=True)
+            for index in range(1, 3):
+                (edge_root / f"edge-{index}.zettel-edge.json").write_text(
+                    json.dumps(
+                        {
+                            "receipt_kind": "zettel_edge_write",
+                            "source_zettel_path": "zettels/example.md",
+                            "edge_id": f"edge-{index}",
+                            "created_at": f"2026-07-07T00:00:0{index}+00:00",
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+            events: list[str] = []
+
+            by_source = archive_services.edge_receipts_by_source(archive_root, progress_callback=events.append)
+
+        self.assertEqual(len(by_source["zettels/example.md"]), 2)
+        self.assertIn("listing edge receipts", events)
+        self.assertIn("scanning edge receipts 0/2", events)
+        self.assertIn("scanning edge receipts 1/2", events)
+        self.assertIn("scanning edge receipts 2/2", events)
+        self.assertIn("edge receipt index ready sources=1 receipts=2/2", events)
+
+    def test_doctor_mint_receipt_file_ref_reports_target_edge_evolution_progress(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            mint = self._mint_lunch_for_reconcile(archive_root)
+            receipt_path = archive_root / mint["mint_receipt_path"]
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            expected_sha = receipt["target"]["sha256"]
+            mismatched_actual_sha = "0" * 64 if expected_sha != "0" * 64 else "1" * 64
+            events: list[str] = []
+            doctor = archive_cli.Doctor(archive_root)
+
+            with patch.object(doctor, "_sha256_file_cached", return_value=mismatched_actual_sha):
+                doctor._check_mint_receipt_file_ref(
+                    receipt,
+                    receipt_path,
+                    "target",
+                    progress_callback=events.append,
+                )
+
+        self.assertIn("checking target edge-receipt evolution", events)
+        self.assertTrue(any(message.startswith("target edge evolution target zettels/") for message in events))
+        self.assertIn("loading target edge receipt candidates", events)
+        self.assertIn("loading edge receipt index", events)
+        self.assertIn("loaded edge receipt index", events)
+        self.assertTrue(any(message.startswith("checking target edge receipt candidates ") for message in events))
+
     def test_doctor_mint_receipts_progress_reports_retired_source_skip(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
@@ -29117,9 +29171,9 @@ state:
             original_edge_index = archive_services.edge_receipts_by_source
             edge_index_calls: list[Path] = []
 
-            def counted_edge_index(root: Path) -> dict[str, list[dict[str, Any]]]:
+            def counted_edge_index(root: Path, **kwargs: Any) -> dict[str, list[dict[str, Any]]]:
                 edge_index_calls.append(Path(root))
-                return original_edge_index(root)
+                return original_edge_index(root, **kwargs)
 
             with patch.object(archive_services, "edge_receipts_by_source", side_effect=counted_edge_index), patch.object(
                 archive_services,
@@ -29447,9 +29501,9 @@ state:
             original_edge_index = archive_services.edge_receipts_by_source
             edge_index_calls: list[Path] = []
 
-            def counted_edge_index(root: Path) -> dict[str, list[dict[str, Any]]]:
+            def counted_edge_index(root: Path, **kwargs: Any) -> dict[str, list[dict[str, Any]]]:
                 edge_index_calls.append(Path(root))
-                return original_edge_index(root)
+                return original_edge_index(root, **kwargs)
 
             with patch.object(archive_services, "edge_receipts_by_source", side_effect=counted_edge_index), patch.object(
                 archive_services,

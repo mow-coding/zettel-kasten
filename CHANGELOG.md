@@ -6,6 +6,20 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.191 - 2026-07-07
+
+Doctor target edge-receipt evolution progress checkpoint. Additive; no migration.
+
+- **Edge receipt index liveness.** `doctor --strict --progress` now reports the target
+  edge-receipt evolution path after a mint target sha mismatch, including the archive-relative
+  target, edge receipt index loading, scan counts, cache hits, and candidate counts.
+- **Evolution replay drilldown.** The target evolution replay now emits content-free progress for
+  target zettel reads, missing cutoff/no-edge-list skips, strict/inclusive history checks, and
+  ok/no-match results.
+- **Long scan heartbeat.** Edge receipt index scans can emit `still scanning edge receipts` after a
+  long quiet interval while keeping result JSON, diagnostics, receipts, manifests, and archive files
+  unchanged.
+
 ## v0.3.190 - 2026-07-07
 
 Doctor mint target file-ref drilldown checkpoint. Additive; no migration.
