@@ -6,6 +6,19 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.190 - 2026-07-07
+
+Doctor mint target file-ref drilldown checkpoint. Additive; no migration.
+
+- **File-ref drilldown.** Mint receipt file-reference checks now emit content-free progress for
+  path resolution, file-existence checks, archive-relative resolved refs, sha256 field validation,
+  file stat, cache hits, hash start/end, sha mismatch, edge-receipt evolution checks, and ref-ok.
+- **Hash start guarantee.** When a mint receipt file ref needs a fresh SHA-256 read, doctor now
+  emits `hashing <section> file bytes` before reading regardless of file size; `still hashing ...`
+  remains a chunk liveness heartbeat rather than a mandatory small-file line.
+- **Source-skip clarity.** When a mint source is already closed by a retire-draft receipt, progress
+  now says `source file ref skipped; source retired` instead of simply omitting the source check.
+
 ## v0.3.189 - 2026-07-07
 
 Doctor mint-receipt internal liveness checkpoint. Additive; no migration.

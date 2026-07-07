@@ -87,7 +87,8 @@ zet, receipt로 보존해야 합니다.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.3.189` | current public pre-release | `wom-kit/docs/releases/v0.3.189.md` |
+| `v0.3.190` | current public pre-release | `wom-kit/docs/releases/v0.3.190.md` |
+| `v0.3.189` | superseded public pre-release | `wom-kit/docs/releases/v0.3.189.md` |
 | `v0.3.188` | superseded public pre-release | `wom-kit/docs/releases/v0.3.188.md` |
 | `v0.3.187` | superseded public pre-release | `wom-kit/docs/releases/v0.3.187.md` |
 | `v0.3.186` | superseded public pre-release | `wom-kit/docs/releases/v0.3.186.md` |
@@ -155,6 +156,21 @@ zet, receipt로 보존해야 합니다.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.3.189` To `v0.3.190`
+
+doctor file-ref drilldown을 보강하는 additive patch입니다. 마이그레이션은 필요 없습니다.
+
+운영자가 볼 변화:
+
+- `doctor --strict --progress`가 mint receipt file-reference check 내부를 더 쪼갭니다:
+  path resolve, existence check, archive-relative resolved ref, sha field check, stat, cache hit,
+  hash 시작/완료, mismatch, target edge-evolution check, ref-ok.
+- 새 SHA-256 읽기가 필요하면 파일 크기와 무관하게 읽기 전에 `hashing <section> file bytes`를 출력합니다.
+- `still hashing ... file bytes`는 긴 읽기의 chunk heartbeat로만 남기고, 작은 파일에서 필수로 찍히지는 않습니다.
+- retired mint source는 `source file ref skipped; source retired`를 출력합니다.
+- result JSON, diagnostics, receipts, manifests, archive 파일은 바뀌지 않습니다.
+- `wom-kit/docs/releases/v0.3.190.md`를 보세요.
 
 ## From `v0.3.188` To `v0.3.189`
 
