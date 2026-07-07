@@ -6,6 +6,20 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.189 - 2026-07-07
+
+Doctor mint-receipt internal liveness checkpoint. Additive; no migration.
+
+- **Every-receipt internal liveness.** `doctor --strict --progress` now emits `started receipt
+  checks`, file-ref check names, and `completed receipt checks` for every mint receipt, not only
+  the detailed sampled receipts, so a pause after a receipt path identifies the current internal
+  step.
+- **Large-file hash liveness.** Mint-receipt file SHA checks can now emit content-free hash
+  liveness for large referenced files, including repeated `still hashing ... file bytes`
+  heartbeats without echoing file bodies, object ids, provider locations, or local paths.
+- **Longer ETA warm-up.** Counted progress keeps `eta=warming_up` through the first nine samples
+  or first 30 seconds of a stage, avoiding early multi-hour projections from too little data.
+
 ## v0.3.188 - 2026-07-07
 
 Doctor mint-receipt progress heartbeat and ETA warm-up checkpoint. Additive; no migration.
