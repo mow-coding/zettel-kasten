@@ -648,6 +648,14 @@ class ArchiveCliTests(unittest.TestCase):
         self.assertIn("comparing target mint receipt_path", messages)
         self.assertIn("target mint receipt link ok", messages)
         self.assertIn("completed receipt checks", messages)
+        self.assertIn("resolving target file path", messages)
+        self.assertIn("checking target file exists", messages)
+        self.assertTrue(any(message.startswith("resolved target file ref ") for message in messages))
+        self.assertIn("checking target sha256 field", messages)
+        self.assertIn("reading target file stat", messages)
+        self.assertIn("hashing target file bytes", messages)
+        self.assertIn("hashed target file bytes", messages)
+        self.assertIn("target file ref ok", messages)
         self.assertTrue(any(message.startswith("cache summary ") for message in messages))
 
     def test_doctor_mint_receipts_progress_reports_fourth_receipt_and_heartbeat(self) -> None:
@@ -674,6 +682,28 @@ class ArchiveCliTests(unittest.TestCase):
         self.assertTrue(any(current == 9 and total == 12 for _message, current, total in mint_events))
         self.assertIn(("started receipt checks", 9, 12), mint_events)
         self.assertIn(("checking target file ref", 9, 12), mint_events)
+        self.assertIn(("resolving target file path", 9, 12), mint_events)
+        self.assertIn(("checking target file exists", 9, 12), mint_events)
+        self.assertTrue(
+            any(
+                message.startswith("resolved target file ref ") and current == 9 and total == 12
+                for message, current, total in mint_events
+            )
+        )
+        self.assertIn(("checking target sha256 field", 9, 12), mint_events)
+        self.assertTrue(
+            ("reading target file stat", 9, 12) in mint_events
+            or ("target file sha256 cache hit", 9, 12) in mint_events
+        )
+        self.assertTrue(
+            ("hashing target file bytes", 9, 12) in mint_events
+            or ("target file sha256 cache hit", 9, 12) in mint_events
+        )
+        self.assertTrue(
+            ("hashed target file bytes", 9, 12) in mint_events
+            or ("target file sha256 cache hit", 9, 12) in mint_events
+        )
+        self.assertIn(("target file ref ok", 9, 12), mint_events)
         self.assertIn(("completed receipt checks", 9, 12), mint_events)
         self.assertIn(
             (
@@ -706,10 +736,26 @@ class ArchiveCliTests(unittest.TestCase):
                     receipt,
                     receipt_path,
                     "target",
-                    progress_callback=events.append,
-                )
+            progress_callback=events.append,
+        )
 
         self.assertIn("hashing target file bytes", events)
+
+    def test_doctor_mint_receipts_progress_reports_retired_source_skip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            self._mint_and_retire_lunch(archive_root)
+            events: list[tuple[str, str, int | None, int | None]] = []
+            doctor = archive_cli.Doctor(
+                archive_root,
+                progress_callback=lambda stage, message, current, total: events.append(
+                    (stage, message, current, total)
+                ),
+            )
+            doctor._check_mint_receipts()
+
+        messages = [message for stage, message, _current, _total in events if stage == "mint-receipts"]
+        self.assertIn("source file ref skipped; source retired", messages)
 
     def test_sha256_file_reports_byte_progress(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

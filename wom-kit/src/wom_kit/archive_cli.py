@@ -975,16 +975,17 @@ class Doctor:
         key = self._file_cache_key(path)
         if key in self._file_sha256_cache:
             self._file_sha256_cache_hits += 1
+            if progress_callback is not None:
+                progress_callback(f"{progress_label} file sha256 cache hit")
         else:
             self._file_sha256_cache_misses += 1
+            if progress_callback is not None:
+                progress_callback(f"reading {progress_label} file stat")
             try:
                 file_size = path.stat().st_size
             except OSError:
                 file_size = None
-            report_hash_progress = progress_callback is not None and (
-                file_size is None or file_size >= 64 * 1024 * 1024
-            )
-            if report_hash_progress and progress_callback is not None:
+            if progress_callback is not None:
                 progress_callback(f"hashing {progress_label} file bytes")
 
             def hash_progress(_bytes_read: int) -> None:
@@ -993,10 +994,10 @@ class Doctor:
 
             self._file_sha256_cache[key] = sha256_file(
                 path,
-                progress_callback=hash_progress if report_hash_progress else None,
+                progress_callback=hash_progress if progress_callback is not None else None,
                 progress_step_bytes=64 * 1024 * 1024,
             )
-            if report_hash_progress and progress_callback is not None:
+            if progress_callback is not None:
                 progress_callback(f"hashed {progress_label} file bytes")
         return self._file_sha256_cache[key]
 
@@ -1979,6 +1980,8 @@ class Doctor:
                     "source",
                     progress_callback=receipt_liveness,
                 )
+            else:
+                receipt_liveness("source file ref skipped; source retired")
             receipt_liveness("checking target file ref")
             target_path = self._check_mint_receipt_file_ref(
                 data,
@@ -2418,6 +2421,8 @@ class Doctor:
     ) -> Path | None:
         section_data = data.get(section)
         if not isinstance(section_data, dict):
+            if progress_callback is not None:
+                progress_callback(f"{section} file ref skipped; section missing")
             return None
         resolved = self._resolve_archive_file_ref(
             section_data.get("path"),
@@ -2425,10 +2430,14 @@ class Doctor:
             code_prefix=f"mint_receipt_{section}",
             label=f"Mint receipt {section}.path",
             required=True,
+            progress_callback=progress_callback,
+            progress_label=section,
         )
         if resolved is None:
             return None
         expected_sha = section_data.get("sha256")
+        if progress_callback is not None:
+            progress_callback(f"checking {section} sha256 field")
         if not isinstance(expected_sha, str) or not SHA256_RE.match(expected_sha):
             self.error("mint_receipt_sha_invalid", f"Mint receipt {section}.sha256 must be a lowercase SHA-256 hex digest.", path)
             return resolved
@@ -2438,13 +2447,18 @@ class Doctor:
             progress_label=section,
         )
         if actual_sha != expected_sha:
-            if section == "target" and self._target_sha_evolved_by_edge_receipts(data, resolved, expected_sha):
-                self.info(
-                    "mint_receipt_target_sha_evolved_by_edge_receipts",
-                    "Mint receipt target.sha256 is historical; current target differs only by approved zettel-edge receipts.",
-                    path,
-                )
-                return resolved
+            if section == "target":
+                if progress_callback is not None:
+                    progress_callback("checking target edge-receipt evolution")
+                if self._target_sha_evolved_by_edge_receipts(data, resolved, expected_sha):
+                    self.info(
+                        "mint_receipt_target_sha_evolved_by_edge_receipts",
+                        "Mint receipt target.sha256 is historical; current target differs only by approved zettel-edge receipts.",
+                        path,
+                    )
+                    return resolved
+            if progress_callback is not None:
+                progress_callback(f"{section} file sha256 mismatch")
             # Format-drift route (v0.3.162): a PREVIOUSLY-reconciled receipt that
             # re-drifted by newline/BOM only. Fires ONLY when the receipt carries a
             # reconcile.normalized_content_digest that matches the current canonical's
@@ -2483,6 +2497,8 @@ class Doctor:
                 )
                 return resolved
             self.error("mint_receipt_sha_mismatch", f"Mint receipt {section}.sha256 does not match the referenced file.", path)
+        if progress_callback is not None:
+            progress_callback(f"{section} file ref ok")
         return resolved
 
     def _check_delegate_receipts(self) -> None:
@@ -2552,19 +2568,28 @@ class Doctor:
         code_prefix: str,
         label: str,
         required: bool,
+        progress_callback: Callable[[str], None] | None = None,
+        progress_label: str = "file",
     ) -> Path | None:
         if not isinstance(value, str) or not value.strip():
             if required:
                 self.error(f"{code_prefix}_path_missing", f"{label} is missing.", path)
             return None
         try:
+            if progress_callback is not None:
+                progress_callback(f"resolving {progress_label} file path")
             resolved = resolve_archive_relative_path(self.archive_root, value)
         except ArchivePathError as exc:
             self.error(f"{code_prefix}_path_unsafe", f"{label} is unsafe: {value} ({exc})", path)
             return None
+        if progress_callback is not None:
+            progress_callback(f"checking {progress_label} file exists")
         if not resolved.is_file():
             self.error(f"{code_prefix}_path_missing", f"{label} points to a missing file: {value}", path)
             return None
+        if progress_callback is not None:
+            display = self._display_path(resolved) or "archive-contained file"
+            progress_callback(f"resolved {progress_label} file ref {display}")
         return resolved
 
     def _check_zettel_kasten_layer(self) -> None:
@@ -2859,18 +2884,14 @@ def sha256_file(
     digest = hashlib.sha256()
     bytes_read = 0
     next_report = max(1, progress_step_bytes)
-    last_reported = 0
     with path.open("rb") as file:
         for chunk in iter(lambda: file.read(1024 * 1024), b""):
             bytes_read += len(chunk)
             digest.update(chunk)
             if progress_callback is not None and bytes_read >= next_report:
                 progress_callback(bytes_read)
-                last_reported = bytes_read
                 while next_report <= bytes_read:
                     next_report += max(1, progress_step_bytes)
-    if progress_callback is not None and bytes_read != last_reported:
-        progress_callback(bytes_read)
     return digest.hexdigest()
 
 

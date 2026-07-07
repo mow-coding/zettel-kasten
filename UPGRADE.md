@@ -95,7 +95,8 @@ and receipts before any cleanup.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.3.189` | current public pre-release | `wom-kit/docs/releases/v0.3.189.md` |
+| `v0.3.190` | current public pre-release | `wom-kit/docs/releases/v0.3.190.md` |
+| `v0.3.189` | superseded public pre-release | `wom-kit/docs/releases/v0.3.189.md` |
 | `v0.3.188` | superseded public pre-release | `wom-kit/docs/releases/v0.3.188.md` |
 | `v0.3.187` | superseded public pre-release | `wom-kit/docs/releases/v0.3.187.md` |
 | `v0.3.186` | superseded public pre-release | `wom-kit/docs/releases/v0.3.186.md` |
@@ -166,6 +167,23 @@ and receipts before any cleanup.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.3.189` To `v0.3.190`
+
+One additive doctor file-ref drilldown patch. No migration is required.
+
+Operator-visible notes:
+
+- `doctor --strict --progress` now drills into mint receipt file-reference checks: resolving path,
+  checking existence, resolved archive-relative ref, sha field check, stat, cache hit, hash
+  start/end, mismatch, target edge-evolution check, and ref-ok.
+- Fresh SHA-256 reads now always emit `hashing <section> file bytes` before reading, regardless of
+  file size.
+- `still hashing ... file bytes` remains a chunk heartbeat for longer reads, not a mandatory
+  small-file line.
+- Retired mint sources now emit `source file ref skipped; source retired`.
+- Result JSON, diagnostics, receipts, manifests, and archive files are unchanged.
+- See `wom-kit/docs/releases/v0.3.190.md`.
 
 ## From `v0.3.188` To `v0.3.189`
 
