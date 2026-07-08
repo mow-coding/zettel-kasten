@@ -1782,6 +1782,7 @@ OBJECT_STORAGE_TIER_MAX = 5
 # since receipts carry no per-run object_count.
 OBJECT_STORAGE_TIER3_BATCH_MIN = 3
 OBJECT_STORAGE_EXECUTIONS_DIR = "receipts/providers/object-storage-executions"
+OBJECT_STORAGE_MANIFEST_RECONCILE_RECEIPTS_DIR = "receipts/providers/object-storage-manifest-reconciles"
 OBJECT_STORAGE_UPLOAD_RECEIPT_SCHEMA = "object-storage-upload-receipt.schema.json"
 OBJECT_STORAGE_UPLOAD_RESULT_STATUSES = {
     "uploaded",
@@ -58146,6 +58147,56 @@ def object_storage_wom_uploaded_location_matches(
     return match["remote_key"] if match else None
 
 
+def object_storage_covering_wom_uploaded_location(
+    locations: list[Any],
+    *,
+    provider_kind: str,
+    store_ref: str,
+    digest: str,
+    remote_key: str,
+) -> dict[str, Any] | None:
+    """Return a valid wom_uploaded location covering the same object/store/key.
+
+    This intentionally does not require the location to link to one exact
+    execution receipt. Repeated `skipped_remote_same` receipts can re-confirm an
+    already uploaded object without appending another manifest location, because
+    the manifest writer de-duplicates one wom_uploaded location per remote_key.
+    """
+    clean_digest = str(digest or "").removeprefix("sha256:").lower()
+    if not SHA256_RE.match(clean_digest) or not safe_object_storage_remote_key(remote_key):
+        return None
+    expected_key_hint = object_storage_content_addressed_key_hint(clean_digest)
+    for location in locations:
+        if not isinstance(location, dict):
+            continue
+        if location.get("provider") != "object_storage":
+            continue
+        if str(location.get("provider_kind") or "") != provider_kind:
+            continue
+        if str(location.get("store_ref") or "") != store_ref:
+            continue
+        if location.get("availability") != "wom_uploaded":
+            continue
+        if location.get("key_hint") != expected_key_hint:
+            continue
+        existing_remote_key = location.get("remote_key")
+        if existing_remote_key is None:
+            existing_remote_key = location.get("key_hint")
+        if existing_remote_key != remote_key:
+            continue
+        if object_storage_wom_uploaded_audit_location_errors(
+            location,
+            digest=clean_digest,
+            provider_kind=provider_kind,
+            store_ref=store_ref,
+        ):
+            continue
+        if not object_storage_location_digest_matches_record(location, f"sha256:{clean_digest}"):
+            continue
+        return location
+    return None
+
+
 def object_storage_matching_remote_key_location_summary(
     locations: list[Any],
     *,
@@ -61089,6 +61140,372 @@ def _object_storage_apply_wom_uploaded_location(
         if changed:
             _atomic_write_text(manifest_path, "\n".join(rewritten_lines) + "\n")
     return changed
+
+
+def object_storage_wom_location_reconcile_run(
+    archive_root: Path | str,
+    *,
+    receipt: str | None = None,
+    provider_kind: str | None = None,
+    store_ref: str | None = None,
+    max_items: int | None = None,
+    reviewed_by: str | None = None,
+    approve: bool = False,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Reconcile missing object-storage wom_uploaded manifest bindings.
+
+    The command is intentionally local-only: it reads execution receipts and the
+    object manifest, writes only the manifest plus one audit receipt under
+    --approve, and never reads credentials, object bytes, or providers.
+    """
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    normalized_reviewer = str(reviewed_by or "").strip()
+    if dry_run and approve:
+        blockers.append("Use either --dry-run or --approve, not both.")
+    if not dry_run and not approve:
+        blockers.append("object-storage-wom-location-reconcile requires exactly one of --dry-run or --approve.")
+    if approve and not normalized_reviewer:
+        blockers.append("object-storage-wom-location-reconcile requires --reviewed-by when --approve is used.")
+    if max_items is not None and int(max_items) < 1:
+        blockers.append("--max-items must be at least 1 when supplied.")
+
+    provider_filter = str(provider_kind or "").strip().lower() or None
+    if provider_filter is not None and provider_filter not in OBJECT_STORAGE_ALLOWED_PROVIDERS:
+        blockers.append("provider_kind must be a supported object-storage provider kind.")
+    store_filter = str(store_ref or "").strip() or None
+    if store_filter is not None and not safe_object_storage_ref(store_filter):
+        blockers.append("store_ref must be a safe store label; do not pass a URL, path, token, or secret.")
+
+    receipt_paths: list[Path] = []
+    receipt_relative_filter: str | None = None
+    if receipt:
+        raw_receipt = str(receipt or "").strip()
+        try:
+            receipt_relative_filter = normalize_archive_relative_path(raw_receipt)
+            if not safe_object_storage_execution_receipt_relative(receipt_relative_filter):
+                blockers.append("receipt must be an archive-relative object-storage execution receipt path.")
+            else:
+                receipt_path = resolve_archive_relative_path(root, receipt_relative_filter)
+                if not receipt_path.is_file():
+                    blockers.append("receipt path does not exist.")
+                else:
+                    receipt_paths = [receipt_path]
+        except ArchivePathError:
+            blockers.append("receipt must be an archive-relative path inside the archive.")
+    else:
+        receipts_dir = archive_internal_path(root, OBJECT_STORAGE_EXECUTIONS_DIR)
+        if receipts_dir.is_dir():
+            receipt_paths = sorted(receipts_dir.glob("*.object-storage-upload.json"))
+
+    manifest_by_object_id: dict[str, dict[str, Any]] = {}
+    for record in load_manifest_records(root):
+        if isinstance(record, dict):
+            object_id = str(record.get("object_id") or "").lower()
+            if object_id:
+                manifest_by_object_id.setdefault(object_id, record)
+
+    candidates: list[dict[str, Any]] = []
+    planned: list[dict[str, Any]] = []
+    counts = {
+        "receipts_scanned": 0,
+        "already_linked": 0,
+        "covered_by_existing_wom_uploaded": 0,
+        "needs_manifest_location": 0,
+        "blocked": 0,
+        "not_applicable": 0,
+    }
+
+    def candidate_public(item: dict[str, Any]) -> dict[str, Any]:
+        return {
+            key: value
+            for key, value in item.items()
+            if not key.startswith("_")
+        }
+
+    def add_candidate(item: dict[str, Any]) -> None:
+        status = str(item.get("status") or "blocked")
+        if status in counts:
+            counts[status] += 1
+        elif status.startswith("blocked"):
+            counts["blocked"] += 1
+        if receipt_relative_filter or status in {
+            "covered_by_existing_wom_uploaded",
+            "needs_manifest_location",
+            "blocked",
+        }:
+            candidates.append(candidate_public(item))
+        if status == "needs_manifest_location":
+            planned.append(item)
+
+    for path in receipt_paths:
+        if not path.is_file():
+            continue
+        counts["receipts_scanned"] += 1
+        try:
+            receipt_relative = archive_relative_path(path, root)
+        except ArchivePathError:
+            add_candidate({"receipt_path": None, "status": "blocked", "reason": "receipt path is outside archive"})
+            continue
+        try:
+            data = read_json_object(path, "Object-storage execution receipt")
+        except ArchiveServiceError as exc:
+            add_candidate({"receipt_path": receipt_relative, "status": "blocked", "reason": str(exc)})
+            continue
+        result_status = str(data.get("result_status") or "")
+        if result_status not in {"uploaded", "skipped_remote_same"}:
+            add_candidate(
+                {
+                    "receipt_path": receipt_relative,
+                    "status": "not_applicable",
+                    "result_status": result_status,
+                    "reason": "receipt result_status is not a successful upload/adopt state",
+                }
+            )
+            continue
+        if bool(data.get("forced_reupload")):
+            add_candidate(
+                {
+                    "receipt_path": receipt_relative,
+                    "status": "not_applicable",
+                    "result_status": result_status,
+                    "reason": "forced_reupload receipts are exempt from exact manifest-linkage repair",
+                }
+            )
+            continue
+        provider = str(data.get("provider_kind") or "").strip().lower()
+        store = str(data.get("store_ref") or "").strip()
+        if provider_filter is not None and provider != provider_filter:
+            continue
+        if store_filter is not None and store != store_filter:
+            continue
+        object_id = str(data.get("object_id") or "").lower()
+        digest = object_id.removeprefix("sha256:")
+        key_strategy = str(data.get("key_strategy") or OBJECT_STORAGE_UPLOAD_KEY_STRATEGY)
+        remote_key = data.get("remote_key")
+        if remote_key is None:
+            remote_key = data.get("key_hint")
+        item_base = {
+            "receipt_path": receipt_relative,
+            "result_status": result_status,
+            "provider_kind": provider,
+            "store_ref": store,
+            "key_strategy": key_strategy,
+            "remote_key_echoed": False,
+            "object_id_echoed": False,
+        }
+        item_blockers: list[str] = []
+        if data.get("receipt_path") != receipt_relative:
+            item_blockers.append("receipt_path field does not match the archive-relative receipt path")
+        if data.get("operation") != "upload_object" or data.get("dry_run") is not False:
+            item_blockers.append("receipt is not an applied upload_object execution receipt")
+        if provider not in OBJECT_STORAGE_ALLOWED_PROVIDERS:
+            item_blockers.append("receipt provider_kind is unsupported")
+        if not safe_object_storage_ref(store):
+            item_blockers.append("receipt store_ref is not a safe label")
+        if not SHA256_RE.match(digest):
+            item_blockers.append("receipt object_id is not a sha256 digest")
+        expected_key_hint = object_storage_content_addressed_key_hint(digest) if SHA256_RE.match(digest) else None
+        if expected_key_hint is None or data.get("key_hint") != expected_key_hint:
+            item_blockers.append("receipt key_hint does not match object_id digest")
+        if key_strategy not in OBJECT_STORAGE_UPLOAD_KEY_STRATEGIES:
+            item_blockers.append("receipt key_strategy is unsupported")
+        if not isinstance(remote_key, str) or not safe_object_storage_remote_key(remote_key):
+            item_blockers.append("receipt remote_key is not safe")
+        elif digest not in remote_key:
+            item_blockers.append("receipt remote_key does not bind the object digest")
+        if data.get("checksum_algorithm") != OBJECT_STORAGE_CHECKSUM_ALGORITHM:
+            item_blockers.append("receipt checksum_algorithm is not sha256")
+        record = manifest_by_object_id.get(object_id)
+        if record is None:
+            item_blockers.append("manifest record for receipt object_id is missing")
+            locations: list[Any] = []
+        else:
+            locations = record.get("locations") if isinstance(record.get("locations"), list) else []
+        if item_blockers:
+            add_candidate({**item_base, "status": "blocked", "reason": "; ".join(item_blockers)})
+            continue
+
+        exact_location = None
+        for location in locations:
+            if (
+                isinstance(location, dict)
+                and location.get("availability") == "wom_uploaded"
+                and location.get("execution_receipt_ref") == receipt_relative
+            ):
+                exact_location = location
+                break
+        if exact_location is not None:
+            add_candidate({**item_base, "status": "already_linked", "reason": "manifest location already links this execution receipt"})
+            continue
+
+        covered = object_storage_covering_wom_uploaded_location(
+            locations,
+            provider_kind=provider,
+            store_ref=store,
+            digest=digest,
+            remote_key=str(remote_key),
+        )
+        if covered is not None and result_status == "skipped_remote_same":
+            add_candidate(
+                {
+                    **item_base,
+                    "status": "covered_by_existing_wom_uploaded",
+                    "reason": "skipped_remote_same receipt is covered by an existing valid wom_uploaded location for the same object/store/key",
+                }
+            )
+            continue
+
+        verification = str(data.get("adopt_verification") or "")
+        remote_key_verification = verification if verification in {"presence_size", "content_hash"} else "content_hash"
+        remote_size = data.get("remote_size")
+        if not isinstance(remote_size, int):
+            bytes_uploaded = int(data.get("bytes_uploaded") or 0)
+            remote_size = bytes_uploaded if bytes_uploaded > 0 else None
+        add_candidate(
+            {
+                **item_base,
+                "status": "needs_manifest_location",
+                "reason": "success receipt has no exact wom_uploaded manifest location and no same-key coverage exemption",
+                "_object_id": object_id,
+                "_digest": digest,
+                "_remote_key": str(remote_key),
+                "_remote_key_verification": remote_key_verification,
+                "_remote_size": remote_size,
+            }
+        )
+
+    if max_items is not None and len(planned) > int(max_items):
+        blockers.append(
+            f"planned update count {len(planned)} exceeds --max-items {int(max_items)}; narrow with --receipt or raise the limit."
+        )
+
+    applied_manifest_updates = 0
+    receipt_written: str | None = None
+    updated_receipts: list[str] = []
+    if approve and not blockers and planned:
+        now = _object_storage_now_iso()
+
+        def _leak_guard(serialized: str) -> list[str]:
+            return assert_no_secret_or_location_leak(serialized, key_values=[])
+
+        for item in planned:
+            changed = _object_storage_apply_wom_uploaded_location(
+                root,
+                object_id=str(item["_object_id"]),
+                provider_kind=str(item["provider_kind"]),
+                store_ref=str(item["store_ref"]),
+                digest=str(item["_digest"]),
+                execution_receipt_ref=str(item["receipt_path"]),
+                uploaded_at=now,
+                leak_guard=_leak_guard,
+                key_strategy=str(item["key_strategy"]),
+                remote_key=str(item["_remote_key"]),
+                remote_key_verification=str(item["_remote_key_verification"]),
+                remote_size=item.get("_remote_size") if isinstance(item.get("_remote_size"), int) else None,
+            )
+            applied_manifest_updates += int(changed)
+            if changed:
+                updated_receipts.append(str(item["receipt_path"]))
+        if updated_receipts:
+            receipt_digest = sha256_json_hex({"updated_receipts": updated_receipts, "reviewed_by": normalized_reviewer})[:16]
+            compact = re.sub(r"[^0-9TZ]", "", now)
+            audit_relative = (
+                f"{OBJECT_STORAGE_MANIFEST_RECONCILE_RECEIPTS_DIR}/"
+                f"{compact}-{receipt_digest}.object-storage-manifest-reconcile.json"
+            )
+            audit_path = resolve_archive_relative_path(root, audit_relative)
+            suffix = 2
+            while audit_path.exists():
+                audit_relative = (
+                    f"{OBJECT_STORAGE_MANIFEST_RECONCILE_RECEIPTS_DIR}/"
+                    f"{compact}-{receipt_digest}.{suffix}.object-storage-manifest-reconcile.json"
+                )
+                audit_path = resolve_archive_relative_path(root, audit_relative)
+                suffix += 1
+            audit_receipt = {
+                "schema": "wom-kit/object-storage-manifest-reconcile-receipt/v0.1",
+                "receipt_path": audit_relative,
+                "action": "reconcile_object_storage_wom_uploaded_manifest_locations",
+                "dry_run": False,
+                "timestamp": now,
+                "archive_id": archive_id,
+                "reviewed_by": normalized_reviewer,
+                "updated_execution_receipts": updated_receipts,
+                "planned_manifest_updates": len(planned),
+                "applied_manifest_updates": applied_manifest_updates,
+                "privacy_guards": {
+                    "object_ids_echoed": False,
+                    "object_keys_echoed": False,
+                    "provider_urls_echoed": False,
+                    "bucket_names_echoed": False,
+                    "credential_refs_echoed": False,
+                    "local_absolute_paths_echoed": False,
+                },
+            }
+            audit_path.parent.mkdir(parents=True, exist_ok=True)
+            _atomic_write_json(audit_path, audit_receipt)
+            receipt_written = audit_relative
+
+    if blockers:
+        status = "blocked"
+    elif approve and applied_manifest_updates:
+        status = "applied"
+    elif planned and not approve:
+        status = "needs_approval"
+    else:
+        status = "clean"
+    next_safe_actions = []
+    if blockers:
+        next_safe_actions.append("Fix blockers before approving any object-storage wom_uploaded manifest reconcile.")
+    elif planned and not approve:
+        next_safe_actions.append("Review the receipt evidence, then rerun with --approve --reviewed-by <actor> if the planned manifest bindings are intentional.")
+        next_safe_actions.append("Do not hand-edit objects/manifests/files.jsonl.")
+    elif approve and applied_manifest_updates:
+        next_safe_actions.append("Run archive doctor --strict to verify object_storage_upload_wom_location_missing cleared.")
+    else:
+        next_safe_actions.append("No manifest binding write is needed.")
+
+    return {
+        "ok": not blockers,
+        "action": "object_storage_wom_location_reconcile",
+        "dry_run": bool(dry_run),
+        "approve": bool(approve),
+        "status": status,
+        "archive_id": archive_id,
+        "reviewed_by": normalized_reviewer or None,
+        "receipt_filter": receipt_relative_filter,
+        "provider_kind_filter": provider_filter,
+        "store_ref_filter": store_filter,
+        "counts": counts,
+        "candidates": candidates,
+        "planned_manifest_updates": len(planned),
+        "applied_manifest_updates": applied_manifest_updates,
+        "receipt_written": receipt_written,
+        "would_write": bool(dry_run and planned),
+        "approval_would_write": bool(planned and not approve),
+        "closed_actions": {
+            "credential_value_read": False,
+            "provider_api_called": False,
+            "object_file_bytes_read": False,
+            "manifest_updated": bool(applied_manifest_updates),
+            "files_written": bool(applied_manifest_updates or receipt_written),
+        },
+        "privacy_guards": {
+            "object_ids_echoed": False,
+            "object_keys_echoed": False,
+            "provider_urls_echoed": False,
+            "bucket_names_echoed": False,
+            "credential_refs_echoed": False,
+            "local_absolute_paths_echoed": False,
+        },
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+        "next_safe_actions": unique_preserve_order(next_safe_actions),
+    }
 
 
 def object_storage_context(root: Path) -> dict[str, Any]:

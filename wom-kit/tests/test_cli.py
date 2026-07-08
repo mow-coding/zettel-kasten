@@ -15848,6 +15848,149 @@ state:
             "\n".join(json.dumps(r, ensure_ascii=False) for r in records) + "\n", encoding="utf-8"
         )
 
+    def test_object_storage_doctor_accepts_skipped_remote_same_covered_by_existing_location(self) -> None:
+        # v0.3.199: a repeat upload with --skip-uploaded can write a new
+        # skipped_remote_same execution receipt for the SAME already-linked remote_key.
+        # The manifest writer de-duplicates one wom_uploaded location per remote_key,
+        # so doctor must accept the existing valid location as coverage instead of
+        # demanding an impossible second exact execution_receipt_ref.
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            with patch.dict(
+                archive_services.os.environ,
+                {"WOM_R2_ACCESS_KEY_ID": _R2_ACCESS_KEY_ID, "WOM_R2_SECRET_ACCESS_KEY": _R2_SECRET_HEX64},
+                clear=False,
+            ):
+                transport = _FakeObjectStorageTransport()
+                first = self._upload_run(
+                    archive_root,
+                    only=f"sha256:{_FAKE_SHA_A}",
+                    max_objects=1,
+                    reviewed_by="kim",
+                    approve=True,
+                    transport=transport,
+                    skip_uploaded=True,
+                )
+                key_hint = archive_services.object_storage_content_addressed_key_hint(_FAKE_SHA_A)
+                second_receipt = archive_services._object_storage_build_execution_receipt(
+                    archive_id=archive_services.read_archive_id(archive_root),
+                    object_id=f"sha256:{_FAKE_SHA_A}",
+                    provider_kind="cloudflare-r2",
+                    store_ref="r2-upload-20260704",
+                    key_hint=key_hint,
+                    result={
+                        "result_status": "skipped_remote_same",
+                        "bytes": 0,
+                        "attempts": 1,
+                        "backoff_ms_total": 0,
+                    },
+                    reviewed_by="kim",
+                    uploaded_at="2026-07-08T00:00:02Z",
+                    key_strategy=archive_services.OBJECT_STORAGE_UPLOAD_KEY_STRATEGY,
+                    remote_key=key_hint,
+                )
+                second_receipt_rel = archive_services.object_storage_write_execution_receipt(
+                    archive_root,
+                    "repeat-skip-same-key",
+                    second_receipt,
+                )
+
+            self.assertEqual(first["execution_results"][0]["result_status"], "uploaded")
+            self.assertTrue((archive_root / second_receipt_rel).is_file())
+            code, output = self.run_cli(["doctor", str(archive_root), "--format", "json"])
+            self.assertEqual(code, 0, output)
+            self.assertNotIn("object_storage_upload_wom_location_missing", output)
+
+    def test_object_storage_wom_location_reconcile_repairs_missing_manifest_binding(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            with patch.dict(
+                archive_services.os.environ,
+                {"WOM_R2_ACCESS_KEY_ID": _R2_ACCESS_KEY_ID, "WOM_R2_SECRET_ACCESS_KEY": _R2_SECRET_HEX64},
+                clear=False,
+            ):
+                transport = _FakeObjectStorageTransport()
+                upload = self._upload_run(
+                    archive_root,
+                    only=f"sha256:{_FAKE_SHA_A}",
+                    max_objects=1,
+                    reviewed_by="kim",
+                    approve=True,
+                    transport=transport,
+                )
+            receipt_rel = upload["receipts_written"][0]
+            self._strip_wom_uploaded_manifest_location(archive_root, f"sha256:{_FAKE_SHA_A}")
+            bad_code, bad_output = self.run_cli(["doctor", str(archive_root), "--format", "json"])
+            self.assertEqual(bad_code, 1, bad_output)
+            self.assertIn("object_storage_upload_wom_location_missing", bad_output)
+
+            before = self.snapshot_archive_files(archive_root)
+            code, output = self.run_cli(
+                [
+                    "object-storage-wom-location-reconcile",
+                    str(archive_root),
+                    "--receipt",
+                    receipt_rel,
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            dry = json.loads(output)
+            self.assertTrue(dry["ok"], dry)
+            self.assertEqual(dry["status"], "needs_approval")
+            self.assertTrue(dry["would_write"])
+            self.assertFalse(dry["closed_actions"]["provider_api_called"])
+            self.assertFalse(dry["closed_actions"]["credential_value_read"])
+            self.assertFalse(dry["closed_actions"]["object_file_bytes_read"])
+            self.assertEqual(dry["planned_manifest_updates"], 1)
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+
+            code, output = self.run_cli(
+                [
+                    "object-storage-wom-location-reconcile",
+                    str(archive_root),
+                    "--receipt",
+                    receipt_rel,
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            applied = json.loads(output)
+            self.assertEqual(applied["status"], "applied")
+            self.assertEqual(applied["applied_manifest_updates"], 1)
+            self.assertIsNotNone(applied["receipt_written"])
+            self.assertTrue((archive_root / applied["receipt_written"]).is_file())
+            self.assertFalse(applied["closed_actions"]["provider_api_called"])
+            self.assertFalse(applied["closed_actions"]["credential_value_read"])
+            self.assertFalse(applied["closed_actions"]["object_file_bytes_read"])
+            clean_code, clean_output = self.run_cli(["doctor", str(archive_root), "--format", "json"])
+            self.assertEqual(clean_code, 0, clean_output)
+            self.assertNotIn("object_storage_upload_wom_location_missing", clean_output)
+            code, output = self.run_cli(
+                [
+                    "object-storage-wom-location-reconcile",
+                    str(archive_root),
+                    "--receipt",
+                    receipt_rel,
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            clean = json.loads(output)
+            self.assertEqual(clean["status"], "clean")
+            self.assertEqual(clean["applied_manifest_updates"], 0)
+            self.assertIsNone(clean["receipt_written"])
+
     def test_force_reupload_reputs_present_match_object(self) -> None:  # FIX A #6
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")

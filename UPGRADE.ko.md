@@ -87,7 +87,8 @@ zet, receipt로 보존해야 합니다.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.3.198` | current public pre-release | `wom-kit/docs/releases/v0.3.198.md` |
+| `v0.3.199` | current public pre-release | `wom-kit/docs/releases/v0.3.199.md` |
+| `v0.3.198` | superseded public pre-release | `wom-kit/docs/releases/v0.3.198.md` |
 | `v0.3.197` | superseded public pre-release | `wom-kit/docs/releases/v0.3.197.md` |
 | `v0.3.196` | superseded public pre-release | `wom-kit/docs/releases/v0.3.196.md` |
 | `v0.3.195` | superseded public pre-release | `wom-kit/docs/releases/v0.3.195.md` |
@@ -164,6 +165,20 @@ zet, receipt로 보존해야 합니다.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.3.198` To `v0.3.199`
+
+object-storage receipt와 manifest의 `wom_uploaded` 연결을 안전하게 맞추는 additive patch입니다. 마이그레이션은 필요 없습니다.
+
+운영자가 보는 변경:
+
+- `archive doctor`는 이제 같은 object/provider/store/remote key를 이미 덮는 유효한 `wom_uploaded` location이 있으면, 반복 `skipped_remote_same` receipt를 `object_storage_upload_wom_location_missing`으로 오탐하지 않습니다.
+- 새 CLI 명령: `archive object-storage-wom-location-reconcile <archive-root> --receipt <receipt> --dry-run|--approve`.
+- 항상 `--dry-run`을 먼저 실행합니다. `--approve`에는 `--reviewed-by`가 필요합니다.
+- 이 명령은 provider 호출, credential 읽기, object byte 읽기, upload/download/sync, remote availability 확인을 하지 않습니다.
+- approve 모드는 `objects/manifests/files.jsonl`과 `receipts/providers/object-storage-manifest-reconciles/` 아래 audit receipt 하나만 씁니다.
+- 후보 출력은 object id, remote key, bucket name, provider URL, 정확한 credential ref, local absolute path를 일부러 보여주지 않습니다.
+- `wom-kit/docs/releases/v0.3.199.md`를 보세요.
 
 ## From `v0.3.197` To `v0.3.198`
 

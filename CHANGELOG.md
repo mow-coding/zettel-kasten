@@ -6,6 +6,26 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.199 - 2026-07-08
+
+Object-storage WOM location reconcile checkpoint. Additive; no archive migration.
+
+- **Same-key skip coverage.** `archive doctor` no longer reports
+  `object_storage_upload_wom_location_missing` for a repeated
+  `skipped_remote_same` execution receipt when an existing valid `wom_uploaded`
+  manifest location already covers the same object, provider, store, and
+  remote key.
+- **Approval-gated manifest binding repair.** New CLI
+  `archive object-storage-wom-location-reconcile <archive-root>
+  --receipt <receipt> --dry-run|--approve` previews and, after
+  `--reviewed-by`, repairs genuine missing `wom_uploaded` manifest bindings
+  from successful object-storage execution receipts.
+- **Closed local-only repair surface.** The reconcile command reads only local
+  receipts and the object manifest; it never calls providers, reads
+  credentials, reads object bytes, uploads, downloads, or echoes object ids,
+  remote keys, bucket names, provider URLs, exact credential refs, or local
+  absolute paths in candidate output.
+
 ## v0.3.198 - 2026-07-08
 
 Reconcile approval-result status cleanup. Additive; no archive migration.
