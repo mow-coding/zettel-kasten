@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WOM-kit object-storage manifest reconcile receipt",
+  "type": "object",
+  "required": [
+    "schema",
+    "receipt_path",
+    "action",
+    "dry_run",
+    "timestamp",
+    "archive_id",
+    "reviewed_by",
+    "updated_execution_receipts",
+    "planned_manifest_updates",
+    "applied_manifest_updates",
+    "privacy_guards"
+  ],
+  "properties": {
+    "schema": {"type": "string", "const": "wom-kit/object-storage-manifest-reconcile-receipt/v0.1"},
+    "receipt_path": {"type": "string"},
+    "action": {"type": "string", "enum": ["reconcile_object_storage_wom_uploaded_manifest_locations"]},
+    "dry_run": {"type": "boolean"},
+    "timestamp": {"type": "string"},
+    "archive_id": {"type": "string"},
+    "reviewed_by": {"type": "string"},
+    "updated_execution_receipts": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "planned_manifest_updates": {"type": "integer"},
+    "applied_manifest_updates": {"type": "integer"},
+    "privacy_guards": {
+      "type": "object",
+      "required": [
+        "object_ids_echoed",
+        "object_keys_echoed",
+        "provider_urls_echoed",
+        "bucket_names_echoed",
+        "credential_refs_echoed",
+        "local_absolute_paths_echoed"
+      ],
+      "properties": {
+        "object_ids_echoed": {"type": "boolean"},
+        "object_keys_echoed": {"type": "boolean"},
+        "provider_urls_echoed": {"type": "boolean"},
+        "bucket_names_echoed": {"type": "boolean"},
+        "credential_refs_echoed": {"type": "boolean"},
+        "local_absolute_paths_echoed": {"type": "boolean"}
+      }
+    }
+  }
+}

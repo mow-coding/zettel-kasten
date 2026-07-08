@@ -1007,6 +1007,7 @@ class Doctor:
             ("retired-draft-receipts", self._check_retired_draft_receipts),
             ("reconcile-receipts", self._check_reconcile_receipts),
             ("object-storage-execution-receipts", self._check_object_storage_execution_receipts),
+            ("object-storage-manifest-reconcile-receipts", self._check_object_storage_manifest_reconcile_receipts),
             ("delegate-receipts", self._check_delegate_receipts),
             ("capture-enablement", self._check_capture_enablement),
             ("zettel-kasten-layer", self._check_zettel_kasten_layer),
@@ -1028,6 +1029,7 @@ class Doctor:
             ("retired-draft-receipts", self._check_retired_draft_receipts),
             ("reconcile-receipts", self._check_reconcile_receipts),
             ("object-storage-execution-receipts", self._check_object_storage_execution_receipts),
+            ("object-storage-manifest-reconcile-receipts", self._check_object_storage_manifest_reconcile_receipts),
             ("scoped-edge-receipts", self._check_scoped_edge_receipts),
             ("zettel-kasten-layer", self._check_zettel_kasten_layer),
         ]
@@ -2431,6 +2433,100 @@ class Doctor:
                                 "wom_uploaded manifest location key_hint digest does not match its record object_id.",
                                 path,
                             )
+
+    def _check_object_storage_manifest_reconcile_receipts(self) -> None:
+        root = self.archive_root / archive_services.OBJECT_STORAGE_MANIFEST_RECONCILE_RECEIPTS_DIR
+        if not root.is_dir():
+            return
+        paths = []
+        for path in sorted(root.glob("*.object-storage-manifest-reconcile.json")):
+            if not self._path_stays_inside_archive(path):
+                continue
+            paths.append(path)
+        total = len(paths)
+        for index, path in enumerate(paths, start=1):
+            if index == 1 or index == total or index % 250 == 0:
+                self._progress("object-storage-manifest-reconcile-receipts", self._display_path(path) or "object-storage manifest reconcile receipt", index, total)
+            data = self._load_json_file(path)
+            if not isinstance(data, dict):
+                continue
+            self._check_schema(data, "object-storage-manifest-reconcile-receipt.schema.json", path)
+            if data.get("schema") != archive_services.OBJECT_STORAGE_MANIFEST_RECONCILE_RECEIPT_SCHEMA:
+                self.error(
+                    "object_storage_manifest_reconcile_receipt_schema_invalid",
+                    "Object-storage manifest reconcile receipt schema is invalid.",
+                    path,
+                )
+            if data.get("action") != "reconcile_object_storage_wom_uploaded_manifest_locations":
+                self.error(
+                    "object_storage_manifest_reconcile_action_invalid",
+                    "Object-storage manifest reconcile receipt action is invalid.",
+                    path,
+                )
+            if data.get("dry_run") is not False:
+                self.error(
+                    "object_storage_manifest_reconcile_dry_run_invalid",
+                    "Applied object-storage manifest reconcile receipt must have dry_run false.",
+                    path,
+                )
+            if not data.get("reviewed_by"):
+                self.error(
+                    "object_storage_manifest_reconcile_reviewer_missing",
+                    "Applied object-storage manifest reconcile receipt must include reviewed_by.",
+                    path,
+                )
+            if data.get("receipt_path") != self._display_path(path):
+                self.error(
+                    "object_storage_manifest_reconcile_path_mismatch",
+                    "Object-storage manifest reconcile receipt_path must match its archive-relative path.",
+                    path,
+                )
+            updated = data.get("updated_execution_receipts")
+            if not isinstance(updated, list) or not updated:
+                self.error(
+                    "object_storage_manifest_reconcile_updated_receipts_missing",
+                    "Object-storage manifest reconcile receipt must list updated execution receipts.",
+                    path,
+                )
+            else:
+                for value in updated:
+                    if not archive_services.safe_object_storage_execution_receipt_relative(value):
+                        self.error(
+                            "object_storage_manifest_reconcile_updated_receipt_invalid",
+                            "Object-storage manifest reconcile receipt includes an unsafe execution receipt ref.",
+                            path,
+                        )
+                        break
+            for field in ("planned_manifest_updates", "applied_manifest_updates"):
+                value = data.get(field)
+                if not isinstance(value, int) or value < 1:
+                    self.error(
+                        "object_storage_manifest_reconcile_count_invalid",
+                        f"Object-storage manifest reconcile receipt {field} must be a positive integer.",
+                        path,
+                    )
+            privacy_guards = data.get("privacy_guards")
+            if not isinstance(privacy_guards, dict):
+                self.error(
+                    "object_storage_manifest_reconcile_privacy_guards_missing",
+                    "Object-storage manifest reconcile receipt must include privacy_guards.",
+                    path,
+                )
+            else:
+                for field in (
+                    "object_ids_echoed",
+                    "object_keys_echoed",
+                    "provider_urls_echoed",
+                    "bucket_names_echoed",
+                    "credential_refs_echoed",
+                    "local_absolute_paths_echoed",
+                ):
+                    if privacy_guards.get(field) is not False:
+                        self.error(
+                            "object_storage_manifest_reconcile_privacy_guard_invalid",
+                            f"Object-storage manifest reconcile privacy guard {field} must be false.",
+                            path,
+                        )
 
     def _check_scoped_edge_receipts(self) -> None:
         if not self.validate_scope.active() or not self.validate_scope.edge_receipt_paths:

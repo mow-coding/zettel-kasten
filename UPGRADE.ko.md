@@ -87,7 +87,8 @@ zet, receipt로 보존해야 합니다.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.3.199` | current public pre-release | `wom-kit/docs/releases/v0.3.199.md` |
+| `v0.3.200` | current public pre-release | `wom-kit/docs/releases/v0.3.200.md` |
+| `v0.3.199` | superseded public pre-release | `wom-kit/docs/releases/v0.3.199.md` |
 | `v0.3.198` | superseded public pre-release | `wom-kit/docs/releases/v0.3.198.md` |
 | `v0.3.197` | superseded public pre-release | `wom-kit/docs/releases/v0.3.197.md` |
 | `v0.3.196` | superseded public pre-release | `wom-kit/docs/releases/v0.3.196.md` |
@@ -165,6 +166,17 @@ zet, receipt로 보존해야 합니다.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.3.199` To `v0.3.200`
+
+object-storage manifest reconcile audit receipt에 schema와 doctor 검증을 추가하는 additive patch입니다. 마이그레이션은 필요 없습니다.
+
+운영자가 보는 변경:
+
+- `object-storage-wom-location-reconcile --approve`가 쓰는 local-only audit receipt에 공개 JSON schema가 생겼습니다: `wom-kit/schemas/object-storage-manifest-reconcile-receipt.schema.json`.
+- `archive doctor`는 이제 object-storage manifest reconcile audit receipt의 schema, action, reviewer, path, updated execution receipt ref, 양수 update count, non-echo privacy guard를 검사합니다.
+- 명령 동작, approval gate, provider/credential/object-byte를 건드리지 않는 경계는 그대로입니다.
+- `wom-kit/docs/releases/v0.3.200.md`를 보세요.
 
 ## From `v0.3.198` To `v0.3.199`
 

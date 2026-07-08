@@ -95,7 +95,8 @@ and receipts before any cleanup.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.3.199` | current public pre-release | `wom-kit/docs/releases/v0.3.199.md` |
+| `v0.3.200` | current public pre-release | `wom-kit/docs/releases/v0.3.200.md` |
+| `v0.3.199` | superseded public pre-release | `wom-kit/docs/releases/v0.3.199.md` |
 | `v0.3.198` | superseded public pre-release | `wom-kit/docs/releases/v0.3.198.md` |
 | `v0.3.197` | superseded public pre-release | `wom-kit/docs/releases/v0.3.197.md` |
 | `v0.3.196` | superseded public pre-release | `wom-kit/docs/releases/v0.3.196.md` |
@@ -176,6 +177,22 @@ and receipts before any cleanup.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.3.199` To `v0.3.200`
+
+One additive schema/doctor validation patch for object-storage manifest reconcile audit receipts. No migration is required.
+
+Operator-visible notes:
+
+- `object-storage-wom-location-reconcile --approve` still writes the same
+  local-only audit receipt, but that receipt now has a public JSON schema:
+  `wom-kit/schemas/object-storage-manifest-reconcile-receipt.schema.json`.
+- `archive doctor` now checks object-storage manifest reconcile audit receipts
+  for schema, action, reviewer, path, updated execution receipt refs, positive
+  update counts, and non-echo privacy guards.
+- The command behavior, approval gates, and no-provider/no-credential/no-object-byte
+  boundaries are unchanged.
+- See `wom-kit/docs/releases/v0.3.200.md`.
 
 ## From `v0.3.198` To `v0.3.199`
 

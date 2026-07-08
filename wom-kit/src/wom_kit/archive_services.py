@@ -1784,6 +1784,7 @@ OBJECT_STORAGE_TIER3_BATCH_MIN = 3
 OBJECT_STORAGE_EXECUTIONS_DIR = "receipts/providers/object-storage-executions"
 OBJECT_STORAGE_MANIFEST_RECONCILE_RECEIPTS_DIR = "receipts/providers/object-storage-manifest-reconciles"
 OBJECT_STORAGE_UPLOAD_RECEIPT_SCHEMA = "object-storage-upload-receipt.schema.json"
+OBJECT_STORAGE_MANIFEST_RECONCILE_RECEIPT_SCHEMA = "wom-kit/object-storage-manifest-reconcile-receipt/v0.1"
 OBJECT_STORAGE_UPLOAD_RESULT_STATUSES = {
     "uploaded",
     "skipped_already_present",
@@ -61427,7 +61428,7 @@ def object_storage_wom_location_reconcile_run(
                 audit_path = resolve_archive_relative_path(root, audit_relative)
                 suffix += 1
             audit_receipt = {
-                "schema": "wom-kit/object-storage-manifest-reconcile-receipt/v0.1",
+                "schema": OBJECT_STORAGE_MANIFEST_RECONCILE_RECEIPT_SCHEMA,
                 "receipt_path": audit_relative,
                 "action": "reconcile_object_storage_wom_uploaded_manifest_locations",
                 "dry_run": False,
