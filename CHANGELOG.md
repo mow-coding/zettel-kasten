@@ -6,6 +6,21 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.200 - 2026-07-08
+
+Object-storage manifest reconcile receipt schema checkpoint. Additive; no archive migration.
+
+- **Receipt schema.** Added
+  `wom-kit/schemas/object-storage-manifest-reconcile-receipt.schema.json` for
+  the audit receipt written by `object-storage-wom-location-reconcile --approve`.
+- **Doctor coverage.** `archive doctor` now validates
+  `receipts/providers/object-storage-manifest-reconciles/*.object-storage-manifest-reconcile.json`
+  for schema, action, `dry_run: false`, reviewer, archive-relative
+  `receipt_path`, updated execution receipt refs, positive update counts, and
+  non-echo privacy guards.
+- **Regression coverage.** The manifest binding repair test now validates the
+  audit receipt against its schema and proves doctor catches a bad schema value.
+
 ## v0.3.199 - 2026-07-08
 
 Object-storage WOM location reconcile checkpoint. Additive; no archive migration.

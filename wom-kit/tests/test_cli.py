@@ -15966,6 +15966,12 @@ state:
             self.assertEqual(applied["applied_manifest_updates"], 1)
             self.assertIsNotNone(applied["receipt_written"])
             self.assertTrue((archive_root / applied["receipt_written"]).is_file())
+            audit_receipt = json.loads((archive_root / applied["receipt_written"]).read_text(encoding="utf-8"))
+            self.assertEqual(
+                archive_cli.validate_schema(audit_receipt, "object-storage-manifest-reconcile-receipt.schema.json"),
+                [],
+            )
+            self.assertEqual(audit_receipt["schema"], archive_services.OBJECT_STORAGE_MANIFEST_RECONCILE_RECEIPT_SCHEMA)
             self.assertFalse(applied["closed_actions"]["provider_api_called"])
             self.assertFalse(applied["closed_actions"]["credential_value_read"])
             self.assertFalse(applied["closed_actions"]["object_file_bytes_read"])
@@ -15990,6 +15996,12 @@ state:
             self.assertEqual(clean["status"], "clean")
             self.assertEqual(clean["applied_manifest_updates"], 0)
             self.assertIsNone(clean["receipt_written"])
+
+            audit_receipt["schema"] = "bad"
+            (archive_root / applied["receipt_written"]).write_text(json.dumps(audit_receipt), encoding="utf-8")
+            bad_code, bad_output = self.run_cli(["doctor", str(archive_root), "--format", "json"])
+            self.assertEqual(bad_code, 1, bad_output)
+            self.assertIn("object_storage_manifest_reconcile_receipt_schema_invalid", bad_output)
 
     def test_force_reupload_reputs_present_match_object(self) -> None:  # FIX A #6
         with tempfile.TemporaryDirectory() as tmp:
