@@ -95,7 +95,8 @@ and receipts before any cleanup.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.3.198` | current public pre-release | `wom-kit/docs/releases/v0.3.198.md` |
+| `v0.3.199` | current public pre-release | `wom-kit/docs/releases/v0.3.199.md` |
+| `v0.3.198` | superseded public pre-release | `wom-kit/docs/releases/v0.3.198.md` |
 | `v0.3.197` | superseded public pre-release | `wom-kit/docs/releases/v0.3.197.md` |
 | `v0.3.196` | superseded public pre-release | `wom-kit/docs/releases/v0.3.196.md` |
 | `v0.3.195` | superseded public pre-release | `wom-kit/docs/releases/v0.3.195.md` |
@@ -175,6 +176,28 @@ and receipts before any cleanup.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.3.198` To `v0.3.199`
+
+One additive object-storage receipt/manifest binding repair patch. No migration is required.
+
+Operator-visible notes:
+
+- `archive doctor` no longer flags a repeated `skipped_remote_same` receipt as
+  `object_storage_upload_wom_location_missing` when an existing valid
+  `wom_uploaded` location already covers the same object/provider/store/remote
+  key.
+- New CLI command:
+  `archive object-storage-wom-location-reconcile <archive-root> --receipt
+  <receipt> --dry-run|--approve`.
+- Always run `--dry-run` first. `--approve` requires `--reviewed-by`.
+- The command never calls providers, reads credentials, reads object bytes,
+  uploads, downloads, syncs, or checks remote availability.
+- Approved mode writes only `objects/manifests/files.jsonl` plus one audit
+  receipt under `receipts/providers/object-storage-manifest-reconciles/`.
+- Candidate output intentionally does not echo object ids, remote keys, bucket
+  names, provider URLs, exact credential refs, or local absolute paths.
+- See `wom-kit/docs/releases/v0.3.199.md`.
 
 ## From `v0.3.197` To `v0.3.198`
 

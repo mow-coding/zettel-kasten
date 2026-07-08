@@ -2386,21 +2386,36 @@ class Doctor:
                         matched_location = location
                         break
                     if matched_location is None:
-                        self.error(
-                            "object_storage_upload_wom_location_missing",
-                            "No wom_uploaded manifest location links to this execution receipt.",
-                            path,
-                            hint=(
-                                "The execution receipt and objects/manifests/files.jsonl disagree. "
-                                "Preserve a full doctor JSON result, then repair through the owning "
-                                "object-storage upload/adopt/reconcile workflow rather than hand-editing "
-                                "the receipt."
-                            ),
-                            suggested_command=(
-                                "archive doctor <archive-root> --strict --summary "
-                                "--output logs/doctor-result.json"
-                            ),
+                        remote_key = data.get("remote_key")
+                        if remote_key is None:
+                            remote_key = data.get("key_hint")
+                        covered_location = (
+                            archive_services.object_storage_covering_wom_uploaded_location(
+                                locations,
+                                provider_kind=provider_kind,
+                                store_ref=store_ref,
+                                digest=digest,
+                                remote_key=remote_key,
+                            )
+                            if str(data.get("result_status") or "") == "skipped_remote_same"
+                            else None
                         )
+                        if covered_location is None:
+                            self.error(
+                                "object_storage_upload_wom_location_missing",
+                                "No wom_uploaded manifest location links to this execution receipt.",
+                                path,
+                                hint=(
+                                    "The execution receipt and objects/manifests/files.jsonl disagree. "
+                                    "Preserve a full doctor JSON result, then repair through the owning "
+                                    "object-storage upload/adopt/reconcile workflow rather than hand-editing "
+                                    "the receipt."
+                                ),
+                                suggested_command=(
+                                    "archive object-storage-wom-location-reconcile <archive-root> "
+                                    f"--receipt {receipt_relative} --dry-run"
+                                ),
+                            )
                     else:
                         location_errors = archive_services.object_storage_wom_uploaded_audit_location_errors(
                             matched_location,
@@ -6081,6 +6096,34 @@ def command_object_storage_adopt_existing(args: argparse.Namespace) -> int:
     return 0 if result.get("ok", True) else 1
 
 
+def command_object_storage_wom_location_reconcile(args: argparse.Namespace) -> int:
+    if args.dry_run and args.approve:
+        print("Use either --dry-run or --approve, not both.", file=sys.stderr)
+        return 1
+    if not args.dry_run and not args.approve:
+        print("object-storage-wom-location-reconcile requires exactly one of --dry-run or --approve.", file=sys.stderr)
+        return 1
+    if args.approve and not (args.reviewed_by or "").strip():
+        print("object-storage-wom-location-reconcile requires --reviewed-by when --approve is used.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.object_storage_wom_location_reconcile_run(
+            Path(args.archive_root),
+            receipt=getattr(args, "receipt", None),
+            provider_kind=getattr(args, "provider_kind", None),
+            store_ref=getattr(args, "store_ref", None),
+            max_items=getattr(args, "max_items", None),
+            reviewed_by=getattr(args, "reviewed_by", None),
+            approve=bool(args.approve),
+            dry_run=bool(args.dry_run),
+        )
+    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    print_object_storage_wom_location_reconcile_result(result, args.format)
+    return 0 if result.get("ok", True) else 1
+
+
 def command_imap_mailbox_operation_request_plan(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print("imap-mailbox-operation-request-plan is read-only and requires --dry-run.", file=sys.stderr)
@@ -7392,6 +7435,33 @@ def print_object_storage_adopt_existing_result(result: dict[str, Any], output_fo
         print("Blockers:")
         for blocker in result["blockers"]:
             print(f"- {blocker}")
+
+
+def print_object_storage_wom_location_reconcile_result(result: dict[str, Any], output_format: str) -> None:
+    if output_format == "json":
+        print_json(result)
+        return
+    counts = result.get("counts") if isinstance(result.get("counts"), dict) else {}
+    print(f"Object storage WOM location reconcile: {result.get('status') or '-'}")
+    print(f"Archive: {result.get('archive_id') or '-'}")
+    print(f"Receipt filter: {result.get('receipt_filter') or '-'}")
+    print(f"Receipts scanned: {counts.get('receipts_scanned', 0)}")
+    print(f"Already linked: {counts.get('already_linked', 0)}")
+    print(f"Covered by existing wom_uploaded: {counts.get('covered_by_existing_wom_uploaded', 0)}")
+    print(f"Planned manifest updates: {result.get('planned_manifest_updates', 0)}")
+    print(f"Applied manifest updates: {result.get('applied_manifest_updates', 0)}")
+    print("Provider API called: no")
+    print(f"Writes: {'manifest/audit receipt' if result.get('applied_manifest_updates') else 'none'}")
+    for warning in result.get("warnings") or []:
+        print(f"Warning: {warning}")
+    if result.get("blockers"):
+        print("Blockers:")
+        for blocker in result["blockers"]:
+            print(f"- {blocker}")
+    if result.get("next_safe_actions"):
+        print("Next safe actions:")
+        for action in result["next_safe_actions"]:
+            print(f"- {action}")
 
 
 def print_imap_mailbox_operation_request_plan_result(result: dict[str, Any], output_format: str) -> None:
@@ -14576,6 +14646,48 @@ def build_parser() -> argparse.ArgumentParser:
     object_storage_adopt_existing.add_argument("--approve", action="store_true", help="Perform the adopt. Verified adopt HEADs each key presence-only (presence+size, no download); a bulk first-live adopt refuses until a tiny-first --only object proves the store; declared adopt needs --accept-unverified-adopt.")
     object_storage_adopt_existing.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     object_storage_adopt_existing.set_defaults(func=command_object_storage_adopt_existing)
+
+    object_storage_wom_location_reconcile = subcommands.add_parser(
+        "object-storage-wom-location-reconcile",
+        aliases=[
+            "object-storage-upload-location-reconcile",
+            "object-storage-manifest-reconcile",
+            "objet-storage-wom-location-reconcile",
+        ],
+        help="Reconcile missing wom_uploaded manifest bindings from existing object-storage execution receipts.",
+    )
+    object_storage_wom_location_reconcile.add_argument("archive_root", help="Archive root to inspect or update.")
+    object_storage_wom_location_reconcile.add_argument(
+        "--receipt",
+        help="Optional archive-relative object-storage execution receipt path to target. Dry-run first.",
+    )
+    object_storage_wom_location_reconcile.add_argument(
+        "--provider-kind",
+        choices=sorted(archive_services.OBJECT_STORAGE_ALLOWED_PROVIDERS),
+        help="Optional object-storage provider kind filter.",
+    )
+    object_storage_wom_location_reconcile.add_argument(
+        "--store-ref",
+        help="Optional safe store label/ref filter. Do not pass URLs, bucket names, paths, tokens, or secrets.",
+    )
+    object_storage_wom_location_reconcile.add_argument(
+        "--max-items",
+        type=int,
+        help="Refuse if more than this many manifest binding writes would be planned.",
+    )
+    object_storage_wom_location_reconcile.add_argument("--reviewed-by", help="Safe reviewer id required when --approve is used.")
+    object_storage_wom_location_reconcile.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview missing/covered manifest bindings. No provider calls, no credential reads, no writes.",
+    )
+    object_storage_wom_location_reconcile.add_argument(
+        "--approve",
+        action="store_true",
+        help="Write planned manifest bindings and one audit receipt. Never calls providers or reads credentials.",
+    )
+    object_storage_wom_location_reconcile.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    object_storage_wom_location_reconcile.set_defaults(func=command_object_storage_wom_location_reconcile)
 
     imap_mailbox_operation_request = subcommands.add_parser(
         "imap-mailbox-operation-request-plan",
