@@ -9945,6 +9945,23 @@ def _reconcile_plan_guidance(*, command_name: str, zettel_id: str, drift_class: 
     }
 
 
+def _reconcile_apply_guidance(*, command_name: str, zettel_id: str) -> dict[str, Any]:
+    selector = f"--zettel-id {zettel_id}" if zettel_id else "--zettel-id <id>"
+    return {
+        "status": "reconcile_applied",
+        "overall_status": "reconcile_applied",
+        "suggested_next_action": "run_doctor_to_verify_reconcile",
+        "next_safe_actions": [
+            "Run `archive doctor <archive-root> --strict --format json` or the same scoped verification to confirm the reconcile cleared the diagnostic.",
+            f"If a new drift appears, start again with `archive {command_name} <archive-root> {selector} --dry-run --format json`.",
+            "Keep the updated receipt and immutable reconcile audit receipt as the approval evidence; do not rerun approve unless a new dry-run asks for it.",
+        ],
+        "would_write": False,
+        "approval_would_write": False,
+        "approval_requires_content_changed_ack": False,
+    }
+
+
 def remint_reconcile_plan(
     archive_root: Path | str,
     *,
@@ -10542,6 +10559,7 @@ def remint_reconcile_apply(
             "writes": "applied",
         }
     )
+    result.update(_reconcile_apply_guidance(command_name="remint-reconcile", zettel_id=str(zettel_id_value)))
     if source_note:
         result["source_note"] = source_note
     if bom_strip_note:
@@ -11054,6 +11072,7 @@ def retire_draft_reconcile_apply(
             "writes": "applied",
         }
     )
+    result.update(_reconcile_apply_guidance(command_name="retire-draft-reconcile", zettel_id=str(zid)))
     if bom_strip_note:
         result["bom_strip_note"] = bom_strip_note
     return result

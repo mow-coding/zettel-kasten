@@ -95,7 +95,8 @@ and receipts before any cleanup.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.3.197` | current public pre-release | `wom-kit/docs/releases/v0.3.197.md` |
+| `v0.3.198` | current public pre-release | `wom-kit/docs/releases/v0.3.198.md` |
+| `v0.3.197` | superseded public pre-release | `wom-kit/docs/releases/v0.3.197.md` |
 | `v0.3.196` | superseded public pre-release | `wom-kit/docs/releases/v0.3.196.md` |
 | `v0.3.195` | superseded public pre-release | `wom-kit/docs/releases/v0.3.195.md` |
 | `v0.3.194` | superseded public pre-release | `wom-kit/docs/releases/v0.3.194.md` |
@@ -174,6 +175,29 @@ and receipts before any cleanup.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.3.197` To `v0.3.198`
+
+One additive reconcile approval-result status cleanup patch. No migration is required.
+
+Operator-visible notes:
+
+- `remint-reconcile --approve --format json` and
+  `retire-draft-reconcile --approve --format json` now report
+  `status: reconcile_applied` and `overall_status: reconcile_applied` after a
+  successful write.
+- The approval result now points to `suggested_next_action:
+  run_doctor_to_verify_reconcile` and doctor verification `next_safe_actions`.
+- Applied approval output no longer keeps the earlier dry-run
+  `needs_content_change_review` status, and no longer says a new approval write
+  is pending.
+- On Windows, prefer explicit UTF-8 capture for JSON examples instead of bare
+  PowerShell `>` redirection.
+- When directly repairing a schema enum on a zettel that also has retired-draft
+  receipts, use the paired reviewed flow: `remint-reconcile` first, then
+  `retire-draft-reconcile`, each dry-run before approve.
+- Reconcile classification and approval gates are unchanged.
+- See `wom-kit/docs/releases/v0.3.198.md`.
 
 ## From `v0.3.196` To `v0.3.197`
 

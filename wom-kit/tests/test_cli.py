@@ -29919,6 +29919,13 @@ state:
             self.assertEqual(code, 0, output)
             result = json.loads(output)
             self.assertTrue(result["content_change_ack"])
+            self.assertEqual(result["status"], "reconcile_applied")
+            self.assertEqual(result["overall_status"], "reconcile_applied")
+            self.assertEqual(result["suggested_next_action"], "run_doctor_to_verify_reconcile")
+            self.assertFalse(result["would_write"])
+            self.assertFalse(result["approval_would_write"])
+            self.assertFalse(result["approval_requires_content_changed_ack"])
+            self.assertTrue(any("archive doctor" in action for action in result["next_safe_actions"]))
             mint_receipt = json.loads((archive_root / mint["mint_receipt_path"]).read_text(encoding="utf-8"))
             self.assertEqual(mint_receipt["reconcile"]["drift_class"], "content_change")
             self.assertTrue(mint_receipt["reconcile"]["content_change_ack"])
@@ -30681,7 +30688,15 @@ state:
                  "--reviewed-by", "person:test", "--content-changed-ack", "--format", "json"]
             )
             self.assertEqual(code, 0, output)
-            self.assertTrue(json.loads(output)["content_change_ack"])
+            result = json.loads(output)
+            self.assertTrue(result["content_change_ack"])
+            self.assertEqual(result["status"], "reconcile_applied")
+            self.assertEqual(result["overall_status"], "reconcile_applied")
+            self.assertEqual(result["suggested_next_action"], "run_doctor_to_verify_reconcile")
+            self.assertFalse(result["would_write"])
+            self.assertFalse(result["approval_would_write"])
+            self.assertFalse(result["approval_requires_content_changed_ack"])
+            self.assertTrue(any("archive doctor" in action for action in result["next_safe_actions"]))
 
     def test_retire_draft_reconcile_tampered_frontmatter_is_content_change(self) -> None:
         # v0.3.167 Item 2 (inherits Item 1.4): a tampered snapshot title that matches a
