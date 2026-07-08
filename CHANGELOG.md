@@ -6,6 +6,18 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.197 - 2026-07-08
+
+Reconcile dry-run next-action guidance checkpoint. Additive; no migration.
+
+- **Dry-run status fields.** `remint-reconcile` and `retire-draft-reconcile` dry-run JSON now
+  includes `status`, `overall_status`, `suggested_next_action`, `would_write`,
+  `approval_would_write`, and `approval_requires_content_changed_ack`.
+- **Content-change guidance.** A `content_change` dry-run now explicitly routes operators to
+  human review before any `--approve --content-changed-ack` run.
+- **Text-mode parity.** `retire-draft-reconcile --format text` now prints `Next safe actions`
+  when the plan includes them.
+
 ## v0.3.196 - 2026-07-08
 
 Doctor progress-log path-policy clarification checkpoint. Additive; no migration.

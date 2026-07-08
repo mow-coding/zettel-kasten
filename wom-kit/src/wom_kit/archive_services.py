@@ -9850,7 +9850,13 @@ def remint_reconcile_diagnostic_view(result: dict[str, Any]) -> dict[str, Any]:
         "bom_strip_note",
         "blockers",
         "warnings",
+        "status",
+        "overall_status",
+        "suggested_next_action",
         "next_safe_actions",
+        "would_write",
+        "approval_would_write",
+        "approval_requires_content_changed_ack",
         "writes",
     ]
     view: dict[str, Any] = {"diagnostic_only": True}
@@ -9874,6 +9880,69 @@ def remint_reconcile_diagnostic_view(result: dict[str, Any]) -> dict[str, Any]:
         key for key in ("current_canonical_text", "frontmatter_field_changes") if key in result
     ]
     return view
+
+
+def _reconcile_plan_guidance(*, command_name: str, zettel_id: str, drift_class: str, blockers: list[str]) -> dict[str, Any]:
+    if blockers:
+        return {
+            "status": "blocked",
+            "overall_status": "blocked",
+            "suggested_next_action": "fix_blockers_before_reconcile",
+            "next_safe_actions": ["Fix blockers before rerunning the reconcile dry-run."],
+            "would_write": False,
+            "approval_would_write": False,
+            "approval_requires_content_changed_ack": False,
+        }
+
+    selector = f"--zettel-id {zettel_id}" if zettel_id else "--zettel-id <id>"
+    approve_command = f"archive {command_name} <archive-root> {selector} --approve --reviewed-by <actor>"
+    if drift_class == "content_change":
+        return {
+            "status": "needs_content_change_review",
+            "overall_status": "needs_content_change_review",
+            "suggested_next_action": "review_content_change_before_approval",
+            "next_safe_actions": [
+                "Review the current canonical and receipt/snapshot evidence outside the redacted JSON summary.",
+                f"If the content change is intentional, rerun `{approve_command} --content-changed-ack`.",
+                "If the content change is not intentional, stop and restore or repair the content before reconciling.",
+            ],
+            "would_write": False,
+            "approval_would_write": True,
+            "approval_requires_content_changed_ack": True,
+        }
+    if drift_class == "format_drift":
+        return {
+            "status": "format_drift_ready_for_review",
+            "overall_status": "format_drift_ready_for_review",
+            "suggested_next_action": "approve_reconcile_after_format_review",
+            "next_safe_actions": [
+                "Review the format-drift classification and receipt refs before approving.",
+                f"If the drift is only newline/BOM format drift, rerun `{approve_command}`.",
+                "Do not use --content-changed-ack unless a later dry-run classifies content_change.",
+            ],
+            "would_write": False,
+            "approval_would_write": True,
+            "approval_requires_content_changed_ack": False,
+        }
+    if drift_class == "clean":
+        return {
+            "status": "clean_noop",
+            "overall_status": "clean_noop",
+            "suggested_next_action": "no_reconcile_needed",
+            "next_safe_actions": ["No reconcile write is needed; rerun doctor if a mismatch was expected."],
+            "would_write": False,
+            "approval_would_write": False,
+            "approval_requires_content_changed_ack": False,
+        }
+    return {
+        "status": "unclassified",
+        "overall_status": "unclassified",
+        "suggested_next_action": "inspect_reconcile_result",
+        "next_safe_actions": ["Inspect the reconcile dry-run result before approving any write."],
+        "would_write": False,
+        "approval_would_write": False,
+        "approval_requires_content_changed_ack": False,
+    }
 
 
 def remint_reconcile_plan(
@@ -9982,9 +10051,16 @@ def remint_reconcile_plan(
             "body_changed": None,
             "blockers": blockers,
             "warnings": warnings,
-            "next_safe_actions": [],
             "writes": "none",
         }
+        blocked_result.update(
+            _reconcile_plan_guidance(
+                command_name="remint-reconcile",
+                zettel_id=str(receipt_id or resolved_id or ""),
+                drift_class="unclassified",
+                blockers=blockers,
+            )
+        )
         if strip_bom_preview is not None:
             blocked_result.update(strip_bom_preview)
         return blocked_result
@@ -10130,9 +10206,16 @@ def remint_reconcile_plan(
         "body_changed": body_changed,
         "blockers": blockers,
         "warnings": warnings,
-        "next_safe_actions": [],
         "writes": "none",
     }
+    classified_result.update(
+        _reconcile_plan_guidance(
+            command_name="remint-reconcile",
+            zettel_id=resolved_id,
+            drift_class=drift_class,
+            blockers=blockers,
+        )
+    )
     # v0.3.176: CONTENT-FREE body-diff diagnostic. A STRICT CLASSIFICATION NO-OP added to
     # the already-built dict AFTER the predicate, mirroring the strip_bom_preview merge; it
     # never reads or influences drift_class/classification_basis/content_change_ack_required.
@@ -10754,7 +10837,7 @@ def retire_draft_reconcile_plan(
     content_change_ack_required = overall == "content_change"
 
     if blockers:
-        return {
+        blocked_result = {
             "ok": False,
             "dry_run": True,
             "action": "reconcile_retire_draft_receipt",
@@ -10765,9 +10848,17 @@ def retire_draft_reconcile_plan(
             "ref_reports": [],
             "blockers": blockers,
             "warnings": warnings,
-            "next_safe_actions": [],
             "writes": "none",
         }
+        blocked_result.update(
+            _reconcile_plan_guidance(
+                command_name="retire-draft-reconcile",
+                zettel_id=zid,
+                drift_class="unclassified",
+                blockers=blockers,
+            )
+        )
+        return blocked_result
 
     classified_result = {
         "ok": True,
@@ -10780,9 +10871,16 @@ def retire_draft_reconcile_plan(
         "ref_reports": ref_reports,
         "blockers": blockers,
         "warnings": warnings,
-        "next_safe_actions": [],
         "writes": "none",
     }
+    classified_result.update(
+        _reconcile_plan_guidance(
+            command_name="retire-draft-reconcile",
+            zettel_id=zid,
+            drift_class=overall,
+            blockers=blockers,
+        )
+    )
     # v0.3.176: CONTENT-FREE body-diff diagnostic threaded up from the inner remint plan.
     # A STRICT CLASSIFICATION NO-OP: it never influenced the per-ref classification/overall
     # above. inner_diag is non-None only when the inner remint plan emitted it (inner

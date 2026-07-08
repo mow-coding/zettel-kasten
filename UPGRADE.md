@@ -95,7 +95,8 @@ and receipts before any cleanup.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.3.196` | current public pre-release | `wom-kit/docs/releases/v0.3.196.md` |
+| `v0.3.197` | current public pre-release | `wom-kit/docs/releases/v0.3.197.md` |
+| `v0.3.196` | superseded public pre-release | `wom-kit/docs/releases/v0.3.196.md` |
 | `v0.3.195` | superseded public pre-release | `wom-kit/docs/releases/v0.3.195.md` |
 | `v0.3.194` | superseded public pre-release | `wom-kit/docs/releases/v0.3.194.md` |
 | `v0.3.193` | superseded public pre-release | `wom-kit/docs/releases/v0.3.193.md` |
@@ -173,6 +174,21 @@ and receipts before any cleanup.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.3.196` To `v0.3.197`
+
+One additive reconcile dry-run next-action guidance patch. No migration is required.
+
+Operator-visible notes:
+
+- `remint-reconcile --dry-run --format json` and `retire-draft-reconcile --dry-run --format json`
+  now include `status`, `overall_status`, `suggested_next_action`, `would_write`,
+  `approval_would_write`, and `approval_requires_content_changed_ack`.
+- A `content_change` dry-run now says that human content review is required before any
+  `--approve --content-changed-ack` run.
+- `retire-draft-reconcile --format text` now prints `Next safe actions` when present.
+- Reconcile classification and approval gates are unchanged.
+- See `wom-kit/docs/releases/v0.3.197.md`.
 
 ## From `v0.3.195` To `v0.3.196`
 

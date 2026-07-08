@@ -29881,6 +29881,13 @@ state:
             result = json.loads(output)
             self.assertEqual(result["drift_class"], "content_change")
             self.assertTrue(result["content_change_ack_required"])
+            self.assertEqual(result["status"], "needs_content_change_review")
+            self.assertEqual(result["overall_status"], "needs_content_change_review")
+            self.assertEqual(result["suggested_next_action"], "review_content_change_before_approval")
+            self.assertFalse(result["would_write"])
+            self.assertTrue(result["approval_would_write"])
+            self.assertTrue(result["approval_requires_content_changed_ack"])
+            self.assertTrue(any("--content-changed-ack" in action for action in result["next_safe_actions"]))
             self.assertTrue(any(change["field"] == "title" for change in result["frontmatter_field_changes"]))
             # Invariant: the class is driven by the frontmatter title edit, NOT a body
             # diff. Body must be byte-identical (only the title changed). Asserting this
@@ -30604,6 +30611,13 @@ state:
             snap_report = next(r for r in plan["ref_reports"] if r["ref"] == "snapshot")
             self.assertEqual(snap_report["drift_class"], "format_drift", plan)
             self.assertFalse(plan["content_change_ack_required"], plan)
+            self.assertEqual(plan["status"], "format_drift_ready_for_review", plan)
+            self.assertEqual(plan["overall_status"], "format_drift_ready_for_review", plan)
+            self.assertEqual(plan["suggested_next_action"], "approve_reconcile_after_format_review", plan)
+            self.assertFalse(plan["would_write"], plan)
+            self.assertTrue(plan["approval_would_write"], plan)
+            self.assertFalse(plan["approval_requires_content_changed_ack"], plan)
+            self.assertTrue(any("retire-draft-reconcile" in action for action in plan["next_safe_actions"]), plan)
             # approve WITHOUT ack (format_drift needs none) -> re-issues shas.
             code, output = self.run_cli(
                 ["retire-draft-reconcile", str(archive_root), "--zettel-id", zid, "--approve",
@@ -30640,6 +30654,19 @@ state:
             plan = json.loads(output)
             self.assertEqual(plan["drift_class"], "content_change", plan)
             self.assertTrue(plan["content_change_ack_required"], plan)
+            self.assertEqual(plan["status"], "needs_content_change_review", plan)
+            self.assertEqual(plan["overall_status"], "needs_content_change_review", plan)
+            self.assertEqual(plan["suggested_next_action"], "review_content_change_before_approval", plan)
+            self.assertFalse(plan["would_write"], plan)
+            self.assertTrue(plan["approval_would_write"], plan)
+            self.assertTrue(plan["approval_requires_content_changed_ack"], plan)
+            self.assertTrue(any("--content-changed-ack" in action for action in plan["next_safe_actions"]), plan)
+            code, text_output = self.run_cli(
+                ["retire-draft-reconcile", str(archive_root), "--zettel-id", zid, "--dry-run", "--format", "text"]
+            )
+            self.assertEqual(code, 0, text_output)
+            self.assertIn("Next safe actions:", text_output)
+            self.assertIn("--content-changed-ack", text_output)
             # approve WITHOUT ack -> blocked, no writes.
             code, output = self.run_cli(
                 ["retire-draft-reconcile", str(archive_root), "--zettel-id", zid, "--approve",
