@@ -9788,6 +9788,10 @@ def command_retire_draft_reconcile(args: argparse.Namespace) -> int:
             print("Blockers:")
             for blocker in result["blockers"]:
                 print(f"- {blocker}")
+        if result.get("next_safe_actions"):
+            print("Next safe actions:")
+            for action in result["next_safe_actions"]:
+                print(f"- {action}")
         if result.get("dry_run"):
             print("Writes: none")
         else:

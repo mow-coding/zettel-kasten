@@ -33,10 +33,10 @@ wom-kit/docs/releases/ - do not re-grow baseline ladders or tag lists here.
 Current public baseline:
 
 ```text
-v0.3.196 pre-release
+v0.3.197 pre-release
 ```
 
-Previous public baseline: v0.3.195 pre-release.
+Previous public baseline: v0.3.196 pre-release.
 
 Full release history: see [CHANGELOG.md](CHANGELOG.md) and [wom-kit/docs/releases/](wom-kit/docs/releases/).
 

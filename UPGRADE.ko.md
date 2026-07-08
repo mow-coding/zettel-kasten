@@ -87,7 +87,8 @@ zet, receipt로 보존해야 합니다.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.3.196` | current public pre-release | `wom-kit/docs/releases/v0.3.196.md` |
+| `v0.3.197` | current public pre-release | `wom-kit/docs/releases/v0.3.197.md` |
+| `v0.3.196` | superseded public pre-release | `wom-kit/docs/releases/v0.3.196.md` |
 | `v0.3.195` | superseded public pre-release | `wom-kit/docs/releases/v0.3.195.md` |
 | `v0.3.194` | superseded public pre-release | `wom-kit/docs/releases/v0.3.194.md` |
 | `v0.3.193` | superseded public pre-release | `wom-kit/docs/releases/v0.3.193.md` |
@@ -162,6 +163,20 @@ zet, receipt로 보존해야 합니다.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.3.196` To `v0.3.197`
+
+reconcile dry-run next-action guidance를 추가하는 additive patch입니다. 마이그레이션은 필요 없습니다.
+
+운영자가 볼 변화:
+
+- `remint-reconcile --dry-run --format json`과 `retire-draft-reconcile --dry-run --format json`에
+  `status`, `overall_status`, `suggested_next_action`, `would_write`,
+  `approval_would_write`, `approval_requires_content_changed_ack`가 추가됩니다.
+- `content_change` dry-run은 이제 `--approve --content-changed-ack` 전에 사람의 내용 검토가 필요하다고 명시합니다.
+- `retire-draft-reconcile --format text`도 가능한 경우 `Next safe actions`를 출력합니다.
+- reconcile 분류와 승인 gate는 그대로입니다.
+- `wom-kit/docs/releases/v0.3.197.md`를 보세요.
 
 ## From `v0.3.195` To `v0.3.196`
 
