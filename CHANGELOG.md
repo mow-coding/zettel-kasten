@@ -6,6 +6,26 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.198 - 2026-07-08
+
+Reconcile approval-result status cleanup. Additive; no archive migration.
+
+- **Post-approval status.** `archive remint-reconcile --approve --format json` and
+  `archive retire-draft-reconcile --approve --format json` now replace dry-run
+  review guidance with `status: reconcile_applied`, `overall_status:
+  reconcile_applied`, `suggested_next_action: run_doctor_to_verify_reconcile`,
+  and doctor verification `next_safe_actions`.
+- **No stale review flags after writes.** Applied approval output now reports
+  `would_write: false`, `approval_would_write: false`, and
+  `approval_requires_content_changed_ack: false` while preserving
+  `content_change_ack: true` when a reviewed content change was explicitly
+  acknowledged.
+- **Operator docs.** Release guidance now calls out two field-observed operator
+  notes: use explicit UTF-8 capture instead of bare PowerShell `>` when saving
+  JSON examples, and pair a direct schema-enum frontmatter repair with both
+  `remint-reconcile` and `retire-draft-reconcile` dry-run/approve checks when
+  the repaired zet has both mint and retired-draft receipts.
+
 ## v0.3.197 - 2026-07-08
 
 Reconcile dry-run next-action guidance checkpoint. Additive; no migration.

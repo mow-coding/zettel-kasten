@@ -1,9 +1,10 @@
 # WOM-kit Capability Matrix
 
-Status: v0.3.197 reconcile dry-run next-action guidance checkpoint
+Status: v0.3.198 reconcile approval-result status checkpoint
 Date: 2026-07-08
-Version: v0.3.197, release candidate
+Version: v0.3.198, release candidate
 
+Previous checkpoint: Status: v0.3.197 reconcile dry-run next-action guidance checkpoint
 Previous checkpoint: Status: v0.3.196 doctor progress-log path-policy clarification checkpoint
 Previous checkpoint: Status: v0.3.195 doctor output path-policy clarification checkpoint
 Previous checkpoint: Status: v0.3.194 doctor result capture and diagnostic guidance checkpoint
@@ -106,11 +107,11 @@ This matrix is a plain-language map of what WOM-kit can do today and what is onl
 
 Read it as a safety label. A row marked `read-only preview` means WOM-kit can inspect or plan something and return JSON, but it does not write files. A row marked `approval-gated write` means the CLI has a human-reviewed write path with explicit approval fields. A row marked `documented-only` means the idea is described, but no product command exists yet.
 
-Current checkpoint note (v0.3.197): `archive remint-reconcile --dry-run` and
-`archive retire-draft-reconcile --dry-run` now include machine-readable
-`status`, `overall_status`, `suggested_next_action`, and approval guidance
-fields so a `content_change` plan routes the operator to human content review
-before any `--approve --content-changed-ack` run.
+Current checkpoint note (v0.3.198): `archive remint-reconcile --approve` and
+`archive retire-draft-reconcile --approve` now return post-approval status
+fields (`status: reconcile_applied`, `overall_status: reconcile_applied`) and
+doctor verification next-actions instead of carrying stale dry-run review status
+after a successful write.
 
 ## Status Legend
 

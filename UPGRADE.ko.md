@@ -87,7 +87,8 @@ zet, receipt로 보존해야 합니다.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.3.197` | current public pre-release | `wom-kit/docs/releases/v0.3.197.md` |
+| `v0.3.198` | current public pre-release | `wom-kit/docs/releases/v0.3.198.md` |
+| `v0.3.197` | superseded public pre-release | `wom-kit/docs/releases/v0.3.197.md` |
 | `v0.3.196` | superseded public pre-release | `wom-kit/docs/releases/v0.3.196.md` |
 | `v0.3.195` | superseded public pre-release | `wom-kit/docs/releases/v0.3.195.md` |
 | `v0.3.194` | superseded public pre-release | `wom-kit/docs/releases/v0.3.194.md` |
@@ -163,6 +164,27 @@ zet, receipt로 보존해야 합니다.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.3.197` To `v0.3.198`
+
+reconcile approve 결과의 상태 표시를 정리하는 additive patch입니다. 마이그레이션은 필요 없습니다.
+
+운영자가 보는 변경:
+
+- `remint-reconcile --approve --format json`과
+  `retire-draft-reconcile --approve --format json`은 성공적으로 쓴 뒤
+  `status: reconcile_applied`, `overall_status: reconcile_applied`를 반환합니다.
+- approve 결과는 이제 `suggested_next_action: run_doctor_to_verify_reconcile`와
+  doctor 재검증 `next_safe_actions`를 보여줍니다.
+- 적용이 끝난 approve 출력에 이전 dry-run의 `needs_content_change_review` 상태가
+  그대로 남지 않으며, 새 approve write가 아직 대기 중인 것처럼 말하지 않습니다.
+- Windows에서 JSON 예시를 파일로 저장할 때는 PowerShell의 bare `>` redirection보다
+  명시적인 UTF-8 capture를 권장합니다.
+- retired-draft receipt가 있는 zet의 schema enum을 직접 고친 경우,
+  `remint-reconcile`을 먼저 dry-run/approve하고 이어서 `retire-draft-reconcile`도
+  dry-run/approve하는 짝 flow를 사용하세요.
+- reconcile 분류와 승인 gate는 그대로입니다.
+- `wom-kit/docs/releases/v0.3.198.md`를 보세요.
 
 ## From `v0.3.196` To `v0.3.197`
 

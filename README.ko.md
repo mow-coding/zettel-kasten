@@ -31,10 +31,10 @@ tag 목록을 여기서 다시 키우지 않습니다.
 현재 공개 기준:
 
 ```text
-v0.3.197 pre-release
+v0.3.198 pre-release
 ```
 
-이전 공개 기준: v0.3.196 pre-release.
+이전 공개 기준: v0.3.197 pre-release.
 
 전체 릴리스 이력은 [CHANGELOG.md](CHANGELOG.md)와 [wom-kit/docs/releases/](wom-kit/docs/releases/)를 보세요.
 
@@ -56,6 +56,7 @@ Roadmap 요약: `v0.1.x`는 아이디어/프로토콜 언어 라인, `v0.2.x`는
 - `wom-kit/` 안의 local CLI와 MCP tooling,
 - doctor, draft, mint, delegate, receipt, search, metadata review 같은 private archive lifecycle 도구. draft 생성은 forward-only draft-id 위생을 갖춰 제목이 없거나 한글뿐인 제목이 더 이상 오해를 주는 `_draft` id로 떨어지지 않고, draft 시점에 `--kind`를 검증해 경고와 함께 유효한 kind 목록을 보여줍니다. mint는 attributed `--affirm` 플래그로 두 human-review 체크리스트 항목을 raw YAML 편집 대신 검토자 귀속(attributed)·감사 가능한 CLI 행위로 충족합니다(mint receipt에 기록, `--reviewed-by` 없으면 무효, machine-enforced 항목은 절대 덮어쓰지 않음).
 - 정직한 `archive remint-reconcile`(그리고 retire receipt용 형제 명령 `archive retire-draft-reconcile`): zet의 바이트가 디스크에서 드리프트한 뒤(CRLF/BOM 재체크아웃 또는 사람의 내용 수정) receipt에 기록된 sha256을 재발급합니다. draft 스냅샷 자체가 드리프트한 경우에도 드리프트를 개행/BOM만인 `format_drift`나 `content_change`로 분류하되, 모든 content frontmatter 필드를 검사(전체 필드 재구성 + mint receipt의 `id`/`title` 대조)하므로 어떤 필드를 수정하거나 내용이 변조된 스냅샷도 절대 `format_drift`의 앵커가 되지 않습니다. 항상 디스크의 현재 내용을 보여주고, 승인하려면 reviewer가 필요하며, 내용 변경 ack 게이트를 절대 우회하지 않는 opt-in `--strip-bom`을 제공하고(그리고 v0.3.172부터 dry-run에서도 approve 실행이 기록하는 것과 동일한 strip 의도 메타데이터를 미리 보여줍니다 — 분류에는 전혀 영향이 없는 no-op이며 `content_change`를 절대 세탁하지 않습니다), v0.3.176부터는 BOM/개행 정규화 이후에도 본문이 여전히 다른 `content_change`에 대해 내용을 노출하지 않는 `body_diff_diagnostic`(카테고리 라벨 + 정규화 형태에서의 바이트 오프셋 + 길이 델타뿐, 본문 텍스트는 절대 없음)을 함께 보여주고, 이제 dry-run JSON `--diagnostic-only`로 canonical 본문 텍스트와 frontmatter 값을 빼고도 그 drift 숫자를 볼 수 있게 하여, 클라이언트가 어떤 sub-BOM 잔차(마지막 개행, 후행 공백, NFC-대-NFD, 또는 실제 편집)인지 분류기를 약화시키지 않고 스스로 진단할 수 있게 하며, 손상을 절대 가리지 않으며, in-place receipt 갱신과 별도의 불변 audit receipt를 함께 씁니다.
+- reconcile approve 결과는 이제 `status: reconcile_applied`와 doctor 재검증 next-action을 보여줍니다. 즉 승인 적용이 끝난 JSON/text 출력에 이전 dry-run의 "검토 필요" 상태가 그대로 남지 않습니다.
 - read-only `archive zet-quality-check --dry-run`으로 mint 전 entity-term, document-type, OCR/parse metadata, table-structure, correction-event, source-rights, audience, derived-artifact dependency 위험을 점검합니다. 선택적 `zet-quality-rules.yml` 프로젝트 규칙은 matched term을 출력하지 않으면서 금지 entity alias를 mint blocker로 만들 수 있습니다.
 - read-only `archive status-board --dry-run`으로 canonical zet, active draft, retire 대기 minted draft, document/audience metadata gap, source metadata gap, derived-artifact sync gap, 선택적 quality count를 한 번에 요약합니다. title/body/source value/provider URL/local path는 출력하지 않습니다.
 - read-only `archive derived-artifact-staleness --dry-run`으로 `derived_artifacts`가 마지막 검토 sync 이후 더 최신 source zet을 놓치고 있는지 확인합니다. 외부 보고서 본문은 열지 않고, artifact ref/title/body/provider URL/local path는 출력하지 않습니다.
