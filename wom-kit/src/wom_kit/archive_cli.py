@@ -37,6 +37,8 @@ Commands:
           Preview wallet-ready identity metadata for a resolved WOM profile.
   runtime-context
           Print read-only AI runtime context for a mounted archive.
+  ai-start-here
+          Print the compact first-read map for an AI operator entering an archive.
   operational-context
           Read or approve-update the AI-facing mission/state rehydration record.
   prompt-boundary
@@ -4040,6 +4042,104 @@ def command_runtime_context(args: argparse.Namespace) -> int:
 
     print_json(result)
     return 0 if result["ok"] else 1
+
+
+def command_ai_start_here(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("ai-start-here is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        diagnostics = [item.as_dict() for item in Doctor(Path(args.archive_root)).run()]
+        result = archive_services.ai_start_here(
+            Path(args.archive_root),
+            expected_archive_id=args.expected_archive_id,
+            expected_type=args.expected_type,
+            strict=args.strict,
+            redact_local_paths=args.redact_local_paths,
+            diagnostics=diagnostics,
+        )
+    except archive_services.ArchiveServiceError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        print(render_ai_start_here_markdown(result))
+    return 0 if result["ok"] else 1
+
+
+def render_ai_start_here_markdown(result: dict[str, Any]) -> str:
+    summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+    first_read = result.get("first_read") if isinstance(result.get("first_read"), dict) else {}
+    operational_context = result.get("operational_context") if isinstance(result.get("operational_context"), dict) else {}
+    safety = result.get("safety_boundaries") if isinstance(result.get("safety_boundaries"), dict) else {}
+    commands = result.get("first_commands") if isinstance(result.get("first_commands"), list) else []
+    steps = result.get("next_safe_steps") if isinstance(result.get("next_safe_steps"), list) else []
+    read_order = first_read.get("read_order") if isinstance(first_read.get("read_order"), list) else []
+    missing = first_read.get("missing_required") if isinstance(first_read.get("missing_required"), list) else []
+    blockers = result.get("blockers") if isinstance(result.get("blockers"), list) else []
+    warnings = result.get("warnings") if isinstance(result.get("warnings"), list) else []
+
+    lines = [
+        "# WOM AI Start Here",
+        "",
+        "This is the safe first-read map for an AI operator entering a WOM archive.",
+        "",
+        "## Archive",
+        "",
+        f"- Archive id: `{result.get('archive_id') or '-'}`",
+        f"- Archive type: `{result.get('archive_type') or '-'}`",
+        f"- Scope: `{result.get('scope') or '-'}`",
+        f"- Start-here file: `{summary.get('start_here_file') or first_read.get('start_here') or 'archive.yml'}`",
+        f"- Operational context: `{operational_context.get('status') or summary.get('operational_context_status') or 'unknown'}`",
+        "",
+        "## Read First",
+        "",
+    ]
+    for item in read_order[:8]:
+        if isinstance(item, dict):
+            role = item.get("role") or "-"
+            path = item.get("path") or "-"
+            status = item.get("status") or "-"
+            lines.append(f"- `{path}` - {role} ({status})")
+    if not read_order:
+        lines.append("- No present entrypoints were reported.")
+    lines.extend(["", "## First Commands", ""])
+    for index, item in enumerate(commands[:4], start=1):
+        if isinstance(item, dict):
+            command = item.get("command") or "-"
+            purpose = item.get("purpose") or "-"
+            lines.append(f"{index}. `{command}`")
+            lines.append(f"   Purpose: {purpose}")
+    if not commands:
+        lines.append("1. `archive runtime-context <archive-root> --format json`")
+        lines.append("   Purpose: confirm archive identity and entrypoints.")
+    lines.extend(["", "## Next Safe Steps", ""])
+    for step in steps:
+        lines.append(f"- {step}")
+    lines.extend(["", "## Safety Boundary", ""])
+    lines.append(f"- Read-only: {'yes' if safety.get('read_only') else 'no'}")
+    lines.append(f"- Files written: {'yes' if safety.get('files_written') else 'no'}")
+    lines.append(f"- Provider API called: {'yes' if safety.get('provider_api_called') else 'no'}")
+    lines.append(f"- Secrets read: {'yes' if safety.get('secrets_read') else 'no'}")
+    lines.append(f"- Zettel bodies read: {'yes' if safety.get('zettel_bodies_read') else 'no'}")
+    lines.append(f"- Objet bytes read: {'yes' if safety.get('objet_bytes_read') else 'no'}")
+    lines.append(f"- Local paths redacted: {'yes' if safety.get('local_paths_redacted') else 'no'}")
+    if missing:
+        lines.extend(["", "## Missing Required Entrypoints", ""])
+        for item in missing:
+            if isinstance(item, dict):
+                lines.append(f"- `{item.get('path') or '-'}` - {item.get('role') or '-'}")
+    if blockers:
+        lines.extend(["", "## Blockers", ""])
+        for blocker in blockers:
+            lines.append(f"- {blocker}")
+    if warnings:
+        lines.extend(["", "## Warnings", ""])
+        for warning in warnings:
+            lines.append(f"- {warning}")
+    return "\n".join(lines)
 
 
 def command_operational_context(args: argparse.Namespace) -> int:
@@ -14160,6 +14260,36 @@ def build_parser() -> argparse.ArgumentParser:
     )
     runtime_context.add_argument("--format", choices=["json"], default="json", help="Output format.")
     runtime_context.set_defaults(func=command_runtime_context)
+
+    ai_start_here = subcommands.add_parser(
+        "ai-start-here",
+        aliases=["start-here", "operator-start-here"],
+        help="Print the compact first-read map for an AI operator entering an archive.",
+    )
+    ai_start_here.add_argument("archive_root", help="Archive root to inspect.")
+    ai_start_here.add_argument("--expected-archive-id", help="Expected archive id; mismatch blocks.")
+    ai_start_here.add_argument(
+        "--expected-type",
+        choices=sorted(archive_services.RUNTIME_CONTEXT_ARCHIVE_TYPES),
+        help="Expected archive type. Mismatch warns by default and blocks with --strict.",
+    )
+    ai_start_here.add_argument("--strict", action="store_true", help="Treat warnings as blocking.")
+    ai_start_here.add_argument("--dry-run", action="store_true", help="Read and render only; never write files.")
+    ai_start_here.add_argument(
+        "--redact-local-paths",
+        dest="redact_local_paths",
+        action="store_true",
+        default=True,
+        help="Use archive-relative paths and suppress local absolute paths. This is the default.",
+    )
+    ai_start_here.add_argument(
+        "--no-redact-local-paths",
+        dest="redact_local_paths",
+        action="store_false",
+        help="Include local absolute path context for trusted local debugging.",
+    )
+    ai_start_here.add_argument("--format", choices=["markdown", "json"], default="markdown", help="Output format.")
+    ai_start_here.set_defaults(func=command_ai_start_here)
 
     operational_context = subcommands.add_parser(
         "operational-context",

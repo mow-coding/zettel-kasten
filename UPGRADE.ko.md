@@ -87,7 +87,8 @@ zet, receipt로 보존해야 합니다.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.3.200` | current public pre-release | `wom-kit/docs/releases/v0.3.200.md` |
+| `v0.3.201` | current public pre-release | `wom-kit/docs/releases/v0.3.201.md` |
+| `v0.3.200` | superseded public pre-release | `wom-kit/docs/releases/v0.3.200.md` |
 | `v0.3.199` | superseded public pre-release | `wom-kit/docs/releases/v0.3.199.md` |
 | `v0.3.198` | superseded public pre-release | `wom-kit/docs/releases/v0.3.198.md` |
 | `v0.3.197` | superseded public pre-release | `wom-kit/docs/releases/v0.3.197.md` |
@@ -166,6 +167,20 @@ zet, receipt로 보존해야 합니다.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.3.200` To `v0.3.201`
+
+AI 운영자가 archive에 처음 들어왔을 때 볼 수 있는 read-only 안내 표지판을 추가하는 additive patch입니다. 마이그레이션은 필요 없습니다.
+
+운영자가 보는 변경:
+
+- 새 `archive ai-start-here <archive-root> --dry-run --format markdown|json`
+  명령이 생겼습니다. 별칭은 `start-here`, `operator-start-here`입니다.
+- 기존 runtime-context, canonical entrypoint, operational-context 메타데이터를
+  한 장짜리 first-read map으로 보여줍니다.
+- 파일을 쓰지 않고, provider를 호출하지 않고, secret, zettel 본문, objet
+  bytes를 읽지 않으며, local absolute path는 기본적으로 redaction합니다.
+- `wom-kit/docs/releases/v0.3.201.md`를 보세요.
 
 ## From `v0.3.199` To `v0.3.200`
 

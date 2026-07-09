@@ -95,7 +95,8 @@ and receipts before any cleanup.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.3.200` | current public pre-release | `wom-kit/docs/releases/v0.3.200.md` |
+| `v0.3.201` | current public pre-release | `wom-kit/docs/releases/v0.3.201.md` |
+| `v0.3.200` | superseded public pre-release | `wom-kit/docs/releases/v0.3.200.md` |
 | `v0.3.199` | superseded public pre-release | `wom-kit/docs/releases/v0.3.199.md` |
 | `v0.3.198` | superseded public pre-release | `wom-kit/docs/releases/v0.3.198.md` |
 | `v0.3.197` | superseded public pre-release | `wom-kit/docs/releases/v0.3.197.md` |
@@ -177,6 +178,21 @@ and receipts before any cleanup.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.3.200` To `v0.3.201`
+
+One additive read-only AI operator signpost. No migration is required.
+
+Operator-visible notes:
+
+- New `archive ai-start-here <archive-root> --dry-run --format markdown|json`
+  command, with `start-here` and `operator-start-here` aliases.
+- The command projects existing runtime-context, canonical entrypoint, and
+  operational-context metadata into one first-read map for an entering AI
+  operator.
+- It writes nothing, calls no providers, reads no secrets, reads no zettel
+  bodies or objet bytes, and redacts local absolute paths by default.
+- See `wom-kit/docs/releases/v0.3.201.md`.
 
 ## From `v0.3.199` To `v0.3.200`
 
