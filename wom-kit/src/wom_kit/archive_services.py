@@ -1947,6 +1947,7 @@ AI_RESPONSE_CONCEPT_GUIDE_TOPICS = {
     "sha256_identity",
     "manifest_vs_zet",
     "three_layers",
+    "operator_vocabulary",
     "zet_markdown_style",
     "git_infra_terms",
 }
@@ -2245,6 +2246,278 @@ AI_OPERATIONAL_LIFECYCLE_TRANSLATIONS = [
     {
         "term": "provisional_meaning",
         "phrases": {"ko-KR": "아직 정식 edge type은 아니고 모아보는 의미 후보", "en-US": "meaning candidate collected before becoming an active edge type"},
+    },
+]
+AI_OPERATOR_VOCABULARY_TRANSLATIONS = [
+    {
+        "category": "archive_entry",
+        "terms": [
+            {
+                "term": "archive",
+                "plain_meaning": "A WOM working archive that holds zets, source records, receipts, and policy.",
+                "phrases": {"ko-KR": "보관함 / 아카이브", "en-US": "archive"},
+                "speak_like": "이 보관함",
+            },
+            {
+                "term": "archive_root",
+                "plain_meaning": "The local folder that is being inspected as the archive root.",
+                "phrases": {"ko-KR": "보관함 폴더", "en-US": "archive folder"},
+                "speak_like": "지금 확인하는 보관함 폴더",
+            },
+            {
+                "term": "AGENTS.md",
+                "plain_meaning": "Local instructions that tell AI operators how to behave in this archive.",
+                "phrases": {"ko-KR": "AI 작업 지침", "en-US": "AI working instructions"},
+                "speak_like": "이 보관함에서 AI가 따라야 하는 작업 지침",
+            },
+            {
+                "term": "runtime_context",
+                "plain_meaning": "A read-only status packet that tells an AI what archive it is in and what to read first.",
+                "phrases": {"ko-KR": "처음 상태 확인", "en-US": "runtime context"},
+                "speak_like": "먼저 보관함 상태를 확인해볼게",
+            },
+            {
+                "term": "ai_start_here",
+                "plain_meaning": "A compact first-read map for an AI entering the archive.",
+                "phrases": {"ko-KR": "첫 안내판 / 시작 지도", "en-US": "start-here map"},
+                "speak_like": "처음 들어왔을 때 보는 안내판",
+            },
+            {
+                "term": "operational_context",
+                "plain_meaning": "A bounded record of the current mission, state, gotchas, and next actions.",
+                "phrases": {"ko-KR": "현재 작업 맥락", "en-US": "operational context"},
+                "speak_like": "지금 어디까지 왔는지 적어둔 작업 맥락",
+            },
+            {
+                "term": "capabilities",
+                "plain_meaning": "The local list of commands this installed WOM-kit can actually run.",
+                "phrases": {"ko-KR": "사용 가능한 도구 목록", "en-US": "available tools"},
+                "speak_like": "지금 설치된 도구로 할 수 있는 일 목록",
+            },
+        ],
+    },
+    {
+        "category": "knowledge_records",
+        "terms": [
+            {
+                "term": "zet",
+                "plain_meaning": "A human-approved durable note or memory unit.",
+                "phrases": {"ko-KR": "정식 메모 / 기억 조각", "en-US": "durable note"},
+                "speak_like": "나중에 다시 믿고 볼 정식 메모",
+            },
+            {
+                "term": "draft",
+                "plain_meaning": "A not-yet-final note waiting in the inbox.",
+                "phrases": {"ko-KR": "초안", "en-US": "draft"},
+                "speak_like": "아직 정식 발행 전인 초안",
+            },
+            {
+                "term": "inbox",
+                "plain_meaning": "The place where drafts wait before minting.",
+                "phrases": {"ko-KR": "초안함", "en-US": "draft inbox"},
+                "speak_like": "초안이 잠깐 머무는 곳",
+            },
+            {
+                "term": "canonical",
+                "plain_meaning": "The currently official archive copy.",
+                "phrases": {"ko-KR": "정식본", "en-US": "canonical copy"},
+                "speak_like": "현재 기준이 되는 정식본",
+            },
+            {
+                "term": "frontmatter",
+                "plain_meaning": "Machine-readable metadata at the top of a Markdown zet, not the human document body.",
+                "phrases": {"ko-KR": "문서 앞 메타데이터", "en-US": "frontmatter metadata"},
+                "speak_like": "사람이 읽는 본문이 아니라 시스템용 정보",
+            },
+            {
+                "term": "source_refs",
+                "plain_meaning": "Safe references to evidence used by a zet.",
+                "phrases": {"ko-KR": "출처 참조", "en-US": "source references"},
+                "speak_like": "이 메모가 어떤 근거를 보고 썼는지",
+            },
+        ],
+    },
+    {
+        "category": "evidence_layers",
+        "terms": [
+            {
+                "term": "objet",
+                "plain_meaning": "Original source material, identified by bytes rather than by today's location.",
+                "phrases": {"ko-KR": "원본 자료 / 오브제", "en-US": "source object"},
+                "speak_like": "나중에 증거로 돌아갈 수 있는 원본 자료",
+            },
+            {
+                "term": "object_id",
+                "plain_meaning": "A stable fingerprint for exact source bytes, usually sha256.",
+                "phrases": {"ko-KR": "자료 지문", "en-US": "object fingerprint"},
+                "speak_like": "파일 내용이 같은지 확인하는 지문",
+            },
+            {
+                "term": "derived_text",
+                "plain_meaning": "Readable text extracted from source material by OCR, ASR, parser, or model.",
+                "phrases": {"ko-KR": "추출 텍스트", "en-US": "derived text"},
+                "speak_like": "원본에서 뽑아낸 읽을 수 있는 텍스트",
+            },
+            {
+                "term": "manifest",
+                "plain_meaning": "A catalog that lists known objects, fingerprints, and safe location labels.",
+                "phrases": {"ko-KR": "자료 목록표", "en-US": "manifest"},
+                "speak_like": "어떤 원본 자료가 있는지 적어둔 목록표",
+            },
+            {
+                "term": "source_map",
+                "plain_meaning": "A map that connects imported or extracted records back to their source clues.",
+                "phrases": {"ko-KR": "출처 지도", "en-US": "source map"},
+                "speak_like": "이 조각이 어디서 왔는지 찾아가는 지도",
+            },
+            {
+                "term": "receipt",
+                "plain_meaning": "An audit record of what a tool previewed or wrote.",
+                "phrases": {"ko-KR": "작업 영수증", "en-US": "audit receipt"},
+                "speak_like": "나중에 확인할 수 있게 남기는 작업 영수증",
+            },
+        ],
+    },
+    {
+        "category": "actions_and_checks",
+        "terms": [
+            {
+                "term": "dry_run",
+                "plain_meaning": "Preview what would happen without writing anything.",
+                "phrases": {"ko-KR": "미리보기", "en-US": "dry run"},
+                "speak_like": "실제로 바꾸기 전에 미리보기만 해볼게",
+            },
+            {
+                "term": "approve",
+                "plain_meaning": "Run the write after explicit human approval.",
+                "phrases": {"ko-KR": "승인 실행", "en-US": "approved write"},
+                "speak_like": "사람이 확인한 뒤 실제로 기록하기",
+            },
+            {
+                "term": "mint",
+                "plain_meaning": "Promote a reviewed draft into a canonical zet with a receipt.",
+                "phrases": {"ko-KR": "정식 발행", "en-US": "mint"},
+                "speak_like": "초안을 정식 메모로 발행하기",
+            },
+            {
+                "term": "retire",
+                "plain_meaning": "Close a draft or old record after its replacement or canonical copy is verified.",
+                "phrases": {"ko-KR": "정리 종료", "en-US": "retire"},
+                "speak_like": "이미 처리된 초안이라 안전하게 정리하기",
+            },
+            {
+                "term": "reconcile",
+                "plain_meaning": "Compare records and safely bring metadata back into agreement.",
+                "phrases": {"ko-KR": "대조해서 맞추기", "en-US": "reconcile"},
+                "speak_like": "기록끼리 맞는지 대조해서 어긋난 부분을 바로잡기",
+            },
+            {
+                "term": "doctor",
+                "plain_meaning": "A health check that finds structural or policy problems.",
+                "phrases": {"ko-KR": "건강검진", "en-US": "doctor check"},
+                "speak_like": "보관함 건강검진을 돌려볼게",
+            },
+            {
+                "term": "validate",
+                "plain_meaning": "A stricter validation pass for archive correctness.",
+                "phrases": {"ko-KR": "엄격 검사", "en-US": "strict validation"},
+                "speak_like": "더 엄격한 검사를 해볼게",
+            },
+            {
+                "term": "privacy_scan",
+                "plain_meaning": "A public-release check for private or sensitive traces.",
+                "phrases": {"ko-KR": "공개 전 민감정보 점검", "en-US": "privacy scan"},
+                "speak_like": "공개해도 되는지 민감정보 흔적을 점검하기",
+            },
+        ],
+    },
+    {
+        "category": "connections",
+        "terms": [
+            {
+                "term": "node",
+                "plain_meaning": "One note or object in the knowledge graph.",
+                "phrases": {"ko-KR": "점 / 항목", "en-US": "node"},
+                "speak_like": "연결망 안의 하나의 항목",
+            },
+            {
+                "term": "edge",
+                "plain_meaning": "A recorded relationship between two nodes.",
+                "phrases": {"ko-KR": "연결선", "en-US": "edge"},
+                "speak_like": "두 항목 사이에 남긴 연결",
+            },
+            {
+                "term": "tie",
+                "plain_meaning": "The human-facing relationship or reason two things belong together.",
+                "phrases": {"ko-KR": "관계 / 이어짐", "en-US": "tie"},
+                "speak_like": "왜 두 메모가 이어지는지",
+            },
+            {
+                "term": "link_type",
+                "plain_meaning": "The stable machine name for a kind of relationship.",
+                "phrases": {"ko-KR": "연결 종류", "en-US": "link type"},
+                "speak_like": "이 연결이 어떤 종류인지",
+            },
+            {
+                "term": "source_mechanism",
+                "plain_meaning": "How the tool found a possible connection.",
+                "phrases": {"ko-KR": "연결이 발견된 방식", "en-US": "source mechanism"},
+                "speak_like": "도구가 이 연결을 어떻게 찾아냈는지",
+            },
+            {
+                "term": "relationship_meaning",
+                "plain_meaning": "What the connection means to the human archive.",
+                "phrases": {"ko-KR": "사람에게 의미 있는 관계", "en-US": "relationship meaning"},
+                "speak_like": "이 연결이 사람에게 무슨 뜻인지",
+            },
+        ],
+    },
+    {
+        "category": "providers_and_secrets",
+        "terms": [
+            {
+                "term": "provider",
+                "plain_meaning": "An external service such as Notion, IMAP, GitHub, or object storage.",
+                "phrases": {"ko-KR": "외부 서비스", "en-US": "provider"},
+                "speak_like": "Notion 같은 외부 서비스",
+            },
+            {
+                "term": "adapter",
+                "plain_meaning": "A bounded connector that knows how to talk to one external service.",
+                "phrases": {"ko-KR": "연결 어댑터", "en-US": "adapter"},
+                "speak_like": "외부 서비스와 안전하게 이어주는 연결 장치",
+            },
+            {
+                "term": "credential_ref",
+                "plain_meaning": "A safe label pointing to a secret stored elsewhere, not the secret itself.",
+                "phrases": {"ko-KR": "비밀값 이름표", "en-US": "credential reference"},
+                "speak_like": "비밀번호 자체가 아니라 비밀번호가 있는 곳의 이름표",
+            },
+            {
+                "term": "secret",
+                "plain_meaning": "A token, password, recovery code, or key that must not be pasted into chat or public records.",
+                "phrases": {"ko-KR": "비밀값", "en-US": "secret"},
+                "speak_like": "AI에게 보여주면 안 되는 비밀값",
+            },
+            {
+                "term": "vault",
+                "plain_meaning": "A local or managed safe place where humans keep secrets.",
+                "phrases": {"ko-KR": "비밀 금고", "en-US": "secret vault"},
+                "speak_like": "비밀번호를 사람이 보관하는 금고",
+            },
+            {
+                "term": "provider_locator",
+                "plain_meaning": "A private service-side address or id that should not be copied into public zets.",
+                "phrases": {"ko-KR": "외부 서비스 위치값", "en-US": "provider locator"},
+                "speak_like": "외부 서비스 안에서만 쓰는 위치값",
+            },
+            {
+                "term": "object_storage",
+                "plain_meaning": "A storage service for large source objects, such as S3-compatible storage.",
+                "phrases": {"ko-KR": "대용량 원본 보관소", "en-US": "object storage"},
+                "speak_like": "큰 원본 파일을 보관하는 저장소",
+            },
+        ],
     },
 ]
 AI_OPERATIONAL_GIT_INFRA_TRANSLATIONS = [
@@ -37830,6 +38103,7 @@ def ai_response_concept_guide(
     include_identity = resolved_topic in {"all", "sha256_identity"}
     include_manifest = resolved_topic in {"all", "manifest_vs_zet"}
     include_layers = resolved_topic in {"all", "three_layers"}
+    include_operator_vocabulary = resolved_topic in {"all", "operator_vocabulary"}
     include_operational_terms = resolved_topic in {"all", "operational_terms"}
     include_zet_markdown_style = resolved_topic in {"all", "zet_markdown_style"}
     include_git_infra_terms = resolved_topic in {"all", "git_infra_terms"}
@@ -37905,6 +38179,8 @@ def ai_response_concept_guide(
             }
         )
 
+    if include_operator_vocabulary:
+        sections.append(ai_response_operator_vocabulary_section(resolved_locale))
     if include_operational_terms:
         sections.append(ai_response_operational_terms_section(resolved_locale))
     if include_zet_markdown_style:
@@ -37932,6 +38208,7 @@ def ai_response_concept_guide(
             "double_tilde_reserved_for_markdown_strikethrough": True,
             "frontmatter_is_storage_metadata_not_document_body": True,
             "prefer_document_view_for_human_reading": True,
+            "translate_wom_jargon_for_humans": True,
             "translate_git_infra_jargon_for_humans": True,
         },
         "sections": sections,
@@ -38014,6 +38291,10 @@ def ai_response_concept_guide(
                 "command": "archive ai-response-concept-guide <archive-root> --topic git_infra_terms --locale en-US --dry-run --format json",
             },
             {
+                "human_intent": "look up plain-language phrasing for WOM operator vocabulary before answering a human",
+                "command": "archive ai-response-concept-guide <archive-root> --topic operator_vocabulary --locale ko-KR --dry-run --format json",
+            },
+            {
                 "human_intent": "upload or sync bytes",
                 "command": "future work until a later release explicitly adds an approval-gated adapter",
             },
@@ -38060,6 +38341,7 @@ def ai_response_concept_guide(
             "zet_markdown_style_guide_available": True,
             "range_tilde_strikethrough_guard_available": True,
             "zet_document_view_available": True,
+            "operator_vocabulary_translation_available": True,
             "git_infra_term_translation_available": True,
             "mcp_tool_available": False,
             "object_upload_adapter_implemented": False,
@@ -38220,6 +38502,50 @@ def ai_response_localized_phrase(entry: dict[str, Any], locale: str) -> str:
     phrases = entry.get("phrases") if isinstance(entry.get("phrases"), dict) else {}
     value = phrases.get(locale) or phrases.get("ko-KR") or phrases.get("en-US") or ""
     return str(value)
+
+
+def ai_response_operator_vocabulary_section(locale: str) -> dict[str, Any]:
+    categories = []
+    for category in AI_OPERATOR_VOCABULARY_TRANSLATIONS:
+        terms = []
+        for entry in category["terms"]:
+            terms.append(
+                {
+                    "term": entry["term"],
+                    "plain_meaning": entry["plain_meaning"],
+                    "selected_user_phrase": ai_response_localized_phrase(entry, locale),
+                    "phrases": copy.deepcopy(entry["phrases"]),
+                    "speak_like": entry["speak_like"],
+                }
+            )
+        categories.append({"category": category["category"], "terms": terms})
+    return {
+        "section_id": "operator_vocabulary",
+        "title": "WOM operator vocabulary translation layer",
+        "locale": locale,
+        "beginner_explanation": "AI operators should explain the user's next step in ordinary Korean first, then keep the exact WOM term in backticks or logs when precision matters.",
+        "answer_order": [
+            "Say the human-facing phrase first.",
+            "Use the internal WOM term only after the meaning is clear.",
+            "Avoid asking the human to choose between raw internal terms unless the decision genuinely depends on that exact term.",
+            "Never turn a technical label into proof; use receipts, manifests, and reviewed records as evidence.",
+        ],
+        "categories": categories,
+        "preferred_short_phrases": {
+            "safe_preview": "먼저 미리보기로 확인해볼게요.",
+            "approved_write": "확인되면 승인 실행으로 실제 기록합니다.",
+            "privacy_boundary": "비밀값이나 원본 본문은 읽지 않고 상태만 확인합니다.",
+            "status_board": "지금 상태를 짧게 정리하면 이렇습니다.",
+            "remaining_work": "남은 일은 이것입니다.",
+        },
+        "do_not_say": [
+            "민트하겠습니다.",
+            "리컨실하면 됩니다.",
+            "매니페스트가 증명합니다.",
+            "프로바이더 로케이터를 zet에 넣으면 됩니다.",
+            "드라이런 결과니까 이미 처리됐습니다.",
+        ],
+    }
 
 
 def ai_response_operational_terms_section(locale: str) -> dict[str, Any]:
