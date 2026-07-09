@@ -10769,7 +10769,18 @@ state:
             self.assertTrue(result["guide_contract"]["prefer_document_view_for_human_reading"])
             self.assertEqual(result["locale"], "ko-KR")
             section_ids = [section["section_id"] for section in result["sections"]]
-            self.assertEqual(section_ids, ["sha256_identity", "manifest_vs_zet", "three_layers", "operational_terms", "zet_markdown_style", "git_infra_terms"])
+            self.assertEqual(
+                section_ids,
+                [
+                    "sha256_identity",
+                    "manifest_vs_zet",
+                    "three_layers",
+                    "operator_vocabulary",
+                    "operational_terms",
+                    "zet_markdown_style",
+                    "git_infra_terms",
+                ],
+            )
             identity_section = result["sections"][0]
             self.assertIn("sha256:<hex>", " ".join(identity_section["answer_order"]))
             self.assertIn("지문", identity_section["korean_script"])
@@ -10777,7 +10788,41 @@ state:
             self.assertEqual(manifest_section["analogy"]["object_manifest"], "address book or catalog for known objects")
             layer_names = [layer["layer"] for layer in result["sections"][2]["layers"]]
             self.assertEqual(layer_names, ["objet", "derived_text", "zet"])
-            operational_section = result["sections"][3]
+            operator_vocabulary_section = result["sections"][3]
+            self.assertEqual(operator_vocabulary_section["section_id"], "operator_vocabulary")
+            self.assertEqual(operator_vocabulary_section["title"], "WOM operator vocabulary translation layer")
+            categories = {category["category"]: category for category in operator_vocabulary_section["categories"]}
+            for category in (
+                "archive_entry",
+                "knowledge_records",
+                "evidence_layers",
+                "actions_and_checks",
+                "connections",
+                "providers_and_secrets",
+            ):
+                self.assertIn(category, categories)
+            action_terms = {
+                term["term"]: term
+                for term in categories["actions_and_checks"]["terms"]
+            }
+            self.assertEqual(action_terms["dry_run"]["selected_user_phrase"], "미리보기")
+            self.assertEqual(action_terms["mint"]["selected_user_phrase"], "정식 발행")
+            self.assertIn("건강검진", action_terms["doctor"]["selected_user_phrase"])
+            evidence_terms = {
+                term["term"]: term
+                for term in categories["evidence_layers"]["terms"]
+            }
+            self.assertEqual(evidence_terms["receipt"]["selected_user_phrase"], "작업 영수증")
+            self.assertEqual(evidence_terms["object_id"]["selected_user_phrase"], "자료 지문")
+            provider_terms = {
+                term["term"]: term
+                for term in categories["providers_and_secrets"]["terms"]
+            }
+            self.assertEqual(provider_terms["credential_ref"]["selected_user_phrase"], "비밀값 이름표")
+            self.assertIn("비밀값이나 원본 본문", operator_vocabulary_section["preferred_short_phrases"]["privacy_boundary"])
+            self.assertTrue(result["guide_contract"]["translate_wom_jargon_for_humans"])
+
+            operational_section = result["sections"][4]
             edge_terms = {term["term"]: term for term in operational_section["edge_type_terms"]}
             self.assertEqual(len(edge_terms), 20)
             self.assertIn("만들어졌다", edge_terms["derived_from"]["selected_user_phrase"])
@@ -10842,6 +10887,7 @@ state:
             self.assertTrue(result["current_capability"]["zet_markdown_style_guide_available"])
             self.assertTrue(result["current_capability"]["range_tilde_strikethrough_guard_available"])
             self.assertTrue(result["current_capability"]["zet_document_view_available"])
+            self.assertTrue(result["current_capability"]["operator_vocabulary_translation_available"])
             self.assertFalse(result["current_capability"]["object_upload_adapter_implemented"])
             self.assertEqual(result["would_change"], [])
             self.assertNotIn("C:\\", serialized)
@@ -10882,6 +10928,32 @@ state:
             self.assertEqual([section["section_id"] for section in terms_result["sections"]], ["operational_terms"])
             supersedes_term = next(term for term in terms_result["sections"][0]["edge_type_terms"] if term["term"] == "supersedes")
             self.assertEqual(supersedes_term["selected_user_phrase"], "This newer note replaces the older one.")
+
+            vocabulary_code, vocabulary_output = self.run_cli(
+                [
+                    "ai-response-concept-guide",
+                    str(archive_root),
+                    "--topic",
+                    "operator_vocabulary",
+                    "--locale",
+                    "ko-KR",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            vocabulary_result = json.loads(vocabulary_output)
+            self.assertEqual(vocabulary_code, 0, vocabulary_output)
+            self.assertEqual([section["section_id"] for section in vocabulary_result["sections"]], ["operator_vocabulary"])
+            vocabulary_categories = {
+                category["category"]: category
+                for category in vocabulary_result["sections"][0]["categories"]
+            }
+            archive_terms = {
+                term["term"]: term
+                for term in vocabulary_categories["archive_entry"]["terms"]
+            }
+            self.assertEqual(archive_terms["ai_start_here"]["selected_user_phrase"], "첫 안내판 / 시작 지도")
 
             git_infra_code, git_infra_output = self.run_cli(
                 [

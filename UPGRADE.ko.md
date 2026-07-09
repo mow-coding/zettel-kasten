@@ -87,7 +87,8 @@ zet, receipt로 보존해야 합니다.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.3.201` | current public pre-release | `wom-kit/docs/releases/v0.3.201.md` |
+| `v0.3.202` | current public pre-release | `wom-kit/docs/releases/v0.3.202.md` |
+| `v0.3.201` | superseded public pre-release | `wom-kit/docs/releases/v0.3.201.md` |
 | `v0.3.200` | superseded public pre-release | `wom-kit/docs/releases/v0.3.200.md` |
 | `v0.3.199` | superseded public pre-release | `wom-kit/docs/releases/v0.3.199.md` |
 | `v0.3.198` | superseded public pre-release | `wom-kit/docs/releases/v0.3.198.md` |
@@ -167,6 +168,20 @@ zet, receipt로 보존해야 합니다.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.3.201` To `v0.3.202`
+
+AI 운영자가 사람에게 WOM을 설명할 때 먼저 쉬운 한국어로 말할 수 있게 하는 read-only 어휘 패치입니다. 마이그레이션은 필요 없습니다.
+
+운영자가 보는 변경:
+
+- `archive ai-response-concept-guide <archive-root> --topic operator_vocabulary
+  --locale ko-KR --dry-run --format json`이 archive entrypoint, zet/draft,
+  objet/evidence, lifecycle action, 검사, 연결, provider, secret 관련 용어를
+  묶어서 돌려줍니다.
+- `all` topic에도 새 `operator_vocabulary` 섹션이 포함됩니다.
+- 기계용 term은 바뀌지 않고, 새 표현은 사람에게 답할 때 쓰는 안내 문장용입니다.
+- `wom-kit/docs/releases/v0.3.202.md`를 보세요.
 
 ## From `v0.3.200` To `v0.3.201`
 

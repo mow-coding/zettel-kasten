@@ -95,7 +95,8 @@ and receipts before any cleanup.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.3.201` | current public pre-release | `wom-kit/docs/releases/v0.3.201.md` |
+| `v0.3.202` | current public pre-release | `wom-kit/docs/releases/v0.3.202.md` |
+| `v0.3.201` | superseded public pre-release | `wom-kit/docs/releases/v0.3.201.md` |
 | `v0.3.200` | superseded public pre-release | `wom-kit/docs/releases/v0.3.200.md` |
 | `v0.3.199` | superseded public pre-release | `wom-kit/docs/releases/v0.3.199.md` |
 | `v0.3.198` | superseded public pre-release | `wom-kit/docs/releases/v0.3.198.md` |
@@ -178,6 +179,20 @@ and receipts before any cleanup.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.3.201` To `v0.3.202`
+
+One additive read-only Korean-first vocabulary patch for AI operators. No migration is required.
+
+Operator-visible notes:
+
+- `archive ai-response-concept-guide <archive-root> --topic operator_vocabulary
+  --locale ko-KR --dry-run --format json` now returns a grouped vocabulary
+  layer for archive entrypoints, zets/drafts, objets/evidence, lifecycle
+  actions, checks, connections, providers, and secrets.
+- The `all` topic includes the new `operator_vocabulary` section.
+- Machine terms stay unchanged; the new phrases guide human-facing prose only.
+- See `wom-kit/docs/releases/v0.3.202.md`.
 
 ## From `v0.3.200` To `v0.3.201`
 

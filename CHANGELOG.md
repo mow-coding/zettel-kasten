@@ -6,6 +6,22 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.202 - 2026-07-09
+
+WOM operator vocabulary translation checkpoint. Additive; no archive migration.
+
+- **Operator vocabulary topic.** Added `operator_vocabulary` to read-only
+  `archive ai-response-concept-guide`, covering the terms an AI operator most
+  often uses while helping a human operate WOM: archive entrypoints, zets and
+  drafts, objets and evidence layers, lifecycle actions, checks, connections,
+  providers, and secrets.
+- **Korean-first wording.** Each entry carries a beginner-facing Korean phrase
+  such as "첫 안내판 / 시작 지도", "정식 메모 / 기억 조각", "작업 영수증",
+  "정식 발행", "건강검진", "관계 / 이어짐", and "비밀값 이름표".
+- **Answer contract.** The guide now tells AI operators to say the human-facing
+  phrase first, keep the exact WOM term in backticks or logs only when needed,
+  and avoid treating technical labels as proof.
+
 ## v0.3.201 - 2026-07-09
 
 AI start-here surface checkpoint. Additive; no archive migration.
