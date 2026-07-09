@@ -1,6 +1,6 @@
 # AI Response Concept Guide
 
-Status: v0.3.202 WOM operator vocabulary translation checkpoint
+Status: v0.3.203 reviewed operator vocabulary correction checkpoint
 Date: 2026-07-09
 
 Previous checkpoint: Status: v0.3.104 read-only concept, operational terminology, and material-clue routing checkpoint
@@ -193,8 +193,10 @@ only copy of the evidence.
 
 ## 4. WOM Operator Vocabulary
 
-When the AI is helping a person operate WOM, it should use everyday Korean
-first and keep the internal term in backticks only when precision matters.
+When the AI is helping a person operate WOM, it must use the user's confirmed
+product and operator terms exactly when they exist. For any future functional
+word without a reviewed Korean name, explain the function plainly; do not
+invent a product term.
 
 Use this lookup:
 
@@ -202,66 +204,108 @@ Use this lookup:
 archive ai-response-concept-guide <archive-root> --topic operator_vocabulary --locale ko-KR --dry-run --format json
 ```
 
-Core groups:
+Confirmed product-language terms:
 
-| Internal term | Beginner Korean |
-| --- | --- |
-| `archive` | 보관함 / 아카이브 |
-| `archive_root` | 보관함 폴더 |
-| `AGENTS.md` | AI 작업 지침 |
-| `runtime_context` | 처음 상태 확인 |
-| `ai_start_here` | 첫 안내판 / 시작 지도 |
-| `operational_context` | 현재 작업 맥락 |
-| `capabilities` | 사용 가능한 도구 목록 |
-| `zet` | 정식 메모 / 기억 조각 |
-| `draft` | 초안 |
-| `inbox` | 초안함 |
-| `canonical` | 정식본 |
-| `frontmatter` | 문서 앞 메타데이터 |
-| `source_refs` | 출처 참조 |
-| `objet` | 원본 자료 / 오브제 |
-| `object_id` | 자료 지문 |
-| `derived_text` | 추출 텍스트 |
-| `manifest` | 자료 목록표 |
-| `source_map` | 출처 지도 |
-| `receipt` | 작업 영수증 |
-| `dry_run` | 미리보기 |
-| `approve` | 승인 실행 |
-| `mint` | 정식 발행 |
-| `retire` | 정리 종료 |
-| `reconcile` | 대조해서 맞추기 |
-| `doctor` | 건강검진 |
-| `validate` | 엄격 검사 |
-| `privacy_scan` | 공개 전 민감정보 점검 |
-| `node` | 점 / 항목 |
-| `edge` | 연결선 |
-| `tie` | 관계 / 이어짐 |
-| `link_type` | 연결 종류 |
-| `source_mechanism` | 연결이 발견된 방식 |
-| `relationship_meaning` | 사람에게 의미 있는 관계 |
-| `provider` | 외부 서비스 |
-| `adapter` | 연결 어댑터 |
-| `credential_ref` | 비밀값 이름표 |
-| `secret` | 비밀값 |
-| `vault` | 비밀 금고 |
-| `provider_locator` | 외부 서비스 위치값 |
-| `object_storage` | 대용량 원본 보관소 |
+| Internal term | Confirmed Korean/product wording | Functional note |
+| --- | --- | --- |
+| `WOM` | `WOM` / 읽기: 옴 | Whole system/world name; do not read as 웜. |
+| `zettel-kasten` | normally `zettel-kasten`; meaning: 기록 계층 | Historical root and local archive method. |
+| `zettel` | `zettel` | Abstract/generic zettelkasten idea; do not use for a concrete WOM record. |
+| `zet` | `zet`; meaning if needed: 쪽글 / 토막글 | Actual WOM text record unit. |
+| `ZET` | `ZET`; meaning if needed: 공유 계층 | Sharing/communication layer; distinct from `zet`. |
+| `objet` | `objet` / 읽기: 오브제 | Source/evidence object; not 오브젝트. |
+| `mint` | 발행하다 | Turn reviewed draft zet into a canonical private archive record. |
+| `receipt` | 영수증 | Durable audit record. |
+| `provenance` | 족보 | Lineage of where a record/source came from. |
+| `canonical` | 정본 | Current official archive copy. |
+| `node` | 노드 | Subject/archive participant in the connection graph. |
+| `edge` | 엣지 | Recorded connection between nodes, zets, or objets in the WOM graph. |
+| `tie` | 타이 | WOM connection layer term for the meaningful relation carried by an edge. |
+| `trust` | 인증 | Product trust/verification relation. |
+| `import` | 반입 | Bring outside material into WOM. |
+| `acceptance` | 채택 | Accept into reviewed WOM state. |
+| `quarantine` | 검문소 | Review checkpoint for uncertain material. |
+| `block` | 상자 | `zet + header`. |
+| `foreign_block` | 소포 | A block after it enters another person's world. |
+| `header` | 초록 | Metadata around a zet. |
+| `body` | 본문 | Readable main text of the zet. |
+| `broadcast` | 송출 | Outward sending/broadcast action. |
+| `naming` | 명명한다 | Giving a concept its product-language name. |
+| `archive` | 아카이브 폴더 | WOM working folder holding zets, objets, receipts, policies, manifests, and operational records. |
+| `archive_root` | 아카이브 최상위 폴더 | Top-level local folder for one archive. |
+| `AGENTS.md` | AI 메뉴얼 | Local instructions for AI operators. |
+| `runtime_context` | 인수인계 문서 | Read-only handoff/status packet for an entering AI. |
+| `ai_start_here` | AI 스타팅 메뉴얼 | Compact first-read map for an AI entering the archive. |
+| `operational_context` | 작업기록 | Current mission, state, gotchas, and next actions. |
+| `capabilities` | 도구 설명서 | Installed WOM-kit command capability list. |
+| `draft` | 초안 | zet candidate before minting. |
+| `inbox` | 임시저장소 | Waiting area for drafts and unprocessed items. |
+| `frontmatter` | 초록 데이터 | Markdown storage form of `header`/초록 data at the top of a zet file. |
+
+Confirmed operator-language terms:
+
+| Internal term | Confirmed Korean/operator wording | Functional note |
+| --- | --- | --- |
+| `source_refs` | 출처참조 | References from a zet to sources, objets, or evidence. |
+| `document_view` | 문서 보기 | Human-reading view that hides raw system metadata. |
+| `object_id` | 오브제 아이디 | Stable identifier for exact source bytes. |
+| `sha256` | SHA-256 지문 | Content fingerprint algorithm. |
+| `derived_text` | 파생 텍스트 | Text extracted from an objet. |
+| `manifest` | 매니페스트 | Catalog of objects or records. |
+| `source_map` | 소스맵 | Map from imported records back to source clues. |
+| `parse_log` | 파싱 로그 | OCR/parsing/extraction log. |
+| `confidence` | 신뢰도 | Reliability score or label. |
+| `human_corrections` | 사람 정정 | Human corrections such as not-a-typo or wrong-section notes. |
+| `dry_run` | 드라이런 | No-write preview execution. |
+| `approve` | 승인 실행 | Human approval that allows a real write. |
+| `promote` | 승격 | Move a record toward a more official state. |
+| `revise` | 수정 | Correct an existing canonical record. |
+| `supersede` | 대체 | Mark that a newer record replaces an older one. |
+| `retire` | 퇴역 | Close a processed draft or old record. |
+| `reconcile` | 대조정리 | Compare records and repair safe audit drift. |
+| `doctor` | 검진 | Diagnostic command for archive health. |
+| `validate` | 검증 | Strict correctness check. |
+| `privacy_scan` | 프라이버시 스캔 | Public-release sensitive-trace check. |
+| `link_type` | 링크 타입 | Stable system name for an edge kind. |
+| `source_mechanism` | 발견 방식 | How a possible connection was discovered. |
+| `relationship_meaning` | 관계 의미 | What the connection means to the human archive. |
+| `relationship_candidate` | 관계 후보 | Possible relationship meaning needing review. |
+| `containment` | 포함 관계 | Structural relation where one record contains another. |
+| `source_link` | 출처 링크 | Link back to source evidence. |
+| `provider` | 외부 서비스 | Outside service such as Notion, IMAP, GitHub, or Tiro. |
+| `adapter` | 어댑터 | Bounded connector to an external service. |
+| `credential_ref` | 자격증명 참조 | Safe reference to a secret location, not the secret value. |
+| `secret` | 비밀값 | Token, password, recovery code, or key. |
+| `vault` | 금고 | Safe place where a human keeps secrets. |
+| `provider_locator` | 외부 서비스 위치값 | External-service URL/id/locator that may be private. |
+| `object_storage` | 오브젝트 스토리지 | R2/S3-like large-object storage. |
+| `live_fetch` | 라이브 회수 | Real external-service fetch. |
+| `status_board` | 상태판 | Compact current status summary for a human. |
+| `remaining_work` | 남은 작업 | Work still open after the current pass. |
+| `safe_preview` | 미리보기 | No-write preview before approval. |
+| `approved_write` | 승인 후 쓰기 | Real write after explicit human approval. |
+| `audience` | 대상 독자 | Intended reader for a document or artifact. |
+| `external_report` | 공개용 문서 | Document meant to be shown outside the private archive. |
+| `private_working_note` | 비공개 문서 | Private working document not copied into public-facing artifacts. |
 
 Preferred short phrases:
 
 ```text
-먼저 미리보기로 확인해볼게요.
-확인되면 승인 실행으로 실제 기록합니다.
-비밀값이나 원본 본문은 읽지 않고 상태만 확인합니다.
+먼저 미리보기로 결과만 확인하겠습니다.
+승인 후 쓰기에서만 실제 기록을 바꾸겠습니다.
+토큰, 비밀번호, 원본 본문은 읽거나 출력하지 않고 상태만 확인하겠습니다.
 지금 상태를 짧게 정리하면 이렇습니다.
-남은 일은 이것입니다.
+남은 작업은 이것입니다.
 ```
 
 Avoid raw jargon in human-facing answers:
 
 ```text
-민트하겠습니다.
-리컨실하면 됩니다.
+zet를 정식 메모 / 기억 조각이라고 부르겠습니다.
+zettel 파일을 실제 WOM 기록이라고 부르겠습니다.
+objet를 오브젝트라고 부르겠습니다.
+receipt를 작업 영수증이라고 새로 번역하겠습니다.
+미검수 기능어에 임의 한국어 이름을 붙이겠습니다.
 매니페스트가 증명합니다.
 프로바이더 로케이터를 zet에 넣으면 됩니다.
 드라이런 결과니까 이미 처리됐습니다.

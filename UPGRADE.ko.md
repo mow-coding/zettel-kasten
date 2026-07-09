@@ -87,7 +87,8 @@ zet, receipt로 보존해야 합니다.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.3.202` | current public pre-release | `wom-kit/docs/releases/v0.3.202.md` |
+| `v0.3.203` | current public pre-release | `wom-kit/docs/releases/v0.3.203.md` |
+| `v0.3.202` | superseded public pre-release | `wom-kit/docs/releases/v0.3.202.md` |
 | `v0.3.201` | superseded public pre-release | `wom-kit/docs/releases/v0.3.201.md` |
 | `v0.3.200` | superseded public pre-release | `wom-kit/docs/releases/v0.3.200.md` |
 | `v0.3.199` | superseded public pre-release | `wom-kit/docs/releases/v0.3.199.md` |
@@ -168,6 +169,23 @@ zet, receipt로 보존해야 합니다.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.3.202` To `v0.3.203`
+
+사용자 검수를 반영한 operator 용어 정정 패치입니다. 마이그레이션은 필요 없습니다.
+
+Operator-visible notes:
+
+- `archive ai-response-concept-guide <archive-root> --topic operator_vocabulary
+  --locale ko-KR --dry-run --format json`은 검수된 operator 용어를
+  `confirmed_operator_language`로 보고합니다.
+- 검수된 한국어 operator 용어에는 `object_id`=`오브제 아이디`,
+  `doctor`=`검진`, `provider`=`외부 서비스`, `containment`=`포함 관계`,
+  `safe_preview`=`미리보기`, `approved_write`=`승인 후 쓰기`,
+  `external_report`=`공개용 문서`, `private_working_note`=`비공개 문서`가
+  포함됩니다.
+- `needs_user_translation`은 이후 새 용어 검수용 빈 묶음으로 남습니다.
+- `wom-kit/docs/releases/v0.3.203.md`를 보세요.
 
 ## From `v0.3.201` To `v0.3.202`
 

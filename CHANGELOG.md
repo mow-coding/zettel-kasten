@@ -6,6 +6,23 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.203 - 2026-07-09
+
+User-reviewed WOM operator vocabulary correction. Additive; no archive migration.
+
+- **Reviewed operator terms.** Finalized the operator vocabulary layer after
+  user review: `object_id` is now `오브제 아이디`, `doctor` is `검진`,
+  `provider` is `외부 서비스`, `containment` is `포함 관계`,
+  `safe_preview` is `미리보기`, `approved_write` is `승인 후 쓰기`,
+  `external_report` is `공개용 문서`, and `private_working_note` is
+  `비공개 문서`.
+- **No invented names.** `edge` remains `엣지`, `tie` remains `타이`, and
+  `zet`/`zettel` keep the reviewed split: `zettel` is the abstract idea while
+  actual WOM records are `zet`.
+- **Output contract.** `operator_vocabulary` now separates
+  `confirmed_product_language`, `confirmed_operator_language`, and an empty
+  `needs_user_translation` bucket reserved for future naming-review items.
+
 ## v0.3.202 - 2026-07-09
 
 WOM operator vocabulary translation checkpoint. Additive; no archive migration.
@@ -15,12 +32,20 @@ WOM operator vocabulary translation checkpoint. Additive; no archive migration.
   often uses while helping a human operate WOM: archive entrypoints, zets and
   drafts, objets and evidence layers, lifecycle actions, checks, connections,
   providers, and secrets.
-- **Korean-first wording.** Each entry carries a beginner-facing Korean phrase
-  such as "첫 안내판 / 시작 지도", "정식 메모 / 기억 조각", "작업 영수증",
-  "정식 발행", "건강검진", "관계 / 이어짐", and "비밀값 이름표".
-- **Answer contract.** The guide now tells AI operators to say the human-facing
-  phrase first, keep the exact WOM term in backticks or logs only when needed,
-  and avoid treating technical labels as proof.
+- **Confirmed product and operator language.** The operator vocabulary now separates
+  user-confirmed product terms (`WOM`, `zet`, `ZET`, `objet`, `mint` as
+  `발행하다`, `receipt` as `영수증`, `canonical` as `정본`, `node` as `노드`,
+  `edge` as `엣지`, `tie` as `타이`, `archive` as `아카이브 폴더`, `ai_start_here` as `AI 스타팅 메뉴얼`,
+  `frontmatter` as `초록 데이터`) from confirmed operator terms such as
+  `object_id` as `오브제 아이디`, `doctor` as `검진`, `provider` as `외부 서비스`,
+  `containment` as `포함 관계`, `safe_preview` as `미리보기`, `approved_write`
+  as `승인 후 쓰기`, `external_report` as `공개용 문서`, and
+  `private_working_note` as `비공개 문서`.
+- **Answer contract.** The guide now tells AI operators to use confirmed terms
+  exactly, treat `zettel` as the abstract idea while pointing to actual WOM
+  records as `zet`, treat future unreviewed functional words as naming-review
+  items, and avoid
+  treating technical labels as proof.
 
 ## v0.3.201 - 2026-07-09
 

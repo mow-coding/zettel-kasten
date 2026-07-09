@@ -31,10 +31,10 @@ tag 목록을 여기서 다시 키우지 않습니다.
 현재 공개 기준:
 
 ```text
-v0.3.202 pre-release
+v0.3.203 pre-release
 ```
 
-이전 공개 기준: v0.3.201 pre-release.
+이전 공개 기준: v0.3.202 pre-release.
 
 전체 릴리스 이력은 [CHANGELOG.md](CHANGELOG.md)와 [wom-kit/docs/releases/](wom-kit/docs/releases/)를 보세요.
 
@@ -100,7 +100,7 @@ Roadmap 요약: `v0.1.x`는 아이디어/프로토콜 언어 라인, `v0.2.x`는
 - read-only `archive ai-response-contract --dry-run`으로 AI 운영자가 사람에게 답하기 전에 outcome, evidence basis, privacy/approval boundary, remaining work, conversational status board를 확인하게 합니다. 별도 web UI는 필요하지 않습니다.
 - 핵심 read-only operator 명령들은 top-level `status_class`, `input_provenance_class`, `secret_signal_class`, `operator_envelope` 필드를 노출하므로 AI가 prose를 추론하지 않고 응답 계약을 적용할 수 있습니다.
 - read-only `archive ai-start-here <archive-root> --dry-run --format markdown|json`으로 기존 runtime-context, canonical entrypoint, operational-context 메타데이터를 AI 운영자가 처음 읽는 한 장짜리 출발 지도처럼 보여줍니다. zettel 본문, objet bytes, secret, provider API는 읽지 않습니다.
-- `ai-response-concept-guide --topic operator_vocabulary --locale ko-KR`로 AI 운영자가 `ai_start_here`, `zet`, `objet`, `receipt`, `mint`, `doctor`, `tie`, `credential_ref` 같은 WOM 내부어를 먼저 쉬운 한국어 표현으로 바꿔 말할 수 있게 합니다.
+- `ai-response-concept-guide --topic operator_vocabulary --locale ko-KR`로 AI 운영자가 이미 확정된 제품어(`WOM`, `zet`, `ZET`, `objet`, `receipt`=`영수증`, `mint`=`발행하다`, `canonical`=`정본`, `node`=`노드`, `edge`=`엣지`, `tie`=`타이`, `archive`=`아카이브 폴더`, `ai_start_here`=`AI 스타팅 메뉴얼`, `frontmatter`=`초록 데이터`)와 확정된 operator 용어(`object_id`=`오브제 아이디`, `doctor`=`검진`, `provider`=`외부 서비스`, `containment`=`포함 관계`, `safe_preview`=`미리보기`, `approved_write`=`승인 후 쓰기`, `external_report`=`공개용 문서`, `private_working_note`=`비공개 문서`)를 그대로 쓰게 합니다.
 - operator용 runtime 표면(`AGENTS.md` 템플릿, runtime skill, plugin-layer 문서)에 담은 normative plain-language 규약: 운영자 AI가 사람에게 답할 때 git/infrastructure/WOM 내부 용어를 일상어로 옮기고 정확한 기술 용어는 괄호나 로그에만 남기게 합니다. read-only `ai-response-concept-guide --topic git_infra_terms` 조회 레이어가 뒷받침하며, 이는 사람 대상 산문에만 적용하는 AI의 지침일 뿐 WOM이 강제·검증하는 검사는 아닙니다.
 - 같은 runtime 표면에 담은 normative AI-Operator Discipline 섹션: 운영자 AI가 지키는 세 가지 행동 규범을 정합니다. 사용자가 실제로 접한 출처(그들이 본 정확한 영상·판본·번역·언어)를 기록하고 "더 권위 있는" 원본으로 조용히 바꾸지 않으며(provenance hierarchy의 source-substitution 축과 짝을 이룸), 어떤 작업을 불가능하다고 선언하거나 낮춰 처리하기 전에 설치·사용 가능한 도구를 먼저 열거하고, 이미 설정·승인된 상태를 처음처럼 다시 묻지 않고 이어받습니다. 이는 AI가 적용하는 지침일 뿐 WOM이 강제·검증하는 검사는 아닙니다.
 

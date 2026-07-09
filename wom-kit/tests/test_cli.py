@@ -10793,33 +10793,74 @@ state:
             self.assertEqual(operator_vocabulary_section["title"], "WOM operator vocabulary translation layer")
             categories = {category["category"]: category for category in operator_vocabulary_section["categories"]}
             for category in (
-                "archive_entry",
-                "knowledge_records",
-                "evidence_layers",
-                "actions_and_checks",
-                "connections",
-                "providers_and_secrets",
+                "confirmed_product_language",
+                "confirmed_operator_language",
+                "needs_user_translation",
             ):
                 self.assertIn(category, categories)
-            action_terms = {
+            confirmed_terms = {
                 term["term"]: term
-                for term in categories["actions_and_checks"]["terms"]
+                for term in categories["confirmed_product_language"]["terms"]
             }
-            self.assertEqual(action_terms["dry_run"]["selected_user_phrase"], "미리보기")
-            self.assertEqual(action_terms["mint"]["selected_user_phrase"], "정식 발행")
-            self.assertIn("건강검진", action_terms["doctor"]["selected_user_phrase"])
-            evidence_terms = {
+            operator_terms = {
                 term["term"]: term
-                for term in categories["evidence_layers"]["terms"]
+                for term in categories["confirmed_operator_language"]["terms"]
             }
-            self.assertEqual(evidence_terms["receipt"]["selected_user_phrase"], "작업 영수증")
-            self.assertEqual(evidence_terms["object_id"]["selected_user_phrase"], "자료 지문")
-            provider_terms = {
+            self.assertEqual(categories["confirmed_product_language"]["translation_status"], "confirmed")
+            self.assertEqual(categories["confirmed_operator_language"]["translation_status"], "confirmed")
+            self.assertEqual(confirmed_terms["WOM"]["selected_user_phrase"], "WOM")
+            self.assertEqual(confirmed_terms["WOM"]["korean_reading"], "옴")
+            self.assertEqual(confirmed_terms["zet"]["selected_user_phrase"], "zet")
+            self.assertEqual(confirmed_terms["zet"]["korean_meaning_translation"], "쪽글 / 토막글")
+            self.assertIn("real WOM record", confirmed_terms["zettel"]["usage_rule"])
+            self.assertEqual(confirmed_terms["ZET"]["selected_user_phrase"], "ZET")
+            self.assertEqual(confirmed_terms["ZET"]["korean_meaning_translation"], "공유 계층")
+            self.assertEqual(confirmed_terms["objet"]["selected_user_phrase"], "objet")
+            self.assertEqual(confirmed_terms["objet"]["korean_reading"], "오브제")
+            self.assertEqual(confirmed_terms["receipt"]["selected_user_phrase"], "영수증")
+            self.assertEqual(confirmed_terms["canonical"]["selected_user_phrase"], "정본")
+            self.assertEqual(confirmed_terms["node"]["selected_user_phrase"], "노드")
+            self.assertEqual(confirmed_terms["edge"]["selected_user_phrase"], "엣지")
+            self.assertEqual(confirmed_terms["tie"]["selected_user_phrase"], "타이")
+            self.assertIn("descriptive Korean phrase", confirmed_terms["edge"]["usage_rule"])
+            self.assertIn("descriptive Korean phrase", confirmed_terms["tie"]["usage_rule"])
+            self.assertEqual(confirmed_terms["mint"]["selected_user_phrase"], "발행하다")
+            self.assertEqual(confirmed_terms["trust"]["selected_user_phrase"], "인증")
+            self.assertEqual(confirmed_terms["import"]["selected_user_phrase"], "반입")
+            self.assertEqual(confirmed_terms["acceptance"]["selected_user_phrase"], "채택")
+            self.assertEqual(confirmed_terms["provenance"]["selected_user_phrase"], "족보")
+            self.assertEqual(confirmed_terms["quarantine"]["selected_user_phrase"], "검문소")
+            self.assertEqual(confirmed_terms["block"]["selected_user_phrase"], "상자")
+            self.assertEqual(confirmed_terms["header"]["selected_user_phrase"], "초록")
+            self.assertEqual(confirmed_terms["body"]["selected_user_phrase"], "본문")
+            self.assertEqual(confirmed_terms["archive"]["selected_user_phrase"], "아카이브 폴더")
+            self.assertEqual(confirmed_terms["archive_root"]["selected_user_phrase"], "아카이브 최상위 폴더")
+            self.assertEqual(confirmed_terms["AGENTS.md"]["selected_user_phrase"], "AI 메뉴얼")
+            self.assertEqual(confirmed_terms["runtime_context"]["selected_user_phrase"], "인수인계 문서")
+            self.assertEqual(confirmed_terms["ai_start_here"]["selected_user_phrase"], "AI 스타팅 메뉴얼")
+            self.assertEqual(confirmed_terms["operational_context"]["selected_user_phrase"], "작업기록")
+            self.assertEqual(confirmed_terms["capabilities"]["selected_user_phrase"], "도구 설명서")
+            self.assertEqual(confirmed_terms["draft"]["selected_user_phrase"], "초안")
+            self.assertEqual(confirmed_terms["inbox"]["selected_user_phrase"], "임시저장소")
+            self.assertEqual(confirmed_terms["frontmatter"]["selected_user_phrase"], "초록 데이터")
+            self.assertIn("header/초록", confirmed_terms["frontmatter"]["usage_rule"])
+            self.assertEqual(operator_terms["object_id"]["selected_user_phrase"], "오브제 아이디")
+            self.assertEqual(operator_terms["doctor"]["selected_user_phrase"], "검진")
+            self.assertEqual(operator_terms["provider"]["selected_user_phrase"], "외부 서비스")
+            self.assertEqual(operator_terms["containment"]["selected_user_phrase"], "포함 관계")
+            self.assertEqual(operator_terms["safe_preview"]["selected_user_phrase"], "미리보기")
+            self.assertEqual(operator_terms["approved_write"]["selected_user_phrase"], "승인 후 쓰기")
+            self.assertEqual(operator_terms["external_report"]["selected_user_phrase"], "공개용 문서")
+            self.assertEqual(operator_terms["private_working_note"]["selected_user_phrase"], "비공개 문서")
+            needs_translation_terms = {
                 term["term"]: term
-                for term in categories["providers_and_secrets"]["terms"]
+                for term in categories["needs_user_translation"]["terms"]
             }
-            self.assertEqual(provider_terms["credential_ref"]["selected_user_phrase"], "비밀값 이름표")
-            self.assertIn("비밀값이나 원본 본문", operator_vocabulary_section["preferred_short_phrases"]["privacy_boundary"])
+            self.assertEqual(categories["needs_user_translation"]["translation_status"], "needs_user_translation")
+            self.assertEqual(needs_translation_terms, {})
+            for term in ("archive", "archive_root", "AGENTS.md", "runtime_context", "ai_start_here", "operational_context", "capabilities", "draft", "inbox", "frontmatter", "edge", "tie"):
+                self.assertNotIn(term, needs_translation_terms)
+            self.assertIn("토큰, 비밀번호, 원본 본문", operator_vocabulary_section["preferred_short_phrases"]["privacy_boundary"])
             self.assertTrue(result["guide_contract"]["translate_wom_jargon_for_humans"])
 
             operational_section = result["sections"][4]
@@ -10949,11 +10990,27 @@ state:
                 category["category"]: category
                 for category in vocabulary_result["sections"][0]["categories"]
             }
-            archive_terms = {
+            confirmed_vocabulary_terms = {
                 term["term"]: term
-                for term in vocabulary_categories["archive_entry"]["terms"]
+                for term in vocabulary_categories["confirmed_product_language"]["terms"]
             }
-            self.assertEqual(archive_terms["ai_start_here"]["selected_user_phrase"], "첫 안내판 / 시작 지도")
+            confirmed_operator_terms = {
+                term["term"]: term
+                for term in vocabulary_categories["confirmed_operator_language"]["terms"]
+            }
+            needs_user_translation_terms = {
+                term["term"]: term
+                for term in vocabulary_categories["needs_user_translation"]["terms"]
+            }
+            self.assertEqual(confirmed_vocabulary_terms["zet"]["selected_user_phrase"], "zet")
+            self.assertEqual(confirmed_vocabulary_terms["mint"]["selected_user_phrase"], "발행하다")
+            self.assertEqual(confirmed_vocabulary_terms["ai_start_here"]["selected_user_phrase"], "AI 스타팅 메뉴얼")
+            self.assertEqual(confirmed_vocabulary_terms["frontmatter"]["selected_user_phrase"], "초록 데이터")
+            self.assertEqual(confirmed_operator_terms["provider"]["selected_user_phrase"], "외부 서비스")
+            self.assertEqual(confirmed_operator_terms["approved_write"]["selected_user_phrase"], "승인 후 쓰기")
+            self.assertEqual(confirmed_operator_terms["external_report"]["selected_user_phrase"], "공개용 문서")
+            self.assertNotIn("ai_start_here", needs_user_translation_terms)
+            self.assertNotIn("provider", needs_user_translation_terms)
 
             git_infra_code, git_infra_output = self.run_cli(
                 [
