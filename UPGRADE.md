@@ -95,7 +95,8 @@ and receipts before any cleanup.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.3.202` | current public pre-release | `wom-kit/docs/releases/v0.3.202.md` |
+| `v0.3.203` | current public pre-release | `wom-kit/docs/releases/v0.3.203.md` |
+| `v0.3.202` | superseded public pre-release | `wom-kit/docs/releases/v0.3.202.md` |
 | `v0.3.201` | superseded public pre-release | `wom-kit/docs/releases/v0.3.201.md` |
 | `v0.3.200` | superseded public pre-release | `wom-kit/docs/releases/v0.3.200.md` |
 | `v0.3.199` | superseded public pre-release | `wom-kit/docs/releases/v0.3.199.md` |
@@ -179,6 +180,24 @@ and receipts before any cleanup.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.3.202` To `v0.3.203`
+
+One additive user-reviewed operator vocabulary correction. No migration is required.
+
+Operator-visible notes:
+
+- `archive ai-response-concept-guide <archive-root> --topic operator_vocabulary
+  --locale ko-KR --dry-run --format json` now reports the reviewed operator
+  vocabulary under `confirmed_operator_language`.
+- The reviewed Korean operator terms include `object_id` as `오브제 아이디`,
+  `doctor` as `검진`, `provider` as `외부 서비스`, `containment` as `포함 관계`,
+  `safe_preview` as `미리보기`, `approved_write` as `승인 후 쓰기`,
+  `external_report` as `공개용 문서`, and `private_working_note` as
+  `비공개 문서`.
+- `needs_user_translation` remains available as an empty bucket for future
+  naming-review items.
+- See `wom-kit/docs/releases/v0.3.203.md`.
 
 ## From `v0.3.201` To `v0.3.202`
 

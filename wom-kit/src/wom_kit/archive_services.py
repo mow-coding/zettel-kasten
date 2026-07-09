@@ -2233,7 +2233,7 @@ AI_OPERATIONAL_LIFECYCLE_TRANSLATIONS = [
     },
     {
         "term": "receipt",
-        "phrases": {"ko-KR": "나중에 확인할 수 있게 남기는 작업 영수증", "en-US": "audit receipt for what happened"},
+        "phrases": {"ko-KR": "나중에 확인할 수 있게 남기는 영수증", "en-US": "audit receipt for what happened"},
     },
     {
         "term": "source_mechanism",
@@ -2250,273 +2250,245 @@ AI_OPERATIONAL_LIFECYCLE_TRANSLATIONS = [
 ]
 AI_OPERATOR_VOCABULARY_TRANSLATIONS = [
     {
-        "category": "archive_entry",
+        "category": "confirmed_product_language",
+        "translation_status": "confirmed",
         "terms": [
             {
+                "term": "WOM",
+                "plain_meaning": "The proper name for the overall product/system/world.",
+                "phrases": {"ko-KR": "WOM", "en-US": "WOM"},
+                "korean_reading": "옴",
+                "usage_rule": "Keep the alphabetic product name. Do not read it as 웜.",
+            },
+            {
+                "term": "zettel-kasten",
+                "plain_meaning": "The historical root and local archive method behind the repository and archive system.",
+                "phrases": {"ko-KR": "zettel-kasten", "en-US": "zettel-kasten"},
+                "korean_meaning_translation": "기록 계층",
+                "usage_rule": "Use the product/root term normally; use the Korean meaning only when explaining the concept.",
+            },
+            {
+                "term": "zettel",
+                "plain_meaning": "The abstract zettelkasten note concept or generic implementation/file-family word; actual WOM records should be called zets.",
+                "phrases": {"ko-KR": "zettel", "en-US": "zettel"},
+                "usage_rule": "Use only for the abstract idea or historical/generic concept. When pointing to a real WOM record, say zet.",
+            },
+            {
+                "term": "zet",
+                "plain_meaning": "The actual WOM text record unit: written by a human or drafted by AI and supervised/approved by a human; after minting it becomes a canonical private archive record.",
+                "phrases": {"ko-KR": "zet", "en-US": "zet"},
+                "korean_meaning_translation": "쪽글 / 토막글",
+                "usage_rule": "Keep lowercase alphabetic zet as the normal product term; use 쪽글/토막글 only as meaning explanation.",
+            },
+            {
+                "term": "ZET",
+                "plain_meaning": "The zettel-kasten-based sharing and communication layer.",
+                "phrases": {"ko-KR": "ZET", "en-US": "ZET"},
+                "korean_reading": "젯",
+                "korean_meaning_translation": "공유 계층",
+                "usage_rule": "Keep uppercase ZET distinct from lowercase zet.",
+            },
+            {
+                "term": "objet",
+                "plain_meaning": "Original source material treated as an evidence object in WOM, intentionally borrowing the philosophy/art word rather than generic object wording.",
+                "phrases": {"ko-KR": "objet", "en-US": "objet"},
+                "korean_reading": "오브제",
+                "usage_rule": "Do not translate as 오브젝트. Use object storage only for the technical storage substrate.",
+            },
+            {
+                "term": "mint",
+                "plain_meaning": "The lifecycle action that turns a reviewed draft zet into a canonical private archive record; not public posting.",
+                "phrases": {"ko-KR": "발행하다", "en-US": "mint"},
+                "usage_rule": "Use as in zet를 발행하다. Preserve that it is more than simple creation.",
+            },
+            {
+                "term": "receipt",
+                "plain_meaning": "A durable audit record of what a WOM tool previewed, wrote, approved, or verified.",
+                "phrases": {"ko-KR": "영수증", "en-US": "receipt"},
+                "usage_rule": "Use the confirmed product term 영수증, not a newly invented phrase.",
+            },
+            {
+                "term": "provenance",
+                "plain_meaning": "The lineage of where a record or source came from and how it was carried forward.",
+                "phrases": {"ko-KR": "족보", "en-US": "provenance"},
+            },
+            {
+                "term": "canonical",
+                "plain_meaning": "The current official archive copy that other work should treat as the reference version.",
+                "phrases": {"ko-KR": "정본", "en-US": "canonical"},
+            },
+            {
+                "term": "node",
+                "plain_meaning": "A subject or archive participant in the WOM connection graph.",
+                "phrases": {"ko-KR": "노드", "en-US": "node"},
+            },
+            {
+                "term": "edge",
+                "plain_meaning": "A recorded connection between two nodes, zets, or objets in the WOM graph.",
+                "phrases": {"ko-KR": "엣지", "en-US": "edge"},
+                "usage_rule": "Keep this as the core graph term 엣지; explain meaning separately instead of replacing the term with a descriptive Korean phrase.",
+            },
+            {
+                "term": "tie",
+                "plain_meaning": "The WOM connection layer term for the meaningful relation carried by an edge.",
+                "phrases": {"ko-KR": "타이", "en-US": "tie"},
+                "usage_rule": "Keep this as the core product term 타이; explain meaning separately instead of replacing the term with a descriptive Korean phrase.",
+            },
+            {
+                "term": "trust",
+                "plain_meaning": "A product-language trust or verification relation/state.",
+                "phrases": {"ko-KR": "인증", "en-US": "trust"},
+            },
+            {
+                "term": "import",
+                "plain_meaning": "Bringing outside material into the WOM world.",
+                "phrases": {"ko-KR": "반입", "en-US": "import"},
+            },
+            {
+                "term": "acceptance",
+                "plain_meaning": "Accepting material or a relation into WOM's reviewed state.",
+                "phrases": {"ko-KR": "채택", "en-US": "acceptance"},
+            },
+            {
+                "term": "quarantine",
+                "plain_meaning": "A review checkpoint for uncertain or risky material before it is treated as safe.",
+                "phrases": {"ko-KR": "검문소", "en-US": "quarantine"},
+            },
+            {
+                "term": "block",
+                "plain_meaning": "The package formed by a zet plus its header.",
+                "phrases": {"ko-KR": "상자", "en-US": "block"},
+                "usage_rule": "Remember the relation: block = zet + header.",
+            },
+            {
+                "term": "foreign_block",
+                "plain_meaning": "A block after it enters another person's world.",
+                "phrases": {"ko-KR": "소포", "en-US": "foreign block"},
+            },
+            {
+                "term": "header",
+                "plain_meaning": "Metadata around a zet: references to zets/objets, hashes, provenance, policy, access hints, summaries, and receipts.",
+                "phrases": {"ko-KR": "초록", "en-US": "header"},
+            },
+            {
+                "term": "body",
+                "plain_meaning": "The readable main text of the zet inside a block.",
+                "phrases": {"ko-KR": "본문", "en-US": "body"},
+            },
+            {
+                "term": "broadcast",
+                "plain_meaning": "A product-language outward sending or broadcasting action.",
+                "phrases": {"ko-KR": "송출", "en-US": "broadcast"},
+            },
+            {
+                "term": "naming",
+                "plain_meaning": "The act of giving a concept its product-language name.",
+                "phrases": {"ko-KR": "명명한다", "en-US": "naming"},
+            },
+            {
                 "term": "archive",
-                "plain_meaning": "A WOM working archive that holds zets, source records, receipts, and policy.",
-                "phrases": {"ko-KR": "보관함 / 아카이브", "en-US": "archive"},
-                "speak_like": "이 보관함",
+                "plain_meaning": "The WOM working space that holds zets, objets, receipts, policies, manifests, and operational records.",
+                "phrases": {"ko-KR": "아카이브 폴더", "en-US": "archive folder"},
             },
             {
                 "term": "archive_root",
-                "plain_meaning": "The local folder that is being inspected as the archive root.",
-                "phrases": {"ko-KR": "보관함 폴더", "en-US": "archive folder"},
-                "speak_like": "지금 확인하는 보관함 폴더",
+                "plain_meaning": "The top-level local folder being treated as one WOM archive.",
+                "phrases": {"ko-KR": "아카이브 최상위 폴더", "en-US": "archive root folder"},
             },
             {
                 "term": "AGENTS.md",
-                "plain_meaning": "Local instructions that tell AI operators how to behave in this archive.",
-                "phrases": {"ko-KR": "AI 작업 지침", "en-US": "AI working instructions"},
-                "speak_like": "이 보관함에서 AI가 따라야 하는 작업 지침",
+                "plain_meaning": "Local instructions that tell AI operators how to behave inside this archive.",
+                "phrases": {"ko-KR": "AI 메뉴얼", "en-US": "AI manual"},
             },
             {
                 "term": "runtime_context",
-                "plain_meaning": "A read-only status packet that tells an AI what archive it is in and what to read first.",
-                "phrases": {"ko-KR": "처음 상태 확인", "en-US": "runtime context"},
-                "speak_like": "먼저 보관함 상태를 확인해볼게",
+                "plain_meaning": "A read-only status packet an AI reads first to know which archive it is in and what is safe to inspect.",
+                "phrases": {"ko-KR": "인수인계 문서", "en-US": "handoff document"},
             },
             {
                 "term": "ai_start_here",
                 "plain_meaning": "A compact first-read map for an AI entering the archive.",
-                "phrases": {"ko-KR": "첫 안내판 / 시작 지도", "en-US": "start-here map"},
-                "speak_like": "처음 들어왔을 때 보는 안내판",
+                "phrases": {"ko-KR": "AI 스타팅 메뉴얼", "en-US": "AI starting manual"},
             },
             {
                 "term": "operational_context",
-                "plain_meaning": "A bounded record of the current mission, state, gotchas, and next actions.",
-                "phrases": {"ko-KR": "현재 작업 맥락", "en-US": "operational context"},
-                "speak_like": "지금 어디까지 왔는지 적어둔 작업 맥락",
+                "plain_meaning": "A bounded record of the current mission, current state, gotchas, and next actions.",
+                "phrases": {"ko-KR": "작업기록", "en-US": "work record"},
             },
             {
                 "term": "capabilities",
-                "plain_meaning": "The local list of commands this installed WOM-kit can actually run.",
-                "phrases": {"ko-KR": "사용 가능한 도구 목록", "en-US": "available tools"},
-                "speak_like": "지금 설치된 도구로 할 수 있는 일 목록",
-            },
-        ],
-    },
-    {
-        "category": "knowledge_records",
-        "terms": [
-            {
-                "term": "zet",
-                "plain_meaning": "A human-approved durable note or memory unit.",
-                "phrases": {"ko-KR": "정식 메모 / 기억 조각", "en-US": "durable note"},
-                "speak_like": "나중에 다시 믿고 볼 정식 메모",
+                "plain_meaning": "The local list of WOM-kit commands this installed version can actually run.",
+                "phrases": {"ko-KR": "도구 설명서", "en-US": "tool manual"},
             },
             {
                 "term": "draft",
-                "plain_meaning": "A not-yet-final note waiting in the inbox.",
+                "plain_meaning": "A zet candidate that is not yet minted into the canonical archive.",
                 "phrases": {"ko-KR": "초안", "en-US": "draft"},
-                "speak_like": "아직 정식 발행 전인 초안",
             },
             {
                 "term": "inbox",
-                "plain_meaning": "The place where drafts wait before minting.",
-                "phrases": {"ko-KR": "초안함", "en-US": "draft inbox"},
-                "speak_like": "초안이 잠깐 머무는 곳",
-            },
-            {
-                "term": "canonical",
-                "plain_meaning": "The currently official archive copy.",
-                "phrases": {"ko-KR": "정식본", "en-US": "canonical copy"},
-                "speak_like": "현재 기준이 되는 정식본",
+                "plain_meaning": "The waiting area where drafts or unprocessed items sit before review.",
+                "phrases": {"ko-KR": "임시저장소", "en-US": "temporary storage"},
             },
             {
                 "term": "frontmatter",
-                "plain_meaning": "Machine-readable metadata at the top of a Markdown zet, not the human document body.",
-                "phrases": {"ko-KR": "문서 앞 메타데이터", "en-US": "frontmatter metadata"},
-                "speak_like": "사람이 읽는 본문이 아니라 시스템용 정보",
-            },
-            {
-                "term": "source_refs",
-                "plain_meaning": "Safe references to evidence used by a zet.",
-                "phrases": {"ko-KR": "출처 참조", "en-US": "source references"},
-                "speak_like": "이 메모가 어떤 근거를 보고 썼는지",
+                "plain_meaning": "The file-format data block at the top of a Markdown zet that stores header/초록 data separately from the body.",
+                "phrases": {"ko-KR": "초록 데이터", "en-US": "frontmatter"},
+                "usage_rule": "This is the Markdown storage form of header/초록 data, not a separate product concept from header.",
             },
         ],
     },
     {
-        "category": "evidence_layers",
+        "category": "confirmed_operator_language",
+        "translation_status": "confirmed",
         "terms": [
-            {
-                "term": "objet",
-                "plain_meaning": "Original source material, identified by bytes rather than by today's location.",
-                "phrases": {"ko-KR": "원본 자료 / 오브제", "en-US": "source object"},
-                "speak_like": "나중에 증거로 돌아갈 수 있는 원본 자료",
-            },
-            {
-                "term": "object_id",
-                "plain_meaning": "A stable fingerprint for exact source bytes, usually sha256.",
-                "phrases": {"ko-KR": "자료 지문", "en-US": "object fingerprint"},
-                "speak_like": "파일 내용이 같은지 확인하는 지문",
-            },
-            {
-                "term": "derived_text",
-                "plain_meaning": "Readable text extracted from source material by OCR, ASR, parser, or model.",
-                "phrases": {"ko-KR": "추출 텍스트", "en-US": "derived text"},
-                "speak_like": "원본에서 뽑아낸 읽을 수 있는 텍스트",
-            },
-            {
-                "term": "manifest",
-                "plain_meaning": "A catalog that lists known objects, fingerprints, and safe location labels.",
-                "phrases": {"ko-KR": "자료 목록표", "en-US": "manifest"},
-                "speak_like": "어떤 원본 자료가 있는지 적어둔 목록표",
-            },
-            {
-                "term": "source_map",
-                "plain_meaning": "A map that connects imported or extracted records back to their source clues.",
-                "phrases": {"ko-KR": "출처 지도", "en-US": "source map"},
-                "speak_like": "이 조각이 어디서 왔는지 찾아가는 지도",
-            },
-            {
-                "term": "receipt",
-                "plain_meaning": "An audit record of what a tool previewed or wrote.",
-                "phrases": {"ko-KR": "작업 영수증", "en-US": "audit receipt"},
-                "speak_like": "나중에 확인할 수 있게 남기는 작업 영수증",
-            },
+            {"term": "source_refs", "plain_meaning": "References from a zet to the sources, objets, or evidence it relies on.", "phrases": {"ko-KR": "출처참조", "en-US": "source references"}},
+            {"term": "document_view", "plain_meaning": "A human-reading view that hides raw system metadata such as YAML frontmatter.", "phrases": {"ko-KR": "문서 보기", "en-US": "document view"}},
+            {"term": "object_id", "plain_meaning": "A stable identifier for exact source bytes, usually based on a hash such as sha256.", "phrases": {"ko-KR": "오브제 아이디", "en-US": "object id"}},
+            {"term": "sha256", "plain_meaning": "A hash algorithm used as a content fingerprint: same bytes produce the same value.", "phrases": {"ko-KR": "SHA-256 지문", "en-US": "SHA-256 fingerprint"}},
+            {"term": "derived_text", "plain_meaning": "Readable text extracted from an objet by OCR, ASR, parser, transcript import, or similar tooling.", "phrases": {"ko-KR": "파생 텍스트", "en-US": "derived text"}},
+            {"term": "manifest", "plain_meaning": "A catalog of known objects or records, often with hashes, sizes, and safe location labels.", "phrases": {"ko-KR": "매니페스트", "en-US": "manifest"}},
+            {"term": "source_map", "plain_meaning": "A map connecting imported or extracted records back to the source clues they came from.", "phrases": {"ko-KR": "소스맵", "en-US": "source map"}},
+            {"term": "parse_log", "plain_meaning": "A log of what happened during OCR, parsing, extraction, or import.", "phrases": {"ko-KR": "파싱 로그", "en-US": "parse log"}},
+            {"term": "confidence", "plain_meaning": "A score or label for how reliable an extracted/parsing result appears to be.", "phrases": {"ko-KR": "신뢰도", "en-US": "confidence"}},
+            {"term": "human_corrections", "plain_meaning": "Corrections from a human such as 'not a typo', 'wrong section', or 'remove this wording'.", "phrases": {"ko-KR": "사람 정정", "en-US": "human corrections"}},
+            {"term": "dry_run", "plain_meaning": "A preview execution that writes nothing and shows what would happen.", "phrases": {"ko-KR": "드라이런", "en-US": "dry run"}},
+            {"term": "approve", "plain_meaning": "Explicit human approval that lets a command perform a real write.", "phrases": {"ko-KR": "승인 실행", "en-US": "approve"}},
+            {"term": "promote", "plain_meaning": "Move a record from a less official state to a more official state.", "phrases": {"ko-KR": "승격", "en-US": "promote"}},
+            {"term": "revise", "plain_meaning": "Create or apply a correction to an existing canonical record.", "phrases": {"ko-KR": "수정", "en-US": "revise"}},
+            {"term": "supersede", "plain_meaning": "Mark that a newer record replaces an older record.", "phrases": {"ko-KR": "대체", "en-US": "supersede"}},
+            {"term": "retire", "plain_meaning": "Close a processed draft or old record so it is no longer active work.", "phrases": {"ko-KR": "퇴역", "en-US": "retire"}},
+            {"term": "reconcile", "plain_meaning": "Compare records and update audit metadata so known-safe drift or repaired links agree again.", "phrases": {"ko-KR": "대조정리", "en-US": "reconcile"}},
+            {"term": "doctor", "plain_meaning": "A diagnostic command that checks archive structure, receipts, policies, and consistency.", "phrases": {"ko-KR": "검진", "en-US": "doctor check"}},
+            {"term": "validate", "plain_meaning": "A stricter correctness check for archive rules or schemas.", "phrases": {"ko-KR": "검증", "en-US": "validate"}},
+            {"term": "privacy_scan", "plain_meaning": "A public-release check for sensitive strings, private traces, or unsafe public surface.", "phrases": {"ko-KR": "프라이버시 스캔", "en-US": "privacy scan"}},
+            {"term": "link_type", "plain_meaning": "The stable system name for a kind of connection.", "phrases": {"ko-KR": "링크 타입", "en-US": "link type"}},
+            {"term": "source_mechanism", "plain_meaning": "How a tool found a possible connection, such as a mention, embed, synced block, or view result.", "phrases": {"ko-KR": "발견 방식", "en-US": "source mechanism"}},
+            {"term": "relationship_meaning", "plain_meaning": "What a connection means to the human archive, separate from how it was discovered.", "phrases": {"ko-KR": "관계 의미", "en-US": "relationship meaning"}},
+            {"term": "relationship_candidate", "plain_meaning": "A possible connection meaning that still needs human review before becoming official.", "phrases": {"ko-KR": "관계 후보", "en-US": "relationship candidate"}},
+            {"term": "containment", "plain_meaning": "A structural relationship where one page or record contains a child page, database, view, or item.", "phrases": {"ko-KR": "포함 관계", "en-US": "containment"}},
+            {"term": "source_link", "plain_meaning": "A link from a zet or derived artifact back to its source evidence.", "phrases": {"ko-KR": "출처 링크", "en-US": "source link"}},
+            {"term": "provider", "plain_meaning": "An external service such as Notion, IMAP, GitHub, Tiro, or object storage.", "phrases": {"ko-KR": "외부 서비스", "en-US": "provider"}},
+            {"term": "adapter", "plain_meaning": "A bounded connector that knows how to talk to one provider safely.", "phrases": {"ko-KR": "어댑터", "en-US": "adapter"}},
+            {"term": "credential_ref", "plain_meaning": "A safe reference to where a secret is stored, not the secret value itself.", "phrases": {"ko-KR": "자격증명 참조", "en-US": "credential reference"}},
+            {"term": "secret", "plain_meaning": "A token, password, recovery code, or key that must not be pasted into chat or public records.", "phrases": {"ko-KR": "비밀값", "en-US": "secret"}},
+            {"term": "vault", "plain_meaning": "A local or managed safe place where a human keeps secrets.", "phrases": {"ko-KR": "금고", "en-US": "vault"}},
+            {"term": "provider_locator", "plain_meaning": "A provider-side id, URL, or locator that can point to a resource but may be private or unsafe to publish.", "phrases": {"ko-KR": "외부 서비스 위치값", "en-US": "provider locator"}},
+            {"term": "object_storage", "plain_meaning": "A storage service for large source objects, such as S3-compatible storage or R2.", "phrases": {"ko-KR": "오브젝트 스토리지", "en-US": "object storage"}},
+            {"term": "live_fetch", "plain_meaning": "A real provider call that fetches live data, unlike a preview or local-only plan.", "phrases": {"ko-KR": "라이브 회수", "en-US": "live fetch"}},
+            {"term": "status_board", "plain_meaning": "A compact status summary an AI shows a human: done work, current blockers, next safe actions.", "phrases": {"ko-KR": "상태판", "en-US": "status board"}},
+            {"term": "remaining_work", "plain_meaning": "The work that is still open after the current pass.", "phrases": {"ko-KR": "남은 작업", "en-US": "remaining work"}},
+            {"term": "safe_preview", "plain_meaning": "A no-write preview that lets the human inspect consequences before approving.", "phrases": {"ko-KR": "미리보기", "en-US": "preview"}},
+            {"term": "approved_write", "plain_meaning": "A write action performed only after explicit human approval.", "phrases": {"ko-KR": "승인 후 쓰기", "en-US": "approved write"}},
+            {"term": "audience", "plain_meaning": "Who a document or artifact is meant for, such as private self, AI working context, client report, or public web.", "phrases": {"ko-KR": "대상 독자", "en-US": "audience"}},
+            {"term": "external_report", "plain_meaning": "A derived artifact meant to be shown outside the private archive.", "phrases": {"ko-KR": "공개용 문서", "en-US": "public-facing document"}},
+            {"term": "private_working_note", "plain_meaning": "A private note for the user or AI workflow that should not be copied verbatim into external artifacts.", "phrases": {"ko-KR": "비공개 문서", "en-US": "private document"}},
         ],
     },
     {
-        "category": "actions_and_checks",
+        "category": "needs_user_translation",
+        "translation_status": "needs_user_translation",
         "terms": [
-            {
-                "term": "dry_run",
-                "plain_meaning": "Preview what would happen without writing anything.",
-                "phrases": {"ko-KR": "미리보기", "en-US": "dry run"},
-                "speak_like": "실제로 바꾸기 전에 미리보기만 해볼게",
-            },
-            {
-                "term": "approve",
-                "plain_meaning": "Run the write after explicit human approval.",
-                "phrases": {"ko-KR": "승인 실행", "en-US": "approved write"},
-                "speak_like": "사람이 확인한 뒤 실제로 기록하기",
-            },
-            {
-                "term": "mint",
-                "plain_meaning": "Promote a reviewed draft into a canonical zet with a receipt.",
-                "phrases": {"ko-KR": "정식 발행", "en-US": "mint"},
-                "speak_like": "초안을 정식 메모로 발행하기",
-            },
-            {
-                "term": "retire",
-                "plain_meaning": "Close a draft or old record after its replacement or canonical copy is verified.",
-                "phrases": {"ko-KR": "정리 종료", "en-US": "retire"},
-                "speak_like": "이미 처리된 초안이라 안전하게 정리하기",
-            },
-            {
-                "term": "reconcile",
-                "plain_meaning": "Compare records and safely bring metadata back into agreement.",
-                "phrases": {"ko-KR": "대조해서 맞추기", "en-US": "reconcile"},
-                "speak_like": "기록끼리 맞는지 대조해서 어긋난 부분을 바로잡기",
-            },
-            {
-                "term": "doctor",
-                "plain_meaning": "A health check that finds structural or policy problems.",
-                "phrases": {"ko-KR": "건강검진", "en-US": "doctor check"},
-                "speak_like": "보관함 건강검진을 돌려볼게",
-            },
-            {
-                "term": "validate",
-                "plain_meaning": "A stricter validation pass for archive correctness.",
-                "phrases": {"ko-KR": "엄격 검사", "en-US": "strict validation"},
-                "speak_like": "더 엄격한 검사를 해볼게",
-            },
-            {
-                "term": "privacy_scan",
-                "plain_meaning": "A public-release check for private or sensitive traces.",
-                "phrases": {"ko-KR": "공개 전 민감정보 점검", "en-US": "privacy scan"},
-                "speak_like": "공개해도 되는지 민감정보 흔적을 점검하기",
-            },
-        ],
-    },
-    {
-        "category": "connections",
-        "terms": [
-            {
-                "term": "node",
-                "plain_meaning": "One note or object in the knowledge graph.",
-                "phrases": {"ko-KR": "점 / 항목", "en-US": "node"},
-                "speak_like": "연결망 안의 하나의 항목",
-            },
-            {
-                "term": "edge",
-                "plain_meaning": "A recorded relationship between two nodes.",
-                "phrases": {"ko-KR": "연결선", "en-US": "edge"},
-                "speak_like": "두 항목 사이에 남긴 연결",
-            },
-            {
-                "term": "tie",
-                "plain_meaning": "The human-facing relationship or reason two things belong together.",
-                "phrases": {"ko-KR": "관계 / 이어짐", "en-US": "tie"},
-                "speak_like": "왜 두 메모가 이어지는지",
-            },
-            {
-                "term": "link_type",
-                "plain_meaning": "The stable machine name for a kind of relationship.",
-                "phrases": {"ko-KR": "연결 종류", "en-US": "link type"},
-                "speak_like": "이 연결이 어떤 종류인지",
-            },
-            {
-                "term": "source_mechanism",
-                "plain_meaning": "How the tool found a possible connection.",
-                "phrases": {"ko-KR": "연결이 발견된 방식", "en-US": "source mechanism"},
-                "speak_like": "도구가 이 연결을 어떻게 찾아냈는지",
-            },
-            {
-                "term": "relationship_meaning",
-                "plain_meaning": "What the connection means to the human archive.",
-                "phrases": {"ko-KR": "사람에게 의미 있는 관계", "en-US": "relationship meaning"},
-                "speak_like": "이 연결이 사람에게 무슨 뜻인지",
-            },
-        ],
-    },
-    {
-        "category": "providers_and_secrets",
-        "terms": [
-            {
-                "term": "provider",
-                "plain_meaning": "An external service such as Notion, IMAP, GitHub, or object storage.",
-                "phrases": {"ko-KR": "외부 서비스", "en-US": "provider"},
-                "speak_like": "Notion 같은 외부 서비스",
-            },
-            {
-                "term": "adapter",
-                "plain_meaning": "A bounded connector that knows how to talk to one external service.",
-                "phrases": {"ko-KR": "연결 어댑터", "en-US": "adapter"},
-                "speak_like": "외부 서비스와 안전하게 이어주는 연결 장치",
-            },
-            {
-                "term": "credential_ref",
-                "plain_meaning": "A safe label pointing to a secret stored elsewhere, not the secret itself.",
-                "phrases": {"ko-KR": "비밀값 이름표", "en-US": "credential reference"},
-                "speak_like": "비밀번호 자체가 아니라 비밀번호가 있는 곳의 이름표",
-            },
-            {
-                "term": "secret",
-                "plain_meaning": "A token, password, recovery code, or key that must not be pasted into chat or public records.",
-                "phrases": {"ko-KR": "비밀값", "en-US": "secret"},
-                "speak_like": "AI에게 보여주면 안 되는 비밀값",
-            },
-            {
-                "term": "vault",
-                "plain_meaning": "A local or managed safe place where humans keep secrets.",
-                "phrases": {"ko-KR": "비밀 금고", "en-US": "secret vault"},
-                "speak_like": "비밀번호를 사람이 보관하는 금고",
-            },
-            {
-                "term": "provider_locator",
-                "plain_meaning": "A private service-side address or id that should not be copied into public zets.",
-                "phrases": {"ko-KR": "외부 서비스 위치값", "en-US": "provider locator"},
-                "speak_like": "외부 서비스 안에서만 쓰는 위치값",
-            },
-            {
-                "term": "object_storage",
-                "plain_meaning": "A storage service for large source objects, such as S3-compatible storage.",
-                "phrases": {"ko-KR": "대용량 원본 보관소", "en-US": "object storage"},
-                "speak_like": "큰 원본 파일을 보관하는 저장소",
-            },
         ],
     },
 ]
@@ -38509,38 +38481,56 @@ def ai_response_operator_vocabulary_section(locale: str) -> dict[str, Any]:
     for category in AI_OPERATOR_VOCABULARY_TRANSLATIONS:
         terms = []
         for entry in category["terms"]:
-            terms.append(
-                {
-                    "term": entry["term"],
-                    "plain_meaning": entry["plain_meaning"],
-                    "selected_user_phrase": ai_response_localized_phrase(entry, locale),
-                    "phrases": copy.deepcopy(entry["phrases"]),
-                    "speak_like": entry["speak_like"],
-                }
-            )
-        categories.append({"category": category["category"], "terms": terms})
+            term_record = {
+                "term": entry["term"],
+                "plain_meaning": entry["plain_meaning"],
+                "translation_status": entry.get("translation_status", category.get("translation_status", "needs_user_translation")),
+            }
+            if "phrases" in entry:
+                term_record["selected_user_phrase"] = ai_response_localized_phrase(entry, locale)
+                term_record["phrases"] = copy.deepcopy(entry["phrases"])
+            if entry.get("korean_reading"):
+                term_record["korean_reading"] = entry["korean_reading"]
+            if entry.get("korean_meaning_translation"):
+                term_record["korean_meaning_translation"] = entry["korean_meaning_translation"]
+            if entry.get("usage_rule"):
+                term_record["usage_rule"] = entry["usage_rule"]
+            if entry.get("speak_like"):
+                term_record["speak_like"] = entry["speak_like"]
+            terms.append(term_record)
+        categories.append(
+            {
+                "category": category["category"],
+                "translation_status": category.get("translation_status", "needs_user_translation"),
+                "terms": terms,
+            }
+        )
     return {
         "section_id": "operator_vocabulary",
         "title": "WOM operator vocabulary translation layer",
         "locale": locale,
-        "beginner_explanation": "AI operators should explain the user's next step in ordinary Korean first, then keep the exact WOM term in backticks or logs when precision matters.",
+        "beginner_explanation": "AI operators must use the user's confirmed product and operator terms when they exist. For any future unreviewed functional word, explain the function plainly and do not invent a Korean product term.",
         "answer_order": [
-            "Say the human-facing phrase first.",
+            "Use confirmed product terms exactly as confirmed.",
+            "Treat zettel as the abstract idea; point to actual WOM records as zets.",
             "Use the internal WOM term only after the meaning is clear.",
-            "Avoid asking the human to choose between raw internal terms unless the decision genuinely depends on that exact term.",
+            "For any future needs_user_translation term, explain the function and ask for naming review before turning the explanation into a product term.",
             "Never turn a technical label into proof; use receipts, manifests, and reviewed records as evidence.",
         ],
         "categories": categories,
         "preferred_short_phrases": {
-            "safe_preview": "먼저 미리보기로 확인해볼게요.",
-            "approved_write": "확인되면 승인 실행으로 실제 기록합니다.",
-            "privacy_boundary": "비밀값이나 원본 본문은 읽지 않고 상태만 확인합니다.",
+            "safe_preview": "먼저 미리보기로 결과만 확인하겠습니다.",
+            "approved_write": "승인 후 쓰기에서만 실제 기록을 바꾸겠습니다.",
+            "privacy_boundary": "토큰, 비밀번호, 원본 본문은 읽거나 출력하지 않고 상태만 확인하겠습니다.",
             "status_board": "지금 상태를 짧게 정리하면 이렇습니다.",
-            "remaining_work": "남은 일은 이것입니다.",
+            "remaining_work": "남은 작업은 이것입니다.",
         },
         "do_not_say": [
-            "민트하겠습니다.",
-            "리컨실하면 됩니다.",
+            "zet를 정식 메모 / 기억 조각이라고 부르겠습니다.",
+            "zettel 파일을 실제 WOM 기록이라고 부르겠습니다.",
+            "objet를 오브젝트라고 부르겠습니다.",
+            "receipt를 작업 영수증이라고 새로 번역하겠습니다.",
+            "미검수 기능어에 임의 한국어 이름을 붙이겠습니다.",
             "매니페스트가 증명합니다.",
             "프로바이더 로케이터를 zet에 넣으면 됩니다.",
             "드라이런 결과니까 이미 처리됐습니다.",
