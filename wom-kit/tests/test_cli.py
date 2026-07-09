@@ -1338,6 +1338,7 @@ class ArchiveCliTests(unittest.TestCase):
         self.assertIn("input-provenance-taxonomy", command_names)
         self.assertIn("secret-signal-taxonomy", command_names)
         self.assertIn("ai-response-contract", command_names)
+        self.assertIn("ai-start-here", command_names)
         capability = next(item for item in commands if item["name"] == "capabilities")
         self.assertIn("--machine", capability["options"])
         serialized = json.dumps(result, ensure_ascii=False)
@@ -3394,6 +3395,55 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertIn("run operator-feedback-plan dry-run", result["available_safe_actions"])
             self.assertIn("create draft in inbox", result["available_safe_actions"])
             self.assertIn("mint only through CLI approve path", result["available_safe_actions"])
+
+    def test_ai_start_here_returns_compact_safe_first_read_map(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+
+            missing_code, missing_output = self.run_cli(["ai-start-here", str(archive_root), "--format", "json"])
+            self.assertEqual(missing_code, 1)
+            self.assertIn("requires --dry-run", missing_output)
+
+            code, output = self.run_cli(
+                ["ai-start-here", str(archive_root), "--dry-run", "--format", "json"]
+            )
+            self.assertEqual(code, 0, output)
+            self.assertNotIn(str(archive_root), output)
+
+            result = json.loads(output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["lifecycle_action"], "ai_start_here")
+            self.assertEqual(result["schema"], "wom-kit/ai-start-here/v0.1")
+            self.assertEqual(result["archive_id"], "archive:personal:fake-life")
+            self.assertEqual(result["summary"]["start_here_file"], "archive.yml")
+            self.assertGreater(result["summary"]["present_entrypoint_count"], 0)
+            self.assertEqual(result["summary"]["missing_required_count"], 0)
+            self.assertEqual(result["operational_context"]["status"], "present")
+            self.assertEqual(result["operational_context"]["record_path"], "ops/operational-context.yml")
+            self.assertEqual(result["first_read"]["start_here"], "archive.yml")
+            self.assertEqual(result["first_read"]["source_truths"]["canonical_zets"], "zettels/")
+            self.assertEqual(
+                result["first_commands"][0]["command"],
+                "archive runtime-context <archive-root> --format json",
+            )
+            self.assertIn("Read AGENTS.md", " ".join(result["next_safe_steps"]))
+            self.assertTrue(result["conversation_status_board"]["allowed"])
+            self.assertFalse(result["conversation_status_board"]["web_ui_required"])
+            self.assertTrue(result["safety_boundaries"]["read_only"])
+            self.assertFalse(result["safety_boundaries"]["provider_api_called"])
+            self.assertFalse(result["safety_boundaries"]["files_written"])
+            self.assertFalse(result["safety_boundaries"]["secrets_read"])
+            self.assertFalse(result["safety_boundaries"]["zettel_bodies_read"])
+            self.assertFalse(result["safety_boundaries"]["objet_bytes_read"])
+            self.assertTrue(result["safety_boundaries"]["local_paths_redacted"])
+
+            markdown_code, markdown_output = self.run_cli(["start-here", str(archive_root), "--dry-run"])
+            self.assertEqual(markdown_code, 0, markdown_output)
+            self.assertIn("# WOM AI Start Here", markdown_output)
+            self.assertIn("`archive.yml`", markdown_output)
+            self.assertIn("## First Commands", markdown_output)
+            self.assertIn("Files written: no", markdown_output)
+            self.assertNotIn(str(archive_root), markdown_output)
 
     def test_operational_context_dry_run_and_approve_write_reviewed_record(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

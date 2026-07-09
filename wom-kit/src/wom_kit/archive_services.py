@@ -55977,6 +55977,148 @@ def runtime_context(
     return result
 
 
+def ai_start_here(
+    archive_root: Path | str,
+    *,
+    expected_archive_id: str | None = None,
+    expected_type: str | None = None,
+    strict: bool = False,
+    redact_local_paths: bool = True,
+    diagnostics: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    context = runtime_context(
+        archive_root,
+        expected_archive_id=expected_archive_id,
+        expected_type=expected_type,
+        strict=strict,
+        redact_local_paths=redact_local_paths,
+        diagnostics=diagnostics,
+    )
+    entrypoints = context.get("canonical_entrypoints") if isinstance(context.get("canonical_entrypoints"), dict) else {}
+    operational_context = context.get("operational_context") if isinstance(context.get("operational_context"), dict) else {}
+    read_order = entrypoints.get("read_order") if isinstance(entrypoints.get("read_order"), list) else []
+    present_entrypoints = [
+        {
+            "path": item.get("path"),
+            "role": item.get("role"),
+            "kind": item.get("kind"),
+            "required": bool(item.get("required")),
+            "status": item.get("status"),
+        }
+        for item in read_order
+        if isinstance(item, dict) and item.get("status") == "present"
+    ]
+    missing_required = [
+        {
+            "path": item.get("path"),
+            "role": item.get("role"),
+            "kind": item.get("kind"),
+            "status": item.get("status"),
+        }
+        for item in read_order
+        if isinstance(item, dict) and item.get("required") and item.get("status") != "present"
+    ]
+    session_start = (
+        operational_context.get("session_start_injection")
+        if isinstance(operational_context.get("session_start_injection"), dict)
+        else None
+    )
+    session_start_summary = ai_start_here_session_start_summary(session_start)
+    next_lines: list[str] = []
+    if session_start_summary and isinstance(session_start_summary.get("next"), list):
+        next_lines.extend(item for item in session_start_summary["next"] if isinstance(item, str))
+    if not next_lines:
+        next_lines.append("Run runtime-context first, then read AGENTS.md when present.")
+
+    return {
+        "ok": bool(context.get("ok")) and not missing_required,
+        "lifecycle_action": "ai_start_here",
+        "schema": "wom-kit/ai-start-here/v0.1",
+        "archive_id": context.get("archive_id"),
+        "archive_type": context.get("archive_type"),
+        "scope": context.get("scope"),
+        "principal": context.get("principal"),
+        "owner": context.get("owner"),
+        "summary": {
+            "purpose": "Give an entering AI operator one safe start-here map before broad archive exploration.",
+            "start_here_file": entrypoints.get("start_here") or "archive.yml",
+            "entrypoint_count": len(read_order),
+            "present_entrypoint_count": len(present_entrypoints),
+            "missing_required_count": len(missing_required),
+            "operational_context_status": operational_context.get("status") or "unknown",
+            "doctor_checked": (
+                context.get("doctor_summary", {}).get("checked")
+                if isinstance(context.get("doctor_summary"), dict)
+                else False
+            ),
+        },
+        "first_read": {
+            "start_here": entrypoints.get("start_here") or "archive.yml",
+            "read_order": present_entrypoints,
+            "missing_required": missing_required,
+            "source_truths": entrypoints.get("source_truths") if isinstance(entrypoints.get("source_truths"), dict) else {},
+        },
+        "first_commands": entrypoints.get("recommended_first_commands")
+        if isinstance(entrypoints.get("recommended_first_commands"), list)
+        else [],
+        "ai_runtime_order": entrypoints.get("ai_runtime_order") if isinstance(entrypoints.get("ai_runtime_order"), list) else [],
+        "operational_context": {
+            "status": operational_context.get("status") or "unknown",
+            "record_path": operational_context.get("record_path"),
+            "session_start": session_start_summary,
+            "recommended_commands": operational_context.get("recommended_commands")
+            if isinstance(operational_context.get("recommended_commands"), list)
+            else [],
+        },
+        "conversation_status_board": {
+            "allowed": True,
+            "web_ui_required": False,
+            "suggested_sections": [
+                "Outcome",
+                "Evidence basis",
+                "Privacy and approval boundary",
+                "Remaining work",
+                "Next safe command",
+            ],
+        },
+        "next_safe_steps": unique_preserve_order(
+            [
+                *next_lines,
+                "Read AGENTS.md when canonical_entrypoints marks it present.",
+                "Use only read-only commands until the human approves a write operation.",
+            ]
+        ),
+        "safety_boundaries": {
+            "read_only": True,
+            "provider_api_called": False,
+            "files_written": False,
+            "secrets_read": False,
+            "zettel_bodies_read": False,
+            "objet_bytes_read": False,
+            "local_paths_redacted": bool(redact_local_paths),
+            "zettel_or_objet_body_echoed": False,
+        },
+        "blockers": unique_preserve_order([*context.get("blockers", []), *[f"required entrypoint missing: {item.get('path')}" for item in missing_required]]),
+        "warnings": context.get("warnings", []),
+        "redaction": context.get("redaction", {"local_paths_redacted": bool(redact_local_paths)}),
+    }
+
+
+def ai_start_here_session_start_summary(session_start: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not session_start:
+        return None
+    summary: dict[str, Any] = {}
+    for key in ("source", "mission_summary", "phase"):
+        value = session_start.get(key)
+        if isinstance(value, str):
+            summary[key] = value
+    for key in ("next", "blocked"):
+        value = session_start.get(key)
+        if isinstance(value, list):
+            summary[key] = [item for item in value if isinstance(item, str)]
+    return summary
+
+
 def load_runtime_context_yaml(root: Path, relative_path: str, messages: list[str], *, required: bool) -> dict[str, Any]:
     try:
         data = load_yaml(read_archive_text(root, relative_path))

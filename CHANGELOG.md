@@ -6,6 +6,23 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.201 - 2026-07-09
+
+AI start-here surface checkpoint. Additive; no archive migration.
+
+- **Compact first-read map.** Added read-only CLI
+  `archive ai-start-here <archive-root> --dry-run --format markdown|json`
+  with aliases `start-here` and `operator-start-here`, giving an entering AI
+  operator a single safe map of archive identity, first files, first commands,
+  operational-context status, next safe steps, and conversation status-board
+  sections.
+- **Runtime-context reuse.** The new surface is a thin projection over existing
+  `runtime-context`, `canonical_entrypoints`, and `operational_context`
+  metadata rather than a new broad body scanner.
+- **Privacy boundary.** The command writes nothing, calls no providers, reads no
+  secrets, reads no zettel bodies or objet bytes, and redacts local absolute
+  paths by default.
+
 ## v0.3.200 - 2026-07-08
 
 Object-storage manifest reconcile receipt schema checkpoint. Additive; no archive migration.
