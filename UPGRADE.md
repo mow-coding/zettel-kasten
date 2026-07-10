@@ -91,6 +91,18 @@ For project-folder work, remember that temporary intake staging is not the
 archive of record. Preserve originals as objets, source maps, manifests, zets,
 and receipts before any cleanup.
 
+## v0.3.206 Catalog Scale And Token Budget
+
+v0.3.206 adds workload estimates and optional `max_estimated_tokens` to CLI and
+MCP catalog pages. Existing archives and callers require no migration; omitting
+the option preserves item-count pagination.
+
+Token estimates cover catalog item JSON only. They use a transparent
+four-characters-per-token heuristic and are not provider-reported usage. MCP
+keeps a process-local materialized snapshot for intermediate pages and
+revalidates local file metadata before returning the completing page. Restart
+at cursor 0 if that check reports `catalog_snapshot_changed`.
+
 ## v0.3.205 Host-AI Abstract Reading
 
 v0.3.205 exposes the v0.3.204 live catalog through MCP and adds a `section`
@@ -121,7 +133,8 @@ make the catalog look complete.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.3.205` | current public pre-release | `wom-kit/docs/releases/v0.3.205.md` |
+| `v0.3.206` | current public pre-release | `wom-kit/docs/releases/v0.3.206.md` |
+| `v0.3.205` | superseded public pre-release | `wom-kit/docs/releases/v0.3.205.md` |
 | `v0.3.204` | superseded public pre-release | `wom-kit/docs/releases/v0.3.204.md` |
 | `v0.3.203` | superseded public pre-release | `wom-kit/docs/releases/v0.3.203.md` |
 | `v0.3.202` | superseded public pre-release | `wom-kit/docs/releases/v0.3.202.md` |

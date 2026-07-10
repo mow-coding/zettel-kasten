@@ -529,10 +529,13 @@ list-zettels
   List canonical and/or draft zettels.
 
 zet-catalog --dry-run
-  Enumerate every local zet's compact frontmatter abstract and complete edge projection in deterministic pages. Reports total, remaining, complete, truncated, next cursor, and snapshot-change evidence without reading zet bodies or requiring the generated index. The same read-only surface is available through MCP `zet_catalog`.
+  Enumerate every local zet's compact frontmatter abstract and complete edge projection in deterministic pages. Reports total, remaining, complete, truncated, next cursor, snapshot consistency, and scope/page workload estimates without reading zet bodies or requiring the generated index. Optional `--max-estimated-tokens` sizes items-only pages for the host context. The same read-only surface is available through MCP `zet_catalog`, whose intermediate pages reuse a process-local materialized snapshot and whose completing page revalidates local metadata.
 
 read-zettel
   Read one zettel by id or archive-relative path. Use `--section overview` for the compact first read; MCP `read_zettel` accepts the same section values while keeping `body` as its compatibility default.
+
+tools/benchmark_zet_catalog.py
+  Build a temporary synthetic 1,000- or 10,000-zet archive, exhaustively page the live catalog, verify unique/complete coverage, and report scan, timing, session-cache, and heuristic token-workload evidence. It reads no real archive and persists no fixture.
 
 create-draft
   Create a draft zettel in inbox/. Optional --abstract stores a bounded compact first read. With --dry-run, preview a profile-aware inbox draft zet without writing files. It can consume a validated source-intake plan with --source-intake-plan and a validated prompt-boundary report with --prompt-boundary-report.

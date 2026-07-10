@@ -3215,7 +3215,8 @@ def require_yaml() -> None:
 
 def load_yaml(text: str) -> Any:
     require_yaml()
-    return yaml.safe_load(text)  # type: ignore[union-attr]
+    loader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)  # type: ignore[union-attr]
+    return yaml.load(text, Loader=loader)  # type: ignore[union-attr]
 
 
 def dump_yaml(data: Any) -> str:
@@ -8030,6 +8031,7 @@ def command_zet_catalog(args: argparse.Namespace) -> int:
             status=args.status,
             cursor=args.cursor,
             page_size=args.page_size,
+            max_estimated_tokens=args.max_estimated_tokens,
             expected_snapshot_id=args.expected_snapshot_id,
             dry_run=True,
         )
@@ -8051,6 +8053,14 @@ def command_zet_catalog(args: argparse.Namespace) -> int:
             f"{coverage.get('returned_count', 0)} returned / "
             f"{coverage.get('total_count', 0)} total / "
             f"{coverage.get('remaining_count', 0)} remaining"
+        )
+        workload = result.get("workload_estimate") if isinstance(result.get("workload_estimate"), dict) else {}
+        scope_workload = workload.get("scope") if isinstance(workload.get("scope"), dict) else {}
+        page_workload = workload.get("page") if isinstance(workload.get("page"), dict) else {}
+        print(
+            "Estimated items JSON tokens: "
+            f"{page_workload.get('estimated_items_json_tokens', 0)} page / "
+            f"{scope_workload.get('estimated_items_json_tokens', 0)} scope"
         )
         for item in result.get("items", []):
             if not isinstance(item, dict):
@@ -16016,6 +16026,11 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=200,
         help=f"Items to return (1-{archive_services.ZET_CATALOG_MAX_PAGE_SIZE}).",
+    )
+    zet_catalog.add_argument(
+        "--max-estimated-tokens",
+        type=int,
+        help="Optional approximate items-only token budget for one page; always returns at least one item to preserve progress.",
     )
     zet_catalog.add_argument(
         "--expected-snapshot-id",
