@@ -75,10 +75,12 @@ python wom-kit/tools/benchmark_zet_catalog.py `
   --max-estimated-tokens 8000 `
   --projection reading `
   --coverage-mode strict `
+  --order seeded_connection_walk `
+  --seed-index 9000 `
   --format json
 ```
 
-One v0.3.207 2026-07-11 Windows strict-reading run observed:
+One v0.3.208 2026-07-11 Windows seeded strict-reading run observed:
 
 | Measure | Result |
 | --- | ---: |
@@ -91,7 +93,10 @@ One v0.3.207 2026-07-11 Windows strict-reading run observed:
 | path metadata checks across pass | 20,000 |
 | materialized intermediate pages | 177 |
 | completion revalidations | 1 |
-| catalog pass time | 52.4 seconds |
+| catalog pass time | 52.1 seconds |
+| connection passages | 9,999 |
+| seed-connected prefix | 10,000 nodes |
+| fallback components | 0 |
 | abstract-only scope estimate | 300,000 tokens |
 | compact reading items-only scope estimate | 1,414,699 tokens |
 | full items-only scope estimate | 2,064,699 tokens |

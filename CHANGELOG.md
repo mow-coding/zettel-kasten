@@ -6,6 +6,31 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.208 - 2026-07-11
+
+Seeded but exhaustive node-reading order checkpoint. Additive; no archive
+migration.
+
+- **Verified goal seeds.** CLI/MCP `zet-catalog` now accepts optional
+  `order=seeded_connection_walk` with up to 32 verified start zet ids. Seeded
+  order blocks when no seed is supplied, a seed is unsafe/missing in scope, or
+  a seed is passed to path order.
+- **Local passages, not a global map.** The reading walk treats safe incoming
+  and outgoing zet edges as undirected passages for breadth-first ordering
+  only. It never changes stored edge meaning/direction, writes a map, ranks
+  relevance, reads bodies, or calls a model/provider.
+- **Exhaustive fallback.** Seed-connected nodes come first; every disconnected
+  component and isolated node then follows in archive-relative path order.
+  Duplicate ids do not cause file nodes to disappear.
+- **Strict binding.** Strict continuation tokens bind the order descriptor and
+  SHA-256 fingerprint of the seed list, so changing seeds mid-pass blocks. The
+  fixed-size fingerprint avoids token growth and reveals no seed ids inside the
+  token. Continuation schema advances to v0.2; restart old in-flight passes.
+- **Scale result.** A synthetic 10,000-node chain seeded at node 9,000 completed
+  179 strict reading pages in 52.1 seconds, traversed 9,999 passages, put all
+  10,000 nodes in the seed-connected prefix, needed no fallback component, and
+  returned 10,000 unique ids with archive-wide claim readiness.
+
 ## v0.3.207 - 2026-07-11
 
 Compact node reading and contiguous coverage checkpoint. Additive; no archive

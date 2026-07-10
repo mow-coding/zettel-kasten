@@ -8031,6 +8031,8 @@ def command_zet_catalog(args: argparse.Namespace) -> int:
             status=args.status,
             projection=args.projection,
             coverage_mode=args.coverage_mode,
+            order_mode=args.order_mode,
+            start_zettel_ids=args.start_zettel_id,
             cursor=args.cursor,
             page_size=args.page_size,
             max_estimated_tokens=args.max_estimated_tokens,
@@ -16034,6 +16036,19 @@ def build_parser() -> argparse.ArgumentParser:
         choices=sorted(archive_services.ZET_CATALOG_COVERAGE_MODES),
         default="page",
         help="page compatibility mode or strict contiguous-prefix continuation proof.",
+    )
+    zet_catalog.add_argument(
+        "--order",
+        dest="order_mode",
+        choices=sorted(archive_services.ZET_CATALOG_ORDER_MODES),
+        default="path",
+        help="Path order or an exhaustive connection walk beginning at verified seed zet ids.",
+    )
+    zet_catalog.add_argument(
+        "--start-zettel-id",
+        action="append",
+        default=[],
+        help=f"Verified seed zet id for seeded_connection_walk; repeat up to {archive_services.ZET_CATALOG_MAX_SEED_IDS} times.",
     )
     zet_catalog.add_argument("--cursor", type=int, default=0, help="Zero-based catalog offset from a prior page.")
     zet_catalog.add_argument(

@@ -91,6 +91,21 @@ For project-folder work, remember that temporary intake staging is not the
 archive of record. Preserve originals as objets, source maps, manifests, zets,
 and receipts before any cleanup.
 
+## v0.3.208 Seeded Exhaustive Reading Order
+
+v0.3.208 adds optional `--order seeded_connection_walk` and repeated
+`--start-zettel-id` (MCP: `order`, `start_zettel_ids`). Existing path order
+remains the default and archives require no migration.
+
+Use seeds only when the host goal or human already provides verified zet ids.
+The command blocks missing seeds instead of guessing. Seed-connected nodes come
+first, then every disconnected component follows, so this changes order but
+never narrows coverage.
+
+Continuation-token schema advances to v0.2 to bind the seed-list fingerprint.
+Restart any v0.3.207 in-flight strict pass at cursor 0 after upgrading; tokens
+are transient and are not archive records.
+
 ## v0.3.207 Compact Reading And Strict Coverage
 
 v0.3.207 adds optional `projection=reading` and `coverage_mode=strict` to CLI
@@ -148,7 +163,8 @@ make the catalog look complete.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.3.207` | current public pre-release | `wom-kit/docs/releases/v0.3.207.md` |
+| `v0.3.208` | current public pre-release | `wom-kit/docs/releases/v0.3.208.md` |
+| `v0.3.207` | superseded public pre-release | `wom-kit/docs/releases/v0.3.207.md` |
 | `v0.3.206` | superseded public pre-release | `wom-kit/docs/releases/v0.3.206.md` |
 | `v0.3.205` | superseded public pre-release | `wom-kit/docs/releases/v0.3.205.md` |
 | `v0.3.204` | superseded public pre-release | `wom-kit/docs/releases/v0.3.204.md` |

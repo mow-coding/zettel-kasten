@@ -28015,7 +28015,7 @@ state:
         )
         self.assertEqual(code, 0, output)
         result = json.loads(output)
-        self.assertEqual(result["schema"], "wom-kit/zet-catalog/v0.3")
+        self.assertEqual(result["schema"], "wom-kit/zet-catalog/v0.4")
         self.assertEqual(result["coverage"]["returned_count"], 1)
         self.assertTrue(result["coverage"]["stopped_for_token_budget"])
         self.assertTrue(result["coverage"]["single_item_exceeds_token_budget"])
@@ -28210,6 +28210,162 @@ state:
         self.assertIsNone(current["coverage"]["continuation_token"])
         self.assertEqual(len(collected), current["coverage"]["total_count"])
         self.assertEqual(len(set(collected)), current["coverage"]["total_count"])
+
+    def test_zet_catalog_seeded_connection_walk_orders_nearby_nodes_first_without_dropping_components(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "archive"
+            zettels_root = archive_root / "zettels"
+            zettels_root.mkdir(parents=True)
+            (archive_root / "archive.yml").write_text(
+                "archive_id: archive:personal:seeded-order-test\ntype: personal\n",
+                encoding="utf-8",
+            )
+            zettel_ids = [f"zet_20260711_order_{letter}" for letter in "abcdef"]
+            targets = {
+                zettel_ids[0]: zettel_ids[1],
+                zettel_ids[1]: zettel_ids[2],
+                zettel_ids[3]: zettel_ids[4],
+            }
+            for zettel_id in zettel_ids:
+                edge_text = (
+                    f"edges:\n  - type: references\n    target: {targets[zettel_id]}\n"
+                    if zettel_id in targets
+                    else "edges: []\n"
+                )
+                (zettels_root / f"{zettel_id}.md").write_text(
+                    "---\n"
+                    f"id: {zettel_id}\n"
+                    f"title: {zettel_id}\n"
+                    "status: canonical\n"
+                    "kind: order_fixture\n"
+                    f"abstract: Abstract for {zettel_id}.\n"
+                    + edge_text
+                    + "---\n\n# Body\n",
+                    encoding="utf-8",
+                )
+
+            command = [
+                "zet-catalog",
+                str(archive_root),
+                "--projection",
+                "reading",
+                "--coverage-mode",
+                "strict",
+                "--order",
+                "seeded_connection_walk",
+                "--start-zettel-id",
+                zettel_ids[2],
+                "--page-size",
+                "2",
+                "--dry-run",
+                "--format",
+                "json",
+            ]
+            first_code, first_output = self.run_cli(command)
+            self.assertEqual(first_code, 0, first_output)
+            current = json.loads(first_output)
+            collected = [item["id"] for item in current["items"]]
+            self.assertEqual(collected, [zettel_ids[2], zettel_ids[1]])
+            self.assertEqual(current["order_evidence"]["seed_connected_prefix_count"], 3)
+            self.assertEqual(current["order_evidence"]["fallback_component_count"], 2)
+            self.assertTrue(current["order_evidence"]["all_nodes_preserved"])
+            self.assertFalse(current["order_evidence"]["edge_meaning_or_direction_rewritten"])
+            self.assertEqual(
+                current["order_evidence"]["connection_direction_for_ordering"],
+                "undirected_reading_passage_only",
+            )
+            continuation_payload = archive_services.zet_catalog_decode_continuation(
+                current["coverage"]["continuation_token"]
+            )
+            self.assertNotIn("seed_zettel_ids", continuation_payload)
+            self.assertEqual(
+                continuation_payload["seed_zettel_ids_sha256"],
+                archive_services.sha256_json_value([zettel_ids[2]]),
+            )
+
+            changed_seed_code, changed_seed_output = self.run_cli(
+                [
+                    "zet-catalog",
+                    str(archive_root),
+                    "--projection",
+                    "reading",
+                    "--coverage-mode",
+                    "strict",
+                    "--order",
+                    "seeded_connection_walk",
+                    "--start-zettel-id",
+                    zettel_ids[1],
+                    "--cursor",
+                    str(current["coverage"]["next_cursor"]),
+                    "--continuation-token",
+                    current["coverage"]["continuation_token"],
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(changed_seed_code, 1, changed_seed_output)
+            self.assertIn("seed ids do not match", changed_seed_output)
+
+            while not current["coverage"]["complete"]:
+                next_code, next_output = self.run_cli(
+                    [
+                        "zet-catalog",
+                        str(archive_root),
+                        "--projection",
+                        "reading",
+                        "--coverage-mode",
+                        "strict",
+                        "--order",
+                        "seeded_connection_walk",
+                        "--start-zettel-id",
+                        zettel_ids[2],
+                        "--cursor",
+                        str(current["coverage"]["next_cursor"]),
+                        "--continuation-token",
+                        current["coverage"]["continuation_token"],
+                        "--dry-run",
+                        "--format",
+                        "json",
+                    ]
+                )
+                self.assertEqual(next_code, 0, next_output)
+                current = json.loads(next_output)
+                collected.extend(item["id"] for item in current["items"])
+
+            self.assertEqual(collected, [zettel_ids[2], zettel_ids[1], zettel_ids[0], zettel_ids[3], zettel_ids[4], zettel_ids[5]])
+            self.assertTrue(current["coverage"]["archive_wide_coverage_claim_ready"])
+            self.assertEqual(len(set(collected)), len(zettel_ids))
+
+            missing_code, missing_output = self.run_cli(
+                [
+                    "zet-catalog",
+                    str(archive_root),
+                    "--order",
+                    "seeded_connection_walk",
+                    "--start-zettel-id",
+                    "zet_20260711_order_missing",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(missing_code, 1, missing_output)
+            self.assertIn("do not exist in the selected catalog scope", missing_output)
+
+            wrong_mode_code, wrong_mode_output = self.run_cli(
+                [
+                    "zet-catalog",
+                    str(archive_root),
+                    "--start-zettel-id",
+                    zettel_ids[2],
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(wrong_mode_code, 1, wrong_mode_output)
+            self.assertIn("requires order_mode=seeded_connection_walk", wrong_mode_output)
 
     def test_zet_catalog_1000_node_pass_reuses_ephemeral_frontmatter_cache(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

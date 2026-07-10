@@ -31,10 +31,10 @@ tag 목록을 여기서 다시 키우지 않습니다.
 현재 공개 기준:
 
 ```text
-v0.3.207 pre-release
+v0.3.208 pre-release
 ```
 
-이전 공개 기준: v0.3.206 pre-release.
+이전 공개 기준: v0.3.207 pre-release.
 
 전체 릴리스 이력은 [CHANGELOG.md](CHANGELOG.md)와 [wom-kit/docs/releases/](wom-kit/docs/releases/)를 보세요.
 
@@ -76,7 +76,7 @@ Roadmap 요약: `v0.1.x`는 아이디어/프로토콜 언어 라인, `v0.2.x`는
 
 ### 조회와 view
 
-- runtime context, profile, source/objet intake, block header, prompt boundary를 위한 read-only preview layer. 선택형 360자 `frontmatter.abstract`와 CLI/MCP `zet-catalog`는 generated index 없이 모든 zet를 초록+타이 compact projection으로 열거하고, checksum으로 이어지는 strict 연속 완주, snapshot 일관성, 전체/현재 페이지의 예상 토큰 작업량, 호스트 컨텍스트에 맞춘 선택형 토큰 예산 페이지를 제공합니다. runtime/start-here 안내는 `archive_wide_coverage_claim_ready`가 true일 때만 전체를 읽었다고 말하고 그 초록과 연결로 본문 순서를 정하게 하며, WOM은 영구 goal/loop 상태를 만들지 않습니다.
+- runtime context, profile, source/objet intake, block header, prompt boundary를 위한 read-only preview layer. 선택형 360자 `frontmatter.abstract`와 CLI/MCP `zet-catalog`는 모든 zet를 초록+타이 compact projection으로 열거하고, strict 연속 완주, snapshot/예상 토큰 증거, 호스트 크기 페이지, 검증된 seed의 가까운 타이부터 읽되 끊어진 모든 component까지 포함하는 선택형 연결 순서를 제공합니다. runtime/start-here 안내는 `archive_wide_coverage_claim_ready`일 때만 전체를 읽었다고 말하게 하며, generated index/map이나 영구 WOM goal/loop 상태를 만들지 않습니다.
 - read-only objet reference resolution 및 zettel objet link preview,
 
 ### 공유와 ZET preview

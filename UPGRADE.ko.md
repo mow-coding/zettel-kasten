@@ -83,6 +83,21 @@ project folder 작업에서는 temporary intake staging이 archive of record가
 아니라는 점을 기억합니다. cleanup 전에 원본을 objet, source map, manifest,
 zet, receipt로 보존해야 합니다.
 
+## v0.3.208 seed 기반 전체 읽기 순서
+
+v0.3.208은 선택형 `--order seeded_connection_walk`와 반복 가능한
+`--start-zettel-id`를 추가합니다(MCP는 `order`, `start_zettel_ids`). 기존
+path order가 기본값이며 archive migration은 없습니다.
+
+host goal이나 사람이 이미 검증된 zet id를 제공한 경우에만 seed를
+사용합니다. 없는 seed는 추측하지 않고 차단합니다. seed와 연결된 node를
+먼저 읽은 뒤 끊어진 모든 component도 이어서 읽으므로 범위가 아니라
+순서만 바뀝니다.
+
+continuation token schema는 seed 목록 지문을 묶는 v0.2로 올라갑니다.
+upgrade 시 진행 중이던 v0.3.207 strict pass는 cursor 0부터 다시
+시작합니다. token은 일시적이며 archive 기록이 아닙니다.
+
 ## v0.3.207 compact 읽기와 strict 완주
 
 v0.3.207은 CLI와 MCP catalog에 선택형 `projection=reading`과
@@ -142,7 +157,8 @@ archive create-draft <archive-root> --title <제목> --abstract <초록> --body 
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.3.207` | current public pre-release | `wom-kit/docs/releases/v0.3.207.md` |
+| `v0.3.208` | current public pre-release | `wom-kit/docs/releases/v0.3.208.md` |
+| `v0.3.207` | superseded public pre-release | `wom-kit/docs/releases/v0.3.207.md` |
 | `v0.3.206` | superseded public pre-release | `wom-kit/docs/releases/v0.3.206.md` |
 | `v0.3.205` | superseded public pre-release | `wom-kit/docs/releases/v0.3.205.md` |
 | `v0.3.204` | superseded public pre-release | `wom-kit/docs/releases/v0.3.204.md` |

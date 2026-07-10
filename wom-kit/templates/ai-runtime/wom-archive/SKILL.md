@@ -83,6 +83,13 @@ first-page snapshot for fast intermediate pages and revalidates local file
 metadata before returning the completing page; restart if that final check
 reports `catalog_snapshot_changed`.
 
+If the host goal or human already provides one or more verified zet ids, add
+`--order seeded_connection_walk` and repeat `--start-zettel-id <id>`. This uses
+incoming and outgoing edges as undirected reading passages only; it does not
+rewrite edge meaning or direction. Never invent ids from natural-language
+similarity. The seeded component comes first, but every disconnected component
+still follows before archive-wide coverage can be claimed.
+
 Use returned abstracts, ties, and edges to choose body-reading order. Search and
 saved views may help, but a top-k search result or one truncated page is not
 exhaustive coverage. Read one compact first view before requesting a body:

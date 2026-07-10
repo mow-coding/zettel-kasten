@@ -33,10 +33,10 @@ wom-kit/docs/releases/ - do not re-grow baseline ladders or tag lists here.
 Current public baseline:
 
 ```text
-v0.3.207 pre-release
+v0.3.208 pre-release
 ```
 
-Previous public baseline: v0.3.206 pre-release.
+Previous public baseline: v0.3.207 pre-release.
 
 Full release history: see [CHANGELOG.md](CHANGELOG.md) and [wom-kit/docs/releases/](wom-kit/docs/releases/).
 
@@ -90,7 +90,7 @@ approval-gated write, or docs-only), see the
 
 ### Retrieval & views
 
-- read-only preview layers for runtime context, profiles, source/objet intake, overview-first zet reading plus a human document view that hides raw YAML frontmatter, block headers with first-read summaries, and prompt boundaries; optional bounded `frontmatter.abstract` plus CLI/MCP `zet-catalog` enumerate every local zet with a compact abstract-plus-tie reading projection, strict checksum-chained contiguous coverage, snapshot consistency, scope/page token-workload estimates, and optional host-sized token-budget pages, while runtime/start-here instructions require `archive_wide_coverage_claim_ready` before an archive-wide claim and then use those abstracts and connections to choose body-reading order, without requiring the generated index or creating persistent WOM-owned goal/loop state,
+- read-only preview layers for runtime context, profiles, source/objet intake, overview-first zet reading plus a human document view that hides raw YAML frontmatter, block headers with first-read summaries, and prompt boundaries; optional bounded `frontmatter.abstract` plus CLI/MCP `zet-catalog` enumerate every local zet with a compact abstract-plus-tie projection, strict checksum-chained coverage, snapshot/token-workload evidence, host-sized pages, and an optional verified-seed connection walk that reads nearby tied nodes first but still includes every disconnected component, while runtime/start-here instructions require `archive_wide_coverage_claim_ready` before an archive-wide claim, without requiring a generated index/map or creating persistent WOM-owned goal/loop state,
 - generated index health checks, saved view health, facet role diagnostics, saved view recommendations,
 - read-only objet reference resolution, presigned URL planning, and zettel objet link previews for mapping `sha256:<hex>` refs to safe local/external candidates,
 

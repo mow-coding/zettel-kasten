@@ -28,6 +28,10 @@ class ZetCatalogBenchmarkTests(unittest.TestCase):
                 "reading",
                 "--coverage-mode",
                 "strict",
+                "--order",
+                "seeded_connection_walk",
+                "--seed-index",
+                "100",
                 "--format",
                 "json",
             ],
@@ -46,6 +50,10 @@ class ZetCatalogBenchmarkTests(unittest.TestCase):
         self.assertTrue(report["coverage"]["archive_wide_coverage_claim_ready"])
         self.assertEqual(report["fixture"]["projection"], "reading")
         self.assertEqual(report["fixture"]["coverage_mode"], "strict")
+        self.assertEqual(report["fixture"]["order_mode"], "seeded_connection_walk")
+        self.assertEqual(report["order_evidence"]["seed_connected_prefix_count"], 120)
+        self.assertEqual(report["order_evidence"]["fallback_component_count"], 0)
+        self.assertTrue(report["order_evidence"]["all_nodes_preserved"])
         self.assertEqual(report["scan"]["frontmatter_files_scanned_across_pass"], 120)
         self.assertEqual(report["scan"]["path_metadata_checked_across_pass"], 240)
         self.assertEqual(report["scan"]["completion_revalidation_pages"], 1)

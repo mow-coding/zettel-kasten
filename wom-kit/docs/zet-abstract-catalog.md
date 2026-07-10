@@ -1,6 +1,6 @@
 # zet Abstract And Live Catalog Contract
 
-Status: implemented CLI baseline in v0.3.204; MCP/host baseline in v0.3.205; scale/token baseline in v0.3.206; compact strict reading baseline in v0.3.207
+Status: implemented CLI baseline in v0.3.204; MCP/host baseline in v0.3.205; scale/token baseline in v0.3.206; compact strict reading in v0.3.207; seeded exhaustive order in v0.3.208
 
 ## Purpose
 
@@ -217,3 +217,16 @@ The token is stateless, contains no body text or local path, and is never
 persisted. It prevents accidental continuation drift; because it uses an
 unkeyed checksum, it is not a signature, attestation, security credential, or
 receipt. See [Contiguous Node Reading](zet-catalog-contiguous-reading.md).
+
+## Seeded Connection Reading Order
+
+When the host goal or human already provides verified zet ids, v0.3.208 can
+start with `order=seeded_connection_walk` and repeated start ids. Safe incoming
+and outgoing zet edges become undirected reading passages for breadth-first
+ordering only. Stored edge direction and meaning remain unchanged.
+
+The seed-connected prefix comes first. Then every unvisited component and
+isolated node follows in archive-relative path order. Missing seeds block rather
+than falling back silently. No relevance model, body search, generated map, or
+provider call participates. See
+[Seeded Connection Reading Order](seeded-connection-reading-order.md).
