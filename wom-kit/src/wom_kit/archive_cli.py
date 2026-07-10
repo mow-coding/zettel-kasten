@@ -8020,6 +8020,67 @@ def command_list_zettels(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_zet_catalog(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("zet-catalog is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.zet_catalog(
+            Path(args.archive_root),
+            status=args.status,
+            cursor=args.cursor,
+            page_size=args.page_size,
+            expected_snapshot_id=args.expected_snapshot_id,
+            dry_run=True,
+        )
+    except archive_services.ArchiveServiceError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        coverage = result.get("coverage") if isinstance(result.get("coverage"), dict) else {}
+        snapshot = result.get("snapshot") if isinstance(result.get("snapshot"), dict) else {}
+        print("WOM zet catalog.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Status filter: {result.get('status_filter') or '-'}")
+        print(f"Snapshot: {snapshot.get('id') or '-'}")
+        print(
+            "Coverage: "
+            f"{coverage.get('returned_count', 0)} returned / "
+            f"{coverage.get('total_count', 0)} total / "
+            f"{coverage.get('remaining_count', 0)} remaining"
+        )
+        for item in result.get("items", []):
+            if not isinstance(item, dict):
+                continue
+            print(
+                "\t".join(
+                    [
+                        str(item.get("status") or "-"),
+                        str(item.get("id") or "-"),
+                        str(item.get("title") or "(untitled)"),
+                        str(item.get("abstract") or "(abstract missing)"),
+                    ]
+                )
+            )
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+        if result.get("next_safe_actions"):
+            print("Next safe actions:")
+            for action in result["next_safe_actions"]:
+                print(f"- {action}")
+        print("Writes: none")
+    return 0 if result.get("ok") else 1
+
+
 def command_status_board(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print("status-board is read-only and requires --dry-run.", file=sys.stderr)
@@ -8592,6 +8653,7 @@ def command_create_draft(args: argparse.Namespace) -> int:
             Path(args.archive_root),
             title=args.title,
             body=body,
+            abstract=args.abstract,
             archive_id=args.archive_id,
             kind=args.kind,
             facets=parse_key_value_pairs(args.facet or []),
@@ -15936,6 +15998,33 @@ def build_parser() -> argparse.ArgumentParser:
     list_zettels.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     list_zettels.set_defaults(func=command_list_zettels)
 
+    zet_catalog = subcommands.add_parser(
+        "zet-catalog",
+        aliases=["zettel-catalog", "abstract-catalog"],
+        help="Enumerate every zet abstract and local connection clue in deterministic pages.",
+    )
+    zet_catalog.add_argument("archive_root", help="Archive root to inspect.")
+    zet_catalog.add_argument(
+        "--status",
+        choices=["all", "draft", "canonical"],
+        default="canonical",
+        help="Zet status to enumerate.",
+    )
+    zet_catalog.add_argument("--cursor", type=int, default=0, help="Zero-based catalog offset from a prior page.")
+    zet_catalog.add_argument(
+        "--page-size",
+        type=int,
+        default=200,
+        help=f"Items to return (1-{archive_services.ZET_CATALOG_MAX_PAGE_SIZE}).",
+    )
+    zet_catalog.add_argument(
+        "--expected-snapshot-id",
+        help="Snapshot id from the first page; blocks if the local catalog changed between pages.",
+    )
+    zet_catalog.add_argument("--dry-run", action="store_true", help="Required. Read local frontmatter only; write nothing.")
+    zet_catalog.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    zet_catalog.set_defaults(func=command_zet_catalog)
+
     status_board = subcommands.add_parser(
         "status-board",
         aliases=["archive-status-board", "zet-status-board"],
@@ -16597,6 +16686,10 @@ def build_parser() -> argparse.ArgumentParser:
     create_draft = subcommands.add_parser("create-draft", help="Create a draft zettel in inbox/.")
     create_draft.add_argument("archive_root", help="Archive root to write to.")
     create_draft.add_argument("--title", help="Draft title. Required unless --list-kinds is used.")
+    create_draft.add_argument(
+        "--abstract",
+        help=f"Optional compact zet abstract, at most {archive_services.ZET_ABSTRACT_MAX_CHARS} characters.",
+    )
     body = create_draft.add_mutually_exclusive_group(required=False)
     body.add_argument("--body", help="Draft body text.")
     body.add_argument("--body-file", help="Path to a UTF-8 text file containing the draft body.")

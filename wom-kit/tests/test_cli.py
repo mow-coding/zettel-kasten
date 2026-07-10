@@ -27817,6 +27817,128 @@ state:
         self.assertNotIn("\\", result["zettels"][0]["path"])
         self.assertIn("T", result["zettels"][0]["created_at"])
 
+    def test_zet_catalog_pages_every_canonical_abstract_without_body_reads(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            canonical_paths = sorted((archive_root / "zettels").glob("*.md"))
+            self.assertGreaterEqual(len(canonical_paths), 2)
+            for index, path in enumerate(canonical_paths):
+                frontmatter, body = archive_services.split_zettel_text(path.read_text(encoding="utf-8"))
+                frontmatter["abstract"] = f"Reviewed compact abstract {index}."
+                if index == 0:
+                    frontmatter["edges"] = [
+                        {
+                            "type": "references",
+                            "target": archive_services.split_zettel_text(
+                                canonical_paths[1].read_text(encoding="utf-8")
+                            )[0]["id"],
+                        }
+                    ]
+                path.write_text(
+                    "---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + body + "\nPRIVATE_BODY_MARKER\n",
+                    encoding="utf-8",
+                )
+
+            collected: list[str] = []
+            cursor = 0
+            snapshot_id: str | None = None
+            with patch.object(
+                archive_services,
+                "split_zettel_text",
+                side_effect=AssertionError("zet-catalog must not read or split zet bodies"),
+            ):
+                while True:
+                    args = [
+                        "zet-catalog",
+                        str(archive_root),
+                        "--page-size",
+                        "1",
+                        "--cursor",
+                        str(cursor),
+                        "--dry-run",
+                        "--format",
+                        "json",
+                    ]
+                    if snapshot_id:
+                        args.extend(["--expected-snapshot-id", snapshot_id])
+                    code, output = self.run_cli(args)
+                    self.assertEqual(code, 0, output)
+                    result = json.loads(output)
+                    snapshot_id = snapshot_id or result["snapshot"]["id"]
+                    self.assertEqual(result["snapshot"]["id"], snapshot_id)
+                    self.assertFalse(result["privacy_guards"]["zettel_body_text_read"])
+                    self.assertFalse(result["privacy_guards"]["zettel_body_text_echoed"])
+                    self.assertNotIn("PRIVATE_BODY_MARKER", output)
+                    self.assertLessEqual(result["coverage"]["returned_count"], 1)
+                    for item in result["items"]:
+                        collected.append(item["id"])
+                        self.assertEqual(item["abstract_status"], "explicit")
+                        self.assertTrue(item["edges_complete"])
+                        self.assertFalse(item["body_read"])
+                    if result["coverage"]["complete"]:
+                        self.assertIsNone(result["coverage"]["next_cursor"])
+                        self.assertEqual(result["coverage"]["remaining_count"], 0)
+                        self.assertFalse(result["coverage"]["truncated"])
+                        break
+                    self.assertTrue(result["coverage"]["truncated"])
+                    cursor = result["coverage"]["next_cursor"]
+
+            self.assertEqual(len(collected), len(canonical_paths))
+            self.assertEqual(len(set(collected)), len(canonical_paths))
+
+    def test_zet_catalog_blocks_when_snapshot_changes_between_pages(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            first_code, first_output = self.run_cli(
+                ["zet-catalog", str(archive_root), "--page-size", "1", "--dry-run", "--format", "json"]
+            )
+            self.assertEqual(first_code, 0, first_output)
+            first = json.loads(first_output)
+            self.assertFalse(first["coverage"]["complete"])
+
+            changed_path = sorted((archive_root / "zettels").glob("*.md"))[-1]
+            frontmatter, body = archive_services.split_zettel_text(changed_path.read_text(encoding="utf-8"))
+            frontmatter["abstract"] = "The catalog changed after the first page."
+            changed_path.write_text(
+                "---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + body,
+                encoding="utf-8",
+            )
+
+            second_code, second_output = self.run_cli(
+                [
+                    "zet-catalog",
+                    str(archive_root),
+                    "--cursor",
+                    str(first["coverage"]["next_cursor"]),
+                    "--page-size",
+                    "1",
+                    "--expected-snapshot-id",
+                    first["snapshot"]["id"],
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(second_code, 1, second_output)
+            second = json.loads(second_output)
+            self.assertIn("catalog_snapshot_changed", second["blockers"])
+            self.assertEqual(second["items"], [])
+            self.assertFalse(second["coverage"]["complete"])
+
+    def test_zet_catalog_requires_dry_run_and_reports_missing_abstracts(self) -> None:
+        archive_root = KIT_ROOT / "examples" / "fake-life-archive"
+        missing_code, missing_output = self.run_cli(["zet-catalog", str(archive_root), "--format", "json"])
+        self.assertEqual(missing_code, 1)
+        self.assertIn("requires --dry-run", missing_output)
+
+        code, output = self.run_cli(["abstract-catalog", str(archive_root), "--dry-run", "--format", "json"])
+        self.assertEqual(code, 0, output)
+        result = json.loads(output)
+        self.assertGreater(result["abstract_counts"]["missing"], 0)
+        self.assertEqual(result["abstract_counts"]["explicit"], 0)
+        self.assertTrue(result["coverage"]["complete"])
+        self.assertTrue(result["closed_actions"]["goal_or_loop_created"] is False)
+
     def test_status_board_reports_mint_state_and_metadata_gaps_without_content_echo(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
@@ -28086,6 +28208,68 @@ state:
             self.assertTrue(result["path"].startswith("inbox/"))
             self.assertTrue((archive_root / result["path"]).is_file())
             self.assertEqual(result["frontmatter"]["facets"]["domain"], "test")
+
+    def test_create_draft_accepts_bounded_abstract_and_rejects_unsafe_or_long_values(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "personal-archive"
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:abstract-draft")
+            self.assertEqual(init_code, 0, init_output)
+
+            code, output = self.run_cli(
+                [
+                    "create-draft",
+                    str(archive_root),
+                    "--title",
+                    "Abstract draft",
+                    "--abstract",
+                    "A compact reviewed abstract for the zet node.",
+                    "--body",
+                    "A longer body that remains separate from the compact abstract.",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertEqual(result["frontmatter"]["abstract"], "A compact reviewed abstract for the zet node.")
+            stored = archive_services.read_zettel_frontmatter_only(archive_root / result["path"])
+            self.assertEqual(stored["abstract"], "A compact reviewed abstract for the zet node.")
+
+            unsafe_code, unsafe_output = self.run_cli(
+                [
+                    "create-draft",
+                    str(archive_root),
+                    "--title",
+                    "Unsafe abstract",
+                    "--abstract",
+                    "Read private material at X:\\private\\note.md",
+                    "--body",
+                    "Safe body text.",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(unsafe_code, 1, unsafe_output)
+            self.assertIn("private locator", unsafe_output)
+
+            long_code, long_output = self.run_cli(
+                [
+                    "create-draft",
+                    str(archive_root),
+                    "--title",
+                    "Long abstract",
+                    "--abstract",
+                    "x" * (archive_services.ZET_ABSTRACT_MAX_CHARS + 1),
+                    "--body",
+                    "Safe body text.",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(long_code, 1, long_output)
+            self.assertIn(f"at most {archive_services.ZET_ABSTRACT_MAX_CHARS} characters", long_output)
 
     def test_create_draft_rejects_unsafe_body(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

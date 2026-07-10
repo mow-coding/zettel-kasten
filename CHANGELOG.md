@@ -6,6 +6,26 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.204 - 2026-07-11
+
+zet abstract and live local catalog checkpoint. Additive; no archive migration.
+
+- **Canonical abstract option.** Added optional, 360-character
+  `frontmatter.abstract` and `archive create-draft --abstract`, with blank,
+  over-limit, private-locator, local-path, account-identifier, and secret-like
+  value guards.
+- **Exhaustive catalog coverage.** Added read-only `archive zet-catalog`
+  (`zettel-catalog`, `abstract-catalog`) with deterministic live local
+  frontmatter enumeration, total/returned/remaining counts, cursor pagination,
+  and explicit `complete`/`truncated` fields instead of the legacy 500-item
+  ambiguity.
+- **Changing-corpus guard.** Continuation pages can replay the first page's
+  snapshot id; changed local catalog evidence blocks with
+  `catalog_snapshot_changed` and returns no page items.
+- **Local-first boundary.** The catalog needs no generated index, reads and
+  echoes no zet body text, calls no providers, reads no objet bytes or secrets,
+  writes no files, and creates no WOM-owned goal/loop state.
+
 ## v0.3.203 - 2026-07-09
 
 User-reviewed WOM operator vocabulary correction. Additive; no archive migration.

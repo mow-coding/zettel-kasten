@@ -83,11 +83,28 @@ project folder 작업에서는 temporary intake staging이 archive of record가
 아니라는 점을 기억합니다. cleanup 전에 원본을 objet, source map, manifest,
 zet, receipt로 보존해야 합니다.
 
+## v0.3.204 선택형 초록
+
+v0.3.204는 선택형 `frontmatter.abstract`와 read-only live `zet-catalog`를
+추가합니다. 기존 archive는 migration이 필요 없고 어떤 zet도 자동으로
+다시 쓰지 않습니다.
+
+새 초안이나 검토한 수정본에는 아래처럼 360자 이내 초록을 넣을 수 있습니다.
+
+```text
+archive create-draft <archive-root> --title <제목> --abstract <초록> --body <본문>
+```
+
+기존 zet에 필드가 없으면 `abstract_status: missing`으로 정직하게 표시됩니다.
+카탈로그를 완성된 것처럼 보이게 하려고 초록을 대량 자동생성해 조용히 쓰지
+말고, 사람이 검토하는 수정 흐름에서 점진적으로 채웁니다.
+
 ## 공개 버전
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.3.203` | current public pre-release | `wom-kit/docs/releases/v0.3.203.md` |
+| `v0.3.204` | current public pre-release | `wom-kit/docs/releases/v0.3.204.md` |
+| `v0.3.203` | superseded public pre-release | `wom-kit/docs/releases/v0.3.203.md` |
 | `v0.3.202` | superseded public pre-release | `wom-kit/docs/releases/v0.3.202.md` |
 | `v0.3.201` | superseded public pre-release | `wom-kit/docs/releases/v0.3.201.md` |
 | `v0.3.200` | superseded public pre-release | `wom-kit/docs/releases/v0.3.200.md` |

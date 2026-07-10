@@ -51,6 +51,7 @@ Supporting philosophy and model docs:
 - [Operator Envelope Classes](operator-envelope-classes.md)
 - [Objet Capture Enablement](capture-enablement.md)
 - [AI Response Concept Guide](ai-response-concept-guide.md)
+- [zet Abstract And Live Catalog](zet-abstract-catalog.md)
 - [Archive Status Board](archive-status-board.md)
 - [Derived Artifact Staleness](derived-artifact-staleness.md)
 - [zet Quality Check](zet-quality-check.md)
