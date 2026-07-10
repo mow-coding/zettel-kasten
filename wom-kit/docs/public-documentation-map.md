@@ -52,6 +52,7 @@ Supporting philosophy and model docs:
 - [Objet Capture Enablement](capture-enablement.md)
 - [AI Response Concept Guide](ai-response-concept-guide.md)
 - [zet Abstract And Live Catalog](zet-abstract-catalog.md)
+- [zet Catalog Readiness Signals](zet-catalog-readiness-signals.md)
 - [zet Catalog Scale And Token Budget](zet-catalog-scale-and-token-budget.md)
 - [Contiguous Node Reading](zet-catalog-contiguous-reading.md)
 - [Seeded Connection Reading Order](seeded-connection-reading-order.md)

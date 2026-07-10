@@ -1,6 +1,6 @@
 # zet Abstract And Live Catalog Contract
 
-Status: implemented CLI baseline in v0.3.204; MCP/host baseline in v0.3.205; scale/token baseline in v0.3.206; compact strict reading in v0.3.207; seeded exhaustive order in v0.3.208
+Status: implemented CLI baseline in v0.3.204; MCP/host baseline in v0.3.205; scale/token baseline in v0.3.206; compact strict reading in v0.3.207; seeded exhaustive order in v0.3.208; separate first-read readiness in v0.3.209
 
 ## Purpose
 
@@ -212,6 +212,12 @@ covered prefix count, and chain hash.
 Only `coverage.archive_wide_coverage_claim_ready: true` means a strict
 cursor-zero chain reached the end without a skipped cursor and passed snapshot
 validation.
+
+That field proves node visitation, not abstract completeness. v0.3.209 adds
+`archive_wide_abstract_reading_claim_ready` for complete non-redacted
+first-read availability and `archive_wide_followup_resolution_ready` for safe
+unique id-based follow-up. See
+[zet Catalog Readiness Signals](zet-catalog-readiness-signals.md).
 
 The token is stateless, contains no body text or local path, and is never
 persisted. It prevents accidental continuation drift; because it uses an

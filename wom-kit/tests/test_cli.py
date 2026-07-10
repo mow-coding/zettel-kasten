@@ -27995,8 +27995,55 @@ state:
         result = json.loads(output)
         self.assertGreater(result["abstract_counts"]["missing"], 0)
         self.assertEqual(result["abstract_counts"]["explicit"], 0)
+        self.assertGreater(result["abstract_coverage"]["first_read_gap_count"], 0)
+        self.assertFalse(result["abstract_coverage"]["all_required_first_reads_available"])
+        self.assertFalse(result["coverage"]["archive_wide_abstract_reading_claim_ready"])
         self.assertTrue(result["coverage"]["complete"])
         self.assertTrue(result["closed_actions"]["goal_or_loop_created"] is False)
+
+    def test_zet_catalog_separates_abstract_readiness_from_unique_id_followup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            canonical_paths = sorted((archive_root / "zettels").glob("*.md"))
+            first_id: str | None = None
+            for index, path in enumerate(canonical_paths):
+                frontmatter, body = archive_services.split_zettel_text(path.read_text(encoding="utf-8"))
+                frontmatter["abstract"] = f"Reviewed first-read text {index}."
+                if first_id is None:
+                    first_id = str(frontmatter["id"])
+                elif index == 1:
+                    frontmatter["id"] = first_id
+                path.write_text(
+                    "---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + body,
+                    encoding="utf-8",
+                )
+
+            code, output = self.run_cli(
+                [
+                    "zet-catalog",
+                    str(archive_root),
+                    "--projection",
+                    "reading",
+                    "--coverage-mode",
+                    "strict",
+                    "--page-size",
+                    "100",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertEqual(result["schema"], "wom-kit/zet-catalog/v0.5")
+            self.assertTrue(result["coverage"]["archive_wide_coverage_claim_ready"])
+            self.assertTrue(result["abstract_coverage"]["all_required_first_reads_available"])
+            self.assertTrue(result["coverage"]["archive_wide_abstract_reading_claim_ready"])
+            self.assertEqual(result["identity_coverage"]["duplicate_id_value_count"], 1)
+            self.assertEqual(result["identity_coverage"]["duplicate_id_entry_count"], 2)
+            self.assertFalse(result["identity_coverage"]["all_entries_uniquely_addressable"])
+            self.assertFalse(result["coverage"]["archive_wide_followup_resolution_ready"])
+            self.assertFalse(result["identity_coverage"]["paths_or_duplicate_id_values_echoed"])
 
     def test_zet_catalog_token_budget_preserves_progress_and_reports_workload(self) -> None:
         archive_root = KIT_ROOT / "examples" / "fake-life-archive"
@@ -28015,7 +28062,7 @@ state:
         )
         self.assertEqual(code, 0, output)
         result = json.loads(output)
-        self.assertEqual(result["schema"], "wom-kit/zet-catalog/v0.4")
+        self.assertEqual(result["schema"], "wom-kit/zet-catalog/v0.5")
         self.assertEqual(result["coverage"]["returned_count"], 1)
         self.assertTrue(result["coverage"]["stopped_for_token_budget"])
         self.assertTrue(result["coverage"]["single_item_exceeds_token_budget"])
@@ -28206,6 +28253,8 @@ state:
             collected.extend(item["id"] for item in current["items"])
 
         self.assertTrue(current["coverage"]["archive_wide_coverage_claim_ready"])
+        self.assertFalse(current["coverage"]["archive_wide_abstract_reading_claim_ready"])
+        self.assertTrue(current["coverage"]["archive_wide_followup_resolution_ready"])
         self.assertEqual(current["coverage"]["covered_count"], current["coverage"]["total_count"])
         self.assertIsNone(current["coverage"]["continuation_token"])
         self.assertEqual(len(collected), current["coverage"]["total_count"])

@@ -6,6 +6,30 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.209 - 2026-07-11
+
+Honest first-read readiness checkpoint. Additive; no archive migration.
+
+- **Three separate completion meanings.** `archive_wide_coverage_claim_ready`
+  continues to mean every selected file node was visited in one strict chain.
+  New `archive_wide_abstract_reading_claim_ready` means every non-redacted node
+  also supplied readable first-read text, while
+  `archive_wide_followup_resolution_ready` means every node has a unique safe
+  frontmatter id for later id-only body reads.
+- **Visible abstract gaps.** `abstract_coverage` reports required, readable,
+  missing/unreadable, and policy-redacted counts. Compatibility summary fields
+  remain readable first-read text; intentionally redacted nodes are counted but
+  excluded from the abstract requirement.
+- **Visible identity gaps.** `identity_coverage` reports safe ids, duplicate-id
+  values and affected entries, and unreadable/unsafe id entries without echoing
+  paths or duplicate id values.
+- **No silent repair.** Missing abstracts and duplicate ids remain warnings and
+  safe next actions. The catalog never reads bodies to invent abstracts,
+  rewrites ids, creates revisions, or persists completion state.
+- **Host guidance.** Runtime context, AI start-here, MCP help, archive agent
+  templates, and the runtime skill now forbid turning node visitation into an
+  “all abstracts read” claim.
+
 ## v0.3.208 - 2026-07-11
 
 Seeded but exhaustive node-reading order checkpoint. Additive; no archive

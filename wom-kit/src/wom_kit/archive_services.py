@@ -2787,7 +2787,7 @@ ZETTEL_READ_SECTIONS = {"overview", "body", "document", "details", "all"}
 ZETTEL_OVERVIEW_GIST_CHAR_LIMIT = 360
 ZET_ABSTRACT_MAX_CHARS = ZETTEL_OVERVIEW_GIST_CHAR_LIMIT
 ZETTEL_OVERVIEW_FRONTMATTER_FIELDS = ("abstract", "gist", "summary", "description", "overview")
-ZET_CATALOG_SCHEMA = "wom-kit/zet-catalog/v0.4"
+ZET_CATALOG_SCHEMA = "wom-kit/zet-catalog/v0.5"
 ZET_CATALOG_MAX_PAGE_SIZE = 10000
 ZET_CATALOG_PROJECTIONS = {"full", "reading"}
 ZET_CATALOG_COVERAGE_MODES = {"page", "strict"}
@@ -5787,6 +5787,71 @@ def zet_catalog_snapshot(
     }
 
 
+def zet_catalog_abstract_coverage(
+    entries: list[tuple[Path, str, dict[str, Any], tuple[int, int] | None]],
+) -> dict[str, Any]:
+    counts = {
+        "explicit": 0,
+        "compatibility_field": 0,
+        "missing": 0,
+        "redacted": 0,
+        "frontmatter_unreadable": 0,
+    }
+    for _path, _expected_status, item, _signature in entries:
+        abstract_status = str(item.get("abstract_status") or "missing")
+        counts[abstract_status] = counts.get(abstract_status, 0) + 1
+
+    readable_count = counts["explicit"] + counts["compatibility_field"]
+    redacted_count = counts["redacted"]
+    required_count = max(0, len(entries) - redacted_count)
+    gap_count = counts["missing"] + counts["frontmatter_unreadable"]
+    return {
+        "selected_entry_count": len(entries),
+        "first_read_required_count": required_count,
+        "readable_first_read_count": readable_count,
+        "first_read_gap_count": gap_count,
+        "redacted_by_policy_count": redacted_count,
+        "all_required_first_reads_available": gap_count == 0 and readable_count == required_count,
+        "redacted_entries_excluded_from_requirement": True,
+        "counts": counts,
+    }
+
+
+def zet_catalog_identity_coverage(
+    entries: list[tuple[Path, str, dict[str, Any], tuple[int, int] | None]],
+) -> dict[str, Any]:
+    safe_id_counts: dict[str, int] = {}
+    unaddressable_entry_count = 0
+    for _path, _expected_status, item, _signature in entries:
+        zettel_id = item.get("id")
+        if (
+            not item.get("frontmatter_readable")
+            or not isinstance(zettel_id, str)
+            or not ZETTEL_EDGE_ZETTEL_ID_RE.match(zettel_id)
+        ):
+            unaddressable_entry_count += 1
+            continue
+        safe_id_counts[zettel_id] = safe_id_counts.get(zettel_id, 0) + 1
+
+    duplicate_counts = [count for count in safe_id_counts.values() if count > 1]
+    duplicate_entry_count = sum(duplicate_counts)
+    all_entries_uniquely_addressable = (
+        unaddressable_entry_count == 0
+        and duplicate_entry_count == 0
+        and len(safe_id_counts) == len(entries)
+    )
+    return {
+        "selected_entry_count": len(entries),
+        "safe_frontmatter_id_entry_count": len(entries) - unaddressable_entry_count,
+        "unique_safe_id_count": len(safe_id_counts),
+        "duplicate_id_value_count": len(duplicate_counts),
+        "duplicate_id_entry_count": duplicate_entry_count,
+        "unaddressable_entry_count": unaddressable_entry_count,
+        "all_entries_uniquely_addressable": all_entries_uniquely_addressable,
+        "paths_or_duplicate_id_values_echoed": False,
+    }
+
+
 def zet_catalog(
     archive_root: Path | str,
     *,
@@ -6019,6 +6084,10 @@ def zet_catalog(
     if cursor > total_count:
         blockers.append("cursor is beyond the current catalog item count.")
 
+    abstract_coverage = zet_catalog_abstract_coverage(entries)
+    abstract_counts = abstract_coverage["counts"]
+    identity_coverage = zet_catalog_identity_coverage(entries)
+
     page_items: list[dict[str, Any]] = []
     stopped_for_token_budget = False
     single_item_exceeds_token_budget = False
@@ -6039,6 +6108,8 @@ def zet_catalog(
     strict_continuation_token: str | None = None
     strict_covered_count = 0
     archive_wide_coverage_claim_ready = False
+    archive_wide_abstract_reading_claim_ready = False
+    archive_wide_followup_resolution_ready = False
     if coverage_mode == "strict" and not blockers:
         previous_chain_hash = (
             continuation_payload.get("chain_hash")
@@ -6065,6 +6136,12 @@ def zet_catalog(
         strict_covered_count = next_cursor_value
         strict_contiguous_prefix_verified = True
         archive_wide_coverage_claim_ready = complete
+        archive_wide_abstract_reading_claim_ready = bool(
+            complete and abstract_coverage["all_required_first_reads_available"]
+        )
+        archive_wide_followup_resolution_ready = bool(
+            complete and identity_coverage["all_entries_uniquely_addressable"]
+        )
         if not complete:
             strict_continuation_token = zet_catalog_encode_continuation(
                 {
@@ -6080,20 +6157,18 @@ def zet_catalog(
                 }
             )
 
-    abstract_counts = {
-        "explicit": 0,
-        "compatibility_field": 0,
-        "missing": 0,
-        "redacted": 0,
-        "frontmatter_unreadable": 0,
-    }
-    for _path, _expected_status, item, _signature in entries:
-        abstract_status = str(item.get("abstract_status") or "missing")
-        abstract_counts[abstract_status] = abstract_counts.get(abstract_status, 0) + 1
     if abstract_counts.get("missing"):
         warnings.append(f"{abstract_counts['missing']} zet(s) have no explicit or compatibility abstract field.")
     if abstract_counts.get("frontmatter_unreadable"):
         warnings.append(f"{abstract_counts['frontmatter_unreadable']} zet(s) have unreadable frontmatter.")
+    if identity_coverage["duplicate_id_entry_count"]:
+        warnings.append(
+            f"{identity_coverage['duplicate_id_entry_count']} zet file(s) share duplicate frontmatter ids."
+        )
+    if identity_coverage["unaddressable_entry_count"]:
+        warnings.append(
+            f"{identity_coverage['unaddressable_entry_count']} zet file(s) lack a readable safe frontmatter id."
+        )
     if single_item_exceeds_token_budget:
         warnings.append("One catalog item exceeds max_estimated_tokens by itself and was returned to preserve progress.")
 
@@ -6120,6 +6195,14 @@ def zet_catalog(
             )
     else:
         next_safe_actions.append("Catalog coverage is complete for the declared status filter and snapshot.")
+        if not abstract_coverage["all_required_first_reads_available"]:
+            next_safe_actions.append(
+                "Report missing or unreadable first-read text as an abstract gap; do not claim that every abstract was read or auto-write replacements."
+            )
+        if not identity_coverage["all_entries_uniquely_addressable"]:
+            next_safe_actions.append(
+                "Resolve duplicate, missing, or unsafe zet ids before relying on id-only follow-up body reads."
+            )
 
     return {
         "ok": not blockers,
@@ -6150,6 +6233,8 @@ def zet_catalog(
             "continuation_token": strict_continuation_token,
             "chain_hash": strict_chain_hash,
             "archive_wide_coverage_claim_ready": archive_wide_coverage_claim_ready,
+            "archive_wide_abstract_reading_claim_ready": archive_wide_abstract_reading_claim_ready,
+            "archive_wide_followup_resolution_ready": archive_wide_followup_resolution_ready,
         },
         "continuation_contract": {
             "schema": ZET_CATALOG_CONTINUATION_SCHEMA,
@@ -6159,6 +6244,8 @@ def zet_catalog(
             "persistent_loop_state_created": False,
         },
         "abstract_counts": abstract_counts,
+        "abstract_coverage": abstract_coverage,
+        "identity_coverage": identity_coverage,
         "workload_estimate": workload_estimate,
         "scan": scan,
         "session_consistency": {
@@ -57382,7 +57469,8 @@ def ai_start_here(
             [
                 *next_lines,
                 "Read AGENTS.md when canonical_entrypoints marks it present.",
-                "Run zet-catalog with projection=reading and coverage_mode=strict, inspect workload_estimate, set a host-appropriate max_estimated_tokens when needed, and follow every page with its continuation token before claiming archive-wide coverage.",
+                "Run zet-catalog with projection=reading and coverage_mode=strict, inspect workload_estimate, set a host-appropriate max_estimated_tokens when needed, and follow every page with its continuation token before claiming archive-wide node coverage.",
+                "Treat archive_wide_coverage_claim_ready as node visitation only; require archive_wide_abstract_reading_claim_ready before saying every required abstract was available and read, and report abstract gaps without auto-writing replacements.",
                 "If the host goal already supplies verified zet ids, use seeded_connection_walk with those ids; never invent a seed or stop after the seeded component.",
                 "Use only read-only commands until the human approves a write operation.",
             ]
@@ -57597,7 +57685,7 @@ def runtime_context_recommended_first_commands() -> list[dict[str, str]]:
         },
         {
             "command": "archive zet-catalog <archive-root> --status canonical --projection reading --coverage-mode strict --cursor 0 --dry-run --format json",
-            "purpose": "enumerate every canonical zet abstract and local connection with explicit completion and workload estimates before claiming archive-wide understanding",
+            "purpose": "enumerate every canonical zet node's abstract state and local connections with separate node, abstract, and follow-up readiness evidence",
         },
         {
             "command": "archive ai-response-concept-guide <archive-root> --topic all --dry-run --format json",
@@ -57641,9 +57729,9 @@ def runtime_context_ai_runtime_order() -> list[dict[str, Any]]:
             "step": 5,
             "action": "enumerate_zet_abstracts",
             "command": "archive zet-catalog <archive-root> --status canonical --projection reading --coverage-mode strict --cursor 0 --dry-run --format json",
-            "continuation": "inspect workload_estimate, optionally set max_estimated_tokens for the host context, follow next_cursor with the same snapshot id and continuation_token until archive_wide_coverage_claim_ready=true, and restart from cursor 0 if catalog_snapshot_changed",
+            "continuation": "inspect workload_estimate, optionally set max_estimated_tokens for the host context, follow next_cursor with the same snapshot id and continuation_token until archive_wide_coverage_claim_ready=true, then check archive_wide_abstract_reading_claim_ready and archive_wide_followup_resolution_ready separately; restart from cursor 0 if catalog_snapshot_changed",
             "optional_seed_order": "when the host goal already provides verified zet ids, add --order seeded_connection_walk and repeated --start-zettel-id values; the walk still includes every disconnected component",
-            "reason": "give the host every local zet abstract and connection clue before it chooses a broad body-reading order; never treat a truncated page as full coverage",
+            "reason": "give the host every local zet node's available first-read text and connection clues before it chooses a broad body-reading order; never equate node visitation with complete abstract availability",
         },
         {
             "step": 6,

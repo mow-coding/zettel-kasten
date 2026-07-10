@@ -7206,6 +7206,8 @@ class McpServerTests(unittest.TestCase):
                     if structured["coverage"]["complete"]:
                         self.assertTrue(structured["session_consistency"]["completion_revalidation_performed"])
                         self.assertTrue(structured["coverage"]["archive_wide_coverage_claim_ready"])
+                        self.assertTrue(structured["coverage"]["archive_wide_abstract_reading_claim_ready"])
+                        self.assertTrue(structured["coverage"]["archive_wide_followup_resolution_ready"])
                         self.assertIsNone(structured["coverage"]["continuation_token"])
                         self.assertEqual(
                             structured["coverage"]["covered_count"],
