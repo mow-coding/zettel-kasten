@@ -1,6 +1,6 @@
 # zet Catalog Scale And Token Budget
 
-Status: implemented in v0.3.206; routed-reading cost comparison in v0.3.210
+Status: implemented in v0.3.206; routed-reading cost comparison in v0.3.210; response-envelope measurement and reserve in v0.3.211
 
 ## Why This Exists
 
@@ -44,6 +44,11 @@ archive zet-catalog <archive-root> `
 Continue with `next_cursor`, `snapshot.id`, and `coverage.continuation_token`
 until `archive_wide_coverage_claim_ready: true`. One item is returned even when
 it alone exceeds the estimate so the loop always makes progress.
+
+v0.3.211 also measures the compact service result and its non-item envelope.
+Optional `--response-envelope-reserve-tokens <n>` subtracts explicit envelope
+room from `max_estimated_tokens`; omitting it preserves items-only semantics.
+See [zet Catalog Response Envelope Budget](zet-catalog-response-envelope-budget.md).
 
 ## Session Consistency
 
@@ -101,6 +106,18 @@ The fixture uses one simple edge per zet and 120-character ASCII abstracts. A
 real archive can differ substantially. `routed_reading` deliberately spends
 more tokens on per-item order reasons; ordinary `reading` omits those fields.
 The token figures are the documented heuristic, not model/provider accounting.
+
+## Response Reserve Observation
+
+On the same 10,000-node compact fixture, total 8,000, envelope reserve 2,500,
+and effective item budget 5,500 completed 264 pages in 58.1 seconds. The largest
+items estimate was 5,500 and the largest compact service-result estimate was
+6,879. No page exceeded the effective items budget or requested response
+budget, and every measured envelope fit the reserve.
+
+The compact service-result estimate excludes its own measurement block, CLI
+pretty-print whitespace, and MCP/JSON-RPC framing. It is still a planning
+heuristic rather than an exact context-window guarantee.
 
 ## Performance Boundary
 

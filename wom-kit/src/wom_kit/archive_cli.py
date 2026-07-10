@@ -8036,6 +8036,7 @@ def command_zet_catalog(args: argparse.Namespace) -> int:
             cursor=args.cursor,
             page_size=args.page_size,
             max_estimated_tokens=args.max_estimated_tokens,
+            response_envelope_reserve_tokens=args.response_envelope_reserve_tokens,
             expected_snapshot_id=args.expected_snapshot_id,
             continuation_token=args.continuation_token,
             dry_run=True,
@@ -8077,6 +8078,12 @@ def command_zet_catalog(args: argparse.Namespace) -> int:
             "Estimated items JSON tokens: "
             f"{page_workload.get('estimated_items_json_tokens', 0)} page / "
             f"{scope_workload.get('estimated_items_json_tokens', 0)} scope"
+        )
+        response_workload = workload.get("response") if isinstance(workload.get("response"), dict) else {}
+        print(
+            "Estimated compact service-result tokens: "
+            f"{response_workload.get('estimated_service_result_json_tokens', 0)} total / "
+            f"{response_workload.get('estimated_response_envelope_tokens', 0)} envelope"
         )
         for item in result.get("items", []):
             if not isinstance(item, dict):
@@ -16084,6 +16091,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--max-estimated-tokens",
         type=int,
         help="Optional approximate items-only token budget for one page; always returns at least one item to preserve progress.",
+    )
+    zet_catalog.add_argument(
+        "--response-envelope-reserve-tokens",
+        type=int,
+        default=0,
+        help="Optional tokens reserved from max-estimated-tokens for non-item compact service-result fields.",
     )
     zet_catalog.add_argument(
         "--expected-snapshot-id",

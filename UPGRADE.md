@@ -91,6 +91,18 @@ For project-folder work, remember that temporary intake staging is not the
 archive of record. Preserve originals as objets, source maps, manifests, zets,
 and receipts before any cleanup.
 
+## v0.3.211 Response Envelope Budget
+
+v0.3.211 adds response-size measurement and optional
+`--response-envelope-reserve-tokens`. Existing calls keep items-only
+`max_estimated_tokens` semantics. When a reserve is provided, WOM subtracts it
+from that value and uses the remainder as the effective items budget.
+
+Catalog schema advances to v0.7; continuation schema remains v0.3, so an
+in-flight strict pass may change its page size, item budget, or reserve without
+restarting. Measurements are heuristic and exclude their own block, CLI pretty
+whitespace, and MCP/JSON-RPC framing. Existing archives require no migration.
+
 ## v0.3.210 Routed Reading Evidence
 
 v0.3.210 adds `projection=routed_reading` for seeded connection order. Normal

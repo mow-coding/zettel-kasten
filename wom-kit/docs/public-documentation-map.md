@@ -54,6 +54,7 @@ Supporting philosophy and model docs:
 - [zet Abstract And Live Catalog](zet-abstract-catalog.md)
 - [zet Catalog Readiness Signals](zet-catalog-readiness-signals.md)
 - [zet Catalog Scale And Token Budget](zet-catalog-scale-and-token-budget.md)
+- [zet Catalog Response Envelope Budget](zet-catalog-response-envelope-budget.md)
 - [Contiguous Node Reading](zet-catalog-contiguous-reading.md)
 - [Seeded Connection Reading Order](seeded-connection-reading-order.md)
 - [Seeded Reading Route Evidence](seeded-reading-route-evidence.md)

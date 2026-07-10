@@ -38,9 +38,9 @@ snapshot.id
 coverage.continuation_token
 ```
 
-The host may change page-size or token-budget values between calls. It may not
-change the status filter, projection, deterministic order, expected cursor, or
-snapshot bound by the token.
+The host may change page-size, item-budget, or response-envelope-reserve values
+between calls. It may not change the status filter, projection, deterministic
+order, expected cursor, or snapshot bound by the token.
 
 ## Token Boundary
 

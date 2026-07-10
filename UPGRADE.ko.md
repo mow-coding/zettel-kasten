@@ -83,6 +83,19 @@ project folder 작업에서는 temporary intake staging이 archive of record가
 아니라는 점을 기억합니다. cleanup 전에 원본을 objet, source map, manifest,
 zet, receipt로 보존해야 합니다.
 
+## v0.3.211 응답 envelope 토큰 예산
+
+v0.3.211은 전체 compact service-result 크기 측정과 선택형
+`--response-envelope-reserve-tokens`를 추가합니다. 기존 호출의
+`max_estimated_tokens`는 계속 항목만 대상으로 합니다. reserve를 지정하면
+그 값을 먼저 빼고 남은 몫을 항목 예산으로 사용합니다.
+
+catalog schema는 v0.7로 올라가고 continuation schema는 v0.3을 유지합니다.
+따라서 strict pass 중간에 page size, 항목 예산, reserve를 바꿔도 cursor를
+건너뛰지 않습니다. 추정치는 측정 블록 자체, CLI 들여쓰기, MCP/JSON-RPC
+바깥 포장을 제외하며 실제 외부 서비스 토큰 수가 아닙니다. archive
+migration은 없습니다.
+
 ## v0.3.210 연결 읽기 경로 근거
 
 v0.3.210은 seed 기반 연결 순서에 `projection=routed_reading`을 추가합니다.
