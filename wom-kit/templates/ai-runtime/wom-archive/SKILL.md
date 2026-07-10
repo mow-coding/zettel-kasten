@@ -74,6 +74,14 @@ When `complete` is false, call the same command with the returned `next_cursor`,
 If `catalog_snapshot_changed` blocks a later page, restart at cursor 0 instead
 of mixing pages from two archive states.
 
+Node coverage and first-read quality are separate. The coverage claim above
+means every selected file node was visited. Say that every required abstract
+was available and read only when `archive_wide_abstract_reading_claim_ready` is
+also true. Otherwise report the `abstract_coverage` gaps and do not invent or
+auto-write replacement abstracts. Before id-only body follow-up, also require
+`archive_wide_followup_resolution_ready`; duplicate or unreadable ids must be
+repaired or handled through an explicitly reviewed path.
+
 Read `workload_estimate` before choosing page size. When one page would exceed
 the host application's remaining context, add `--max-estimated-tokens <budget>`
 or MCP `max_estimated_tokens`. This is a four-characters-per-token estimate for

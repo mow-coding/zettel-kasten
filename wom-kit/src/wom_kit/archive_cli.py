@@ -16016,7 +16016,7 @@ def build_parser() -> argparse.ArgumentParser:
     zet_catalog = subcommands.add_parser(
         "zet-catalog",
         aliases=["zettel-catalog", "abstract-catalog"],
-        help="Enumerate every zet abstract and local connection clue in deterministic pages.",
+        help="Enumerate every zet node's available abstract state and local connection clues in deterministic pages.",
     )
     zet_catalog.add_argument("archive_root", help="Archive root to inspect.")
     zet_catalog.add_argument(

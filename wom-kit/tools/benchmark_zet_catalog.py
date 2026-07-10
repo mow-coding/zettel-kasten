@@ -153,7 +153,15 @@ def run_catalog_benchmark(
             "complete": bool(final_result["coverage"]["complete"]),
             "snapshot_stable": final_result["snapshot"]["id"] == snapshot_id,
             "archive_wide_coverage_claim_ready": final_result["coverage"]["archive_wide_coverage_claim_ready"],
+            "archive_wide_abstract_reading_claim_ready": final_result["coverage"][
+                "archive_wide_abstract_reading_claim_ready"
+            ],
+            "archive_wide_followup_resolution_ready": final_result["coverage"][
+                "archive_wide_followup_resolution_ready"
+            ],
         },
+        "abstract_coverage": final_result["abstract_coverage"],
+        "identity_coverage": final_result["identity_coverage"],
         "scan": {
             "frontmatter_files_scanned_across_pass": frontmatter_files_scanned,
             "cached_items_reused_across_pass": cached_items_reused,

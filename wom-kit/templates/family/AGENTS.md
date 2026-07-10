@@ -7,12 +7,14 @@ This archive is a shared household or family memory space.
 1. Read `archive.yml`.
 2. Read relevant `views/*.yml`.
 3. For archive-wide understanding, run `archive zet-catalog <archive-root> --status canonical --projection reading --coverage-mode strict --cursor 0 --dry-run --format json`.
-4. Follow every `next_cursor` with the same snapshot id and continuation token until `archive_wide_coverage_claim_ready: true`; restart at cursor 0 if the catalog changed.
-5. Inspect `workload_estimate`; use `max_estimated_tokens` to fit the host context, but never replace complete coverage with top-k search.
-6. If the host goal already provides verified zet ids, use `--order seeded_connection_walk` with repeated `--start-zettel-id`; never invent a seed, and still read every disconnected component.
-7. Use the returned abstracts, ties, and edges to choose a useful body-reading order. A search result or one truncated page is never full coverage.
-8. Read selected zet bodies with `read-zettel --section overview` first, then `--section document|body` when the host task needs the body.
-9. Read object manifests only when file metadata is needed.
+4. Follow every `next_cursor` with the same snapshot id and continuation token until `archive_wide_coverage_claim_ready: true`; this proves node visitation only, and a changed catalog restarts at cursor 0.
+5. Check `archive_wide_abstract_reading_claim_ready` before saying every required abstract was available and read. Report `abstract_coverage` gaps without inventing or auto-writing replacements.
+6. Check `archive_wide_followup_resolution_ready` before relying on id-only body reads; duplicate or unreadable ids require repair or an explicitly reviewed path.
+7. Inspect `workload_estimate`; use `max_estimated_tokens` to fit the host context, but never replace complete coverage with top-k search.
+8. If the host goal already provides verified zet ids, use `--order seeded_connection_walk` with repeated `--start-zettel-id`; never invent a seed, and still read every disconnected component.
+9. Use the returned abstracts, ties, and edges to choose a useful body-reading order. A search result or one truncated page is never full coverage.
+10. Read selected zet bodies with `read-zettel --section overview` first, then `--section document|body` when the host task needs the body.
+11. Read object manifests only when file metadata is needed.
 
 ## Write Policy
 

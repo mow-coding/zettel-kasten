@@ -91,6 +91,23 @@ For project-folder work, remember that temporary intake staging is not the
 archive of record. Preserve originals as objets, source maps, manifests, zets,
 and receipts before any cleanup.
 
+## v0.3.209 First-Read Readiness Signals
+
+v0.3.209 adds no migration and does not rewrite existing zets. Catalog output
+schema advances to v0.5 while the strict continuation-token schema remains
+v0.2.
+
+After a strict pass, interpret the three signals separately:
+
+- `archive_wide_coverage_claim_ready`: every selected file node was visited;
+- `archive_wide_abstract_reading_claim_ready`: every non-redacted node also
+  supplied readable first-read text;
+- `archive_wide_followup_resolution_ready`: every node has a readable, safe,
+  unique frontmatter id for id-only follow-up.
+
+A false abstract or follow-up signal is a review gap, not an automatic repair
+request. Do not generate missing abstracts or rewrite ids without human review.
+
 ## v0.3.208 Seeded Exhaustive Reading Order
 
 v0.3.208 adds optional `--order seeded_connection_walk` and repeated

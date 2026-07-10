@@ -1903,7 +1903,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
     },
     {
         "name": "zet_catalog",
-        "description": "Enumerate every selected local zet abstract and frontmatter connection in deterministic pages. Use projection=reading and coverage_mode=strict for compact contiguous coverage; optional seeded_connection_walk reads verified seed neighborhoods first while still including every component. Read-only; never reads zet bodies or requires a generated index.",
+        "description": "Enumerate every selected local zet node's available abstract state and frontmatter connections in deterministic pages. Use projection=reading and coverage_mode=strict for compact contiguous node coverage, then inspect separate abstract-reading and id-followup readiness; optional seeded_connection_walk reads verified seed neighborhoods first while still including every component. Read-only; never reads zet bodies or requires a generated index.",
         "inputSchema": {
             "type": "object",
             "properties": {

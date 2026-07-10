@@ -83,6 +83,23 @@ project folder 작업에서는 temporary intake staging이 archive of record가
 아니라는 점을 기억합니다. cleanup 전에 원본을 objet, source map, manifest,
 zet, receipt로 보존해야 합니다.
 
+## v0.3.209 첫 읽기 준비 상태
+
+v0.3.209는 migration이 없고 기존 zet를 다시 쓰지 않습니다. catalog 출력
+schema는 v0.5로 올라가지만 strict continuation token schema는 v0.2를
+유지합니다.
+
+strict pass 뒤에는 세 신호를 따로 해석합니다.
+
+- `archive_wide_coverage_claim_ready`: 선택한 모든 파일 노드를 방문함
+- `archive_wide_abstract_reading_claim_ready`: 비공개 처리된 노드를 제외한
+  모든 노드에 읽을 수 있는 첫 읽기 텍스트가 있음
+- `archive_wide_followup_resolution_ready`: 모든 노드가 후속 읽기에 사용할
+  수 있는 안전하고 고유한 zet ID를 가짐
+
+초록 또는 후속 읽기 신호가 거짓이면 사람의 검토가 필요한 공백입니다.
+초록이나 ID를 자동으로 만들거나 다시 쓰지 않습니다.
+
 ## v0.3.208 seed 기반 전체 읽기 순서
 
 v0.3.208은 선택형 `--order seeded_connection_walk`와 반복 가능한
