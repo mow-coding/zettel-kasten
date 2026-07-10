@@ -737,6 +737,16 @@ class McpServerTests(unittest.TestCase):
             self.assertIn("source_scan_plan", tool_names)
             self.assertIn("source_registration_plan", tool_names)
             self.assertIn("source_mount_plan", tool_names)
+            self.assertIn("zet_catalog", tool_names)
+            self.assertIn("section", tools_by_name["read_zettel"]["inputSchema"]["properties"])
+            self.assertEqual(
+                tools_by_name["read_zettel"]["inputSchema"]["properties"]["section"]["default"],
+                "body",
+            )
+            self.assertEqual(
+                tools_by_name["zet_catalog"]["inputSchema"]["properties"]["page_size"]["maximum"],
+                1000,
+            )
             self.assertIn("ownership_transfer_check", tool_names)
             share_required = tools_by_name["share_check"]["inputSchema"]["required"]
             delegate_schema = tools_by_name["delegate_zet_check"]["inputSchema"]
@@ -6969,6 +6979,113 @@ class McpServerTests(unittest.TestCase):
         finally:
             self.stop_server(process)
 
+    def test_zet_catalog_tool_pages_all_abstracts_and_blocks_changed_snapshot(self) -> None:
+        process = self.start_server()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+                canonical_paths = sorted((archive_root / "zettels").glob("*.md"))
+                self.assertGreaterEqual(len(canonical_paths), 2)
+                for index, path in enumerate(canonical_paths):
+                    frontmatter, body = archive_services.split_zettel_text(path.read_text(encoding="utf-8"))
+                    frontmatter["abstract"] = f"MCP catalog abstract {index}."
+                    path.write_text(
+                        "---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + body + "\nPRIVATE_MCP_BODY\n",
+                        encoding="utf-8",
+                    )
+
+                collected: list[str] = []
+                cursor = 0
+                snapshot_id: str | None = None
+                request_id = 1
+                while True:
+                    arguments: dict[str, object] = {
+                        "archive_root": str(archive_root),
+                        "status": "canonical",
+                        "cursor": cursor,
+                        "page_size": 1,
+                    }
+                    if snapshot_id:
+                        arguments["expected_snapshot_id"] = snapshot_id
+                    response = self.send(
+                        process,
+                        {
+                            "jsonrpc": "2.0",
+                            "id": request_id,
+                            "method": "tools/call",
+                            "params": {"name": "zet_catalog", "arguments": arguments},
+                        },
+                    )
+                    request_id += 1
+                    result = response["result"]
+                    self.assertFalse(result["isError"])
+                    structured = result["structuredContent"]
+                    snapshot_id = snapshot_id or structured["snapshot"]["id"]
+                    self.assertEqual(structured["snapshot"]["id"], snapshot_id)
+                    self.assertFalse(structured["privacy_guards"]["zettel_body_text_read"])
+                    self.assertNotIn("PRIVATE_MCP_BODY", json.dumps(structured, ensure_ascii=False))
+                    collected.extend(item["id"] for item in structured["items"])
+                    if structured["coverage"]["complete"]:
+                        self.assertEqual(structured["coverage"]["remaining_count"], 0)
+                        break
+                    cursor = structured["coverage"]["next_cursor"]
+
+                self.assertEqual(len(collected), len(canonical_paths))
+                self.assertEqual(len(set(collected)), len(canonical_paths))
+
+                first_page = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": request_id,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "zet_catalog",
+                            "arguments": {"archive_root": str(archive_root), "page_size": 1},
+                        },
+                    },
+                )["result"]["structuredContent"]
+                changed_path = canonical_paths[-1]
+                changed_path.write_text(changed_path.read_text(encoding="utf-8") + "\nchanged\n", encoding="utf-8")
+                blocked = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": request_id + 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "zet_catalog",
+                            "arguments": {
+                                "archive_root": str(archive_root),
+                                "cursor": first_page["coverage"]["next_cursor"],
+                                "page_size": 1,
+                                "expected_snapshot_id": first_page["snapshot"]["id"],
+                            },
+                        },
+                    },
+                )
+                self.assertFalse(blocked["result"]["isError"])
+                blocked_result = blocked["result"]["structuredContent"]
+                self.assertFalse(blocked_result["ok"])
+                self.assertIn("catalog_snapshot_changed", blocked_result["blockers"])
+
+                write_attempt = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": request_id + 2,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "zet_catalog",
+                            "arguments": {"archive_root": str(archive_root), "dry_run": False},
+                        },
+                    },
+                )
+                self.assertTrue(write_attempt["result"]["isError"])
+                self.assertIn("dry-run only", write_attempt["result"]["structuredContent"]["error"])
+        finally:
+            self.stop_server(process)
+
     def test_create_draft_zettel_tool_writes_to_inbox(self) -> None:
         process = self.start_server()
         try:
@@ -7006,6 +7123,7 @@ class McpServerTests(unittest.TestCase):
                                 "archive_root": str(archive_root),
                                 "title": "MCP draft note",
                                 "body": "# MCP draft note\n\nCreated by a test.",
+                                "abstract": "A compact MCP-created draft for first-pass reading.",
                                 "facets": {"domain": "test"},
                             },
                         },
@@ -7016,6 +7134,12 @@ class McpServerTests(unittest.TestCase):
                 self.assertTrue(relative_path.startswith("inbox"))
                 self.assertNotIn("\\", relative_path)
                 self.assertTrue((archive_root / relative_path).is_file())
+                draft_text = (archive_root / relative_path).read_text(encoding="utf-8")
+                draft_frontmatter, _draft_body = archive_services.split_zettel_text(draft_text)
+                self.assertEqual(
+                    draft_frontmatter["abstract"],
+                    "A compact MCP-created draft for first-pass reading.",
+                )
 
                 read_response = self.send(
                     process,
@@ -7028,12 +7152,22 @@ class McpServerTests(unittest.TestCase):
                             "arguments": {
                                 "archive_root": str(archive_root),
                                 "path": relative_path.replace("/", "\\"),
+                                "section": "overview",
                             },
                         },
                     },
                 )
                 self.assertFalse(read_response["result"]["isError"])
-                self.assertEqual(read_response["result"]["structuredContent"]["path"], relative_path)
+                read_result = read_response["result"]["structuredContent"]
+                self.assertEqual(read_result["path"], relative_path)
+                self.assertEqual(read_result["section"], "overview")
+                self.assertTrue(read_result["body_omitted"])
+                self.assertEqual(read_result["body"], "")
+                self.assertEqual(
+                    read_result["overview"]["gist"],
+                    "A compact MCP-created draft for first-pass reading.",
+                )
+                self.assertEqual(read_result["overview"]["gist_source"], "frontmatter.abstract")
         finally:
             self.stop_server(process)
 

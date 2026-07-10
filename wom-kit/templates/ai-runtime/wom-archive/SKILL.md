@@ -57,6 +57,34 @@ If the expected archive is known, include:
 
 Use `--strict` when the AI must stop on archive type mismatch or doctor warnings.
 
+## Read Archive Memory Through The Host Goal
+
+Goal, loop, branching, and completion UI belong to the host LLM application.
+WOM supplies the local memory surface. Before a host claims archive-wide
+understanding, enumerate every canonical zet abstract:
+
+```bash
+archive zet-catalog <archive-root> --status canonical --cursor 0 --dry-run --format json
+```
+
+When `complete` is false, call the same command with the returned `next_cursor`
+and `--expected-snapshot-id <snapshot.id>`. Continue until `complete` is true.
+If `catalog_snapshot_changed` blocks a later page, restart at cursor 0 instead
+of mixing pages from two archive states.
+
+Use returned abstracts, ties, and edges to choose body-reading order. Search and
+saved views may help, but a top-k search result or one truncated page is not
+exhaustive coverage. Read one compact first view before requesting a body:
+
+```bash
+archive read-zettel <archive-root> --zettel-id <id> --section overview --format json
+archive read-zettel <archive-root> --zettel-id <id> --section document --format json
+```
+
+Through MCP, use `zet_catalog` for pages and pass `section: overview` to
+`read_zettel` before asking for `document` or `body`. The catalog reads local
+frontmatter only and does not require the generated SQLite index.
+
 Before writing an AI-assisted inbox draft, preview it:
 
 If the draft is based on a presentation, document, image, provider item, or AI artifact, first classify the source/objet reference:

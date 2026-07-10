@@ -6,8 +6,11 @@ This archive is a scoped company memory space.
 
 1. Read `archive.yml`.
 2. Read relevant `views/*.yml`.
-3. Search `zettels/` for canonical company records.
-4. Read object manifests only when file metadata is needed.
+3. For archive-wide understanding, run `archive zet-catalog <archive-root> --status canonical --cursor 0 --dry-run --format json`.
+4. Follow every `next_cursor` with the same snapshot id until `complete: true`; restart at cursor 0 if the catalog changed.
+5. Use the returned abstracts, ties, and edges to choose a useful body-reading order. A search result or one truncated page is never full coverage.
+6. Read selected zet bodies with `read-zettel --section overview` first, then `--section document|body` when the host task needs the body.
+7. Read object manifests only when file metadata is needed.
 
 ## Write Policy
 

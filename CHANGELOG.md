@@ -6,6 +6,24 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.205 - 2026-07-11
+
+Host-AI exhaustive abstract reading checkpoint. Additive; no archive migration.
+
+- **MCP catalog parity.** Added read-only MCP `zet_catalog` with deterministic
+  pages, explicit completion coverage, same-snapshot continuation, and
+  changed-snapshot blocking.
+- **Overview-first MCP reads.** MCP `read_zettel` now accepts `section`; hosts
+  can request `overview` before `document` or `body`, while the compatibility
+  default remains `body`.
+- **Reviewed draft abstracts.** MCP `create_draft_zettel` now accepts the same
+  bounded optional `abstract` as the CLI draft surface.
+- **Host reading order.** Runtime context, AI start-here, archive templates,
+  and the runtime skill now tell the host to enumerate every canonical zet
+  abstract, finish all pages under one snapshot, and only then use abstracts
+  and local connections to choose body-reading order. Search or one truncated
+  page is never described as full archive coverage.
+
 ## v0.3.204 - 2026-07-11
 
 zet abstract and live local catalog checkpoint. Additive; no archive migration.

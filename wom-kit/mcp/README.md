@@ -116,8 +116,11 @@ archive_init
 list_zettels
   List canonical and/or draft zettels.
 
+zet_catalog
+  Enumerate every selected local zet's compact frontmatter abstract and connections in deterministic read-only pages. Follow `next_cursor` with the same snapshot id until complete; it reads no zet bodies and requires no generated index.
+
 read_zettel
-  Read one zettel by id or path.
+  Read one zettel by id or path. Pass `section: overview` for the compact first read before requesting `document` or `body`; omitted `section` keeps the compatibility `body` default.
 
 zettel_objet_links
   Preview safe local-client objet link candidates referenced by one zettel. This is read-only and never echoes body text, frontmatter values, absolute paths, provider URLs, presigned URLs, object bytes, or writes files.
