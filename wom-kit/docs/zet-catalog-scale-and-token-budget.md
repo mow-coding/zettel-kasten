@@ -1,6 +1,6 @@
 # zet Catalog Scale And Token Budget
 
-Status: implemented in v0.3.206
+Status: implemented in v0.3.206; routed-reading cost comparison in v0.3.210
 
 ## Why This Exists
 
@@ -80,31 +80,27 @@ python wom-kit/tools/benchmark_zet_catalog.py `
   --format json
 ```
 
-One v0.3.208 2026-07-11 Windows seeded strict-reading run observed:
+Two v0.3.210 2026-07-11 Windows seeded strict runs observed:
 
-| Measure | Result |
-| --- | ---: |
-| zets collected / unique | 10,000 / 10,000 |
-| pages | 179 |
-| missing or duplicate ids | 0 |
-| pages above requested estimate | 0 |
-| largest estimated page | 7,925 tokens |
-| frontmatter parses across pass | 10,000 |
-| path metadata checks across pass | 20,000 |
-| materialized intermediate pages | 177 |
-| completion revalidations | 1 |
-| catalog pass time | 52.1 seconds |
-| connection passages | 9,999 |
-| seed-connected prefix | 10,000 nodes |
-| fallback components | 0 |
-| abstract-only scope estimate | 300,000 tokens |
-| compact reading items-only scope estimate | 1,414,699 tokens |
-| full items-only scope estimate | 2,064,699 tokens |
+| Measure | `reading` | `routed_reading` |
+| --- | ---: | ---: |
+| zets collected / unique | 10,000 / 10,000 | 10,000 / 10,000 |
+| pages | 179 | 257 |
+| pages above requested estimate | 0 | 0 |
+| largest estimated page | 7,925 | 7,913 |
+| catalog pass time | 50.8 seconds | 53.8 seconds |
+| items-only scope estimate | 1,414,699 | 2,026,799 |
+
+Both runs parsed 10,000 frontmatter files once, checked path metadata twice,
+traversed 9,999 passages, placed all 10,000 nodes in the seeded prefix, needed
+no fallback component, and reached node, abstract, and id-follow-up readiness.
+The abstract-only scope estimate was 300,000 tokens.
 
 The host timing is an observation, not a cross-machine service-level promise.
 The fixture uses one simple edge per zet and 120-character ASCII abstracts. A
-real archive can differ substantially. The token figures are the documented
-heuristic, not model/provider accounting.
+real archive can differ substantially. `routed_reading` deliberately spends
+more tokens on per-item order reasons; ordinary `reading` omits those fields.
+The token figures are the documented heuristic, not model/provider accounting.
 
 ## Performance Boundary
 

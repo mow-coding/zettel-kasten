@@ -1,6 +1,6 @@
 # Seeded Connection Reading Order
 
-Status: implemented in v0.3.208
+Status: implemented in v0.3.208; opt-in route evidence in v0.3.210
 
 ## Purpose
 
@@ -25,6 +25,10 @@ archive zet-catalog <archive-root> `
 
 Repeat `--start-zettel-id` for up to 32 verified ids. MCP uses `order` and
 `start_zettel_ids`.
+
+Keep `projection=reading` for the smaller payload. Switch to
+`projection=routed_reading` only when the host or human needs a per-item reason
+for the order. See [Seeded Reading Route Evidence](seeded-reading-route-evidence.md).
 
 Use seeds only when the human, host goal, saved view, or prior verified tool
 output already identifies the ids. Do not invent an id from natural-language
@@ -56,9 +60,10 @@ malformed archive with duplicate ids does not silently lose files.
 - that edge meaning/direction was not rewritten;
 - that no ranking or global map was produced or persisted.
 
-Strict continuation token v0.2 binds the order descriptor and a fixed-size
-SHA-256 fingerprint of the ordered seed list. Changing seeds mid-pass blocks.
-Raw seed ids are not embedded in the token.
+Strict continuation token v0.3 binds the order descriptor, a fixed-size SHA-256
+fingerprint of the ordered seed list, and the snapshot file-entry identity
+basis. Changing seeds or projections mid-pass blocks. Raw seed ids and
+file-entry identities are not embedded in the token.
 
 ## Boundaries
 

@@ -1,6 +1,6 @@
 # Contiguous Node Reading
 
-Status: implemented in v0.3.207
+Status: implemented in v0.3.207; duplicate-safe file-entry chain identity in v0.3.210
 
 ## Purpose
 
@@ -44,13 +44,15 @@ snapshot bound by the token.
 
 ## Token Boundary
 
-The token is a base64url safe payload plus SHA-256 checksum. Its v0.2 payload
+The token is a base64url safe payload plus SHA-256 checksum. Its v0.3 payload
 binds schema, snapshot id, status filter, projection, order, fixed-size
-seed-list SHA-256, next cursor, covered prefix count, and the cumulative chain
-hash over returned node ids.
+seed-list SHA-256, file-entry identity basis, next cursor, covered prefix count,
+and the cumulative chain hash over page entry-identity digests. Snapshot-bound
+file entries remain distinct even when malformed archives contain duplicate zet
+ids.
 
-It contains no raw seed id, zet body, title, abstract, edge, or local path. It
-is stateless and WOM writes no traversal record.
+It contains no raw seed id, file-entry identity list, zet body, title, abstract,
+edge, or local path. It is stateless and WOM writes no traversal record.
 
 The checksum detects accidental corruption and normal cursor drift. It is not
 keyed, so a determined caller can construct another valid checksum. It is not

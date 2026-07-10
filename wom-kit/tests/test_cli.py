@@ -28001,6 +28001,22 @@ state:
         self.assertTrue(result["coverage"]["complete"])
         self.assertTrue(result["closed_actions"]["goal_or_loop_created"] is False)
 
+        text_code, text_output = self.run_cli(
+            [
+                "zet-catalog",
+                str(archive_root),
+                "--coverage-mode",
+                "strict",
+                "--page-size",
+                "100",
+                "--dry-run",
+            ]
+        )
+        self.assertEqual(text_code, 0, text_output)
+        self.assertIn("Node coverage claim ready: yes", text_output)
+        self.assertIn("All required abstracts ready: no", text_output)
+        self.assertIn("Unique id follow-up ready: yes", text_output)
+
     def test_zet_catalog_separates_abstract_readiness_from_unique_id_followup(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
@@ -28027,7 +28043,7 @@ state:
                     "--coverage-mode",
                     "strict",
                     "--page-size",
-                    "100",
+                    "1",
                     "--dry-run",
                     "--format",
                     "json",
@@ -28035,7 +28051,30 @@ state:
             )
             self.assertEqual(code, 0, output)
             result = json.loads(output)
-            self.assertEqual(result["schema"], "wom-kit/zet-catalog/v0.5")
+            pages = [result]
+            while not result["coverage"]["complete"]:
+                next_code, next_output = self.run_cli(
+                    [
+                        "zet-catalog",
+                        str(archive_root),
+                        "--projection",
+                        "reading",
+                        "--coverage-mode",
+                        "strict",
+                        "--cursor",
+                        str(result["coverage"]["next_cursor"]),
+                        "--continuation-token",
+                        result["coverage"]["continuation_token"],
+                        "--dry-run",
+                        "--format",
+                        "json",
+                    ]
+                )
+                self.assertEqual(next_code, 0, next_output)
+                result = json.loads(next_output)
+                pages.append(result)
+
+            self.assertEqual(result["schema"], "wom-kit/zet-catalog/v0.6")
             self.assertTrue(result["coverage"]["archive_wide_coverage_claim_ready"])
             self.assertTrue(result["abstract_coverage"]["all_required_first_reads_available"])
             self.assertTrue(result["coverage"]["archive_wide_abstract_reading_claim_ready"])
@@ -28044,6 +28083,16 @@ state:
             self.assertFalse(result["identity_coverage"]["all_entries_uniquely_addressable"])
             self.assertFalse(result["coverage"]["archive_wide_followup_resolution_ready"])
             self.assertFalse(result["identity_coverage"]["paths_or_duplicate_id_values_echoed"])
+            self.assertTrue(result["continuation_contract"]["duplicate_ids_distinguished_in_chain"])
+            self.assertFalse(result["continuation_contract"]["entry_identity_values_echoed"])
+            self.assertRegex(result["coverage"]["page_entry_identity_sha256"], r"^sha256:[0-9a-f]{64}$")
+            duplicate_page_digests = [
+                page["coverage"]["page_entry_identity_sha256"]
+                for page in pages
+                if page["items"] and page["items"][0]["id"] == first_id
+            ]
+            self.assertEqual(len(duplicate_page_digests), 2)
+            self.assertEqual(len(set(duplicate_page_digests)), 2)
 
     def test_zet_catalog_token_budget_preserves_progress_and_reports_workload(self) -> None:
         archive_root = KIT_ROOT / "examples" / "fake-life-archive"
@@ -28062,7 +28111,7 @@ state:
         )
         self.assertEqual(code, 0, output)
         result = json.loads(output)
-        self.assertEqual(result["schema"], "wom-kit/zet-catalog/v0.5")
+        self.assertEqual(result["schema"], "wom-kit/zet-catalog/v0.6")
         self.assertEqual(result["coverage"]["returned_count"], 1)
         self.assertTrue(result["coverage"]["stopped_for_token_budget"])
         self.assertTrue(result["coverage"]["single_item_exceeds_token_budget"])
@@ -28133,6 +28182,8 @@ state:
             self.assertEqual(item["abstract_status"], "explicit")
             self.assertEqual(item["tie_summary"]["edge_count"], 1)
             self.assertEqual(len(item["edges"]), 1)
+            self.assertNotIn("catalog_order_index", item)
+            self.assertNotIn("reading_route", item)
             self.assertNotIn("path", item)
             self.assertNotIn("abstract_source", item)
             self.assertNotIn("body_read", item)
@@ -28182,6 +28233,8 @@ state:
         self.assertTrue(first["coverage"]["contiguous_prefix_verified"])
         self.assertEqual(first["coverage"]["covered_count"], 1)
         self.assertFalse(first["coverage"]["archive_wide_coverage_claim_ready"])
+        self.assertRegex(first["coverage"]["page_entry_identity_sha256"], r"^sha256:[0-9a-f]{64}$")
+        self.assertTrue(first["continuation_contract"]["duplicate_ids_distinguished_in_chain"])
         self.assertFalse(first["continuation_contract"]["cryptographic_attestation"])
         self.assertFalse(first["continuation_contract"]["persistent_loop_state_created"])
 
@@ -28297,7 +28350,7 @@ state:
                 "zet-catalog",
                 str(archive_root),
                 "--projection",
-                "reading",
+                "routed_reading",
                 "--coverage-mode",
                 "strict",
                 "--order",
@@ -28313,7 +28366,8 @@ state:
             first_code, first_output = self.run_cli(command)
             self.assertEqual(first_code, 0, first_output)
             current = json.loads(first_output)
-            collected = [item["id"] for item in current["items"]]
+            collected_items = list(current["items"])
+            collected = [item["id"] for item in collected_items]
             self.assertEqual(collected, [zettel_ids[2], zettel_ids[1]])
             self.assertEqual(current["order_evidence"]["seed_connected_prefix_count"], 3)
             self.assertEqual(current["order_evidence"]["fallback_component_count"], 2)
@@ -28323,6 +28377,21 @@ state:
                 current["order_evidence"]["connection_direction_for_ordering"],
                 "undirected_reading_passage_only",
             )
+            self.assertTrue(current["order_evidence"]["item_route_evidence_in_routed_reading_projection"])
+            self.assertEqual(current["order_evidence"]["item_route_evidence_count"], len(zettel_ids))
+            seed_route = collected_items[0]["reading_route"]
+            self.assertEqual(collected_items[0]["catalog_order_index"], 0)
+            self.assertEqual(seed_route["reason"], "verified_seed")
+            self.assertEqual(seed_route["distance"], 0)
+            self.assertNotIn("component_index", seed_route)
+            neighbor_route = collected_items[1]["reading_route"]
+            self.assertEqual(collected_items[1]["catalog_order_index"], 1)
+            self.assertEqual(neighbor_route["reason"], "connection_passage")
+            self.assertEqual(neighbor_route["from_catalog_order_index"], 0)
+            self.assertEqual(neighbor_route["from_zettel_id"], zettel_ids[2])
+            self.assertEqual(neighbor_route["via"]["edge_type"], "references")
+            self.assertEqual(neighbor_route["via"]["walk_direction"], "against_stored_direction")
+            self.assertNotIn("parallel_candidate_count", neighbor_route["via"])
             continuation_payload = archive_services.zet_catalog_decode_continuation(
                 current["coverage"]["continuation_token"]
             )
@@ -28331,13 +28400,44 @@ state:
                 continuation_payload["seed_zettel_ids_sha256"],
                 archive_services.sha256_json_value([zettel_ids[2]]),
             )
+            self.assertEqual(
+                continuation_payload["entry_identity_basis"],
+                archive_services.ZET_CATALOG_ENTRY_IDENTITY_BASIS,
+            )
+            self.assertRegex(current["coverage"]["page_entry_identity_sha256"], r"^sha256:[0-9a-f]{64}$")
+
+            wrong_identity_payload = dict(continuation_payload)
+            wrong_identity_payload["entry_identity_basis"] = "wrong_entry_identity_basis"
+            wrong_identity_code, wrong_identity_output = self.run_cli(
+                [
+                    "zet-catalog",
+                    str(archive_root),
+                    "--projection",
+                    "routed_reading",
+                    "--coverage-mode",
+                    "strict",
+                    "--order",
+                    "seeded_connection_walk",
+                    "--start-zettel-id",
+                    zettel_ids[2],
+                    "--cursor",
+                    str(current["coverage"]["next_cursor"]),
+                    "--continuation-token",
+                    archive_services.zet_catalog_encode_continuation(wrong_identity_payload),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(wrong_identity_code, 1, wrong_identity_output)
+            self.assertIn("entry identity basis does not match", wrong_identity_output)
 
             changed_seed_code, changed_seed_output = self.run_cli(
                 [
                     "zet-catalog",
                     str(archive_root),
                     "--projection",
-                    "reading",
+                    "routed_reading",
                     "--coverage-mode",
                     "strict",
                     "--order",
@@ -28362,7 +28462,7 @@ state:
                         "zet-catalog",
                         str(archive_root),
                         "--projection",
-                        "reading",
+                        "routed_reading",
                         "--coverage-mode",
                         "strict",
                         "--order",
@@ -28380,11 +28480,22 @@ state:
                 )
                 self.assertEqual(next_code, 0, next_output)
                 current = json.loads(next_output)
+                collected_items.extend(current["items"])
                 collected.extend(item["id"] for item in current["items"])
 
             self.assertEqual(collected, [zettel_ids[2], zettel_ids[1], zettel_ids[0], zettel_ids[3], zettel_ids[4], zettel_ids[5]])
             self.assertTrue(current["coverage"]["archive_wide_coverage_claim_ready"])
             self.assertEqual(len(set(collected)), len(zettel_ids))
+            by_id = {item["id"]: item for item in collected_items}
+            self.assertEqual(by_id[zettel_ids[0]]["reading_route"]["distance"], 2)
+            fallback_root = by_id[zettel_ids[3]]["reading_route"]
+            self.assertEqual(fallback_root["reason"], "fallback_component_root")
+            self.assertEqual(fallback_root["component_index"], 1)
+            fallback_neighbor = by_id[zettel_ids[4]]["reading_route"]
+            self.assertEqual(fallback_neighbor["reason"], "connection_passage")
+            self.assertEqual(fallback_neighbor["from_catalog_order_index"], 3)
+            self.assertEqual(fallback_neighbor["via"]["walk_direction"], "with_stored_direction")
+            self.assertEqual(by_id[zettel_ids[5]]["reading_route"]["component_index"], 2)
 
             missing_code, missing_output = self.run_cli(
                 [
@@ -28415,6 +28526,20 @@ state:
             )
             self.assertEqual(wrong_mode_code, 1, wrong_mode_output)
             self.assertIn("requires order_mode=seeded_connection_walk", wrong_mode_output)
+
+            routed_path_code, routed_path_output = self.run_cli(
+                [
+                    "zet-catalog",
+                    str(archive_root),
+                    "--projection",
+                    "routed_reading",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(routed_path_code, 1, routed_path_output)
+            self.assertIn("routed_reading requires order_mode=seeded_connection_walk", routed_path_output)
 
     def test_zet_catalog_1000_node_pass_reuses_ephemeral_frontmatter_cache(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

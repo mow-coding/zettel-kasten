@@ -25,7 +25,7 @@ class ZetCatalogBenchmarkTests(unittest.TestCase):
                 "--max-estimated-tokens",
                 "2000",
                 "--projection",
-                "reading",
+                "routed_reading",
                 "--coverage-mode",
                 "strict",
                 "--order",
@@ -52,12 +52,15 @@ class ZetCatalogBenchmarkTests(unittest.TestCase):
         self.assertTrue(report["coverage"]["archive_wide_followup_resolution_ready"])
         self.assertTrue(report["abstract_coverage"]["all_required_first_reads_available"])
         self.assertTrue(report["identity_coverage"]["all_entries_uniquely_addressable"])
-        self.assertEqual(report["fixture"]["projection"], "reading")
+        self.assertEqual(report["fixture"]["projection"], "routed_reading")
         self.assertEqual(report["fixture"]["coverage_mode"], "strict")
         self.assertEqual(report["fixture"]["order_mode"], "seeded_connection_walk")
         self.assertEqual(report["order_evidence"]["seed_connected_prefix_count"], 120)
         self.assertEqual(report["order_evidence"]["fallback_component_count"], 0)
+        self.assertTrue(report["order_evidence"]["item_route_evidence_in_routed_reading_projection"])
+        self.assertEqual(report["order_evidence"]["item_route_evidence_count"], 120)
         self.assertTrue(report["order_evidence"]["all_nodes_preserved"])
+        self.assertTrue(report["continuation_contract"]["duplicate_ids_distinguished_in_chain"])
         self.assertEqual(report["scan"]["frontmatter_files_scanned_across_pass"], 120)
         self.assertEqual(report["scan"]["path_metadata_checked_across_pass"], 240)
         self.assertEqual(report["scan"]["completion_revalidation_pages"], 1)

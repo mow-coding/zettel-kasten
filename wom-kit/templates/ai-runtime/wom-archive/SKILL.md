@@ -98,6 +98,12 @@ rewrite edge meaning or direction. Never invent ids from natural-language
 similarity. The seeded component comes first, but every disconnected component
 still follows before archive-wide coverage can be claimed.
 
+Keep `projection=reading` when compact exhaustive coverage is enough. If the
+host or human needs to explain why each seeded item appears next, use
+`projection=routed_reading` with the same seeded order. It adds per-item
+seed/tie/component route evidence and therefore costs more tokens. It is an
+explanation layer, not a relevance score or permission to skip nodes.
+
 Use returned abstracts, ties, and edges to choose body-reading order. Search and
 saved views may help, but a top-k search result or one truncated page is not
 exhaustive coverage. Read one compact first view before requesting a body:

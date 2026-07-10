@@ -8052,12 +8052,23 @@ def command_zet_catalog(args: argparse.Namespace) -> int:
         print("WOM zet catalog.")
         print(f"Archive: {result.get('archive_id') or '-'}")
         print(f"Status filter: {result.get('status_filter') or '-'}")
+        order_evidence = result.get("order_evidence") if isinstance(result.get("order_evidence"), dict) else {}
+        print(f"Order: {order_evidence.get('mode') or '-'}")
         print(f"Snapshot: {snapshot.get('id') or '-'}")
         print(
             "Coverage: "
             f"{coverage.get('returned_count', 0)} returned / "
             f"{coverage.get('total_count', 0)} total / "
             f"{coverage.get('remaining_count', 0)} remaining"
+        )
+        print(f"Node coverage claim ready: {'yes' if coverage.get('archive_wide_coverage_claim_ready') else 'no'}")
+        print(
+            "All required abstracts ready: "
+            f"{'yes' if coverage.get('archive_wide_abstract_reading_claim_ready') else 'no'}"
+        )
+        print(
+            "Unique id follow-up ready: "
+            f"{'yes' if coverage.get('archive_wide_followup_resolution_ready') else 'no'}"
         )
         workload = result.get("workload_estimate") if isinstance(result.get("workload_estimate"), dict) else {}
         scope_workload = workload.get("scope") if isinstance(workload.get("scope"), dict) else {}
@@ -8070,13 +8081,25 @@ def command_zet_catalog(args: argparse.Namespace) -> int:
         for item in result.get("items", []):
             if not isinstance(item, dict):
                 continue
+            route = item.get("reading_route") if isinstance(item.get("reading_route"), dict) else None
+            route_reason = str(route.get("reason") or "") if route else ""
+            if route_reason == "verified_seed":
+                route_label = "start zet"
+            elif route_reason == "connection_passage":
+                route_label = f"tie from order #{route.get('from_catalog_order_index')}"
+            elif route_reason == "fallback_component_root":
+                route_label = f"unconnected group {route.get('component_index')} start"
+            else:
+                route_label = "path order"
             print(
                 "\t".join(
                     [
+                        f"#{item.get('catalog_order_index', '-')}",
                         str(item.get("status") or "-"),
                         str(item.get("id") or "-"),
                         str(item.get("title") or "(untitled)"),
                         str(item.get("abstract") or "(abstract missing)"),
+                        route_label,
                     ]
                 )
             )
@@ -16029,7 +16052,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--projection",
         choices=sorted(archive_services.ZET_CATALOG_PROJECTIONS),
         default="full",
-        help="full compatibility fields or compact reading fields with abstracts and all frontmatter edges.",
+        help="full compatibility fields, compact reading fields, or opt-in routed_reading connection-order evidence.",
     )
     zet_catalog.add_argument(
         "--coverage-mode",

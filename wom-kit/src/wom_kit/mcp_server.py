@@ -1903,13 +1903,17 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
     },
     {
         "name": "zet_catalog",
-        "description": "Enumerate every selected local zet node's available abstract state and frontmatter connections in deterministic pages. Use projection=reading and coverage_mode=strict for compact contiguous node coverage, then inspect separate abstract-reading and id-followup readiness; optional seeded_connection_walk reads verified seed neighborhoods first while still including every component. Read-only; never reads zet bodies or requires a generated index.",
+        "description": "Enumerate every selected local zet node's available abstract state and frontmatter connections in deterministic pages. Use projection=reading and coverage_mode=strict for compact contiguous node coverage; use routed_reading only with seeded_connection_walk when per-item connection-order reasons are worth the extra tokens. Inspect separate abstract-reading and id-followup readiness. Read-only; never reads zet bodies or requires a generated index.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "archive_root": {"type": "string"},
                 "status": {"type": "string", "enum": ["all", "draft", "canonical"], "default": "canonical"},
-                "projection": {"type": "string", "enum": ["full", "reading"], "default": "full"},
+                "projection": {
+                    "type": "string",
+                    "enum": ["full", "reading", "routed_reading"],
+                    "default": "full",
+                },
                 "coverage_mode": {"type": "string", "enum": ["page", "strict"], "default": "page"},
                 "order": {
                     "type": "string",
@@ -4672,7 +4676,16 @@ def tool_zet_catalog(arguments: dict[str, Any]) -> dict[str, Any]:
         materialize_session_snapshot=True,
     )
     coverage = result.get("coverage") if isinstance(result.get("coverage"), dict) else {}
-    state = "complete" if coverage.get("complete") else ("blocked" if not result.get("ok") else "more_pages")
+    if not result.get("ok"):
+        state = "blocked"
+    elif not coverage.get("complete"):
+        state = "more_pages"
+    elif not coverage.get("archive_wide_coverage_claim_ready"):
+        state = "page_complete_without_strict_claim"
+    elif coverage.get("archive_wide_abstract_reading_claim_ready"):
+        state = "node_and_abstract_complete"
+    else:
+        state = "node_complete_with_abstract_gaps"
     return tool_success_result(
         f"zet_catalog: {state}, {coverage.get('returned_count', 0)} returned, {coverage.get('remaining_count', 0)} remaining.",
         result,

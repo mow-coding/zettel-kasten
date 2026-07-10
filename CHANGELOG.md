@@ -6,6 +6,30 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.210 - 2026-07-11
+
+Explainable connection-order checkpoint. Additive; no archive migration.
+
+- **Opt-in routed reading.** New `projection=routed_reading` works with
+  `order=seeded_connection_walk` and adds a compact per-item reason: verified
+  seed, connection passage, or disconnected-component root. Connected items
+  include distance, prior catalog order index/id, edge type, and whether the
+  walk followed or opposed the stored edge direction.
+- **Token cost stays explicit.** Existing `projection=reading` remains the
+  compact default and carries no per-item route fields. On the same synthetic
+  10,000-node chain and 8,000-token page budget, reading stayed at 179 pages and
+  1,414,699 estimated item tokens; routed reading used 257 pages and 2,026,799.
+- **Duplicate-safe chain identity.** Strict chain hashes now use snapshot-bound
+  file-entry identities instead of zet ids, so duplicate ids cannot collapse
+  two file nodes into the same chain evidence. The opaque identity values and
+  archive paths are not returned.
+- **Continuation compatibility.** Continuation schema advances to v0.3 and
+  binds the entry-identity basis. Restart v0.3.209 in-flight strict passes at
+  cursor zero.
+- **Session performance.** Snapshot-bound entry identities and projection/order
+  workload estimates are cached in the same bounded process-local catalog
+  session. No map, route ledger, goal, loop, or receipt is persisted.
+
 ## v0.3.209 - 2026-07-11
 
 Honest first-read readiness checkpoint. Additive; no archive migration.

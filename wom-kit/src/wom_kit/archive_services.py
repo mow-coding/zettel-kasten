@@ -2787,13 +2787,14 @@ ZETTEL_READ_SECTIONS = {"overview", "body", "document", "details", "all"}
 ZETTEL_OVERVIEW_GIST_CHAR_LIMIT = 360
 ZET_ABSTRACT_MAX_CHARS = ZETTEL_OVERVIEW_GIST_CHAR_LIMIT
 ZETTEL_OVERVIEW_FRONTMATTER_FIELDS = ("abstract", "gist", "summary", "description", "overview")
-ZET_CATALOG_SCHEMA = "wom-kit/zet-catalog/v0.5"
+ZET_CATALOG_SCHEMA = "wom-kit/zet-catalog/v0.6"
 ZET_CATALOG_MAX_PAGE_SIZE = 10000
-ZET_CATALOG_PROJECTIONS = {"full", "reading"}
+ZET_CATALOG_PROJECTIONS = {"full", "reading", "routed_reading"}
 ZET_CATALOG_COVERAGE_MODES = {"page", "strict"}
 ZET_CATALOG_ORDER_MODES = {"path", "seeded_connection_walk"}
 ZET_CATALOG_MAX_SEED_IDS = 32
-ZET_CATALOG_CONTINUATION_SCHEMA = "wom-kit/zet-catalog-continuation/v0.2"
+ZET_CATALOG_CONTINUATION_SCHEMA = "wom-kit/zet-catalog-continuation/v0.3"
+ZET_CATALOG_ENTRY_IDENTITY_BASIS = "snapshot_id_path_order_ordinal_status_sha256"
 ZETTEL_EDGE_EXTERNAL_REF_RE = re.compile(r"^zet:(?P<source>[A-Za-z0-9_-]+):(?P<external_id>[A-Za-z0-9_-]+)$")
 MACHINE_ENFORCED_CHECKLIST_ITEMS = {"object_id_only", "allowed_edges"}
 HUMAN_AFFIRMABLE_CHECKLIST_ITEMS = {"one_clear_purpose", "sensitive_content_reviewed"}
@@ -5485,10 +5486,16 @@ def zet_catalog_item_json(item: dict[str, Any]) -> str:
     return json.dumps(item, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
-def zet_catalog_project_item(item: dict[str, Any], projection: str) -> dict[str, Any]:
+def zet_catalog_project_item(
+    item: dict[str, Any],
+    projection: str,
+    *,
+    catalog_order_index: int | None = None,
+    reading_route: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     if projection == "full":
         return item
-    return {
+    projected = {
         "id": item.get("id"),
         "status": item.get("status"),
         "title": item.get("title"),
@@ -5500,6 +5507,12 @@ def zet_catalog_project_item(item: dict[str, Any], projection: str) -> dict[str,
         "tie_summary": item.get("tie_summary") if isinstance(item.get("tie_summary"), dict) else {},
         "edges": item.get("edges") if isinstance(item.get("edges"), list) else [],
     }
+    if projection == "routed_reading":
+        if catalog_order_index is not None:
+            projected["catalog_order_index"] = catalog_order_index
+        if isinstance(reading_route, dict):
+            projected["reading_route"] = reading_route
+    return projected
 
 
 def zet_catalog_order_descriptor(order_mode: str) -> str:
@@ -5527,63 +5540,138 @@ def zet_catalog_order_entries(
     *,
     order_mode: str,
     seed_zettel_ids: list[str],
-) -> tuple[list[tuple[Path, str, dict[str, Any], tuple[int, int] | None]], dict[str, Any]]:
+) -> tuple[
+    list[tuple[Path, str, dict[str, Any], tuple[int, int] | None]],
+    dict[str, Any],
+    list[dict[str, Any] | None],
+]:
     if order_mode == "path":
-        return entries, {
-            "mode": "path",
-            "descriptor": zet_catalog_order_descriptor(order_mode),
-            "seed_zettel_ids": [],
-            "resolved_seed_ids": [],
-            "missing_seed_ids": [],
-            "seed_connected_prefix_count": 0,
-            "fallback_component_count": 0,
-            "connection_direction_for_ordering": "not_used",
-            "all_nodes_preserved": True,
-            "ranking_performed": False,
-            "global_map_persisted": False,
-        }
+        return (
+            entries,
+            {
+                "mode": "path",
+                "descriptor": zet_catalog_order_descriptor(order_mode),
+                "seed_zettel_ids": [],
+                "resolved_seed_ids": [],
+                "missing_seed_ids": [],
+                "seed_connected_prefix_count": 0,
+                "fallback_component_count": 0,
+                "connection_direction_for_ordering": "not_used",
+                "item_route_evidence_in_routed_reading_projection": False,
+                "all_nodes_preserved": True,
+                "ranking_performed": False,
+                "global_map_persisted": False,
+            },
+            [None for _entry in entries],
+        )
 
     id_to_indices: dict[str, list[int]] = {}
     for index, (_path, _status, item, _signature) in enumerate(entries):
         zettel_id = item.get("id")
-        if isinstance(zettel_id, str):
+        if isinstance(zettel_id, str) and ZETTEL_EDGE_ZETTEL_ID_RE.match(zettel_id):
             id_to_indices.setdefault(zettel_id, []).append(index)
 
     missing_seed_ids = [zettel_id for zettel_id in seed_zettel_ids if zettel_id not in id_to_indices]
-    adjacency: list[set[int]] = [set() for _entry in entries]
+    adjacency: list[dict[int, list[dict[str, Any]]]] = [{} for _entry in entries]
     for source_index, (_path, _status, item, _signature) in enumerate(entries):
+        source_zettel_id = item.get("id")
+        if not isinstance(source_zettel_id, str) or not ZETTEL_EDGE_ZETTEL_ID_RE.match(source_zettel_id):
+            continue
         edges = item.get("edges") if isinstance(item.get("edges"), list) else []
         for edge in edges:
             if not isinstance(edge, dict):
                 continue
             target = edge.get("target")
-            if not isinstance(target, str):
+            if not isinstance(target, str) or not ZETTEL_EDGE_ZETTEL_ID_RE.match(target):
                 continue
+            edge_type = edge.get("type") if isinstance(edge.get("type"), str) else None
             for target_index in id_to_indices.get(target, []):
                 if target_index == source_index:
                     continue
-                adjacency[source_index].add(target_index)
-                adjacency[target_index].add(source_index)
+                forward = {
+                    "edge_type": edge_type,
+                    "stored_source_zettel_id": source_zettel_id,
+                    "stored_target_zettel_id": target,
+                    "walk_direction": "with_stored_direction",
+                }
+                reverse = {
+                    **forward,
+                    "walk_direction": "against_stored_direction",
+                }
+                adjacency[source_index].setdefault(target_index, []).append(forward)
+                adjacency[target_index].setdefault(source_index, []).append(reverse)
 
     visited: set[int] = set()
     ordered_indices: list[int] = []
+    route_by_index: dict[int, dict[str, Any]] = {}
+    order_position_by_index: dict[int, int] = {}
 
-    def walk(root_indices: list[int]) -> None:
-        queue = [index for index in root_indices if index not in visited]
+    def passage_sort_key(passage: dict[str, Any]) -> tuple[str, str, str, str]:
+        return (
+            str(passage.get("edge_type") or ""),
+            str(passage.get("stored_source_zettel_id") or ""),
+            str(passage.get("stored_target_zettel_id") or ""),
+            str(passage.get("walk_direction") or ""),
+        )
+
+    def walk(root_indices: list[int], *, phase: str, fallback_component_index: int | None) -> None:
+        discovered = set(visited)
+        queue: list[tuple[int, int | None, int]] = []
+        for index in root_indices:
+            if index in discovered:
+                continue
+            discovered.add(index)
+            queue.append((index, None, 0))
         queue_offset = 0
         while queue_offset < len(queue):
-            index = queue[queue_offset]
+            index, parent_index, distance = queue[queue_offset]
             queue_offset += 1
             if index in visited:
                 continue
             visited.add(index)
+            catalog_order_index = len(ordered_indices)
             ordered_indices.append(index)
-            queue.extend(neighbor for neighbor in sorted(adjacency[index]) if neighbor not in visited)
+            order_position_by_index[index] = catalog_order_index
+            route: dict[str, Any] = {
+                "reason": (
+                    "verified_seed"
+                    if parent_index is None and phase == "verified_seed_prefix"
+                    else "fallback_component_root"
+                    if parent_index is None
+                    else "connection_passage"
+                ),
+                "distance": distance,
+            }
+            if fallback_component_index is not None:
+                route["component_index"] = fallback_component_index
+            if parent_index is not None:
+                passages = sorted(adjacency[parent_index].get(index, []), key=passage_sort_key)
+                selected_passage = passages[0] if passages else {}
+                parent_item = entries[parent_index][2]
+                via = {
+                    "edge_type": selected_passage.get("edge_type"),
+                    "walk_direction": selected_passage.get("walk_direction"),
+                }
+                if len(passages) > 1:
+                    via["parallel_candidate_count"] = len(passages)
+                route.update(
+                    {
+                        "from_catalog_order_index": order_position_by_index[parent_index],
+                        "from_zettel_id": parent_item.get("id"),
+                        "via": via,
+                    }
+                )
+            route_by_index[index] = route
+            for neighbor in sorted(adjacency[index]):
+                if neighbor in discovered:
+                    continue
+                discovered.add(neighbor)
+                queue.append((neighbor, index, distance + 1))
 
     seed_indices: list[int] = []
     for zettel_id in seed_zettel_ids:
         seed_indices.extend(id_to_indices.get(zettel_id, []))
-    walk(seed_indices)
+    walk(seed_indices, phase="verified_seed_prefix", fallback_component_index=None)
     seed_connected_prefix_count = len(ordered_indices)
 
     fallback_component_count = 0
@@ -5591,25 +5679,36 @@ def zet_catalog_order_entries(
         if index in visited:
             continue
         fallback_component_count += 1
-        walk([index])
+        walk(
+            [index],
+            phase="fallback_component",
+            fallback_component_index=fallback_component_count,
+        )
 
     ordered_entries = [entries[index] for index in ordered_indices]
-    return ordered_entries, {
-        "mode": order_mode,
-        "descriptor": zet_catalog_order_descriptor(order_mode),
-        "seed_zettel_ids": seed_zettel_ids,
-        "resolved_seed_ids": [zettel_id for zettel_id in seed_zettel_ids if zettel_id in id_to_indices],
-        "missing_seed_ids": missing_seed_ids,
-        "seed_entry_count": len(seed_indices),
-        "seed_connected_prefix_count": seed_connected_prefix_count,
-        "fallback_component_count": fallback_component_count,
-        "connection_passage_count": sum(len(neighbors) for neighbors in adjacency) // 2,
-        "connection_direction_for_ordering": "undirected_reading_passage_only",
-        "edge_meaning_or_direction_rewritten": False,
-        "all_nodes_preserved": len(ordered_entries) == len(entries),
-        "ranking_performed": False,
-        "global_map_persisted": False,
-    }
+    ordered_routes = [route_by_index.get(index) for index in ordered_indices]
+    return (
+        ordered_entries,
+        {
+            "mode": order_mode,
+            "descriptor": zet_catalog_order_descriptor(order_mode),
+            "seed_zettel_ids": seed_zettel_ids,
+            "resolved_seed_ids": [zettel_id for zettel_id in seed_zettel_ids if zettel_id in id_to_indices],
+            "missing_seed_ids": missing_seed_ids,
+            "seed_entry_count": len(seed_indices),
+            "seed_connected_prefix_count": seed_connected_prefix_count,
+            "fallback_component_count": fallback_component_count,
+            "connection_passage_count": sum(len(neighbors) for neighbors in adjacency) // 2,
+            "connection_direction_for_ordering": "undirected_reading_passage_only",
+            "item_route_evidence_in_routed_reading_projection": True,
+            "item_route_evidence_count": len(ordered_routes),
+            "edge_meaning_or_direction_rewritten": False,
+            "all_nodes_preserved": len(ordered_entries) == len(entries),
+            "ranking_performed": False,
+            "global_map_persisted": False,
+        },
+        ordered_routes,
+    )
 
 
 def zet_catalog_encode_continuation(payload: dict[str, Any]) -> str:
@@ -5682,6 +5781,8 @@ def zet_catalog_continuation_context(
         blockers.append("Strict catalog continuation order does not match the catalog order.")
     if payload.get("seed_zettel_ids_sha256") != sha256_json_value(seed_zettel_ids):
         blockers.append("Strict catalog continuation seed ids do not match the prior page.")
+    if payload.get("entry_identity_basis") != ZET_CATALOG_ENTRY_IDENTITY_BASIS:
+        blockers.append("Strict catalog continuation entry identity basis does not match.")
     token_next_cursor = payload.get("next_cursor")
     token_covered_count = payload.get("covered_count")
     if (
@@ -5878,7 +5979,7 @@ def zet_catalog(
     if status not in {"all", "draft", "canonical"}:
         blockers.append("status must be one of: all, draft, canonical")
     if projection not in ZET_CATALOG_PROJECTIONS:
-        blockers.append("projection must be one of: full, reading")
+        blockers.append("projection must be one of: full, reading, routed_reading")
     if coverage_mode not in ZET_CATALOG_COVERAGE_MODES:
         blockers.append("coverage_mode must be one of: page, strict")
     if order_mode not in ZET_CATALOG_ORDER_MODES:
@@ -5888,6 +5989,8 @@ def zet_catalog(
         blockers.append("start_zettel_id requires order_mode=seeded_connection_walk.")
     if order_mode == "seeded_connection_walk" and not seed_zettel_ids:
         blockers.append("seeded_connection_walk requires at least one start_zettel_id.")
+    if projection == "routed_reading" and order_mode != "seeded_connection_walk":
+        blockers.append("routed_reading requires order_mode=seeded_connection_walk.")
     order_descriptor = zet_catalog_order_descriptor(order_mode)
     if cursor < 0:
         blockers.append("cursor must be a non-negative integer.")
@@ -5924,6 +6027,9 @@ def zet_catalog(
     materialized_ordered_entries = (
         cached_order_record.get("entries") if isinstance(cached_order_record, dict) else None
     )
+    materialized_ordered_routes = (
+        cached_order_record.get("routes") if isinstance(cached_order_record, dict) else None
+    )
     materialized_snapshot_reused = False
     completion_revalidation_performed = False
     if (
@@ -5932,11 +6038,18 @@ def zet_catalog(
         and isinstance(materialized_entries, list)
         and isinstance(materialized_snapshot, dict)
         and isinstance(materialized_ordered_entries, list)
+        and isinstance(materialized_ordered_routes, list)
+        and len(materialized_ordered_routes) == len(materialized_ordered_entries)
         and materialized_snapshot.get("id") == expected_snapshot_id
     ):
         preview_candidates = [
-            zet_catalog_project_item(item, projection)
-            for _path, _expected_status, item, _signature in materialized_ordered_entries[cursor : cursor + page_size]
+            zet_catalog_project_item(
+                entry[2],
+                projection,
+                catalog_order_index=cursor + offset,
+                reading_route=materialized_ordered_routes[cursor + offset],
+            )
+            for offset, entry in enumerate(materialized_ordered_entries[cursor : cursor + page_size])
         ]
         preview_page, _preview_stopped, _preview_single = zet_catalog_budgeted_page(
             preview_candidates,
@@ -6016,16 +6129,22 @@ def zet_catalog(
     cached_order_evidence = (
         current_order_record.get("evidence") if isinstance(current_order_record, dict) else None
     )
+    cached_ordered_routes = (
+        current_order_record.get("routes") if isinstance(current_order_record, dict) else None
+    )
     order_cache_reused = bool(
         isinstance(cached_ordered_entries, list)
         and len(cached_ordered_entries) == len(entries)
         and isinstance(cached_order_evidence, dict)
+        and isinstance(cached_ordered_routes, list)
+        and len(cached_ordered_routes) == len(entries)
     )
     if order_cache_reused:
         ordered_entries = cached_ordered_entries
         order_evidence = cached_order_evidence
+        ordered_routes = cached_ordered_routes
     else:
-        ordered_entries, order_evidence = zet_catalog_order_entries(
+        ordered_entries, order_evidence, ordered_routes = zet_catalog_order_entries(
             entries,
             order_mode=order_mode,
             seed_zettel_ids=seed_zettel_ids,
@@ -6033,10 +6152,12 @@ def zet_catalog(
         if isinstance(current_scope, dict):
             cached_orderings = current_scope.setdefault("ordered_entries", {})
             if isinstance(cached_orderings, dict):
-                cached_orderings[order_cache_key] = {
+                current_order_record = {
                     "entries": ordered_entries,
                     "evidence": order_evidence,
+                    "routes": ordered_routes,
                 }
+                cached_orderings[order_cache_key] = current_order_record
     scan["order_cache_reused"] = order_cache_reused
     if order_evidence.get("missing_seed_ids"):
         blockers.append("One or more start_zettel_id values do not exist in the selected catalog scope.")
@@ -6055,8 +6176,13 @@ def zet_catalog(
         all_items = cached_projected_items
     else:
         all_items = [
-            zet_catalog_project_item(item, projection)
-            for _path, _expected_status, item, _signature in ordered_entries
+            zet_catalog_project_item(
+                entry[2],
+                projection,
+                catalog_order_index=index,
+                reading_route=ordered_routes[index],
+            )
+            for index, entry in enumerate(ordered_entries)
         ]
         if isinstance(current_scope, dict):
             cached_projections = current_scope.setdefault("projected_items", {})
@@ -6065,8 +6191,9 @@ def zet_catalog(
     scan["projection_cache_reused"] = projection_cache_reused
     workload_estimates = current_scope.get("workload_estimates") if isinstance(current_scope, dict) else None
     scope_workload_estimate = (
-        workload_estimates.get(projection)
-        if isinstance(workload_estimates, dict) and isinstance(workload_estimates.get(projection), dict)
+        workload_estimates.get(projection_cache_key)
+        if isinstance(workload_estimates, dict)
+        and isinstance(workload_estimates.get(projection_cache_key), dict)
         else None
     )
     scope_metrics_cache_reused = scope_workload_estimate is not None
@@ -6075,7 +6202,7 @@ def zet_catalog(
         if isinstance(current_scope, dict):
             cached_workloads = current_scope.setdefault("workload_estimates", {})
             if isinstance(cached_workloads, dict):
-                cached_workloads[projection] = scope_workload_estimate
+                cached_workloads[projection_cache_key] = scope_workload_estimate
     scan["scope_metrics_cache_reused"] = scope_metrics_cache_reused
     if expected_snapshot_id and expected_snapshot_id != snapshot["id"]:
         blockers.append("catalog_snapshot_changed")
@@ -6083,6 +6210,32 @@ def zet_catalog(
     total_count = len(ordered_entries)
     if cursor > total_count:
         blockers.append("cursor is beyond the current catalog item count.")
+
+    cached_entry_identities = (
+        current_order_record.get("entry_identities") if isinstance(current_order_record, dict) else None
+    )
+    entry_identity_cache_reused = bool(
+        isinstance(cached_entry_identities, list)
+        and len(cached_entry_identities) == len(ordered_entries)
+    )
+    if entry_identity_cache_reused:
+        ordered_entry_identities = cached_entry_identities
+    else:
+        path_order_index_by_path = {entry[0]: index for index, entry in enumerate(entries)}
+        ordered_entry_identities = [
+            sha256_json_value(
+                {
+                    "basis": ZET_CATALOG_ENTRY_IDENTITY_BASIS,
+                    "snapshot_id": snapshot["id"],
+                    "path_order_ordinal": path_order_index_by_path[entry[0]],
+                    "status": entry[1],
+                }
+            )
+            for entry in ordered_entries
+        ]
+        if isinstance(current_order_record, dict):
+            current_order_record["entry_identities"] = ordered_entry_identities
+    scan["entry_identity_cache_reused"] = entry_identity_cache_reused
 
     abstract_coverage = zet_catalog_abstract_coverage(entries)
     abstract_counts = abstract_coverage["counts"]
@@ -6102,6 +6255,9 @@ def zet_catalog(
     complete = not blockers and next_cursor_value >= total_count
     next_cursor = None if complete or blockers else next_cursor_value
     remaining_count = total_count if blockers else max(0, total_count - next_cursor_value)
+    page_entry_identity_sha256 = sha256_json_value(
+        ordered_entry_identities[cursor:next_cursor_value] if not blockers else []
+    )
 
     strict_contiguous_prefix_verified = False
     strict_chain_hash: str | None = None
@@ -6122,6 +6278,7 @@ def zet_catalog(
                     "projection": projection,
                     "order": order_descriptor,
                     "seed_zettel_ids_sha256": sha256_json_value(seed_zettel_ids),
+                    "entry_identity_basis": ZET_CATALOG_ENTRY_IDENTITY_BASIS,
                     "covered_count": 0,
                 }
             )
@@ -6130,7 +6287,7 @@ def zet_catalog(
             {
                 "previous_chain_hash": previous_chain_hash,
                 "cursor": cursor,
-                "returned_ids": [item.get("id") for item in page_items],
+                "page_entry_identity_sha256": page_entry_identity_sha256,
             }
         )
         strict_covered_count = next_cursor_value
@@ -6151,6 +6308,7 @@ def zet_catalog(
                     "projection": projection,
                     "order": order_descriptor,
                     "seed_zettel_ids_sha256": sha256_json_value(seed_zettel_ids),
+                    "entry_identity_basis": ZET_CATALOG_ENTRY_IDENTITY_BASIS,
                     "next_cursor": next_cursor,
                     "covered_count": strict_covered_count,
                     "chain_hash": strict_chain_hash,
@@ -6232,6 +6390,7 @@ def zet_catalog(
             "covered_count": strict_covered_count,
             "continuation_token": strict_continuation_token,
             "chain_hash": strict_chain_hash,
+            "page_entry_identity_sha256": page_entry_identity_sha256,
             "archive_wide_coverage_claim_ready": archive_wide_coverage_claim_ready,
             "archive_wide_abstract_reading_claim_ready": archive_wide_abstract_reading_claim_ready,
             "archive_wide_followup_resolution_ready": archive_wide_followup_resolution_ready,
@@ -6240,6 +6399,9 @@ def zet_catalog(
             "schema": ZET_CATALOG_CONTINUATION_SCHEMA,
             "stateless": True,
             "checksum_validated": isinstance(continuation_payload, dict),
+            "entry_identity_basis": ZET_CATALOG_ENTRY_IDENTITY_BASIS,
+            "duplicate_ids_distinguished_in_chain": True,
+            "entry_identity_values_echoed": False,
             "cryptographic_attestation": False,
             "persistent_loop_state_created": False,
         },
@@ -57472,6 +57634,7 @@ def ai_start_here(
                 "Run zet-catalog with projection=reading and coverage_mode=strict, inspect workload_estimate, set a host-appropriate max_estimated_tokens when needed, and follow every page with its continuation token before claiming archive-wide node coverage.",
                 "Treat archive_wide_coverage_claim_ready as node visitation only; require archive_wide_abstract_reading_claim_ready before saying every required abstract was available and read, and report abstract gaps without auto-writing replacements.",
                 "If the host goal already supplies verified zet ids, use seeded_connection_walk with those ids; never invent a seed or stop after the seeded component.",
+                "Keep projection=reading for the compact pass; use routed_reading with seeded_connection_walk only when the host or human needs a per-item explanation of the connection order and can afford the larger payload.",
                 "Use only read-only commands until the human approves a write operation.",
             ]
         ),
@@ -57731,6 +57894,7 @@ def runtime_context_ai_runtime_order() -> list[dict[str, Any]]:
             "command": "archive zet-catalog <archive-root> --status canonical --projection reading --coverage-mode strict --cursor 0 --dry-run --format json",
             "continuation": "inspect workload_estimate, optionally set max_estimated_tokens for the host context, follow next_cursor with the same snapshot id and continuation_token until archive_wide_coverage_claim_ready=true, then check archive_wide_abstract_reading_claim_ready and archive_wide_followup_resolution_ready separately; restart from cursor 0 if catalog_snapshot_changed",
             "optional_seed_order": "when the host goal already provides verified zet ids, add --order seeded_connection_walk and repeated --start-zettel-id values; the walk still includes every disconnected component",
+            "optional_route_evidence": "keep projection=reading for compact coverage; switch to routed_reading only with seeded_connection_walk when per-item seed, tie-passage, and disconnected-component reasons are needed",
             "reason": "give the host every local zet node's available first-read text and connection clues before it chooses a broad body-reading order; never equate node visitation with complete abstract availability",
         },
         {

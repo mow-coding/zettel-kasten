@@ -1,6 +1,6 @@
 # zet Abstract And Live Catalog Contract
 
-Status: implemented CLI baseline in v0.3.204; MCP/host baseline in v0.3.205; scale/token baseline in v0.3.206; compact strict reading in v0.3.207; seeded exhaustive order in v0.3.208; separate first-read readiness in v0.3.209
+Status: implemented CLI baseline in v0.3.204; MCP/host baseline in v0.3.205; scale/token baseline in v0.3.206; compact strict reading in v0.3.207; seeded exhaustive order in v0.3.208; separate first-read readiness in v0.3.209; routed order evidence in v0.3.210
 
 ## Purpose
 
@@ -236,3 +236,7 @@ isolated node follows in archive-relative path order. Missing seeds block rather
 than falling back silently. No relevance model, body search, generated map, or
 provider call participates. See
 [Seeded Connection Reading Order](seeded-connection-reading-order.md).
+
+When that seeded order needs an item-by-item explanation, use the opt-in
+`routed_reading` projection. Normal `reading` stays smaller. See
+[Seeded Reading Route Evidence](seeded-reading-route-evidence.md).
