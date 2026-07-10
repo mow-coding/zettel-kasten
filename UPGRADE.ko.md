@@ -83,6 +83,19 @@ project folder 작업에서는 temporary intake staging이 archive of record가
 아니라는 점을 기억합니다. cleanup 전에 원본을 objet, source map, manifest,
 zet, receipt로 보존해야 합니다.
 
+## v0.3.210 연결 읽기 경로 근거
+
+v0.3.210은 seed 기반 연결 순서에 `projection=routed_reading`을 추가합니다.
+일반 `projection=reading`은 작은 기본값으로 유지됩니다. `routed_reading`은
+검증된 시작 zet ID와 `order=seeded_connection_walk`을 함께 쓸 때만
+동작합니다.
+
+catalog schema는 v0.6, strict continuation schema는 v0.3으로 올라갑니다.
+chain hash가 zet ID만이 아니라 snapshot 안의 파일 항목을 서로 다르게
+구분하기 때문입니다. 진행 중인 v0.3.209 strict pass는 cursor 0에서 다시
+시작합니다. token은 signature나 영수증이 아닌 일시적인 checksum 실수 방지
+장치입니다. archive migration이나 기존 zet 재작성은 없습니다.
+
 ## v0.3.209 첫 읽기 준비 상태
 
 v0.3.209는 migration이 없고 기존 zet를 다시 쓰지 않습니다. catalog 출력

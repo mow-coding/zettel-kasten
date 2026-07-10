@@ -91,6 +91,18 @@ For project-folder work, remember that temporary intake staging is not the
 archive of record. Preserve originals as objets, source maps, manifests, zets,
 and receipts before any cleanup.
 
+## v0.3.210 Routed Reading Evidence
+
+v0.3.210 adds `projection=routed_reading` for seeded connection order. Normal
+`projection=reading` remains the compact default. Routed reading is valid only
+with `order=seeded_connection_walk` and verified start zet ids.
+
+Catalog schema advances to v0.6. Strict continuation schema advances to v0.3
+because chain hashes now distinguish snapshot file entries instead of relying
+only on zet ids. Restart any v0.3.209 in-flight strict pass at cursor zero.
+Tokens remain transient, checksum-based drift guards rather than signatures or
+receipts. Existing archives require no migration and no zet is rewritten.
+
 ## v0.3.209 First-Read Readiness Signals
 
 v0.3.209 adds no migration and does not rewrite existing zets. Catalog output

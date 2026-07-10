@@ -755,6 +755,10 @@ class McpServerTests(unittest.TestCase):
                 tools_by_name["zet_catalog"]["inputSchema"]["properties"]["projection"]["default"],
                 "full",
             )
+            self.assertIn(
+                "routed_reading",
+                tools_by_name["zet_catalog"]["inputSchema"]["properties"]["projection"]["enum"],
+            )
             self.assertEqual(
                 tools_by_name["zet_catalog"]["inputSchema"]["properties"]["coverage_mode"]["default"],
                 "page",
@@ -7160,6 +7164,7 @@ class McpServerTests(unittest.TestCase):
                     )
 
                 collected: list[str] = []
+                collected_items: list[dict[str, object]] = []
                 cursor = 0
                 continuation_token: str | None = None
                 request_id = 1
@@ -7167,7 +7172,7 @@ class McpServerTests(unittest.TestCase):
                 while True:
                     arguments: dict[str, object] = {
                         "archive_root": str(archive_root),
-                        "projection": "reading",
+                        "projection": "routed_reading",
                         "coverage_mode": "strict",
                         "order": "seeded_connection_walk",
                         "start_zettel_ids": [canonical_ids[-1]],
@@ -7190,13 +7195,14 @@ class McpServerTests(unittest.TestCase):
                     self.assertFalse(result["isError"])
                     structured = result["structuredContent"]
                     self.assertTrue(structured["ok"], structured)
-                    self.assertEqual(structured["projection"], "reading")
+                    self.assertEqual(structured["projection"], "routed_reading")
                     self.assertTrue(structured["coverage"]["contiguous_prefix_verified"])
                     self.assertNotIn("STRICT_BODY_MARKER", json.dumps(structured, ensure_ascii=False))
                     for item in structured["items"]:
                         self.assertNotIn("path", item)
                         self.assertNotIn("body_read", item)
                         self.assertIn("edges", item)
+                        collected_items.append(item)
                         collected.append(item["id"])
                     if page_index == 0:
                         self.assertFalse(structured["session_consistency"]["materialized_snapshot_reused"])
@@ -7204,6 +7210,7 @@ class McpServerTests(unittest.TestCase):
                         self.assertTrue(structured["session_consistency"]["materialized_snapshot_reused"])
                         self.assertEqual(structured["scan"]["path_metadata_checked"], 0)
                     if structured["coverage"]["complete"]:
+                        self.assertIn("node_and_abstract_complete", result["content"][0]["text"])
                         self.assertTrue(structured["session_consistency"]["completion_revalidation_performed"])
                         self.assertTrue(structured["coverage"]["archive_wide_coverage_claim_ready"])
                         self.assertTrue(structured["coverage"]["archive_wide_abstract_reading_claim_ready"])
@@ -7222,9 +7229,19 @@ class McpServerTests(unittest.TestCase):
                 self.assertEqual(len(collected), len(canonical_paths))
                 self.assertEqual(len(set(collected)), len(canonical_paths))
                 self.assertEqual(collected[0], canonical_ids[-1])
+                self.assertEqual(collected_items[0]["catalog_order_index"], 0)
+                self.assertEqual(collected_items[0]["reading_route"]["reason"], "verified_seed")
+                self.assertEqual(collected_items[1]["catalog_order_index"], 1)
+                self.assertEqual(collected_items[1]["reading_route"]["reason"], "connection_passage")
+                self.assertEqual(collected_items[1]["reading_route"]["from_catalog_order_index"], 0)
+                self.assertEqual(
+                    collected_items[1]["reading_route"]["via"]["walk_direction"],
+                    "with_stored_direction",
+                )
                 self.assertEqual(structured["order_evidence"]["seed_connected_prefix_count"], len(canonical_paths))
                 self.assertEqual(structured["order_evidence"]["fallback_component_count"], 0)
                 self.assertTrue(structured["order_evidence"]["all_nodes_preserved"])
+                self.assertTrue(structured["continuation_contract"]["duplicate_ids_distinguished_in_chain"])
         finally:
             self.stop_server(process)
 

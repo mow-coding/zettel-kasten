@@ -54,6 +54,7 @@
 - [zet Catalog 규모와 Token Budget](zet-catalog-scale-and-token-budget.md)
 - [연속 Node 읽기](zet-catalog-contiguous-reading.md)
 - [Seed 기반 연결 읽기 순서](seeded-connection-reading-order.md)
+- [Seed 기반 읽기 경로 근거](seeded-reading-route-evidence.md)
 - [Archive Status Board](archive-status-board.md)
 - [Derived Artifact Staleness](derived-artifact-staleness.md)
 - [zet Quality Check](zet-quality-check.md)

@@ -162,6 +162,7 @@ def run_catalog_benchmark(
         },
         "abstract_coverage": final_result["abstract_coverage"],
         "identity_coverage": final_result["identity_coverage"],
+        "continuation_contract": final_result["continuation_contract"],
         "scan": {
             "frontmatter_files_scanned_across_pass": frontmatter_files_scanned,
             "cached_items_reused_across_pass": cached_items_reused,
