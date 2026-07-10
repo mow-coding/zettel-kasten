@@ -50,6 +50,7 @@
 - [Objet Capture Enablement](capture-enablement.md)
 - [AI 응대 개념 설명 가이드](ai-response-concept-guide.md)
 - [zet 초록과 Live Catalog](zet-abstract-catalog.md)
+- [zet Catalog 규모와 Token Budget](zet-catalog-scale-and-token-budget.md)
 - [Archive Status Board](archive-status-board.md)
 - [Derived Artifact Staleness](derived-artifact-staleness.md)
 - [zet Quality Check](zet-quality-check.md)

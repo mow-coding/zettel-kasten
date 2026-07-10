@@ -83,6 +83,18 @@ project folder 작업에서는 temporary intake staging이 archive of record가
 아니라는 점을 기억합니다. cleanup 전에 원본을 objet, source map, manifest,
 zet, receipt로 보존해야 합니다.
 
+## v0.3.206 카탈로그 규모와 토큰 예산
+
+v0.3.206은 CLI와 MCP 카탈로그 페이지에 작업량 추정치와 선택형
+`max_estimated_tokens`를 추가합니다. 기존 archive와 호출자는 migration이
+필요 없으며, 이 option을 생략하면 기존 item-count pagination이 유지됩니다.
+
+토큰 추정치는 catalog item JSON만 대상으로 하고 4자당 1토큰이라는 공개된
+휴리스틱을 사용합니다. 외부 서비스가 보고한 실제 사용량이 아닙니다. MCP는
+중간 페이지를 process-local materialized snapshot에서 읽고, 완료 페이지를
+내기 전에 로컬 파일 metadata를 전체 재검증합니다. 그때
+`catalog_snapshot_changed`가 나오면 cursor 0부터 다시 시작합니다.
+
 ## v0.3.205 호스트 AI 초록 읽기
 
 v0.3.205는 v0.3.204의 live catalog를 MCP에도 노출하고 MCP
@@ -115,7 +127,8 @@ archive create-draft <archive-root> --title <제목> --abstract <초록> --body 
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.3.205` | current public pre-release | `wom-kit/docs/releases/v0.3.205.md` |
+| `v0.3.206` | current public pre-release | `wom-kit/docs/releases/v0.3.206.md` |
+| `v0.3.205` | superseded public pre-release | `wom-kit/docs/releases/v0.3.205.md` |
 | `v0.3.204` | superseded public pre-release | `wom-kit/docs/releases/v0.3.204.md` |
 | `v0.3.203` | superseded public pre-release | `wom-kit/docs/releases/v0.3.203.md` |
 | `v0.3.202` | superseded public pre-release | `wom-kit/docs/releases/v0.3.202.md` |

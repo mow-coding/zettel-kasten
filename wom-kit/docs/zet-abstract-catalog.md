@@ -1,6 +1,6 @@
 # zet Abstract And Live Catalog Contract
 
-Status: implemented CLI baseline in v0.3.204; MCP and host-runtime baseline in v0.3.205
+Status: implemented CLI baseline in v0.3.204; MCP/host baseline in v0.3.205; scale and token-budget baseline in v0.3.206
 
 ## Purpose
 
@@ -160,3 +160,35 @@ runtime skill all state the same order:
 
 Goal and loop remain host-application UI/UX. WOM supplies local memory,
 passages between zet nodes, and explicit completion evidence.
+
+## Workload And Token Budget
+
+v0.3.206 adds `workload_estimate` for the declared scope and returned page:
+
+- abstract character count and estimated abstract tokens;
+- items-only JSON character count and UTF-8 byte count;
+- estimated items-only JSON tokens.
+
+The method is `unicode_character_count_divided_by_4_heuristic`. It is not a
+provider-reported token count, excludes the response envelope, and excludes zet
+bodies. Hosts should treat it as a transparent planning estimate.
+
+CLI `--max-estimated-tokens <n>` and MCP `max_estimated_tokens` stop a page
+before its estimated items-only JSON exceeds the requested budget. One item is
+still returned when that item exceeds the budget by itself, so a host loop
+cannot get stuck without advancing its cursor.
+
+## MCP Session Snapshot
+
+For large MCP passes, the first page materializes safe catalog items in process
+memory. Intermediate pages read that same snapshot without rescanning every
+file. Before the page that would make `complete: true`, MCP re-enumerates local
+paths and file metadata. If the resulting snapshot differs, it returns
+`catalog_snapshot_changed` and no completing items; the host restarts at cursor
+0. The cache is process-local, bounded by archive/status scopes, not persisted,
+not authoritative, and not a generated map.
+
+CLI calls remain independent processes and live-verify each invocation.
+
+See [zet Catalog Scale And Token Budget](zet-catalog-scale-and-token-budget.md)
+for reproducible synthetic benchmark commands and interpretation boundaries.

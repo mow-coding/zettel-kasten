@@ -6,6 +6,30 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.206 - 2026-07-11
+
+zet-catalog scale and token-budget checkpoint. Additive; no archive migration.
+
+- **Workload visibility.** `zet-catalog` now reports scope/page abstract
+  characters, items-only JSON characters and UTF-8 bytes, and explicit
+  four-characters-per-token estimates. The estimate is labeled heuristic, not
+  provider-reported usage, and excludes bodies and the response envelope.
+- **Host-sized pages.** CLI and MCP accept optional `max_estimated_tokens` so a
+  host can divide exhaustive coverage across its own loops without replacing
+  it with top-k retrieval. At least one item is returned to preserve progress.
+- **Large-session consistency.** MCP materializes the first-page snapshot for
+  intermediate pages and performs a full local metadata revalidation before
+  the completing page. A changed corpus blocks completion and requires restart.
+- **Cold-scan acceleration.** Safe YAML uses PyYAML's C safe loader when
+  available, with the prior safe-loader fallback, and catalog frontmatter
+  parsing uses a bounded thread pool. No new dependency or generated index is
+  required.
+- **Reproducible scale evidence.** Added a temporary-fixture benchmark and
+  automated 1,000-node coverage/cache regression. A local 10,000-node run with
+  120-character abstracts and an 8,000-token page budget completed 264 pages
+  with zero missing/duplicate ids and zero over-budget pages; host timings are
+  observations, not cross-machine guarantees.
+
 ## v0.3.205 - 2026-07-11
 
 Host-AI exhaustive abstract reading checkpoint. Additive; no archive migration.

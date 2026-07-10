@@ -22,12 +22,27 @@ SERVER_NAME = "zettel-kasten-archive-mcp"
 SUPPORTED_PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"]
 MCP_ALLOWED_ROOTS_ENV = "AI_ARCHIVE_MCP_ALLOWED_ROOTS"
 MCP_ALLOW_LOCAL_PATHS_ENV = "AI_ARCHIVE_MCP_ALLOW_LOCAL_PATHS"
+ZET_CATALOG_CACHE_MAX_SCOPES = 8
+ZET_CATALOG_ITEM_CACHES: dict[tuple[str, str], dict[str, dict[str, Any]]] = {}
 
 JSONRPC_PARSE_ERROR = -32700
 JSONRPC_INVALID_REQUEST = -32600
 JSONRPC_METHOD_NOT_FOUND = -32601
 JSONRPC_INVALID_PARAMS = -32602
 JSONRPC_INTERNAL_ERROR = -32603
+
+
+def zet_catalog_item_cache(archive_root: Path, status: str) -> dict[str, dict[str, Any]]:
+    key = (str(archive_root.resolve()).casefold(), status)
+    cache = ZET_CATALOG_ITEM_CACHES.get(key)
+    if cache is not None:
+        return cache
+    while len(ZET_CATALOG_ITEM_CACHES) >= ZET_CATALOG_CACHE_MAX_SCOPES:
+        oldest_key = next(iter(ZET_CATALOG_ITEM_CACHES))
+        del ZET_CATALOG_ITEM_CACHES[oldest_key]
+    cache = {}
+    ZET_CATALOG_ITEM_CACHES[key] = cache
+    return cache
 
 
 def configure_stdio_utf8() -> None:
@@ -1896,6 +1911,11 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "status": {"type": "string", "enum": ["all", "draft", "canonical"], "default": "canonical"},
                 "cursor": {"type": "integer", "minimum": 0, "default": 0},
                 "page_size": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 200},
+                "max_estimated_tokens": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Optional approximate items-only token budget for one page; at least one item is returned to preserve progress.",
+                },
                 "expected_snapshot_id": {"type": "string"},
                 "dry_run": {"type": "boolean", "default": True},
             },
@@ -4610,14 +4630,19 @@ def tool_zet_catalog(arguments: dict[str, Any]) -> dict[str, Any]:
         raise ToolError("zet_catalog is dry-run only.")
     archive_root = require_path_arg(arguments, "archive_root")
     status = optional_string_arg(arguments, "status") or "canonical"
+    max_estimated_tokens_value = arguments.get("max_estimated_tokens")
+    max_estimated_tokens = int(max_estimated_tokens_value) if max_estimated_tokens_value is not None else None
     result = call_service(
         archive_services.zet_catalog,
         archive_root,
         status=status,
         cursor=int(arguments.get("cursor", 0)),
         page_size=int(arguments.get("page_size", 200)),
+        max_estimated_tokens=max_estimated_tokens,
         expected_snapshot_id=optional_string_arg(arguments, "expected_snapshot_id"),
         dry_run=True,
+        item_cache=zet_catalog_item_cache(archive_root, status),
+        materialize_session_snapshot=True,
     )
     coverage = result.get("coverage") if isinstance(result.get("coverage"), dict) else {}
     state = "complete" if coverage.get("complete") else ("blocked" if not result.get("ok") else "more_pages")

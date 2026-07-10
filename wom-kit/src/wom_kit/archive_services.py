@@ -24,6 +24,7 @@ import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterable, Protocol
@@ -2785,7 +2786,7 @@ ZETTEL_READ_SECTIONS = {"overview", "body", "document", "details", "all"}
 ZETTEL_OVERVIEW_GIST_CHAR_LIMIT = 360
 ZET_ABSTRACT_MAX_CHARS = ZETTEL_OVERVIEW_GIST_CHAR_LIMIT
 ZETTEL_OVERVIEW_FRONTMATTER_FIELDS = ("abstract", "gist", "summary", "description", "overview")
-ZET_CATALOG_SCHEMA = "wom-kit/zet-catalog/v0.1"
+ZET_CATALOG_SCHEMA = "wom-kit/zet-catalog/v0.2"
 ZET_CATALOG_MAX_PAGE_SIZE = 10000
 ZETTEL_EDGE_EXTERNAL_REF_RE = re.compile(r"^zet:(?P<source>[A-Za-z0-9_-]+):(?P<external_id>[A-Za-z0-9_-]+)$")
 MACHINE_ENFORCED_CHECKLIST_ITEMS = {"object_id_only", "allowed_edges"}
@@ -2931,7 +2932,8 @@ def require_yaml() -> None:
 
 def load_yaml(text: str) -> Any:
     require_yaml()
-    return yaml.safe_load(text)  # type: ignore[union-attr]
+    loader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)  # type: ignore[union-attr]
+    return yaml.load(text, Loader=loader)  # type: ignore[union-attr]
 
 
 def dump_yaml(data: Any) -> str:
@@ -5387,16 +5389,152 @@ def zet_catalog_item(path: Path, root: Path, expected_status: str) -> dict[str, 
     }
 
 
-def zet_catalog_snapshot(root: Path, entries: list[tuple[Path, str, dict[str, Any]]]) -> dict[str, Any]:
-    evidence: list[dict[str, Any]] = []
-    for path, _expected_status, item in entries:
+def zet_catalog_entries(
+    root: Path,
+    path_entries: list[tuple[Path, str]],
+    item_cache: dict[str, dict[str, Any]] | None,
+) -> tuple[list[tuple[Path, str, dict[str, Any], tuple[int, int] | None]], dict[str, Any]]:
+    active_cache_keys: set[str] = set()
+    cached_items_reused = 0
+    resolved_items: list[dict[str, Any] | None] = [None] * len(path_entries)
+    signatures: list[tuple[int, int] | None] = [None] * len(path_entries)
+    misses: list[tuple[int, Path, str, str, tuple[int, int] | None]] = []
+    for index, (path, expected_status) in enumerate(path_entries):
+        relative = archive_relative_path(path, root)
+        cache_key = f"{expected_status}:{relative}"
+        active_cache_keys.add(cache_key)
         try:
             stat = path.stat()
-            file_size = stat.st_size
-            file_mtime_ns = stat.st_mtime_ns
+            signature: tuple[int, int] | None = (stat.st_size, stat.st_mtime_ns)
         except OSError:
-            file_size = None
-            file_mtime_ns = None
+            signature = None
+        signatures[index] = signature
+
+        cached = item_cache.get(cache_key) if item_cache is not None else None
+        if (
+            cached is not None
+            and signature is not None
+            and cached.get("file_signature") == signature
+            and isinstance(cached.get("item"), dict)
+        ):
+            resolved_items[index] = cached["item"]
+            cached_items_reused += 1
+        else:
+            misses.append((index, path, expected_status, cache_key, signature))
+
+    worker_count = min(8, len(misses), max(1, os.cpu_count() or 1))
+
+    def parse_missing(row: tuple[int, Path, str, str, tuple[int, int] | None]) -> tuple[int, str, tuple[int, int] | None, dict[str, Any]]:
+        index, path, expected_status, cache_key, signature = row
+        return index, cache_key, signature, zet_catalog_item(path, root, expected_status)
+
+    if worker_count > 1 and len(misses) >= 64:
+        with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="wom-zet-catalog") as executor:
+            parsed_rows = list(executor.map(parse_missing, misses))
+        scan_mode = "bounded_thread_pool"
+    else:
+        parsed_rows = [parse_missing(row) for row in misses]
+        scan_mode = "sequential"
+
+    for index, cache_key, signature, item in parsed_rows:
+        resolved_items[index] = item
+        if item_cache is not None and signature is not None:
+            item_cache[cache_key] = {
+                "file_signature": signature,
+                "item": item,
+            }
+
+    entries: list[tuple[Path, str, dict[str, Any], tuple[int, int] | None]] = []
+    for index, (path, expected_status) in enumerate(path_entries):
+        item = resolved_items[index]
+        if item is None:
+            item = zet_catalog_item(path, root, expected_status)
+            if item_cache is not None and signatures[index] is not None:
+                relative = archive_relative_path(path, root)
+                item_cache[f"{expected_status}:{relative}"] = {
+                    "file_signature": signatures[index],
+                    "item": item,
+                }
+        entries.append((path, expected_status, item, signatures[index]))
+
+    if item_cache is not None:
+        for cache_key in list(item_cache):
+            if not cache_key.startswith("__") and cache_key not in active_cache_keys:
+                del item_cache[cache_key]
+
+    return entries, {
+        "path_count": len(path_entries),
+        "path_metadata_checked": len(path_entries),
+        "frontmatter_files_scanned": len(misses),
+        "frontmatter_scan_mode": scan_mode,
+        "frontmatter_scan_workers": worker_count if scan_mode == "bounded_thread_pool" else 1,
+        "cached_items_reused": cached_items_reused,
+        "cache_mode": "process_local_ephemeral" if item_cache is not None else "none",
+        "cache_authoritative": False,
+        "cache_persisted": False,
+    }
+
+
+def zet_catalog_item_json(item: dict[str, Any]) -> str:
+    return json.dumps(item, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def zet_catalog_estimated_tokens_from_chars(char_count: int) -> int:
+    if char_count <= 0:
+        return 0
+    return max(1, (char_count + 3) // 4)
+
+
+def zet_catalog_workload_estimate(items: list[dict[str, Any]]) -> dict[str, int]:
+    abstract_chars = sum(int(item.get("abstract_char_count") or 0) for item in items)
+    payload = "[" + ",".join(zet_catalog_item_json(item) for item in items) + "]"
+    payload_chars = len(payload)
+    return {
+        "item_count": len(items),
+        "abstract_chars": abstract_chars,
+        "estimated_abstract_tokens": zet_catalog_estimated_tokens_from_chars(abstract_chars),
+        "items_json_chars": payload_chars,
+        "items_json_utf8_bytes": len(payload.encode("utf-8")),
+        "estimated_items_json_tokens": zet_catalog_estimated_tokens_from_chars(payload_chars),
+    }
+
+
+def zet_catalog_budgeted_page(
+    items: list[dict[str, Any]],
+    *,
+    max_estimated_tokens: int | None,
+) -> tuple[list[dict[str, Any]], bool, bool]:
+    if max_estimated_tokens is None:
+        return items, False, False
+
+    selected: list[dict[str, Any]] = []
+    payload_chars = 2
+    single_item_exceeds_budget = False
+    stopped_for_budget = False
+    for item in items:
+        item_chars = len(zet_catalog_item_json(item))
+        candidate_payload_chars = payload_chars + item_chars + (1 if selected else 0)
+        candidate_tokens = zet_catalog_estimated_tokens_from_chars(candidate_payload_chars)
+        if selected and candidate_tokens > max_estimated_tokens:
+            stopped_for_budget = True
+            break
+        selected.append(item)
+        payload_chars = candidate_payload_chars
+        if len(selected) == 1 and candidate_tokens > max_estimated_tokens:
+            single_item_exceeds_budget = True
+            stopped_for_budget = len(items) > 1
+            break
+    return selected, stopped_for_budget, single_item_exceeds_budget
+
+
+def zet_catalog_snapshot(
+    root: Path,
+    entries: list[tuple[Path, str, dict[str, Any], tuple[int, int] | None]],
+) -> dict[str, Any]:
+    evidence: list[dict[str, Any]] = []
+    for path, _expected_status, item, signature in entries:
+        file_size = signature[0] if signature is not None else None
+        file_mtime_ns = signature[1] if signature is not None else None
         evidence.append(
             {
                 "path": archive_relative_path(path, root),
@@ -5424,8 +5562,11 @@ def zet_catalog(
     status: str = "canonical",
     cursor: int = 0,
     page_size: int = 200,
+    max_estimated_tokens: int | None = None,
     expected_snapshot_id: str | None = None,
     dry_run: bool = False,
+    item_cache: dict[str, dict[str, Any]] | None = None,
+    materialize_session_snapshot: bool = False,
 ) -> dict[str, Any]:
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
@@ -5439,12 +5580,82 @@ def zet_catalog(
         blockers.append("cursor must be a non-negative integer.")
     if page_size < 1 or page_size > ZET_CATALOG_MAX_PAGE_SIZE:
         blockers.append(f"page_size must be between 1 and {ZET_CATALOG_MAX_PAGE_SIZE}.")
+    if max_estimated_tokens is not None and max_estimated_tokens < 1:
+        blockers.append("max_estimated_tokens must be a positive integer when provided.")
     if expected_snapshot_id and not re.match(r"^sha256:[0-9a-f]{64}$", expected_snapshot_id):
         blockers.append("expected_snapshot_id must use sha256:<64 lowercase hex> syntax.")
 
-    path_entries = zet_catalog_paths(root, status) if status in {"all", "draft", "canonical"} else []
-    entries = [(path, expected_status, zet_catalog_item(path, root, expected_status)) for path, expected_status in path_entries]
-    snapshot = zet_catalog_snapshot(root, entries)
+    cached_scope = item_cache.get("__catalog_scope__") if item_cache is not None else None
+    materialized_entries = cached_scope.get("entries") if isinstance(cached_scope, dict) else None
+    materialized_snapshot = cached_scope.get("snapshot") if isinstance(cached_scope, dict) else None
+    materialized_workload = cached_scope.get("workload_estimate") if isinstance(cached_scope, dict) else None
+    materialized_snapshot_reused = False
+    completion_revalidation_performed = False
+    if (
+        materialize_session_snapshot
+        and expected_snapshot_id
+        and isinstance(materialized_entries, list)
+        and isinstance(materialized_snapshot, dict)
+        and isinstance(materialized_workload, dict)
+        and materialized_snapshot.get("id") == expected_snapshot_id
+    ):
+        materialized_items = [
+            item
+            for _path, _expected_status, item, _signature in materialized_entries
+        ]
+        preview_candidates = materialized_items[cursor : cursor + page_size]
+        preview_page, _preview_stopped, _preview_single = zet_catalog_budgeted_page(
+            preview_candidates,
+            max_estimated_tokens=max_estimated_tokens,
+        )
+        preview_would_complete = cursor + len(preview_page) >= len(materialized_entries)
+        if not preview_would_complete:
+            materialized_snapshot_reused = True
+        else:
+            completion_revalidation_performed = True
+
+    if materialized_snapshot_reused:
+        entries = materialized_entries
+        snapshot = cached_scope["snapshot"]
+        scope_workload_estimate = cached_scope["workload_estimate"]
+        scan = {
+            "path_count": len(entries),
+            "path_metadata_checked": 0,
+            "frontmatter_files_scanned": 0,
+            "frontmatter_scan_mode": "materialized_session_snapshot",
+            "frontmatter_scan_workers": 0,
+            "cached_items_reused": len(entries),
+            "cache_mode": "process_local_ephemeral",
+            "cache_authoritative": False,
+            "cache_persisted": False,
+            "scope_metrics_cache_reused": True,
+        }
+    else:
+        path_entries = zet_catalog_paths(root, status) if status in {"all", "draft", "canonical"} else []
+        entries, scan = zet_catalog_entries(root, path_entries, item_cache)
+        all_items = [item for _path, _expected_status, item, _signature in entries]
+        scope_cache_reusable = bool(
+            isinstance(cached_scope, dict)
+            and scan["frontmatter_files_scanned"] == 0
+            and scan["cached_items_reused"] == len(entries)
+            and cached_scope.get("path_count") == len(entries)
+            and isinstance(cached_scope.get("snapshot"), dict)
+            and isinstance(cached_scope.get("workload_estimate"), dict)
+        )
+        if scope_cache_reusable:
+            snapshot = cached_scope["snapshot"]
+            scope_workload_estimate = cached_scope["workload_estimate"]
+        else:
+            snapshot = zet_catalog_snapshot(root, entries)
+            scope_workload_estimate = zet_catalog_workload_estimate(all_items)
+        if item_cache is not None:
+            item_cache["__catalog_scope__"] = {
+                "path_count": len(entries),
+                "snapshot": snapshot,
+                "workload_estimate": scope_workload_estimate,
+                "entries": entries,
+            }
+        scan["scope_metrics_cache_reused"] = scope_cache_reusable
     if expected_snapshot_id and expected_snapshot_id != snapshot["id"]:
         blockers.append("catalog_snapshot_changed")
 
@@ -5453,8 +5664,14 @@ def zet_catalog(
         blockers.append("cursor is beyond the current catalog item count.")
 
     page_items: list[dict[str, Any]] = []
+    stopped_for_token_budget = False
+    single_item_exceeds_token_budget = False
     if not blockers:
-        page_items = [item for _path, _expected_status, item in entries[cursor : cursor + page_size]]
+        candidate_items = [item for _path, _expected_status, item, _signature in entries[cursor : cursor + page_size]]
+        page_items, stopped_for_token_budget, single_item_exceeds_token_budget = zet_catalog_budgeted_page(
+            candidate_items,
+            max_estimated_tokens=max_estimated_tokens,
+        )
     returned_count = len(page_items)
     next_cursor_value = cursor + returned_count
     complete = not blockers and next_cursor_value >= total_count
@@ -5468,13 +5685,24 @@ def zet_catalog(
         "redacted": 0,
         "frontmatter_unreadable": 0,
     }
-    for _path, _expected_status, item in entries:
+    for _path, _expected_status, item, _signature in entries:
         abstract_status = str(item.get("abstract_status") or "missing")
         abstract_counts[abstract_status] = abstract_counts.get(abstract_status, 0) + 1
     if abstract_counts.get("missing"):
         warnings.append(f"{abstract_counts['missing']} zet(s) have no explicit or compatibility abstract field.")
     if abstract_counts.get("frontmatter_unreadable"):
         warnings.append(f"{abstract_counts['frontmatter_unreadable']} zet(s) have unreadable frontmatter.")
+    if single_item_exceeds_token_budget:
+        warnings.append("One catalog item exceeds max_estimated_tokens by itself and was returned to preserve progress.")
+
+    workload_estimate = {
+        "method": "unicode_character_count_divided_by_4_heuristic",
+        "provider_reported": False,
+        "includes_response_envelope": False,
+        "includes_zet_bodies": False,
+        "scope": scope_workload_estimate,
+        "page": zet_catalog_workload_estimate(page_items),
+    }
 
     next_safe_actions = []
     if blockers:
@@ -5498,6 +5726,9 @@ def zet_catalog(
         "coverage": {
             "cursor": cursor,
             "page_size": page_size,
+            "max_estimated_tokens": max_estimated_tokens,
+            "stopped_for_token_budget": stopped_for_token_budget,
+            "single_item_exceeds_token_budget": single_item_exceeds_token_budget,
             "total_count": total_count,
             "returned_count": returned_count,
             "remaining_count": remaining_count,
@@ -5506,6 +5737,19 @@ def zet_catalog(
             "truncated": not complete,
         },
         "abstract_counts": abstract_counts,
+        "workload_estimate": workload_estimate,
+        "scan": scan,
+        "session_consistency": {
+            "mode": (
+                "materialized_snapshot_with_completion_revalidation"
+                if materialize_session_snapshot
+                else "live_verify_every_page"
+            ),
+            "materialized_snapshot_reused": materialized_snapshot_reused,
+            "completion_revalidation_required": bool(materialize_session_snapshot),
+            "completion_revalidation_performed": completion_revalidation_performed,
+            "changed_snapshot_blocks_completion": True,
+        },
         "items": page_items,
         "privacy_guards": {
             "zettel_body_text_read": False,
@@ -56715,7 +56959,7 @@ def ai_start_here(
             [
                 *next_lines,
                 "Read AGENTS.md when canonical_entrypoints marks it present.",
-                "Run zet-catalog and follow every page with the same snapshot id before claiming archive-wide coverage.",
+                "Run zet-catalog, inspect workload_estimate, set a host-appropriate max_estimated_tokens when needed, and follow every page with the same snapshot id before claiming archive-wide coverage.",
                 "Use only read-only commands until the human approves a write operation.",
             ]
         ),
@@ -56929,7 +57173,7 @@ def runtime_context_recommended_first_commands() -> list[dict[str, str]]:
         },
         {
             "command": "archive zet-catalog <archive-root> --status canonical --cursor 0 --dry-run --format json",
-            "purpose": "enumerate every canonical zet abstract and local connection with explicit completion coverage before claiming archive-wide understanding",
+            "purpose": "enumerate every canonical zet abstract and local connection with explicit completion and workload estimates before claiming archive-wide understanding",
         },
         {
             "command": "archive ai-response-concept-guide <archive-root> --topic all --dry-run --format json",
@@ -56973,7 +57217,7 @@ def runtime_context_ai_runtime_order() -> list[dict[str, Any]]:
             "step": 5,
             "action": "enumerate_zet_abstracts",
             "command": "archive zet-catalog <archive-root> --status canonical --cursor 0 --dry-run --format json",
-            "continuation": "follow next_cursor with the same snapshot id until complete=true; restart from cursor 0 if catalog_snapshot_changed",
+            "continuation": "inspect workload_estimate, optionally set max_estimated_tokens for the host context, follow next_cursor with the same snapshot id until complete=true, and restart from cursor 0 if catalog_snapshot_changed",
             "reason": "give the host every local zet abstract and connection clue before it chooses a broad body-reading order; never treat a truncated page as full coverage",
         },
         {

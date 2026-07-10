@@ -27949,6 +27949,118 @@ state:
         self.assertTrue(result["coverage"]["complete"])
         self.assertTrue(result["closed_actions"]["goal_or_loop_created"] is False)
 
+    def test_zet_catalog_token_budget_preserves_progress_and_reports_workload(self) -> None:
+        archive_root = KIT_ROOT / "examples" / "fake-life-archive"
+        code, output = self.run_cli(
+            [
+                "zet-catalog",
+                str(archive_root),
+                "--page-size",
+                "1000",
+                "--max-estimated-tokens",
+                "1",
+                "--dry-run",
+                "--format",
+                "json",
+            ]
+        )
+        self.assertEqual(code, 0, output)
+        result = json.loads(output)
+        self.assertEqual(result["schema"], "wom-kit/zet-catalog/v0.2")
+        self.assertEqual(result["coverage"]["returned_count"], 1)
+        self.assertTrue(result["coverage"]["stopped_for_token_budget"])
+        self.assertTrue(result["coverage"]["single_item_exceeds_token_budget"])
+        self.assertEqual(result["workload_estimate"]["method"], "unicode_character_count_divided_by_4_heuristic")
+        self.assertFalse(result["workload_estimate"]["provider_reported"])
+        self.assertFalse(result["workload_estimate"]["includes_zet_bodies"])
+        self.assertEqual(
+            result["workload_estimate"]["scope"]["item_count"],
+            result["coverage"]["total_count"],
+        )
+        self.assertGreater(result["workload_estimate"]["scope"]["estimated_items_json_tokens"], 0)
+        self.assertGreater(result["workload_estimate"]["page"]["items_json_utf8_bytes"], 0)
+
+        invalid_code, invalid_output = self.run_cli(
+            [
+                "zet-catalog",
+                str(archive_root),
+                "--max-estimated-tokens",
+                "0",
+                "--dry-run",
+                "--format",
+                "json",
+            ]
+        )
+        self.assertEqual(invalid_code, 1, invalid_output)
+        self.assertIn("max_estimated_tokens must be a positive integer", invalid_output)
+
+    def test_zet_catalog_1000_node_pass_reuses_ephemeral_frontmatter_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "archive"
+            zettels_root = archive_root / "zettels"
+            zettels_root.mkdir(parents=True)
+            (archive_root / "archive.yml").write_text(
+                "archive_id: archive:personal:catalog-scale-test\ntype: personal\n",
+                encoding="utf-8",
+            )
+            for index in range(1000):
+                zettel_id = f"zet_20260711_scale_{index:05d}"
+                previous_id = f"zet_20260711_scale_{index - 1:05d}" if index else None
+                edge_text = (
+                    f"edges:\n  - type: references\n    target: {previous_id}\n"
+                    if previous_id
+                    else "edges: []\n"
+                )
+                (zettels_root / f"{zettel_id}.md").write_text(
+                    "---\n"
+                    f"id: {zettel_id}\n"
+                    f"title: Scale fixture {index}\n"
+                    "status: canonical\n"
+                    "kind: benchmark_fixture\n"
+                    f"abstract: Compact scale abstract number {index} for deterministic coverage.\n"
+                    "facets:\n  domain: benchmark\n"
+                    + edge_text
+                    + "---\n\n# Body\n\nBODY_MUST_NOT_APPEAR\n",
+                    encoding="utf-8",
+                )
+
+            item_cache: dict[str, dict[str, object]] = {}
+            collected: list[str] = []
+            cursor = 0
+            snapshot_id: str | None = None
+            page_count = 0
+            while True:
+                result = archive_services.zet_catalog(
+                    archive_root,
+                    cursor=cursor,
+                    page_size=100,
+                    expected_snapshot_id=snapshot_id,
+                    dry_run=True,
+                    item_cache=item_cache,
+                    materialize_session_snapshot=True,
+                )
+                self.assertTrue(result["ok"], result)
+                page_count += 1
+                snapshot_id = snapshot_id or result["snapshot"]["id"]
+                if page_count == 1:
+                    self.assertEqual(result["scan"]["frontmatter_files_scanned"], 1000)
+                    self.assertEqual(result["scan"]["cached_items_reused"], 0)
+                else:
+                    self.assertEqual(result["scan"]["frontmatter_files_scanned"], 0)
+                    self.assertEqual(result["scan"]["cached_items_reused"], 1000)
+                self.assertNotIn("BODY_MUST_NOT_APPEAR", json.dumps(result, ensure_ascii=False))
+                collected.extend(item["id"] for item in result["items"])
+                if result["coverage"]["complete"]:
+                    break
+                cursor = result["coverage"]["next_cursor"]
+
+            self.assertEqual(page_count, 10)
+            self.assertEqual(len(collected), 1000)
+            self.assertEqual(len(set(collected)), 1000)
+            self.assertEqual(result["workload_estimate"]["scope"]["item_count"], 1000)
+            self.assertGreater(result["workload_estimate"]["scope"]["estimated_abstract_tokens"], 0)
+            self.assertGreater(result["workload_estimate"]["scope"]["estimated_items_json_tokens"], 0)
+
     def test_status_board_reports_mint_state_and_metadata_gaps_without_content_echo(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")

@@ -72,6 +72,15 @@ and `--expected-snapshot-id <snapshot.id>`. Continue until `complete` is true.
 If `catalog_snapshot_changed` blocks a later page, restart at cursor 0 instead
 of mixing pages from two archive states.
 
+Read `workload_estimate` before choosing page size. When one page would exceed
+the host application's remaining context, add `--max-estimated-tokens <budget>`
+or MCP `max_estimated_tokens`. This is a four-characters-per-token estimate for
+catalog item JSON, not provider-reported usage and not a reason to skip nodes.
+Continue across host loops until coverage is complete. MCP materializes the
+first-page snapshot for fast intermediate pages and revalidates local file
+metadata before returning the completing page; restart if that final check
+reports `catalog_snapshot_changed`.
+
 Use returned abstracts, ties, and edges to choose body-reading order. Search and
 saved views may help, but a top-k search result or one truncated page is not
 exhaustive coverage. Read one compact first view before requesting a body:

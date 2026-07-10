@@ -747,6 +747,10 @@ class McpServerTests(unittest.TestCase):
                 tools_by_name["zet_catalog"]["inputSchema"]["properties"]["page_size"]["maximum"],
                 1000,
             )
+            self.assertEqual(
+                tools_by_name["zet_catalog"]["inputSchema"]["properties"]["max_estimated_tokens"]["minimum"],
+                1,
+            )
             self.assertIn("ownership_transfer_check", tool_names)
             share_required = tools_by_name["share_check"]["inputSchema"]["required"]
             delegate_schema = tools_by_name["delegate_zet_check"]["inputSchema"]
@@ -7024,6 +7028,14 @@ class McpServerTests(unittest.TestCase):
                     self.assertEqual(structured["snapshot"]["id"], snapshot_id)
                     self.assertFalse(structured["privacy_guards"]["zettel_body_text_read"])
                     self.assertNotIn("PRIVATE_MCP_BODY", json.dumps(structured, ensure_ascii=False))
+                    if cursor == 0:
+                        self.assertEqual(structured["scan"]["frontmatter_files_scanned"], len(canonical_paths))
+                        self.assertEqual(structured["scan"]["cached_items_reused"], 0)
+                    else:
+                        self.assertEqual(structured["scan"]["frontmatter_files_scanned"], 0)
+                        self.assertEqual(structured["scan"]["cached_items_reused"], len(canonical_paths))
+                    self.assertEqual(structured["scan"]["cache_mode"], "process_local_ephemeral")
+                    self.assertGreater(structured["workload_estimate"]["scope"]["estimated_items_json_tokens"], 0)
                     collected.extend(item["id"] for item in structured["items"])
                     if structured["coverage"]["complete"]:
                         self.assertEqual(structured["coverage"]["remaining_count"], 0)
@@ -7057,7 +7069,7 @@ class McpServerTests(unittest.TestCase):
                             "name": "zet_catalog",
                             "arguments": {
                                 "archive_root": str(archive_root),
-                                "cursor": first_page["coverage"]["next_cursor"],
+                                "cursor": first_page["coverage"]["total_count"] - 1,
                                 "page_size": 1,
                                 "expected_snapshot_id": first_page["snapshot"]["id"],
                             },
@@ -7068,12 +7080,34 @@ class McpServerTests(unittest.TestCase):
                 blocked_result = blocked["result"]["structuredContent"]
                 self.assertFalse(blocked_result["ok"])
                 self.assertIn("catalog_snapshot_changed", blocked_result["blockers"])
+                self.assertEqual(blocked_result["scan"]["frontmatter_files_scanned"], 1)
+                self.assertEqual(blocked_result["scan"]["cached_items_reused"], len(canonical_paths) - 1)
+
+                budgeted = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": request_id + 2,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "zet_catalog",
+                            "arguments": {
+                                "archive_root": str(archive_root),
+                                "page_size": 1000,
+                                "max_estimated_tokens": 1,
+                            },
+                        },
+                    },
+                )["result"]["structuredContent"]
+                self.assertEqual(budgeted["coverage"]["returned_count"], 1)
+                self.assertTrue(budgeted["coverage"]["single_item_exceeds_token_budget"])
+                self.assertTrue(budgeted["coverage"]["stopped_for_token_budget"])
 
                 write_attempt = self.send(
                     process,
                     {
                         "jsonrpc": "2.0",
-                        "id": request_id + 2,
+                        "id": request_id + 3,
                         "method": "tools/call",
                         "params": {
                             "name": "zet_catalog",
