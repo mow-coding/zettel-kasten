@@ -2787,7 +2787,7 @@ ZETTEL_READ_SECTIONS = {"overview", "body", "document", "details", "all"}
 ZETTEL_OVERVIEW_GIST_CHAR_LIMIT = 360
 ZET_ABSTRACT_MAX_CHARS = ZETTEL_OVERVIEW_GIST_CHAR_LIMIT
 ZETTEL_OVERVIEW_FRONTMATTER_FIELDS = ("abstract", "gist", "summary", "description", "overview")
-ZET_CATALOG_SCHEMA = "wom-kit/zet-catalog/v0.6"
+ZET_CATALOG_SCHEMA = "wom-kit/zet-catalog/v0.7"
 ZET_CATALOG_MAX_PAGE_SIZE = 10000
 ZET_CATALOG_PROJECTIONS = {"full", "reading", "routed_reading"}
 ZET_CATALOG_COVERAGE_MODES = {"page", "strict"}
@@ -5831,6 +5831,38 @@ def zet_catalog_workload_estimate(items: list[dict[str, Any]]) -> dict[str, int]
     }
 
 
+def zet_catalog_response_measurement(result: dict[str, Any]) -> dict[str, Any]:
+    probe = dict(result)
+    workload = dict(probe.get("workload_estimate", {}))
+    workload.pop("response", None)
+    probe["workload_estimate"] = workload
+    payload = json.dumps(probe, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    items = probe.get("items") if isinstance(probe.get("items"), list) else []
+    items_payload = "[" + ",".join(zet_catalog_item_json(item) for item in items if isinstance(item, dict)) + "]"
+    payload_chars = len(payload)
+    payload_bytes = len(payload.encode("utf-8"))
+    items_chars = len(items_payload)
+    items_bytes = len(items_payload.encode("utf-8"))
+    envelope_chars = max(0, payload_chars - items_chars)
+    envelope_bytes = max(0, payload_bytes - items_bytes)
+    return {
+        "basis": "compact_sorted_service_result_json_excluding_this_measurement",
+        "provider_reported": False,
+        "service_result_json_chars": payload_chars,
+        "service_result_json_utf8_bytes": payload_bytes,
+        "estimated_service_result_json_tokens": zet_catalog_estimated_tokens_from_chars(payload_chars),
+        "items_json_chars": items_chars,
+        "estimated_items_json_tokens": zet_catalog_estimated_tokens_from_chars(items_chars),
+        "response_envelope_json_chars": envelope_chars,
+        "response_envelope_json_utf8_bytes": envelope_bytes,
+        "estimated_response_envelope_tokens": zet_catalog_estimated_tokens_from_chars(envelope_chars),
+        "includes_this_measurement": False,
+        "includes_cli_pretty_print_whitespace": False,
+        "includes_mcp_jsonrpc_envelope": False,
+        "includes_zet_bodies": False,
+    }
+
+
 def zet_catalog_budgeted_page(
     items: list[dict[str, Any]],
     *,
@@ -5964,6 +5996,7 @@ def zet_catalog(
     cursor: int = 0,
     page_size: int = 200,
     max_estimated_tokens: int | None = None,
+    response_envelope_reserve_tokens: int = 0,
     expected_snapshot_id: str | None = None,
     continuation_token: str | None = None,
     dry_run: bool = False,
@@ -5998,6 +6031,15 @@ def zet_catalog(
         blockers.append(f"page_size must be between 1 and {ZET_CATALOG_MAX_PAGE_SIZE}.")
     if max_estimated_tokens is not None and max_estimated_tokens < 1:
         blockers.append("max_estimated_tokens must be a positive integer when provided.")
+    if response_envelope_reserve_tokens < 0:
+        blockers.append("response_envelope_reserve_tokens must be a non-negative integer.")
+    if response_envelope_reserve_tokens and max_estimated_tokens is None:
+        blockers.append("response_envelope_reserve_tokens requires max_estimated_tokens.")
+    effective_items_token_budget = (
+        max(1, max_estimated_tokens - response_envelope_reserve_tokens)
+        if max_estimated_tokens is not None
+        else None
+    )
     if expected_snapshot_id and not re.match(r"^sha256:[0-9a-f]{64}$", expected_snapshot_id):
         blockers.append("expected_snapshot_id must use sha256:<64 lowercase hex> syntax.")
     continuation_payload, expected_snapshot_id = zet_catalog_continuation_context(
@@ -6053,7 +6095,7 @@ def zet_catalog(
         ]
         preview_page, _preview_stopped, _preview_single = zet_catalog_budgeted_page(
             preview_candidates,
-            max_estimated_tokens=max_estimated_tokens,
+            max_estimated_tokens=effective_items_token_budget,
         )
         preview_would_complete = cursor + len(preview_page) >= len(materialized_ordered_entries)
         if not preview_would_complete:
@@ -6248,7 +6290,7 @@ def zet_catalog(
         candidate_items = all_items[cursor : cursor + page_size]
         page_items, stopped_for_token_budget, single_item_exceeds_token_budget = zet_catalog_budgeted_page(
             candidate_items,
-            max_estimated_tokens=max_estimated_tokens,
+            max_estimated_tokens=effective_items_token_budget,
         )
     returned_count = len(page_items)
     next_cursor_value = cursor + returned_count
@@ -6328,7 +6370,14 @@ def zet_catalog(
             f"{identity_coverage['unaddressable_entry_count']} zet file(s) lack a readable safe frontmatter id."
         )
     if single_item_exceeds_token_budget:
-        warnings.append("One catalog item exceeds max_estimated_tokens by itself and was returned to preserve progress.")
+        warnings.append("One catalog item exceeds the effective items token budget by itself and was returned to preserve progress.")
+    if (
+        max_estimated_tokens is not None
+        and response_envelope_reserve_tokens >= max_estimated_tokens
+    ):
+        warnings.append(
+            "The response envelope reserve leaves no positive items budget; one item is still allowed to preserve progress."
+        )
 
     workload_estimate = {
         "method": "unicode_character_count_divided_by_4_heuristic",
@@ -6362,7 +6411,7 @@ def zet_catalog(
                 "Resolve duplicate, missing, or unsafe zet ids before relying on id-only follow-up body reads."
             )
 
-    return {
+    result = {
         "ok": not blockers,
         "dry_run": bool(dry_run),
         "lifecycle_action": "zet_catalog",
@@ -6378,6 +6427,8 @@ def zet_catalog(
             "mode": coverage_mode,
             "page_size": page_size,
             "max_estimated_tokens": max_estimated_tokens,
+            "response_envelope_reserve_tokens": response_envelope_reserve_tokens,
+            "effective_items_token_budget": effective_items_token_budget,
             "stopped_for_token_budget": stopped_for_token_budget,
             "single_item_exceeds_token_budget": single_item_exceeds_token_budget,
             "total_count": total_count,
@@ -6441,6 +6492,41 @@ def zet_catalog(
         "blockers": unique_preserve_order(blockers),
         "warnings": unique_preserve_order(warnings),
     }
+    provisional_response_measurement = zet_catalog_response_measurement(result)
+    response_budget_active = bool(response_envelope_reserve_tokens and max_estimated_tokens is not None)
+    estimated_response_tokens = provisional_response_measurement["estimated_service_result_json_tokens"]
+    if response_budget_active and estimated_response_tokens > int(max_estimated_tokens or 0):
+        result["warnings"] = unique_preserve_order(
+            [
+                *result["warnings"],
+                "The measured compact service-result estimate exceeds max_estimated_tokens; increase response_envelope_reserve_tokens or the total host budget.",
+            ]
+        )
+        result["next_safe_actions"] = unique_preserve_order(
+            [
+                *result["next_safe_actions"],
+                "Use the measured response envelope estimate to reserve more tokens on the next page; never drop nodes to fit the context.",
+            ]
+        )
+    response_measurement = zet_catalog_response_measurement(result)
+    response_measurement["budget"] = {
+        "reserve_active": response_budget_active,
+        "requested_total_estimated_tokens": max_estimated_tokens if response_budget_active else None,
+        "response_envelope_reserve_tokens": response_envelope_reserve_tokens,
+        "effective_items_token_budget": effective_items_token_budget,
+        "estimated_total_within_requested_budget": (
+            response_measurement["estimated_service_result_json_tokens"] <= int(max_estimated_tokens or 0)
+            if response_budget_active
+            else None
+        ),
+        "reserve_covers_measured_envelope": (
+            response_envelope_reserve_tokens >= response_measurement["estimated_response_envelope_tokens"]
+            if response_budget_active
+            else None
+        ),
+    }
+    result["workload_estimate"]["response"] = response_measurement
+    return result
 
 
 def objet_ref_occurrences_in_text(text: str, *, source: str, field: str | None = None) -> list[dict[str, Any]]:
@@ -57631,7 +57717,7 @@ def ai_start_here(
             [
                 *next_lines,
                 "Read AGENTS.md when canonical_entrypoints marks it present.",
-                "Run zet-catalog with projection=reading and coverage_mode=strict, inspect workload_estimate, set a host-appropriate max_estimated_tokens when needed, and follow every page with its continuation token before claiming archive-wide node coverage.",
+                "Run zet-catalog with projection=reading and coverage_mode=strict, inspect item and compact response-envelope estimates, set a host-appropriate max_estimated_tokens plus an explicit response_envelope_reserve_tokens when needed, and follow every page with its continuation token before claiming archive-wide node coverage.",
                 "Treat archive_wide_coverage_claim_ready as node visitation only; require archive_wide_abstract_reading_claim_ready before saying every required abstract was available and read, and report abstract gaps without auto-writing replacements.",
                 "If the host goal already supplies verified zet ids, use seeded_connection_walk with those ids; never invent a seed or stop after the seeded component.",
                 "Keep projection=reading for the compact pass; use routed_reading with seeded_connection_walk only when the host or human needs a per-item explanation of the connection order and can afford the larger payload.",
@@ -57892,7 +57978,7 @@ def runtime_context_ai_runtime_order() -> list[dict[str, Any]]:
             "step": 5,
             "action": "enumerate_zet_abstracts",
             "command": "archive zet-catalog <archive-root> --status canonical --projection reading --coverage-mode strict --cursor 0 --dry-run --format json",
-            "continuation": "inspect workload_estimate, optionally set max_estimated_tokens for the host context, follow next_cursor with the same snapshot id and continuation_token until archive_wide_coverage_claim_ready=true, then check archive_wide_abstract_reading_claim_ready and archive_wide_followup_resolution_ready separately; restart from cursor 0 if catalog_snapshot_changed",
+            "continuation": "inspect workload_estimate.page and workload_estimate.response, optionally split max_estimated_tokens with response_envelope_reserve_tokens for the host context, follow next_cursor with the same snapshot id and continuation_token until archive_wide_coverage_claim_ready=true, then check archive_wide_abstract_reading_claim_ready and archive_wide_followup_resolution_ready separately; restart from cursor 0 if catalog_snapshot_changed",
             "optional_seed_order": "when the host goal already provides verified zet ids, add --order seeded_connection_walk and repeated --start-zettel-id values; the walk still includes every disconnected component",
             "optional_route_evidence": "keep projection=reading for compact coverage; switch to routed_reading only with seeded_connection_walk when per-item seed, tie-passage, and disconnected-component reasons are needed",
             "reason": "give the host every local zet node's available first-read text and connection clues before it chooses a broad body-reading order; never equate node visitation with complete abstract availability",

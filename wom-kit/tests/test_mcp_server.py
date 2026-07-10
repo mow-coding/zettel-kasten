@@ -752,6 +752,10 @@ class McpServerTests(unittest.TestCase):
                 1,
             )
             self.assertEqual(
+                tools_by_name["zet_catalog"]["inputSchema"]["properties"]["response_envelope_reserve_tokens"]["minimum"],
+                0,
+            )
+            self.assertEqual(
                 tools_by_name["zet_catalog"]["inputSchema"]["properties"]["projection"]["default"],
                 "full",
             )
@@ -7178,6 +7182,8 @@ class McpServerTests(unittest.TestCase):
                         "start_zettel_ids": [canonical_ids[-1]],
                         "cursor": cursor,
                         "page_size": 1,
+                        "max_estimated_tokens": 5000,
+                        "response_envelope_reserve_tokens": 2500,
                     }
                     if continuation_token:
                         arguments["continuation_token"] = continuation_token
@@ -7197,6 +7203,13 @@ class McpServerTests(unittest.TestCase):
                     self.assertTrue(structured["ok"], structured)
                     self.assertEqual(structured["projection"], "routed_reading")
                     self.assertTrue(structured["coverage"]["contiguous_prefix_verified"])
+                    self.assertEqual(structured["coverage"]["effective_items_token_budget"], 2500)
+                    self.assertTrue(structured["workload_estimate"]["response"]["budget"]["reserve_active"])
+                    self.assertTrue(
+                        structured["workload_estimate"]["response"]["budget"][
+                            "estimated_total_within_requested_budget"
+                        ]
+                    )
                     self.assertNotIn("STRICT_BODY_MARKER", json.dumps(structured, ensure_ascii=False))
                     for item in structured["items"]:
                         self.assertNotIn("path", item)

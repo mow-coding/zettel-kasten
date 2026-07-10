@@ -62,6 +62,7 @@ def run_catalog_benchmark(
     zet_count: int,
     page_size: int,
     max_estimated_tokens: int | None,
+    response_envelope_reserve_tokens: int,
     projection: str,
     coverage_mode: str,
     order_mode: str,
@@ -80,6 +81,9 @@ def run_catalog_benchmark(
     completion_revalidation_pages = 0
     max_page_estimated_items_json_tokens = 0
     pages_over_requested_token_budget = 0
+    max_page_estimated_service_result_tokens = 0
+    pages_over_requested_response_budget = 0
+    pages_with_insufficient_envelope_reserve = 0
     final_result: dict[str, Any] | None = None
 
     started = time.perf_counter()
@@ -94,6 +98,7 @@ def run_catalog_benchmark(
             cursor=cursor,
             page_size=page_size,
             max_estimated_tokens=max_estimated_tokens,
+            response_envelope_reserve_tokens=response_envelope_reserve_tokens,
             expected_snapshot_id=snapshot_id,
             continuation_token=continuation_token,
             dry_run=True,
@@ -120,12 +125,24 @@ def run_catalog_benchmark(
             completion_revalidation_pages += 1
         page_tokens = int(result["workload_estimate"]["page"]["estimated_items_json_tokens"])
         max_page_estimated_items_json_tokens = max(max_page_estimated_items_json_tokens, page_tokens)
+        effective_items_budget = result["coverage"].get("effective_items_token_budget")
         if (
-            max_estimated_tokens is not None
-            and page_tokens > max_estimated_tokens
+            effective_items_budget is not None
+            and page_tokens > int(effective_items_budget)
             and not result["coverage"]["single_item_exceeds_token_budget"]
         ):
             pages_over_requested_token_budget += 1
+        response_measurement = result["workload_estimate"]["response"]
+        response_tokens = int(response_measurement["estimated_service_result_json_tokens"])
+        max_page_estimated_service_result_tokens = max(
+            max_page_estimated_service_result_tokens,
+            response_tokens,
+        )
+        response_budget = response_measurement["budget"]
+        if response_budget["reserve_active"] and not response_budget["estimated_total_within_requested_budget"]:
+            pages_over_requested_response_budget += 1
+        if response_budget["reserve_active"] and not response_budget["reserve_covers_measured_envelope"]:
+            pages_with_insufficient_envelope_reserve += 1
         if result["coverage"]["complete"]:
             break
         cursor = int(result["coverage"]["next_cursor"])
@@ -141,6 +158,7 @@ def run_catalog_benchmark(
             "zet_count": zet_count,
             "page_size": page_size,
             "max_estimated_tokens": max_estimated_tokens,
+            "response_envelope_reserve_tokens": response_envelope_reserve_tokens,
             "projection": projection,
             "coverage_mode": coverage_mode,
             "order_mode": order_mode,
@@ -183,8 +201,13 @@ def run_catalog_benchmark(
         "order_evidence": final_result["order_evidence"],
         "page_budget_observation": {
             "requested_max_estimated_tokens": max_estimated_tokens,
+            "response_envelope_reserve_tokens": response_envelope_reserve_tokens,
+            "effective_items_token_budget": final_result["coverage"]["effective_items_token_budget"],
             "max_page_estimated_items_json_tokens": max_page_estimated_items_json_tokens,
             "pages_over_requested_token_budget": pages_over_requested_token_budget,
+            "max_page_estimated_service_result_tokens": max_page_estimated_service_result_tokens,
+            "pages_over_requested_response_budget": pages_over_requested_response_budget,
+            "pages_with_insufficient_envelope_reserve": pages_with_insufficient_envelope_reserve,
         },
         "safety": {
             "real_archive_read": False,
@@ -236,6 +259,12 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Optional approximate items-only token budget per page.",
     )
+    parser.add_argument(
+        "--response-envelope-reserve-tokens",
+        type=int,
+        default=0,
+        help="Optional tokens reserved from max-estimated-tokens for non-item compact service-result fields.",
+    )
     parser.add_argument("--format", choices=["json", "text"], default="text")
     args = parser.parse_args(argv)
 
@@ -247,6 +276,10 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(f"--abstract-chars must be between 1 and {archive_services.ZET_ABSTRACT_MAX_CHARS}")
     if args.max_estimated_tokens is not None and args.max_estimated_tokens < 1:
         parser.error("--max-estimated-tokens must be positive")
+    if args.response_envelope_reserve_tokens < 0:
+        parser.error("--response-envelope-reserve-tokens must be non-negative")
+    if args.response_envelope_reserve_tokens and args.max_estimated_tokens is None:
+        parser.error("--response-envelope-reserve-tokens requires --max-estimated-tokens")
     if any(index < 0 or index >= args.zet_count for index in args.seed_index):
         parser.error("--seed-index must refer to a generated zet")
     if args.order_mode == "seeded_connection_walk" and not args.seed_index:
@@ -267,6 +300,7 @@ def main(argv: list[str] | None = None) -> int:
             zet_count=args.zet_count,
             page_size=args.page_size,
             max_estimated_tokens=args.max_estimated_tokens,
+            response_envelope_reserve_tokens=args.response_envelope_reserve_tokens,
             projection=args.projection,
             coverage_mode=args.coverage_mode,
             order_mode=args.order_mode,

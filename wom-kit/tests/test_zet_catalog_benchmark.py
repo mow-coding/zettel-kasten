@@ -23,7 +23,9 @@ class ZetCatalogBenchmarkTests(unittest.TestCase):
                 "--abstract-chars",
                 "80",
                 "--max-estimated-tokens",
-                "2000",
+                "5000",
+                "--response-envelope-reserve-tokens",
+                "2500",
                 "--projection",
                 "routed_reading",
                 "--coverage-mode",
@@ -70,8 +72,16 @@ class ZetCatalogBenchmarkTests(unittest.TestCase):
         self.assertFalse(report["safety"]["real_archive_read"])
         self.assertFalse(report["safety"]["zet_bodies_read"])
         self.assertGreater(report["workload_estimate"]["scope"]["estimated_items_json_tokens"], 0)
-        self.assertLessEqual(report["page_budget_observation"]["max_page_estimated_items_json_tokens"], 2000)
+        self.assertEqual(report["page_budget_observation"]["effective_items_token_budget"], 2500)
+        self.assertLessEqual(report["page_budget_observation"]["max_page_estimated_items_json_tokens"], 2500)
         self.assertEqual(report["page_budget_observation"]["pages_over_requested_token_budget"], 0)
+        self.assertLessEqual(report["page_budget_observation"]["max_page_estimated_service_result_tokens"], 5000)
+        self.assertEqual(report["page_budget_observation"]["pages_over_requested_response_budget"], 0)
+        self.assertEqual(report["page_budget_observation"]["pages_with_insufficient_envelope_reserve"], 0)
+        self.assertEqual(
+            report["workload_estimate"]["response"]["basis"],
+            "compact_sorted_service_result_json_excluding_this_measurement",
+        )
 
 
 if __name__ == "__main__":

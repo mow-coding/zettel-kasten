@@ -6,6 +6,30 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.211 - 2026-07-11
+
+Whole-response token observability checkpoint. Additive; no archive migration.
+
+- **Measured service-result size.** Every catalog page now reports compact,
+  sorted service-result JSON characters/bytes/tokens, items JSON, and the
+  non-item response envelope. The transparent four-characters-per-token
+  heuristic remains provider-independent.
+- **Explicit measurement boundary.** The estimate excludes its own measurement
+  block, CLI pretty-print whitespace, MCP JSON-RPC framing, and zet bodies.
+  Those exclusions are machine-readable rather than implied.
+- **Opt-in envelope reserve.** CLI/MCP
+  `response_envelope_reserve_tokens` subtracts an explicit reserve from
+  `max_estimated_tokens`; the remainder becomes the effective items budget.
+  Omitting the reserve preserves the existing items-only budget semantics.
+- **Honest insufficiency.** The result reports whether the reserve covered the
+  observed envelope and whether the measured compact service result stayed
+  within the requested total. An undersized reserve warns and suggests a larger
+  reserve on the next page; it never drops nodes or stalls at zero items.
+- **Scale result.** A synthetic 10,000-node compact reading pass with 8,000
+  requested total tokens and a 2,500-token envelope reserve completed 264 pages;
+  the largest measured service-result estimate was 6,879 tokens, with zero
+  item-budget, response-budget, or reserve-insufficiency pages.
+
 ## v0.3.210 - 2026-07-11
 
 Explainable connection-order checkpoint. Additive; no archive migration.

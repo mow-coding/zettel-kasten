@@ -28016,6 +28016,7 @@ state:
         self.assertIn("Node coverage claim ready: yes", text_output)
         self.assertIn("All required abstracts ready: no", text_output)
         self.assertIn("Unique id follow-up ready: yes", text_output)
+        self.assertIn("Estimated compact service-result tokens:", text_output)
 
     def test_zet_catalog_separates_abstract_readiness_from_unique_id_followup(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -28074,7 +28075,7 @@ state:
                 result = json.loads(next_output)
                 pages.append(result)
 
-            self.assertEqual(result["schema"], "wom-kit/zet-catalog/v0.6")
+            self.assertEqual(result["schema"], "wom-kit/zet-catalog/v0.7")
             self.assertTrue(result["coverage"]["archive_wide_coverage_claim_ready"])
             self.assertTrue(result["abstract_coverage"]["all_required_first_reads_available"])
             self.assertTrue(result["coverage"]["archive_wide_abstract_reading_claim_ready"])
@@ -28111,7 +28112,7 @@ state:
         )
         self.assertEqual(code, 0, output)
         result = json.loads(output)
-        self.assertEqual(result["schema"], "wom-kit/zet-catalog/v0.6")
+        self.assertEqual(result["schema"], "wom-kit/zet-catalog/v0.7")
         self.assertEqual(result["coverage"]["returned_count"], 1)
         self.assertTrue(result["coverage"]["stopped_for_token_budget"])
         self.assertTrue(result["coverage"]["single_item_exceeds_token_budget"])
@@ -28124,6 +28125,74 @@ state:
         )
         self.assertGreater(result["workload_estimate"]["scope"]["estimated_items_json_tokens"], 0)
         self.assertGreater(result["workload_estimate"]["page"]["items_json_utf8_bytes"], 0)
+        response_measurement = result["workload_estimate"]["response"]
+        self.assertEqual(
+            response_measurement["basis"],
+            "compact_sorted_service_result_json_excluding_this_measurement",
+        )
+        self.assertGreater(
+            response_measurement["estimated_service_result_json_tokens"],
+            response_measurement["estimated_items_json_tokens"],
+        )
+        self.assertGreater(response_measurement["estimated_response_envelope_tokens"], 0)
+        self.assertFalse(response_measurement["includes_this_measurement"])
+        self.assertFalse(response_measurement["includes_cli_pretty_print_whitespace"])
+        self.assertFalse(response_measurement["includes_mcp_jsonrpc_envelope"])
+        self.assertFalse(response_measurement["budget"]["reserve_active"])
+
+        reserved_code, reserved_output = self.run_cli(
+            [
+                "zet-catalog",
+                str(archive_root),
+                "--projection",
+                "reading",
+                "--coverage-mode",
+                "strict",
+                "--page-size",
+                "1000",
+                "--max-estimated-tokens",
+                "5000",
+                "--response-envelope-reserve-tokens",
+                "2500",
+                "--dry-run",
+                "--format",
+                "json",
+            ]
+        )
+        self.assertEqual(reserved_code, 0, reserved_output)
+        reserved = json.loads(reserved_output)
+        self.assertEqual(reserved["coverage"]["effective_items_token_budget"], 2500)
+        self.assertTrue(reserved["workload_estimate"]["response"]["budget"]["reserve_active"])
+        self.assertTrue(
+            reserved["workload_estimate"]["response"]["budget"]["estimated_total_within_requested_budget"]
+        )
+        self.assertTrue(
+            reserved["workload_estimate"]["response"]["budget"]["reserve_covers_measured_envelope"]
+        )
+
+        insufficient_code, insufficient_output = self.run_cli(
+            [
+                "zet-catalog",
+                str(archive_root),
+                "--max-estimated-tokens",
+                "100",
+                "--response-envelope-reserve-tokens",
+                "99",
+                "--dry-run",
+                "--format",
+                "json",
+            ]
+        )
+        self.assertEqual(insufficient_code, 0, insufficient_output)
+        insufficient = json.loads(insufficient_output)
+        self.assertEqual(insufficient["coverage"]["effective_items_token_budget"], 1)
+        self.assertFalse(
+            insufficient["workload_estimate"]["response"]["budget"]["estimated_total_within_requested_budget"]
+        )
+        self.assertFalse(
+            insufficient["workload_estimate"]["response"]["budget"]["reserve_covers_measured_envelope"]
+        )
+        self.assertIn("measured compact service-result estimate exceeds", insufficient_output)
 
         invalid_code, invalid_output = self.run_cli(
             [
@@ -28138,6 +28207,36 @@ state:
         )
         self.assertEqual(invalid_code, 1, invalid_output)
         self.assertIn("max_estimated_tokens must be a positive integer", invalid_output)
+
+        reserve_without_budget_code, reserve_without_budget_output = self.run_cli(
+            [
+                "zet-catalog",
+                str(archive_root),
+                "--response-envelope-reserve-tokens",
+                "100",
+                "--dry-run",
+                "--format",
+                "json",
+            ]
+        )
+        self.assertEqual(reserve_without_budget_code, 1, reserve_without_budget_output)
+        self.assertIn("requires max_estimated_tokens", reserve_without_budget_output)
+
+        negative_reserve_code, negative_reserve_output = self.run_cli(
+            [
+                "zet-catalog",
+                str(archive_root),
+                "--max-estimated-tokens",
+                "1000",
+                "--response-envelope-reserve-tokens",
+                "-1",
+                "--dry-run",
+                "--format",
+                "json",
+            ]
+        )
+        self.assertEqual(negative_reserve_code, 1, negative_reserve_output)
+        self.assertIn("must be a non-negative integer", negative_reserve_output)
 
     def test_zet_catalog_reading_projection_keeps_abstracts_and_edges_without_full_item_fields(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

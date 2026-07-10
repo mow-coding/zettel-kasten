@@ -82,10 +82,14 @@ auto-write replacement abstracts. Before id-only body follow-up, also require
 `archive_wide_followup_resolution_ready`; duplicate or unreadable ids must be
 repaired or handled through an explicitly reviewed path.
 
-Read `workload_estimate` before choosing page size. When one page would exceed
-the host application's remaining context, add `--max-estimated-tokens <budget>`
-or MCP `max_estimated_tokens`. This is a four-characters-per-token estimate for
-catalog item JSON, not provider-reported usage and not a reason to skip nodes.
+Read `workload_estimate` before choosing page size. It separates items from the
+measured compact service-result envelope. When one page would exceed the host
+application's remaining context, add `--max-estimated-tokens <budget>` and, for
+a whole-result planning target, reserve envelope room with
+`--response-envelope-reserve-tokens <reserve>` (MCP uses the underscore names).
+The measurement excludes its own block, CLI pretty whitespace, and MCP/JSON-RPC
+framing. It is a four-characters-per-token heuristic, not provider-reported
+usage and not a reason to skip nodes.
 Continue across host loops until coverage is complete. MCP materializes the
 first-page snapshot for fast intermediate pages and revalidates local file
 metadata before returning the completing page; restart if that final check

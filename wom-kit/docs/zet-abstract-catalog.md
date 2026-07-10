@@ -1,6 +1,6 @@
 # zet Abstract And Live Catalog Contract
 
-Status: implemented CLI baseline in v0.3.204; MCP/host baseline in v0.3.205; scale/token baseline in v0.3.206; compact strict reading in v0.3.207; seeded exhaustive order in v0.3.208; separate first-read readiness in v0.3.209; routed order evidence in v0.3.210
+Status: implemented CLI baseline in v0.3.204; MCP/host baseline in v0.3.205; scale/token baseline in v0.3.206; compact strict reading in v0.3.207; seeded exhaustive order in v0.3.208; separate first-read readiness in v0.3.209; routed order evidence in v0.3.210; response-envelope observability in v0.3.211
 
 ## Purpose
 
@@ -177,6 +177,12 @@ CLI `--max-estimated-tokens <n>` and MCP `max_estimated_tokens` stop a page
 before its estimated items-only JSON exceeds the requested budget. One item is
 still returned when that item exceeds the budget by itself, so a host loop
 cannot get stuck without advancing its cursor.
+
+v0.3.211 adds `workload_estimate.response` for compact service-result and
+non-item envelope size. Optional `response_envelope_reserve_tokens` subtracts
+explicit envelope room from `max_estimated_tokens`; without it, existing
+items-only semantics remain unchanged. See
+[zet Catalog Response Envelope Budget](zet-catalog-response-envelope-budget.md).
 
 ## MCP Session Snapshot
 
