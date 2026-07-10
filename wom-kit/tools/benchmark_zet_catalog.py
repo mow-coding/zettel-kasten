@@ -64,6 +64,8 @@ def run_catalog_benchmark(
     max_estimated_tokens: int | None,
     projection: str,
     coverage_mode: str,
+    order_mode: str,
+    start_zettel_ids: list[str],
 ) -> dict[str, Any]:
     item_cache: dict[str, dict[str, Any]] = {}
     cursor = 0
@@ -87,6 +89,8 @@ def run_catalog_benchmark(
             root,
             projection=projection,
             coverage_mode=coverage_mode,
+            order_mode=order_mode,
+            start_zettel_ids=start_zettel_ids,
             cursor=cursor,
             page_size=page_size,
             max_estimated_tokens=max_estimated_tokens,
@@ -139,6 +143,8 @@ def run_catalog_benchmark(
             "max_estimated_tokens": max_estimated_tokens,
             "projection": projection,
             "coverage_mode": coverage_mode,
+            "order_mode": order_mode,
+            "start_zettel_ids": start_zettel_ids,
         },
         "coverage": {
             "page_count": page_count,
@@ -165,6 +171,7 @@ def run_catalog_benchmark(
             "slowest_page": round(max(page_seconds), 6),
         },
         "workload_estimate": final_result["workload_estimate"],
+        "order_evidence": final_result["order_evidence"],
         "page_budget_observation": {
             "requested_max_estimated_tokens": max_estimated_tokens,
             "max_page_estimated_items_json_tokens": max_page_estimated_items_json_tokens,
@@ -201,6 +208,20 @@ def main(argv: list[str] | None = None) -> int:
         help="Compatibility page mode or strict contiguous-prefix mode.",
     )
     parser.add_argument(
+        "--order",
+        dest="order_mode",
+        choices=sorted(archive_services.ZET_CATALOG_ORDER_MODES),
+        default="path",
+        help="Catalog reading order.",
+    )
+    parser.add_argument(
+        "--seed-index",
+        type=int,
+        action="append",
+        default=[],
+        help="Synthetic zet index used as a verified seed for seeded_connection_walk.",
+    )
+    parser.add_argument(
         "--max-estimated-tokens",
         type=int,
         default=None,
@@ -217,6 +238,13 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(f"--abstract-chars must be between 1 and {archive_services.ZET_ABSTRACT_MAX_CHARS}")
     if args.max_estimated_tokens is not None and args.max_estimated_tokens < 1:
         parser.error("--max-estimated-tokens must be positive")
+    if any(index < 0 or index >= args.zet_count for index in args.seed_index):
+        parser.error("--seed-index must refer to a generated zet")
+    if args.order_mode == "seeded_connection_walk" and not args.seed_index:
+        parser.error("--order seeded_connection_walk requires at least one --seed-index")
+    if args.order_mode == "path" and args.seed_index:
+        parser.error("--seed-index requires --order seeded_connection_walk")
+    start_zettel_ids = [f"zet_20260711_benchmark_{index:05d}" for index in args.seed_index]
 
     with tempfile.TemporaryDirectory(prefix="wom-zet-catalog-benchmark-") as tmp:
         archive_root = Path(tmp) / "archive"
@@ -232,6 +260,8 @@ def main(argv: list[str] | None = None) -> int:
             max_estimated_tokens=args.max_estimated_tokens,
             projection=args.projection,
             coverage_mode=args.coverage_mode,
+            order_mode=args.order_mode,
+            start_zettel_ids=start_zettel_ids,
         )
         result["timing_seconds"]["fixture_generation"] = round(fixture_seconds, 6)
 

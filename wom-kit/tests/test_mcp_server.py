@@ -759,6 +759,14 @@ class McpServerTests(unittest.TestCase):
                 tools_by_name["zet_catalog"]["inputSchema"]["properties"]["coverage_mode"]["default"],
                 "page",
             )
+            self.assertEqual(
+                tools_by_name["zet_catalog"]["inputSchema"]["properties"]["order"]["default"],
+                "path",
+            )
+            self.assertEqual(
+                tools_by_name["zet_catalog"]["inputSchema"]["properties"]["start_zettel_ids"]["maxItems"],
+                archive_services.ZET_CATALOG_MAX_SEED_IDS,
+            )
             self.assertIn("ownership_transfer_check", tool_names)
             share_required = tools_by_name["share_check"]["inputSchema"]["required"]
             delegate_schema = tools_by_name["delegate_zet_check"]["inputSchema"]
@@ -7134,9 +7142,18 @@ class McpServerTests(unittest.TestCase):
             with tempfile.TemporaryDirectory() as tmp:
                 archive_root = self.copy_fake_archive(Path(tmp) / "archive")
                 canonical_paths = sorted((archive_root / "zettels").glob("*.md"))
+                canonical_ids = [
+                    archive_services.split_zettel_text(path.read_text(encoding="utf-8"))[0]["id"]
+                    for path in canonical_paths
+                ]
                 for index, path in enumerate(canonical_paths):
                     frontmatter, body = archive_services.split_zettel_text(path.read_text(encoding="utf-8"))
                     frontmatter["abstract"] = f"Strict MCP reading abstract {index}."
+                    frontmatter["edges"] = (
+                        [{"type": "references", "target": canonical_ids[index - 1]}]
+                        if index
+                        else []
+                    )
                     path.write_text(
                         "---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + body + "\nSTRICT_BODY_MARKER\n",
                         encoding="utf-8",
@@ -7152,6 +7169,8 @@ class McpServerTests(unittest.TestCase):
                         "archive_root": str(archive_root),
                         "projection": "reading",
                         "coverage_mode": "strict",
+                        "order": "seeded_connection_walk",
+                        "start_zettel_ids": [canonical_ids[-1]],
                         "cursor": cursor,
                         "page_size": 1,
                     }
@@ -7200,6 +7219,10 @@ class McpServerTests(unittest.TestCase):
 
                 self.assertEqual(len(collected), len(canonical_paths))
                 self.assertEqual(len(set(collected)), len(canonical_paths))
+                self.assertEqual(collected[0], canonical_ids[-1])
+                self.assertEqual(structured["order_evidence"]["seed_connected_prefix_count"], len(canonical_paths))
+                self.assertEqual(structured["order_evidence"]["fallback_component_count"], 0)
+                self.assertTrue(structured["order_evidence"]["all_nodes_preserved"])
         finally:
             self.stop_server(process)
 

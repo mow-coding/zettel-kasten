@@ -54,6 +54,7 @@ Supporting philosophy and model docs:
 - [zet Abstract And Live Catalog](zet-abstract-catalog.md)
 - [zet Catalog Scale And Token Budget](zet-catalog-scale-and-token-budget.md)
 - [Contiguous Node Reading](zet-catalog-contiguous-reading.md)
+- [Seeded Connection Reading Order](seeded-connection-reading-order.md)
 - [Archive Status Board](archive-status-board.md)
 - [Derived Artifact Staleness](derived-artifact-staleness.md)
 - [zet Quality Check](zet-quality-check.md)

@@ -44,12 +44,13 @@ snapshot bound by the token.
 
 ## Token Boundary
 
-The token is a base64url safe payload plus SHA-256 checksum. Its payload binds
-schema, snapshot id, status filter, projection, order, next cursor, covered
-prefix count, and the cumulative chain hash over returned node ids.
+The token is a base64url safe payload plus SHA-256 checksum. Its v0.2 payload
+binds schema, snapshot id, status filter, projection, order, fixed-size
+seed-list SHA-256, next cursor, covered prefix count, and the cumulative chain
+hash over returned node ids.
 
-It contains no zet body, title, abstract, edge, or local path. It is stateless
-and WOM writes no traversal record.
+It contains no raw seed id, zet body, title, abstract, edge, or local path. It
+is stateless and WOM writes no traversal record.
 
 The checksum detects accidental corruption and normal cursor drift. It is not
 keyed, so a determined caller can construct another valid checksum. It is not
@@ -64,6 +65,7 @@ Strict continuation blocks when:
 - cursor does not match the token;
 - token checksum or payload is malformed;
 - status, projection, or order changes;
+- seeded order's start-id list changes;
 - expected snapshot conflicts with the token;
 - local catalog evidence changes before completion.
 

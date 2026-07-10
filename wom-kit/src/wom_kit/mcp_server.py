@@ -1903,7 +1903,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
     },
     {
         "name": "zet_catalog",
-        "description": "Enumerate every selected local zet abstract and frontmatter connection in deterministic pages. Use projection=reading and coverage_mode=strict for compact, contiguous all-node coverage. Read-only; never reads zet bodies or requires a generated index.",
+        "description": "Enumerate every selected local zet abstract and frontmatter connection in deterministic pages. Use projection=reading and coverage_mode=strict for compact contiguous coverage; optional seeded_connection_walk reads verified seed neighborhoods first while still including every component. Read-only; never reads zet bodies or requires a generated index.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -1911,6 +1911,16 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "status": {"type": "string", "enum": ["all", "draft", "canonical"], "default": "canonical"},
                 "projection": {"type": "string", "enum": ["full", "reading"], "default": "full"},
                 "coverage_mode": {"type": "string", "enum": ["page", "strict"], "default": "page"},
+                "order": {
+                    "type": "string",
+                    "enum": ["path", "seeded_connection_walk"],
+                    "default": "path",
+                },
+                "start_zettel_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "maxItems": archive_services.ZET_CATALOG_MAX_SEED_IDS,
+                },
                 "cursor": {"type": "integer", "minimum": 0, "default": 0},
                 "page_size": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 200},
                 "max_estimated_tokens": {
@@ -4635,6 +4645,13 @@ def tool_zet_catalog(arguments: dict[str, Any]) -> dict[str, Any]:
     status = optional_string_arg(arguments, "status") or "canonical"
     projection = optional_string_arg(arguments, "projection") or "full"
     coverage_mode = optional_string_arg(arguments, "coverage_mode") or "page"
+    order_mode = optional_string_arg(arguments, "order") or "path"
+    raw_start_zettel_ids = arguments.get("start_zettel_ids")
+    start_zettel_ids = (
+        [str(value) for value in raw_start_zettel_ids]
+        if isinstance(raw_start_zettel_ids, list)
+        else []
+    )
     max_estimated_tokens_value = arguments.get("max_estimated_tokens")
     max_estimated_tokens = int(max_estimated_tokens_value) if max_estimated_tokens_value is not None else None
     result = call_service(
@@ -4643,6 +4660,8 @@ def tool_zet_catalog(arguments: dict[str, Any]) -> dict[str, Any]:
         status=status,
         projection=projection,
         coverage_mode=coverage_mode,
+        order_mode=order_mode,
+        start_zettel_ids=start_zettel_ids,
         cursor=int(arguments.get("cursor", 0)),
         page_size=int(arguments.get("page_size", 200)),
         max_estimated_tokens=max_estimated_tokens,
