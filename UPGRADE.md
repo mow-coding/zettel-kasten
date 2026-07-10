@@ -91,6 +91,20 @@ For project-folder work, remember that temporary intake staging is not the
 archive of record. Preserve originals as objets, source maps, manifests, zets,
 and receipts before any cleanup.
 
+## v0.3.212 Compact Strict Continuations
+
+v0.3.212 adds optional `--response-profile continuation` after the first page
+of a strict catalog pass. Cursor zero must remain `full`; retain its scope-wide
+abstract, identity, order, scan, and workload diagnostics. Later compact pages
+keep items, readiness, snapshot, token, chain, session, warning, and privacy
+fields while omitting repeated diagnostics.
+
+Catalog schema advances to v0.8. Continuation schema remains v0.3 because the
+response profile does not change item selection, order, cursor, or chain
+identity. Existing callers remain full by default, and in-flight v0.3.211
+strict passes may opt into compact responses on their next nonzero cursor.
+Existing archives require no migration and no zet is rewritten.
+
 ## v0.3.211 Response Envelope Budget
 
 v0.3.211 adds response-size measurement and optional

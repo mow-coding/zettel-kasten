@@ -28075,7 +28075,7 @@ state:
                 result = json.loads(next_output)
                 pages.append(result)
 
-            self.assertEqual(result["schema"], "wom-kit/zet-catalog/v0.7")
+            self.assertEqual(result["schema"], "wom-kit/zet-catalog/v0.8")
             self.assertTrue(result["coverage"]["archive_wide_coverage_claim_ready"])
             self.assertTrue(result["abstract_coverage"]["all_required_first_reads_available"])
             self.assertTrue(result["coverage"]["archive_wide_abstract_reading_claim_ready"])
@@ -28112,7 +28112,7 @@ state:
         )
         self.assertEqual(code, 0, output)
         result = json.loads(output)
-        self.assertEqual(result["schema"], "wom-kit/zet-catalog/v0.7")
+        self.assertEqual(result["schema"], "wom-kit/zet-catalog/v0.8")
         self.assertEqual(result["coverage"]["returned_count"], 1)
         self.assertTrue(result["coverage"]["stopped_for_token_budget"])
         self.assertTrue(result["coverage"]["single_item_exceeds_token_budget"])
@@ -28411,6 +28411,117 @@ state:
         self.assertIsNone(current["coverage"]["continuation_token"])
         self.assertEqual(len(collected), current["coverage"]["total_count"])
         self.assertEqual(len(set(collected)), current["coverage"]["total_count"])
+
+    def test_zet_catalog_compact_continuation_omits_only_repeated_metadata(self) -> None:
+        archive_root = KIT_ROOT / "examples" / "fake-life-archive"
+        first_code, first_output = self.run_cli(
+            [
+                "zet-catalog",
+                str(archive_root),
+                "--projection",
+                "reading",
+                "--coverage-mode",
+                "strict",
+                "--page-size",
+                "1",
+                "--dry-run",
+                "--format",
+                "json",
+            ]
+        )
+        self.assertEqual(first_code, 0, first_output)
+        first = json.loads(first_output)
+        self.assertEqual(first["response_profile"], "full")
+        self.assertIn("order_evidence", first)
+
+        continuation_args = [
+            "zet-catalog",
+            str(archive_root),
+            "--projection",
+            "reading",
+            "--coverage-mode",
+            "strict",
+            "--cursor",
+            str(first["coverage"]["next_cursor"]),
+            "--page-size",
+            "1",
+            "--continuation-token",
+            first["coverage"]["continuation_token"],
+            "--dry-run",
+            "--format",
+            "json",
+        ]
+        full_code, full_output = self.run_cli(continuation_args)
+        self.assertEqual(full_code, 0, full_output)
+        full = json.loads(full_output)
+
+        compact_code, compact_output = self.run_cli(
+            [*continuation_args[:-3], "--response-profile", "continuation", *continuation_args[-3:]]
+        )
+        self.assertEqual(compact_code, 0, compact_output)
+        compact = json.loads(compact_output)
+
+        self.assertEqual(compact["schema"], "wom-kit/zet-catalog/v0.8")
+        self.assertEqual(compact["response_profile"], "continuation")
+        self.assertEqual(compact["items"], full["items"])
+        self.assertEqual(compact["snapshot"], full["snapshot"])
+        self.assertEqual(compact["coverage"], full["coverage"])
+        self.assertEqual(compact["continuation_contract"], full["continuation_contract"])
+        self.assertEqual(compact["session_consistency"], full["session_consistency"])
+        self.assertEqual(compact["privacy_guards"], full["privacy_guards"])
+        self.assertFalse(compact["privacy_guards"]["zettel_body_text_read"])
+        for key in (
+            "abstract_counts",
+            "abstract_coverage",
+            "identity_coverage",
+            "order_evidence",
+            "scan",
+            "closed_actions",
+        ):
+            self.assertIn(key, full)
+            self.assertNotIn(key, compact)
+        self.assertIn("scope", full["workload_estimate"])
+        self.assertNotIn("scope", compact["workload_estimate"])
+        self.assertTrue(compact["workload_estimate"]["scope_omitted_in_continuation_profile"])
+        contract = compact["response_profile_contract"]
+        self.assertTrue(contract["first_page_full_required"])
+        self.assertTrue(contract["items_unchanged"])
+        self.assertTrue(contract["coverage_semantics_unchanged"])
+        self.assertTrue(contract["snapshot_and_token_retained"])
+        self.assertEqual(
+            contract["omitted_repeated_sections"],
+            [
+                "abstract_counts",
+                "abstract_coverage",
+                "identity_coverage",
+                "order_evidence",
+                "scan",
+                "closed_actions",
+                "workload_estimate.scope",
+            ],
+        )
+        self.assertLess(
+            compact["workload_estimate"]["response"]["estimated_service_result_json_tokens"],
+            full["workload_estimate"]["response"]["estimated_service_result_json_tokens"],
+        )
+
+        invalid_code, invalid_output = self.run_cli(
+            [
+                "zet-catalog",
+                str(archive_root),
+                "--projection",
+                "reading",
+                "--coverage-mode",
+                "strict",
+                "--response-profile",
+                "continuation",
+                "--dry-run",
+                "--format",
+                "json",
+            ]
+        )
+        self.assertEqual(invalid_code, 1, invalid_output)
+        self.assertIn("requires a nonzero strict continuation cursor", invalid_output)
 
     def test_zet_catalog_seeded_connection_walk_orders_nearby_nodes_first_without_dropping_components(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

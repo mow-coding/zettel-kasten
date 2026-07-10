@@ -90,6 +90,12 @@ a whole-result planning target, reserve envelope room with
 The measurement excludes its own block, CLI pretty whitespace, and MCP/JSON-RPC
 framing. It is a four-characters-per-token heuristic, not provider-reported
 usage and not a reason to skip nodes.
+Keep the cursor-zero `response_profile` full and retain its scope-wide gap,
+identity, order, and workload diagnostics. On later strict pages, add
+`--response-profile continuation` (MCP: `response_profile: "continuation"`)
+when repeated metadata would waste host context. This changes response shape
+only: items, readiness, snapshot, token, and chain evidence must remain, and a
+compact page never permits a skipped node.
 Continue across host loops until coverage is complete. MCP materializes the
 first-page snapshot for fast intermediate pages and revalidates local file
 metadata before returning the completing page; restart if that final check

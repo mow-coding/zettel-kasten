@@ -58,3 +58,8 @@ The readiness check is read-only. It does not:
 
 Report gaps to the human and use the archive's reviewed repair workflow. Do not
 turn absence into invented memory.
+
+In v0.3.212 compact continuation responses, detailed `abstract_coverage` and
+`identity_coverage` remain on the required full first page rather than being
+repeated. Their three readiness booleans remain in `coverage` on every page.
+The host must retain the first page if it needs to explain a final false signal.

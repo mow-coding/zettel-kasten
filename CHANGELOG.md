@@ -6,6 +6,29 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.212 - 2026-07-11
+
+Compact strict-continuation checkpoint. Additive; no archive migration.
+
+- **Full first page, compact later pages.** New CLI/MCP
+  `response_profile=continuation` is valid only after cursor zero in strict
+  mode. Existing calls remain full by default.
+- **No coverage shortcut.** Compact pages omit repeated scope-wide abstract,
+  identity, order, scan, closed-action, and workload-scope sections while
+  preserving every item, readiness signal, snapshot, continuation token,
+  chain digest, session check, warning, and privacy guard.
+- **Profile-independent chain.** The strict token intentionally does not bind
+  response profile, so a host can return to a full page without changing
+  cursor, ordering, or chain identity. Cursor-zero and non-strict compact
+  requests block.
+- **Measured after shaping.** Whole-response estimates describe the actual
+  selected profile. The benchmark now reports cumulative service-result cost
+  and full/continuation page counts.
+- **Scale result.** Equivalent 10,000-node, 264-page runs measured 1,785,893
+  cumulative tokens with full pages and 1,671,758 with one full plus 263
+  compact continuation pages: 114,135 fewer (6.39%), with identical complete
+  node, abstract, and id-follow-up readiness.
+
 ## v0.3.211 - 2026-07-11
 
 Whole-response token observability checkpoint. Additive; no archive migration.

@@ -1,6 +1,6 @@
 # zet Catalog Scale And Token Budget
 
-Status: implemented in v0.3.206; routed-reading cost comparison in v0.3.210; response-envelope measurement and reserve in v0.3.211
+Status: implemented in v0.3.206; routed-reading cost comparison in v0.3.210; response-envelope measurement and reserve in v0.3.211; compact continuation comparison in v0.3.212
 
 ## Why This Exists
 
@@ -50,6 +50,11 @@ Optional `--response-envelope-reserve-tokens <n>` subtracts explicit envelope
 room from `max_estimated_tokens`; omitting it preserves items-only semantics.
 See [zet Catalog Response Envelope Budget](zet-catalog-response-envelope-budget.md).
 
+After retaining the full first strict page, add `--response-profile
+continuation` on later pages to omit repeated scope diagnostics while keeping
+items and completion evidence. See
+[zet Catalog Compact Continuations](zet-catalog-compact-continuations.md).
+
 ## Session Consistency
 
 MCP materializes the first safe catalog snapshot in process memory. It serves
@@ -78,6 +83,8 @@ python wom-kit/tools/benchmark_zet_catalog.py `
   --page-size 1000 `
   --abstract-chars 120 `
   --max-estimated-tokens 8000 `
+  --response-envelope-reserve-tokens 2500 `
+  --compact-continuations `
   --projection reading `
   --coverage-mode strict `
   --order seeded_connection_walk `
@@ -118,6 +125,17 @@ budget, and every measured envelope fit the reserve.
 The compact service-result estimate excludes its own measurement block, CLI
 pretty-print whitespace, and MCP/JSON-RPC framing. It is still a planning
 heuristic rather than an exact context-window guarantee.
+
+## Compact Continuation Observation
+
+Equivalent 10,000-node runs both completed 264 pages. Full responses on every
+page measured 1,785,893 cumulative service-result tokens. One full page plus
+263 compact continuation pages measured 1,671,758: 114,135 fewer, or 6.39%.
+Both returned 10,000 unique nodes, completed all three readiness signals, and
+recorded no item-budget, response-budget, or reserve-insufficiency pages.
+
+This comparison measures response shape, not model comprehension or provider
+billing. It does not justify skipping the full first page or any node.
 
 ## Performance Boundary
 

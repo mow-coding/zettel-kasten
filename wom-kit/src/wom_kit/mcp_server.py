@@ -1903,7 +1903,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
     },
     {
         "name": "zet_catalog",
-        "description": "Enumerate every selected local zet node's available abstract state and frontmatter connections in deterministic pages. Use projection=reading and coverage_mode=strict for compact contiguous node coverage; use routed_reading only with seeded_connection_walk when per-item connection-order reasons are worth the extra tokens. Inspect item and compact service-result envelope estimates, with an optional explicit envelope reserve, plus separate abstract-reading and id-followup readiness. Read-only; never reads zet bodies or requires a generated index.",
+        "description": "Enumerate every selected local zet node's available abstract state and frontmatter connections in deterministic pages. Use projection=reading and coverage_mode=strict for compact contiguous node coverage; after the required full first page, response_profile=continuation may omit repeated diagnostics while retaining items, coverage, snapshot, and continuation proof. Use routed_reading only with seeded_connection_walk when per-item connection-order reasons are worth the extra tokens. Inspect item and compact service-result envelope estimates, with an optional explicit envelope reserve, plus separate abstract-reading and id-followup readiness. Read-only; never reads zet bodies or requires a generated index.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -1937,6 +1937,12 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                     "minimum": 0,
                     "default": 0,
                     "description": "Optional tokens reserved from max_estimated_tokens for non-item compact service-result fields.",
+                },
+                "response_profile": {
+                    "type": "string",
+                    "enum": ["full", "continuation"],
+                    "default": "full",
+                    "description": "Use continuation only after the first strict page to omit repeated diagnostics without changing items or continuation proof.",
                 },
                 "expected_snapshot_id": {"type": "string"},
                 "continuation_token": {"type": "string", "maxLength": 4096},
@@ -4665,6 +4671,7 @@ def tool_zet_catalog(arguments: dict[str, Any]) -> dict[str, Any]:
     max_estimated_tokens_value = arguments.get("max_estimated_tokens")
     max_estimated_tokens = int(max_estimated_tokens_value) if max_estimated_tokens_value is not None else None
     response_envelope_reserve_tokens = int(arguments.get("response_envelope_reserve_tokens", 0))
+    response_profile = optional_string_arg(arguments, "response_profile") or "full"
     result = call_service(
         archive_services.zet_catalog,
         archive_root,
@@ -4677,6 +4684,7 @@ def tool_zet_catalog(arguments: dict[str, Any]) -> dict[str, Any]:
         page_size=int(arguments.get("page_size", 200)),
         max_estimated_tokens=max_estimated_tokens,
         response_envelope_reserve_tokens=response_envelope_reserve_tokens,
+        response_profile=response_profile,
         expected_snapshot_id=optional_string_arg(arguments, "expected_snapshot_id"),
         continuation_token=optional_string_arg(arguments, "continuation_token"),
         dry_run=True,

@@ -1,6 +1,6 @@
 # zet Abstract And Live Catalog Contract
 
-Status: implemented CLI baseline in v0.3.204; MCP/host baseline in v0.3.205; scale/token baseline in v0.3.206; compact strict reading in v0.3.207; seeded exhaustive order in v0.3.208; separate first-read readiness in v0.3.209; routed order evidence in v0.3.210; response-envelope observability in v0.3.211
+Status: implemented CLI baseline in v0.3.204; MCP/host baseline in v0.3.205; scale/token baseline in v0.3.206; compact strict reading in v0.3.207; seeded exhaustive order in v0.3.208; separate first-read readiness in v0.3.209; routed order evidence in v0.3.210; response-envelope observability in v0.3.211; compact strict continuations in v0.3.212
 
 ## Purpose
 
@@ -183,6 +183,12 @@ non-item envelope size. Optional `response_envelope_reserve_tokens` subtracts
 explicit envelope room from `max_estimated_tokens`; without it, existing
 items-only semantics remain unchanged. See
 [zet Catalog Response Envelope Budget](zet-catalog-response-envelope-budget.md).
+
+v0.3.212 keeps the cursor-zero strict response full, then allows opt-in
+`response_profile=continuation` on later pages. It removes repeated scope-wide
+diagnostics only after the host has received them once. Items, coverage,
+snapshot, token, chain, session checks, warnings, and privacy guards remain.
+See [zet Catalog Compact Continuations](zet-catalog-compact-continuations.md).
 
 ## MCP Session Snapshot
 

@@ -8037,6 +8037,7 @@ def command_zet_catalog(args: argparse.Namespace) -> int:
             page_size=args.page_size,
             max_estimated_tokens=args.max_estimated_tokens,
             response_envelope_reserve_tokens=args.response_envelope_reserve_tokens,
+            response_profile=args.response_profile,
             expected_snapshot_id=args.expected_snapshot_id,
             continuation_token=args.continuation_token,
             dry_run=True,
@@ -8053,6 +8054,7 @@ def command_zet_catalog(args: argparse.Namespace) -> int:
         print("WOM zet catalog.")
         print(f"Archive: {result.get('archive_id') or '-'}")
         print(f"Status filter: {result.get('status_filter') or '-'}")
+        print(f"Response profile: {result.get('response_profile') or '-'}")
         order_evidence = result.get("order_evidence") if isinstance(result.get("order_evidence"), dict) else {}
         print(f"Order: {order_evidence.get('mode') or '-'}")
         print(f"Snapshot: {snapshot.get('id') or '-'}")
@@ -16097,6 +16099,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=0,
         help="Optional tokens reserved from max-estimated-tokens for non-item compact service-result fields.",
+    )
+    zet_catalog.add_argument(
+        "--response-profile",
+        choices=sorted(archive_services.ZET_CATALOG_RESPONSE_PROFILES),
+        default="full",
+        help="Full response metadata, or a compact continuation response after the first strict page.",
     )
     zet_catalog.add_argument(
         "--expected-snapshot-id",
