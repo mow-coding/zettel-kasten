@@ -1,6 +1,6 @@
 # Contiguous Node Reading
 
-Status: implemented in v0.3.207; duplicate-safe file-entry chain identity in v0.3.210
+Status: implemented in v0.3.207; duplicate-safe file-entry chain identity in v0.3.210; compact continuation responses in v0.3.212
 
 ## Purpose
 
@@ -39,8 +39,11 @@ coverage.continuation_token
 ```
 
 The host may change page-size, item-budget, or response-envelope-reserve values
-between calls. It may not change the status filter, projection, deterministic
-order, expected cursor, or snapshot bound by the token.
+between calls. After the required full cursor-zero page, it may also use
+`response_profile=continuation` to omit repeated diagnostics. The
+profile is not token-bound because it does not change items or ordering. It may
+not change the status filter, projection, deterministic order, expected cursor,
+or snapshot bound by the token.
 
 ## Token Boundary
 

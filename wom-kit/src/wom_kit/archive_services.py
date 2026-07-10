@@ -2787,11 +2787,12 @@ ZETTEL_READ_SECTIONS = {"overview", "body", "document", "details", "all"}
 ZETTEL_OVERVIEW_GIST_CHAR_LIMIT = 360
 ZET_ABSTRACT_MAX_CHARS = ZETTEL_OVERVIEW_GIST_CHAR_LIMIT
 ZETTEL_OVERVIEW_FRONTMATTER_FIELDS = ("abstract", "gist", "summary", "description", "overview")
-ZET_CATALOG_SCHEMA = "wom-kit/zet-catalog/v0.7"
+ZET_CATALOG_SCHEMA = "wom-kit/zet-catalog/v0.8"
 ZET_CATALOG_MAX_PAGE_SIZE = 10000
 ZET_CATALOG_PROJECTIONS = {"full", "reading", "routed_reading"}
 ZET_CATALOG_COVERAGE_MODES = {"page", "strict"}
 ZET_CATALOG_ORDER_MODES = {"path", "seeded_connection_walk"}
+ZET_CATALOG_RESPONSE_PROFILES = {"full", "continuation"}
 ZET_CATALOG_MAX_SEED_IDS = 32
 ZET_CATALOG_CONTINUATION_SCHEMA = "wom-kit/zet-catalog-continuation/v0.3"
 ZET_CATALOG_ENTRY_IDENTITY_BASIS = "snapshot_id_path_order_ordinal_status_sha256"
@@ -5997,6 +5998,7 @@ def zet_catalog(
     page_size: int = 200,
     max_estimated_tokens: int | None = None,
     response_envelope_reserve_tokens: int = 0,
+    response_profile: str = "full",
     expected_snapshot_id: str | None = None,
     continuation_token: str | None = None,
     dry_run: bool = False,
@@ -6017,6 +6019,8 @@ def zet_catalog(
         blockers.append("coverage_mode must be one of: page, strict")
     if order_mode not in ZET_CATALOG_ORDER_MODES:
         blockers.append("order_mode must be one of: path, seeded_connection_walk")
+    if response_profile not in ZET_CATALOG_RESPONSE_PROFILES:
+        blockers.append("response_profile must be one of: full, continuation")
     seed_zettel_ids = zet_catalog_normalize_seed_ids(start_zettel_ids, blockers)
     if order_mode == "path" and seed_zettel_ids:
         blockers.append("start_zettel_id requires order_mode=seeded_connection_walk.")
@@ -6024,6 +6028,8 @@ def zet_catalog(
         blockers.append("seeded_connection_walk requires at least one start_zettel_id.")
     if projection == "routed_reading" and order_mode != "seeded_connection_walk":
         blockers.append("routed_reading requires order_mode=seeded_connection_walk.")
+    if response_profile == "continuation" and (coverage_mode != "strict" or cursor == 0):
+        blockers.append("response_profile=continuation requires a nonzero strict continuation cursor.")
     order_descriptor = zet_catalog_order_descriptor(order_mode)
     if cursor < 0:
         blockers.append("cursor must be a non-negative integer.")
@@ -6419,6 +6425,7 @@ def zet_catalog(
         "archive_id": archive_id,
         "status_filter": status,
         "projection": projection,
+        "response_profile": response_profile,
         "order": order_descriptor,
         "order_evidence": order_evidence,
         "snapshot": snapshot,
@@ -6453,6 +6460,8 @@ def zet_catalog(
             "entry_identity_basis": ZET_CATALOG_ENTRY_IDENTITY_BASIS,
             "duplicate_ids_distinguished_in_chain": True,
             "entry_identity_values_echoed": False,
+            "response_profile_bound": False,
+            "response_profile_may_change_between_pages": True,
             "cryptographic_attestation": False,
             "persistent_loop_state_created": False,
         },
@@ -6492,6 +6501,38 @@ def zet_catalog(
         "blockers": unique_preserve_order(blockers),
         "warnings": unique_preserve_order(warnings),
     }
+    if response_profile == "continuation":
+        omitted_sections = [
+            "abstract_counts",
+            "abstract_coverage",
+            "identity_coverage",
+            "order_evidence",
+            "scan",
+            "closed_actions",
+            "workload_estimate.scope",
+        ]
+        for key in (
+            "abstract_counts",
+            "abstract_coverage",
+            "identity_coverage",
+            "order_evidence",
+            "scan",
+            "closed_actions",
+        ):
+            result.pop(key, None)
+        continuation_workload = dict(result["workload_estimate"])
+        continuation_workload.pop("scope", None)
+        continuation_workload["scope_omitted_in_continuation_profile"] = True
+        result["workload_estimate"] = continuation_workload
+        result["response_profile_contract"] = {
+            "schema": "wom-kit/zet-catalog-response-profile/v0.1",
+            "first_page_full_required": True,
+            "continuation_cursor_required": True,
+            "items_unchanged": True,
+            "coverage_semantics_unchanged": True,
+            "snapshot_and_token_retained": True,
+            "omitted_repeated_sections": omitted_sections,
+        }
     provisional_response_measurement = zet_catalog_response_measurement(result)
     response_budget_active = bool(response_envelope_reserve_tokens and max_estimated_tokens is not None)
     estimated_response_tokens = provisional_response_measurement["estimated_service_result_json_tokens"]
@@ -57717,7 +57758,7 @@ def ai_start_here(
             [
                 *next_lines,
                 "Read AGENTS.md when canonical_entrypoints marks it present.",
-                "Run zet-catalog with projection=reading and coverage_mode=strict, inspect item and compact response-envelope estimates, set a host-appropriate max_estimated_tokens plus an explicit response_envelope_reserve_tokens when needed, and follow every page with its continuation token before claiming archive-wide node coverage.",
+                "Run zet-catalog with projection=reading and coverage_mode=strict, keep the first response_profile full, inspect item and compact response-envelope estimates, set a host-appropriate max_estimated_tokens plus an explicit response_envelope_reserve_tokens when needed, then optionally use response_profile=continuation on later pages while following every continuation token before claiming archive-wide node coverage.",
                 "Treat archive_wide_coverage_claim_ready as node visitation only; require archive_wide_abstract_reading_claim_ready before saying every required abstract was available and read, and report abstract gaps without auto-writing replacements.",
                 "If the host goal already supplies verified zet ids, use seeded_connection_walk with those ids; never invent a seed or stop after the seeded component.",
                 "Keep projection=reading for the compact pass; use routed_reading with seeded_connection_walk only when the host or human needs a per-item explanation of the connection order and can afford the larger payload.",
@@ -57978,7 +58019,7 @@ def runtime_context_ai_runtime_order() -> list[dict[str, Any]]:
             "step": 5,
             "action": "enumerate_zet_abstracts",
             "command": "archive zet-catalog <archive-root> --status canonical --projection reading --coverage-mode strict --cursor 0 --dry-run --format json",
-            "continuation": "inspect workload_estimate.page and workload_estimate.response, optionally split max_estimated_tokens with response_envelope_reserve_tokens for the host context, follow next_cursor with the same snapshot id and continuation_token until archive_wide_coverage_claim_ready=true, then check archive_wide_abstract_reading_claim_ready and archive_wide_followup_resolution_ready separately; restart from cursor 0 if catalog_snapshot_changed",
+            "continuation": "keep the cursor-zero response_profile full and retain its complete diagnostics; inspect workload_estimate.page and workload_estimate.response, optionally split max_estimated_tokens with response_envelope_reserve_tokens for the host context, then use response_profile=continuation on later strict pages when smaller repeated metadata is useful; follow next_cursor with the same snapshot id and continuation_token until archive_wide_coverage_claim_ready=true, then check archive_wide_abstract_reading_claim_ready and archive_wide_followup_resolution_ready separately; restart from cursor 0 if catalog_snapshot_changed",
             "optional_seed_order": "when the host goal already provides verified zet ids, add --order seeded_connection_walk and repeated --start-zettel-id values; the walk still includes every disconnected component",
             "optional_route_evidence": "keep projection=reading for compact coverage; switch to routed_reading only with seeded_connection_walk when per-item seed, tie-passage, and disconnected-component reasons are needed",
             "reason": "give the host every local zet node's available first-read text and connection clues before it chooses a broad body-reading order; never equate node visitation with complete abstract availability",

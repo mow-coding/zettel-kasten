@@ -53,6 +53,7 @@
 - [zet Catalog 준비 상태 신호](zet-catalog-readiness-signals.md)
 - [zet Catalog 규모와 Token Budget](zet-catalog-scale-and-token-budget.md)
 - [zet Catalog 응답 Envelope 예산](zet-catalog-response-envelope-budget.md)
+- [zet Catalog Compact Continuation](zet-catalog-compact-continuations.md)
 - [연속 Node 읽기](zet-catalog-contiguous-reading.md)
 - [Seed 기반 연결 읽기 순서](seeded-connection-reading-order.md)
 - [Seed 기반 읽기 경로 근거](seeded-reading-route-evidence.md)

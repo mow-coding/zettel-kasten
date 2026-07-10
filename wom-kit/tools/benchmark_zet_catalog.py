@@ -67,6 +67,7 @@ def run_catalog_benchmark(
     coverage_mode: str,
     order_mode: str,
     start_zettel_ids: list[str],
+    compact_continuations: bool,
 ) -> dict[str, Any]:
     item_cache: dict[str, dict[str, Any]] = {}
     cursor = 0
@@ -82,13 +83,19 @@ def run_catalog_benchmark(
     max_page_estimated_items_json_tokens = 0
     pages_over_requested_token_budget = 0
     max_page_estimated_service_result_tokens = 0
+    max_continuation_page_estimated_service_result_tokens = 0
+    cumulative_estimated_service_result_tokens = 0
     pages_over_requested_response_budget = 0
     pages_with_insufficient_envelope_reserve = 0
+    full_profile_pages = 0
+    continuation_profile_pages = 0
+    first_result: dict[str, Any] | None = None
     final_result: dict[str, Any] | None = None
 
     started = time.perf_counter()
     while True:
         page_started = time.perf_counter()
+        response_profile = "continuation" if compact_continuations and cursor > 0 else "full"
         result = archive_services.zet_catalog(
             root,
             projection=projection,
@@ -99,6 +106,7 @@ def run_catalog_benchmark(
             page_size=page_size,
             max_estimated_tokens=max_estimated_tokens,
             response_envelope_reserve_tokens=response_envelope_reserve_tokens,
+            response_profile=response_profile,
             expected_snapshot_id=snapshot_id,
             continuation_token=continuation_token,
             dry_run=True,
@@ -112,13 +120,25 @@ def run_catalog_benchmark(
                 "blockers": result.get("blockers", []),
                 "warnings": result.get("warnings", []),
             }
+        if first_result is None:
+            first_result = result
         final_result = result
         snapshot_id = snapshot_id or result["snapshot"]["id"]
         continuation_token = result["coverage"].get("continuation_token")
         collected_ids.extend(str(item["id"]) for item in result["items"])
-        frontmatter_files_scanned += int(result["scan"]["frontmatter_files_scanned"])
-        cached_items_reused += int(result["scan"]["cached_items_reused"])
-        path_metadata_checked += int(result["scan"]["path_metadata_checked"])
+        scan = result.get("scan") if isinstance(result.get("scan"), dict) else None
+        if scan is not None:
+            frontmatter_files_scanned += int(scan["frontmatter_files_scanned"])
+            cached_items_reused += int(scan["cached_items_reused"])
+            path_metadata_checked += int(scan["path_metadata_checked"])
+        else:
+            first_scan = first_result["scan"]
+            path_count = int(first_scan["path_count"])
+            if result["session_consistency"]["materialized_snapshot_reused"]:
+                cached_items_reused += path_count
+            if result["session_consistency"]["completion_revalidation_performed"]:
+                cached_items_reused += path_count
+                path_metadata_checked += path_count
         if result["session_consistency"]["materialized_snapshot_reused"]:
             materialized_snapshot_pages += 1
         if result["session_consistency"]["completion_revalidation_performed"]:
@@ -134,10 +154,19 @@ def run_catalog_benchmark(
             pages_over_requested_token_budget += 1
         response_measurement = result["workload_estimate"]["response"]
         response_tokens = int(response_measurement["estimated_service_result_json_tokens"])
+        cumulative_estimated_service_result_tokens += response_tokens
         max_page_estimated_service_result_tokens = max(
             max_page_estimated_service_result_tokens,
             response_tokens,
         )
+        if response_profile == "continuation":
+            continuation_profile_pages += 1
+            max_continuation_page_estimated_service_result_tokens = max(
+                max_continuation_page_estimated_service_result_tokens,
+                response_tokens,
+            )
+        else:
+            full_profile_pages += 1
         response_budget = response_measurement["budget"]
         if response_budget["reserve_active"] and not response_budget["estimated_total_within_requested_budget"]:
             pages_over_requested_response_budget += 1
@@ -148,6 +177,11 @@ def run_catalog_benchmark(
         cursor = int(result["coverage"]["next_cursor"])
     elapsed = time.perf_counter() - started
     assert final_result is not None
+    assert first_result is not None
+
+    workload_estimate = dict(final_result["workload_estimate"])
+    if "scope" not in workload_estimate:
+        workload_estimate["scope"] = first_result["workload_estimate"]["scope"]
 
     unique_count = len(set(collected_ids))
     page_count = len(page_seconds)
@@ -163,6 +197,7 @@ def run_catalog_benchmark(
             "coverage_mode": coverage_mode,
             "order_mode": order_mode,
             "start_zettel_ids": start_zettel_ids,
+            "compact_continuations": compact_continuations,
         },
         "coverage": {
             "page_count": page_count,
@@ -178,8 +213,8 @@ def run_catalog_benchmark(
                 "archive_wide_followup_resolution_ready"
             ],
         },
-        "abstract_coverage": final_result["abstract_coverage"],
-        "identity_coverage": final_result["identity_coverage"],
+        "abstract_coverage": first_result["abstract_coverage"],
+        "identity_coverage": first_result["identity_coverage"],
         "continuation_contract": final_result["continuation_contract"],
         "scan": {
             "frontmatter_files_scanned_across_pass": frontmatter_files_scanned,
@@ -188,8 +223,8 @@ def run_catalog_benchmark(
             "materialized_snapshot_pages": materialized_snapshot_pages,
             "completion_revalidation_pages": completion_revalidation_pages,
             "expected_cold_frontmatter_scan_count": zet_count,
-            "cache_mode": final_result["scan"]["cache_mode"],
-            "cache_persisted": final_result["scan"]["cache_persisted"],
+            "cache_mode": first_result["scan"]["cache_mode"],
+            "cache_persisted": first_result["scan"]["cache_persisted"],
         },
         "timing_seconds": {
             "catalog_pass": round(elapsed, 6),
@@ -197,8 +232,8 @@ def run_catalog_benchmark(
             "later_pages_total": round(sum(page_seconds[1:]), 6),
             "slowest_page": round(max(page_seconds), 6),
         },
-        "workload_estimate": final_result["workload_estimate"],
-        "order_evidence": final_result["order_evidence"],
+        "workload_estimate": workload_estimate,
+        "order_evidence": first_result["order_evidence"],
         "page_budget_observation": {
             "requested_max_estimated_tokens": max_estimated_tokens,
             "response_envelope_reserve_tokens": response_envelope_reserve_tokens,
@@ -206,6 +241,12 @@ def run_catalog_benchmark(
             "max_page_estimated_items_json_tokens": max_page_estimated_items_json_tokens,
             "pages_over_requested_token_budget": pages_over_requested_token_budget,
             "max_page_estimated_service_result_tokens": max_page_estimated_service_result_tokens,
+            "cumulative_estimated_service_result_tokens": cumulative_estimated_service_result_tokens,
+            "full_profile_pages": full_profile_pages,
+            "continuation_profile_pages": continuation_profile_pages,
+            "max_continuation_page_estimated_service_result_tokens": (
+                max_continuation_page_estimated_service_result_tokens
+            ),
             "pages_over_requested_response_budget": pages_over_requested_response_budget,
             "pages_with_insufficient_envelope_reserve": pages_with_insufficient_envelope_reserve,
         },
@@ -265,6 +306,11 @@ def main(argv: list[str] | None = None) -> int:
         default=0,
         help="Optional tokens reserved from max-estimated-tokens for non-item compact service-result fields.",
     )
+    parser.add_argument(
+        "--compact-continuations",
+        action="store_true",
+        help="Keep the first strict page full, then request compact continuation response profiles.",
+    )
     parser.add_argument("--format", choices=["json", "text"], default="text")
     args = parser.parse_args(argv)
 
@@ -280,6 +326,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--response-envelope-reserve-tokens must be non-negative")
     if args.response_envelope_reserve_tokens and args.max_estimated_tokens is None:
         parser.error("--response-envelope-reserve-tokens requires --max-estimated-tokens")
+    if args.compact_continuations and args.coverage_mode != "strict":
+        parser.error("--compact-continuations requires --coverage-mode strict")
     if any(index < 0 or index >= args.zet_count for index in args.seed_index):
         parser.error("--seed-index must refer to a generated zet")
     if args.order_mode == "seeded_connection_walk" and not args.seed_index:
@@ -305,6 +353,7 @@ def main(argv: list[str] | None = None) -> int:
             coverage_mode=args.coverage_mode,
             order_mode=args.order_mode,
             start_zettel_ids=start_zettel_ids,
+            compact_continuations=args.compact_continuations,
         )
         result["timing_seconds"]["fixture_generation"] = round(fixture_seconds, 6)
 

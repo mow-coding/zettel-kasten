@@ -756,6 +756,14 @@ class McpServerTests(unittest.TestCase):
                 0,
             )
             self.assertEqual(
+                tools_by_name["zet_catalog"]["inputSchema"]["properties"]["response_profile"]["default"],
+                "full",
+            )
+            self.assertEqual(
+                tools_by_name["zet_catalog"]["inputSchema"]["properties"]["response_profile"]["enum"],
+                ["full", "continuation"],
+            )
+            self.assertEqual(
                 tools_by_name["zet_catalog"]["inputSchema"]["properties"]["projection"]["default"],
                 "full",
             )
@@ -7173,6 +7181,7 @@ class McpServerTests(unittest.TestCase):
                 continuation_token: str | None = None
                 request_id = 1
                 page_index = 0
+                first_order_evidence: dict[str, object] | None = None
                 while True:
                     arguments: dict[str, object] = {
                         "archive_root": str(archive_root),
@@ -7184,6 +7193,7 @@ class McpServerTests(unittest.TestCase):
                         "page_size": 1,
                         "max_estimated_tokens": 5000,
                         "response_envelope_reserve_tokens": 2500,
+                        "response_profile": "full" if cursor == 0 else "continuation",
                     }
                     if continuation_token:
                         arguments["continuation_token"] = continuation_token
@@ -7218,10 +7228,19 @@ class McpServerTests(unittest.TestCase):
                         collected_items.append(item)
                         collected.append(item["id"])
                     if page_index == 0:
+                        self.assertEqual(structured["response_profile"], "full")
+                        self.assertIn("order_evidence", structured)
+                        first_order_evidence = structured["order_evidence"]
                         self.assertFalse(structured["session_consistency"]["materialized_snapshot_reused"])
-                    elif not structured["coverage"]["complete"]:
-                        self.assertTrue(structured["session_consistency"]["materialized_snapshot_reused"])
-                        self.assertEqual(structured["scan"]["path_metadata_checked"], 0)
+                    else:
+                        self.assertEqual(structured["response_profile"], "continuation")
+                        self.assertNotIn("order_evidence", structured)
+                        self.assertNotIn("scan", structured)
+                        self.assertNotIn("abstract_coverage", structured)
+                        self.assertNotIn("identity_coverage", structured)
+                        self.assertTrue(structured["response_profile_contract"]["items_unchanged"])
+                        if not structured["coverage"]["complete"]:
+                            self.assertTrue(structured["session_consistency"]["materialized_snapshot_reused"])
                     if structured["coverage"]["complete"]:
                         self.assertIn("node_and_abstract_complete", result["content"][0]["text"])
                         self.assertTrue(structured["session_consistency"]["completion_revalidation_performed"])
@@ -7251,9 +7270,10 @@ class McpServerTests(unittest.TestCase):
                     collected_items[1]["reading_route"]["via"]["walk_direction"],
                     "with_stored_direction",
                 )
-                self.assertEqual(structured["order_evidence"]["seed_connected_prefix_count"], len(canonical_paths))
-                self.assertEqual(structured["order_evidence"]["fallback_component_count"], 0)
-                self.assertTrue(structured["order_evidence"]["all_nodes_preserved"])
+                self.assertIsNotNone(first_order_evidence)
+                self.assertEqual(first_order_evidence["seed_connected_prefix_count"], len(canonical_paths))
+                self.assertEqual(first_order_evidence["fallback_component_count"], 0)
+                self.assertTrue(first_order_evidence["all_nodes_preserved"])
                 self.assertTrue(structured["continuation_contract"]["duplicate_ids_distinguished_in_chain"])
         finally:
             self.stop_server(process)

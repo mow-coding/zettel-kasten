@@ -1,6 +1,6 @@
 # zet Catalog Response Envelope Budget
 
-Status: implemented in v0.3.211
+Status: implemented in v0.3.211; compact continuation profile in v0.3.212
 
 ## Why Items-Only Is Not The Whole Response
 
@@ -85,6 +85,17 @@ every measured envelope. All 10,000 ids were unique and all three readiness
 signals completed.
 
 This is a local synthetic observation, not an SLA or provider token count.
+
+## Compact Continuations
+
+v0.3.212 can reduce the repeated envelope after the required full first strict
+page. Add `response_profile=continuation` on later pages. Response measurement
+is calculated after repeated scope diagnostics are removed, so it describes
+the selected profile rather than the full compatibility shape. Items,
+readiness, snapshot, token, and chain evidence remain unchanged.
+
+See [zet Catalog Compact Continuations](zet-catalog-compact-continuations.md)
+for the exact omitted fields and paired 10,000-node comparison.
 
 ## Closed Actions
 

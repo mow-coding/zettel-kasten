@@ -34,6 +34,7 @@ class ZetCatalogBenchmarkTests(unittest.TestCase):
                 "seeded_connection_walk",
                 "--seed-index",
                 "100",
+                "--compact-continuations",
                 "--format",
                 "json",
             ],
@@ -57,6 +58,7 @@ class ZetCatalogBenchmarkTests(unittest.TestCase):
         self.assertEqual(report["fixture"]["projection"], "routed_reading")
         self.assertEqual(report["fixture"]["coverage_mode"], "strict")
         self.assertEqual(report["fixture"]["order_mode"], "seeded_connection_walk")
+        self.assertTrue(report["fixture"]["compact_continuations"])
         self.assertEqual(report["order_evidence"]["seed_connected_prefix_count"], 120)
         self.assertEqual(report["order_evidence"]["fallback_component_count"], 0)
         self.assertTrue(report["order_evidence"]["item_route_evidence_in_routed_reading_projection"])
@@ -78,6 +80,15 @@ class ZetCatalogBenchmarkTests(unittest.TestCase):
         self.assertLessEqual(report["page_budget_observation"]["max_page_estimated_service_result_tokens"], 5000)
         self.assertEqual(report["page_budget_observation"]["pages_over_requested_response_budget"], 0)
         self.assertEqual(report["page_budget_observation"]["pages_with_insufficient_envelope_reserve"], 0)
+        self.assertEqual(report["page_budget_observation"]["full_profile_pages"], 1)
+        self.assertEqual(
+            report["page_budget_observation"]["continuation_profile_pages"],
+            report["coverage"]["page_count"] - 1,
+        )
+        self.assertGreater(
+            report["page_budget_observation"]["cumulative_estimated_service_result_tokens"],
+            report["page_budget_observation"]["max_page_estimated_service_result_tokens"],
+        )
         self.assertEqual(
             report["workload_estimate"]["response"]["basis"],
             "compact_sorted_service_result_json_excluding_this_measurement",

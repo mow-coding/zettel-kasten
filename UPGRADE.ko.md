@@ -83,6 +83,20 @@ project folder 작업에서는 temporary intake staging이 archive of record가
 아니라는 점을 기억합니다. cleanup 전에 원본을 objet, source map, manifest,
 zet, receipt로 보존해야 합니다.
 
+## v0.3.212 Compact strict continuation
+
+v0.3.212는 strict catalog pass의 첫 페이지 뒤에서 선택형
+`--response-profile continuation`을 제공합니다. cursor 0은 반드시 `full`로
+두고 그 페이지의 archive 전체 초록, ID, 순서, scan, workload 진단을
+보관해야 합니다. 이후 compact 페이지는 항목, 준비 상태, snapshot, token,
+chain, session, 경고, privacy 필드를 유지하고 반복 진단만 생략합니다.
+
+catalog schema는 v0.8로 올라가고 continuation schema는 v0.3을 유지합니다.
+응답 profile은 항목 선택, 순서, cursor, chain identity를 바꾸지 않기
+때문입니다. 기존 호출은 계속 full 응답을 받고, 진행 중인 v0.3.211 strict
+pass도 다음 0이 아닌 cursor부터 compact 응답을 선택할 수 있습니다.
+archive migration과 기존 zet 재작성은 없습니다.
+
 ## v0.3.211 응답 envelope 토큰 예산
 
 v0.3.211은 전체 compact service-result 크기 측정과 선택형
