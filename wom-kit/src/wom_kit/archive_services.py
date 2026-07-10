@@ -56715,6 +56715,7 @@ def ai_start_here(
             [
                 *next_lines,
                 "Read AGENTS.md when canonical_entrypoints marks it present.",
+                "Run zet-catalog and follow every page with the same snapshot id before claiming archive-wide coverage.",
                 "Use only read-only commands until the human approves a write operation.",
             ]
         ),
@@ -56927,6 +56928,10 @@ def runtime_context_recommended_first_commands() -> list[dict[str, str]]:
             "purpose": "load the AI-facing mission, scope, state, gotchas, and decisions record before choosing next actions",
         },
         {
+            "command": "archive zet-catalog <archive-root> --status canonical --cursor 0 --dry-run --format json",
+            "purpose": "enumerate every canonical zet abstract and local connection with explicit completion coverage before claiming archive-wide understanding",
+        },
+        {
             "command": "archive ai-response-concept-guide <archive-root> --topic all --dry-run --format json",
             "purpose": "load beginner-facing WOM concepts, safe routing hints, and overclaim guardrails",
         },
@@ -56966,18 +56971,25 @@ def runtime_context_ai_runtime_order() -> list[dict[str, Any]]:
         },
         {
             "step": 5,
+            "action": "enumerate_zet_abstracts",
+            "command": "archive zet-catalog <archive-root> --status canonical --cursor 0 --dry-run --format json",
+            "continuation": "follow next_cursor with the same snapshot id until complete=true; restart from cursor 0 if catalog_snapshot_changed",
+            "reason": "give the host every local zet abstract and connection clue before it chooses a broad body-reading order; never treat a truncated page as full coverage",
+        },
+        {
+            "step": 6,
             "action": "run_ai_response_concept_guide",
             "command": "archive ai-response-concept-guide <archive-root> --topic all --dry-run --format json",
             "reason": "load WOM concept wording, safe routing, material-link routes, and overclaim guardrails",
         },
         {
-            "step": 6,
+            "step": 7,
             "action": "choose_material_link_route",
             "field": "canonical_entrypoints.material_link_routes",
             "reason": "use omitted-locator, source-map, or body-locator routes without inventing provider calls",
         },
         {
-            "step": 7,
+            "step": 8,
             "action": "plan_operator_feedback",
             "command": "archive operator-feedback-plan <archive-root> --dry-run --format json",
             "when": "the human reports tool friction, a workflow gap, or asks where feedback records live",

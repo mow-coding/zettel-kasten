@@ -1887,14 +1887,35 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "zet_catalog",
+        "description": "Enumerate every selected local zet abstract and frontmatter connection in deterministic pages. Read-only; never reads zet bodies, requires no generated index, and reports explicit completion/truncation coverage.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string"},
+                "status": {"type": "string", "enum": ["all", "draft", "canonical"], "default": "canonical"},
+                "cursor": {"type": "integer", "minimum": 0, "default": 0},
+                "page_size": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 200},
+                "expected_snapshot_id": {"type": "string"},
+                "dry_run": {"type": "boolean", "default": True},
+            },
+            "required": ["archive_root"],
+        },
+    },
+    {
         "name": "read_zettel",
-        "description": "Read one zettel by zettel id or archive-relative path.",
+        "description": "Read one zettel by zettel id or archive-relative path. Use section=overview for the compact first read before requesting a body.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "archive_root": {"type": "string"},
                 "zettel_id": {"type": "string"},
                 "path": {"type": "string"},
+                "section": {
+                    "type": "string",
+                    "enum": sorted(archive_services.ZETTEL_READ_SECTIONS),
+                    "default": "body",
+                },
             },
             "required": ["archive_root"],
         },
@@ -2483,6 +2504,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "archive_root": {"type": "string"},
                 "title": {"type": "string"},
                 "body": {"type": "string"},
+                "abstract": {"type": "string", "maxLength": archive_services.ZET_ABSTRACT_MAX_CHARS},
                 "archive_id": {"type": "string"},
                 "kind": {"type": "string", "default": "fleeting_capture"},
                 "facets": {"type": "object"},
@@ -2892,6 +2914,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_source_mount_plan(arguments)
     if name == "list_zettels":
         return tool_list_zettels(arguments)
+    if name == "zet_catalog":
+        return tool_zet_catalog(arguments)
     if name == "read_zettel":
         return tool_read_zettel(arguments)
     if name == "zettel_objet_links":
@@ -4581,6 +4605,28 @@ def tool_list_zettels(arguments: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+def tool_zet_catalog(arguments: dict[str, Any]) -> dict[str, Any]:
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("zet_catalog is dry-run only.")
+    archive_root = require_path_arg(arguments, "archive_root")
+    status = optional_string_arg(arguments, "status") or "canonical"
+    result = call_service(
+        archive_services.zet_catalog,
+        archive_root,
+        status=status,
+        cursor=int(arguments.get("cursor", 0)),
+        page_size=int(arguments.get("page_size", 200)),
+        expected_snapshot_id=optional_string_arg(arguments, "expected_snapshot_id"),
+        dry_run=True,
+    )
+    coverage = result.get("coverage") if isinstance(result.get("coverage"), dict) else {}
+    state = "complete" if coverage.get("complete") else ("blocked" if not result.get("ok") else "more_pages")
+    return tool_success_result(
+        f"zet_catalog: {state}, {coverage.get('returned_count', 0)} returned, {coverage.get('remaining_count', 0)} remaining.",
+        result,
+    )
+
+
 def tool_read_zettel(arguments: dict[str, Any]) -> dict[str, Any]:
     archive_root = require_path_arg(arguments, "archive_root")
     zettel_id = optional_string_arg(arguments, "zettel_id")
@@ -4590,6 +4636,7 @@ def tool_read_zettel(arguments: dict[str, Any]) -> dict[str, Any]:
         archive_root,
         zettel_id=zettel_id,
         relative_path=relative_path,
+        section=optional_string_arg(arguments, "section") or "body",
     )
     frontmatter = result["frontmatter"]
     return tool_success_result(
@@ -5293,6 +5340,7 @@ def tool_create_draft_zettel(arguments: dict[str, Any]) -> dict[str, Any]:
         archive_root,
         title=title,
         body=body,
+        abstract=optional_string_arg(arguments, "abstract"),
         archive_id=archive_id,
         kind=kind,
         facets=facets,

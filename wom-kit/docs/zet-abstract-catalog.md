@@ -1,6 +1,6 @@
 # zet Abstract And Live Catalog Contract
 
-Status: implemented CLI baseline in v0.3.204
+Status: implemented CLI baseline in v0.3.204; MCP and host-runtime baseline in v0.3.205
 
 ## Purpose
 
@@ -124,3 +124,39 @@ The catalog:
 
 The generated index may become an optional accelerator later, but a missing or
 stale index must never make local zet nodes disappear from discovery.
+
+## MCP And Host Runtime
+
+v0.3.205 exposes the same read-only catalog through MCP:
+
+```json
+{
+  "name": "zet_catalog",
+  "arguments": {
+    "archive_root": "<archive-root>",
+    "status": "canonical",
+    "cursor": 0,
+    "page_size": 200
+  }
+}
+```
+
+The MCP page-size ceiling is 1,000. A host must follow `next_cursor` with the
+returned `snapshot.id` as `expected_snapshot_id` until `complete` is true. A
+changed snapshot blocks continuation rather than combining two local states.
+
+MCP `read_zettel` accepts `section: overview`, `document`, `body`, `details`, or
+`all`. The compatibility default remains `body`; host reading instructions use
+`overview` first. MCP `create_draft_zettel` accepts the same optional bounded
+`abstract` as the CLI.
+
+Runtime context, AI start-here, archive `AGENTS.md` templates, and the shipped
+runtime skill all state the same order:
+
+1. enumerate every canonical abstract and complete every page;
+2. use abstracts, ties, and edges to choose body-reading order;
+3. read a zet overview before its document or body;
+4. never call a search result or truncated page exhaustive coverage.
+
+Goal and loop remain host-application UI/UX. WOM supplies local memory,
+passages between zet nodes, and explicit completion evidence.

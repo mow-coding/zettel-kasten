@@ -83,6 +83,18 @@ project folder 작업에서는 temporary intake staging이 archive of record가
 아니라는 점을 기억합니다. cleanup 전에 원본을 objet, source map, manifest,
 zet, receipt로 보존해야 합니다.
 
+## v0.3.205 호스트 AI 초록 읽기
+
+v0.3.205는 v0.3.204의 live catalog를 MCP에도 노출하고 MCP
+`read_zettel`에 `section` 인자를 추가합니다. 기존 client가 `section`을
+생략하면 이전과 같은 `body` 기본값을 사용합니다. archive migration은
+필요 없습니다.
+
+호스트 AI는 `zet_catalog`의 `next_cursor`를 같은 `snapshot.id`로
+`complete: true`까지 따라가야 합니다. 본문을 넓게 읽기 전에는
+`read_zettel(section: "overview")`를 먼저 사용합니다. 중간에 snapshot이
+바뀌면 서로 다른 archive 상태를 섞지 말고 cursor 0부터 다시 시작합니다.
+
 ## v0.3.204 선택형 초록
 
 v0.3.204는 선택형 `frontmatter.abstract`와 read-only live `zet-catalog`를
@@ -103,7 +115,8 @@ archive create-draft <archive-root> --title <제목> --abstract <초록> --body 
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.3.204` | current public pre-release | `wom-kit/docs/releases/v0.3.204.md` |
+| `v0.3.205` | current public pre-release | `wom-kit/docs/releases/v0.3.205.md` |
+| `v0.3.204` | superseded public pre-release | `wom-kit/docs/releases/v0.3.204.md` |
 | `v0.3.203` | superseded public pre-release | `wom-kit/docs/releases/v0.3.203.md` |
 | `v0.3.202` | superseded public pre-release | `wom-kit/docs/releases/v0.3.202.md` |
 | `v0.3.201` | superseded public pre-release | `wom-kit/docs/releases/v0.3.201.md` |

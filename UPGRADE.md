@@ -91,6 +91,17 @@ For project-folder work, remember that temporary intake staging is not the
 archive of record. Preserve originals as objets, source maps, manifests, zets,
 and receipts before any cleanup.
 
+## v0.3.205 Host-AI Abstract Reading
+
+v0.3.205 exposes the v0.3.204 live catalog through MCP and adds a `section`
+argument to MCP `read_zettel`. Existing clients that omit `section` keep the
+previous `body` default. Existing archives require no migration.
+
+Host applications should call `zet_catalog`, follow `next_cursor` with the
+same `snapshot.id` until `complete: true`, and request
+`read_zettel(section: "overview")` before broader body reads. If the snapshot
+changes, restart at cursor 0 rather than mixing archive states.
+
 ## v0.3.204 Optional Abstract
 
 v0.3.204 adds optional `frontmatter.abstract` and the read-only live
@@ -110,7 +121,8 @@ make the catalog look complete.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.3.204` | current public pre-release | `wom-kit/docs/releases/v0.3.204.md` |
+| `v0.3.205` | current public pre-release | `wom-kit/docs/releases/v0.3.205.md` |
+| `v0.3.204` | superseded public pre-release | `wom-kit/docs/releases/v0.3.204.md` |
 | `v0.3.203` | superseded public pre-release | `wom-kit/docs/releases/v0.3.203.md` |
 | `v0.3.202` | superseded public pre-release | `wom-kit/docs/releases/v0.3.202.md` |
 | `v0.3.201` | superseded public pre-release | `wom-kit/docs/releases/v0.3.201.md` |

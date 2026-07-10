@@ -3343,10 +3343,14 @@ class ArchiveCliTests(unittest.TestCase):
             )
             self.assertEqual(
                 entrypoints["recommended_first_commands"][2]["command"],
-                "archive ai-response-concept-guide <archive-root> --topic all --dry-run --format json",
+                "archive zet-catalog <archive-root> --status canonical --cursor 0 --dry-run --format json",
             )
             self.assertEqual(
                 entrypoints["recommended_first_commands"][3]["command"],
+                "archive ai-response-concept-guide <archive-root> --topic all --dry-run --format json",
+            )
+            self.assertEqual(
+                entrypoints["recommended_first_commands"][4]["command"],
                 "archive operator-feedback-plan <archive-root> --dry-run --format json",
             )
             self.assertEqual(
@@ -3356,6 +3360,7 @@ class ArchiveCliTests(unittest.TestCase):
                     "read_operational_context",
                     "read_canonical_entrypoints",
                     "read_local_agent_instructions",
+                    "enumerate_zet_abstracts",
                     "run_ai_response_concept_guide",
                     "choose_material_link_route",
                     "plan_operator_feedback",
@@ -3427,6 +3432,11 @@ class ArchiveCliTests(unittest.TestCase):
                 "archive runtime-context <archive-root> --format json",
             )
             self.assertIn("Read AGENTS.md", " ".join(result["next_safe_steps"]))
+            self.assertIn("Run zet-catalog", " ".join(result["next_safe_steps"]))
+            self.assertEqual(
+                result["first_commands"][2]["command"],
+                "archive zet-catalog <archive-root> --status canonical --cursor 0 --dry-run --format json",
+            )
             self.assertTrue(result["conversation_status_board"]["allowed"])
             self.assertFalse(result["conversation_status_board"]["web_ui_required"])
             self.assertTrue(result["safety_boundaries"]["read_only"])
