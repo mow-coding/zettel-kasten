@@ -1903,12 +1903,14 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
     },
     {
         "name": "zet_catalog",
-        "description": "Enumerate every selected local zet abstract and frontmatter connection in deterministic pages. Read-only; never reads zet bodies, requires no generated index, and reports explicit completion/truncation coverage.",
+        "description": "Enumerate every selected local zet abstract and frontmatter connection in deterministic pages. Use projection=reading and coverage_mode=strict for compact, contiguous all-node coverage. Read-only; never reads zet bodies or requires a generated index.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "archive_root": {"type": "string"},
                 "status": {"type": "string", "enum": ["all", "draft", "canonical"], "default": "canonical"},
+                "projection": {"type": "string", "enum": ["full", "reading"], "default": "full"},
+                "coverage_mode": {"type": "string", "enum": ["page", "strict"], "default": "page"},
                 "cursor": {"type": "integer", "minimum": 0, "default": 0},
                 "page_size": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 200},
                 "max_estimated_tokens": {
@@ -1917,6 +1919,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                     "description": "Optional approximate items-only token budget for one page; at least one item is returned to preserve progress.",
                 },
                 "expected_snapshot_id": {"type": "string"},
+                "continuation_token": {"type": "string", "maxLength": 4096},
                 "dry_run": {"type": "boolean", "default": True},
             },
             "required": ["archive_root"],
@@ -4630,16 +4633,21 @@ def tool_zet_catalog(arguments: dict[str, Any]) -> dict[str, Any]:
         raise ToolError("zet_catalog is dry-run only.")
     archive_root = require_path_arg(arguments, "archive_root")
     status = optional_string_arg(arguments, "status") or "canonical"
+    projection = optional_string_arg(arguments, "projection") or "full"
+    coverage_mode = optional_string_arg(arguments, "coverage_mode") or "page"
     max_estimated_tokens_value = arguments.get("max_estimated_tokens")
     max_estimated_tokens = int(max_estimated_tokens_value) if max_estimated_tokens_value is not None else None
     result = call_service(
         archive_services.zet_catalog,
         archive_root,
         status=status,
+        projection=projection,
+        coverage_mode=coverage_mode,
         cursor=int(arguments.get("cursor", 0)),
         page_size=int(arguments.get("page_size", 200)),
         max_estimated_tokens=max_estimated_tokens,
         expected_snapshot_id=optional_string_arg(arguments, "expected_snapshot_id"),
+        continuation_token=optional_string_arg(arguments, "continuation_token"),
         dry_run=True,
         item_cache=zet_catalog_item_cache(archive_root, status),
         materialize_session_snapshot=True,

@@ -3343,7 +3343,7 @@ class ArchiveCliTests(unittest.TestCase):
             )
             self.assertEqual(
                 entrypoints["recommended_first_commands"][2]["command"],
-                "archive zet-catalog <archive-root> --status canonical --cursor 0 --dry-run --format json",
+                "archive zet-catalog <archive-root> --status canonical --projection reading --coverage-mode strict --cursor 0 --dry-run --format json",
             )
             self.assertEqual(
                 entrypoints["recommended_first_commands"][3]["command"],
@@ -3435,7 +3435,7 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertIn("Run zet-catalog", " ".join(result["next_safe_steps"]))
             self.assertEqual(
                 result["first_commands"][2]["command"],
-                "archive zet-catalog <archive-root> --status canonical --cursor 0 --dry-run --format json",
+                "archive zet-catalog <archive-root> --status canonical --projection reading --coverage-mode strict --cursor 0 --dry-run --format json",
             )
             self.assertTrue(result["conversation_status_board"]["allowed"])
             self.assertFalse(result["conversation_status_board"]["web_ui_required"])
@@ -27935,6 +27935,55 @@ state:
             self.assertEqual(second["items"], [])
             self.assertFalse(second["coverage"]["complete"])
 
+    def test_zet_catalog_strict_chain_blocks_changed_snapshot_before_continuation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            first_code, first_output = self.run_cli(
+                [
+                    "zet-catalog",
+                    str(archive_root),
+                    "--projection",
+                    "reading",
+                    "--coverage-mode",
+                    "strict",
+                    "--page-size",
+                    "1",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(first_code, 0, first_output)
+            first = json.loads(first_output)
+
+            changed_path = sorted((archive_root / "zettels").glob("*.md"))[-1]
+            changed_path.write_text(
+                changed_path.read_text(encoding="utf-8") + "\nbody changed during strict pass\n",
+                encoding="utf-8",
+            )
+            second_code, second_output = self.run_cli(
+                [
+                    "zet-catalog",
+                    str(archive_root),
+                    "--projection",
+                    "reading",
+                    "--coverage-mode",
+                    "strict",
+                    "--cursor",
+                    str(first["coverage"]["next_cursor"]),
+                    "--continuation-token",
+                    first["coverage"]["continuation_token"],
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(second_code, 1, second_output)
+            second = json.loads(second_output)
+            self.assertIn("catalog_snapshot_changed", second["blockers"])
+            self.assertFalse(second["coverage"]["archive_wide_coverage_claim_ready"])
+            self.assertEqual(second["items"], [])
+
     def test_zet_catalog_requires_dry_run_and_reports_missing_abstracts(self) -> None:
         archive_root = KIT_ROOT / "examples" / "fake-life-archive"
         missing_code, missing_output = self.run_cli(["zet-catalog", str(archive_root), "--format", "json"])
@@ -27966,7 +28015,7 @@ state:
         )
         self.assertEqual(code, 0, output)
         result = json.loads(output)
-        self.assertEqual(result["schema"], "wom-kit/zet-catalog/v0.2")
+        self.assertEqual(result["schema"], "wom-kit/zet-catalog/v0.3")
         self.assertEqual(result["coverage"]["returned_count"], 1)
         self.assertTrue(result["coverage"]["stopped_for_token_budget"])
         self.assertTrue(result["coverage"]["single_item_exceeds_token_budget"])
@@ -27993,6 +28042,174 @@ state:
         )
         self.assertEqual(invalid_code, 1, invalid_output)
         self.assertIn("max_estimated_tokens must be a positive integer", invalid_output)
+
+    def test_zet_catalog_reading_projection_keeps_abstracts_and_edges_without_full_item_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            canonical_paths = sorted((archive_root / "zettels").glob("*.md"))
+            first_frontmatter, first_body = archive_services.split_zettel_text(
+                canonical_paths[0].read_text(encoding="utf-8")
+            )
+            first_frontmatter["abstract"] = "Compact node meaning for the host reading pass."
+            first_frontmatter["edges"] = [
+                {
+                    "type": "references",
+                    "target": archive_services.split_zettel_text(
+                        canonical_paths[1].read_text(encoding="utf-8")
+                    )[0]["id"],
+                }
+            ]
+            canonical_paths[0].write_text(
+                "---\n" + archive_cli.dump_yaml(first_frontmatter) + "---\n\n" + first_body,
+                encoding="utf-8",
+            )
+
+            code, output = self.run_cli(
+                [
+                    "zet-catalog",
+                    str(archive_root),
+                    "--projection",
+                    "reading",
+                    "--page-size",
+                    "100",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertEqual(result["projection"], "reading")
+            by_id = {item["id"]: item for item in result["items"]}
+            item = by_id[first_frontmatter["id"]]
+            self.assertEqual(item["abstract"], "Compact node meaning for the host reading pass.")
+            self.assertEqual(item["abstract_status"], "explicit")
+            self.assertEqual(item["tie_summary"]["edge_count"], 1)
+            self.assertEqual(len(item["edges"]), 1)
+            self.assertNotIn("path", item)
+            self.assertNotIn("abstract_source", item)
+            self.assertNotIn("body_read", item)
+            self.assertNotIn("warnings", item)
+
+            full_code, full_output = self.run_cli(
+                [
+                    "zet-catalog",
+                    str(archive_root),
+                    "--projection",
+                    "full",
+                    "--page-size",
+                    "100",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(full_code, 0, full_output)
+            full = json.loads(full_output)
+            self.assertLess(
+                result["workload_estimate"]["scope"]["estimated_items_json_tokens"],
+                full["workload_estimate"]["scope"]["estimated_items_json_tokens"],
+            )
+
+    def test_zet_catalog_strict_chain_blocks_skips_and_proves_contiguous_completion(self) -> None:
+        archive_root = KIT_ROOT / "examples" / "fake-life-archive"
+        first_code, first_output = self.run_cli(
+            [
+                "zet-catalog",
+                str(archive_root),
+                "--projection",
+                "reading",
+                "--coverage-mode",
+                "strict",
+                "--page-size",
+                "1",
+                "--dry-run",
+                "--format",
+                "json",
+            ]
+        )
+        self.assertEqual(first_code, 0, first_output)
+        first = json.loads(first_output)
+        token = first["coverage"]["continuation_token"]
+        self.assertTrue(token)
+        self.assertTrue(first["coverage"]["contiguous_prefix_verified"])
+        self.assertEqual(first["coverage"]["covered_count"], 1)
+        self.assertFalse(first["coverage"]["archive_wide_coverage_claim_ready"])
+        self.assertFalse(first["continuation_contract"]["cryptographic_attestation"])
+        self.assertFalse(first["continuation_contract"]["persistent_loop_state_created"])
+
+        skipped_code, skipped_output = self.run_cli(
+            [
+                "zet-catalog",
+                str(archive_root),
+                "--projection",
+                "reading",
+                "--coverage-mode",
+                "strict",
+                "--cursor",
+                "2",
+                "--page-size",
+                "1",
+                "--continuation-token",
+                token,
+                "--dry-run",
+                "--format",
+                "json",
+            ]
+        )
+        self.assertEqual(skipped_code, 1, skipped_output)
+        self.assertIn("cursor does not match the prior page", skipped_output)
+
+        tampered = token[:-1] + ("0" if token[-1] != "0" else "1")
+        tampered_code, tampered_output = self.run_cli(
+            [
+                "zet-catalog",
+                str(archive_root),
+                "--projection",
+                "reading",
+                "--coverage-mode",
+                "strict",
+                "--cursor",
+                "1",
+                "--continuation-token",
+                tampered,
+                "--dry-run",
+                "--format",
+                "json",
+            ]
+        )
+        self.assertEqual(tampered_code, 1, tampered_output)
+        self.assertIn("checksum does not match", tampered_output)
+
+        collected = [item["id"] for item in first["items"]]
+        current = first
+        while not current["coverage"]["complete"]:
+            next_code, next_output = self.run_cli(
+                [
+                    "zet-catalog",
+                    str(archive_root),
+                    "--projection",
+                    "reading",
+                    "--coverage-mode",
+                    "strict",
+                    "--cursor",
+                    str(current["coverage"]["next_cursor"]),
+                    "--continuation-token",
+                    current["coverage"]["continuation_token"],
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(next_code, 0, next_output)
+            current = json.loads(next_output)
+            collected.extend(item["id"] for item in current["items"])
+
+        self.assertTrue(current["coverage"]["archive_wide_coverage_claim_ready"])
+        self.assertEqual(current["coverage"]["covered_count"], current["coverage"]["total_count"])
+        self.assertIsNone(current["coverage"]["continuation_token"])
+        self.assertEqual(len(collected), current["coverage"]["total_count"])
+        self.assertEqual(len(set(collected)), current["coverage"]["total_count"])
 
     def test_zet_catalog_1000_node_pass_reuses_ephemeral_frontmatter_cache(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

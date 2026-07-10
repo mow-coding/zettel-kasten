@@ -6,6 +6,32 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.207 - 2026-07-11
+
+Compact node reading and contiguous coverage checkpoint. Additive; no archive
+migration.
+
+- **Compact abstract-plus-tie projection.** CLI/MCP `zet-catalog` now accepts
+  `projection=reading`, preserving id, status, title, kind, updated time,
+  abstract state, facets, tie summary, and every safe frontmatter edge while
+  omitting full-only path and repeated safety fields.
+- **Strict contiguous pass.** Optional `coverage_mode=strict` starts at cursor
+  zero and requires the prior page's stateless checksum continuation token for
+  every later cursor. Skipped cursors, changed projection/status, malformed or
+  tampered tokens, and changed snapshots block.
+- **Honest completion signal.** `archive_wide_coverage_claim_ready` becomes true
+  only after a strict contiguous prefix reaches the end and MCP's completion
+  revalidation succeeds. Legacy `complete` remains page-end compatibility and
+  is not by itself archive-wide proof.
+- **No hidden loop state.** The continuation token carries only safe snapshot,
+  cursor, projection, and chain hashes; WOM persists no traversal state. Its
+  checksum prevents accidental drift but is explicitly not a signature,
+  attestation, or receipt.
+- **Scale result.** A synthetic 10,000-zet strict reading run with 120-character
+  abstracts and an 8,000-token page budget completed 179 pages in 52.4 seconds
+  with 10,000 unique ids and zero over-budget pages. Compact items estimated
+  1,414,699 tokens versus 2,064,699 for full items on the same fixture.
+
 ## v0.3.206 - 2026-07-11
 
 zet-catalog scale and token-budget checkpoint. Additive; no archive migration.

@@ -751,6 +751,14 @@ class McpServerTests(unittest.TestCase):
                 tools_by_name["zet_catalog"]["inputSchema"]["properties"]["max_estimated_tokens"]["minimum"],
                 1,
             )
+            self.assertEqual(
+                tools_by_name["zet_catalog"]["inputSchema"]["properties"]["projection"]["default"],
+                "full",
+            )
+            self.assertEqual(
+                tools_by_name["zet_catalog"]["inputSchema"]["properties"]["coverage_mode"]["default"],
+                "page",
+            )
             self.assertIn("ownership_transfer_check", tool_names)
             share_required = tools_by_name["share_check"]["inputSchema"]["required"]
             delegate_schema = tools_by_name["delegate_zet_check"]["inputSchema"]
@@ -7117,6 +7125,81 @@ class McpServerTests(unittest.TestCase):
                 )
                 self.assertTrue(write_attempt["result"]["isError"])
                 self.assertIn("dry-run only", write_attempt["result"]["structuredContent"]["error"])
+        finally:
+            self.stop_server(process)
+
+    def test_zet_catalog_tool_strict_reading_chain_reuses_snapshot_and_proves_completion(self) -> None:
+        process = self.start_server()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+                canonical_paths = sorted((archive_root / "zettels").glob("*.md"))
+                for index, path in enumerate(canonical_paths):
+                    frontmatter, body = archive_services.split_zettel_text(path.read_text(encoding="utf-8"))
+                    frontmatter["abstract"] = f"Strict MCP reading abstract {index}."
+                    path.write_text(
+                        "---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + body + "\nSTRICT_BODY_MARKER\n",
+                        encoding="utf-8",
+                    )
+
+                collected: list[str] = []
+                cursor = 0
+                continuation_token: str | None = None
+                request_id = 1
+                page_index = 0
+                while True:
+                    arguments: dict[str, object] = {
+                        "archive_root": str(archive_root),
+                        "projection": "reading",
+                        "coverage_mode": "strict",
+                        "cursor": cursor,
+                        "page_size": 1,
+                    }
+                    if continuation_token:
+                        arguments["continuation_token"] = continuation_token
+                    response = self.send(
+                        process,
+                        {
+                            "jsonrpc": "2.0",
+                            "id": request_id,
+                            "method": "tools/call",
+                            "params": {"name": "zet_catalog", "arguments": arguments},
+                        },
+                    )
+                    request_id += 1
+                    result = response["result"]
+                    self.assertFalse(result["isError"])
+                    structured = result["structuredContent"]
+                    self.assertTrue(structured["ok"], structured)
+                    self.assertEqual(structured["projection"], "reading")
+                    self.assertTrue(structured["coverage"]["contiguous_prefix_verified"])
+                    self.assertNotIn("STRICT_BODY_MARKER", json.dumps(structured, ensure_ascii=False))
+                    for item in structured["items"]:
+                        self.assertNotIn("path", item)
+                        self.assertNotIn("body_read", item)
+                        self.assertIn("edges", item)
+                        collected.append(item["id"])
+                    if page_index == 0:
+                        self.assertFalse(structured["session_consistency"]["materialized_snapshot_reused"])
+                    elif not structured["coverage"]["complete"]:
+                        self.assertTrue(structured["session_consistency"]["materialized_snapshot_reused"])
+                        self.assertEqual(structured["scan"]["path_metadata_checked"], 0)
+                    if structured["coverage"]["complete"]:
+                        self.assertTrue(structured["session_consistency"]["completion_revalidation_performed"])
+                        self.assertTrue(structured["coverage"]["archive_wide_coverage_claim_ready"])
+                        self.assertIsNone(structured["coverage"]["continuation_token"])
+                        self.assertEqual(
+                            structured["coverage"]["covered_count"],
+                            structured["coverage"]["total_count"],
+                        )
+                        break
+                    cursor = structured["coverage"]["next_cursor"]
+                    continuation_token = structured["coverage"]["continuation_token"]
+                    self.assertTrue(continuation_token)
+                    page_index += 1
+
+                self.assertEqual(len(collected), len(canonical_paths))
+                self.assertEqual(len(set(collected)), len(canonical_paths))
         finally:
             self.stop_server(process)
 

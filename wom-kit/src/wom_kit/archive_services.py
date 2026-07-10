@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import copy
 import base64
+import binascii
 import hashlib
 import hmac
 import fnmatch
@@ -2786,8 +2787,11 @@ ZETTEL_READ_SECTIONS = {"overview", "body", "document", "details", "all"}
 ZETTEL_OVERVIEW_GIST_CHAR_LIMIT = 360
 ZET_ABSTRACT_MAX_CHARS = ZETTEL_OVERVIEW_GIST_CHAR_LIMIT
 ZETTEL_OVERVIEW_FRONTMATTER_FIELDS = ("abstract", "gist", "summary", "description", "overview")
-ZET_CATALOG_SCHEMA = "wom-kit/zet-catalog/v0.2"
+ZET_CATALOG_SCHEMA = "wom-kit/zet-catalog/v0.3"
 ZET_CATALOG_MAX_PAGE_SIZE = 10000
+ZET_CATALOG_PROJECTIONS = {"full", "reading"}
+ZET_CATALOG_COVERAGE_MODES = {"page", "strict"}
+ZET_CATALOG_CONTINUATION_SCHEMA = "wom-kit/zet-catalog-continuation/v0.1"
 ZETTEL_EDGE_EXTERNAL_REF_RE = re.compile(r"^zet:(?P<source>[A-Za-z0-9_-]+):(?P<external_id>[A-Za-z0-9_-]+)$")
 MACHINE_ENFORCED_CHECKLIST_ITEMS = {"object_id_only", "allowed_edges"}
 HUMAN_AFFIRMABLE_CHECKLIST_ITEMS = {"one_clear_purpose", "sensitive_content_reviewed"}
@@ -5479,6 +5483,112 @@ def zet_catalog_item_json(item: dict[str, Any]) -> str:
     return json.dumps(item, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
+def zet_catalog_project_item(item: dict[str, Any], projection: str) -> dict[str, Any]:
+    if projection == "full":
+        return item
+    return {
+        "id": item.get("id"),
+        "status": item.get("status"),
+        "title": item.get("title"),
+        "kind": item.get("kind"),
+        "updated_at": item.get("updated_at"),
+        "abstract": item.get("abstract"),
+        "abstract_status": item.get("abstract_status"),
+        "facets": item.get("facets") if isinstance(item.get("facets"), dict) else {},
+        "tie_summary": item.get("tie_summary") if isinstance(item.get("tie_summary"), dict) else {},
+        "edges": item.get("edges") if isinstance(item.get("edges"), list) else [],
+    }
+
+
+def zet_catalog_encode_continuation(payload: dict[str, Any]) -> str:
+    raw = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    encoded = base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+    checksum = hashlib.sha256(raw).hexdigest()
+    return f"{encoded}.{checksum}"
+
+
+def zet_catalog_decode_continuation(token: str) -> dict[str, Any]:
+    text = str(token or "").strip()
+    if not text or "." not in text or len(text) > 4096:
+        raise ValueError("continuation token shape is invalid")
+    encoded, checksum = text.rsplit(".", 1)
+    if not re.match(r"^[0-9a-f]{64}$", checksum):
+        raise ValueError("continuation token checksum is invalid")
+    padding = "=" * (-len(encoded) % 4)
+    try:
+        raw = base64.urlsafe_b64decode((encoded + padding).encode("ascii"))
+    except (ValueError, UnicodeEncodeError, binascii.Error) as exc:
+        raise ValueError("continuation token encoding is invalid") from exc
+    if not hmac.compare_digest(hashlib.sha256(raw).hexdigest(), checksum):
+        raise ValueError("continuation token checksum does not match")
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("continuation token payload is invalid") from exc
+    if not isinstance(payload, dict) or payload.get("schema") != ZET_CATALOG_CONTINUATION_SCHEMA:
+        raise ValueError("continuation token schema is invalid")
+    return payload
+
+
+def zet_catalog_continuation_context(
+    *,
+    coverage_mode: str,
+    continuation_token: str | None,
+    cursor: int,
+    status: str,
+    projection: str,
+    expected_snapshot_id: str | None,
+    blockers: list[str],
+) -> tuple[dict[str, Any] | None, str | None]:
+    if coverage_mode != "strict":
+        if continuation_token:
+            blockers.append("continuation_token requires coverage_mode=strict.")
+        return None, expected_snapshot_id
+
+    if cursor == 0:
+        if continuation_token:
+            blockers.append("A strict catalog pass must start at cursor 0 without a continuation token.")
+        return None, expected_snapshot_id
+    if not continuation_token:
+        blockers.append("Strict catalog continuation requires the continuation token returned by the prior page.")
+        return None, expected_snapshot_id
+
+    try:
+        payload = zet_catalog_decode_continuation(continuation_token)
+    except ValueError as exc:
+        blockers.append(f"Strict catalog continuation token is invalid: {exc}.")
+        return None, expected_snapshot_id
+
+    token_snapshot = payload.get("snapshot_id")
+    if payload.get("status_filter") != status:
+        blockers.append("Strict catalog continuation status filter does not match the prior page.")
+    if payload.get("projection") != projection:
+        blockers.append("Strict catalog continuation projection does not match the prior page.")
+    if payload.get("order") != "archive_relative_path_ascending":
+        blockers.append("Strict catalog continuation order does not match the catalog order.")
+    token_next_cursor = payload.get("next_cursor")
+    token_covered_count = payload.get("covered_count")
+    if (
+        not isinstance(token_next_cursor, int)
+        or isinstance(token_next_cursor, bool)
+        or not isinstance(token_covered_count, int)
+        or isinstance(token_covered_count, bool)
+        or token_next_cursor != cursor
+        or token_covered_count != cursor
+    ):
+        blockers.append("Strict catalog continuation cursor does not match the prior page.")
+    if not isinstance(token_snapshot, str) or not re.match(r"^sha256:[0-9a-f]{64}$", token_snapshot):
+        blockers.append("Strict catalog continuation snapshot id is invalid.")
+    elif expected_snapshot_id and expected_snapshot_id != token_snapshot:
+        blockers.append("expected_snapshot_id does not match the strict continuation token.")
+    else:
+        expected_snapshot_id = token_snapshot
+    chain_hash = payload.get("chain_hash")
+    if not isinstance(chain_hash, str) or not re.match(r"^sha256:[0-9a-f]{64}$", chain_hash):
+        blockers.append("Strict catalog continuation chain hash is invalid.")
+    return payload, expected_snapshot_id
+
+
 def zet_catalog_estimated_tokens_from_chars(char_count: int) -> int:
     if char_count <= 0:
         return 0
@@ -5486,7 +5596,12 @@ def zet_catalog_estimated_tokens_from_chars(char_count: int) -> int:
 
 
 def zet_catalog_workload_estimate(items: list[dict[str, Any]]) -> dict[str, int]:
-    abstract_chars = sum(int(item.get("abstract_char_count") or 0) for item in items)
+    abstract_chars = sum(
+        len(item["abstract"])
+        if isinstance(item.get("abstract"), str)
+        else int(item.get("abstract_char_count") or 0)
+        for item in items
+    )
     payload = "[" + ",".join(zet_catalog_item_json(item) for item in items) + "]"
     payload_chars = len(payload)
     return {
@@ -5560,10 +5675,13 @@ def zet_catalog(
     archive_root: Path | str,
     *,
     status: str = "canonical",
+    projection: str = "full",
+    coverage_mode: str = "page",
     cursor: int = 0,
     page_size: int = 200,
     max_estimated_tokens: int | None = None,
     expected_snapshot_id: str | None = None,
+    continuation_token: str | None = None,
     dry_run: bool = False,
     item_cache: dict[str, dict[str, Any]] | None = None,
     materialize_session_snapshot: bool = False,
@@ -5576,6 +5694,10 @@ def zet_catalog(
         blockers.append("zet-catalog is read-only and requires --dry-run.")
     if status not in {"all", "draft", "canonical"}:
         blockers.append("status must be one of: all, draft, canonical")
+    if projection not in ZET_CATALOG_PROJECTIONS:
+        blockers.append("projection must be one of: full, reading")
+    if coverage_mode not in ZET_CATALOG_COVERAGE_MODES:
+        blockers.append("coverage_mode must be one of: page, strict")
     if cursor < 0:
         blockers.append("cursor must be a non-negative integer.")
     if page_size < 1 or page_size > ZET_CATALOG_MAX_PAGE_SIZE:
@@ -5584,11 +5706,19 @@ def zet_catalog(
         blockers.append("max_estimated_tokens must be a positive integer when provided.")
     if expected_snapshot_id and not re.match(r"^sha256:[0-9a-f]{64}$", expected_snapshot_id):
         blockers.append("expected_snapshot_id must use sha256:<64 lowercase hex> syntax.")
+    continuation_payload, expected_snapshot_id = zet_catalog_continuation_context(
+        coverage_mode=coverage_mode,
+        continuation_token=continuation_token,
+        cursor=cursor,
+        status=status,
+        projection=projection,
+        expected_snapshot_id=expected_snapshot_id,
+        blockers=blockers,
+    )
 
     cached_scope = item_cache.get("__catalog_scope__") if item_cache is not None else None
     materialized_entries = cached_scope.get("entries") if isinstance(cached_scope, dict) else None
     materialized_snapshot = cached_scope.get("snapshot") if isinstance(cached_scope, dict) else None
-    materialized_workload = cached_scope.get("workload_estimate") if isinstance(cached_scope, dict) else None
     materialized_snapshot_reused = False
     completion_revalidation_performed = False
     if (
@@ -5596,14 +5726,12 @@ def zet_catalog(
         and expected_snapshot_id
         and isinstance(materialized_entries, list)
         and isinstance(materialized_snapshot, dict)
-        and isinstance(materialized_workload, dict)
         and materialized_snapshot.get("id") == expected_snapshot_id
     ):
-        materialized_items = [
-            item
-            for _path, _expected_status, item, _signature in materialized_entries
+        preview_candidates = [
+            zet_catalog_project_item(item, projection)
+            for _path, _expected_status, item, _signature in materialized_entries[cursor : cursor + page_size]
         ]
-        preview_candidates = materialized_items[cursor : cursor + page_size]
         preview_page, _preview_stopped, _preview_single = zet_catalog_budgeted_page(
             preview_candidates,
             max_estimated_tokens=max_estimated_tokens,
@@ -5617,7 +5745,6 @@ def zet_catalog(
     if materialized_snapshot_reused:
         entries = materialized_entries
         snapshot = cached_scope["snapshot"]
-        scope_workload_estimate = cached_scope["workload_estimate"]
         scan = {
             "path_count": len(entries),
             "path_metadata_checked": 0,
@@ -5628,34 +5755,78 @@ def zet_catalog(
             "cache_mode": "process_local_ephemeral",
             "cache_authoritative": False,
             "cache_persisted": False,
-            "scope_metrics_cache_reused": True,
+            "snapshot_cache_reused": True,
         }
     else:
         path_entries = zet_catalog_paths(root, status) if status in {"all", "draft", "canonical"} else []
         entries, scan = zet_catalog_entries(root, path_entries, item_cache)
-        all_items = [item for _path, _expected_status, item, _signature in entries]
         scope_cache_reusable = bool(
             isinstance(cached_scope, dict)
             and scan["frontmatter_files_scanned"] == 0
             and scan["cached_items_reused"] == len(entries)
             and cached_scope.get("path_count") == len(entries)
             and isinstance(cached_scope.get("snapshot"), dict)
-            and isinstance(cached_scope.get("workload_estimate"), dict)
         )
         if scope_cache_reusable:
             snapshot = cached_scope["snapshot"]
-            scope_workload_estimate = cached_scope["workload_estimate"]
         else:
             snapshot = zet_catalog_snapshot(root, entries)
-            scope_workload_estimate = zet_catalog_workload_estimate(all_items)
         if item_cache is not None:
+            workload_estimates = (
+                dict(cached_scope.get("workload_estimates", {}))
+                if scope_cache_reusable and isinstance(cached_scope.get("workload_estimates"), dict)
+                else {}
+            )
+            projected_items = (
+                dict(cached_scope.get("projected_items", {}))
+                if scope_cache_reusable and isinstance(cached_scope.get("projected_items"), dict)
+                else {}
+            )
             item_cache["__catalog_scope__"] = {
                 "path_count": len(entries),
                 "snapshot": snapshot,
-                "workload_estimate": scope_workload_estimate,
+                "workload_estimates": workload_estimates,
+                "projected_items": projected_items,
                 "entries": entries,
             }
-        scan["scope_metrics_cache_reused"] = scope_cache_reusable
+        scan["snapshot_cache_reused"] = scope_cache_reusable
+
+    current_scope = item_cache.get("__catalog_scope__") if item_cache is not None else None
+    projected_items = current_scope.get("projected_items") if isinstance(current_scope, dict) else None
+    cached_projected_items = (
+        projected_items.get(projection)
+        if isinstance(projected_items, dict) and isinstance(projected_items.get(projection), list)
+        else None
+    )
+    projection_cache_reused = bool(
+        isinstance(cached_projected_items, list) and len(cached_projected_items) == len(entries)
+    )
+    if projection_cache_reused:
+        all_items = cached_projected_items
+    else:
+        all_items = [
+            zet_catalog_project_item(item, projection)
+            for _path, _expected_status, item, _signature in entries
+        ]
+        if isinstance(current_scope, dict):
+            cached_projections = current_scope.setdefault("projected_items", {})
+            if isinstance(cached_projections, dict):
+                cached_projections[projection] = all_items
+    scan["projection_cache_reused"] = projection_cache_reused
+    workload_estimates = current_scope.get("workload_estimates") if isinstance(current_scope, dict) else None
+    scope_workload_estimate = (
+        workload_estimates.get(projection)
+        if isinstance(workload_estimates, dict) and isinstance(workload_estimates.get(projection), dict)
+        else None
+    )
+    scope_metrics_cache_reused = scope_workload_estimate is not None
+    if scope_workload_estimate is None:
+        scope_workload_estimate = zet_catalog_workload_estimate(all_items)
+        if isinstance(current_scope, dict):
+            cached_workloads = current_scope.setdefault("workload_estimates", {})
+            if isinstance(cached_workloads, dict):
+                cached_workloads[projection] = scope_workload_estimate
+    scan["scope_metrics_cache_reused"] = scope_metrics_cache_reused
     if expected_snapshot_id and expected_snapshot_id != snapshot["id"]:
         blockers.append("catalog_snapshot_changed")
 
@@ -5667,7 +5838,7 @@ def zet_catalog(
     stopped_for_token_budget = False
     single_item_exceeds_token_budget = False
     if not blockers:
-        candidate_items = [item for _path, _expected_status, item, _signature in entries[cursor : cursor + page_size]]
+        candidate_items = all_items[cursor : cursor + page_size]
         page_items, stopped_for_token_budget, single_item_exceeds_token_budget = zet_catalog_budgeted_page(
             candidate_items,
             max_estimated_tokens=max_estimated_tokens,
@@ -5677,6 +5848,50 @@ def zet_catalog(
     complete = not blockers and next_cursor_value >= total_count
     next_cursor = None if complete or blockers else next_cursor_value
     remaining_count = total_count if blockers else max(0, total_count - next_cursor_value)
+
+    strict_contiguous_prefix_verified = False
+    strict_chain_hash: str | None = None
+    strict_continuation_token: str | None = None
+    strict_covered_count = 0
+    archive_wide_coverage_claim_ready = False
+    if coverage_mode == "strict" and not blockers:
+        previous_chain_hash = (
+            continuation_payload.get("chain_hash")
+            if isinstance(continuation_payload, dict)
+            else sha256_json_value(
+                {
+                    "schema": ZET_CATALOG_CONTINUATION_SCHEMA,
+                    "snapshot_id": snapshot["id"],
+                    "status_filter": status,
+                    "projection": projection,
+                    "order": "archive_relative_path_ascending",
+                    "covered_count": 0,
+                }
+            )
+        )
+        strict_chain_hash = sha256_json_value(
+            {
+                "previous_chain_hash": previous_chain_hash,
+                "cursor": cursor,
+                "returned_ids": [item.get("id") for item in page_items],
+            }
+        )
+        strict_covered_count = next_cursor_value
+        strict_contiguous_prefix_verified = True
+        archive_wide_coverage_claim_ready = complete
+        if not complete:
+            strict_continuation_token = zet_catalog_encode_continuation(
+                {
+                    "schema": ZET_CATALOG_CONTINUATION_SCHEMA,
+                    "snapshot_id": snapshot["id"],
+                    "status_filter": status,
+                    "projection": projection,
+                    "order": "archive_relative_path_ascending",
+                    "next_cursor": next_cursor,
+                    "covered_count": strict_covered_count,
+                    "chain_hash": strict_chain_hash,
+                }
+            )
 
     abstract_counts = {
         "explicit": 0,
@@ -5708,9 +5923,14 @@ def zet_catalog(
     if blockers:
         next_safe_actions.append("Restart the catalog from cursor 0 and use the newly returned snapshot id.")
     elif next_cursor is not None:
-        next_safe_actions.append(
-            f"Continue with --cursor {next_cursor} --expected-snapshot-id {snapshot['id']}."
-        )
+        if coverage_mode == "strict":
+            next_safe_actions.append(
+                "Continue with next_cursor, snapshot.id, and the returned coverage.continuation_token."
+            )
+        else:
+            next_safe_actions.append(
+                f"Continue with --cursor {next_cursor} --expected-snapshot-id {snapshot['id']}."
+            )
     else:
         next_safe_actions.append("Catalog coverage is complete for the declared status filter and snapshot.")
 
@@ -5721,10 +5941,12 @@ def zet_catalog(
         "schema": ZET_CATALOG_SCHEMA,
         "archive_id": archive_id,
         "status_filter": status,
+        "projection": projection,
         "order": "archive_relative_path_ascending",
         "snapshot": snapshot,
         "coverage": {
             "cursor": cursor,
+            "mode": coverage_mode,
             "page_size": page_size,
             "max_estimated_tokens": max_estimated_tokens,
             "stopped_for_token_budget": stopped_for_token_budget,
@@ -5735,6 +5957,18 @@ def zet_catalog(
             "next_cursor": next_cursor,
             "complete": complete,
             "truncated": not complete,
+            "contiguous_prefix_verified": strict_contiguous_prefix_verified,
+            "covered_count": strict_covered_count,
+            "continuation_token": strict_continuation_token,
+            "chain_hash": strict_chain_hash,
+            "archive_wide_coverage_claim_ready": archive_wide_coverage_claim_ready,
+        },
+        "continuation_contract": {
+            "schema": ZET_CATALOG_CONTINUATION_SCHEMA,
+            "stateless": True,
+            "checksum_validated": isinstance(continuation_payload, dict),
+            "cryptographic_attestation": False,
+            "persistent_loop_state_created": False,
         },
         "abstract_counts": abstract_counts,
         "workload_estimate": workload_estimate,
@@ -5762,6 +5996,7 @@ def zet_catalog(
         },
         "closed_actions": {
             "goal_or_loop_created": False,
+            "coverage_state_persisted": False,
             "generated_index_required": False,
             "files_written": False,
         },
@@ -56959,7 +57194,7 @@ def ai_start_here(
             [
                 *next_lines,
                 "Read AGENTS.md when canonical_entrypoints marks it present.",
-                "Run zet-catalog, inspect workload_estimate, set a host-appropriate max_estimated_tokens when needed, and follow every page with the same snapshot id before claiming archive-wide coverage.",
+                "Run zet-catalog with projection=reading and coverage_mode=strict, inspect workload_estimate, set a host-appropriate max_estimated_tokens when needed, and follow every page with its continuation token before claiming archive-wide coverage.",
                 "Use only read-only commands until the human approves a write operation.",
             ]
         ),
@@ -57172,7 +57407,7 @@ def runtime_context_recommended_first_commands() -> list[dict[str, str]]:
             "purpose": "load the AI-facing mission, scope, state, gotchas, and decisions record before choosing next actions",
         },
         {
-            "command": "archive zet-catalog <archive-root> --status canonical --cursor 0 --dry-run --format json",
+            "command": "archive zet-catalog <archive-root> --status canonical --projection reading --coverage-mode strict --cursor 0 --dry-run --format json",
             "purpose": "enumerate every canonical zet abstract and local connection with explicit completion and workload estimates before claiming archive-wide understanding",
         },
         {
@@ -57216,8 +57451,8 @@ def runtime_context_ai_runtime_order() -> list[dict[str, Any]]:
         {
             "step": 5,
             "action": "enumerate_zet_abstracts",
-            "command": "archive zet-catalog <archive-root> --status canonical --cursor 0 --dry-run --format json",
-            "continuation": "inspect workload_estimate, optionally set max_estimated_tokens for the host context, follow next_cursor with the same snapshot id until complete=true, and restart from cursor 0 if catalog_snapshot_changed",
+            "command": "archive zet-catalog <archive-root> --status canonical --projection reading --coverage-mode strict --cursor 0 --dry-run --format json",
+            "continuation": "inspect workload_estimate, optionally set max_estimated_tokens for the host context, follow next_cursor with the same snapshot id and continuation_token until archive_wide_coverage_claim_ready=true, and restart from cursor 0 if catalog_snapshot_changed",
             "reason": "give the host every local zet abstract and connection clue before it chooses a broad body-reading order; never treat a truncated page as full coverage",
         },
         {

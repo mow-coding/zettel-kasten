@@ -32,6 +32,8 @@ Use a host-sized page without dropping nodes:
 ```powershell
 archive zet-catalog <archive-root> `
   --status canonical `
+  --projection reading `
+  --coverage-mode strict `
   --cursor 0 `
   --page-size 1000 `
   --max-estimated-tokens 8000 `
@@ -39,9 +41,9 @@ archive zet-catalog <archive-root> `
   --format json
 ```
 
-Continue with `next_cursor` and `snapshot.id` until `complete: true`. One item
-is returned even when it alone exceeds the estimate so the loop always makes
-progress.
+Continue with `next_cursor`, `snapshot.id`, and `coverage.continuation_token`
+until `archive_wide_coverage_claim_ready: true`. One item is returned even when
+it alone exceeds the estimate so the loop always makes progress.
 
 ## Session Consistency
 
@@ -71,24 +73,27 @@ python wom-kit/tools/benchmark_zet_catalog.py `
   --page-size 1000 `
   --abstract-chars 120 `
   --max-estimated-tokens 8000 `
+  --projection reading `
+  --coverage-mode strict `
   --format json
 ```
 
-One 2026-07-11 Windows run observed:
+One v0.3.207 2026-07-11 Windows strict-reading run observed:
 
 | Measure | Result |
 | --- | ---: |
 | zets collected / unique | 10,000 / 10,000 |
-| pages | 264 |
+| pages | 179 |
 | missing or duplicate ids | 0 |
 | pages above requested estimate | 0 |
-| largest estimated page | 7,848 tokens |
+| largest estimated page | 7,925 tokens |
 | frontmatter parses across pass | 10,000 |
 | path metadata checks across pass | 20,000 |
-| materialized intermediate pages | 262 |
+| materialized intermediate pages | 177 |
 | completion revalidations | 1 |
-| catalog pass time | 54.6 seconds |
+| catalog pass time | 52.4 seconds |
 | abstract-only scope estimate | 300,000 tokens |
+| compact reading items-only scope estimate | 1,414,699 tokens |
 | full items-only scope estimate | 2,064,699 tokens |
 
 The host timing is an observation, not a cross-machine service-level promise.

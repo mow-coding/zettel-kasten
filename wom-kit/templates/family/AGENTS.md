@@ -6,8 +6,8 @@ This archive is a shared household or family memory space.
 
 1. Read `archive.yml`.
 2. Read relevant `views/*.yml`.
-3. For archive-wide understanding, run `archive zet-catalog <archive-root> --status canonical --cursor 0 --dry-run --format json`.
-4. Follow every `next_cursor` with the same snapshot id until `complete: true`; restart at cursor 0 if the catalog changed.
+3. For archive-wide understanding, run `archive zet-catalog <archive-root> --status canonical --projection reading --coverage-mode strict --cursor 0 --dry-run --format json`.
+4. Follow every `next_cursor` with the same snapshot id and continuation token until `archive_wide_coverage_claim_ready: true`; restart at cursor 0 if the catalog changed.
 5. Inspect `workload_estimate`; use `max_estimated_tokens` to fit the host context, but never replace complete coverage with top-k search.
 6. Use the returned abstracts, ties, and edges to choose a useful body-reading order. A search result or one truncated page is never full coverage.
 7. Read selected zet bodies with `read-zettel --section overview` first, then `--section document|body` when the host task needs the body.

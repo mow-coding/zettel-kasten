@@ -83,6 +83,21 @@ project folder 작업에서는 temporary intake staging이 archive of record가
 아니라는 점을 기억합니다. cleanup 전에 원본을 objet, source map, manifest,
 zet, receipt로 보존해야 합니다.
 
+## v0.3.207 compact 읽기와 strict 완주
+
+v0.3.207은 CLI와 MCP catalog에 선택형 `projection=reading`과
+`coverage_mode=strict`를 추가합니다. 기존 호출은 `projection=full`,
+`coverage_mode=page`를 그대로 사용하며 archive migration은 없습니다.
+
+AI가 archive 전체를 읽을 때는 strict mode를 cursor 0에서 시작하고, 이후
+매 호출에 직전 페이지의 `coverage.continuation_token`을 전달합니다.
+`archive_wide_coverage_claim_ready: true`일 때만 이 연속 chain이 끝까지
+도달한 것입니다. 기존 `complete`는 현재 페이지가 scope 끝에 닿았다는
+뜻일 뿐, 중간 cursor를 건너뛰지 않았다는 증거가 아닙니다.
+
+token은 checksum을 검사하는 stateless 실수 방지 장치입니다. signature,
+attestation, 보안 credential, 영수증이 아닙니다.
+
 ## v0.3.206 카탈로그 규모와 토큰 예산
 
 v0.3.206은 CLI와 MCP 카탈로그 페이지에 작업량 추정치와 선택형
@@ -127,7 +142,8 @@ archive create-draft <archive-root> --title <제목> --abstract <초록> --body 
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.3.206` | current public pre-release | `wom-kit/docs/releases/v0.3.206.md` |
+| `v0.3.207` | current public pre-release | `wom-kit/docs/releases/v0.3.207.md` |
+| `v0.3.206` | superseded public pre-release | `wom-kit/docs/releases/v0.3.206.md` |
 | `v0.3.205` | superseded public pre-release | `wom-kit/docs/releases/v0.3.205.md` |
 | `v0.3.204` | superseded public pre-release | `wom-kit/docs/releases/v0.3.204.md` |
 | `v0.3.203` | superseded public pre-release | `wom-kit/docs/releases/v0.3.203.md` |
