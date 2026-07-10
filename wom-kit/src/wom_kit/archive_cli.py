@@ -8029,10 +8029,13 @@ def command_zet_catalog(args: argparse.Namespace) -> int:
         result = archive_services.zet_catalog(
             Path(args.archive_root),
             status=args.status,
+            projection=args.projection,
+            coverage_mode=args.coverage_mode,
             cursor=args.cursor,
             page_size=args.page_size,
             max_estimated_tokens=args.max_estimated_tokens,
             expected_snapshot_id=args.expected_snapshot_id,
+            continuation_token=args.continuation_token,
             dry_run=True,
         )
     except archive_services.ArchiveServiceError as exc:
@@ -16020,6 +16023,18 @@ def build_parser() -> argparse.ArgumentParser:
         default="canonical",
         help="Zet status to enumerate.",
     )
+    zet_catalog.add_argument(
+        "--projection",
+        choices=sorted(archive_services.ZET_CATALOG_PROJECTIONS),
+        default="full",
+        help="full compatibility fields or compact reading fields with abstracts and all frontmatter edges.",
+    )
+    zet_catalog.add_argument(
+        "--coverage-mode",
+        choices=sorted(archive_services.ZET_CATALOG_COVERAGE_MODES),
+        default="page",
+        help="page compatibility mode or strict contiguous-prefix continuation proof.",
+    )
     zet_catalog.add_argument("--cursor", type=int, default=0, help="Zero-based catalog offset from a prior page.")
     zet_catalog.add_argument(
         "--page-size",
@@ -16035,6 +16050,10 @@ def build_parser() -> argparse.ArgumentParser:
     zet_catalog.add_argument(
         "--expected-snapshot-id",
         help="Snapshot id from the first page; blocks if the local catalog changed between pages.",
+    )
+    zet_catalog.add_argument(
+        "--continuation-token",
+        help="Stateless checksum token returned by the prior strict page; required for strict cursor continuation.",
     )
     zet_catalog.add_argument("--dry-run", action="store_true", help="Required. Read local frontmatter only; write nothing.")
     zet_catalog.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")

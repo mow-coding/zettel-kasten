@@ -62,10 +62,13 @@ def run_catalog_benchmark(
     zet_count: int,
     page_size: int,
     max_estimated_tokens: int | None,
+    projection: str,
+    coverage_mode: str,
 ) -> dict[str, Any]:
     item_cache: dict[str, dict[str, Any]] = {}
     cursor = 0
     snapshot_id: str | None = None
+    continuation_token: str | None = None
     collected_ids: list[str] = []
     page_seconds: list[float] = []
     frontmatter_files_scanned = 0
@@ -82,10 +85,13 @@ def run_catalog_benchmark(
         page_started = time.perf_counter()
         result = archive_services.zet_catalog(
             root,
+            projection=projection,
+            coverage_mode=coverage_mode,
             cursor=cursor,
             page_size=page_size,
             max_estimated_tokens=max_estimated_tokens,
             expected_snapshot_id=snapshot_id,
+            continuation_token=continuation_token,
             dry_run=True,
             item_cache=item_cache,
             materialize_session_snapshot=True,
@@ -99,6 +105,7 @@ def run_catalog_benchmark(
             }
         final_result = result
         snapshot_id = snapshot_id or result["snapshot"]["id"]
+        continuation_token = result["coverage"].get("continuation_token")
         collected_ids.extend(str(item["id"]) for item in result["items"])
         frontmatter_files_scanned += int(result["scan"]["frontmatter_files_scanned"])
         cached_items_reused += int(result["scan"]["cached_items_reused"])
@@ -130,6 +137,8 @@ def run_catalog_benchmark(
             "zet_count": zet_count,
             "page_size": page_size,
             "max_estimated_tokens": max_estimated_tokens,
+            "projection": projection,
+            "coverage_mode": coverage_mode,
         },
         "coverage": {
             "page_count": page_count,
@@ -137,6 +146,7 @@ def run_catalog_benchmark(
             "unique_count": unique_count,
             "complete": bool(final_result["coverage"]["complete"]),
             "snapshot_stable": final_result["snapshot"]["id"] == snapshot_id,
+            "archive_wide_coverage_claim_ready": final_result["coverage"]["archive_wide_coverage_claim_ready"],
         },
         "scan": {
             "frontmatter_files_scanned_across_pass": frontmatter_files_scanned,
@@ -179,6 +189,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--page-size", type=int, default=1000, help="Maximum items per page (1-10000).")
     parser.add_argument("--abstract-chars", type=int, default=120, help="Synthetic abstract characters (1-360).")
     parser.add_argument(
+        "--projection",
+        choices=sorted(archive_services.ZET_CATALOG_PROJECTIONS),
+        default="full",
+        help="Catalog item projection.",
+    )
+    parser.add_argument(
+        "--coverage-mode",
+        choices=sorted(archive_services.ZET_CATALOG_COVERAGE_MODES),
+        default="page",
+        help="Compatibility page mode or strict contiguous-prefix mode.",
+    )
+    parser.add_argument(
         "--max-estimated-tokens",
         type=int,
         default=None,
@@ -208,6 +230,8 @@ def main(argv: list[str] | None = None) -> int:
             zet_count=args.zet_count,
             page_size=args.page_size,
             max_estimated_tokens=args.max_estimated_tokens,
+            projection=args.projection,
+            coverage_mode=args.coverage_mode,
         )
         result["timing_seconds"]["fixture_generation"] = round(fixture_seconds, 6)
 

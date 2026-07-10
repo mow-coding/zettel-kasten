@@ -24,6 +24,10 @@ class ZetCatalogBenchmarkTests(unittest.TestCase):
                 "80",
                 "--max-estimated-tokens",
                 "2000",
+                "--projection",
+                "reading",
+                "--coverage-mode",
+                "strict",
                 "--format",
                 "json",
             ],
@@ -39,6 +43,9 @@ class ZetCatalogBenchmarkTests(unittest.TestCase):
         self.assertTrue(report["coverage"]["complete"])
         self.assertEqual(report["coverage"]["collected_count"], 120)
         self.assertEqual(report["coverage"]["unique_count"], 120)
+        self.assertTrue(report["coverage"]["archive_wide_coverage_claim_ready"])
+        self.assertEqual(report["fixture"]["projection"], "reading")
+        self.assertEqual(report["fixture"]["coverage_mode"], "strict")
         self.assertEqual(report["scan"]["frontmatter_files_scanned_across_pass"], 120)
         self.assertEqual(report["scan"]["path_metadata_checked_across_pass"], 240)
         self.assertEqual(report["scan"]["completion_revalidation_pages"], 1)

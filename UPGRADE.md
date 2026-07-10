@@ -91,6 +91,21 @@ For project-folder work, remember that temporary intake staging is not the
 archive of record. Preserve originals as objets, source maps, manifests, zets,
 and receipts before any cleanup.
 
+## v0.3.207 Compact Reading And Strict Coverage
+
+v0.3.207 adds optional `projection=reading` and `coverage_mode=strict` to CLI
+and MCP catalog calls. Existing callers keep `projection=full` and
+`coverage_mode=page`; no archive migration is required.
+
+For archive-wide AI reading, start strict mode at cursor 0. Every continuation
+must pass the prior page's `coverage.continuation_token`. Only
+`archive_wide_coverage_claim_ready: true` proves that this strict chain reached
+the end. The older `complete` field still means the requested page reached the
+scope end and must not be treated as contiguous-pass proof by itself.
+
+The token is checksum validated and stateless. It is not a signature,
+attestation, security credential, or receipt.
+
 ## v0.3.206 Catalog Scale And Token Budget
 
 v0.3.206 adds workload estimates and optional `max_estimated_tokens` to CLI and
@@ -133,7 +148,8 @@ make the catalog look complete.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.3.206` | current public pre-release | `wom-kit/docs/releases/v0.3.206.md` |
+| `v0.3.207` | current public pre-release | `wom-kit/docs/releases/v0.3.207.md` |
+| `v0.3.206` | superseded public pre-release | `wom-kit/docs/releases/v0.3.206.md` |
 | `v0.3.205` | superseded public pre-release | `wom-kit/docs/releases/v0.3.205.md` |
 | `v0.3.204` | superseded public pre-release | `wom-kit/docs/releases/v0.3.204.md` |
 | `v0.3.203` | superseded public pre-release | `wom-kit/docs/releases/v0.3.203.md` |

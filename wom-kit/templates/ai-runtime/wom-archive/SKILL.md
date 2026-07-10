@@ -64,11 +64,13 @@ WOM supplies the local memory surface. Before a host claims archive-wide
 understanding, enumerate every canonical zet abstract:
 
 ```bash
-archive zet-catalog <archive-root> --status canonical --cursor 0 --dry-run --format json
+archive zet-catalog <archive-root> --status canonical --projection reading --coverage-mode strict --cursor 0 --dry-run --format json
 ```
 
-When `complete` is false, call the same command with the returned `next_cursor`
-and `--expected-snapshot-id <snapshot.id>`. Continue until `complete` is true.
+When `complete` is false, call the same command with the returned `next_cursor`,
+`--expected-snapshot-id <snapshot.id>`, and
+`--continuation-token <coverage.continuation_token>`. Continue until
+`archive_wide_coverage_claim_ready` is true.
 If `catalog_snapshot_changed` blocks a later page, restart at cursor 0 instead
 of mixing pages from two archive states.
 

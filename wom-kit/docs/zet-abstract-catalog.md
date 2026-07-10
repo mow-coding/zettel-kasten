@@ -1,6 +1,6 @@
 # zet Abstract And Live Catalog Contract
 
-Status: implemented CLI baseline in v0.3.204; MCP/host baseline in v0.3.205; scale and token-budget baseline in v0.3.206
+Status: implemented CLI baseline in v0.3.204; MCP/host baseline in v0.3.205; scale/token baseline in v0.3.206; compact strict reading baseline in v0.3.207
 
 ## Purpose
 
@@ -192,3 +192,28 @@ CLI calls remain independent processes and live-verify each invocation.
 
 See [zet Catalog Scale And Token Budget](zet-catalog-scale-and-token-budget.md)
 for reproducible synthetic benchmark commands and interpretation boundaries.
+
+## Compact Reading Projection
+
+v0.3.207 adds `projection=reading` for the host's archive-wide first pass. Each
+item keeps id, status, title, kind, updated time, abstract state, facets, tie
+summary, and every safe frontmatter edge. It omits full-only path, created time,
+abstract-source/truncation bookkeeping, per-item body-read flags, and repeated
+warnings. `projection=full` remains the compatibility default.
+
+## Strict Contiguous Coverage
+
+Use `coverage_mode=strict` from cursor 0. Every later call must pass the prior
+page's `coverage.continuation_token`. The checksum-validated token binds the
+snapshot, status filter, projection, deterministic order, expected next cursor,
+covered prefix count, and chain hash.
+
+`coverage.complete` still means that the current page reached the scope end.
+Only `coverage.archive_wide_coverage_claim_ready: true` means a strict
+cursor-zero chain reached the end without a skipped cursor and passed snapshot
+validation.
+
+The token is stateless, contains no body text or local path, and is never
+persisted. It prevents accidental continuation drift; because it uses an
+unkeyed checksum, it is not a signature, attestation, security credential, or
+receipt. See [Contiguous Node Reading](zet-catalog-contiguous-reading.md).

@@ -117,7 +117,7 @@ list_zettels
   List canonical and/or draft zettels.
 
 zet_catalog
-  Enumerate every selected local zet's compact frontmatter abstract and connections in deterministic read-only pages. Inspect `workload_estimate`, optionally pass `max_estimated_tokens`, and follow `next_cursor` with the same snapshot id until complete. Intermediate pages reuse a process-local materialized snapshot; the completing page revalidates local metadata and blocks on change. It reads no zet bodies and requires no generated index.
+  Enumerate every selected local zet's compact frontmatter abstract and connections in deterministic read-only pages. For archive-wide reading, use `projection: reading`, `coverage_mode: strict`, inspect `workload_estimate`, optionally pass `max_estimated_tokens`, and follow `next_cursor` with the returned continuation token until `archive_wide_coverage_claim_ready`. Intermediate pages reuse a process-local materialized snapshot; the completing page revalidates local metadata and blocks on change. It reads no zet bodies and requires no generated index.
 
 read_zettel
   Read one zettel by id or path. Pass `section: overview` for the compact first read before requesting `document` or `body`; omitted `section` keeps the compatibility `body` default.
