@@ -2783,7 +2783,10 @@ FRONTMATTER_V03_LEGACY_REF_TYPE = "legacy_provenance_source"
 FRONTMATTER_V03_LEGACY_REF_ROLE = "legacy_provenance_source"
 ZETTEL_READ_SECTIONS = {"overview", "body", "document", "details", "all"}
 ZETTEL_OVERVIEW_GIST_CHAR_LIMIT = 360
-ZETTEL_OVERVIEW_FRONTMATTER_FIELDS = ("gist", "summary", "abstract", "description", "overview")
+ZET_ABSTRACT_MAX_CHARS = ZETTEL_OVERVIEW_GIST_CHAR_LIMIT
+ZETTEL_OVERVIEW_FRONTMATTER_FIELDS = ("abstract", "gist", "summary", "description", "overview")
+ZET_CATALOG_SCHEMA = "wom-kit/zet-catalog/v0.1"
+ZET_CATALOG_MAX_PAGE_SIZE = 10000
 ZETTEL_EDGE_EXTERNAL_REF_RE = re.compile(r"^zet:(?P<source>[A-Za-z0-9_-]+):(?P<external_id>[A-Za-z0-9_-]+)$")
 MACHINE_ENFORCED_CHECKLIST_ITEMS = {"object_id_only", "allowed_edges"}
 HUMAN_AFFIRMABLE_CHECKLIST_ITEMS = {"one_clear_purpose", "sensitive_content_reviewed"}
@@ -5227,6 +5230,300 @@ def read_zettel(
         "raw_frontmatter_delimiters_echoed": False,
         "redacted": False,
         "warnings": unique_preserve_order(overview_warnings),
+    }
+
+
+def zet_catalog_paths(root: Path, status: str) -> list[tuple[Path, str]]:
+    if status not in {"all", "draft", "canonical"}:
+        raise ArchiveServiceError("status must be one of: all, draft, canonical")
+    if status == "all":
+        folders = [("zettels", "canonical"), ("inbox", "draft")]
+    elif status == "draft":
+        folders = [("inbox", "draft")]
+    else:
+        folders = [("zettels", "canonical")]
+
+    paths: list[tuple[Path, str]] = []
+    for folder, expected_status in folders:
+        folder_root = root / folder
+        if folder_root.is_dir():
+            paths.extend(
+                (path, expected_status)
+                for path in safe_archive_glob(folder_root, "*.md", root, recursive=True)
+            )
+    return sorted(paths, key=lambda item: archive_relative_path(item[0], root))
+
+
+def zet_catalog_abstract(
+    frontmatter: dict[str, Any],
+    warnings: list[str],
+) -> tuple[str | None, str, str, bool]:
+    for field in ZETTEL_OVERVIEW_FRONTMATTER_FIELDS:
+        value = frontmatter.get(field)
+        if not isinstance(value, str):
+            continue
+        compact = re.sub(r"\s+", " ", value).strip()
+        abstract = safe_zettel_overview_string(value, warnings, f"$.frontmatter.{field}")
+        if abstract:
+            return (
+                abstract,
+                f"frontmatter.{field}",
+                "explicit" if field == "abstract" else "compatibility_field",
+                len(compact) > ZET_ABSTRACT_MAX_CHARS,
+            )
+    return None, "unavailable", "missing", False
+
+
+def zet_catalog_item(path: Path, root: Path, expected_status: str) -> dict[str, Any]:
+    relative = archive_relative_path(path, root)
+    frontmatter = read_zettel_frontmatter_only(path)
+    if not frontmatter:
+        return {
+            "path": relative,
+            "id": path.stem,
+            "status": expected_status,
+            "title": None,
+            "kind": None,
+            "created_at": None,
+            "updated_at": None,
+            "abstract": None,
+            "abstract_source": "unavailable",
+            "abstract_status": "frontmatter_unreadable",
+            "abstract_char_count": 0,
+            "abstract_truncated": False,
+            "facets": {},
+            "tie_summary": {
+                "edge_count": 0,
+                "edge_types": [],
+                "referenced_zets_count": 0,
+                "referenced_objets_count": 0,
+                "referenced_receipts_count": 0,
+            },
+            "edges": [],
+            "edges_complete": True,
+            "redacted": False,
+            "frontmatter_readable": False,
+            "body_read": False,
+            "warnings": ["Zet frontmatter could not be read."],
+        }
+
+    safe_frontmatter = json_safe(frontmatter)
+    raw_status = str(safe_frontmatter.get("status") or expected_status)
+    redacted = raw_status == "redacted"
+    if redacted:
+        return {
+            "path": relative,
+            "id": safe_frontmatter.get("id") or path.stem,
+            "status": "redacted",
+            "title": None,
+            "kind": None,
+            "created_at": safe_frontmatter.get("created_at"),
+            "updated_at": safe_frontmatter.get("updated_at"),
+            "abstract": None,
+            "abstract_source": "redacted",
+            "abstract_status": "redacted",
+            "abstract_char_count": 0,
+            "abstract_truncated": False,
+            "facets": {},
+            "tie_summary": {
+                "edge_count": 0,
+                "edge_types": [],
+                "referenced_zets_count": 0,
+                "referenced_objets_count": 0,
+                "referenced_receipts_count": 0,
+            },
+            "edges": [],
+            "edges_complete": True,
+            "redacted": True,
+            "frontmatter_readable": True,
+            "body_read": False,
+            "warnings": [],
+        }
+
+    warnings: list[str] = []
+    title = safe_zettel_overview_string(safe_frontmatter.get("title"), warnings, "$.frontmatter.title")
+    kind = safe_zettel_overview_string(safe_frontmatter.get("kind"), warnings, "$.frontmatter.kind")
+    abstract, abstract_source, abstract_status, abstract_truncated = zet_catalog_abstract(safe_frontmatter, warnings)
+    edges = safe_frontmatter.get("edges") if isinstance(safe_frontmatter.get("edges"), list) else []
+    edge_dicts = [edge for edge in edges if isinstance(edge, dict)]
+    edge_types = sorted(
+        {
+            str(edge.get("type")).strip()
+            for edge in edge_dicts
+            if edge.get("type") and not header_string_is_private_or_unsafe(str(edge.get("type")))
+        }
+    )
+    referenced_zets = collect_referenced_zets(safe_frontmatter)
+    referenced_objets = collect_referenced_objets(safe_frontmatter)
+    referenced_receipts = collect_referenced_receipts(safe_frontmatter)
+    safe_edges = [safe_overview_edge_preview(edge, warnings, index) for index, edge in enumerate(edge_dicts)]
+    return {
+        "path": relative,
+        "id": safe_frontmatter.get("id") or path.stem,
+        "status": raw_status,
+        "title": title,
+        "kind": kind,
+        "created_at": safe_frontmatter.get("created_at"),
+        "updated_at": safe_frontmatter.get("updated_at"),
+        "abstract": abstract,
+        "abstract_source": abstract_source,
+        "abstract_status": abstract_status,
+        "abstract_char_count": len(abstract) if abstract else 0,
+        "abstract_truncated": abstract_truncated,
+        "facets": safe_overview_facets(safe_frontmatter, warnings),
+        "tie_summary": {
+            "edge_count": len(edge_dicts),
+            "edge_types": edge_types,
+            "referenced_zets_count": len(referenced_zets),
+            "referenced_objets_count": len(referenced_objets),
+            "referenced_receipts_count": len(referenced_receipts),
+        },
+        "edges": safe_edges,
+        "edges_complete": True,
+        "redacted": False,
+        "frontmatter_readable": True,
+        "body_read": False,
+        "warnings": unique_preserve_order(warnings),
+    }
+
+
+def zet_catalog_snapshot(root: Path, entries: list[tuple[Path, str, dict[str, Any]]]) -> dict[str, Any]:
+    evidence: list[dict[str, Any]] = []
+    for path, _expected_status, item in entries:
+        try:
+            stat = path.stat()
+            file_size = stat.st_size
+            file_mtime_ns = stat.st_mtime_ns
+        except OSError:
+            file_size = None
+            file_mtime_ns = None
+        evidence.append(
+            {
+                "path": archive_relative_path(path, root),
+                "file_size": file_size,
+                "file_mtime_ns": file_mtime_ns,
+                "id": item.get("id"),
+                "updated_at": item.get("updated_at"),
+                "abstract_status": item.get("abstract_status"),
+                "abstract_sha256": "sha256:" + sha256_text(item["abstract"]) if item.get("abstract") else None,
+                "edge_count": item.get("tie_summary", {}).get("edge_count", 0),
+            }
+        )
+    return {
+        "id": sha256_json_value(evidence),
+        "basis": "path_size_mtime_frontmatter_projection",
+        "frontmatter_projection_hashed": True,
+        "body_content_hashed": False,
+        "item_count": len(evidence),
+    }
+
+
+def zet_catalog(
+    archive_root: Path | str,
+    *,
+    status: str = "canonical",
+    cursor: int = 0,
+    page_size: int = 200,
+    expected_snapshot_id: str | None = None,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if not dry_run:
+        blockers.append("zet-catalog is read-only and requires --dry-run.")
+    if status not in {"all", "draft", "canonical"}:
+        blockers.append("status must be one of: all, draft, canonical")
+    if cursor < 0:
+        blockers.append("cursor must be a non-negative integer.")
+    if page_size < 1 or page_size > ZET_CATALOG_MAX_PAGE_SIZE:
+        blockers.append(f"page_size must be between 1 and {ZET_CATALOG_MAX_PAGE_SIZE}.")
+    if expected_snapshot_id and not re.match(r"^sha256:[0-9a-f]{64}$", expected_snapshot_id):
+        blockers.append("expected_snapshot_id must use sha256:<64 lowercase hex> syntax.")
+
+    path_entries = zet_catalog_paths(root, status) if status in {"all", "draft", "canonical"} else []
+    entries = [(path, expected_status, zet_catalog_item(path, root, expected_status)) for path, expected_status in path_entries]
+    snapshot = zet_catalog_snapshot(root, entries)
+    if expected_snapshot_id and expected_snapshot_id != snapshot["id"]:
+        blockers.append("catalog_snapshot_changed")
+
+    total_count = len(entries)
+    if cursor > total_count:
+        blockers.append("cursor is beyond the current catalog item count.")
+
+    page_items: list[dict[str, Any]] = []
+    if not blockers:
+        page_items = [item for _path, _expected_status, item in entries[cursor : cursor + page_size]]
+    returned_count = len(page_items)
+    next_cursor_value = cursor + returned_count
+    complete = not blockers and next_cursor_value >= total_count
+    next_cursor = None if complete or blockers else next_cursor_value
+    remaining_count = total_count if blockers else max(0, total_count - next_cursor_value)
+
+    abstract_counts = {
+        "explicit": 0,
+        "compatibility_field": 0,
+        "missing": 0,
+        "redacted": 0,
+        "frontmatter_unreadable": 0,
+    }
+    for _path, _expected_status, item in entries:
+        abstract_status = str(item.get("abstract_status") or "missing")
+        abstract_counts[abstract_status] = abstract_counts.get(abstract_status, 0) + 1
+    if abstract_counts.get("missing"):
+        warnings.append(f"{abstract_counts['missing']} zet(s) have no explicit or compatibility abstract field.")
+    if abstract_counts.get("frontmatter_unreadable"):
+        warnings.append(f"{abstract_counts['frontmatter_unreadable']} zet(s) have unreadable frontmatter.")
+
+    next_safe_actions = []
+    if blockers:
+        next_safe_actions.append("Restart the catalog from cursor 0 and use the newly returned snapshot id.")
+    elif next_cursor is not None:
+        next_safe_actions.append(
+            f"Continue with --cursor {next_cursor} --expected-snapshot-id {snapshot['id']}."
+        )
+    else:
+        next_safe_actions.append("Catalog coverage is complete for the declared status filter and snapshot.")
+
+    return {
+        "ok": not blockers,
+        "dry_run": bool(dry_run),
+        "lifecycle_action": "zet_catalog",
+        "schema": ZET_CATALOG_SCHEMA,
+        "archive_id": archive_id,
+        "status_filter": status,
+        "order": "archive_relative_path_ascending",
+        "snapshot": snapshot,
+        "coverage": {
+            "cursor": cursor,
+            "page_size": page_size,
+            "total_count": total_count,
+            "returned_count": returned_count,
+            "remaining_count": remaining_count,
+            "next_cursor": next_cursor,
+            "complete": complete,
+            "truncated": not complete,
+        },
+        "abstract_counts": abstract_counts,
+        "items": page_items,
+        "privacy_guards": {
+            "zettel_body_text_read": False,
+            "zettel_body_text_echoed": False,
+            "object_file_bytes_read": False,
+            "provider_api_called": False,
+            "secrets_read": False,
+            "absolute_local_paths_echoed": False,
+            "writes": False,
+        },
+        "closed_actions": {
+            "goal_or_loop_created": False,
+            "generated_index_required": False,
+            "files_written": False,
+        },
+        "next_safe_actions": next_safe_actions,
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
     }
 
 
@@ -8537,6 +8834,7 @@ def create_draft_zettel(
     *,
     title: str,
     body: str,
+    abstract: str | None = None,
     archive_id: str | None = None,
     kind: str = "fleeting_capture",
     facets: dict[str, Any] | None = None,
@@ -8573,6 +8871,20 @@ def create_draft_zettel(
     warnings: list[str] = []
     if not body.strip():
         blockers.append("body is required and must contain non-whitespace text.")
+
+    normalized_abstract: str | None = None
+    if abstract is not None:
+        normalized_abstract = re.sub(r"\s+", " ", abstract).strip()
+        if not normalized_abstract:
+            blockers.append("abstract must contain non-whitespace text when provided.")
+        elif len(normalized_abstract) > ZET_ABSTRACT_MAX_CHARS:
+            blockers.append(f"abstract must be at most {ZET_ABSTRACT_MAX_CHARS} characters.")
+        elif (
+            header_string_is_private_or_unsafe(normalized_abstract)
+            or source_intake_has_provider_url(normalized_abstract)
+            or source_intake_secret_like(normalized_abstract)
+        ):
+            blockers.append("abstract appears to contain a private locator, local path, account identifier, or secret-like value.")
 
     resolved_archive_id = archive_id or str(archive_config.get("archive_id") or "")
     archive_type = archive_config.get("type") if isinstance(archive_config.get("type"), str) else None
@@ -8700,6 +9012,8 @@ def create_draft_zettel(
             "ready_for_promotion": False,
         },
     }
+    if normalized_abstract:
+        frontmatter["abstract"] = normalized_abstract
     if creation_mode:
         frontmatter["provenance"]["creation_mode"] = creation_mode
     if assisted:

@@ -31,10 +31,10 @@ tag 목록을 여기서 다시 키우지 않습니다.
 현재 공개 기준:
 
 ```text
-v0.3.203 pre-release
+v0.3.204 pre-release
 ```
 
-이전 공개 기준: v0.3.202 pre-release.
+이전 공개 기준: v0.3.203 pre-release.
 
 전체 릴리스 이력은 [CHANGELOG.md](CHANGELOG.md)와 [wom-kit/docs/releases/](wom-kit/docs/releases/)를 보세요.
 
@@ -76,7 +76,7 @@ Roadmap 요약: `v0.1.x`는 아이디어/프로토콜 언어 라인, `v0.2.x`는
 
 ### 조회와 view
 
-- runtime context, profile, source/objet intake, block header, prompt boundary를 위한 read-only preview layer,
+- runtime context, profile, source/objet intake, block header, prompt boundary를 위한 read-only preview layer. 선택형 360자 `frontmatter.abstract`와 read-only `archive zet-catalog --dry-run`은 generated index 없이 로컬 초록 데이터만 읽어 모든 zet를 결정적인 순서와 페이지로 열거하고, total/remaining/complete/truncated coverage, 전체 frontmatter edge projection, 페이지 사이 snapshot 변화 차단을 제공하며 zet 본문은 읽지 않습니다.
 - read-only objet reference resolution 및 zettel objet link preview,
 
 ### 공유와 ZET preview

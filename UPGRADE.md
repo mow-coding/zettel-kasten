@@ -91,11 +91,27 @@ For project-folder work, remember that temporary intake staging is not the
 archive of record. Preserve originals as objets, source maps, manifests, zets,
 and receipts before any cleanup.
 
+## v0.3.204 Optional Abstract
+
+v0.3.204 adds optional `frontmatter.abstract` and the read-only live
+`zet-catalog`. Existing archives require no migration and no zet is rewritten.
+
+New or revised drafts may add a compact abstract with:
+
+```text
+archive create-draft <archive-root> --title <title> --abstract <text> --body <body>
+```
+
+Old zets without the field appear as `abstract_status: missing`. Review and
+revise them gradually; do not bulk-generate or silently write abstracts only to
+make the catalog look complete.
+
 ## Public Versions
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.3.203` | current public pre-release | `wom-kit/docs/releases/v0.3.203.md` |
+| `v0.3.204` | current public pre-release | `wom-kit/docs/releases/v0.3.204.md` |
+| `v0.3.203` | superseded public pre-release | `wom-kit/docs/releases/v0.3.203.md` |
 | `v0.3.202` | superseded public pre-release | `wom-kit/docs/releases/v0.3.202.md` |
 | `v0.3.201` | superseded public pre-release | `wom-kit/docs/releases/v0.3.201.md` |
 | `v0.3.200` | superseded public pre-release | `wom-kit/docs/releases/v0.3.200.md` |

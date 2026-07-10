@@ -33,10 +33,10 @@ wom-kit/docs/releases/ - do not re-grow baseline ladders or tag lists here.
 Current public baseline:
 
 ```text
-v0.3.203 pre-release
+v0.3.204 pre-release
 ```
 
-Previous public baseline: v0.3.202 pre-release.
+Previous public baseline: v0.3.203 pre-release.
 
 Full release history: see [CHANGELOG.md](CHANGELOG.md) and [wom-kit/docs/releases/](wom-kit/docs/releases/).
 
@@ -90,7 +90,7 @@ approval-gated write, or docs-only), see the
 
 ### Retrieval & views
 
-- read-only preview layers for runtime context, profiles, source/objet intake, overview-first zet reading plus a human document view that hides raw YAML frontmatter, block headers with first-read summaries, and prompt boundaries,
+- read-only preview layers for runtime context, profiles, source/objet intake, overview-first zet reading plus a human document view that hides raw YAML frontmatter, block headers with first-read summaries, and prompt boundaries; optional bounded `frontmatter.abstract` plus read-only `archive zet-catalog --dry-run` now enumerate every local zet's compact frontmatter and complete edge projection in deterministic pages with total/remaining/complete/truncated coverage and snapshot-change blocking, without reading zet bodies or requiring the generated index,
 - generated index health checks, saved view health, facet role diagnostics, saved view recommendations,
 - read-only objet reference resolution, presigned URL planning, and zettel objet link previews for mapping `sha256:<hex>` refs to safe local/external candidates,
 

@@ -528,11 +528,14 @@ validate
 list-zettels
   List canonical and/or draft zettels.
 
+zet-catalog --dry-run
+  Enumerate every local zet's compact frontmatter abstract and complete edge projection in deterministic pages. Reports total, remaining, complete, truncated, next cursor, and snapshot-change evidence without reading zet bodies or requiring the generated index.
+
 read-zettel
   Read one zettel by id or archive-relative path.
 
 create-draft
-  Create a draft zettel in inbox/. With --dry-run, preview a profile-aware inbox draft zet without writing files. It can consume a validated source-intake plan with --source-intake-plan and a validated prompt-boundary report with --prompt-boundary-report.
+  Create a draft zettel in inbox/. Optional --abstract stores a bounded compact first read. With --dry-run, preview a profile-aware inbox draft zet without writing files. It can consume a validated source-intake plan with --source-intake-plan and a validated prompt-boundary report with --prompt-boundary-report.
 
 mint-zet --dry-run
   Check whether a draft zet can be minted and preview canonical path, mint receipt, and draft snapshot without writing.

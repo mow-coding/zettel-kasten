@@ -1,0 +1,126 @@
+# zet Abstract And Live Catalog Contract
+
+Status: implemented CLI baseline in v0.3.204
+
+## Purpose
+
+WOM keeps local zet files as canonical memory. A host LLM application should be
+able to enumerate that local memory without depending on a generated map or
+silently stopping at an arbitrary top-k limit.
+
+This contract adds two compatible pieces:
+
+- optional canonical `abstract` frontmatter for a compact first read;
+- read-only `archive zet-catalog` for deterministic, paged enumeration.
+
+Goal, loop, task branching, and completion UI remain responsibilities of the
+host LLM application. WOM provides local memory and coverage evidence.
+
+## Abstract Field
+
+New or revised zets may store:
+
+```yaml
+abstract: A compact, human-reviewable account of what this zet contributes.
+```
+
+The field is optional in v0.3.204 and is limited to 360 characters. Existing
+archives require no migration.
+
+`archive create-draft --abstract <text>` writes the field into the inbox draft.
+It blocks blank, over-limit, private-locator, local-path, account-identifier, or
+secret-like values before writing.
+
+The catalog classifies first-read text honestly:
+
+| `abstract_status` | Meaning |
+| --- | --- |
+| `explicit` | The zet has `frontmatter.abstract`. |
+| `compatibility_field` | A prior optional `gist`, `summary`, `description`, or `overview` field supplied the compact text. |
+| `missing` | No compact frontmatter text exists. The catalog does not read the body to invent one. |
+| `redacted` | The zet exists but its content-bearing first-read fields are suppressed. |
+| `frontmatter_unreadable` | The file exists but its frontmatter could not be parsed. |
+
+The one-zet `read-zettel --section overview` compatibility surface may still
+derive a gist from the first safe body paragraph. The archive-wide catalog does
+not use that fallback because its contract is frontmatter-only enumeration.
+
+## Live Catalog
+
+```powershell
+archive zet-catalog <archive-root> `
+  --status canonical `
+  --page-size 200 `
+  --cursor 0 `
+  --dry-run `
+  --format json
+```
+
+Aliases:
+
+```text
+zettel-catalog
+abstract-catalog
+```
+
+The default scope is every file under `zettels/`, sorted by archive-relative
+path. `--status draft` selects `inbox/`; `--status all` selects both.
+
+Every response includes:
+
+- total, returned, remaining, and next-cursor counts;
+- explicit `complete` and `truncated` booleans;
+- a local snapshot id;
+- abstract-state counts across the declared scope;
+- each returned zet's safe title, abstract, facets, complete frontmatter edge
+  projection, and tie counts;
+- privacy and closed-action fields.
+
+Continue a multi-page read with both values from the prior page:
+
+```powershell
+archive zet-catalog <archive-root> `
+  --cursor <next-cursor> `
+  --expected-snapshot-id <snapshot-id> `
+  --dry-run `
+  --format json
+```
+
+If local catalog evidence changes between pages, the command returns the
+`catalog_snapshot_changed` blocker and no page items. Restart from cursor 0.
+
+## Snapshot Honesty
+
+The v0.3.204 snapshot hashes:
+
+- archive-relative path;
+- file size and mtime;
+- safe frontmatter projection evidence, including abstract identity and edge
+  count.
+
+It does not hash zet body content. The output therefore reports:
+
+```text
+basis: path_size_mtime_frontmatter_projection
+frontmatter_projection_hashed: true
+body_content_hashed: false
+```
+
+This is change detection for a multi-page abstract pass, not proof that every
+body byte remained unchanged.
+
+## Local-First Boundary
+
+The catalog:
+
+- reads local frontmatter directly;
+- requires no generated SQLite index;
+- reads and echoes no zet body text;
+- reads no objet bytes;
+- calls no provider;
+- reads no secrets;
+- writes no files;
+- creates no WOM-owned goal or loop state.
+
+The generated index may become an optional accelerator later, but a missing or
+stale index must never make local zet nodes disappear from discovery.
