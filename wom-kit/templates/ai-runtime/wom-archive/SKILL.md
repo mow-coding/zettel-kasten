@@ -151,6 +151,25 @@ writes one revision receipt, and rolls back every attempted canonical byte on a
 runtime item or receipt failure. Do not edit the same targets concurrently.
 Forced termination has no automatic crash-recovery journal in v0.3.219.
 
+If a human later decides to remove that whole applied abstract batch, never
+hand-edit the zets and never infer removal authority. Retain the applied
+writer's `receipt.sha256`, then audit the receipt and exact inverse first:
+
+```bash
+archive zet-abstract-backfill-revert <archive-root> --receipt receipts/revisions/abstract-backfill/<digest>.zet-abstract-backfill.json --expected-receipt-sha256 <receipt.sha256> --dry-run --progress --format json
+```
+
+Only after a human reviews every removal may the host run:
+
+```bash
+archive zet-abstract-backfill-revert <archive-root> --receipt receipts/revisions/abstract-backfill/<digest>.zet-abstract-backfill.json --expected-receipt-sha256 <receipt.sha256> --approve --reviewed-by person:<reviewer> --affirm-abstract-removal-reviewed --progress --format json
+```
+
+Any later canonical change blocks the revert. Preserve both receipts. A matching
+retry is `already_reverted`; reapplying even the same text requires a newly
+reviewed proposal byte sequence and new proposal hash. The scratch lock does
+not protect against external editors or forced termination.
+
 Use paged `zet-catalog` when the host needs one stdout page, manual continuation,
 or MCP rather than a complete CLI pass:
 

@@ -6,6 +6,29 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.220 - 2026-07-11
+
+Receipt-audited deterministic abstract rollback checkpoint. Additive; no
+archive migration.
+
+- **Receipt-first audit.** New `zet-abstract-backfill-revert` CLI, with
+  `abstract-backfill-revert` alias, requires the exact applied receipt SHA-256.
+  Dry-run validates the source receipt, current canonical after-hashes, body and
+  abstract hashes, and exact reversibility without needing the proposal file.
+- **One-field inverse proof.** WOM-kit removes only the deterministic first
+  `abstract:` line inserted by v0.3.219 and requires the reconstructed bytes to
+  match every recorded `before_file_sha256`. Any later canonical edit blocks the
+  whole batch.
+- **Explicit removal authority.** A new approved revert requires a safe reviewer
+  plus `--affirm-abstract-removal-reviewed`; a green audit grants no authority.
+- **Transactional revert evidence.** The command restores all exact pre-backfill
+  bytes, writes an immutable text-free revert receipt last, preserves the source
+  receipt, and restores the applied state if an item or receipt operation fails.
+- **Idempotent and honest.** Matching re-runs validate the revert receipt and
+  return no-write `already_reverted`. Private output redaction and bounded memory
+  remain in force. The scratch lock is advisory; external editors and forced
+  termination remain outside the in-process rollback guarantee.
+
 ## v0.3.219 - 2026-07-11
 
 Approval-gated transactional zet abstract revision checkpoint. Additive; no

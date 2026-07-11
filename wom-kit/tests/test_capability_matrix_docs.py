@@ -521,7 +521,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.219 pre-release",
+            "v0.3.220 pre-release",
             "[Version Truth Source](wom-kit/docs/version-truth-source.md)",
             "[Project Version Update](wom-kit/docs/project-version-update.md)",
             "read-only WOM-kit version truth-source checks",
@@ -793,8 +793,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, receipt_schema_text)
         for phrase in (
-            "Status: v0.3.219 approval-gated transactional abstract revision checkpoint",
-            "Version: v0.3.219, release candidate",
+            "Previous checkpoint: Status: v0.3.219 approval-gated transactional abstract revision checkpoint",
             "zet abstract backfill write",
             "approval-gated write",
             "forced termination or machine failure",
@@ -830,6 +829,84 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                 self.assertIn(phrase, decision_text)
         self.assertIn("[zet Abstract Backfill Write](zet-abstract-backfill-write.md)", public_map_text)
         self.assertIn("[zet 초록 승인 후 쓰기](zet-abstract-backfill-write.md)", public_map_ko_text)
+
+    def test_abstract_backfill_revert_docs_expose_receipt_audit_exact_inverse_and_removal_authority(self) -> None:
+        guide_text = (KIT_ROOT / "docs" / "zet-abstract-backfill-revert.md").read_text(encoding="utf-8")
+        schema_text = (KIT_ROOT / "schemas" / "zet-abstract-backfill-revert-receipt.schema.json").read_text(encoding="utf-8")
+        decision_text = (
+            KIT_ROOT / "docs" / "archive-infra-decision-log-2026-07-11-v03220-abstract-backfill-revert.md"
+        ).read_text(encoding="utf-8")
+        release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.220.md").read_text(encoding="utf-8")
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        changelog_text = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+        readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        readme_ko_text = (REPO_ROOT / "README.ko.md").read_text(encoding="utf-8")
+        kit_readme_text = (KIT_ROOT / "README.md").read_text(encoding="utf-8")
+        upgrade_text = (REPO_ROOT / "UPGRADE.md").read_text(encoding="utf-8")
+        upgrade_ko_text = (REPO_ROOT / "UPGRADE.ko.md").read_text(encoding="utf-8")
+        runtime_skill_text = (KIT_ROOT / "templates" / "ai-runtime" / "wom-archive" / "SKILL.md").read_text(encoding="utf-8")
+        public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
+        public_map_ko_text = (KIT_ROOT / "docs" / "public-documentation-map.ko.md").read_text(encoding="utf-8")
+        for phrase in (
+            "Status: implemented as a receipt-audited approval-gated revert in v0.3.220",
+            "--expected-receipt-sha256 <receipt.sha256>",
+            "--affirm-abstract-removal-reviewed",
+            "removing only that line reconstructs the exact recorded",
+            "one revert batch:  256 MiB",
+            "stores no body text and no abstract text",
+            "new proposal SHA-256",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, guide_text)
+        for phrase in (
+            "wom-kit/zet-abstract-backfill-revert-receipt/v0.1",
+            "abstract_removal_reviewed",
+            "applied_file_sha256",
+            "reverted_file_sha256",
+            "removed_abstract_sha256",
+            "exact_before_file_hash_restored",
+            "crash_recovery_journal_written",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, schema_text)
+        for phrase in (
+            "Status: v0.3.220 receipt-audited deterministic abstract rollback checkpoint",
+            "Version: v0.3.220, release candidate",
+            "zet abstract backfill revert",
+            "Any later canonical edit",
+            "Reapplying later requires a newly reviewed proposal byte sequence",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, matrix_text)
+        for text in (readme_text, readme_ko_text, kit_readme_text, upgrade_text, upgrade_ko_text, runtime_skill_text):
+            with self.subTest(document="operator-surface"):
+                self.assertIn("zet-abstract-backfill-revert", text)
+        for text in (kit_readme_text, upgrade_text, upgrade_ko_text, runtime_skill_text):
+            with self.subTest(document="detailed-operator-surface"):
+                self.assertIn("--affirm-abstract-removal-reviewed", text)
+        for phrase in (
+            "v0.3.220 - 2026-07-11",
+            "One-field inverse proof",
+            "Transactional revert evidence",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, changelog_text)
+        for phrase in (
+            "v0.3.220 - Receipt-Audited Deterministic Abstract Rollback",
+            "Matching re-run is verified no-write",
+            "new proposal hash",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, release_text)
+        for phrase in (
+            "Make the immutable applied receipt",
+            "removing only the deterministic first `abstract:` line",
+            "not a general revision engine",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, decision_text)
+        self.assertIn("[zet Abstract Backfill Revert](zet-abstract-backfill-revert.md)", public_map_text)
+        self.assertIn("[zet 초록 보충 되돌리기](zet-abstract-backfill-revert.md)", public_map_ko_text)
 
     def test_tiro_import_plan_doc_and_matrix_cover_read_only_meeting_manifest_contract(self) -> None:
         tiro_text = TIRO_IMPORT_PLAN_PATH.read_text(encoding="utf-8")

@@ -2795,8 +2795,11 @@ ZET_ABSTRACT_BACKFILL_PROPOSAL_SCHEMA = "wom-kit/zet-abstract-backfill-proposal/
 ZET_ABSTRACT_BACKFILL_PLAN_SCHEMA = "wom-kit/zet-abstract-backfill-plan/v0.1"
 ZET_ABSTRACT_BACKFILL_WRITE_SCHEMA = "wom-kit/zet-abstract-backfill-write/v0.1"
 ZET_ABSTRACT_BACKFILL_RECEIPT_SCHEMA = "wom-kit/zet-abstract-backfill-receipt/v0.1"
+ZET_ABSTRACT_BACKFILL_REVERT_SCHEMA = "wom-kit/zet-abstract-backfill-revert/v0.1"
+ZET_ABSTRACT_BACKFILL_REVERT_RECEIPT_SCHEMA = "wom-kit/zet-abstract-backfill-revert-receipt/v0.1"
 ZET_ABSTRACT_BACKFILL_PROPOSAL_PREFIX = ".wom-scratch/abstract-backfill/"
 ZET_ABSTRACT_BACKFILL_RECEIPTS_DIR = "receipts/revisions/abstract-backfill"
+ZET_ABSTRACT_BACKFILL_REVERT_RECEIPTS_DIR = "receipts/revisions/abstract-backfill-reverts"
 ZET_ABSTRACT_BACKFILL_GENERATION_MODES = {"human_written", "ai_assisted"}
 ZET_ABSTRACT_BACKFILL_BASIS = "canonical_zet_body"
 ZET_ABSTRACT_BACKFILL_MAX_ITEMS = 5000
@@ -2804,6 +2807,7 @@ ZET_ABSTRACT_BACKFILL_MAX_FILE_BYTES = 64 * 1024 * 1024
 ZET_ABSTRACT_BACKFILL_MAX_LINE_BYTES = 1024 * 1024
 ZET_ABSTRACT_BACKFILL_MAX_CANONICAL_FILE_BYTES = 16 * 1024 * 1024
 ZET_ABSTRACT_BACKFILL_MAX_TOTAL_CANONICAL_BYTES = 256 * 1024 * 1024
+ZET_ABSTRACT_BACKFILL_MAX_RECEIPT_BYTES = 16 * 1024 * 1024
 ZETTEL_OVERVIEW_FRONTMATTER_FIELDS = ("abstract", "gist", "summary", "description", "overview")
 ZET_CATALOG_SCHEMA = "wom-kit/zet-catalog/v0.8"
 ZET_CATALOG_MAX_PAGE_SIZE = 10000
@@ -7665,6 +7669,731 @@ def zet_abstract_backfill_write(
             if rollback["succeeded"]
             else "transaction_failed_rollback_incomplete"
         )
+        return result_payload(
+            "failed_rolled_back" if rollback["succeeded"] else "failed_rollback_incomplete"
+        )
+
+
+def resolve_zet_abstract_backfill_receipt_path(root: Path, raw_path: str) -> tuple[Path, str]:
+    try:
+        normalized = normalize_archive_relative_path(raw_path)
+    except ArchivePathError as exc:
+        raise ArchiveServiceError("Abstract backfill receipt path must be archive-relative.") from exc
+    if (
+        not normalized.startswith(f"{ZET_ABSTRACT_BACKFILL_RECEIPTS_DIR}/")
+        or not normalized.endswith(".zet-abstract-backfill.json")
+    ):
+        raise ArchiveServiceError("Abstract backfill receipt path is outside the supported receipt directory.")
+    unresolved = root.resolve()
+    for part in normalized.split("/"):
+        unresolved = unresolved / part
+        if unresolved.is_symlink():
+            raise ArchiveServiceError("Abstract backfill receipt paths must not contain symbolic links.")
+    path = archive_internal_path(root, normalized)
+    if path.is_symlink() or not path.is_file():
+        raise ArchiveServiceError("Abstract backfill receipt must be an existing regular file.")
+    return path, normalized
+
+
+def read_zet_abstract_backfill_receipt_document(path: Path) -> tuple[bytes, dict[str, Any], str]:
+    if path.stat().st_size > ZET_ABSTRACT_BACKFILL_MAX_RECEIPT_BYTES:
+        raise ArchiveServiceError("Abstract backfill receipt exceeds the 16 MiB safety limit.")
+    with path.open("rb") as handle:
+        receipt_bytes = handle.read(ZET_ABSTRACT_BACKFILL_MAX_RECEIPT_BYTES + 1)
+    if len(receipt_bytes) > ZET_ABSTRACT_BACKFILL_MAX_RECEIPT_BYTES:
+        raise ArchiveServiceError("Abstract backfill receipt exceeds the 16 MiB safety limit.")
+    try:
+        receipt = json.loads(receipt_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ArchiveServiceError("Abstract backfill receipt is not valid UTF-8 JSON.") from exc
+    if not isinstance(receipt, dict):
+        raise ArchiveServiceError("Abstract backfill receipt must be a JSON object.")
+    return receipt_bytes, receipt, "sha256:" + hashlib.sha256(receipt_bytes).hexdigest()
+
+
+def zet_abstract_backfill_revert_receipt_relative_path(source_receipt_sha256: str) -> str:
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", source_receipt_sha256):
+        raise ArchiveServiceError("Abstract backfill receipt SHA-256 is invalid.")
+    return (
+        f"{ZET_ABSTRACT_BACKFILL_REVERT_RECEIPTS_DIR}/"
+        f"{source_receipt_sha256.removeprefix('sha256:')}.zet-abstract-backfill-revert.json"
+    )
+
+
+def zet_abstract_backfill_revert_candidate_bytes(
+    applied_bytes: bytes,
+    *,
+    expected_abstract_sha256: str,
+    expected_before_file_sha256: str,
+) -> bytes:
+    try:
+        text = applied_bytes.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ArchiveServiceError("Applied canonical zet is not valid UTF-8.") from exc
+    has_bom = text.startswith("\ufeff")
+    payload = text[1:] if has_bom else text
+    opening = re.match(r"\A---[ \t]*(\r\n|\n)", payload)
+    if opening is None:
+        raise ArchiveServiceError("Applied canonical zet has no supported YAML frontmatter opening.")
+    applied_frontmatter, applied_body = split_zettel_text(text)
+    abstract = applied_frontmatter.get("abstract")
+    if not isinstance(abstract, str):
+        raise ArchiveServiceError("Applied canonical zet has no string abstract to revert.")
+    actual_abstract_sha256 = "sha256:" + hashlib.sha256(abstract.encode("utf-8")).hexdigest()
+    if actual_abstract_sha256 != expected_abstract_sha256:
+        raise ArchiveServiceError("Applied canonical abstract does not match its receipt hash.")
+    inserted_line = f"abstract: {json.dumps(abstract, ensure_ascii=False)}{opening.group(1)}"
+    if not payload.startswith(inserted_line, opening.end()):
+        raise ArchiveServiceError("Applied canonical abstract is not the deterministic inserted line.")
+    reverted_payload = payload[: opening.end()] + payload[opening.end() + len(inserted_line) :]
+    reverted_text = ("\ufeff" if has_bom else "") + reverted_payload
+    reverted_frontmatter, reverted_body = split_zettel_text(reverted_text)
+    expected_reverted_frontmatter = dict(applied_frontmatter)
+    expected_reverted_frontmatter.pop("abstract", None)
+    if reverted_frontmatter != expected_reverted_frontmatter or reverted_body != applied_body:
+        raise ArchiveServiceError("Abstract removal would change canonical content beyond the inserted field.")
+    reverted_bytes = reverted_text.encode("utf-8")
+    if "sha256:" + hashlib.sha256(reverted_bytes).hexdigest() != expected_before_file_sha256:
+        raise ArchiveServiceError("Deterministic abstract removal does not restore the receipt before hash.")
+    return reverted_bytes
+
+
+def materialize_zet_abstract_backfill_revert_candidates(
+    root: Path,
+    source_receipt: dict[str, Any],
+    *,
+    max_items: int,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    blockers: list[str] = []
+    candidates: list[dict[str, Any]] = []
+    raw_items = source_receipt.get("items")
+    if not isinstance(raw_items, list) or not raw_items:
+        return [], ["source_receipt_items_missing"]
+    if len(raw_items) > max_items:
+        return [], ["source_receipt_exceeds_max_items"]
+    total_canonical_bytes = 0
+    for index, raw_item in enumerate(raw_items):
+        try:
+            if not isinstance(raw_item, dict):
+                raise ValueError("source_receipt_item_invalid")
+            zettel_id = raw_item.get("zettel_id")
+            canonical_path = raw_item.get("canonical_path")
+            before_file_sha256 = raw_item.get("before_file_sha256")
+            after_file_sha256 = raw_item.get("after_file_sha256")
+            abstract_sha256 = raw_item.get("abstract_sha256")
+            body_sha256 = raw_item.get("body_sha256")
+            if (
+                not isinstance(zettel_id, str)
+                or not ZETTEL_EDGE_ZETTEL_ID_RE.fullmatch(zettel_id)
+                or not isinstance(canonical_path, str)
+                or any(
+                    not isinstance(value, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", value)
+                    for value in (before_file_sha256, after_file_sha256, abstract_sha256, body_sha256)
+                )
+            ):
+                raise ValueError("source_receipt_item_invalid")
+            path = resolve_zettel_path(root, zettel_id=zettel_id, relative_path=None)
+            relative = archive_relative_path(path, root)
+            if path.is_symlink() or relative != canonical_path or not relative.startswith("zettels/"):
+                raise ValueError("source_receipt_target_identity_mismatch")
+            applied_bytes = read_zet_abstract_backfill_canonical_bytes(path)
+            total_canonical_bytes += len(applied_bytes)
+            if total_canonical_bytes > ZET_ABSTRACT_BACKFILL_MAX_TOTAL_CANONICAL_BYTES:
+                blockers.append("canonical_batch_exceeds_revert_limit")
+                break
+            if "sha256:" + hashlib.sha256(applied_bytes).hexdigest() != after_file_sha256:
+                raise ValueError("canonical_changed_after_abstract_apply")
+            applied_frontmatter, applied_body = split_zettel_text(applied_bytes.decode("utf-8"))
+            if applied_frontmatter.get("id") != zettel_id or applied_frontmatter.get("status") != "canonical":
+                raise ValueError("canonical_identity_or_status_changed")
+            if "sha256:" + hashlib.sha256(applied_body.encode("utf-8")).hexdigest() != body_sha256:
+                raise ValueError("canonical_body_changed_after_abstract_apply")
+            reverted_bytes = zet_abstract_backfill_revert_candidate_bytes(
+                applied_bytes,
+                expected_abstract_sha256=abstract_sha256,
+                expected_before_file_sha256=before_file_sha256,
+            )
+            candidates.append(
+                {
+                    "row_index": raw_item.get("row_index", index),
+                    "zettel_id": zettel_id,
+                    "path": path,
+                    "relative_path": relative,
+                    "applied_bytes": applied_bytes,
+                    "applied_file_sha256": after_file_sha256,
+                    "reverted_file_sha256": before_file_sha256,
+                    "abstract_sha256": abstract_sha256,
+                    "body_sha256": body_sha256,
+                    "generation_mode": raw_item.get("generation_mode"),
+                    "reverted_candidate_sha256": "sha256:" + hashlib.sha256(reverted_bytes).hexdigest(),
+                }
+            )
+        except (ArchiveServiceError, ArchivePathError, OSError, UnicodeDecodeError, ValueError):
+            blockers.append("source_receipt_or_canonical_not_revertible")
+            break
+    if len(candidates) != len(raw_items):
+        blockers.append("revert_candidate_count_mismatch")
+    return candidates, unique_preserve_order(blockers)
+
+
+def verify_zet_abstract_backfill_revert_receipt(
+    root: Path,
+    revert_receipt_path: Path,
+    *,
+    archive_id: str,
+    source_receipt_sha256: str,
+    source_receipt_relative: str,
+    max_items: int,
+) -> dict[str, Any]:
+    blockers: list[str] = []
+    public_items: list[dict[str, Any]] = []
+    try:
+        receipt_bytes, receipt, receipt_sha256 = read_zet_abstract_backfill_receipt_document(
+            revert_receipt_path
+        )
+    except ArchiveServiceError:
+        return {
+            "ok": False,
+            "receipt_sha256": None,
+            "items": [],
+            "blockers": ["revert_receipt_unreadable_or_invalid"],
+        }
+    if validate_schema(receipt, "zet-abstract-backfill-revert-receipt.schema.json"):
+        blockers.append("revert_receipt_schema_invalid")
+    if receipt.get("schema") != ZET_ABSTRACT_BACKFILL_REVERT_RECEIPT_SCHEMA:
+        blockers.append("revert_receipt_schema_unsupported")
+    if receipt.get("archive_id") != archive_id:
+        blockers.append("revert_receipt_archive_mismatch")
+    if receipt.get("source_receipt_sha256") != source_receipt_sha256:
+        blockers.append("revert_receipt_source_hash_mismatch")
+    if receipt.get("source_receipt_path") != source_receipt_relative:
+        blockers.append("revert_receipt_source_path_mismatch")
+    raw_items = receipt.get("items")
+    if not isinstance(raw_items, list) or not raw_items:
+        blockers.append("revert_receipt_items_missing")
+        raw_items = []
+    if len(raw_items) > max_items:
+        blockers.append("revert_receipt_exceeds_max_items")
+        raw_items = raw_items[:max_items]
+    seen_ids: set[str] = set()
+    seen_paths: set[str] = set()
+    for index, raw_item in enumerate(raw_items):
+        item_blockers: list[str] = []
+        current_matches: bool | None = None
+        abstract_absent: bool | None = None
+        body_matches: bool | None = None
+        row_index = index
+        if not isinstance(raw_item, dict):
+            item_blockers.append("revert_receipt_item_invalid")
+        else:
+            row_index = raw_item.get("row_index") if isinstance(raw_item.get("row_index"), int) else index
+            zettel_id = raw_item.get("zettel_id")
+            canonical_path = raw_item.get("canonical_path")
+            reverted_file_sha256 = raw_item.get("reverted_file_sha256")
+            body_sha256 = raw_item.get("body_sha256")
+            if not isinstance(zettel_id, str) or not ZETTEL_EDGE_ZETTEL_ID_RE.fullmatch(zettel_id):
+                item_blockers.append("revert_receipt_zettel_id_invalid")
+                zettel_id = None
+            elif zettel_id in seen_ids:
+                item_blockers.append("revert_receipt_zettel_id_duplicate")
+            else:
+                seen_ids.add(zettel_id)
+            if not isinstance(canonical_path, str):
+                item_blockers.append("revert_receipt_canonical_path_invalid")
+                canonical_path = None
+            elif canonical_path in seen_paths:
+                item_blockers.append("revert_receipt_canonical_path_duplicate")
+            else:
+                seen_paths.add(canonical_path)
+            if (
+                not isinstance(reverted_file_sha256, str)
+                or not re.fullmatch(r"sha256:[0-9a-f]{64}", reverted_file_sha256)
+                or not isinstance(body_sha256, str)
+                or not re.fullmatch(r"sha256:[0-9a-f]{64}", body_sha256)
+            ):
+                item_blockers.append("revert_receipt_hash_invalid")
+            if zettel_id is not None and canonical_path is not None and not item_blockers:
+                try:
+                    path = resolve_zettel_path(root, zettel_id=zettel_id, relative_path=None)
+                    relative = archive_relative_path(path, root)
+                    if path.is_symlink() or relative != canonical_path:
+                        item_blockers.append("reverted_target_identity_mismatch")
+                    else:
+                        current_bytes = read_zet_abstract_backfill_canonical_bytes(path)
+                        current_matches = (
+                            "sha256:" + hashlib.sha256(current_bytes).hexdigest()
+                            == reverted_file_sha256
+                        )
+                        frontmatter, body = split_zettel_text(current_bytes.decode("utf-8"))
+                        abstract_absent = "abstract" not in frontmatter
+                        body_matches = (
+                            "sha256:" + hashlib.sha256(body.encode("utf-8")).hexdigest()
+                            == body_sha256
+                        )
+                        if not current_matches:
+                            item_blockers.append("reverted_canonical_hash_diverged")
+                        if not abstract_absent:
+                            item_blockers.append("reverted_abstract_present")
+                        if not body_matches:
+                            item_blockers.append("reverted_body_hash_diverged")
+                except (ArchiveServiceError, ArchivePathError, OSError, UnicodeDecodeError):
+                    item_blockers.append("reverted_target_unavailable_or_unreadable")
+        blockers.extend(item_blockers)
+        public_items.append(
+            {
+                "row_index": row_index,
+                "status": "already_reverted" if not item_blockers else "blocked",
+                "current_file_sha256_matches_revert_receipt": current_matches,
+                "abstract_absent": abstract_absent,
+                "body_sha256_matches_revert_receipt": body_matches,
+                "blocker_codes": unique_preserve_order(item_blockers),
+            }
+        )
+    if receipt.get("item_count") != len(raw_items):
+        blockers.append("revert_receipt_item_count_mismatch")
+    return {
+        "ok": not blockers,
+        "receipt_sha256": receipt_sha256,
+        "receipt_bytes_read": len(receipt_bytes),
+        "reviewed_by_present": bool(receipt.get("reviewed_by")),
+        "items": public_items,
+        "blockers": unique_preserve_order(blockers),
+    }
+
+
+def zet_abstract_backfill_revert(
+    archive_root: Path | str,
+    *,
+    receipt_path: str,
+    expected_receipt_sha256: str,
+    max_items: int = 500,
+    dry_run: bool = False,
+    approve: bool = False,
+    reviewed_by: str | None = None,
+    affirm_abstract_removal_reviewed: bool = False,
+    progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    requested_max_items = int(max_items)
+    effective_max_items = max(1, min(requested_max_items, ZET_ABSTRACT_BACKFILL_MAX_ITEMS))
+    expected_sha256 = str(expected_receipt_sha256 or "").strip()
+    reviewer = safe_foreign_quarantine_actor_id(reviewed_by)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    public_items: list[dict[str, Any]] = []
+    source_receipt_sha256: str | None = None
+    source_receipt: dict[str, Any] = {}
+    source_receipt_relative: str | None = None
+    revert_receipt_relative: str | None = None
+    revert_receipt_sha256: str | None = None
+    revert_receipt_exists = False
+    revert_receipt_written_this_run = False
+    receipt_audit_state = "not_checked"
+    canonical_files_written: int | None = 0
+    canonical_write_attempt_count = 0
+    write_lock_removed: bool | None = None
+    rollback = {
+        "attempted": False,
+        "succeeded": None,
+        "canonical_files_restored": 0,
+        "revert_receipt_removed": None,
+        "write_lock_removed": None,
+    }
+
+    if requested_max_items != effective_max_items:
+        blockers.append("max_items_out_of_range")
+
+    def result_payload(status: str) -> dict[str, Any]:
+        ok = status in {"ready_to_revert", "reverted", "already_reverted"} and not blockers
+        valid_revert_receipt = revert_receipt_exists and status in {"reverted", "already_reverted"}
+        return {
+            "ok": ok,
+            "schema": ZET_ABSTRACT_BACKFILL_REVERT_SCHEMA,
+            "lifecycle_action": "zet_abstract_backfill_revert",
+            "status": status,
+            "dry_run": bool(dry_run),
+            "approved": bool(approve and status == "reverted"),
+            "archive_id": archive_id,
+            "source_receipt": {
+                "sha256": source_receipt_sha256,
+                "expected_sha256_matches": bool(
+                    source_receipt_sha256 and source_receipt_sha256 == expected_sha256
+                ),
+                "path_echoed": False,
+                "preserved": True,
+            },
+            "revert_receipt": {
+                "path": revert_receipt_relative,
+                "path_contains_only_source_receipt_digest": bool(revert_receipt_relative),
+                "exists": revert_receipt_exists,
+                "written_this_run": revert_receipt_written_this_run,
+                "sha256": revert_receipt_sha256,
+                "contains_private_zettel_ids_and_paths": True if valid_revert_receipt else None,
+                "contains_body_or_abstract_text": False if valid_revert_receipt else None,
+            },
+            "receipt_audit_state": receipt_audit_state,
+            "summary": {
+                "candidate_count": len(public_items),
+                "ready_count": sum(1 for item in public_items if item.get("status") == "ready_to_revert"),
+                "reverted_count": sum(1 for item in public_items if item.get("status") == "reverted"),
+                "already_reverted_count": sum(
+                    1 for item in public_items if item.get("status") == "already_reverted"
+                ),
+                "blocked_count": sum(1 for item in public_items if item.get("status") == "blocked"),
+                "canonical_files_written_this_run": canonical_files_written,
+                "canonical_write_attempt_count": canonical_write_attempt_count,
+                "max_items": effective_max_items,
+                "max_canonical_file_bytes": ZET_ABSTRACT_BACKFILL_MAX_CANONICAL_FILE_BYTES,
+                "max_total_canonical_bytes": ZET_ABSTRACT_BACKFILL_MAX_TOTAL_CANONICAL_BYTES,
+            },
+            "items": public_items,
+            "human_review": {
+                "required_for_new_revert": True,
+                "reviewed_by_supplied": bool(reviewer),
+                "reviewed_by_echoed": False,
+                "abstract_removal_reviewed_affirmed": bool(affirm_abstract_removal_reviewed),
+                "source_approval_preserved": True,
+            },
+            "write_boundary": {
+                "frontmatter_field_removed": "abstract" if status == "reverted" else None,
+                "canonical_body_bytes_changed": None if status == "failed_rollback_incomplete" else False,
+                "other_frontmatter_fields_changed": None if status == "failed_rollback_incomplete" else False,
+                "updated_at_changed": None if status == "failed_rollback_incomplete" else False,
+                "source_receipt_deleted": False,
+                "proposal_file_required": False,
+                "temporary_write_lock_removed": write_lock_removed,
+                "provider_state_written": False,
+                "objet_bytes_written": False,
+                "database_rows_written": False,
+            },
+            "rollback": rollback,
+            "privacy_guards": {
+                "source_receipt_path_echoed": False,
+                "zettel_ids_echoed": False,
+                "zettel_paths_echoed": False,
+                "zettel_titles_echoed": False,
+                "zettel_body_text_echoed": False,
+                "abstract_text_echoed": False,
+                "reviewed_by_echoed": False,
+                "absolute_local_paths_echoed": False,
+                "provider_api_called": False,
+                "model_called": False,
+                "secret_store_or_environment_read": False,
+            },
+            "blockers": unique_preserve_order(blockers),
+            "warnings": unique_preserve_order(warnings),
+            "next_safe_actions": (
+                ["Retain both immutable receipts; the canonical files now match their exact pre-backfill hashes."]
+                if status == "reverted"
+                else ["No write is needed; the revert receipt and current canonical before-hashes agree."]
+                if status == "already_reverted"
+                else ["After human review, approve the same exact receipt with the abstract-removal affirmation."]
+                if status == "ready_to_revert"
+                else ["Do not force removal. Resolve receipt or canonical divergence first."]
+            ),
+        }
+
+    if bool(dry_run) == bool(approve):
+        blockers.append("choose_exactly_one_of_dry_run_or_approve")
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", expected_sha256):
+        blockers.append("expected_receipt_sha256_invalid")
+    source_path, source_receipt_relative = resolve_zet_abstract_backfill_receipt_path(root, receipt_path)
+    if progress_callback is not None:
+        progress_callback("abstract-revert-receipt", "start", 0, None)
+    source_receipt_bytes, source_receipt, source_receipt_sha256 = read_zet_abstract_backfill_receipt_document(
+        source_path
+    )
+    if progress_callback is not None:
+        progress_callback("abstract-revert-receipt", "done", len(source_receipt_bytes), len(source_receipt_bytes))
+    if source_receipt_sha256 != expected_sha256:
+        blockers.append("source_receipt_sha256_mismatch")
+    if validate_schema(source_receipt, "zet-abstract-backfill-receipt.schema.json"):
+        blockers.append("source_receipt_schema_invalid")
+    if source_receipt.get("schema") != ZET_ABSTRACT_BACKFILL_RECEIPT_SCHEMA:
+        blockers.append("source_receipt_schema_unsupported")
+    if source_receipt.get("archive_id") != archive_id:
+        blockers.append("source_receipt_archive_mismatch")
+    proposal_sha256 = source_receipt.get("proposal_sha256")
+    if not isinstance(proposal_sha256, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", proposal_sha256):
+        blockers.append("source_receipt_proposal_sha256_invalid")
+    raw_source_items = source_receipt.get("items")
+    if not isinstance(raw_source_items, list) or not raw_source_items:
+        blockers.append("source_receipt_items_missing")
+    elif len(raw_source_items) > effective_max_items:
+        blockers.append("source_receipt_exceeds_max_items")
+    if source_receipt_sha256 and re.fullmatch(r"sha256:[0-9a-f]{64}", source_receipt_sha256):
+        revert_receipt_relative = zet_abstract_backfill_revert_receipt_relative_path(source_receipt_sha256)
+    if blockers:
+        receipt_audit_state = "blocked"
+        return result_payload("blocked")
+
+    assert source_receipt_relative is not None
+    assert revert_receipt_relative is not None
+    revert_receipt_path = archive_internal_path(root, revert_receipt_relative)
+    lock_digest = source_receipt_sha256.removeprefix("sha256:")
+    write_lock_path = archive_internal_path(
+        root,
+        f"{ZET_ABSTRACT_BACKFILL_PROPOSAL_PREFIX}.{lock_digest}.abstract-revert.lock",
+    )
+    if revert_receipt_path.exists():
+        revert_receipt_exists = True
+        if write_lock_path.exists():
+            warnings.append("matching_abstract_revert_lock_remains_inspect_before_cleanup")
+        verification = verify_zet_abstract_backfill_revert_receipt(
+            root,
+            revert_receipt_path,
+            archive_id=archive_id,
+            source_receipt_sha256=source_receipt_sha256,
+            source_receipt_relative=source_receipt_relative,
+            max_items=effective_max_items,
+        )
+        revert_receipt_sha256 = verification.get("receipt_sha256")
+        public_items = verification.get("items") if isinstance(verification.get("items"), list) else []
+        blockers.extend(str(item) for item in verification.get("blockers", []))
+        receipt_audit_state = "revert_receipt_and_current_state_verified" if verification.get("ok") else "blocked"
+        return result_payload("already_reverted" if verification.get("ok") else "blocked")
+
+    if approve:
+        if reviewer is None:
+            blockers.append("safe_reviewed_by_required")
+        if not affirm_abstract_removal_reviewed:
+            blockers.append("affirm_abstract_removal_reviewed_required")
+    elif reviewed_by:
+        blockers.append("reviewed_by_only_valid_with_approve")
+    elif affirm_abstract_removal_reviewed:
+        blockers.append("affirmation_only_valid_with_approve")
+    if blockers:
+        receipt_audit_state = "blocked"
+        return result_payload("blocked")
+
+    source_verification = verify_zet_abstract_backfill_receipt(
+        root,
+        source_path,
+        archive_id=archive_id,
+        proposal_sha256=proposal_sha256,
+        max_items=effective_max_items,
+    )
+    if not source_verification.get("ok"):
+        blockers.extend(str(item) for item in source_verification.get("blockers", []))
+        public_items = source_verification.get("items") if isinstance(source_verification.get("items"), list) else []
+        receipt_audit_state = "blocked"
+        return result_payload("blocked")
+    candidates, candidate_blockers = materialize_zet_abstract_backfill_revert_candidates(
+        root,
+        source_receipt,
+        max_items=effective_max_items,
+    )
+    blockers.extend(candidate_blockers)
+    public_items = [
+        {
+            "row_index": item["row_index"],
+            "status": "ready_to_revert" if not blockers else "blocked",
+            "generation_mode": item["generation_mode"],
+            "applied_file_sha256": item["applied_file_sha256"],
+            "reverted_file_sha256": item["reverted_file_sha256"],
+            "abstract_sha256": item["abstract_sha256"],
+            "body_sha256": item["body_sha256"],
+            "deterministic_revert_matches_before_hash": (
+                item["reverted_candidate_sha256"] == item["reverted_file_sha256"]
+            ),
+            "blocker_codes": [] if not blockers else list(blockers),
+        }
+        for item in candidates
+    ]
+    if blockers:
+        receipt_audit_state = "blocked"
+        return result_payload("blocked")
+    receipt_audit_state = "source_receipt_and_applied_state_verified"
+    if dry_run:
+        return result_payload("ready_to_revert")
+
+    assert reviewer is not None
+    reverted_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    revert_receipt = {
+        "schema": ZET_ABSTRACT_BACKFILL_REVERT_RECEIPT_SCHEMA,
+        "action": "zet_abstract_backfill_revert",
+        "status": "reverted",
+        "reverted_at": reverted_at,
+        "archive_id": archive_id,
+        "source_receipt_path": source_receipt_relative,
+        "source_receipt_sha256": source_receipt_sha256,
+        "source_proposal_sha256": proposal_sha256,
+        "source_plan_digest": source_receipt.get("plan_digest"),
+        "reviewed_by": reviewer,
+        "human_affirmation": "abstract_removal_reviewed",
+        "item_count": len(candidates),
+        "items": [
+            {
+                "row_index": item["row_index"],
+                "zettel_id": item["zettel_id"],
+                "canonical_path": item["relative_path"],
+                "generation_mode": item["generation_mode"],
+                "applied_file_sha256": item["applied_file_sha256"],
+                "reverted_file_sha256": item["reverted_file_sha256"],
+                "removed_abstract_sha256": item["abstract_sha256"],
+                "body_sha256": item["body_sha256"],
+            }
+            for item in candidates
+        ],
+        "mutation_contract": {
+            "field_removed": "frontmatter.abstract",
+            "exact_before_file_hash_restored": True,
+            "body_bytes_preserved": True,
+            "other_frontmatter_semantics_preserved": True,
+            "updated_at_changed": False,
+            "source_receipt_preserved": True,
+            "rollback_on_runtime_failure": True,
+            "crash_recovery_journal_written": False,
+        },
+        "privacy_guards": {
+            "abstract_text_stored_in_receipt": False,
+            "body_text_stored_in_receipt": False,
+            "provider_api_called": False,
+            "model_called": False,
+            "secret_store_or_environment_read": False,
+        },
+    }
+    if validate_schema(revert_receipt, "zet-abstract-backfill-revert-receipt.schema.json"):
+        blockers.append("revert_receipt_schema_validation_failed")
+        receipt_audit_state = "blocked"
+        return result_payload("blocked")
+
+    lock_descriptor: int | None = None
+    write_lock_parent_existed = write_lock_path.parent.exists()
+    try:
+        write_lock_path.parent.mkdir(parents=True, exist_ok=True)
+        lock_descriptor = os.open(write_lock_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(lock_descriptor, "wb") as lock_handle:
+            lock_descriptor = None
+            lock_handle.write((source_receipt_sha256 + "\n").encode("ascii"))
+            lock_handle.flush()
+            os.fsync(lock_handle.fileno())
+    except FileExistsError:
+        blockers.append("abstract_revert_write_lock_exists")
+        receipt_audit_state = "blocked"
+        return result_payload("blocked")
+    except OSError:
+        try:
+            if write_lock_path.exists():
+                write_lock_path.unlink()
+            if not write_lock_parent_existed:
+                cleanup_empty_archive_dirs(root, [write_lock_path])
+        except OSError:
+            pass
+        blockers.append("abstract_revert_write_lock_create_failed")
+        receipt_audit_state = "blocked"
+        return result_payload("blocked")
+    finally:
+        if lock_descriptor is not None:
+            os.close(lock_descriptor)
+
+    attempted_candidates: list[dict[str, Any]] = []
+    revert_receipt_parent_existed = revert_receipt_path.parent.exists()
+    revert_receipt_write_attempted = False
+    revert_receipt_owned_this_run = False
+    try:
+        if progress_callback is not None:
+            progress_callback("abstract-revert-write", "start", 0, len(candidates))
+        for index, item in enumerate(candidates, start=1):
+            path = item["path"]
+            if read_zet_abstract_backfill_canonical_bytes(path) != item["applied_bytes"]:
+                raise RuntimeError("canonical_changed_immediately_before_revert")
+            reverted_bytes = zet_abstract_backfill_revert_candidate_bytes(
+                item["applied_bytes"],
+                expected_abstract_sha256=item["abstract_sha256"],
+                expected_before_file_sha256=item["reverted_file_sha256"],
+            )
+            attempted_candidates.append(item)
+            canonical_write_attempt_count += 1
+            write_bytes_atomic(path, reverted_bytes)
+            if read_zet_abstract_backfill_canonical_bytes(path) != reverted_bytes:
+                raise RuntimeError("canonical_revert_verification_failed")
+            canonical_files_written = int(canonical_files_written or 0) + 1
+            public_items[index - 1]["status"] = "reverted"
+            if progress_callback is not None:
+                progress_callback("abstract-revert-write", "written", index, len(candidates))
+        for item in candidates:
+            current = read_zet_abstract_backfill_canonical_bytes(item["path"])
+            if "sha256:" + hashlib.sha256(current).hexdigest() != item["reverted_file_sha256"]:
+                raise RuntimeError("canonical_revert_batch_revalidation_failed")
+        if progress_callback is not None:
+            progress_callback("abstract-revert-write", "done", len(candidates), len(candidates))
+            progress_callback("abstract-revert-receipt", "start", None, None)
+        revert_receipt_path.parent.mkdir(parents=True, exist_ok=True)
+        revert_receipt_write_attempted = True
+        try:
+            write_json_new_file(revert_receipt_path, revert_receipt)
+            revert_receipt_owned_this_run = True
+        except FileExistsError:
+            revert_receipt_write_attempted = False
+            raise RuntimeError("revert_receipt_created_concurrently")
+        except Exception:
+            revert_receipt_owned_this_run = revert_receipt_path.exists()
+            raise
+        written_bytes, written_receipt, revert_receipt_sha256 = read_zet_abstract_backfill_receipt_document(
+            revert_receipt_path
+        )
+        if validate_schema(written_receipt, "zet-abstract-backfill-revert-receipt.schema.json"):
+            raise RuntimeError("written_revert_receipt_schema_validation_failed")
+        revert_receipt_exists = True
+        revert_receipt_written_this_run = True
+        try:
+            write_lock_path.unlink()
+            write_lock_removed = True
+            if not write_lock_parent_existed:
+                cleanup_empty_archive_dirs(root, [write_lock_path])
+        except OSError:
+            write_lock_removed = False
+            warnings.append("temporary_abstract_revert_lock_cleanup_failed")
+        if progress_callback is not None:
+            progress_callback("abstract-revert-receipt", "done", len(written_bytes), len(written_bytes))
+        receipt_audit_state = "revert_receipt_and_current_state_verified"
+        return result_payload("reverted")
+    except Exception:
+        rollback["attempted"] = bool(attempted_candidates or revert_receipt_write_attempted)
+        revert_receipt_removed = True
+        if revert_receipt_owned_this_run and revert_receipt_path.exists():
+            try:
+                revert_receipt_path.unlink()
+            except OSError:
+                revert_receipt_removed = False
+        restored = 0
+        canonical_restore_ok = True
+        for item in reversed(attempted_candidates):
+            try:
+                write_bytes_atomic(item["path"], item["applied_bytes"])
+                if read_zet_abstract_backfill_canonical_bytes(item["path"]) != item["applied_bytes"]:
+                    raise OSError("canonical_revert_rollback_verification_failed")
+                restored += 1
+            except Exception:
+                canonical_restore_ok = False
+        try:
+            if write_lock_path.exists():
+                write_lock_path.unlink()
+            write_lock_removed = True
+            if not write_lock_parent_existed:
+                cleanup_empty_archive_dirs(root, [write_lock_path])
+        except OSError:
+            write_lock_removed = False
+        if not revert_receipt_parent_existed:
+            cleanup_empty_archive_dirs(root, [revert_receipt_path])
+        rollback["canonical_files_restored"] = restored
+        rollback["revert_receipt_removed"] = revert_receipt_removed
+        rollback["write_lock_removed"] = write_lock_removed
+        rollback["succeeded"] = canonical_restore_ok and revert_receipt_removed and write_lock_removed
+        canonical_files_written = None if not rollback["succeeded"] else 0
+        revert_receipt_exists = revert_receipt_path.exists()
+        revert_receipt_written_this_run = False
+        attempted_indexes = {item["row_index"] for item in attempted_candidates}
+        for item in public_items:
+            item["status"] = "rolled_back" if item.get("row_index") in attempted_indexes else "not_attempted"
+        blockers.append(
+            "revert_transaction_failed_and_rolled_back"
+            if rollback["succeeded"]
+            else "revert_transaction_failed_rollback_incomplete"
+        )
+        receipt_audit_state = "source_receipt_and_applied_state_verified"
         return result_payload(
             "failed_rolled_back" if rollback["succeeded"] else "failed_rollback_incomplete"
         )

@@ -83,6 +83,46 @@ project folder 작업에서는 temporary intake staging이 archive of record가
 아니라는 점을 기억합니다. cleanup 전에 원본을 objet, source map, manifest,
 zet, receipt로 보존해야 합니다.
 
+## v0.3.220 영수증 검증형 초록 보충 되돌리기
+
+v0.3.220은 아카이브 migration을 요구하지 않습니다. 성공한 v0.3.219 초록
+배치를 영수증으로 검진하고, 사람 승인 뒤 삽입 전 상태로 되돌리는 기능을
+추가합니다. 원래 비공개 proposal 파일은 없어도 됩니다. 적용 명령이 돌려준
+영수증 경로와 `receipt.sha256`은 보관해야 합니다.
+
+먼저 아무것도 쓰지 않고 정확히 되돌릴 수 있는지 확인합니다.
+
+```text
+archive zet-abstract-backfill-revert <archive-root> --receipt receipts/revisions/abstract-backfill/<digest>.zet-abstract-backfill.json --expected-receipt-sha256 <receipt.sha256> --max-items 500 --dry-run --progress --format json
+```
+
+`ready_to_revert`는 현재 모든 정본 파일이 적용 직후 해시와 같고, writer가
+넣은 첫 `abstract:` 줄 하나만 제거하면 기록된 적용 전 해시가 정확히 나온다는
+뜻입니다. 제거 승인을 뜻하지는 않습니다.
+
+사람이 기록된 모든 초록의 제거를 검토한 뒤 같은 영수증을 명시적으로
+승인합니다.
+
+```text
+archive zet-abstract-backfill-revert <archive-root> --receipt receipts/revisions/abstract-backfill/<digest>.zet-abstract-backfill.json --expected-receipt-sha256 <receipt.sha256> --max-items 500 --approve --reviewed-by person:<검수자> --affirm-abstract-removal-reviewed --progress --format json
+```
+
+되돌리기는 초록 보충 전 파일 바이트를 정확히 복원하고 원래 적용 영수증을
+보존하며, `receipts/revisions/abstract-backfill-reverts/` 아래에 텍스트 없는
+불변 영수증 하나를 씁니다. 적용 뒤 정본 수정, 초록 변경, 본문 변경, 영수증
+불일치, writer와 다른 줄 모양이 하나라도 있으면 배치 전체를 차단합니다.
+항목 또는 되돌리기 영수증 쓰기에서 실행 중 오류가 나면 적용된 상태로 다시
+복원합니다.
+
+같은 작업을 다시 실행하면 쓰지 않고 `already_reverted`를 반환합니다. 나중에
+같은 초록을 다시 넣으려면 새로운 proposal SHA-256과 영수증 아이디가 생기도록
+새 proposal 바이트를 준비하고 다시 검토해야 합니다. 기존 적용 영수증은
+되돌리기 영수증과 함께 닫힌 기록으로 남습니다.
+
+단기 잠금은 `.wom-scratch/abstract-backfill/` 아래에 있고 외부 편집기를 잠그지
+않습니다. 강제 종료 뒤 자동 복구 journal도 아직 없습니다. 남은 잠금을 바로
+지우지 말고 두 영수증과 현재 파일 해시를 먼저 확인하십시오.
+
 ## v0.3.219 승인 후 초록 보충 쓰기
 
 v0.3.219는 아카이브 migration을 요구하지 않습니다. 대신

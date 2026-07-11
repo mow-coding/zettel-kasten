@@ -8622,6 +8622,45 @@ def command_zet_abstract_backfill_write(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 1
 
 
+def command_zet_abstract_backfill_revert(args: argparse.Namespace) -> int:
+    if bool(args.dry_run) == bool(args.approve):
+        print("zet-abstract-backfill-revert requires exactly one of --dry-run or --approve.", file=sys.stderr)
+        return 1
+    reporter = CommandProgressReporter(bool(getattr(args, "progress", False)), label="zet-abstract-backfill-revert")
+    try:
+        result = archive_services.zet_abstract_backfill_revert(
+            Path(args.archive_root),
+            receipt_path=str(args.receipt),
+            expected_receipt_sha256=str(args.expected_receipt_sha256),
+            max_items=int(args.max_items),
+            dry_run=bool(args.dry_run),
+            approve=bool(args.approve),
+            reviewed_by=str(args.reviewed_by or "").strip() or None,
+            affirm_abstract_removal_reviewed=bool(args.affirm_abstract_removal_reviewed),
+            progress_callback=reporter.progress,
+        )
+    except archive_services.ArchiveServiceError:
+        print("zet-abstract-backfill-revert could not read a safe private receipt or archive target.", file=sys.stderr)
+        return 1
+    except (ArchivePathError, OSError, ValueError):
+        print("zet-abstract-backfill-revert failed before a privacy-safe result could be produced.", file=sys.stderr)
+        return 1
+    finally:
+        reporter.close()
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+        print(f"WOM zet abstract backfill revert: {result.get('status') or 'unknown'}")
+        print(f"Candidates: {summary.get('candidate_count', 0)}")
+        print(f"Ready: {summary.get('ready_count', 0)}")
+        print(f"Reverted: {summary.get('reverted_count', 0)}")
+        print(f"Already reverted: {summary.get('already_reverted_count', 0)}")
+        print(f"Blocked: {summary.get('blocked_count', 0)}")
+    return 0 if result.get("ok") else 1
+
+
 def command_status_board(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print("status-board is read-only and requires --dry-run.", file=sys.stderr)
@@ -17784,6 +17823,47 @@ def build_parser() -> argparse.ArgumentParser:
     )
     zet_abstract_backfill_write.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     zet_abstract_backfill_write.set_defaults(func=command_zet_abstract_backfill_write)
+
+    zet_abstract_backfill_revert = subcommands.add_parser(
+        "zet-abstract-backfill-revert",
+        aliases=["abstract-backfill-revert"],
+        help="Audit or approve exact one-field rollback from an abstract backfill receipt.",
+    )
+    zet_abstract_backfill_revert.add_argument("archive_root", help="Archive root containing canonical zets.")
+    zet_abstract_backfill_revert.add_argument(
+        "--receipt",
+        required=True,
+        help="Private applied receipt under receipts/revisions/abstract-backfill/; its path and values are never echoed.",
+    )
+    zet_abstract_backfill_revert.add_argument(
+        "--expected-receipt-sha256",
+        required=True,
+        help="Required sha256:<64 lowercase hex> identity returned by the applied writer.",
+    )
+    zet_abstract_backfill_revert.add_argument(
+        "--max-items",
+        type=int,
+        default=500,
+        help=f"Maximum receipt rows to audit and revert (1-{archive_services.ZET_ABSTRACT_BACKFILL_MAX_ITEMS}).",
+    )
+    zet_abstract_backfill_revert.add_argument("--dry-run", action="store_true", help="Audit exact reversibility and preview removal; writes nothing.")
+    zet_abstract_backfill_revert.add_argument("--approve", action="store_true", help="Restore the whole validated batch and write one immutable revert receipt.")
+    zet_abstract_backfill_revert.add_argument(
+        "--reviewed-by",
+        help="Safe human reviewer id required for a new approved revert; never echoed.",
+    )
+    zet_abstract_backfill_revert.add_argument(
+        "--affirm-abstract-removal-reviewed",
+        action="store_true",
+        help="Required with --approve: affirm that removal of every recorded abstract was human-reviewed.",
+    )
+    zet_abstract_backfill_revert.add_argument(
+        "--progress",
+        action="store_true",
+        help="Stream content-free receipt and row counts plus 10-second heartbeats to stderr.",
+    )
+    zet_abstract_backfill_revert.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    zet_abstract_backfill_revert.set_defaults(func=command_zet_abstract_backfill_revert)
 
     status_board = subcommands.add_parser(
         "status-board",
