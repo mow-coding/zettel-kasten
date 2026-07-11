@@ -199,7 +199,10 @@ profile-wallet
   Preview wallet-ready WOM profile/node identity metadata. Dry-run only; never generates keys, signs data, stores secrets, or calls blockchain/provider APIs.
 
 runtime-context
-  Print read-only JSON context for terminal-capable AI runtimes. It confirms archive id, archive type/scope, principal/owner summary, AI write policy, safe archive-relative paths, canonical entrypoint metadata, AI guide handoff order, material-link routes, safe actions, WOM-kit version, and doctor summary. Local absolute paths are redacted by default.
+  Print read-only JSON context for terminal-capable AI runtimes. It confirms archive id, archive type/scope, principal/owner summary, AI write policy, safe archive-relative paths, canonical entrypoint metadata, AI guide handoff order, material-link routes, safe actions, WOM-kit version, local-sovereignty storage authority, and doctor summary. Local absolute paths are redacted by default.
+
+local-sovereignty --dry-run
+  Report the machine-readable authority model: local WOM is canonical, GitHub backs up metadata/version history, object storage backs up objet bytes, and external databases hold regenerable map backups or replicas. It performs no live audit, provider/network call, secret read, or write.
 
 prompt-boundary
   Check untrusted text for obvious prompt-injection and unsafe-agent strings. Dry-run only; never calls LLMs, executes inspected text, approves, mints, or writes files.

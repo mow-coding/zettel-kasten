@@ -1,9 +1,10 @@
 # WOM-kit Capability Matrix
 
-Status: v0.3.212 compact strict-continuation checkpoint
+Status: v0.3.213 local-sovereignty and backup-authority checkpoint
 Date: 2026-07-11
-Version: v0.3.212, release candidate
+Version: v0.3.213, release candidate
 
+Previous checkpoint: Status: v0.3.212 compact strict-continuation checkpoint
 Previous checkpoint: Status: v0.3.211 whole-response token observability checkpoint
 Previous checkpoint: Status: v0.3.210 explainable connection-order checkpoint
 Previous checkpoint: Status: v0.3.209 honest first-read readiness checkpoint
@@ -121,11 +122,11 @@ This matrix is a plain-language map of what WOM-kit can do today and what is onl
 
 Read it as a safety label. A row marked `read-only preview` means WOM-kit can inspect or plan something and return JSON, but it does not write files. A row marked `approval-gated write` means the CLI has a human-reviewed write path with explicit approval fields. A row marked `documented-only` means the idea is described, but no product command exists yet.
 
-Current checkpoint note (v0.3.212): a strict catalog pass keeps cursor zero
-full, then may omit repeated diagnostics on later pages while
-retaining every item, readiness signal, snapshot, continuation token, chain
-digest, session check, warning, and privacy guard. Full responses remain the
-default.
+Current checkpoint note (v0.3.213): one machine-readable authority contract
+declares local reviewed WOM state canonical, with GitHub metadata/version
+backup, object-storage objet-byte backup, and external-DB map backup/replica
+roles. Runtime, AI start-here, recovery, and upgrade surfaces share its offline,
+conflict, recovery, and receipt boundaries.
 
 ## Status Legend
 
@@ -209,6 +210,7 @@ default.
 | Anchor lifecycle preview | `read-only preview` | none | `anchor-zet --dry-run` previews local meaning anchoring without writing anchor metadata. |
 | Block header preview | `read-only preview` | none | Derives a header preview for an existing draft or canonical zet and now returns a top-level `first_read` card with gist, facets, tie counts, and safe edge preview before body reading. `first_read` is outside `header_preview`, so the shareable header hash boundary remains tied to the sanitized header projection. It does not modify the zet. |
 | Runtime context | `read-only preview` | none | AI runtimes can confirm archive id, type, paths, policy, and safe next actions. |
+| Local sovereignty and backup authority | `implemented local command` | read-only | CLI `archive local-sovereignty <archive-root> --dry-run --format json`, aliases `storage-authority` and `backup-authority`, returns the normative authority model also embedded as `storage_authority` in runtime-context, ai-start-here, recovery-plan, and upgrade-check recovery output. Local reviewed WOM files and registered local objet bytes are canonical; GitHub backs up metadata/version history, object storage backs up objet bytes, and external databases hold map backups or replicas regenerated from local relation-bearing records. It lists offline operations, local-wins conflict policy, recovery direction, disposable indexes, and honest evidence boundaries: a local commit is not remote GitHub proof, `declared_uploaded` is not byte proof, provider-verified `wom_uploaded` receipts cover only object storage, and generic GitHub/external-DB completion receipts remain unimplemented. It performs no live backup audit, provider/network/database call, secret read, body/byte read, write, migration, reconcile, or restore. |
 | WOM-kit version truth source | `read-only preview` | none | CLI `archive --version` prints the running CLI version. CLI `archive version [root] --format json` and runtime-context field `wom_kit_version` report `wom_kit.__version__`, source-checkout consistency, an optional project installed-version pin, and project-local source mirror drift through `project_source_mirror`. When the inspected root is an archive root, the pin and source mirror checks also look at the parent project root and report safe logical checked locations such as `parent_of_archive/.zettel-kasten/installed-version.txt` or `parent_of_archive/.zettel-kasten/source` without echoing local absolute paths. The source mirror check compares mirror package version, mirror pyproject version, mirror installed-version pin, exact head tag, and latest fetched semver tag when available, returning states such as `project_source_mirror_mismatch` or `project_source_mirror_behind_latest_fetched_tag`. It writes no files, repairs no mirror, calls no providers, and reads no secrets. |
 | Runtime canonical entrypoints | `read-only preview` | none | Runtime-context field `canonical_entrypoints` names `archive.yml` as the start-here file and lists archive-relative authoritative files/directories such as `AGENTS.md`, `source-bindings.yml`, `provider-bindings.yml`, `zettels/`, `inbox/`, object and derived-text manifests, views, and schema context. It also returns `ai_runtime_order`, `recommended_first_commands`, and `material_link_routes` so AI runtimes can discover the `runtime-context` -> `AGENTS.md` -> `ai-response-concept-guide` handoff, the read-only `operator-feedback-plan` friction-recording route (v0.3.160, appended entries only), and choose read-only Notion material-link routes without inventing provider calls. It reads no file bodies, writes nothing, calls no providers, reads no secrets, and echoes no local absolute paths by default. |
 | AI start-here surface | `read-only preview` | none | CLI `archive ai-start-here <archive-root> --dry-run --format markdown|json`, aliases `archive start-here` and `archive operator-start-here`, projects existing runtime-context, canonical entrypoint, and operational-context metadata into one compact first-read map for an entering AI operator. It reports archive identity, start-here file, present/missing entrypoints, first commands, operational-context status, next safe steps, a conversation status-board section list, and safety boundaries. It writes nothing, calls no providers, reads no secrets, reads no zettel bodies or objet bytes, does not create a generated start page, and redacts local absolute paths by default. |

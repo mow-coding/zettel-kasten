@@ -33,10 +33,10 @@ wom-kit/docs/releases/ - do not re-grow baseline ladders or tag lists here.
 Current public baseline:
 
 ```text
-v0.3.212 pre-release
+v0.3.213 pre-release
 ```
 
-Previous public baseline: v0.3.211 pre-release.
+Previous public baseline: v0.3.212 pre-release.
 
 Full release history: see [CHANGELOG.md](CHANGELOG.md) and [wom-kit/docs/releases/](wom-kit/docs/releases/).
 
@@ -60,6 +60,7 @@ approval-gated write, or docs-only), see the
 
 - a public WOM/zet/ZET design baseline with specs, schemas, fake archives, release notes, and work logs,
 - a public version-line roadmap that explains how the pre-1.0 minor lines map to idea, implementation, WOM feedback, UI/control-layer, and ZET feedback phases,
+- a machine-readable local-sovereignty contract: local reviewed WOM state is canonical, GitHub backs up metadata/version history, object storage backs up objet bytes, and external databases hold regenerable map backups or replicas; runtime/start-here/recovery surfaces share the same offline, conflict, recovery, and receipt boundaries,
 - WOM-kit local CLI and MCP tooling under `wom-kit/`, importing as `wom_kit`,
 - private archive lifecycle tools for doctor checks, draft creation (with forward-only draft-id hygiene so a titleless or Hangul-only title no longer yields a misleading `_draft` id, and draft-time `--kind` validation that warns and lists valid kinds), minting with dry-run checklist guidance and an attributed `--affirm` flag that satisfies the two human-review checklist items via an audited, reviewer-attributed CLI act instead of a raw YAML edit (recorded in the mint receipt, inert without `--reviewed-by`, never overriding machine-enforced items), verified minted-draft retirement, delegation, receipts, search, and metadata review,
 - honest `archive remint-reconcile` (and the sibling `archive retire-draft-reconcile` for retire receipts) that re-issues a receipt's recorded sha256 after a zet drifts on disk (a CRLF/BOM re-checkout or a human content edit): it classifies the drift as newline/BOM-only `format_drift` or `content_change` even when the draft snapshot itself drifted — checking every content frontmatter field (a full-field reconstruction plus an `id`/`title` cross-check against the mint receipt) so an edit to any field, or a content-tampered snapshot, can never anchor `format_drift` — always shows the on-disk content, requires a reviewer to approve, offers an opt-in `--strip-bom` that never bypasses the content-change ack gate (and, since v0.3.172, previews the same strip-intent metadata on a dry-run as an approve run records — a strict classification no-op that never launders a `content_change`), surfaces (since v0.3.176) a content-free `body_diff_diagnostic` on a `content_change` whose body still differs after the BOM/newline fold — a category label plus a normalized-form byte offset and length delta, never any body text — and now offers dry-run JSON `--diagnostic-only` to omit canonical body text and frontmatter values while preserving those drift numbers, so a client can self-diagnose which sub-BOM residual (final-newline, trailing-whitespace, NFC-vs-NFD, or a real edit) they have without weakening the classifier, never masks corruption, and writes both an in-place receipt update and a separate immutable audit receipt,

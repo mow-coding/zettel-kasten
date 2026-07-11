@@ -973,6 +973,7 @@ PROFILE_RAW_TOKEN_KEYS = {
 PROFILE_IGNORABLE_QUERY_CHARS = dict.fromkeys(map(ord, "\ufeff\u200b\u200c\u200d\u2060"), None)
 RUNTIME_CONTEXT_ARCHIVE_TYPES = {"personal", "company", "family", "project", "relationship", "child", "business_unit"}
 RUNTIME_CONTEXT_SAFE_ACTIONS = [
+    "run local-sovereignty dry-run",
     "run ai-response-concept-guide dry-run",
     "run operational-context dry-run",
     "run operator-feedback-plan dry-run",
@@ -1047,6 +1048,7 @@ SECRET_SIGNAL_CLASSES = (
 )
 SECRET_SIGNAL_BLOCKING_CLASSES = ("secret_value_pattern", "private_locator", "account_identifier", "unknown_sensitive_context")
 AI_RESPONSE_CONTRACT_SCHEMA = "wom-kit/ai-response-contract/v0.1"
+LOCAL_SOVEREIGNTY_CONTRACT_SCHEMA = "wom-kit/local-sovereignty-contract/v0.1"
 OPERATOR_ENVELOPE_CLASS_SCHEMA = "wom-kit/operator-envelope-classes/v0.1"
 AI_USAGE_RECEIPTS_DIR = "receipts/ai-usage"
 AI_USAGE_RECEIPT_SCHEMA = "wom-kit/ai-usage-receipt/v0.1"
@@ -52639,6 +52641,159 @@ def source_mount_plan(archive_root: Path | str) -> dict[str, Any]:
     }
 
 
+def local_sovereignty_authority_model() -> dict[str, Any]:
+    return {
+        "schema": LOCAL_SOVEREIGNTY_CONTRACT_SCHEMA,
+        "contract_kind": "normative_authority_model_not_live_backup_audit",
+        "canonical_authority": "local_wom",
+        "authority_order": [
+            "local_reviewed_wom_state",
+            "external_backup_or_replica",
+            "generated_disposable_projection",
+        ],
+        "plain_summary": {
+            "local": "canonical_working_and_recovery_state",
+            "github": "metadata_and_version_history_backup",
+            "object_storage": "objet_original_byte_backup",
+            "external_database": "map_backup_or_replica",
+        },
+        "data_classes": [
+            {
+                "data_class": "text_control_plane",
+                "includes": [
+                    "zet_documents",
+                    "frontmatter_and_ties",
+                    "archive_configuration",
+                    "manifests",
+                    "receipts",
+                    "source_maps",
+                    "views",
+                ],
+                "local_canonical": "reviewed_files_in_the_local_wom_archive",
+                "external_backup": "github_git_remote",
+                "conflict_winner": "local_reviewed_state_pending_explicit_reconcile",
+                "offline_available": True,
+                "rebuildable_from_external_backup": True,
+            },
+            {
+                "data_class": "objet_original_bytes",
+                "includes": ["documents", "images", "audio", "video", "exports", "other_source_originals"],
+                "local_canonical": "sha256_identified_bytes_in_a_registered_local_objet_store_or_reviewed_local_source",
+                "external_backup": "object_storage_such_as_cloudflare_r2",
+                "conflict_winner": "sha256_verified_local_identity_pending_explicit_reconcile",
+                "offline_available": "only_when_local_bytes_are_present",
+                "rebuildable_from_external_backup": "only_when_remote_bytes_are_verified_and_retrievable",
+            },
+            {
+                "data_class": "relationship_and_map_data",
+                "includes": ["zet_edges", "ties", "source_maps", "manifest_links", "derived_graph_projection"],
+                "local_canonical": "relation_bearing_local_zet_and_control_plane_records",
+                "external_backup": "external_database_map_backup_or_replica",
+                "conflict_winner": "local_relation_bearing_records",
+                "offline_available": True,
+                "rebuildable_from_external_backup": False,
+                "external_map_rebuildable_from_local": True,
+            },
+            {
+                "data_class": "generated_indexes_and_caches",
+                "includes": ["local_sqlite_index", "search_index", "derived_graph_cache"],
+                "local_canonical": False,
+                "external_backup": False,
+                "conflict_winner": "regenerate_from_local_canonical_records",
+                "offline_available": True,
+                "deletable_and_rebuildable": True,
+            },
+            {
+                "data_class": "credentials_and_secrets",
+                "includes": ["provider_credentials", "tokens", "passwords", "private_keys"],
+                "local_canonical": "human_controlled_os_or_vault_store",
+                "external_backup": "outside_this_github_object_storage_database_contract",
+                "conflict_winner": "human_review_required",
+                "offline_available": "depends_on_the_human_controlled_secret_store",
+                "must_never_enter_public_metadata_backup": True,
+            },
+        ],
+        "offline_operations": {
+            "available": [
+                "read_local_zets_and_frontmatter",
+                "inspect_local_ties_and_edges",
+                "draft_and_review_local_records",
+                "run_local_validation_and_doctor",
+                "rebuild_disposable_local_indexes",
+                "read_local_objet_bytes_when_present",
+            ],
+            "unavailable_without_network": [
+                "push_github_backup",
+                "verify_or_restore_remote_object_storage",
+                "sync_or_query_external_database_replica",
+            ],
+        },
+        "conflict_policy": {
+            "automatic_external_overwrite_of_local": False,
+            "local_wins_by_default": True,
+            "reviewed_reconcile_required": True,
+            "external_state_may_supply_recovery_evidence_but_not_silent_authority": True,
+        },
+        "recovery_direction": [
+            "restore_github_metadata_and_version_history_into_local_wom",
+            "restore_sha256_verified_objet_bytes_from_object_storage_into_a_local_objet_store",
+            "validate_local_manifests_receipts_and_links",
+            "regenerate_local_indexes_and_external_database_map_replicas_from_local_records",
+        ],
+        "backup_evidence": {
+            "github": {
+                "required_evidence": "remote_ref_or_provider_confirmed_push_evidence",
+                "local_commit_alone_proves_remote_backup": False,
+                "generic_wom_backup_completion_receipt_implemented": False,
+            },
+            "object_storage": {
+                "required_evidence": "provider_verified_wom_uploaded_manifest_location_linked_to_an_execution_receipt",
+                "declared_uploaded_alone_proves_remote_bytes": False,
+                "live_upload_execution_receipt_implemented": True,
+            },
+            "external_database": {
+                "required_evidence": "provider_specific_export_or_replication_receipt_bound_to_a_local_snapshot",
+                "generic_wom_backup_completion_receipt_implemented": False,
+            },
+            "generated_local_index": {
+                "required_evidence": "successful_rebuild_from_current_local_records",
+                "is_backup_proof": False,
+            },
+        },
+        "closed_actions": {
+            "live_backup_status_checked": False,
+            "provider_api_called": False,
+            "network_checked": False,
+            "files_written": False,
+            "secrets_read": False,
+        },
+    }
+
+
+def local_sovereignty_contract(archive_root: Path | str, *, dry_run: bool = True) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    blockers = [] if dry_run else ["local-sovereignty is read-only and requires --dry-run."]
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "lifecycle_action": "local_sovereignty_contract",
+        "archive_id": read_archive_id(root),
+        "authority": local_sovereignty_authority_model(),
+        "blockers": blockers,
+        "warnings": [],
+        "would_change": [],
+        "privacy_guards": {
+            "archive_body_text_read": False,
+            "objet_bytes_read": False,
+            "provider_api_called": False,
+            "network_checked": False,
+            "secrets_read": False,
+            "local_absolute_paths_echoed": False,
+            "files_written": False,
+        },
+    }
+
+
 def recovery_plan(archive_root: Path | str) -> dict[str, Any]:
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
@@ -52698,6 +52853,7 @@ def recovery_plan(archive_root: Path | str) -> dict[str, Any]:
             ],
         },
         "latest_successful_restore_drill": latest_receipt,
+        "storage_authority": local_sovereignty_authority_model(),
         "next_steps": [
             "Run restore-drill --dry-run against an empty target folder.",
             "Run restore-drill --approve --reviewed-by <actor> before first real source scan.",
@@ -52812,6 +52968,7 @@ def upgrade_check(
             "does_not_copy": recovery["does_not_copy"],
             "source_summary": recovery["source_summary"],
             "provider_summary": recovery["provider_summary"],
+            "storage_authority": recovery["storage_authority"],
         },
         "upgrade_policy": upgrade_policy,
         "migration_honesty": migration_honesty,
@@ -57634,6 +57791,7 @@ def runtime_context(
         "ai_write_policy": runtime_context_ai_write_policy_summary(archive_config),
         "paths": paths,
         "wom_kit_version": wom_kit_version_info(root, redact_local_paths=redact_local_paths),
+        "storage_authority": local_sovereignty_authority_model(),
         "operational_context": operational_context_summary,
         "canonical_entrypoints": runtime_context_canonical_entrypoints(root, archive_config, paths),
         "available_safe_actions": list(RUNTIME_CONTEXT_SAFE_ACTIONS),
@@ -57706,12 +57864,15 @@ def ai_start_here(
     return {
         "ok": bool(context.get("ok")) and not missing_required,
         "lifecycle_action": "ai_start_here",
-        "schema": "wom-kit/ai-start-here/v0.1",
+        "schema": "wom-kit/ai-start-here/v0.2",
         "archive_id": context.get("archive_id"),
         "archive_type": context.get("archive_type"),
         "scope": context.get("scope"),
         "principal": context.get("principal"),
         "owner": context.get("owner"),
+        "storage_authority": context.get("storage_authority")
+        if isinstance(context.get("storage_authority"), dict)
+        else local_sovereignty_authority_model(),
         "summary": {
             "purpose": "Give an entering AI operator one safe start-here map before broad archive exploration.",
             "start_here_file": entrypoints.get("start_here") or "archive.yml",
@@ -57763,6 +57924,7 @@ def ai_start_here(
                 "If the host goal already supplies verified zet ids, use seeded_connection_walk with those ids; never invent a seed or stop after the seeded component.",
                 "Keep projection=reading for the compact pass; use routed_reading with seeded_connection_walk only when the host or human needs a per-item explanation of the connection order and can afford the larger payload.",
                 "Use only read-only commands until the human approves a write operation.",
+                "Treat local WOM records as canonical; GitHub, object storage, and external databases are backup or replica layers and may not silently overwrite local state.",
             ]
         ),
         "safety_boundaries": {

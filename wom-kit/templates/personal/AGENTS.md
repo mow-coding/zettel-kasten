@@ -1,6 +1,7 @@
 # Personal Archive Agent Rules
 
 This archive is a local-first personal memory space.
+Local reviewed WOM state is canonical. GitHub backs up metadata/version history, object storage backs up objet bytes, and external databases hold regenerable map backups or replicas; external state never silently overwrites local state.
 
 ## Read Order
 

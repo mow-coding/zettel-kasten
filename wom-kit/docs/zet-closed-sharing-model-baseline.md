@@ -26,11 +26,20 @@ The base zettel-kasten system is local-first infrastructure for archive memory.
 
 In the current architecture:
 
-- GitHub primarily tracks machine-readable metadata, zet documents, version history, and reviewable changes.
-- Object storage holds most human-created source/original materials.
-- A DB stores relationships between GitHub-tracked records and object-storage materials.
+- Local WOM is the canonical working and recovery state.
+- GitHub backs up machine-readable metadata, zet documents, version history,
+  and reviewable changes.
+- Registered local objet bytes are the canonical byte recovery source; object
+  storage backs up those source/original bytes.
+- Local zet edges, ties, source maps, and manifests are the canonical
+  relationship records. An external DB may store a map backup or replica that
+  can be regenerated from them.
 
 Think of this layer as the archive foundation. It stores, links, and reviews memory before any social or publication surface is involved.
+
+See [Local Sovereignty And Backup Authority](local-sovereignty-and-backup-authority.md)
+for offline behavior, conflict precedence, recovery order, and honest receipt
+boundaries.
 
 ## 2. Unit Layer: zet And objet
 
@@ -38,7 +47,11 @@ Think of this layer as the archive foundation. It stores, links, and reviews mem
 
 A `zet` can be private archive memory, a draft under review, or a future candidate for sharing. In the base system, zet documents are tracked through the GitHub side of the archive because they are text records with history.
 
-`objet` is WOM product language for source/original material stored outside Git. The cloud/storage substrate may call this object storage, but the product term stays `objet` when we talk about source materials in WOM.
+`objet` is WOM product language for source/original material stored outside
+Git. A local registered objet store keeps the canonical recovery copy when the
+local-sovereignty goal is met. The cloud/storage substrate may call its backup
+object storage, but the product term stays `objet` when we talk about source
+materials in WOM.
 
 That distinction matters:
 
