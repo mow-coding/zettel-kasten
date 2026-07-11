@@ -83,6 +83,40 @@ project folder 작업에서는 temporary intake staging이 archive of record가
 아니라는 점을 기억합니다. cleanup 전에 원본을 objet, source map, manifest,
 zet, receipt로 보존해야 합니다.
 
+## v0.3.221 아카이브 전체 초록 수정 영수증 검진
+
+v0.3.221은 아카이브 migration을 요구하지 않고 아무것도 쓰지 않습니다.
+초록 배치를 적용하거나 되돌린 뒤, 다음 명령으로 전체 생명주기를 한 번에
+검진합니다.
+
+```text
+archive zet-abstract-backfill-receipt-audit <archive-root> --dry-run --max-receipts 5000 --max-locks 5000 --max-problems 100 --progress --format json
+```
+
+각 적용 영수증은 다음 두 닫힌 상태 중 하나여야 합니다.
+
+```text
+적용 영수증 + 현재 적용 상태 해시
+적용 영수증 + 정상 되돌리기 영수증 + 현재 되돌림 상태 해시
+```
+
+손상되거나 고아가 된 영수증, 현재 정본 해시 불일치는 차단됩니다. 정상
+생명주기는 개수와 하나의 `audit_digest`로만 보여주고, 문제 항목만 제한된
+개수로 출력합니다. 문제 출력도 비공개 경로·아이디·본문·초록·검수자 대신
+해시와 정렬 인덱스를 사용합니다.
+
+`.wom-scratch/abstract-backfill/` 아래의 알려진 잠금은 내용 자체를 읽지 않고
+검진합니다.
+
+- 대응하는 완료 영수증이 있으면 `attention_required` 경고입니다. 실행 중인
+  프로세스가 없고 완료 상태가 맞는지 확인한 뒤에만 수동으로 지웁니다.
+- 대응하는 완료 영수증이 없으면 해결되지 않은 transaction 차단입니다.
+  잠금을 지우기 전에 영수증과 현재 정본 해시부터 확인합니다.
+
+이 검진은 잠금을 지우거나, 영수증을 편집하거나, 정본 zet를 고치거나,
+외부 서비스·모델·비밀 저장소를 호출하지 않습니다. green은 로컬 일관성
+증거이지 초록 내용의 품질이나 강제 종료 안전성을 증명하지 않습니다.
+
 ## v0.3.220 영수증 검증형 초록 보충 되돌리기
 
 v0.3.220은 아카이브 migration을 요구하지 않습니다. 성공한 v0.3.219 초록

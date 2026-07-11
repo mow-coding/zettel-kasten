@@ -8661,6 +8661,45 @@ def command_zet_abstract_backfill_revert(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 1
 
 
+def command_zet_abstract_backfill_receipt_audit(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("zet-abstract-backfill-receipt-audit is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    reporter = CommandProgressReporter(
+        bool(getattr(args, "progress", False)),
+        label="zet-abstract-backfill-receipt-audit",
+    )
+    try:
+        result = archive_services.zet_abstract_backfill_receipt_audit(
+            Path(args.archive_root),
+            dry_run=True,
+            max_receipts=int(args.max_receipts),
+            max_locks=int(args.max_locks),
+            max_problems=int(args.max_problems),
+            progress_callback=reporter.progress,
+        )
+    except archive_services.ArchiveServiceError:
+        print("zet-abstract-backfill-receipt-audit could not inspect the private archive safely.", file=sys.stderr)
+        return 1
+    except (ArchivePathError, OSError, ValueError):
+        print("zet-abstract-backfill-receipt-audit failed before a privacy-safe result could be produced.", file=sys.stderr)
+        return 1
+    finally:
+        reporter.close()
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+        print(f"WOM zet abstract receipt audit: {result.get('status') or 'unknown'}")
+        print(f"Receipts: {summary.get('receipt_count', 0)}")
+        print(f"Applied verified: {summary.get('applied_verified', 0)}")
+        print(f"Reverted verified: {summary.get('reverted_verified', 0)}")
+        print(f"Locks: {summary.get('lock_count', 0)}")
+        print(f"Problems: {summary.get('problem_count', 0)}")
+    return 0 if result.get("ok") else 1
+
+
 def command_status_board(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print("status-board is read-only and requires --dry-run.", file=sys.stderr)
@@ -17864,6 +17903,53 @@ def build_parser() -> argparse.ArgumentParser:
     )
     zet_abstract_backfill_revert.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     zet_abstract_backfill_revert.set_defaults(func=command_zet_abstract_backfill_revert)
+
+    zet_abstract_backfill_receipt_audit = subcommands.add_parser(
+        "zet-abstract-backfill-receipt-audit",
+        aliases=["abstract-backfill-receipt-audit"],
+        help="Audit every abstract apply/revert receipt lifecycle and leftover transaction lock without echoing content.",
+    )
+    zet_abstract_backfill_receipt_audit.add_argument(
+        "archive_root",
+        help="Archive root containing canonical zets and private revision receipts.",
+    )
+    zet_abstract_backfill_receipt_audit.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Required. Reads receipts, hashes canonical state, and reports only; writes nothing.",
+    )
+    zet_abstract_backfill_receipt_audit.add_argument(
+        "--max-receipts",
+        type=int,
+        default=5000,
+        help="Maximum total apply/revert receipts to audit (1-5000).",
+    )
+    zet_abstract_backfill_receipt_audit.add_argument(
+        "--max-locks",
+        type=int,
+        default=5000,
+        help="Maximum recognized abstract transaction locks to audit (1-5000).",
+    )
+    zet_abstract_backfill_receipt_audit.add_argument(
+        "--max-problems",
+        type=int,
+        default=100,
+        help="Maximum content-free problem records to return (1-500).",
+    )
+    zet_abstract_backfill_receipt_audit.add_argument(
+        "--progress",
+        action="store_true",
+        help="Stream content-free receipt/lock counts plus 10-second heartbeats to stderr.",
+    )
+    zet_abstract_backfill_receipt_audit.add_argument(
+        "--format",
+        choices=["text", "json"],
+        default="json",
+        help="Output format.",
+    )
+    zet_abstract_backfill_receipt_audit.set_defaults(
+        func=command_zet_abstract_backfill_receipt_audit
+    )
 
     status_board = subcommands.add_parser(
         "status-board",

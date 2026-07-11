@@ -1527,6 +1527,7 @@ class ArchiveCliTests(unittest.TestCase):
         self.assertIn("zet-abstract-backfill-plan", command_names)
         self.assertIn("zet-abstract-backfill-write", command_names)
         self.assertIn("zet-abstract-backfill-revert", command_names)
+        self.assertIn("zet-abstract-backfill-receipt-audit", command_names)
         capability = next(item for item in commands if item["name"] == "capabilities")
         self.assertIn("--machine", capability["options"])
         project_update = next(item for item in commands if item["name"] == "project-version-update")
@@ -1577,6 +1578,21 @@ class ArchiveCliTests(unittest.TestCase):
             "--progress",
         ):
             self.assertIn(option, abstract_backfill_revert["options"])
+        abstract_receipt_audit = next(
+            item for item in commands if item["name"] == "zet-abstract-backfill-receipt-audit"
+        )
+        self.assertEqual(
+            abstract_receipt_audit["aliases"],
+            ["abstract-backfill-receipt-audit"],
+        )
+        for option in (
+            "--dry-run",
+            "--max-receipts",
+            "--max-locks",
+            "--max-problems",
+            "--progress",
+        ):
+            self.assertIn(option, abstract_receipt_audit["options"])
         serialized = json.dumps(result, ensure_ascii=False)
         self.assertNotIn(str(KIT_ROOT), serialized)
         self.assertNotIn(str(Path.home()), serialized)
@@ -30547,6 +30563,239 @@ state:
             expected_before_file_sha256="sha256:" + hashlib.sha256(original).hexdigest(),
         )
         self.assertEqual(reverted, original)
+
+    def test_zet_abstract_backfill_receipt_audit_tracks_empty_applied_and_reverted_lifecycles(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            missing_code, _missing_stdout, missing_stderr = self.run_cli_split(
+                ["zet-abstract-backfill-receipt-audit", str(archive_root)]
+            )
+            self.assertEqual(missing_code, 1)
+            self.assertIn("requires --dry-run", missing_stderr)
+
+            empty_code, empty_output = self.run_cli(
+                ["abstract-backfill-receipt-audit", str(archive_root), "--dry-run"]
+            )
+            self.assertEqual(empty_code, 0, empty_output)
+            empty = json.loads(empty_output)
+            self.assertEqual(empty["status"], "healthy")
+            self.assertEqual(empty["summary"]["receipt_count"], 0)
+            self.assertEqual(empty["summary"]["problem_count"], 0)
+            self.assertFalse(empty["write_boundary"]["files_written"])
+
+            fixture = self.create_abstract_backfill_proposal(archive_root, count=2, name="audit-lifecycle.jsonl")
+            applied = archive_services.zet_abstract_backfill_write(
+                archive_root,
+                proposal_path=fixture["relative"],
+                expected_proposal_sha256=fixture["sha256"],
+                max_items=2,
+                approve=True,
+                reviewed_by="person:audit-apply-reviewer",
+                affirm_abstracts_reviewed=True,
+            )
+            applied_canonical = {path: path.read_bytes() for path in fixture["originals"]}
+            applied_code, applied_output = self.run_cli(
+                [
+                    "zet-abstract-backfill-receipt-audit",
+                    str(archive_root),
+                    "--dry-run",
+                ]
+            )
+            self.assertEqual(applied_code, 0, applied_output)
+            applied_audit = json.loads(applied_output)
+            self.assertEqual(applied_audit["status"], "healthy")
+            self.assertEqual(applied_audit["summary"]["source_receipt_count"], 1)
+            self.assertEqual(applied_audit["summary"]["applied_verified"], 1)
+            self.assertEqual(applied_audit["summary"]["reverted_verified"], 0)
+            self.assertEqual(applied_audit["summary"]["problem_count"], 0)
+            self.assertTrue(applied_audit["audit_digest"].startswith("sha256:"))
+            self.assertEqual(applied_audit["problems"], [])
+            for path, value in applied_canonical.items():
+                self.assertEqual(path.read_bytes(), value)
+
+            reverted = archive_services.zet_abstract_backfill_revert(
+                archive_root,
+                receipt_path=applied["receipt"]["path"],
+                expected_receipt_sha256=applied["receipt"]["sha256"],
+                max_items=2,
+                approve=True,
+                reviewed_by="person:audit-revert-reviewer",
+                affirm_abstract_removal_reviewed=True,
+            )
+            self.assertEqual(reverted["status"], "reverted", reverted)
+            reverted_code, reverted_output = self.run_cli(
+                ["zet-abstract-backfill-receipt-audit", str(archive_root), "--dry-run"]
+            )
+            self.assertEqual(reverted_code, 0, reverted_output)
+            reverted_audit = json.loads(reverted_output)
+            self.assertEqual(reverted_audit["status"], "healthy")
+            self.assertEqual(reverted_audit["summary"]["receipt_count"], 2)
+            self.assertEqual(reverted_audit["summary"]["receipts_scanned"], 2)
+            self.assertEqual(reverted_audit["summary"]["applied_verified"], 0)
+            self.assertEqual(reverted_audit["summary"]["reverted_verified"], 1)
+            self.assertEqual(reverted_audit["summary"]["problem_count"], 0)
+            for path, original in fixture["originals"].items():
+                self.assertEqual(path.read_bytes(), original)
+
+            serialized = empty_output + applied_output + reverted_output
+            for private_value in (
+                *fixture["abstracts"],
+                *(row["zettel_id"] for row in fixture["rows"]),
+                applied["receipt"]["path"],
+                "person:audit-apply-reviewer",
+                "person:audit-revert-reviewer",
+                str(archive_root),
+            ):
+                self.assertNotIn(private_value, serialized)
+
+    def test_zet_abstract_backfill_receipt_audit_blocks_drift_and_orphan_revert_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            fixture = self.create_abstract_backfill_proposal(archive_root, count=1, name="audit-drift.jsonl")
+            applied = archive_services.zet_abstract_backfill_write(
+                archive_root,
+                proposal_path=fixture["relative"],
+                expected_proposal_sha256=fixture["sha256"],
+                approve=True,
+                reviewed_by="person:audit-reviewer",
+                affirm_abstracts_reviewed=True,
+            )
+            canonical_path = next(iter(fixture["originals"]))
+            drifted_bytes = canonical_path.read_bytes() + b"\nLater canonical edit.\n"
+            canonical_path.write_bytes(drifted_bytes)
+            drift_code, drift_output = self.run_cli(
+                ["zet-abstract-backfill-receipt-audit", str(archive_root), "--dry-run"]
+            )
+            self.assertEqual(drift_code, 1, drift_output)
+            drift = json.loads(drift_output)
+            self.assertEqual(drift["status"], "attention_required")
+            self.assertEqual(drift["summary"]["receipt_audit_failed"], 1)
+            self.assertEqual(drift["summary"]["problem_count"], 1)
+            self.assertIn("receipt_current_state_diverged", drift["problems"][0]["blocker_codes"])
+            self.assertEqual(canonical_path.read_bytes(), drifted_bytes)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            fixture = self.create_abstract_backfill_proposal(archive_root, count=1, name="audit-renamed.jsonl")
+            applied = archive_services.zet_abstract_backfill_write(
+                archive_root,
+                proposal_path=fixture["relative"],
+                expected_proposal_sha256=fixture["sha256"],
+                approve=True,
+                reviewed_by="person:audit-reviewer",
+                affirm_abstracts_reviewed=True,
+            )
+            source_path = archive_root / applied["receipt"]["path"]
+            renamed_path = source_path.with_name(
+                ("2" * 64) + ".zet-abstract-backfill.json"
+            )
+            source_path.replace(renamed_path)
+            renamed_code, renamed_output = self.run_cli(
+                ["zet-abstract-backfill-receipt-audit", str(archive_root), "--dry-run"]
+            )
+            self.assertEqual(renamed_code, 1, renamed_output)
+            renamed = json.loads(renamed_output)
+            self.assertEqual(renamed["summary"]["receipt_audit_failed"], 1)
+            self.assertIn("source_receipt_invalid", renamed["problems"][0]["blocker_codes"])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            fixture = self.create_abstract_backfill_proposal(archive_root, count=1, name="audit-orphan.jsonl")
+            applied = archive_services.zet_abstract_backfill_write(
+                archive_root,
+                proposal_path=fixture["relative"],
+                expected_proposal_sha256=fixture["sha256"],
+                approve=True,
+                reviewed_by="person:audit-reviewer",
+                affirm_abstracts_reviewed=True,
+            )
+            reverted = archive_services.zet_abstract_backfill_revert(
+                archive_root,
+                receipt_path=applied["receipt"]["path"],
+                expected_receipt_sha256=applied["receipt"]["sha256"],
+                approve=True,
+                reviewed_by="person:audit-reviewer",
+                affirm_abstract_removal_reviewed=True,
+            )
+            self.assertEqual(reverted["status"], "reverted", reverted)
+            (archive_root / applied["receipt"]["path"]).unlink()
+            orphan_code, orphan_output = self.run_cli(
+                ["zet-abstract-backfill-receipt-audit", str(archive_root), "--dry-run"]
+            )
+            self.assertEqual(orphan_code, 1, orphan_output)
+            orphan = json.loads(orphan_output)
+            self.assertEqual(orphan["summary"]["orphan_revert_receipt"], 1)
+            self.assertEqual(orphan["problems"][0]["status"], "orphan_revert_receipt")
+            self.assertIn("source_receipt_missing_or_invalid", orphan["problems"][0]["blocker_codes"])
+
+    def test_zet_abstract_backfill_receipt_audit_distinguishes_completed_and_unresolved_locks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            lock_root = archive_root / ".wom-scratch" / "abstract-backfill"
+            lock_root.mkdir(parents=True, exist_ok=True)
+            unresolved_digest = "1" * 64
+            unresolved_lock = lock_root / f".{unresolved_digest}.write.lock"
+            unresolved_secret = "PRIVATE LOCK CONTENT MUST NOT ECHO"
+            unresolved_lock.write_text(unresolved_secret, encoding="utf-8")
+            unresolved_code, unresolved_output = self.run_cli(
+                ["zet-abstract-backfill-receipt-audit", str(archive_root), "--dry-run"]
+            )
+            self.assertEqual(unresolved_code, 1, unresolved_output)
+            unresolved = json.loads(unresolved_output)
+            self.assertEqual(unresolved["summary"]["unresolved_write_lock"], 1)
+            self.assertIn("one_or_more_unresolved_abstract_transaction_locks", unresolved["blockers"])
+            self.assertFalse(unresolved["privacy_guards"]["lock_file_content_read"])
+            self.assertNotIn(unresolved_secret, unresolved_output)
+            self.assertTrue(unresolved_lock.exists())
+            unresolved_lock.unlink()
+
+            fixture = self.create_abstract_backfill_proposal(archive_root, count=1, name="audit-locks.jsonl")
+            applied = archive_services.zet_abstract_backfill_write(
+                archive_root,
+                proposal_path=fixture["relative"],
+                expected_proposal_sha256=fixture["sha256"],
+                approve=True,
+                reviewed_by="person:audit-reviewer",
+                affirm_abstracts_reviewed=True,
+            )
+            write_lock = lock_root / f".{fixture['sha256'].removeprefix('sha256:')}.write.lock"
+            write_lock.write_text(unresolved_secret, encoding="utf-8")
+            completed_code, completed_output = self.run_cli(
+                ["zet-abstract-backfill-receipt-audit", str(archive_root), "--dry-run"]
+            )
+            self.assertEqual(completed_code, 0, completed_output)
+            completed = json.loads(completed_output)
+            self.assertEqual(completed["status"], "attention_required")
+            self.assertEqual(completed["summary"]["stale_completed_write_lock"], 1)
+            self.assertIn("one_or_more_completed_abstract_write_locks_remain", completed["warnings"])
+            self.assertTrue(write_lock.exists())
+
+            reverted = archive_services.zet_abstract_backfill_revert(
+                archive_root,
+                receipt_path=applied["receipt"]["path"],
+                expected_receipt_sha256=applied["receipt"]["sha256"],
+                approve=True,
+                reviewed_by="person:audit-reviewer",
+                affirm_abstract_removal_reviewed=True,
+            )
+            self.assertEqual(reverted["status"], "reverted", reverted)
+            revert_lock = lock_root / (
+                f".{applied['receipt']['sha256'].removeprefix('sha256:')}.abstract-revert.lock"
+            )
+            revert_lock.write_text(unresolved_secret, encoding="utf-8")
+            both_code, both_output = self.run_cli(
+                ["zet-abstract-backfill-receipt-audit", str(archive_root), "--dry-run"]
+            )
+            self.assertEqual(both_code, 0, both_output)
+            both = json.loads(both_output)
+            self.assertEqual(both["summary"]["stale_completed_write_lock"], 1)
+            self.assertEqual(both["summary"]["stale_completed_revert_lock"], 1)
+            self.assertEqual(both["summary"]["problem_count"], 2)
+            self.assertNotIn(unresolved_secret, both_output)
+            self.assertTrue(write_lock.exists())
+            self.assertTrue(revert_lock.exists())
+            write_lock.unlink()
+            revert_lock.unlink()
 
     def test_zet_catalog_pass_discards_partial_when_final_snapshot_revalidation_changes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

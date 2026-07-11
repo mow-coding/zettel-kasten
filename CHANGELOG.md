@@ -6,6 +6,29 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.221 - 2026-07-11
+
+Archive-wide abstract revision receipt and transaction-lock audit checkpoint.
+Additive; no archive migration.
+
+- **Complete lifecycle scan.** New read-only
+  `zet-abstract-backfill-receipt-audit` CLI, with
+  `abstract-backfill-receipt-audit` alias, validates every bounded applied
+  receipt as either currently applied or paired with one valid revert receipt.
+- **Current-state proof.** Applied lifecycles recheck current after/body/abstract
+  hashes; reverted lifecycles recheck the inverse receipt, current before/body
+  hashes, and abstract absence. Orphan, malformed, or diverged receipts block.
+- **Crash-signal distinction.** Recognized `.wom-scratch/abstract-backfill/`
+  locks are audited without reading lock content. A lock with its completed
+  receipt is a removable-after-inspection warning; a lock without the matching
+  receipt is an unresolved-transaction blocker.
+- **Bounded AI output.** The command scans up to 5,000 receipts and 5,000 locks,
+  returns only bounded problem records, and commits every outcome to one audit
+  digest. Healthy receipts are counts, not thousands of repeated JSON rows.
+- **Read-only privacy boundary.** It writes/deletes nothing and echoes no receipt
+  paths, zet ids/paths, bodies, abstracts, reviewers, or local absolute paths.
+  It does not clean locks or repair immutable evidence automatically.
+
 ## v0.3.220 - 2026-07-11
 
 Receipt-audited deterministic abstract rollback checkpoint. Additive; no
