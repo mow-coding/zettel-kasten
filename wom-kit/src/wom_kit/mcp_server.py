@@ -129,7 +129,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
     },
     {
         "name": "archive_runtime_context",
-        "description": "Return read-only AI runtime context for a mounted archive before draft, dry-run, or mint approval work.",
+        "description": "Return quick read-only AI runtime context for a mounted archive before draft, dry-run, or mint approval work; complete Doctor is explicit.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -137,6 +137,11 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "expected_archive_id": {"type": "string"},
                 "expected_type": {"type": "string", "enum": sorted(archive_services.RUNTIME_CONTEXT_ARCHIVE_TYPES)},
                 "strict": {"type": "boolean", "default": False},
+                "full_doctor": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Run complete archive Doctor diagnostics. The default returns bounded runtime context without scanning all zets or receipts.",
+                },
                 "redact_local_paths": {
                     "type": "boolean",
                     "default": True,
@@ -3133,9 +3138,19 @@ def tool_wom_profile_wallet_check(arguments: dict[str, Any]) -> dict[str, Any]:
 def tool_archive_runtime_context(arguments: dict[str, Any]) -> dict[str, Any]:
     archive_root = require_path_arg(arguments, "archive_root")
     strict = bool(arguments.get("strict", False))
+    full_doctor = bool(arguments.get("full_doctor", False))
     requested_redaction = bool(arguments.get("redact_local_paths", True))
     redact_local_paths = mcp_redact_local_paths(requested_redaction)
-    diagnostics = [item.as_dict() for item in archive_cli.Doctor(archive_root).run()]
+    diagnostics: list[dict[str, Any]] | None = None
+    inspection_reads = {
+        "zettel_bodies_read": False,
+        "objet_bytes_read": False,
+        "archive_text_scanned_for_secret_patterns": False,
+    }
+    if full_doctor:
+        doctor = archive_cli.Doctor(archive_root)
+        diagnostics = [item.as_dict() for item in doctor.run()]
+        inspection_reads = doctor.read_observations()
     result = call_service(
         archive_services.runtime_context,
         archive_root,
@@ -3144,10 +3159,12 @@ def tool_archive_runtime_context(arguments: dict[str, Any]) -> dict[str, Any]:
         strict=strict,
         redact_local_paths=redact_local_paths,
         diagnostics=diagnostics,
+        inspection_mode="full_doctor" if full_doctor else "quick",
+        inspection_reads=inspection_reads,
     )
     add_mcp_redaction_warning(result, requested_redaction, redact_local_paths)
     state = "passed" if result["ok"] else "blocked"
-    return tool_success_result(f"archive_runtime_context: {state}.", result)
+    return tool_success_result(f"archive_runtime_context: {state}; mode={result['inspection']['mode']}.", result)
 
 
 def tool_prompt_boundary_check(arguments: dict[str, Any]) -> dict[str, Any]:

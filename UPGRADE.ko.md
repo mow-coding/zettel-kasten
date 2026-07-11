@@ -83,6 +83,36 @@ project folder 작업에서는 temporary intake staging이 archive of record가
 아니라는 점을 기억합니다. cleanup 전에 원본을 objet, source map, manifest,
 zet, receipt로 보존해야 합니다.
 
+## v0.3.224 빠른 인수인계 문서와 반복 없는 연결
+
+v0.3.224는 아카이브 migration이나 상태 쓰기가 없습니다. CLI와 MCP의
+인수인계 문서(`runtime-context`)는 이제 기본적으로 빠른 안내만 반환합니다.
+정체성, 정책, canonical entrypoint, 로컬 주권, 버전, 작업기록만 읽고 전체 zet와
+영수증을 훑는 검진은 만들지 않습니다.
+
+```text
+archive runtime-context <archive-root> --format json
+```
+
+전체 검진이 실제로 필요한 작업에서만 다음처럼 명시합니다.
+
+```text
+archive runtime-context <archive-root> --full-doctor --progress --format json
+```
+
+MCP도 같습니다. 빠른 인수인계에는 `full_doctor`를 생략하고, 전체 검진에는
+`full_doctor: true`를 씁니다. 두 표면 모두 `inspection.mode`, 전체 검진 실행
+여부, 검진 상태, 실제로 넓게 읽은 범위를 보고합니다. 이전처럼 인수인계 문서가
+자동으로 전체 검진까지 실행한다고 가정한 스크립트는 명시적 옵션을 추가해야
+합니다.
+
+AI 스타팅 메뉴얼(`ai-start-here`) 결과에는 인수인계 문서가 이미 들어 있습니다.
+호환용 `first_commands` 목록의 해당 행은 `already_included`와
+`run_required: false`로 표시됩니다. 실제 다음 실행은 `next_commands`와
+`remaining_ai_runtime_order`를 따릅니다. 원본 작업기록을 고쳐 쓰지는 않지만,
+이미 끝난 기본 `Run runtime-context first.` 문장은 AI 스타팅 메뉴얼의 다음 안전
+단계로 다시 복사하지 않습니다.
+
 ## v0.3.223 전체 검진 영수증 내부 단계
 
 v0.3.223은 아카이브 migration을 요구하지 않으며 v0.3.222의 빠른 기본

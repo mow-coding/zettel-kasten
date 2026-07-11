@@ -1240,8 +1240,33 @@ class McpServerTests(unittest.TestCase):
                 structured = allowed_result["structuredContent"]
                 self.assertTrue(structured["ok"])
                 self.assertEqual(structured["lifecycle_action"], "runtime_context")
+                self.assertEqual(structured["inspection"]["mode"], "quick")
+                self.assertFalse(structured["inspection"]["full_doctor_run"])
+                self.assertFalse(structured["doctor_summary"]["checked"])
                 self.assertTrue(structured["redaction"]["local_paths_redacted"])
                 self.assertNotIn(str(allowed_archive), json.dumps(structured))
+
+                full_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 3,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "archive_runtime_context",
+                            "arguments": {
+                                "archive_root": str(allowed_archive),
+                                "full_doctor": True,
+                            },
+                        },
+                    },
+                )
+                full_result = full_response["result"]
+                self.assertFalse(full_result["isError"])
+                full_structured = full_result["structuredContent"]
+                self.assertEqual(full_structured["inspection"]["mode"], "full_doctor")
+                self.assertTrue(full_structured["inspection"]["full_doctor_run"])
+                self.assertTrue(full_structured["doctor_summary"]["checked"])
 
                 outside_response = self.send(
                     process,

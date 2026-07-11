@@ -1,7 +1,8 @@
 # AI Start-Here Quick And Full Inspection
 
 Status: quick/default and explicit full-Doctor contract implemented in v0.3.222;
-safe full-Doctor receipt phase and callback coalescing added in v0.3.223
+safe full-Doctor receipt phase and callback coalescing added in v0.3.223;
+no-repeat runtime-context handoff added in v0.3.224
 
 ## Purpose
 
@@ -27,6 +28,16 @@ inspection.doctor_summary.checked: false
 It does not construct Doctor, enumerate every zet or receipt, read zet bodies,
 read objet bytes, access a credential store/provider, or write archive state.
 Its result is an entry map, not an archive health claim.
+
+The map already includes runtime-context. Since v0.3.224, the compatibility
+`first_commands` list marks that command `already_included` with
+`run_required: false`. AI operators should continue through `next_commands` and
+`remaining_ai_runtime_order`, not execute the full recommendation list again.
+Markdown output separates `Already Included` from `Next Commands`.
+
+The source operational-context record remains unchanged. If its default next
+list says `Run runtime-context first.`, start-here does not copy that already
+satisfied sentence into `next_safe_steps`.
 
 ## Explicit Full Doctor
 
@@ -92,4 +103,6 @@ credential refs, tokens, or secret values.
 
 No archive migration is required. Scripts that relied on `ai-start-here` to run
 a complete Doctor must add `--full-doctor`. Scripts that only needed the entry
-map become faster without changing archive data.
+map become faster without changing archive data. CLI and MCP runtime-context
+also become quick by default in v0.3.224; see
+[Runtime Context Quick And Full Inspection](runtime-context-quick-and-full-inspection.md).

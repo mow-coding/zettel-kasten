@@ -31,10 +31,10 @@ tag 목록을 여기서 다시 키우지 않습니다.
 현재 공개 기준:
 
 ```text
-v0.3.223 pre-release
+v0.3.224 pre-release
 ```
 
-이전 공개 기준: v0.3.222 pre-release.
+이전 공개 기준: v0.3.223 pre-release.
 
 전체 릴리스 이력은 [CHANGELOG.md](CHANGELOG.md)와 [wom-kit/docs/releases/](wom-kit/docs/releases/)를 보세요.
 
@@ -101,7 +101,7 @@ Roadmap 요약: `v0.1.x`는 아이디어/프로토콜 언어 라인, `v0.2.x`는
 - read-only `archive input-provenance-taxonomy --dry-run`으로 AI 운영자가 tool-discovered/receipt-verified 입력과 caller-supplied/AI-generated/fixture/environment-inferred/unknown 입력을 구분하게 합니다. 호출자가 준 입력을 도구가 발견한 source truth처럼 말하지 않기 위한 기준입니다.
 - read-only `archive ai-response-contract --dry-run`으로 AI 운영자가 사람에게 답하기 전에 outcome, evidence basis, privacy/approval boundary, remaining work, conversational status board를 확인하게 합니다. 별도 web UI는 필요하지 않습니다.
 - 핵심 read-only operator 명령들은 top-level `status_class`, `input_provenance_class`, `secret_signal_class`, `operator_envelope` 필드를 노출하므로 AI가 prose를 추론하지 않고 응답 계약을 적용할 수 있습니다.
-- read-only `archive ai-start-here <archive-root> --dry-run --format markdown|json`은 모든 zet와 영수증을 훑지 않고 runtime-context, canonical entrypoint, 로컬 주권, 작업기록을 빠르게 보여줍니다. 전체 아카이브 검진은 `--full-doctor`를 명시할 때만 실행하고, 진행 표시는 같은 개수의 반복을 억제하며 실제 작업 단위와 `file_hash`, `edge_receipt_index` 같은 고정된 비공개 내용 없는 heartbeat phase를 밝힙니다. 같은 개수의 비공개 하위 단계는 formatter 전에 합쳐지고, 두 모드 모두 실제로 읽은 범위를 정직하게 보고하며 외부 서비스 호출이나 아카이브 쓰기는 하지 않습니다.
+- read-only `archive ai-start-here <archive-root> --dry-run --format markdown|json`과 빠른 기본 CLI/MCP 인수인계 문서(`runtime-context`)는 모든 zet와 영수증을 훑지 않고 정체성, canonical entrypoint, 로컬 주권, 작업기록을 보여줍니다. 전체 검진은 `--full-doctor`를 명시할 때만 실행하며 진행 표시는 비공개 내용을 드러내지 않습니다. AI 스타팅 메뉴얼은 인수인계 문서가 이미 포함되었다고 표시하고 `completed_commands`와 `next_commands`를 분리하므로 AI가 같은 단계를 곧바로 반복하지 않습니다.
 - `ai-response-concept-guide --topic operator_vocabulary --locale ko-KR`로 AI 운영자가 이미 확정된 제품어(`WOM`, `zet`, `ZET`, `objet`, `receipt`=`영수증`, `mint`=`발행하다`, `canonical`=`정본`, `node`=`노드`, `edge`=`엣지`, `tie`=`타이`, `archive`=`아카이브 폴더`, `ai_start_here`=`AI 스타팅 메뉴얼`, `frontmatter`=`초록 데이터`)와 확정된 operator 용어(`object_id`=`오브제 아이디`, `doctor`=`검진`, `provider`=`외부 서비스`, `containment`=`포함 관계`, `safe_preview`=`미리보기`, `approved_write`=`승인 후 쓰기`, `external_report`=`공개용 문서`, `private_working_note`=`비공개 문서`)를 그대로 쓰게 합니다.
 - operator용 runtime 표면(`AGENTS.md` 템플릿, runtime skill, plugin-layer 문서)에 담은 normative plain-language 규약: 운영자 AI가 사람에게 답할 때 git/infrastructure/WOM 내부 용어를 일상어로 옮기고 정확한 기술 용어는 괄호나 로그에만 남기게 합니다. read-only `ai-response-concept-guide --topic git_infra_terms` 조회 레이어가 뒷받침하며, 이는 사람 대상 산문에만 적용하는 AI의 지침일 뿐 WOM이 강제·검증하는 검사는 아닙니다.
 - 같은 runtime 표면에 담은 normative AI-Operator Discipline 섹션: 운영자 AI가 지키는 세 가지 행동 규범을 정합니다. 사용자가 실제로 접한 출처(그들이 본 정확한 영상·판본·번역·언어)를 기록하고 "더 권위 있는" 원본으로 조용히 바꾸지 않으며(provenance hierarchy의 source-substitution 축과 짝을 이룸), 어떤 작업을 불가능하다고 선언하거나 낮춰 처리하기 전에 설치·사용 가능한 도구를 먼저 열거하고, 이미 설정·승인된 상태를 처음처럼 다시 묻지 않고 이어받습니다. 이는 AI가 적용하는 지침일 뿐 WOM이 강제·검증하는 검사는 아닙니다.

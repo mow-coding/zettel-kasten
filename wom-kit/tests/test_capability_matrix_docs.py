@@ -521,7 +521,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.223 pre-release",
+            "v0.3.224 pre-release",
             "[Version Truth Source](wom-kit/docs/version-truth-source.md)",
             "[Project Version Update](wom-kit/docs/project-version-update.md)",
             "read-only WOM-kit version truth-source checks",
@@ -937,7 +937,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                 self.assertIn(phrase, guide_text)
         for phrase in (
             "Status: v0.3.221 archive-wide abstract receipt and lock audit checkpoint",
-            "Version: v0.3.223, release candidate",
+            "Version: v0.3.224, release candidate",
             "zet abstract receipt lifecycle audit",
             "Up to 5,000 receipts and 5,000 locks",
             "Green proves bounded local consistency",
@@ -1138,7 +1138,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.58.md").read_text(encoding="utf-8")
         current_release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.106.md").read_text(encoding="utf-8")
         for phrase in (
-            "Status: v0.3.117 AI operational context rehydration checkpoint",
+            "Status: v0.3.224 quick runtime-context and no-repeat handoff checkpoint",
             "archive runtime-context <archive-root> --format json",
             "operational_context",
             "ops/operational-context.yml",
@@ -5997,6 +5997,81 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for text in (
+            kit_readme_text,
+            upgrade_text,
+            upgrade_ko_text,
+            changelog_text,
+            release_text,
+            runtime_skill_text,
+        ):
+            with self.subTest(document="operator-surface"):
+                self.assertIn("edge_receipt_index", text)
+
+    def test_runtime_context_quick_and_no_repeat_handoff_docs_match_v03224(self) -> None:
+        runtime_text = (
+            KIT_ROOT / "docs" / "runtime-context-quick-and-full-inspection.md"
+        ).read_text(encoding="utf-8")
+        start_here_text = (KIT_ROOT / "docs" / "ai-start-here.md").read_text(encoding="utf-8")
+        entrypoint_text = (KIT_ROOT / "docs" / "runtime-canonical-entrypoints.md").read_text(
+            encoding="utf-8"
+        )
+        progress_text = (KIT_ROOT / "docs" / "large-command-progress-and-output.md").read_text(
+            encoding="utf-8"
+        )
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        readme_ko_text = (REPO_ROOT / "README.ko.md").read_text(encoding="utf-8")
+        kit_readme_text = (KIT_ROOT / "README.md").read_text(encoding="utf-8")
+        upgrade_text = (REPO_ROOT / "UPGRADE.md").read_text(encoding="utf-8")
+        upgrade_ko_text = (REPO_ROOT / "UPGRADE.ko.md").read_text(encoding="utf-8")
+        changelog_text = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+        release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.224.md").read_text(encoding="utf-8")
+        runtime_skill_text = (
+            KIT_ROOT / "templates" / "ai-runtime" / "wom-archive" / "SKILL.md"
+        ).read_text(encoding="utf-8")
+        public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
+        public_map_ko_text = (KIT_ROOT / "docs" / "public-documentation-map.ko.md").read_text(
+            encoding="utf-8"
+        )
+
+        for phrase in (
+            "quick/default and explicit full-Doctor contract implemented in v0.3.224",
+            "doctor_summary.checked: false",
+            "full_doctor: true",
+            "completed_commands",
+            "next_commands",
+            "remaining_ai_runtime_order",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, runtime_text)
+        for phrase in (
+            "no-repeat runtime-context handoff added in v0.3.224",
+            "run_required: false",
+            "does not copy that already",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, start_here_text)
+        for phrase in (
+            "Status: v0.3.224 quick runtime-context and no-repeat handoff checkpoint",
+            "Do not run both back-to-back",
+            "canonical_entrypoints.next_commands",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, entrypoint_text)
+        self.assertIn("explicit runtime-context full-Doctor", progress_text)
+        self.assertIn(
+            "archive runtime-context <archive-root> --full-doctor --progress --format json",
+            progress_text,
+        )
+        for phrase in (
+            "Status: v0.3.224 quick runtime-context and no-repeat AI handoff checkpoint",
+            "Previous checkpoint: Status: v0.3.223",
+            "MCP `full_doctor: true`",
+            "completed, next-command, and remaining-runtime-order collections",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, matrix_text)
+        for text in (
             readme_text,
             readme_ko_text,
             kit_readme_text,
@@ -6007,7 +6082,15 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             runtime_skill_text,
         ):
             with self.subTest(document="operator-surface"):
-                self.assertIn("edge_receipt_index", text)
+                self.assertIn("next_commands", text)
+        self.assertIn(
+            "[Runtime Context Quick And Full Inspection](runtime-context-quick-and-full-inspection.md)",
+            public_map_text,
+        )
+        self.assertIn(
+            "[빠른 인수인계 문서와 전체 검진](runtime-context-quick-and-full-inspection.md)",
+            public_map_ko_text,
+        )
 
 
 if __name__ == "__main__":

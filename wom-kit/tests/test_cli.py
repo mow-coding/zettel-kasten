@@ -4128,6 +4128,10 @@ class ArchiveCliTests(unittest.TestCase):
             result = json.loads(first_output)
             self.assertTrue(result["ok"])
             self.assertEqual(result["lifecycle_action"], "runtime_context")
+            self.assertEqual(result["inspection"]["mode"], "quick")
+            self.assertFalse(result["inspection"]["full_doctor_run"])
+            self.assertFalse(result["doctor_summary"]["checked"])
+            self.assertIn("not an archive health claim", result["inspection"]["claim_boundary"])
             self.assertEqual(result["archive_id"], "archive:personal:fake-life")
             self.assertEqual(result["archive_type"], "personal")
             self.assertEqual(result["scope"], "personal")
@@ -4182,6 +4186,17 @@ class ArchiveCliTests(unittest.TestCase):
                 entrypoints["recommended_first_commands"][0]["command"],
                 "archive runtime-context <archive-root> --format json",
             )
+            self.assertEqual(entrypoints["recommended_first_commands"][0]["status"], "already_included")
+            self.assertFalse(entrypoints["recommended_first_commands"][0]["run_required"])
+            self.assertEqual(entrypoints["completed_commands"], [entrypoints["recommended_first_commands"][0]])
+            self.assertEqual(
+                entrypoints["next_commands"][0]["command"],
+                "archive operational-context <archive-root> --dry-run --format json",
+            )
+            self.assertEqual(entrypoints["ai_runtime_order"][0]["status"], "completed_by_runtime_context")
+            self.assertEqual(entrypoints["remaining_ai_runtime_order"][0]["action"], "read_operational_context")
+            self.assertTrue(result["handoff"]["runtime_context_included"])
+            self.assertFalse(result["handoff"]["runtime_context_rerun_required"])
             self.assertEqual(
                 entrypoints["recommended_first_commands"][1]["command"],
                 "archive operational-context <archive-root> --dry-run --format json",
@@ -4246,6 +4261,65 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertIn("create draft in inbox", result["available_safe_actions"])
             self.assertIn("mint only through CLI approve path", result["available_safe_actions"])
 
+    def test_runtime_context_quick_default_does_not_construct_doctor_or_read_zets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            unreadable = archive_root / "zettels" / "runtime-context-quick-must-not-read.md"
+            unreadable.write_bytes(b"\xff\xfe\x00\x01")
+
+            with patch.object(archive_cli, "Doctor", side_effect=AssertionError("quick runtime-context invoked Doctor")):
+                code, output = self.run_cli(["runtime-context", str(archive_root), "--format", "json"])
+
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertEqual(result["inspection"]["mode"], "quick")
+            self.assertFalse(result["inspection"]["full_doctor_run"])
+            self.assertFalse(result["doctor_summary"]["checked"])
+            self.assertFalse(result["inspection"]["read_observations"]["zettel_bodies_read"])
+
+    def test_runtime_context_full_doctor_is_explicit_and_progress_is_content_free(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            private_marker = "PRIVATE_RUNTIME_CONTEXT_ZET_PATH"
+
+            with self.assertRaisesRegex(
+                archive_services.ArchiveServiceError,
+                "requires Doctor read observations",
+            ):
+                archive_services.runtime_context(
+                    archive_root,
+                    diagnostics=[],
+                    inspection_mode="full_doctor",
+                )
+
+            def fake_doctor_run(doctor: archive_cli.Doctor) -> list[archive_cli.Diagnostic]:
+                doctor._read_observations["zettel_bodies_read"] = True
+                doctor._progress("zettels", private_marker, 1, 1)
+                return []
+
+            with patch.object(archive_cli.Doctor, "run", fake_doctor_run):
+                code, stdout, stderr = self.run_cli_split(
+                    [
+                        "runtime-context",
+                        str(archive_root),
+                        "--full-doctor",
+                        "--progress",
+                        "--format",
+                        "json",
+                    ]
+                )
+
+            self.assertEqual(code, 0, stdout + stderr)
+            result = json.loads(stdout)
+            self.assertEqual(result["inspection"]["mode"], "full_doctor")
+            self.assertTrue(result["inspection"]["full_doctor_run"])
+            self.assertTrue(result["doctor_summary"]["checked"])
+            self.assertTrue(result["inspection"]["read_observations"]["zettel_bodies_read"])
+            self.assertIn("[runtime-context] doctor: start", stderr)
+            self.assertIn("[runtime-context] compose-runtime-context: done", stderr)
+            self.assertNotIn(private_marker, stderr)
+            self.assertNotIn(str(archive_root), stderr)
+
     def test_ai_start_here_returns_compact_safe_first_read_map(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
@@ -4281,6 +4355,21 @@ class ArchiveCliTests(unittest.TestCase):
                 result["first_commands"][0]["command"],
                 "archive runtime-context <archive-root> --format json",
             )
+            self.assertEqual(result["first_commands"][0]["status"], "already_included")
+            self.assertFalse(result["first_commands"][0]["run_required"])
+            self.assertEqual(result["completed_commands"], [result["first_commands"][0]])
+            self.assertEqual(
+                result["next_commands"][0]["command"],
+                "archive operational-context <archive-root> --dry-run --format json",
+            )
+            self.assertTrue(all(item["run_required"] for item in result["next_commands"]))
+            self.assertTrue(result["summary"]["runtime_context_included"])
+            self.assertFalse(result["summary"]["runtime_context_rerun_required"])
+            self.assertTrue(result["handoff"]["runtime_context_included"])
+            self.assertFalse(result["handoff"]["runtime_context_rerun_required"])
+            self.assertEqual(result["ai_runtime_order"][0]["status"], "completed_by_runtime_context")
+            self.assertEqual(result["remaining_ai_runtime_order"][0]["action"], "read_operational_context")
+            self.assertNotIn("Run runtime-context first.", result["next_safe_steps"])
             self.assertIn("Read AGENTS.md", " ".join(result["next_safe_steps"]))
             self.assertIn("Run zet-catalog", " ".join(result["next_safe_steps"]))
             self.assertEqual(
@@ -4309,7 +4398,9 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertIn("Inspection mode: `quick`", markdown_output)
             self.assertIn("Full Doctor run: no", markdown_output)
             self.assertIn("`archive.yml`", markdown_output)
-            self.assertIn("## First Commands", markdown_output)
+            self.assertIn("## Already Included", markdown_output)
+            self.assertIn("## Next Commands", markdown_output)
+            self.assertIn("do not run again before using this map", markdown_output)
             self.assertIn("## Storage Authority", markdown_output)
             self.assertIn("metadata_and_version_history_backup", markdown_output)
             self.assertIn("Files written: no", markdown_output)

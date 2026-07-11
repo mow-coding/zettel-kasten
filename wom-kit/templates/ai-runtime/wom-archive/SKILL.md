@@ -37,13 +37,8 @@ archive create-draft <archive-root> --dry-run --prompt-boundary-report <prompt-b
 
 `low` risk is not proof of safety. `medium` risk may continue with warnings. `high` risk blocks draft creation.
 
-Before creating drafts, running mint checks, or asking for mint approval, then run:
-
-```bash
-archive runtime-context <archive-root> --format json
-```
-
-For the normal compact entry map, use:
+Before creating drafts, running mint checks, or asking for mint approval, use
+the normal compact entry map:
 
 ```bash
 archive ai-start-here <archive-root> --dry-run --progress --format json
@@ -53,7 +48,15 @@ This quick path reads bounded identity, policy, entrypoint, authority, and
 operational-context metadata. It does not walk every zet/receipt or make an
 archive-health claim. Require `inspection.mode=quick` and
 `inspection.doctor_summary.checked=false` rather than silently treating it as a
-green Doctor result.
+green Doctor result. It already includes runtime-context. Follow
+`next_commands` and do not immediately run `runtime-context` again.
+
+When a host specifically requests the raw runtime-context packet without the
+start-here projection, this command is also quick by default:
+
+```bash
+archive runtime-context <archive-root> --format json
+```
 
 Only when the task needs a complete archive health check, run:
 
@@ -73,7 +76,7 @@ it contains no receipt/path/content identity and does not prove completion.
 If `archive` is not installed on PATH, run the repository entrypoint instead:
 
 ```bash
-python wom-kit/cli/archive.py runtime-context <archive-root> --format json
+python wom-kit/cli/archive.py ai-start-here <archive-root> --dry-run --progress --format json
 ```
 
 If the expected archive is known, include:
@@ -85,8 +88,8 @@ If the expected archive is known, include:
 Use `--strict` when the AI must stop on archive type mismatch. Doctor warnings
 are part of that decision only when `--full-doctor` was also requested.
 
-Read `storage_authority` from runtime-context, or request the same contract
-directly:
+Read `storage_authority` from ai-start-here or runtime-context, or request the
+same contract directly:
 
 ```bash
 archive local-sovereignty <archive-root> --dry-run --format json

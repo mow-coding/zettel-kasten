@@ -143,7 +143,16 @@ MCP:
 archive_runtime_context
 ```
 
-The output is intentionally small and stable. It includes archive identity, archive type/scope, owner/principal summary, AI write policy, archive-relative paths, safe next actions, doctor summary, blockers, warnings, and redaction status.
+The output is intentionally small and stable. Quick mode is the default for CLI
+and MCP; it does not construct Doctor or scan every zet and receipt. It includes
+archive identity, archive type/scope, owner/principal summary, AI write policy,
+archive-relative paths, safe next actions, Doctor status, blockers, warnings,
+inspection mode, and redaction status.
+
+Use CLI `--full-doctor --progress` or MCP `full_doctor: true` only when a
+complete archive health check is needed. An `ai-start-here` result already
+includes runtime-context, so follow `next_commands` instead of running the raw
+packet again.
 
 Local absolute paths are redacted by default.
 
