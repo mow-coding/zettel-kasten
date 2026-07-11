@@ -49,6 +49,7 @@ Supporting philosophy and model docs:
 - [Secret Signal Taxonomy](secret-signal-taxonomy.md)
 - [Local Sovereignty And Backup Authority](local-sovereignty-and-backup-authority.md)
 - [AI Start-Here Quick And Full Inspection](ai-start-here.md)
+- [Runtime Context Quick And Full Inspection](runtime-context-quick-and-full-inspection.md)
 - [Large-Command Progress And Bounded Output](large-command-progress-and-output.md)
 - [AI Response Contract](ai-response-contract.md)
 - [Operator Envelope Classes](operator-envelope-classes.md)

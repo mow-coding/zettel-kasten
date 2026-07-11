@@ -4357,19 +4357,39 @@ def command_profile_wallet(args: argparse.Namespace) -> int:
 
 
 def command_runtime_context(args: argparse.Namespace) -> int:
+    archive_root = Path(args.archive_root)
+    reporter = CommandProgressReporter(bool(getattr(args, "progress", False)), label="runtime-context")
+    full_doctor = bool(getattr(args, "full_doctor", False))
     try:
-        diagnostics = [item.as_dict() for item in Doctor(Path(args.archive_root)).run()]
+        diagnostics: list[dict[str, Any]] | None = None
+        inspection_reads = {
+            "zettel_bodies_read": False,
+            "objet_bytes_read": False,
+            "archive_text_scanned_for_secret_patterns": False,
+        }
+        if full_doctor:
+            reporter.progress("doctor", "start", None, None)
+            doctor = Doctor(archive_root, progress_callback=reporter.progress)
+            diagnostics = [item.as_dict() for item in doctor.run()]
+            inspection_reads = doctor.read_observations()
+            reporter.progress("doctor", "done", None, None)
+        reporter.progress("compose-runtime-context", "start", None, None)
         result = archive_services.runtime_context(
-            Path(args.archive_root),
+            archive_root,
             expected_archive_id=args.expected_archive_id,
             expected_type=args.expected_type,
             strict=args.strict,
             redact_local_paths=args.redact_local_paths,
             diagnostics=diagnostics,
+            inspection_mode="full_doctor" if full_doctor else "quick",
+            inspection_reads=inspection_reads,
         )
-    except archive_services.ArchiveServiceError as exc:
+        reporter.progress("compose-runtime-context", "done", None, None)
+    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
         print(str(exc), file=sys.stderr)
         return 1
+    finally:
+        reporter.close()
 
     print_json(result)
     return 0 if result["ok"] else 1
@@ -4433,6 +4453,7 @@ def command_ai_start_here(args: argparse.Namespace) -> int:
             "archive_id": result.get("archive_id"),
             "summary": result.get("summary"),
             "inspection": result.get("inspection"),
+            "handoff": result.get("handoff"),
             "blocker_count": len(result.get("blockers", [])),
             "warning_count": len(result.get("warnings", [])),
             "output": output_metadata,
@@ -4456,7 +4477,8 @@ def render_ai_start_here_markdown(result: dict[str, Any]) -> str:
     first_read = result.get("first_read") if isinstance(result.get("first_read"), dict) else {}
     operational_context = result.get("operational_context") if isinstance(result.get("operational_context"), dict) else {}
     safety = result.get("safety_boundaries") if isinstance(result.get("safety_boundaries"), dict) else {}
-    commands = result.get("first_commands") if isinstance(result.get("first_commands"), list) else []
+    completed_commands = result.get("completed_commands") if isinstance(result.get("completed_commands"), list) else []
+    commands = result.get("next_commands") if isinstance(result.get("next_commands"), list) else []
     steps = result.get("next_safe_steps") if isinstance(result.get("next_safe_steps"), list) else []
     read_order = first_read.get("read_order") if isinstance(first_read.get("read_order"), list) else []
     missing = first_read.get("missing_required") if isinstance(first_read.get("missing_required"), list) else []
@@ -4496,7 +4518,14 @@ def render_ai_start_here_markdown(result: dict[str, Any]) -> str:
             lines.append(f"- `{path}` - {role} ({status})")
     if not read_order:
         lines.append("- No present entrypoints were reported.")
-    lines.extend(["", "## First Commands", ""])
+    lines.extend(["", "## Already Included", ""])
+    for item in completed_commands:
+        if isinstance(item, dict):
+            command = item.get("command") or "-"
+            lines.append(f"- `{command}` - do not run again before using this map")
+    if not completed_commands:
+        lines.append("- Runtime-context is included in this start-here result.")
+    lines.extend(["", "## Next Commands", ""])
     for index, item in enumerate(commands[:4], start=1):
         if isinstance(item, dict):
             command = item.get("command") or "-"
@@ -4504,8 +4533,7 @@ def render_ai_start_here_markdown(result: dict[str, Any]) -> str:
             lines.append(f"{index}. `{command}`")
             lines.append(f"   Purpose: {purpose}")
     if not commands:
-        lines.append("1. `archive runtime-context <archive-root> --format json`")
-        lines.append("   Purpose: confirm archive identity and entrypoints.")
+        lines.append("1. Read `AGENTS.md` when the entrypoint map marks it present.")
     lines.extend(["", "## Storage Authority", ""])
     lines.append(f"- Local: `{authority_summary.get('local') or 'canonical_working_and_recovery_state'}`")
     lines.append(f"- GitHub: `{authority_summary.get('github') or 'metadata_and_version_history_backup'}`")
@@ -16025,6 +16053,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Expected archive type. Mismatch warns by default and blocks with --strict.",
     )
     runtime_context.add_argument("--strict", action="store_true", help="Treat runtime context warnings as blocking.")
+    runtime_context.add_argument(
+        "--progress",
+        action="store_true",
+        help="Stream content-free stage progress and 10-second heartbeats to stderr.",
+    )
+    runtime_context.add_argument(
+        "--full-doctor",
+        action="store_true",
+        help="Run the complete archive Doctor before composing runtime context. The default quick path does not scan all zets or receipts.",
+    )
     runtime_context.add_argument(
         "--redact-local-paths",
         dest="redact_local_paths",

@@ -91,6 +91,36 @@ For project-folder work, remember that temporary intake staging is not the
 archive of record. Preserve originals as objets, source maps, manifests, zets,
 and receipts before any cleanup.
 
+## v0.3.224 Quick Runtime Context And No-Repeat Handoff
+
+v0.3.224 adds no archive migration and writes no archive state. CLI and MCP
+`runtime-context` are now quick by default. The ordinary command reads bounded
+identity, policy, entrypoint, authority, version, and operational-context
+metadata without constructing Doctor or walking every zet and receipt:
+
+```text
+archive runtime-context <archive-root> --format json
+```
+
+Use complete validation only when the task actually needs it:
+
+```text
+archive runtime-context <archive-root> --full-doctor --progress --format json
+```
+
+MCP uses the same split: omit `full_doctor` for quick context, or pass
+`full_doctor: true` for complete Doctor diagnostics. Both surfaces report
+`inspection.mode`, `inspection.full_doctor_run`, Doctor status, and observed
+broad reads. Scripts that relied on runtime-context to run Doctor implicitly
+must add the explicit full-Doctor option.
+
+An `ai-start-here` result already contains runtime-context. Its compatibility
+list `first_commands` now marks that row `already_included` and
+`run_required: false`; use `next_commands` and `remaining_ai_runtime_order` for
+the executable continuation. The source operational-context record is not
+rewritten, but a stale default `Run runtime-context first.` line is no longer
+copied into start-here's next-safe-step list.
+
 ## v0.3.223 Full-Doctor Receipt Phase
 
 v0.3.223 adds no archive migration and does not change the quick/default

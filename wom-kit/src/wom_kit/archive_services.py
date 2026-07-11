@@ -59945,6 +59945,60 @@ def ai_usage_report(
     }
 
 
+def runtime_context_command_is_already_included(item: dict[str, Any]) -> bool:
+    command = str(item.get("command") or "").strip().lower()
+    return command == "archive runtime-context" or command.startswith("archive runtime-context ")
+
+
+def runtime_context_step_is_already_satisfied(value: str) -> bool:
+    normalized = " ".join(value.lower().split()).rstrip(".")
+    return normalized in {"run runtime-context first", "read runtime-context"}
+
+
+def runtime_context_handoff_entrypoints(entrypoints: dict[str, Any]) -> dict[str, Any]:
+    annotated = dict(entrypoints)
+    recommended = entrypoints.get("recommended_first_commands")
+    first_commands: list[dict[str, Any]] = []
+    completed_commands: list[dict[str, Any]] = []
+    next_commands: list[dict[str, Any]] = []
+    for item in recommended if isinstance(recommended, list) else []:
+        if not isinstance(item, dict):
+            continue
+        already_included = runtime_context_command_is_already_included(item)
+        command = {
+            **item,
+            "status": "already_included" if already_included else "recommended_next",
+            "run_required": not already_included,
+        }
+        first_commands.append(command)
+        if already_included:
+            completed_commands.append(command)
+        else:
+            next_commands.append(command)
+
+    order = entrypoints.get("ai_runtime_order")
+    ai_runtime_order: list[dict[str, Any]] = []
+    remaining_ai_runtime_order: list[dict[str, Any]] = []
+    for item in order if isinstance(order, list) else []:
+        if not isinstance(item, dict):
+            continue
+        already_included = item.get("action") == "run_runtime_context"
+        step = {
+            **item,
+            "status": "completed_by_runtime_context" if already_included else "pending",
+        }
+        ai_runtime_order.append(step)
+        if not already_included:
+            remaining_ai_runtime_order.append(step)
+
+    annotated["recommended_first_commands"] = first_commands
+    annotated["completed_commands"] = completed_commands
+    annotated["next_commands"] = next_commands
+    annotated["ai_runtime_order"] = ai_runtime_order
+    annotated["remaining_ai_runtime_order"] = remaining_ai_runtime_order
+    return annotated
+
+
 def runtime_context(
     archive_root: Path | str,
     *,
@@ -59953,7 +60007,26 @@ def runtime_context(
     strict: bool = False,
     redact_local_paths: bool = True,
     diagnostics: list[dict[str, Any]] | None = None,
+    inspection_mode: str | None = None,
+    inspection_reads: dict[str, bool] | None = None,
 ) -> dict[str, Any]:
+    mode = inspection_mode or ("full_doctor" if diagnostics is not None else "quick")
+    if mode not in {"quick", "full_doctor"}:
+        raise ArchiveServiceError("runtime-context inspection_mode must be quick or full_doctor.")
+    if mode == "full_doctor" and diagnostics is None:
+        raise ArchiveServiceError("runtime-context full_doctor mode requires Doctor diagnostics.")
+    if mode == "full_doctor" and inspection_reads is None:
+        raise ArchiveServiceError("runtime-context full_doctor mode requires Doctor read observations.")
+    if mode == "quick" and diagnostics is not None:
+        raise ArchiveServiceError("runtime-context quick mode cannot include Doctor diagnostics.")
+    full_doctor_run = mode == "full_doctor"
+    observed_reads = {
+        "zettel_bodies_read": bool((inspection_reads or {}).get("zettel_bodies_read")),
+        "objet_bytes_read": bool((inspection_reads or {}).get("objet_bytes_read")),
+        "archive_text_scanned_for_secret_patterns": bool(
+            (inspection_reads or {}).get("archive_text_scanned_for_secret_patterns")
+        ),
+    }
     root = require_existing_archive_root(archive_root)
     blockers: list[str] = []
     warnings: list[str] = []
@@ -59985,6 +60058,9 @@ def runtime_context(
 
     doctor_summary = runtime_context_doctor_summary(diagnostics, strict=strict, blockers=blockers, warnings=warnings)
     paths = runtime_context_paths(root, archive_config, warnings)
+    canonical_entrypoints = runtime_context_handoff_entrypoints(
+        runtime_context_canonical_entrypoints(root, archive_config, paths)
+    )
     operational_context_summary = runtime_context_operational_context(root)
     if not operational_context_summary["ok"]:
         warnings.append("ops/operational-context.yml is present but not safe/readable; run operational-context dry-run.")
@@ -60005,9 +60081,30 @@ def runtime_context(
         "wom_kit_version": wom_kit_version_info(root, redact_local_paths=redact_local_paths),
         "storage_authority": local_sovereignty_authority_model(),
         "operational_context": operational_context_summary,
-        "canonical_entrypoints": runtime_context_canonical_entrypoints(root, archive_config, paths),
+        "canonical_entrypoints": canonical_entrypoints,
+        "handoff": {
+            "runtime_context_included": True,
+            "runtime_context_rerun_required": False,
+            "completed_commands_field": "canonical_entrypoints.completed_commands",
+            "next_commands_field": "canonical_entrypoints.next_commands",
+            "remaining_runtime_order_field": "canonical_entrypoints.remaining_ai_runtime_order",
+        },
         "available_safe_actions": list(RUNTIME_CONTEXT_SAFE_ACTIONS),
         "doctor_summary": doctor_summary,
+        "inspection": {
+            "mode": mode,
+            "full_doctor_run": full_doctor_run,
+            "doctor_summary": doctor_summary,
+            "claim_boundary": (
+                "Full Doctor diagnostics were run for this runtime context."
+                if full_doctor_run
+                else "Quick runtime context verifies identity, policy, entrypoint presence, and operating context only; it is not an archive health claim."
+            ),
+            "full_doctor_command": (
+                "archive runtime-context <archive-root> --full-doctor --progress --format json"
+            ),
+            "read_observations": observed_reads,
+        },
         "blockers": unique_preserve_order(blockers),
         "warnings": unique_preserve_order(warnings),
         "redaction": {
@@ -60877,6 +60974,8 @@ def ai_start_here(
         strict=strict,
         redact_local_paths=redact_local_paths,
         diagnostics=diagnostics,
+        inspection_mode=mode,
+        inspection_reads=observed_reads,
     )
     entrypoints = context.get("canonical_entrypoints") if isinstance(context.get("canonical_entrypoints"), dict) else {}
     operational_context = context.get("operational_context") if isinstance(context.get("operational_context"), dict) else {}
@@ -60908,11 +61007,35 @@ def ai_start_here(
         else None
     )
     session_start_summary = ai_start_here_session_start_summary(session_start)
+    first_commands = (
+        entrypoints.get("recommended_first_commands")
+        if isinstance(entrypoints.get("recommended_first_commands"), list)
+        else []
+    )
+    completed_commands = (
+        entrypoints.get("completed_commands")
+        if isinstance(entrypoints.get("completed_commands"), list)
+        else []
+    )
+    next_commands = entrypoints.get("next_commands") if isinstance(entrypoints.get("next_commands"), list) else []
+    ai_runtime_order = (
+        entrypoints.get("ai_runtime_order") if isinstance(entrypoints.get("ai_runtime_order"), list) else []
+    )
+    remaining_ai_runtime_order = (
+        entrypoints.get("remaining_ai_runtime_order")
+        if isinstance(entrypoints.get("remaining_ai_runtime_order"), list)
+        else []
+    )
+
     next_lines: list[str] = []
     if session_start_summary and isinstance(session_start_summary.get("next"), list):
-        next_lines.extend(item for item in session_start_summary["next"] if isinstance(item, str))
+        next_lines.extend(
+            item
+            for item in session_start_summary["next"]
+            if isinstance(item, str) and not runtime_context_step_is_already_satisfied(item)
+        )
     if not next_lines:
-        next_lines.append("Run runtime-context first, then read AGENTS.md when present.")
+        next_lines.append("Read AGENTS.md when the entrypoint map marks it present.")
 
     return {
         "ok": bool(context.get("ok")) and not missing_required,
@@ -60934,6 +61057,8 @@ def ai_start_here(
             "missing_required_count": len(missing_required),
             "operational_context_status": operational_context.get("status") or "unknown",
             "inspection_mode": mode,
+            "runtime_context_included": True,
+            "runtime_context_rerun_required": False,
             "doctor_checked": (
                 context.get("doctor_summary", {}).get("checked")
                 if isinstance(context.get("doctor_summary"), dict)
@@ -60962,10 +61087,18 @@ def ai_start_here(
             "missing_required": missing_required,
             "source_truths": entrypoints.get("source_truths") if isinstance(entrypoints.get("source_truths"), dict) else {},
         },
-        "first_commands": entrypoints.get("recommended_first_commands")
-        if isinstance(entrypoints.get("recommended_first_commands"), list)
-        else [],
-        "ai_runtime_order": entrypoints.get("ai_runtime_order") if isinstance(entrypoints.get("ai_runtime_order"), list) else [],
+        "handoff": {
+            "runtime_context_included": True,
+            "runtime_context_rerun_required": False,
+            "completed_commands_field": "completed_commands",
+            "next_commands_field": "next_commands",
+            "remaining_runtime_order_field": "remaining_ai_runtime_order",
+        },
+        "first_commands": first_commands,
+        "completed_commands": completed_commands,
+        "next_commands": next_commands,
+        "ai_runtime_order": ai_runtime_order,
+        "remaining_ai_runtime_order": remaining_ai_runtime_order,
         "operational_context": {
             "status": operational_context.get("status") or "unknown",
             "record_path": operational_context.get("record_path"),
@@ -60987,6 +61120,7 @@ def ai_start_here(
         },
         "next_safe_steps": unique_preserve_order(
             [
+                "This ai-start-here result already includes runtime-context; do not run runtime-context again before using this map.",
                 *next_lines,
                 (
                     "Review the quick start map first; run ai-start-here --full-doctor only when a complete archive health check is needed."

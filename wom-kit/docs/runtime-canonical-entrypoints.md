@@ -1,6 +1,6 @@
 # Runtime Canonical Entry Points
 
-Status: v0.3.117 AI operational context rehydration checkpoint
+Status: v0.3.224 quick runtime-context and no-repeat handoff checkpoint
 
 When an AI runtime enters a WOM archive, it needs a small, explicit "start
 here" map. The archive may contain zets, source bindings, provider metadata,
@@ -8,13 +8,21 @@ object manifests, receipts, local instructions, and generated indexes. Without a
 canonical entrypoint summary, an agent can mistake a partial export, mirror, or
 secondary folder for the archive source of truth.
 
-v0.3.58 adds that map to:
+For the complete beginner-facing entry map, start with:
+
+```powershell
+archive ai-start-here <archive-root> --dry-run --progress --format json
+```
+
+The underlying raw context packet remains available through:
 
 ```powershell
 archive runtime-context <archive-root> --format json
 ```
 
-The result includes `canonical_entrypoints`. From v0.3.117, it also includes
+Both paths are quick by default and do not construct Doctor. Add
+`--full-doctor` only when a complete archive health check is required. The
+result includes `canonical_entrypoints`. From v0.3.117, it also includes
 `operational_context`, a read-only view of `ops/operational-context.yml` for
 AI-facing mission, scope, state, gotchas, and reviewed decisions. The
 `canonical_entrypoints` object includes machine-readable `ai_runtime_order`,
@@ -27,18 +35,22 @@ waiting for the human to mention them.
 When an AI enters an archive, use this order before interpreting or writing
 anything:
 
-1. Run `archive runtime-context <archive-root> --format json`.
-2. Read `operational_context.session_start_injection` when present.
-3. Read `canonical_entrypoints`, especially `archive.yml`, `AGENTS.md`, and
+1. Run `archive ai-start-here <archive-root> --dry-run --progress --format
+   json`, or use quick `runtime-context` when the host specifically needs the
+   raw packet. Do not run both back-to-back.
+2. Follow `next_commands`; runtime-context is already listed under
+   `completed_commands` with `run_required: false`.
+3. Read `operational_context.session_start_injection` when present.
+4. Read `canonical_entrypoints`, especially `archive.yml`, `AGENTS.md`, and
    `ops/operational-context.yml`.
-4. Run `archive ai-response-concept-guide <archive-root> --topic all --dry-run`
+5. Run `archive ai-response-concept-guide <archive-root> --topic all --dry-run`
    when the human is asking what to do next.
-5. For Notion material links, choose the route from that guide:
+6. For Notion material links, choose the route from that guide:
    `notion-objet-import-clue-audit` to check omitted-locator imports,
    `notion-objet-source-map-link-plan` when source maps or ledgers can recover
    a candidate, or `notion-objet-link-index` / `notion-objet-link-plan` when
    body locators still exist.
-6. Run `archive operator-feedback-plan <archive-root> --dry-run` (read-only)
+7. Run `archive operator-feedback-plan <archive-root> --dry-run` (read-only)
    when the human reports tool friction, a workflow gap, or asks where
    feedback records live; recording still needs a separate
    `archive operator-feedback-record --approve` review gate. From v0.3.160 the
@@ -61,6 +73,9 @@ The same order is returned in JSON:
 ```text
 canonical_entrypoints.ai_runtime_order
 canonical_entrypoints.recommended_first_commands
+canonical_entrypoints.completed_commands
+canonical_entrypoints.next_commands
+canonical_entrypoints.remaining_ai_runtime_order
 canonical_entrypoints.material_link_routes
 operational_context.session_start_injection
 ```
@@ -113,10 +128,13 @@ rehydrate the current mission/state. Apart from that bounded record:
 - it echoes no local absolute paths by default.
 
 Use `runtime-context --no-redact-local-paths` only for trusted local debugging.
+Use `runtime-context --full-doctor --progress` only when complete validation is
+needed. Quick mode reports `doctor_summary.checked: false` and is not an archive
+health claim.
 
 ## Not Implemented
 
-v0.3.117 does not enforce migration, auto-upgrade project folders, scan broad
+The quick/default path does not enforce migration, auto-upgrade project folders, scan broad
 file contents, choose between competing exports, synchronize providers, write
 material links, or run IMAP adapters. It gives AI runtimes a deterministic
 archive-relative map, a bounded operational-context rehydration record, and the

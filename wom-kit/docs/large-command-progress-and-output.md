@@ -2,7 +2,8 @@
 
 Status: implemented in v0.3.214; complete-only catalog JSONL in v0.3.216;
 same-count suppression and counted-unit/rate contract in v0.3.222; safe receipt
-phase and reporter coalescing in v0.3.223
+phase and reporter coalescing in v0.3.223; explicit runtime-context full-Doctor
+progress in v0.3.224
 
 ## Purpose
 
@@ -14,6 +15,7 @@ The shared v0.3.214 contract covers:
 
 ```text
 archive ai-start-here
+archive runtime-context
 archive upgrade-check
 archive zet-catalog
 ```
@@ -25,6 +27,7 @@ Add `--progress` to any of the three commands:
 ```powershell
 archive ai-start-here <archive-root> --dry-run --progress --format json
 archive ai-start-here <archive-root> --dry-run --full-doctor --progress --format json
+archive runtime-context <archive-root> --full-doctor --progress --format json
 archive upgrade-check <archive-root> --dry-run --progress --format json
 archive zet-catalog <archive-root> `
   --status canonical `

@@ -6,6 +6,28 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.224 - 2026-07-12
+
+Quick runtime-context and no-repeat AI handoff checkpoint. Additive; no archive
+migration.
+
+- **Quick runtime-context default.** CLI and MCP `runtime-context` now return
+  bounded identity, policy, entrypoint, authority, and operational-context
+  metadata without constructing Doctor or scanning every zet and receipt.
+- **Explicit complete inspection.** CLI `--full-doctor --progress` and MCP
+  `full_doctor: true` preserve the complete validation path. Results state the
+  inspection mode, Doctor status, and observed broad reads.
+- **No-repeat start-here handoff.** `ai-start-here` marks runtime-context as
+  `already_included` with `run_required: false`, separates
+  `completed_commands` from `next_commands`, and exposes only the remaining AI
+  runtime order for execution.
+- **Stale next-step suppression.** The default `Run runtime-context first.`
+  line remains visible inside its source operational-context record but is not
+  copied into `ai-start-here.next_safe_steps` after that step is satisfied.
+- **Runtime guidance aligned.** The bundled AI runtime skill now enters through
+  quick `ai-start-here` and warns against immediately repeating
+  runtime-context.
+
 ## v0.3.223 - 2026-07-12
 
 Full-Doctor receipt phase and callback coalescing checkpoint. Additive; no
