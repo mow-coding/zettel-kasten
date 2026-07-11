@@ -83,6 +83,37 @@ project folder 작업에서는 temporary intake staging이 archive of record가
 아니라는 점을 기억합니다. cleanup 전에 원본을 objet, source map, manifest,
 zet, receipt로 보존해야 합니다.
 
+## v0.3.216 한 프로세스 카탈로그 완주
+
+v0.3.216은 아카이브 migration을 추가하지 않고 zet를 다시 쓰지 않습니다.
+터미널 AI가 큰 아카이브를 전부 훑어야 할 때, 페이지마다 새 CLI를 실행하는
+대신 다음 한 명령을 우선 사용합니다.
+
+```text
+archive zet-catalog-pass <archive-root> --status canonical --projection reading --page-size 200 --max-estimated-tokens 8000 --response-envelope-reserve-tokens 2500 --max-output-mib 256 --output .wom-scratch/diagnostics/catalog-pass.jsonl --dry-run --progress --format json
+```
+
+첫 페이지에서 로컬 초록 데이터(frontmatter)를 실제로 읽습니다. 중간 페이지는 그
+프로세스의 메모리만 재사용합니다. 여러 페이지를 완주하기 직전에는 선택된
+로컬 파일 상태를 다시 확인합니다. 도중에 바뀌었다면 차단하고 완성 결과
+경로를 만들지 않습니다.
+
+JSONL에는 시작 정보 한 줄, strict 페이지별 한 줄, 완주 정보 한 줄이
+들어갑니다. zet 아이디, 제목, 초록, 분류값(facet), 타이, 엣지처럼 비공개 정보가
+포함될 수 있지만 zet 본문은 들어가지 않습니다. 이것은 아카이브 기록이나
+영수증이 아닙니다. Git에 올리지 말고 한 줄씩 읽은 뒤 사용이 끝나면
+삭제합니다.
+
+결과 경로는 `.wom-scratch/diagnostics/` 아래의 새 `.jsonl`이어야 하며 기존
+파일을 덮어쓰지 않습니다. 정상적으로 처리된 실패는 새 숨은 임시 partial 파일을
+지웁니다. 프로세스를 강제로 끊으면 비공개 partial이 남을 수 있습니다.
+다음 실행은 그 개수만 알리고 읽거나 자동 삭제하지 않습니다. 수동 정리
+전에는 실행 중인 pass가 없는지 먼저 확인합니다.
+
+기존 페이지형 `zet-catalog`와 MCP 동작은 그대로입니다. 새 명령은 영구
+캐시, 생성 지도, 인덱스, host goal/loop 상태를 만들지 않고 외부 서비스도
+호출하지 않습니다.
+
 ## v0.3.215 프로젝트 버전 갱신
 
 v0.3.215는 프로젝트의 WOM-kit 소스 미러와 버전 핀을 함께 갱신하는 첫

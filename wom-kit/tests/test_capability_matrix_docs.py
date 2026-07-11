@@ -521,7 +521,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.215 pre-release",
+            "v0.3.216 pre-release",
             "[Version Truth Source](wom-kit/docs/version-truth-source.md)",
             "[Project Version Update](wom-kit/docs/project-version-update.md)",
             "read-only WOM-kit version truth-source checks",
@@ -577,6 +577,67 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         self.assertIn("[Version Truth Source](version-truth-source.md)", public_map_ko_text)
         self.assertIn("[Project Version Update](project-version-update.md)", public_map_text)
         self.assertIn("[프로젝트 버전 갱신](project-version-update.md)", public_map_ko_text)
+
+    def test_one_process_catalog_pass_docs_expose_private_scratch_lifecycle(self) -> None:
+        catalog_pass_text = (KIT_ROOT / "docs" / "zet-catalog-one-process-pass.md").read_text(encoding="utf-8")
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        readme_ko_text = (REPO_ROOT / "README.ko.md").read_text(encoding="utf-8")
+        kit_readme_text = (KIT_ROOT / "README.md").read_text(encoding="utf-8")
+        upgrade_text = (REPO_ROOT / "UPGRADE.md").read_text(encoding="utf-8")
+        upgrade_ko_text = (REPO_ROOT / "UPGRADE.ko.md").read_text(encoding="utf-8")
+        changelog_text = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+        release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.216.md").read_text(encoding="utf-8")
+        public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
+        public_map_ko_text = (KIT_ROOT / "docs" / "public-documentation-map.ko.md").read_text(encoding="utf-8")
+        runtime_skill_text = (KIT_ROOT / "templates" / "ai-runtime" / "wom-archive" / "SKILL.md").read_text(encoding="utf-8")
+        for phrase in (
+            "Status: implemented in v0.3.216",
+            "archive zet-catalog-pass <archive-root>",
+            "Intermediate pages reuse that materialized snapshot in process memory",
+            "catalog_snapshot_changed",
+            "catalog_pass_header",
+            "catalog_pass_footer",
+            "complete output is published",
+            "forced process termination can leave a hidden private partial",
+            "uses no persistent catalog cache",
+            "does not solve model",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, catalog_pass_text)
+        for phrase in (
+            "Status: v0.3.216 one-process strict catalog pass checkpoint",
+            "Version: v0.3.216, release candidate",
+            "archive zet-catalog-pass",
+            "complete-only catalog JSONL",
+            "no persisted cache",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, matrix_text)
+        for text in (readme_text, readme_ko_text, kit_readme_text, upgrade_text, upgrade_ko_text, runtime_skill_text):
+            with self.subTest(document="operator-surface"):
+                self.assertIn("zet-catalog-pass", text)
+        for text in (kit_readme_text, upgrade_text, upgrade_ko_text, runtime_skill_text):
+            with self.subTest(document="detailed-operator-surface"):
+                self.assertIn(".wom-scratch/diagnostics/", text)
+                self.assertIn(".jsonl", text)
+        for phrase in (
+            "v0.3.216 - 2026-07-11",
+            "One command, one frontmatter scan",
+            "Complete-only private output",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, changelog_text)
+        for phrase in (
+            "# v0.3.216 - one-process strict catalog pass",
+            "process-memory snapshot",
+            "complete-only",
+            "must not be committed",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, release_text)
+        self.assertIn("[zet Catalog One-Process Pass](zet-catalog-one-process-pass.md)", public_map_text)
+        self.assertIn("[한 프로세스 zet 카탈로그 완주](zet-catalog-one-process-pass.md)", public_map_ko_text)
 
     def test_tiro_import_plan_doc_and_matrix_cover_read_only_meeting_manifest_contract(self) -> None:
         tiro_text = TIRO_IMPORT_PLAN_PATH.read_text(encoding="utf-8")

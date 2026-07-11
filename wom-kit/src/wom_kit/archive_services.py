@@ -59015,8 +59015,8 @@ def runtime_context_recommended_first_commands() -> list[dict[str, str]]:
             "purpose": "load the AI-facing mission, scope, state, gotchas, and decisions record before choosing next actions",
         },
         {
-            "command": "archive zet-catalog <archive-root> --status canonical --projection reading --coverage-mode strict --cursor 0 --dry-run --format json",
-            "purpose": "enumerate every canonical zet node's abstract state and local connections with separate node, abstract, and follow-up readiness evidence",
+            "command": "archive zet-catalog-pass <archive-root> --status canonical --projection reading --output .wom-scratch/diagnostics/<new-name>.jsonl --dry-run --progress --format json",
+            "purpose": "complete one strict frontmatter-only pass with process-memory reuse, final local revalidation, and private incremental JSONL",
         },
         {
             "command": "archive ai-response-concept-guide <archive-root> --topic all --dry-run --format json",
@@ -59059,8 +59059,9 @@ def runtime_context_ai_runtime_order() -> list[dict[str, Any]]:
         {
             "step": 5,
             "action": "enumerate_zet_abstracts",
-            "command": "archive zet-catalog <archive-root> --status canonical --projection reading --coverage-mode strict --cursor 0 --dry-run --format json",
-            "continuation": "keep the cursor-zero response_profile full and retain its complete diagnostics; inspect workload_estimate.page and workload_estimate.response, optionally split max_estimated_tokens with response_envelope_reserve_tokens for the host context, then use response_profile=continuation on later strict pages when smaller repeated metadata is useful; follow next_cursor with the same snapshot id and continuation_token until archive_wide_coverage_claim_ready=true, then check archive_wide_abstract_reading_claim_ready and archive_wide_followup_resolution_ready separately; restart from cursor 0 if catalog_snapshot_changed",
+            "command": "archive zet-catalog-pass <archive-root> --status canonical --projection reading --output .wom-scratch/diagnostics/<new-name>.jsonl --dry-run --progress --format json",
+            "continuation": "require archive_wide_coverage_claim_ready=true in the compact stdout summary; read catalog_page JSONL records incrementally, retain the first full diagnostics, check abstract and follow-up readiness separately, never load the whole private file into one response, never commit it, and delete it after use; restart the complete pass if catalog_snapshot_changed",
+            "mcp_alternative": "use zet_catalog pages with cursor, snapshot id, continuation token, full first response, compact continuation responses, and completion revalidation",
             "optional_seed_order": "when the host goal already provides verified zet ids, add --order seeded_connection_walk and repeated --start-zettel-id values; the walk still includes every disconnected component",
             "optional_route_evidence": "keep projection=reading for compact coverage; switch to routed_reading only with seeded_connection_walk when per-item seed, tie-passage, and disconnected-component reasons are needed",
             "reason": "give the host every local zet node's available first-read text and connection clues before it chooses a broad body-reading order; never equate node visitation with complete abstract availability",

@@ -1478,6 +1478,7 @@ class ArchiveCliTests(unittest.TestCase):
         self.assertIn("ai-response-contract", command_names)
         self.assertIn("ai-start-here", command_names)
         self.assertIn("project-version-update", command_names)
+        self.assertIn("zet-catalog-pass", command_names)
         capability = next(item for item in commands if item["name"] == "capabilities")
         self.assertIn("--machine", capability["options"])
         project_update = next(item for item in commands if item["name"] == "project-version-update")
@@ -1485,6 +1486,11 @@ class ArchiveCliTests(unittest.TestCase):
         self.assertEqual(project_update["required_positionals"], ["inspection_root"])
         for option in ("--target", "--dry-run", "--approve", "--reviewed-by", "--progress"):
             self.assertIn(option, project_update["options"])
+        catalog_pass = next(item for item in commands if item["name"] == "zet-catalog-pass")
+        self.assertEqual(catalog_pass["aliases"], ["catalog-pass", "zet-catalog-drain"])
+        self.assertEqual(catalog_pass["required_positionals"], ["archive_root"])
+        for option in ("--output", "--dry-run", "--progress", "--max-output-mib"):
+            self.assertIn(option, catalog_pass["options"])
         serialized = json.dumps(result, ensure_ascii=False)
         self.assertNotIn(str(KIT_ROOT), serialized)
         self.assertNotIn(str(Path.home()), serialized)
@@ -3991,7 +3997,7 @@ class ArchiveCliTests(unittest.TestCase):
             )
             self.assertEqual(
                 entrypoints["recommended_first_commands"][2]["command"],
-                "archive zet-catalog <archive-root> --status canonical --projection reading --coverage-mode strict --cursor 0 --dry-run --format json",
+                "archive zet-catalog-pass <archive-root> --status canonical --projection reading --output .wom-scratch/diagnostics/<new-name>.jsonl --dry-run --progress --format json",
             )
             self.assertEqual(
                 entrypoints["recommended_first_commands"][3]["command"],
@@ -4088,7 +4094,7 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertIn("Run zet-catalog", " ".join(result["next_safe_steps"]))
             self.assertEqual(
                 result["first_commands"][2]["command"],
-                "archive zet-catalog <archive-root> --status canonical --projection reading --coverage-mode strict --cursor 0 --dry-run --format json",
+                "archive zet-catalog-pass <archive-root> --status canonical --projection reading --output .wom-scratch/diagnostics/<new-name>.jsonl --dry-run --progress --format json",
             )
             self.assertTrue(result["conversation_status_board"]["allowed"])
             self.assertFalse(result["conversation_status_board"]["web_ui_required"])
@@ -29330,6 +29336,235 @@ state:
             self.assertEqual(len(saved["items"]), 1)
             self.assertTrue(saved["cli_output_artifact"]["result_artifact_written"])
             self.assertFalse(saved["privacy_guards"]["zettel_body_text_read"])
+
+    def test_zet_catalog_pass_scans_frontmatter_once_and_publishes_complete_private_jsonl(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            zettel_paths = sorted((archive_root / "zettels").glob("*.md"))
+            self.assertGreater(len(zettel_paths), 1)
+            private_body_marker = "PRIVATE_CATALOG_PASS_BODY_MUST_NOT_APPEAR"
+            zettel_paths[0].write_text(
+                zettel_paths[0].read_text(encoding="utf-8") + f"\n{private_body_marker}\n",
+                encoding="utf-8",
+            )
+            output_relative = ".wom-scratch/diagnostics/catalog-pass.jsonl"
+            output_path = archive_root / output_relative
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            preexisting_partial = output_path.parent / ".catalog-pass.jsonl.prior.partial"
+            preexisting_partial_bytes = b"PRIVATE PRIOR PARTIAL MUST STAY UNREAD\n"
+            preexisting_partial.write_bytes(preexisting_partial_bytes)
+
+            real_catalog_item = archive_services.zet_catalog_item
+            with patch.object(archive_services, "zet_catalog_item", wraps=real_catalog_item) as catalog_item:
+                code, stdout, stderr = self.run_cli_split(
+                    [
+                        "zet-catalog-pass",
+                        str(archive_root),
+                        "--projection",
+                        "reading",
+                        "--page-size",
+                        "1",
+                        "--output",
+                        output_relative,
+                        "--dry-run",
+                        "--progress",
+                        "--format",
+                        "json",
+                    ]
+                )
+
+            self.assertEqual(code, 0, stdout + stderr)
+            summary = json.loads(stdout)
+            self.assertTrue(summary["ok"], summary)
+            self.assertEqual(summary["status"], "complete")
+            self.assertEqual(summary["page_count"], len(zettel_paths))
+            self.assertEqual(summary["coverage"]["covered_count"], len(zettel_paths))
+            self.assertTrue(summary["coverage"]["archive_wide_coverage_claim_ready"])
+            self.assertEqual(summary["session"]["initial_frontmatter_files_scanned"], len(zettel_paths))
+            self.assertTrue(summary["session"]["completion_revalidation_performed"])
+            self.assertFalse(summary["session"]["cache_persisted"])
+            self.assertFalse(summary["session"]["mcp_cache_used"])
+            self.assertEqual(summary["output"]["preexisting_partial_count"], 1)
+            self.assertFalse(summary["output"]["preexisting_partials_read"])
+            self.assertFalse(summary["output"]["preexisting_partials_deleted"])
+            self.assertEqual(catalog_item.call_count, len(zettel_paths))
+            self.assertNotIn("items", summary)
+            self.assertNotIn(private_body_marker, stdout + stderr)
+            self.assertNotIn("PRIVATE PRIOR PARTIAL MUST STAY UNREAD", stdout + stderr)
+            self.assertNotIn(str(archive_root), stdout + stderr)
+            self.assertIn("catalog-path-metadata", stderr)
+            self.assertIn("catalog-session-snapshot", stderr)
+            self.assertIn("catalog-page", stderr)
+
+            self.assertTrue(output_path.is_file())
+            records = [json.loads(line) for line in output_path.read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(summary["output"]["bytes_written"], output_path.stat().st_size)
+            self.assertEqual(summary["output"]["line_count"], len(records))
+            self.assertEqual(records[0]["record_type"], "catalog_pass_header")
+            self.assertEqual(records[-1]["record_type"], "catalog_pass_footer")
+            page_records = [record for record in records if record.get("record_type") == "catalog_page"]
+            self.assertEqual(len(page_records), len(zettel_paths))
+            self.assertEqual(page_records[0]["result"]["response_profile"], "full")
+            self.assertTrue(
+                all(record["result"]["response_profile"] == "continuation" for record in page_records[1:])
+            )
+            collected = [
+                item["id"]
+                for record in page_records
+                for item in record["result"].get("items", [])
+            ]
+            self.assertEqual(len(collected), len(zettel_paths))
+            self.assertEqual(len(set(collected)), len(zettel_paths))
+            self.assertTrue(records[-1]["coverage"]["archive_wide_coverage_claim_ready"])
+            self.assertTrue(records[-1]["session_consistency"]["completion_revalidation_performed"])
+            self.assertNotIn(private_body_marker, output_path.read_text(encoding="utf-8"))
+            self.assertEqual(preexisting_partial.read_bytes(), preexisting_partial_bytes)
+            self.assertEqual(list(output_path.parent.glob(".*.partial")), [preexisting_partial])
+
+    def test_zet_catalog_pass_discards_partial_when_final_snapshot_revalidation_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            zettel_paths = sorted((archive_root / "zettels").glob("*.md"))
+            self.assertGreater(len(zettel_paths), 1)
+            output_relative = ".wom-scratch/diagnostics/changed-pass.jsonl"
+            real_catalog = archive_services.zet_catalog
+            call_count = 0
+
+            def catalog_then_change(*args: Any, **kwargs: Any) -> dict[str, Any]:
+                nonlocal call_count
+                result = real_catalog(*args, **kwargs)
+                call_count += 1
+                if call_count == 1:
+                    text = zettel_paths[0].read_text(encoding="utf-8")
+                    zettel_paths[0].write_text(
+                        text.replace("title:", "title: Changed during pass ", 1),
+                        encoding="utf-8",
+                    )
+                return result
+
+            with patch.object(archive_services, "zet_catalog", side_effect=catalog_then_change):
+                code, stdout, stderr = self.run_cli_split(
+                    [
+                        "zet-catalog-pass",
+                        str(archive_root),
+                        "--projection",
+                        "reading",
+                        "--page-size",
+                        "1",
+                        "--output",
+                        output_relative,
+                        "--dry-run",
+                        "--progress",
+                        "--format",
+                        "json",
+                    ]
+                )
+
+            self.assertEqual(code, 1, stdout + stderr)
+            result = json.loads(stdout)
+            self.assertEqual(result["status"], "blocked")
+            self.assertIn("catalog_snapshot_changed", result["blockers"])
+            self.assertGreaterEqual(result["page_count"], 1)
+            self.assertGreater(result["attempted_page_count"], result["page_count"])
+            self.assertFalse(result["output"]["result_artifact_written"])
+            self.assertFalse(result["output"]["partial_temp_present_after_result"])
+            output_path = archive_root / output_relative
+            self.assertFalse(output_path.exists())
+            self.assertEqual(list(output_path.parent.glob(".*.partial")), [])
+            self.assertNotIn(str(archive_root), stdout + stderr)
+
+    def test_zet_catalog_pass_refuses_overwrite_wrong_extension_and_output_cap(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            diagnostics_root = archive_root / ".wom-scratch" / "diagnostics"
+            diagnostics_root.mkdir(parents=True, exist_ok=True)
+
+            no_dry_run_relative = ".wom-scratch/diagnostics/no-dry-run.jsonl"
+            no_dry_run_code, no_dry_run_stdout, no_dry_run_stderr = self.run_cli_split(
+                [
+                    "zet-catalog-pass",
+                    str(archive_root),
+                    "--output",
+                    no_dry_run_relative,
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(no_dry_run_code, 1, no_dry_run_stdout + no_dry_run_stderr)
+            self.assertIn("requires --dry-run", no_dry_run_stderr)
+            self.assertFalse((archive_root / no_dry_run_relative).exists())
+
+            private_missing_root = Path(tmp) / "PRIVATE_MISSING_CATALOG_PASS_ARCHIVE"
+            missing_code, missing_stdout, missing_stderr = self.run_cli_split(
+                [
+                    "zet-catalog-pass",
+                    str(private_missing_root),
+                    "--output",
+                    ".wom-scratch/diagnostics/missing.jsonl",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(missing_code, 1, missing_stdout + missing_stderr)
+            self.assertNotIn("PRIVATE_MISSING_CATALOG_PASS_ARCHIVE", missing_stdout + missing_stderr)
+            self.assertNotIn(str(private_missing_root), missing_stdout + missing_stderr)
+
+            existing_relative = ".wom-scratch/diagnostics/existing.jsonl"
+            existing_path = archive_root / existing_relative
+            existing_bytes = b"PRIVATE EXISTING CATALOG PASS\n"
+            existing_path.write_bytes(existing_bytes)
+
+            overwrite_code, overwrite_stdout, overwrite_stderr = self.run_cli_split(
+                [
+                    "zet-catalog-pass",
+                    str(archive_root),
+                    "--output",
+                    existing_relative,
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(overwrite_code, 1, overwrite_stdout + overwrite_stderr)
+            self.assertEqual(existing_path.read_bytes(), existing_bytes)
+            self.assertNotIn("PRIVATE EXISTING CATALOG PASS", overwrite_stdout + overwrite_stderr)
+
+            extension_code, extension_stdout, extension_stderr = self.run_cli_split(
+                [
+                    "zet-catalog-pass",
+                    str(archive_root),
+                    "--output",
+                    ".wom-scratch/diagnostics/not-jsonl.json",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(extension_code, 1, extension_stdout + extension_stderr)
+            self.assertIn(".jsonl", extension_stderr)
+
+            capped_relative = ".wom-scratch/diagnostics/capped.jsonl"
+            with patch.object(archive_cli, "ZET_CATALOG_PASS_MIB_BYTES", 1):
+                capped_code, capped_stdout, capped_stderr = self.run_cli_split(
+                    [
+                        "zet-catalog-pass",
+                        str(archive_root),
+                        "--max-output-mib",
+                        "1",
+                        "--output",
+                        capped_relative,
+                        "--dry-run",
+                        "--format",
+                        "json",
+                    ]
+                )
+            self.assertEqual(capped_code, 1, capped_stdout + capped_stderr)
+            capped = json.loads(capped_stdout)
+            self.assertEqual(capped["status"], "blocked")
+            self.assertTrue(any("max-output-mib" in item for item in capped["blockers"]))
+            self.assertFalse((archive_root / capped_relative).exists())
+            self.assertEqual(list(diagnostics_root.glob(".*.partial")), [])
 
     def test_zet_catalog_seeded_connection_walk_orders_nearby_nodes_first_without_dropping_components(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

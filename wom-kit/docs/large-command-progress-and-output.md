@@ -1,6 +1,6 @@
 # Large-Command Progress And Bounded Output
 
-Status: implemented in v0.3.214
+Status: implemented in v0.3.214; complete-only catalog JSONL in v0.3.216
 
 ## Purpose
 
@@ -94,3 +94,17 @@ No persistent catalog cache is introduced in v0.3.214. A future optimization
 must separately define private-data content, expiry, invalidation, crash
 cleanup, snapshot revalidation, and ownership before it can persist catalog
 state. Progress is visibility, not a performance-completion claim.
+
+## v0.3.216 One-Process Catalog Output
+
+`zet-catalog-pass` addresses repeated CLI scans without persisting a cache. It
+runs all strict pages inside one process, keeps intermediate catalog state only
+in memory, and revalidates local state before a multi-page completion.
+
+Its required output is a new private `.jsonl` below
+`.wom-scratch/diagnostics/`. The final path is published only after completion;
+handled failures remove the invocation's partial. `--max-output-mib` bounds
+disk growth. A forced termination can leave a hidden private partial, which
+later runs count but never read or auto-delete. The JSONL must not be committed
+and should be read incrementally then deleted. See
+[zet Catalog One-Process Pass](zet-catalog-one-process-pass.md).

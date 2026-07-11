@@ -73,6 +73,12 @@ This cache:
 CLI invocations live-verify each page because separate processes do not share
 the MCP session cache.
 
+Since v0.3.216, terminal hosts that intend to complete the full chain can use
+`zet-catalog-pass`. It applies the same process-memory snapshot and completion
+revalidation in one CLI invocation, then publishes a private scratch JSONL.
+This does not create a persistent cache: ordinary separate CLI page calls still
+live-verify independently, and the pass memory disappears with its process.
+
 ## Reproducible Benchmark
 
 The benchmark creates only a temporary fake archive:

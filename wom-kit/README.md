@@ -140,6 +140,7 @@ docs/imap-mailbox-material-capture-approval-plan.md
 docs/imap-mailbox-material-capture-approval-audit.md
 docs/version-truth-source.md
 docs/project-version-update.md
+docs/zet-catalog-one-process-pass.md
 docs/runtime-canonical-entrypoints.md
 docs/operational-context.md
 docs/connected-accounts.md
@@ -540,6 +541,9 @@ list-zettels
 
 zet-catalog --dry-run
   Enumerate every local zet node's available compact frontmatter abstract state and complete edge projection in deterministic pages. `--projection reading --coverage-mode strict` gives compact checksum-chained node coverage. It measures items, compact service-result, and response-envelope cost; optional `--response-envelope-reserve-tokens` partitions a requested total without changing the old items-only default. Keep cursor zero full, then optionally use `--response-profile continuation` to omit repeated scope diagnostics while retaining items, readiness, snapshot, token, and chain evidence. Optional verified-seed order remains exhaustive, and opt-in `routed_reading` adds each item's seed/tie/component reason at a higher token cost. Separate signals report node coverage, first-read availability, and unique-id follow-up, while strict chain hashes distinguish duplicate-id file entries without returning paths. `--progress` reports content-free scan counts and heartbeat on stderr; scratch-scoped `--output` can keep the full JSON off stdout. It ranks nothing, writes no map/state, reads no body, and requires no generated index. A new CLI process still performs its own live scan.
+
+zet-catalog-pass --dry-run --output .wom-scratch/diagnostics/<new-name>.jsonl
+  Complete the same strict continuation chain in one CLI process. It parses frontmatter on the first page, reuses only ephemeral process memory for intermediate pages, then revalidates local state before completion. It publishes one private header/pages/footer JSONL only after success, refuses overwrite, removes its new partial on handled failure, bounds output with `--max-output-mib`, and prints no items to stdout. Forced termination may leave a hidden private partial; later runs count but never read or auto-delete it. The file is not a record or receipt: read it incrementally, never commit it, and delete it after use.
 
 read-zettel
   Read one zettel by id or archive-relative path. Use `--section overview` for the compact first read; MCP `read_zettel` accepts the same section values while keeping `body` as its compatibility default.

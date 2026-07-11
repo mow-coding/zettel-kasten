@@ -242,6 +242,7 @@ Onboarding and setup plans:
 - [View Recommendation Plan](view-recommendation-plan.md)
 - [Version Truth Source](version-truth-source.md)
 - [Project Version Update](project-version-update.md)
+- [zet Catalog One-Process Pass](zet-catalog-one-process-pass.md)
 - [Runtime Canonical Entry Points](runtime-canonical-entrypoints.md)
 - [Operational Context](operational-context.md)
 - [ZET Publication Surface Baseline](zet-publication-surface-baseline.md)

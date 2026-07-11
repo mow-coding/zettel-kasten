@@ -6,6 +6,8 @@ Commands:
           Print the running WOM-kit version and optional project pin status.
   project-version-update
           Preview or approve one verified project source-mirror and version-pin update.
+  zet-catalog-pass
+          Complete one strict catalog pass in one process and publish one private scratch JSONL.
   capabilities
           Print an agent-facing manifest of executable CLI commands and release identity.
   operator-feedback-plan
@@ -314,6 +316,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import shutil
 import sqlite3
 import subprocess
@@ -344,6 +347,9 @@ except ImportError:  # pragma: no cover - exercised only when dependency is abse
 KIT_ROOT = Path(__file__).resolve().parents[2]
 TEMPLATES_ROOT = KIT_ROOT / "templates"
 KIT_ZETTEL_KASTEN_ROOT = KIT_ROOT / "zettel-kasten"
+ZET_CATALOG_PASS_DEFAULT_MAX_OUTPUT_MIB = 256
+ZET_CATALOG_PASS_MAX_OUTPUT_MIB = 2048
+ZET_CATALOG_PASS_MIB_BYTES = 1024 * 1024
 
 REQUIRED_ARCHIVE_FILES = [
     "AGENTS.md",
@@ -8359,6 +8365,63 @@ def command_zet_catalog(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 1
 
 
+def command_zet_catalog_pass(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("zet-catalog-pass requires --dry-run; only its explicit private scratch output may be written.", file=sys.stderr)
+        return 1
+    reporter = CommandProgressReporter(bool(getattr(args, "progress", False)), label="zet-catalog-pass")
+    try:
+        result = write_zet_catalog_pass_output_file(
+            str(args.output),
+            Path(args.archive_root),
+            status=args.status,
+            projection=args.projection,
+            order_mode=args.order_mode,
+            start_zettel_ids=args.start_zettel_id,
+            page_size=args.page_size,
+            max_estimated_tokens=args.max_estimated_tokens,
+            response_envelope_reserve_tokens=args.response_envelope_reserve_tokens,
+            max_output_mib=args.max_output_mib,
+            progress_callback=reporter.progress,
+        )
+    except archive_services.ArchiveServiceError:
+        print("zet-catalog-pass could not open a valid archive root or catalog scope.", file=sys.stderr)
+        return 1
+    except (ArchivePathError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    except OSError:
+        print("zet-catalog-pass failed before a privacy-safe result could be produced.", file=sys.stderr)
+        return 1
+    finally:
+        reporter.close()
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        coverage = result.get("coverage") if isinstance(result.get("coverage"), dict) else {}
+        output = result.get("output") if isinstance(result.get("output"), dict) else {}
+        print(f"WOM zet catalog pass: {result.get('status') or 'unknown'}")
+        print(
+            "Coverage: "
+            f"{coverage.get('covered_count', 0)} / {coverage.get('total_count', 0)} "
+            f"across {result.get('page_count', 0)} page(s)"
+        )
+        print(f"Complete output written: {'yes' if output.get('result_artifact_written') else 'no'}")
+        if output.get("result_artifact_written"):
+            print(f"Private scratch output: {output.get('path')}")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+        print("Archive records written: none")
+    return 0 if result.get("ok") else 1
+
+
 def command_status_board(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print("status-board is read-only and requires --dry-run.", file=sys.stderr)
@@ -14147,6 +14210,403 @@ def write_command_result_output_file(
     return metadata
 
 
+def write_zet_catalog_pass_output_file(
+    path_arg: str,
+    archive_root: Path,
+    *,
+    status: str,
+    projection: str,
+    order_mode: str,
+    start_zettel_ids: list[str],
+    page_size: int,
+    max_estimated_tokens: int | None,
+    response_envelope_reserve_tokens: int,
+    max_output_mib: int,
+    progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
+) -> dict[str, Any]:
+    root = archive_services.require_existing_archive_root(archive_root)
+    if max_output_mib < 1 or max_output_mib > ZET_CATALOG_PASS_MAX_OUTPUT_MIB:
+        raise ValueError(
+            f"--max-output-mib must be between 1 and {ZET_CATALOG_PASS_MAX_OUTPUT_MIB}."
+        )
+    normalized = path_arg.replace("\\", "/").strip()
+    required_prefix = ".wom-scratch/diagnostics/"
+    if not normalized.startswith(required_prefix):
+        raise ValueError(f"--output must be under {required_prefix}")
+    output_path = resolve_archive_relative_path(root, normalized)
+    if output_path.suffix.lower() != ".jsonl":
+        raise ValueError("zet-catalog-pass --output must use a .jsonl filename.")
+    if output_path.exists() or output_path.is_symlink():
+        raise ValueError("zet-catalog-pass refuses to overwrite an existing output file.")
+
+    output_parent_existed_before = output_path.parent.exists()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    partial_name_prefix = f".{output_path.name}."
+    preexisting_partial_count = sum(
+        1
+        for candidate in output_path.parent.iterdir()
+        if candidate.name.startswith(partial_name_prefix) and candidate.name.endswith(".partial")
+    )
+    max_output_bytes = max_output_mib * ZET_CATALOG_PASS_MIB_BYTES
+    descriptor: int | None = None
+    partial_path: Path | None = None
+    for _ in range(8):
+        candidate = output_path.with_name(
+            f".{output_path.name}.{secrets.token_hex(8)}.partial"
+        )
+        try:
+            descriptor = os.open(candidate, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            partial_path = candidate
+            break
+        except FileExistsError:
+            continue
+    if descriptor is None or partial_path is None:
+        raise OSError("could_not_reserve_catalog_pass_partial")
+
+    output_display = display_output_path(output_path, root)
+    handle = os.fdopen(descriptor, "wb")
+    descriptor = None
+    published = False
+    partial_present_after_result = False
+    output_bytes = 0
+    output_line_count = 0
+    page_count = 0
+    attempted_page_count = 0
+    total_count = 0
+    covered_count = 0
+    snapshot_id: str | None = None
+    continuation_token: str | None = None
+    cursor = 0
+    first_result: dict[str, Any] | None = None
+    final_result: dict[str, Any] | None = None
+    warnings: list[str] = []
+    blockers: list[str] = []
+    item_cache: dict[str, dict[str, Any]] = {}
+    if preexisting_partial_count:
+        warnings.append(
+            f"Found {preexisting_partial_count} pre-existing hidden catalog-pass partial(s); they were not read or deleted."
+        )
+
+    def write_record(record: dict[str, Any]) -> bool:
+        nonlocal output_bytes, output_line_count
+        encoded = (
+            json.dumps(record, ensure_ascii=False, separators=(",", ":"), default=str) + "\n"
+        ).encode("utf-8")
+        if output_bytes + len(encoded) > max_output_bytes:
+            return False
+        handle.write(encoded)
+        output_bytes += len(encoded)
+        output_line_count += 1
+        return True
+
+    def close_handle() -> None:
+        nonlocal handle
+        if handle is not None and not handle.closed:
+            handle.close()
+
+    def remove_partial() -> bool:
+        nonlocal partial_present_after_result
+        if partial_path is None or not partial_path.exists():
+            partial_present_after_result = False
+            return True
+        try:
+            partial_path.unlink()
+            partial_present_after_result = False
+            return True
+        except OSError:
+            partial_present_after_result = True
+            return False
+
+    def summary_payload(status_value: str) -> dict[str, Any]:
+        successful = status_value == "complete"
+        first_scan = (
+            first_result.get("scan")
+            if isinstance(first_result, dict) and isinstance(first_result.get("scan"), dict)
+            else {}
+        )
+        first_abstract_coverage = (
+            first_result.get("abstract_coverage")
+            if isinstance(first_result, dict)
+            and isinstance(first_result.get("abstract_coverage"), dict)
+            else {}
+        )
+        final_coverage = (
+            final_result.get("coverage")
+            if isinstance(final_result, dict) and isinstance(final_result.get("coverage"), dict)
+            else {}
+        )
+        final_session = (
+            final_result.get("session_consistency")
+            if isinstance(final_result, dict)
+            and isinstance(final_result.get("session_consistency"), dict)
+            else {}
+        )
+        output_metadata = {
+            "path": output_display,
+            "path_kind": "archive_relative_private_scratch",
+            "relative_to": "archive_root",
+            "format": "jsonl_header_pages_footer",
+            "contains": "private_full_first_page_and_compact_strict_catalog_pages",
+            "contains_private_catalog_metadata": True,
+            "contains_zettel_body_text": False,
+            "result_artifact_written": successful,
+            "complete_only_published": True,
+            "existing_destination_overwritten": False,
+            "bytes_written": output_bytes if successful else 0,
+            "line_count": output_line_count if successful else 0,
+            "max_output_bytes": max_output_bytes,
+            "archive_record_written": False,
+            "receipt_written": False,
+            "tracking_policy": "local_private_scratch_not_archive_record_do_not_commit_delete_after_use",
+            "partial_temp_present_after_result": partial_present_after_result,
+            "preexisting_partial_count": preexisting_partial_count,
+            "preexisting_partials_read": False,
+            "preexisting_partials_deleted": False,
+            "forced_termination_partial_temp_may_remain": True,
+            "absolute_path_echoed": False,
+        }
+        return {
+            "ok": successful,
+            "dry_run": True,
+            "schema": "wom-kit/zet-catalog-pass/v0.1",
+            "lifecycle_action": "zet_catalog_pass",
+            "status": status_value,
+            "archive_id": first_result.get("archive_id") if isinstance(first_result, dict) else None,
+            "status_filter": status,
+            "projection": projection,
+            "order_mode": order_mode,
+            "page_count": page_count,
+            "attempted_page_count": attempted_page_count,
+            "coverage": {
+                "total_count": total_count,
+                "covered_count": covered_count,
+                "complete": successful and bool(final_coverage.get("complete")),
+                "archive_wide_coverage_claim_ready": successful
+                and bool(final_coverage.get("archive_wide_coverage_claim_ready")),
+                "archive_wide_abstract_reading_claim_ready": successful
+                and bool(final_coverage.get("archive_wide_abstract_reading_claim_ready")),
+                "archive_wide_followup_resolution_ready": successful
+                and bool(final_coverage.get("archive_wide_followup_resolution_ready")),
+                "first_read_gap_count": first_abstract_coverage.get("first_read_gap_count"),
+            },
+            "snapshot": {
+                "id": snapshot_id,
+                "body_content_hashed": False,
+            },
+            "session": {
+                "mode": "one_process_ephemeral_snapshot_with_completion_revalidation",
+                "initial_frontmatter_files_scanned": first_scan.get("frontmatter_files_scanned", 0),
+                "initial_cached_items_reused": first_scan.get("cached_items_reused", 0),
+                "intermediate_pages_reused_process_memory": page_count > 1,
+                "completion_revalidation_required": page_count > 1,
+                "completion_revalidation_performed": bool(
+                    final_session.get("completion_revalidation_performed")
+                ),
+                "cache_persisted": False,
+                "mcp_cache_used": False,
+                "local_files_remain_canonical": True,
+            },
+            "output": output_metadata,
+            "write_boundary": {
+                "private_scratch_output_written": successful,
+                "scratch_parent_directory_created": not output_parent_existed_before,
+                "archive_zets_written": False,
+                "archive_objets_written": False,
+                "archive_manifests_written": False,
+                "archive_receipts_written": False,
+                "provider_state_written": False,
+            },
+            "files_written": [output_display] if successful else [],
+            "privacy_guards": {
+                "zettel_body_text_read": False,
+                "object_file_bytes_read": False,
+                "provider_api_called": False,
+                "secrets_read": False,
+                "absolute_local_paths_echoed": False,
+                "stdout_items_echoed": False,
+                "persistent_catalog_cache_written": False,
+            },
+            "blockers": archive_services.unique_preserve_order(blockers),
+            "warnings": archive_services.unique_preserve_order(warnings),
+            "next_safe_actions": (
+                [
+                    "Read the JSONL catalog_page records incrementally; do not load the whole private file into one model response.",
+                    "Delete the private scratch JSONL after the host has consumed or reviewed it.",
+                ]
+                if successful
+                else [
+                    "Resolve the blocker and restart zet-catalog-pass from the beginning.",
+                    "If partial_temp_present_after_result is true, remove the hidden partial only after confirming no pass process is running.",
+                ]
+            ),
+        }
+
+    try:
+        while True:
+            attempted_page_count += 1
+            response_profile = "full" if cursor == 0 else "continuation"
+            result = archive_services.zet_catalog(
+                root,
+                status=status,
+                projection=projection,
+                coverage_mode="strict",
+                order_mode=order_mode,
+                start_zettel_ids=start_zettel_ids,
+                cursor=cursor,
+                page_size=page_size,
+                max_estimated_tokens=max_estimated_tokens,
+                response_envelope_reserve_tokens=response_envelope_reserve_tokens,
+                response_profile=response_profile,
+                expected_snapshot_id=snapshot_id,
+                continuation_token=continuation_token,
+                dry_run=True,
+                item_cache=item_cache,
+                materialize_session_snapshot=True,
+                progress_callback=progress_callback,
+            )
+            final_result = result
+            warnings.extend(str(item) for item in result.get("warnings", []) if isinstance(item, str))
+            if first_result is None:
+                first_result = result
+                snapshot = result.get("snapshot") if isinstance(result.get("snapshot"), dict) else {}
+                snapshot_id = snapshot.get("id") if isinstance(snapshot.get("id"), str) else None
+                coverage = result.get("coverage") if isinstance(result.get("coverage"), dict) else {}
+                total_count = int(coverage.get("total_count") or 0)
+            if not result.get("ok"):
+                blockers.extend(str(item) for item in result.get("blockers", []) if isinstance(item, str))
+                break
+
+            coverage = result.get("coverage") if isinstance(result.get("coverage"), dict) else {}
+            if page_count == 0:
+                header = {
+                    "schema": "wom-kit/zet-catalog-pass/v0.1",
+                    "record_type": "catalog_pass_header",
+                    "archive_id": result.get("archive_id"),
+                    "catalog_schema": result.get("schema"),
+                    "status_filter": status,
+                    "projection": projection,
+                    "coverage_mode": "strict",
+                    "order_mode": order_mode,
+                    "seed_zettel_id_count": len(start_zettel_ids),
+                    "seed_zettel_ids_sha256": archive_services.sha256_json_value(start_zettel_ids),
+                    "page_size": page_size,
+                    "max_estimated_tokens": max_estimated_tokens,
+                    "response_envelope_reserve_tokens": response_envelope_reserve_tokens,
+                    "first_page_full": True,
+                    "later_pages_compact": True,
+                    "process_local_cache_only": True,
+                    "complete_output_published_only_after_final_revalidation": True,
+                    "contains_private_catalog_metadata": True,
+                    "contains_zettel_body_text": False,
+                }
+                if not write_record(header):
+                    blockers.append("The catalog pass exceeded --max-output-mib before a complete output could be published.")
+                    break
+
+            page_record = {
+                "schema": "wom-kit/zet-catalog-pass-page/v0.1",
+                "record_type": "catalog_page",
+                "page_index": page_count,
+                "result": result,
+            }
+            if not write_record(page_record):
+                blockers.append("The catalog pass exceeded --max-output-mib before a complete output could be published.")
+                break
+            page_count += 1
+            covered_count = int(coverage.get("covered_count") or covered_count)
+            if progress_callback is not None:
+                progress_callback("catalog-pass-pages", "written", page_count, None)
+            if coverage.get("complete"):
+                break
+            next_cursor = coverage.get("next_cursor")
+            next_token = coverage.get("continuation_token")
+            if (
+                not isinstance(next_cursor, int)
+                or next_cursor <= cursor
+                or not isinstance(next_token, str)
+                or not next_token
+            ):
+                blockers.append("The strict catalog continuation did not make safe forward progress.")
+                break
+            cursor = next_cursor
+            continuation_token = next_token
+
+        if not blockers:
+            final_coverage = (
+                final_result.get("coverage")
+                if isinstance(final_result, dict) and isinstance(final_result.get("coverage"), dict)
+                else {}
+            )
+            final_session = (
+                final_result.get("session_consistency")
+                if isinstance(final_result, dict)
+                and isinstance(final_result.get("session_consistency"), dict)
+                else {}
+            )
+            if not final_coverage.get("complete") or not final_coverage.get("archive_wide_coverage_claim_ready"):
+                blockers.append("The strict catalog pass ended without archive-wide coverage proof.")
+            if page_count > 1 and not final_session.get("completion_revalidation_performed"):
+                blockers.append("The multi-page catalog pass ended without final local snapshot revalidation.")
+
+        if blockers:
+            close_handle()
+            if not remove_partial():
+                blockers.append("A private catalog-pass partial could not be removed after failure.")
+                return summary_payload("blocked_cleanup_incomplete")
+            output_bytes = 0
+            output_line_count = 0
+            return summary_payload("blocked")
+
+        footer = {
+            "schema": "wom-kit/zet-catalog-pass/v0.1",
+            "record_type": "catalog_pass_footer",
+            "status": "complete",
+            "page_count": page_count,
+            "coverage": final_result.get("coverage") if isinstance(final_result, dict) else {},
+            "snapshot": final_result.get("snapshot") if isinstance(final_result, dict) else {},
+            "session_consistency": (
+                final_result.get("session_consistency") if isinstance(final_result, dict) else {}
+            ),
+            "warnings": archive_services.unique_preserve_order(warnings),
+            "private_scratch_delete_after_use": True,
+        }
+        if not write_record(footer):
+            blockers.append("The catalog pass exceeded --max-output-mib before its completion footer could be published.")
+            close_handle()
+            if not remove_partial():
+                blockers.append("A private catalog-pass partial could not be removed after failure.")
+                return summary_payload("blocked_cleanup_incomplete")
+            output_bytes = 0
+            output_line_count = 0
+            return summary_payload("blocked")
+
+        handle.flush()
+        os.fsync(handle.fileno())
+        close_handle()
+        if os.name == "nt":
+            partial_path.rename(output_path)
+            published = True
+            partial_path = None
+        else:
+            os.link(partial_path, output_path)
+            published = True
+            try:
+                partial_path.unlink()
+                partial_path = None
+            except OSError:
+                partial_present_after_result = True
+                warnings.append("A hidden private partial remains beside the complete output and should be removed after review.")
+        if not output_path.is_file():
+            raise OSError("catalog_pass_output_publication_not_verified")
+        return summary_payload("complete")
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        close_handle()
+        if not published:
+            remove_partial()
+
+
 def write_doctor_output_file(path_arg: str, archive_root: Path, diagnostics: list[Diagnostic]) -> str:
     output_path = resolve_archive_relative_path(archive_root, path_arg)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -16485,6 +16945,81 @@ def build_parser() -> argparse.ArgumentParser:
     )
     zet_catalog.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     zet_catalog.set_defaults(func=command_zet_catalog)
+
+    zet_catalog_pass = subcommands.add_parser(
+        "zet-catalog-pass",
+        aliases=["catalog-pass", "zet-catalog-drain"],
+        help="Complete one strict zet catalog pass in one process and publish one private scratch JSONL.",
+    )
+    zet_catalog_pass.add_argument("archive_root", help="Archive root to inspect.")
+    zet_catalog_pass.add_argument(
+        "--status",
+        choices=["all", "draft", "canonical"],
+        default="canonical",
+        help="Zet status to enumerate.",
+    )
+    zet_catalog_pass.add_argument(
+        "--projection",
+        choices=sorted(archive_services.ZET_CATALOG_PROJECTIONS),
+        default="reading",
+        help="Catalog item projection; reading is the compact default.",
+    )
+    zet_catalog_pass.add_argument(
+        "--order",
+        dest="order_mode",
+        choices=sorted(archive_services.ZET_CATALOG_ORDER_MODES),
+        default="path",
+        help="Path order or an exhaustive connection walk beginning at verified seed zet ids.",
+    )
+    zet_catalog_pass.add_argument(
+        "--start-zettel-id",
+        action="append",
+        default=[],
+        help=f"Verified seed zet id for seeded_connection_walk; repeat up to {archive_services.ZET_CATALOG_MAX_SEED_IDS} times.",
+    )
+    zet_catalog_pass.add_argument(
+        "--page-size",
+        type=int,
+        default=200,
+        help=f"Maximum items per internal page (1-{archive_services.ZET_CATALOG_MAX_PAGE_SIZE}).",
+    )
+    zet_catalog_pass.add_argument(
+        "--max-estimated-tokens",
+        type=int,
+        help="Optional approximate items-only token budget for each internal page.",
+    )
+    zet_catalog_pass.add_argument(
+        "--response-envelope-reserve-tokens",
+        type=int,
+        default=0,
+        help="Optional tokens reserved from each page budget for its compact response envelope.",
+    )
+    zet_catalog_pass.add_argument(
+        "--max-output-mib",
+        type=int,
+        default=ZET_CATALOG_PASS_DEFAULT_MAX_OUTPUT_MIB,
+        help=(
+            "Maximum private JSONL size before fail-closed cleanup "
+            f"(1-{ZET_CATALOG_PASS_MAX_OUTPUT_MIB} MiB)."
+        ),
+    )
+    zet_catalog_pass.add_argument(
+        "--output",
+        required=True,
+        help="New .jsonl path under .wom-scratch/diagnostics/; existing files are never overwritten.",
+    )
+    zet_catalog_pass.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Required. The catalog is read-only; only the explicit private scratch JSONL may be written.",
+    )
+    zet_catalog_pass.add_argument(
+        "--progress",
+        action="store_true",
+        help="Stream content-free scan, page, final-revalidation, and 10-second heartbeat progress to stderr.",
+    )
+    zet_catalog_pass.add_argument("--format", choices=["text", "json"], default="json", help="Summary output format.")
+    zet_catalog_pass.set_defaults(func=command_zet_catalog_pass)
 
     status_board = subcommands.add_parser(
         "status-board",

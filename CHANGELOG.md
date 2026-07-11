@@ -6,6 +6,33 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.216 - 2026-07-11
+
+One-process strict catalog checkpoint. Additive; no archive migration.
+
+- **One command, one frontmatter scan.** New `zet-catalog-pass` CLI, with
+  `catalog-pass` and `zet-catalog-drain` aliases, runs the existing strict
+  catalog continuation chain to completion inside one process. The first page
+  is full; later pages are compact.
+- **Ephemeral reuse, local revalidation.** Intermediate pages reuse only
+  process memory. Before a multi-page pass completes, WOM-kit rechecks the
+  selected local file metadata and blocks with `catalog_snapshot_changed` if
+  the archive moved underneath the pass. No persistent catalog cache, map,
+  index, goal, or loop state is created.
+- **Complete-only private output.** The command requires a new
+  `.wom-scratch/diagnostics/*.jsonl` destination. It streams to an exclusive
+  hidden partial and publishes the final path only after strict coverage and
+  final revalidation succeed; handled failures remove the new partial and
+  never overwrite an existing destination.
+- **Bounded and honest lifecycle.** `--max-output-mib` fails closed before disk
+  growth exceeds the reviewed bound. A forced process termination can leave a
+  hidden private partial, which later runs count but never read or auto-delete.
+  The JSONL contains private titles/abstracts/ties, no zet bodies, and must not
+  be committed; hosts should read it incrementally and delete it after use.
+- **CLI boundary only.** Ordinary paged `zet-catalog` behavior is unchanged,
+  and MCP keeps its existing process-local session cache. No provider, secret,
+  objet byte, external database, or archive record is touched.
+
 ## v0.3.215 - 2026-07-11
 
 Project source-mirror and version-pin update checkpoint. Additive; no archive
