@@ -43,6 +43,13 @@ Before creating drafts, running mint checks, or asking for mint approval, then r
 archive runtime-context <archive-root> --format json
 ```
 
+For a compact entry map that also runs Doctor, use visible progress on a real
+archive:
+
+```bash
+archive ai-start-here <archive-root> --dry-run --progress --format json
+```
+
 If `archive` is not installed on PATH, run the repository entrypoint instead:
 
 ```bash
@@ -77,8 +84,13 @@ WOM supplies the local memory surface. Before a host claims archive-wide
 understanding, enumerate every canonical zet abstract:
 
 ```bash
-archive zet-catalog <archive-root> --status canonical --projection reading --coverage-mode strict --cursor 0 --dry-run --format json
+archive zet-catalog <archive-root> --status canonical --projection reading --coverage-mode strict --cursor 0 --dry-run --progress --format json
 ```
+
+Progress is content-free and goes to stderr. If the complete JSON should not
+fill stdout, add `--output .wom-scratch/diagnostics/<new-name>.json`; treat that
+file as private local scratch, never as a receipt or canonical record, and do
+not commit it. The command refuses to overwrite an existing output file.
 
 When `complete` is false, call the same command with the returned `next_cursor`,
 `--expected-snapshot-id <snapshot.id>`, and

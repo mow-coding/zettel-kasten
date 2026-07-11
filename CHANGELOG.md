@@ -6,6 +6,27 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.214 - 2026-07-11
+
+Large-command progress and bounded-result checkpoint. Additive; no archive
+migration.
+
+- **Shared liveness contract.** `ai-start-here`, `upgrade-check`, and CLI
+  `zet-catalog` accept opt-in `--progress`, emit immediate stage boundaries,
+  counted milestones where available, and a 10-second quiet-interval heartbeat
+  to stderr while keeping the final result on stdout.
+- **Content-free progress.** Progress strips paths, zet ids, titles, abstracts,
+  body text, refs, provider values, and secret values. Long Doctor work is
+  reduced to safe stage/count events instead of forwarding path-bearing trace
+  messages.
+- **Bounded full-result capture.** Optional `--output` writes one new JSON file
+  only below `.wom-scratch/diagnostics/`, refuses traversal, non-JSON names, and
+  overwrite, and prints a compact stdout summary. The artifact is private local
+  scratch, not a WOM record or receipt, and should not be committed.
+- **Catalog scan visibility.** CLI catalog reports path-metadata and frontmatter
+  scan counts. This does not add a persisted cache or solve the independent
+  process rescan cost; that privacy and lifecycle design remains separate.
+
 ## v0.3.213 - 2026-07-11
 
 Local-sovereignty and backup-authority checkpoint. Additive; no archive

@@ -83,6 +83,28 @@ project folder 작업에서는 temporary intake staging이 archive of record가
 아니라는 점을 기억합니다. cleanup 전에 원본을 objet, source map, manifest,
 zet, receipt로 보존해야 합니다.
 
+## v0.3.214 장시간 명령 진행 표시와 제한된 결과 저장
+
+v0.3.214는 migration을 추가하지 않고 기존 zet도 다시 쓰지 않습니다.
+오래 걸리는 `ai-start-here`, `upgrade-check`, CLI `zet-catalog`에 선택형
+진행 표시를 사용할 수 있습니다.
+
+```text
+archive ai-start-here <archive-root> --dry-run --progress --format json
+archive upgrade-check <archive-root> --dry-run --progress --format json
+archive zet-catalog <archive-root> --coverage-mode strict --cursor 0 --dry-run --progress --format json
+```
+
+진행 표시는 stderr로만 나가고 최종 결과는 stdout에 남습니다. 선택형
+`--output .wom-scratch/diagnostics/<name>.json`은 전체 JSON 결과를 저장하고
+stdout에는 작은 요약만 보여줍니다. 이 파일은 아카이브 기록이나 영수증이
+아닌 비공개 임시 파일입니다. 기존 파일을 덮어쓰지 않으며 Git에 올리지
+않아야 합니다.
+
+catalog 진행 표시는 실제 재검사를 보이게 할 뿐, 새 CLI 프로세스가 수행하는
+전체 scan을 없애거나 영구 cache를 만들지 않습니다. 두 option을 생략한 기존
+호출은 이전과 같습니다.
+
 ## v0.3.213 Local sovereignty authority
 
 v0.3.213은 migration이나 기존 zet 재작성을 하지 않습니다. read-only

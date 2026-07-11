@@ -7,7 +7,7 @@ Local reviewed WOM state is canonical. GitHub backs up metadata/version history,
 
 1. Read `archive.yml`.
 2. Read relevant `views/*.yml`.
-3. For archive-wide understanding, run `archive zet-catalog <archive-root> --status canonical --projection reading --coverage-mode strict --cursor 0 --dry-run --format json`.
+3. For archive-wide understanding, run `archive zet-catalog <archive-root> --status canonical --projection reading --coverage-mode strict --cursor 0 --dry-run --progress --format json` so a long live scan remains visibly active.
 4. Follow every `next_cursor` with the same snapshot id and continuation token until `archive_wide_coverage_claim_ready: true`; this proves node visitation only, and a changed catalog restarts at cursor 0.
 5. Check `archive_wide_abstract_reading_claim_ready` before saying every required abstract was available and read. Report `abstract_coverage` gaps without inventing or auto-writing replacements.
 6. Check `archive_wide_followup_resolution_ready` before relying on id-only body reads; duplicate or unreadable ids require repair or an explicitly reviewed path.

@@ -91,6 +91,26 @@ For project-folder work, remember that temporary intake staging is not the
 archive of record. Preserve originals as objets, source maps, manifests, zets,
 and receipts before any cleanup.
 
+## v0.3.214 Large-Command Progress And Bounded Output
+
+v0.3.214 adds no migration and rewrites no zet. Long `ai-start-here`,
+`upgrade-check`, and CLI `zet-catalog` runs can opt into content-free liveness:
+
+```text
+archive ai-start-here <archive-root> --dry-run --progress --format json
+archive upgrade-check <archive-root> --dry-run --progress --format json
+archive zet-catalog <archive-root> --coverage-mode strict --cursor 0 --dry-run --progress --format json
+```
+
+Progress goes only to stderr. The final result remains on stdout. Optional
+`--output .wom-scratch/diagnostics/<name>.json` stores the full JSON result and
+prints only a compact stdout summary. It creates a private scratch file, not an
+archive record or receipt; it refuses overwrite and should not be committed.
+
+Catalog progress makes each live scan visible but does not persist a cache or
+remove the full scan performed by a new CLI process. Existing archives and
+callers that omit both options behave as before.
+
 ## v0.3.213 Local Sovereignty Authority
 
 v0.3.213 adds no migration and rewrites no zet. It adds a read-only
