@@ -6,6 +6,33 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.219 - 2026-07-11
+
+Approval-gated transactional zet abstract revision checkpoint. Additive; no
+archive migration.
+
+- **Explicit human authority.** New `zet-abstract-backfill-write` CLI, with
+  `abstract-backfill-write` alias, requires exactly one of preview or approval.
+  A new write also requires the reviewed proposal SHA-256, a safe reviewer id,
+  and `--affirm-abstracts-reviewed`.
+- **Exact revalidation.** Before mutation, WOM-kit reruns the v0.3.218 plan,
+  re-reads the proposal, and revalidates every canonical file against its
+  expected SHA-256. Per-file and per-batch canonical byte limits bound rollback
+  memory.
+- **Whole-batch runtime rollback.** The writer adds only
+  `frontmatter.abstract`, preserves BOM/newline/body bytes and other parsed
+  frontmatter semantics, verifies every result, and restores every attempted
+  canonical file byte-for-byte if an item or receipt write fails.
+- **Durable revision evidence.** One deterministic receipt records proposal and
+  plan hashes, human authority, private target ids/paths, and before/after/body/
+  abstract hashes without storing body or abstract text. A matching re-run is a
+  verified, no-write `already_applied` result.
+- **Private and honest boundary.** Public output omits reviewer, zet ids/paths,
+  bodies, abstracts, proposal filename, and local absolute paths. A private
+  short-lived lock prevents the same proposal from concurrent WOM writes.
+  Runtime exceptions roll back; forced process or machine termination has no
+  crash-recovery journal and remains a documented residual risk.
+
 ## v0.3.218 - 2026-07-11
 
 Reviewed abstract backfill planning checkpoint. Additive; no archive migration.

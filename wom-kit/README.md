@@ -552,7 +552,10 @@ zet-catalog-pass-cleanup --input <scratch.jsonl> --expected-sha256 <sha256> --dr
   Preview or approve deletion of one complete matching private scratch JSONL after consumption. It never deletes hidden partials or archive records, writes no receipt, and echoes no reviewer value.
 
 zet-abstract-backfill-plan --proposal .wom-scratch/abstract-backfill/<private>.jsonl --dry-run
-  Validate bounded missing-abstract proposals against exact current canonical file bytes. It checks the shipped row schema, identity/status, hash, first-read absence, safe abstract shape, and a byte-preserving one-field insertion. It returns only row indexes, counts, and hashes; writes nothing and echoes no ids, paths, bodies, abstracts, or proposal filename. Approved revision is not implemented in v0.3.218.
+  Validate bounded missing-abstract proposals against exact current canonical file bytes. It checks the shipped row schema, identity/status, hash, first-read absence, safe abstract shape, and a byte-preserving one-field insertion. It returns only row indexes, counts, and hashes; writes nothing and echoes no ids, paths, bodies, abstracts, or proposal filename.
+
+zet-abstract-backfill-write --proposal .wom-scratch/abstract-backfill/<private>.jsonl --expected-proposal-sha256 <sha256> --dry-run|--approve
+  Preview first. A new approved write also requires `--reviewed-by` and `--affirm-abstracts-reviewed`. It reruns the plan, revalidates every exact canonical hash, adds only `frontmatter.abstract`, and writes one hash-evidence receipt. Any runtime item/receipt failure restores all attempted canonical bytes. A matching receipt makes retries no-write `already_applied`. Per-file and batch byte limits bound rollback memory; forced termination has no crash-recovery journal.
 
 read-zettel
   Read one zettel by id or archive-relative path. Use `--section overview` for the compact first read; MCP `read_zettel` accepts the same section values while keeping `body` as its compatibility default. Non-redacted results include exact canonical file SHA-256 and decoded returned-body SHA-256 so a private revision proposal can bind to the version actually read; redacted hashes are suppressed.

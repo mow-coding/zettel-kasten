@@ -51,6 +51,10 @@ that one canonical body, binds a private candidate to the exact file SHA-256,
 and validates it without writing. The catalog itself still never invents or
 auto-writes replacement text.
 
+Since v0.3.219, only the separate
+[`zet Abstract Backfill Write`](zet-abstract-backfill-write.md) can apply those
+candidates, and only after exact proposal binding plus explicit human review.
+
 ## Live Catalog
 
 ```powershell

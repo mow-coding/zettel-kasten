@@ -521,7 +521,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.218 pre-release",
+            "v0.3.219 pre-release",
             "[Version Truth Source](wom-kit/docs/version-truth-source.md)",
             "[Project Version Update](wom-kit/docs/project-version-update.md)",
             "read-only WOM-kit version truth-source checks",
@@ -710,7 +710,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "integrity.file_sha256",
             "archive zet-abstract-backfill-plan <archive-root>",
             "5,000 rows",
-            "does not implement the approved revision write",
+            "The v0.3.218 planner itself never writes",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, plan_text)
@@ -723,11 +723,10 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, schema_text)
         for phrase in (
-            "Status: v0.3.218 reviewed abstract backfill planning checkpoint",
-            "Version: v0.3.218, release candidate",
+            "Previous checkpoint: Status: v0.3.218 reviewed abstract backfill planning checkpoint",
             "zet abstract backfill plan",
             "ready_for_human_review",
-            "approval-gated transactional revision remains unimplemented",
+            "grants no write authority",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
@@ -753,6 +752,84 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                 self.assertIn(phrase, release_text)
         self.assertIn("[zet Abstract Backfill Plan](zet-abstract-backfill-plan.md)", public_map_text)
         self.assertIn("[zet 초록 보충 계획](zet-abstract-backfill-plan.md)", public_map_ko_text)
+
+    def test_abstract_backfill_write_docs_expose_human_authority_transaction_and_crash_boundary(self) -> None:
+        guide_text = (KIT_ROOT / "docs" / "zet-abstract-backfill-write.md").read_text(encoding="utf-8")
+        receipt_schema_text = (KIT_ROOT / "schemas" / "zet-abstract-backfill-receipt.schema.json").read_text(encoding="utf-8")
+        decision_text = (
+            KIT_ROOT / "docs" / "archive-infra-decision-log-2026-07-11-v03219-abstract-backfill-write.md"
+        ).read_text(encoding="utf-8")
+        release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.219.md").read_text(encoding="utf-8")
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        changelog_text = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+        readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        readme_ko_text = (REPO_ROOT / "README.ko.md").read_text(encoding="utf-8")
+        kit_readme_text = (KIT_ROOT / "README.md").read_text(encoding="utf-8")
+        upgrade_text = (REPO_ROOT / "UPGRADE.md").read_text(encoding="utf-8")
+        upgrade_ko_text = (REPO_ROOT / "UPGRADE.ko.md").read_text(encoding="utf-8")
+        public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
+        public_map_ko_text = (KIT_ROOT / "docs" / "public-documentation-map.ko.md").read_text(encoding="utf-8")
+        runtime_skill_text = (KIT_ROOT / "templates" / "ai-runtime" / "wom-archive" / "SKILL.md").read_text(encoding="utf-8")
+        for phrase in (
+            "Status: implemented as an approval-gated transactional write in v0.3.219",
+            "--expected-proposal-sha256 <proposal.sha256>",
+            "--affirm-abstracts-reviewed",
+            "one canonical zet: 16 MiB",
+            "one write batch:   256 MiB",
+            "Forced process termination",
+            "already_applied",
+            "stores no body text and no abstract text",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, guide_text)
+        for phrase in (
+            "wom-kit/zet-abstract-backfill-receipt/v0.1",
+            "all_proposed_abstracts_reviewed",
+            "before_file_sha256",
+            "after_file_sha256",
+            "abstract_text_stored_in_receipt",
+            "crash_recovery_journal_written",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, receipt_schema_text)
+        for phrase in (
+            "Status: v0.3.219 approval-gated transactional abstract revision checkpoint",
+            "Version: v0.3.219, release candidate",
+            "zet abstract backfill write",
+            "approval-gated write",
+            "forced termination or machine failure",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, matrix_text)
+        for text in (readme_text, readme_ko_text, kit_readme_text, upgrade_text, upgrade_ko_text, runtime_skill_text):
+            with self.subTest(document="operator-surface"):
+                self.assertIn("zet-abstract-backfill-write", text)
+        for text in (kit_readme_text, upgrade_text, upgrade_ko_text, runtime_skill_text):
+            with self.subTest(document="detailed-operator-surface"):
+                self.assertIn("--affirm-abstracts-reviewed", text)
+        for phrase in (
+            "v0.3.219 - 2026-07-11",
+            "Whole-batch runtime rollback",
+            "Durable revision evidence",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, changelog_text)
+        for phrase in (
+            "v0.3.219 - Approval-Gated Transactional Abstract Revision",
+            "Matching re-run is verified no-write",
+            "crash-recovery journal",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, release_text)
+        for phrase in (
+            "Keep planning and writing as separate commands",
+            "Snapshot exact canonical bytes in bounded memory",
+            "is not crash-safe",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, decision_text)
+        self.assertIn("[zet Abstract Backfill Write](zet-abstract-backfill-write.md)", public_map_text)
+        self.assertIn("[zet 초록 승인 후 쓰기](zet-abstract-backfill-write.md)", public_map_ko_text)
 
     def test_tiro_import_plan_doc_and_matrix_cover_read_only_meeting_manifest_contract(self) -> None:
         tiro_text = TIRO_IMPORT_PLAN_PATH.read_text(encoding="utf-8")

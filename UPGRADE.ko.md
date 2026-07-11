@@ -83,6 +83,44 @@ project folder 작업에서는 temporary intake staging이 archive of record가
 아니라는 점을 기억합니다. cleanup 전에 원본을 objet, source map, manifest,
 zet, receipt로 보존해야 합니다.
 
+## v0.3.219 승인 후 초록 보충 쓰기
+
+v0.3.219는 아카이브 migration을 요구하지 않습니다. 대신
+`zet-abstract-backfill-plan`을 통과하고 사람이 검토한 비공개 제안서만
+정본 zet에 반영하는 별도 쓰기 명령을 추가합니다. 계획이 green이어도
+저절로 쓰지는 않습니다.
+
+먼저 같은 제안서 SHA-256으로 실제 반영 내용을 미리 봅니다.
+
+```text
+archive zet-abstract-backfill-write <archive-root> --proposal .wom-scratch/abstract-backfill/<비공개-이름>.jsonl --expected-proposal-sha256 <proposal.sha256> --max-items 500 --dry-run --progress --format json
+```
+
+결과가 `ready_to_apply`인지 확인한 다음, 사람이 비공개 제안서의 모든 초록을
+직접 검토해야 합니다. 검토를 마친 뒤에만 같은 바이트를 명시적으로
+승인합니다.
+
+```text
+archive zet-abstract-backfill-write <archive-root> --proposal .wom-scratch/abstract-backfill/<비공개-이름>.jsonl --expected-proposal-sha256 <proposal.sha256> --max-items 500 --approve --reviewed-by person:<검수자> --affirm-abstracts-reviewed --progress --format json
+```
+
+이 명령은 쓰기 직전에 계획과 모든 정본 파일 해시를 다시 확인합니다.
+`frontmatter.abstract` 하나만 추가하고 BOM, 줄바꿈 방식, 본문 바이트,
+나머지 초록 데이터의 의미를 그대로 보존한 뒤
+`receipts/revisions/abstract-backfill/` 아래에 영수증 하나를 씁니다. 영수증은
+대상 아이디·경로와 수정 전·후·본문·초록 해시를 보관하지만 본문이나 초록
+문장 자체는 보관하지 않습니다. 공개 명령 출력에는 이 비공개 값과 검수자
+값이 나오지 않습니다.
+
+항목 하나 또는 영수증 쓰기에서 오류가 나면, 시도한 모든 정본 파일을
+메모리에 보관한 원래 바이트로 되돌리고 불완전한 영수증을 지웁니다. 롤백
+메모리를 제한하기 위해 파일 하나는 16 MiB, 배치 전체는 256 MiB로 제한합니다.
+성공한 같은 제안서를 다시 실행하면 쓰지 않고 `already_applied`를 반환합니다.
+
+같은 대상 zet를 동시에 편집하지 마십시오. 실행 중 오류는 롤백하지만,
+프로세스 강제 종료·정전·컴퓨터 장애는 실행 중 정리 절차를 건너뛸 수 있습니다.
+v0.3.219에는 강제 종료 뒤 자동 복구를 위한 journal이 없습니다.
+
 ## v0.3.218 검토형 초록 보충 계획
 
 v0.3.218은 아카이브 migration을 추가하지 않고 zet도 쓰지 않습니다. 검증된

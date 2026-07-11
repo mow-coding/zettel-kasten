@@ -91,6 +91,43 @@ For project-folder work, remember that temporary intake staging is not the
 archive of record. Preserve originals as objets, source maps, manifests, zets,
 and receipts before any cleanup.
 
+## v0.3.219 Approval-Gated Abstract Backfill Write
+
+v0.3.219 adds no archive migration. It adds a separate writer for private
+proposal files that already passed `zet-abstract-backfill-plan` and human
+review. A green plan never writes by itself.
+
+First preview the exact proposal SHA-256 that will be used:
+
+```text
+archive zet-abstract-backfill-write <archive-root> --proposal .wom-scratch/abstract-backfill/<private>.jsonl --expected-proposal-sha256 <proposal.sha256> --max-items 500 --dry-run --progress --format json
+```
+
+Check that the result is `ready_to_apply`. Then a human must review every
+abstract in the private proposal. Only after that review, approve the same
+bytes explicitly:
+
+```text
+archive zet-abstract-backfill-write <archive-root> --proposal .wom-scratch/abstract-backfill/<private>.jsonl --expected-proposal-sha256 <proposal.sha256> --max-items 500 --approve --reviewed-by person:<reviewer> --affirm-abstracts-reviewed --progress --format json
+```
+
+The command re-runs the plan and rechecks every canonical file hash immediately
+before writing. It adds only `frontmatter.abstract`, preserves the original BOM,
+newline style, body bytes, and all other parsed frontmatter meaning, then writes
+one receipt under `receipts/revisions/abstract-backfill/`. The receipt keeps
+target ids and paths plus before/after/body/abstract hashes, but stores no body
+or abstract text. Public command output echoes none of those private values or
+the reviewer value.
+
+If any item or receipt write raises an error, every attempted canonical file is
+restored from its exact in-memory bytes and the incomplete receipt is removed.
+One file is capped at 16 MiB and one batch at 256 MiB so rollback snapshots stay
+bounded. A matching successful re-run returns `already_applied` without writing.
+
+Do not edit the same target zets concurrently. Runtime errors are rolled back,
+but forced process termination, power loss, or machine failure can bypass
+in-process cleanup because v0.3.219 writes no crash-recovery journal.
+
 ## v0.3.218 Reviewed Abstract Backfill Planning
 
 v0.3.218 adds no archive migration and writes no zet. When a validated catalog

@@ -426,6 +426,49 @@ class ArchiveCliTests(unittest.TestCase):
         shutil.copytree(KIT_ROOT / "examples" / "fake-life-archive", root)
         return root
 
+    def create_abstract_backfill_proposal(
+        self,
+        archive_root: Path,
+        *,
+        count: int = 1,
+        name: str = "reviewed.jsonl",
+    ) -> dict[str, Any]:
+        zettel_paths = sorted((archive_root / "zettels").glob("*.md"))[:count]
+        self.assertEqual(len(zettel_paths), count)
+        rows: list[dict[str, Any]] = []
+        originals: dict[Path, bytes] = {}
+        abstracts: list[str] = []
+        for index, zettel_path in enumerate(zettel_paths):
+            original = zettel_path.read_bytes()
+            abstract = f"PRIVATE HUMAN REVIEWED ABSTRACT {index + 1}"
+            originals[zettel_path] = original
+            abstracts.append(abstract)
+            rows.append(
+                {
+                    "schema": "wom-kit/zet-abstract-backfill-proposal/v0.1",
+                    "zettel_id": archive_services.read_zettel_frontmatter_only(zettel_path)["id"],
+                    "expected_file_sha256": "sha256:" + hashlib.sha256(original).hexdigest(),
+                    "abstract": abstract,
+                    "generation_mode": "ai_assisted" if index % 2 == 0 else "human_written",
+                    "basis": "canonical_zet_body",
+                }
+            )
+        relative = f".wom-scratch/abstract-backfill/{name}"
+        proposal_path = archive_root / relative
+        proposal_path.parent.mkdir(parents=True, exist_ok=True)
+        proposal_path.write_text(
+            "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows),
+            encoding="utf-8",
+        )
+        return {
+            "relative": relative,
+            "path": proposal_path,
+            "sha256": "sha256:" + hashlib.sha256(proposal_path.read_bytes()).hexdigest(),
+            "rows": rows,
+            "originals": originals,
+            "abstracts": abstracts,
+        }
+
     def project_intake_receipt(self, tmp: str, archive_root: Path) -> str:
         decisions_path = Path(tmp) / "project-intake-decisions.json"
         decisions_path.write_text(
@@ -1482,6 +1525,7 @@ class ArchiveCliTests(unittest.TestCase):
         self.assertIn("zet-catalog-pass-read", command_names)
         self.assertIn("zet-catalog-pass-cleanup", command_names)
         self.assertIn("zet-abstract-backfill-plan", command_names)
+        self.assertIn("zet-abstract-backfill-write", command_names)
         capability = next(item for item in commands if item["name"] == "capabilities")
         self.assertIn("--machine", capability["options"])
         project_update = next(item for item in commands if item["name"] == "project-version-update")
@@ -1506,6 +1550,19 @@ class ArchiveCliTests(unittest.TestCase):
         self.assertEqual(abstract_backfill["aliases"], ["abstract-backfill-plan"])
         for option in ("--proposal", "--max-items", "--dry-run", "--progress"):
             self.assertIn(option, abstract_backfill["options"])
+        abstract_backfill_write = next(item for item in commands if item["name"] == "zet-abstract-backfill-write")
+        self.assertEqual(abstract_backfill_write["aliases"], ["abstract-backfill-write"])
+        for option in (
+            "--proposal",
+            "--expected-proposal-sha256",
+            "--max-items",
+            "--dry-run",
+            "--approve",
+            "--reviewed-by",
+            "--affirm-abstracts-reviewed",
+            "--progress",
+        ):
+            self.assertIn(option, abstract_backfill_write["options"])
         serialized = json.dumps(result, ensure_ascii=False)
         self.assertNotIn(str(KIT_ROOT), serialized)
         self.assertNotIn(str(Path.home()), serialized)
@@ -29975,6 +30032,232 @@ state:
         inserted = f"abstract: {json.dumps(abstract)}\r\n".encode("utf-8")
         self.assertTrue(candidate.startswith(b"\xef\xbb\xbf---\r\n" + inserted))
         self.assertEqual(candidate.replace(inserted, b"", 1), original)
+
+    def test_zet_abstract_backfill_write_requires_review_then_applies_once_with_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            fixture = self.create_abstract_backfill_proposal(archive_root, count=2)
+            command = [
+                "abstract-backfill-write",
+                str(archive_root),
+                "--proposal",
+                fixture["relative"],
+                "--expected-proposal-sha256",
+                fixture["sha256"],
+                "--max-items",
+                "2",
+                "--format",
+                "json",
+            ]
+
+            preview_code, preview_output = self.run_cli([*command, "--dry-run"])
+            self.assertEqual(preview_code, 0, preview_output)
+            preview = json.loads(preview_output)
+            self.assertEqual(preview["status"], "ready_to_apply")
+            self.assertEqual(preview["summary"]["ready_count"], 2)
+            self.assertFalse(preview["receipt"]["exists"])
+            for path, original in fixture["originals"].items():
+                self.assertEqual(path.read_bytes(), original)
+
+            no_affirm_code, no_affirm_output = self.run_cli(
+                [*command, "--approve", "--reviewed-by", "person:release-reviewer"]
+            )
+            self.assertEqual(no_affirm_code, 1, no_affirm_output)
+            no_affirm = json.loads(no_affirm_output)
+            self.assertIn("affirm_abstracts_reviewed_required", no_affirm["blockers"])
+            for path, original in fixture["originals"].items():
+                self.assertEqual(path.read_bytes(), original)
+
+            approve_code, approve_output = self.run_cli(
+                [
+                    *command,
+                    "--approve",
+                    "--reviewed-by",
+                    "person:release-reviewer",
+                    "--affirm-abstracts-reviewed",
+                ]
+            )
+            self.assertEqual(approve_code, 0, approve_output)
+            approved = json.loads(approve_output)
+            self.assertEqual(approved["status"], "applied")
+            self.assertEqual(approved["summary"]["applied_count"], 2)
+            self.assertEqual(approved["summary"]["canonical_files_written_this_run"], 2)
+            self.assertTrue(approved["receipt"]["written_this_run"])
+            self.assertTrue(approved["human_review"]["all_abstracts_reviewed_affirmed"])
+            self.assertFalse(approved["human_review"]["reviewed_by_echoed"])
+            receipt_path = archive_root / approved["receipt"]["path"]
+            receipt_before = receipt_path.read_bytes()
+            receipt = json.loads(receipt_before.decode("utf-8"))
+            self.assertEqual(receipt["schema"], "wom-kit/zet-abstract-backfill-receipt/v0.1")
+            self.assertEqual(receipt["proposal_sha256"], fixture["sha256"])
+            self.assertEqual(receipt["human_affirmation"], "all_proposed_abstracts_reviewed")
+            self.assertEqual(receipt["item_count"], 2)
+            self.assertFalse(receipt["privacy_guards"]["abstract_text_stored_in_receipt"])
+            self.assertFalse(receipt["mutation_contract"]["updated_at_changed"])
+            for index, (path, original) in enumerate(fixture["originals"].items()):
+                before_frontmatter, before_body = archive_services.split_zettel_text(original.decode("utf-8"))
+                after_bytes = path.read_bytes()
+                self.assertEqual(
+                    after_bytes,
+                    archive_services.zet_abstract_backfill_candidate_bytes(original, fixture["abstracts"][index]),
+                )
+                after_frontmatter, after_body = archive_services.split_zettel_text(after_bytes.decode("utf-8"))
+                self.assertNotIn("abstract", before_frontmatter)
+                self.assertEqual(after_frontmatter["abstract"], fixture["abstracts"][index])
+                self.assertEqual(after_body, before_body)
+
+            serialized_output = approve_output + preview_output + no_affirm_output
+            for private_value in (
+                *fixture["abstracts"],
+                *(row["zettel_id"] for row in fixture["rows"]),
+                Path(fixture["relative"]).name,
+                "person:release-reviewer",
+                str(archive_root),
+            ):
+                self.assertNotIn(private_value, serialized_output)
+            receipt_serialized = json.dumps(receipt, ensure_ascii=False)
+            for abstract in fixture["abstracts"]:
+                self.assertNotIn(abstract, receipt_serialized)
+
+            canonical_after = {path: path.read_bytes() for path in fixture["originals"]}
+            repeated_code, repeated_output = self.run_cli([*command, "--approve"])
+            self.assertEqual(repeated_code, 0, repeated_output)
+            repeated = json.loads(repeated_output)
+            self.assertEqual(repeated["status"], "already_applied")
+            self.assertEqual(repeated["summary"]["canonical_files_written_this_run"], 0)
+            self.assertEqual(repeated["summary"]["canonical_write_attempt_count"], 0)
+            self.assertTrue(repeated["human_review"]["receipt_human_affirmation_verified"])
+            self.assertFalse(repeated["human_review"]["all_abstracts_reviewed_affirmed"])
+            self.assertEqual(receipt_path.read_bytes(), receipt_before)
+            for path, applied_bytes in canonical_after.items():
+                self.assertEqual(path.read_bytes(), applied_bytes)
+
+            leftover_lock = fixture["path"].with_name(
+                f".{fixture['sha256'].removeprefix('sha256:')}.write.lock"
+            )
+            leftover_lock.write_text(fixture["sha256"] + "\n", encoding="ascii")
+            locked_code, locked_output = self.run_cli([*command, "--dry-run"])
+            self.assertEqual(locked_code, 0, locked_output)
+            locked = json.loads(locked_output)
+            self.assertEqual(locked["status"], "already_applied")
+            self.assertIn(
+                "matching_proposal_write_lock_remains_inspect_before_cleanup",
+                locked["warnings"],
+            )
+            self.assertTrue(leftover_lock.exists())
+            leftover_lock.unlink()
+
+    def test_zet_abstract_backfill_write_blocks_wrong_proposal_hash_without_private_echo(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            fixture = self.create_abstract_backfill_proposal(
+                archive_root,
+                count=1,
+                name="PRIVATE_WRONG_HASH_PROPOSAL.jsonl",
+            )
+            code, output = self.run_cli(
+                [
+                    "zet-abstract-backfill-write",
+                    str(archive_root),
+                    "--proposal",
+                    fixture["relative"],
+                    "--expected-proposal-sha256",
+                    "sha256:" + ("0" * 64),
+                    "--dry-run",
+                ]
+            )
+            self.assertEqual(code, 1, output)
+            result = json.loads(output)
+            self.assertEqual(result["status"], "blocked")
+            self.assertIn("proposal_sha256_mismatch", result["blockers"])
+            for path, original in fixture["originals"].items():
+                self.assertEqual(path.read_bytes(), original)
+            for private_value in (
+                *fixture["abstracts"],
+                *(row["zettel_id"] for row in fixture["rows"]),
+                "PRIVATE_WRONG_HASH_PROPOSAL.jsonl",
+                str(archive_root),
+            ):
+                self.assertNotIn(private_value, output)
+
+            range_code, range_output = self.run_cli(
+                [
+                    "zet-abstract-backfill-write",
+                    str(archive_root),
+                    "--proposal",
+                    fixture["relative"],
+                    "--expected-proposal-sha256",
+                    fixture["sha256"],
+                    "--max-items",
+                    "0",
+                    "--dry-run",
+                ]
+            )
+            self.assertEqual(range_code, 1, range_output)
+            self.assertIn("max_items_out_of_range", json.loads(range_output)["blockers"])
+            for path, original in fixture["originals"].items():
+                self.assertEqual(path.read_bytes(), original)
+
+    def test_zet_abstract_backfill_write_rolls_back_all_canonical_bytes_on_item_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            fixture = self.create_abstract_backfill_proposal(archive_root, count=2, name="item-failure.jsonl")
+            real_write = archive_services.write_bytes_atomic
+            target_paths = {path.resolve() for path in fixture["originals"]}
+            target_write_count = 0
+
+            def fail_second_target(path: Path, value: bytes) -> None:
+                nonlocal target_write_count
+                if path.resolve() in target_paths:
+                    target_write_count += 1
+                    if target_write_count == 2:
+                        raise OSError("injected second target failure")
+                real_write(path, value)
+
+            with patch.object(archive_services, "write_bytes_atomic", side_effect=fail_second_target):
+                result = archive_services.zet_abstract_backfill_write(
+                    archive_root,
+                    proposal_path=fixture["relative"],
+                    expected_proposal_sha256=fixture["sha256"],
+                    max_items=2,
+                    approve=True,
+                    reviewed_by="person:rollback-reviewer",
+                    affirm_abstracts_reviewed=True,
+                )
+            self.assertFalse(result["ok"], result)
+            self.assertEqual(result["status"], "failed_rolled_back")
+            self.assertTrue(result["rollback"]["succeeded"])
+            self.assertEqual(result["rollback"]["canonical_files_restored"], 2)
+            self.assertEqual(result["summary"]["canonical_write_attempt_count"], 2)
+            self.assertIn("transaction_failed_and_rolled_back", result["blockers"])
+            for path, original in fixture["originals"].items():
+                self.assertEqual(path.read_bytes(), original)
+            self.assertFalse((archive_root / result["receipt"]["path"]).exists())
+            self.assertFalse(any(fixture["path"].parent.glob("*.write.lock")))
+
+    def test_zet_abstract_backfill_write_rolls_back_when_receipt_write_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            fixture = self.create_abstract_backfill_proposal(archive_root, count=2, name="receipt-failure.jsonl")
+            with patch.object(archive_services, "write_json_new_file", side_effect=OSError("injected receipt failure")):
+                result = archive_services.zet_abstract_backfill_write(
+                    archive_root,
+                    proposal_path=fixture["relative"],
+                    expected_proposal_sha256=fixture["sha256"],
+                    max_items=2,
+                    approve=True,
+                    reviewed_by="person:rollback-reviewer",
+                    affirm_abstracts_reviewed=True,
+                )
+            self.assertFalse(result["ok"], result)
+            self.assertEqual(result["status"], "failed_rolled_back")
+            self.assertTrue(result["rollback"]["succeeded"])
+            self.assertEqual(result["rollback"]["canonical_files_restored"], 2)
+            self.assertTrue(result["rollback"]["receipt_removed"])
+            for path, original in fixture["originals"].items():
+                self.assertEqual(path.read_bytes(), original)
+            self.assertFalse((archive_root / result["receipt"]["path"]).exists())
+            self.assertFalse(any(fixture["path"].parent.glob("*.write.lock")))
 
     def test_zet_catalog_pass_discards_partial_when_final_snapshot_revalidation_changes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
