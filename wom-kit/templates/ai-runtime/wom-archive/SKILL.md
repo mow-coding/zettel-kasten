@@ -66,7 +66,9 @@ archive text for secret-pattern checks. Its result records which reads occurred.
 It still accesses no credential store or provider and writes no archive state.
 Progress names the counted unit, reports stage elapsed time/rate/ETA, carries
 the latest count in heartbeat, and suppresses unchanged count floods in compact
-output.
+output. A long mint-receipt heartbeat may also include a fixed safe phase such
+as `file_hash` or `edge_receipt_index`. Treat the phase only as local liveness;
+it contains no receipt/path/content identity and does not prove completion.
 
 If `archive` is not installed on PATH, run the repository entrypoint instead:
 

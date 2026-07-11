@@ -1,6 +1,7 @@
 # AI Start-Here Quick And Full Inspection
 
-Status: quick/default and explicit full-Doctor contract implemented in v0.3.222
+Status: quick/default and explicit full-Doctor contract implemented in v0.3.222;
+safe full-Doctor receipt phase and callback coalescing added in v0.3.223
 
 ## Purpose
 
@@ -70,6 +71,12 @@ Compact output prints the same stage/count at most once per 30 seconds unless
 the event is a heartbeat. A receipt's many internal checks therefore cannot
 produce dozens of identical `1/N progress` lines. Full detailed events remain
 available through Doctor verbose/progress-log modes.
+
+In v0.3.223, a long full-Doctor mint receipt heartbeat also names one fixed safe
+phase such as `file_hash`, `target_edge_evolution`, or `edge_receipt_index`.
+Private substep text never enters the phase. The shared reporter coalesces later
+same-count callbacks before formatter/lock work while continuing to update the
+phase used by heartbeat.
 
 ## Output And Privacy
 

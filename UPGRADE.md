@@ -91,6 +91,30 @@ For project-folder work, remember that temporary intake staging is not the
 archive of record. Preserve originals as objets, source maps, manifests, zets,
 and receipts before any cleanup.
 
+## v0.3.223 Full-Doctor Receipt Phase
+
+v0.3.223 adds no archive migration and does not change the quick/default
+`ai-start-here` behavior from v0.3.222. In the optional full scan:
+
+```text
+archive ai-start-here <archive-root> --dry-run --full-doctor --progress --format json
+```
+
+heartbeat now carries a fixed content-free `phase` when a mint receipt holds
+the same outer count. Examples include `target_file_ref`, `file_hash`,
+`target_edge_evolution`, and `edge_receipt_index`. These labels explain the
+class of local work without exposing a receipt path, zet path/id, object ref,
+edge value, title, body, abstract, provider value, or secret.
+
+The shared command reporter forwards generic progress only once for each
+stage/count. Later same-count receipt substeps update the heartbeat phase but do
+not reacquire the formatter lock. This reduces observer overhead; it does not
+skip validation, hashes, receipts, or archive files.
+
+Direct `doctor --progress-detail verbose` and explicit private Doctor progress
+logs remain detailed and unchanged. Full Doctor can still take minutes on a
+large archive; the new phase is liveness evidence, not a completion guarantee.
+
 ## v0.3.222 Fast AI Start-Here
 
 v0.3.222 adds no archive migration and writes no archive state. The ordinary

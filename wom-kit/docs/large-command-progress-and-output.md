@@ -1,7 +1,8 @@
 # Large-Command Progress And Bounded Output
 
 Status: implemented in v0.3.214; complete-only catalog JSONL in v0.3.216;
-same-count suppression and counted-unit/rate contract in v0.3.222
+same-count suppression and counted-unit/rate contract in v0.3.222; safe receipt
+phase and reporter coalescing in v0.3.223
 
 ## Purpose
 
@@ -56,6 +57,28 @@ dozens of identical `1/N progress` lines in an AI start-here run.
 
 For `mint-receipts`, the count and total mean mint receipt files being checked.
 They do not mean canonical zet files, target-id resolutions, or graph steps.
+
+Since v0.3.223, a count-bearing heartbeat in the shared AI command reporter can
+also include one fixed safe mint-receipt phase:
+
+```text
+receipt_checks
+source_file_ref
+target_file_ref
+snapshot_file_ref
+file_hash
+target_frontmatter
+mint_link
+target_edge_evolution
+edge_receipt_index
+```
+
+Unknown details produce no phase. Path-bearing source text is never copied; a
+recognized message can produce only its fixed label. The reporter forwards
+generic progress only once per stage/count; later same-count substeps update
+phase state without invoking the compact formatter again. Direct Doctor verbose
+output and explicit private progress logs retain detailed events. No validation
+work is skipped.
 
 Progress is content-free. It does not emit local paths, zet ids, titles,
 abstracts, body text, object refs, provider values, credential refs, tokens, or
