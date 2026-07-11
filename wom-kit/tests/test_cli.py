@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 import unicodedata
 from contextlib import redirect_stderr, redirect_stdout
@@ -157,6 +158,32 @@ class ArchiveCliTests(unittest.TestCase):
             return code, buffer.getvalue()
         finally:
             sys.stdin = old_stdin
+
+    def run_cli_split(self, args: list[str]) -> tuple[int, str, str]:
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            code = archive_cli.main(args)
+        return code, stdout.getvalue(), stderr.getvalue()
+
+    def test_command_progress_reporter_emits_content_free_heartbeat(self) -> None:
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            reporter = archive_cli.CommandProgressReporter(
+                True,
+                label="progress-test",
+                heartbeat_interval_seconds=0.02,
+            )
+            reporter.progress("zettels", "start", None, None)
+            reporter.progress("zettels", "PRIVATE_PATH_MARKER.md", 1, 100)
+            time.sleep(0.06)
+            reporter.close()
+
+        progress = stderr.getvalue()
+        self.assertIn("[progress-test] zettels: start", progress)
+        self.assertIn("1/100 progress", progress)
+        self.assertIn("heartbeat", progress)
+        self.assertNotIn("PRIVATE_PATH_MARKER", progress)
 
     def init_personal_archive(self, root: Path, archive_id: str = "archive:personal:test") -> tuple[int, str]:
         return self.run_cli(
@@ -3469,6 +3496,70 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertIn("metadata_and_version_history_backup", markdown_output)
             self.assertIn("Files written: no", markdown_output)
             self.assertNotIn(str(archive_root), markdown_output)
+
+    def test_ai_start_here_progress_and_output_keep_stdout_small_and_paths_private(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            private_marker = "PRIVATE_PROGRESS_ZET_PATH"
+            first_zettel = sorted((archive_root / "zettels").glob("*.md"))[0]
+            first_zettel.rename(first_zettel.with_name(f"{private_marker}.md"))
+            output_relative = ".wom-scratch/diagnostics/ai-start-here.json"
+
+            code, stdout, stderr = self.run_cli_split(
+                [
+                    "ai-start-here",
+                    str(archive_root),
+                    "--dry-run",
+                    "--progress",
+                    "--output",
+                    output_relative,
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, stdout + stderr)
+            summary = json.loads(stdout)
+            self.assertEqual(summary["lifecycle_action"], "ai_start_here_output_summary")
+            self.assertEqual(summary["output"]["path"], output_relative)
+            self.assertNotIn("first_read", summary)
+            self.assertIn("[ai-start-here] doctor: start", stderr)
+            self.assertIn("zettels:", stderr)
+            self.assertIn("eta=warming_up", stderr)
+            self.assertNotIn(private_marker, stderr)
+            self.assertNotIn(str(archive_root), stderr)
+
+            saved = json.loads((archive_root / output_relative).read_text(encoding="utf-8"))
+            self.assertEqual(saved["schema"], "wom-kit/ai-start-here/v0.2")
+            self.assertTrue(saved["cli_output_artifact"]["result_artifact_written"])
+            self.assertFalse(saved["cli_output_artifact"]["archive_record_written"])
+
+            overwrite_code, _overwrite_stdout, overwrite_stderr = self.run_cli_split(
+                [
+                    "ai-start-here",
+                    str(archive_root),
+                    "--dry-run",
+                    "--output",
+                    output_relative,
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(overwrite_code, 1)
+            self.assertIn("refuses to overwrite", overwrite_stderr)
+
+            invalid_code, _invalid_stdout, invalid_stderr = self.run_cli_split(
+                [
+                    "ai-start-here",
+                    str(archive_root),
+                    "--dry-run",
+                    "--output",
+                    "ops/unsafe-result.json",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(invalid_code, 1)
+            self.assertIn("must be under .wom-scratch/diagnostics/", invalid_stderr)
 
     def test_local_sovereignty_contract_is_machine_readable_and_read_only(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -28583,6 +28674,50 @@ state:
         self.assertEqual(invalid_code, 1, invalid_output)
         self.assertIn("requires a nonzero strict continuation cursor", invalid_output)
 
+    def test_zet_catalog_progress_and_output_are_count_only_and_scratch_scoped(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            private_marker = "PRIVATE_CATALOG_PROGRESS_PATH"
+            first_zettel = sorted((archive_root / "zettels").glob("*.md"))[0]
+            first_zettel.rename(first_zettel.with_name(f"{private_marker}.md"))
+            output_relative = ".wom-scratch/diagnostics/zet-catalog.json"
+
+            code, stdout, stderr = self.run_cli_split(
+                [
+                    "zet-catalog",
+                    str(archive_root),
+                    "--projection",
+                    "reading",
+                    "--coverage-mode",
+                    "strict",
+                    "--page-size",
+                    "1",
+                    "--dry-run",
+                    "--progress",
+                    "--output",
+                    output_relative,
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, stdout + stderr)
+            summary = json.loads(stdout)
+            self.assertEqual(summary["lifecycle_action"], "zet_catalog_output_summary")
+            self.assertEqual(summary["coverage"]["returned_count"], 1)
+            self.assertNotIn("items", summary)
+            self.assertEqual(summary["output"]["path"], output_relative)
+            self.assertIn("catalog-path-metadata", stderr)
+            self.assertIn("catalog-frontmatter", stderr)
+            self.assertIn("1/", stderr)
+            self.assertNotIn(private_marker, stderr)
+            self.assertNotIn(str(archive_root), stderr)
+
+            saved = json.loads((archive_root / output_relative).read_text(encoding="utf-8"))
+            self.assertEqual(saved["schema"], "wom-kit/zet-catalog/v0.8")
+            self.assertEqual(len(saved["items"]), 1)
+            self.assertTrue(saved["cli_output_artifact"]["result_artifact_written"])
+            self.assertFalse(saved["privacy_guards"]["zettel_body_text_read"])
+
     def test_zet_catalog_seeded_connection_walk_orders_nearby_nodes_first_without_dropping_components(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = Path(tmp) / "archive"
@@ -28846,6 +28981,7 @@ state:
             cursor = 0
             snapshot_id: str | None = None
             page_count = 0
+            progress_events: list[tuple[str, str, int | None, int | None]] = []
             while True:
                 result = archive_services.zet_catalog(
                     archive_root,
@@ -28855,6 +28991,9 @@ state:
                     dry_run=True,
                     item_cache=item_cache,
                     materialize_session_snapshot=True,
+                    progress_callback=lambda stage, message, current, total: progress_events.append(
+                        (stage, message, current, total)
+                    ),
                 )
                 self.assertTrue(result["ok"], result)
                 page_count += 1
@@ -28877,6 +29016,14 @@ state:
             self.assertEqual(result["workload_estimate"]["scope"]["item_count"], 1000)
             self.assertGreater(result["workload_estimate"]["scope"]["estimated_abstract_tokens"], 0)
             self.assertGreater(result["workload_estimate"]["scope"]["estimated_items_json_tokens"], 0)
+            self.assertIn(("catalog-path-metadata", "scanned", 1000, 1000), progress_events)
+            self.assertIn(("catalog-frontmatter", "scanned", 1000, 1000), progress_events)
+            self.assertTrue(
+                any(
+                    stage == "catalog-session-snapshot" and message == "reused"
+                    for stage, message, _current, _total in progress_events
+                )
+            )
 
     def test_status_board_reports_mint_state_and_metadata_gaps_without_content_echo(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -35040,6 +35187,37 @@ state:
             self.assertFalse(result["upgrade_policy"]["object_store_operations"])
             after = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
             self.assertEqual(after, before)
+
+    def test_upgrade_check_progress_and_output_write_only_scratch_result(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            output_relative = ".wom-scratch/diagnostics/upgrade-check.json"
+
+            code, stdout, stderr = self.run_cli_split(
+                [
+                    "upgrade-check",
+                    str(archive_root),
+                    "--dry-run",
+                    "--progress",
+                    "--output",
+                    output_relative,
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, stdout + stderr)
+            summary = json.loads(stdout)
+            self.assertEqual(summary["lifecycle_action"], "upgrade_check_output_summary")
+            self.assertEqual(summary["output"]["path"], output_relative)
+            self.assertNotIn("findings", summary)
+            self.assertIn("[upgrade-check] doctor: start", stderr)
+            self.assertIn("upgrade-readiness: done", stderr)
+            self.assertNotIn(str(archive_root), stderr)
+
+            saved = json.loads((archive_root / output_relative).read_text(encoding="utf-8"))
+            self.assertEqual(saved["action"], "archive_upgrade_check")
+            self.assertTrue(saved["cli_output_artifact"]["result_artifact_written"])
+            self.assertEqual(saved["would_change"], [])
 
     def test_upgrade_check_requires_dry_run(self) -> None:
         archive_root = KIT_ROOT / "examples" / "fake-life-archive"

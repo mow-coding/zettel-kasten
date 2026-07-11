@@ -316,6 +316,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import date, datetime
@@ -910,6 +911,71 @@ def make_stage_progress_callback(
             print(f"[{label}] {stage}: {message} elapsed={elapsed:.1f}s", file=sys.stderr, flush=True)
 
     return progress
+
+
+class CommandProgressReporter:
+    def __init__(
+        self,
+        enabled: bool,
+        *,
+        label: str,
+        heartbeat_interval_seconds: float = 10.0,
+    ) -> None:
+        self._callback = make_stage_progress_callback(enabled, label=label, detail="compact")
+        self._interval = max(0.01, heartbeat_interval_seconds)
+        self._state_lock = threading.Lock()
+        self._callback_lock = threading.Lock()
+        self._stop = threading.Event()
+        self._current_stage = "starting"
+        self._last_completed_stage: str | None = None
+        self._thread: threading.Thread | None = None
+        if self._callback is not None:
+            self._thread = threading.Thread(
+                target=self._heartbeat_loop,
+                name=f"wom-{label}-heartbeat",
+                daemon=True,
+            )
+            self._thread.start()
+
+    def progress(self, stage: str, message: str, current: int | None, total: int | None) -> None:
+        if self._callback is None:
+            return
+        safe_message = self._content_free_message(message, current, total)
+        with self._state_lock:
+            self._current_stage = stage
+            if message == "done":
+                self._last_completed_stage = stage
+        if safe_message == "working":
+            return
+        with self._callback_lock:
+            self._callback(stage, safe_message, current, total)
+
+    @staticmethod
+    def _content_free_message(message: str, current: int | None, total: int | None) -> str:
+        if message in {"start", "done", "scanned", "reused"}:
+            return message
+        if message.startswith("heartbeat"):
+            return message
+        if current is not None and total is not None:
+            return "progress"
+        return "working"
+
+    def _heartbeat_loop(self) -> None:
+        while not self._stop.wait(self._interval):
+            with self._state_lock:
+                stage = self._current_stage
+                last_completed = self._last_completed_stage
+            message = "heartbeat"
+            if last_completed:
+                message += f" last_completed={last_completed}"
+            with self._callback_lock:
+                if self._callback is not None:
+                    self._callback(stage, message, None, None)
+
+    def close(self) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=max(1.0, self._interval * 2))
 
 
 def make_validate_progress_callback(enabled: bool) -> ProgressCallback | None:
@@ -4076,20 +4142,58 @@ def command_ai_start_here(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print("ai-start-here is read-only and requires --dry-run.", file=sys.stderr)
         return 1
+    archive_root = Path(args.archive_root)
+    reporter = CommandProgressReporter(bool(getattr(args, "progress", False)), label="ai-start-here")
+    output_metadata: dict[str, Any] | None = None
     try:
-        diagnostics = [item.as_dict() for item in Doctor(Path(args.archive_root)).run()]
+        reporter.progress("doctor", "start", None, None)
+        diagnostics = [
+            item.as_dict()
+            for item in Doctor(archive_root, progress_callback=reporter.progress).run()
+        ]
+        reporter.progress("doctor", "done", None, None)
+        reporter.progress("compose-start-here", "start", None, None)
         result = archive_services.ai_start_here(
-            Path(args.archive_root),
+            archive_root,
             expected_archive_id=args.expected_archive_id,
             expected_type=args.expected_type,
             strict=args.strict,
             redact_local_paths=args.redact_local_paths,
             diagnostics=diagnostics,
         )
-    except archive_services.ArchiveServiceError as exc:
+        reporter.progress("compose-start-here", "done", None, None)
+        if getattr(args, "output", None):
+            reporter.progress("write-output", "start", None, None)
+            output_metadata = write_command_result_output_file(
+                str(args.output),
+                archive_root,
+                result,
+                command="ai-start-here",
+            )
+            reporter.progress("write-output", "done", None, None)
+    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
         print(str(exc), file=sys.stderr)
         return 1
+    finally:
+        reporter.close()
 
+    if output_metadata is not None:
+        summary_result = {
+            "ok": bool(result.get("ok")),
+            "lifecycle_action": "ai_start_here_output_summary",
+            "archive_id": result.get("archive_id"),
+            "summary": result.get("summary"),
+            "blocker_count": len(result.get("blockers", [])),
+            "warning_count": len(result.get("warnings", [])),
+            "output": output_metadata,
+        }
+        if args.format == "json":
+            print_json(summary_result)
+        else:
+            print("WOM AI start-here summary.")
+            print(f"OK: {str(summary_result['ok']).lower()}")
+            print(f"Full result written to: {output_metadata['path']}")
+        return 0 if result["ok"] else 1
     if args.format == "json":
         print_json(result)
     else:
@@ -8064,9 +8168,12 @@ def command_zet_catalog(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print("zet-catalog is read-only and requires --dry-run.", file=sys.stderr)
         return 1
+    archive_root = Path(args.archive_root)
+    reporter = CommandProgressReporter(bool(getattr(args, "progress", False)), label="zet-catalog")
+    output_metadata: dict[str, Any] | None = None
     try:
         result = archive_services.zet_catalog(
-            Path(args.archive_root),
+            archive_root,
             status=args.status,
             projection=args.projection,
             coverage_mode=args.coverage_mode,
@@ -8080,11 +8187,53 @@ def command_zet_catalog(args: argparse.Namespace) -> int:
             expected_snapshot_id=args.expected_snapshot_id,
             continuation_token=args.continuation_token,
             dry_run=True,
+            progress_callback=reporter.progress,
         )
-    except archive_services.ArchiveServiceError as exc:
+        if getattr(args, "output", None):
+            reporter.progress("write-output", "start", None, None)
+            output_metadata = write_command_result_output_file(
+                str(args.output),
+                archive_root,
+                result,
+                command="zet-catalog",
+            )
+            reporter.progress("write-output", "done", None, None)
+    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
         print(str(exc), file=sys.stderr)
         return 1
+    finally:
+        reporter.close()
 
+    if output_metadata is not None:
+        coverage = result.get("coverage") if isinstance(result.get("coverage"), dict) else {}
+        summary_result = {
+            "ok": bool(result.get("ok")),
+            "lifecycle_action": "zet_catalog_output_summary",
+            "archive_id": result.get("archive_id"),
+            "response_profile": result.get("response_profile"),
+            "coverage": {
+                "cursor": coverage.get("cursor"),
+                "returned_count": coverage.get("returned_count"),
+                "total_count": coverage.get("total_count"),
+                "remaining_count": coverage.get("remaining_count"),
+                "next_cursor": coverage.get("next_cursor"),
+                "complete": coverage.get("complete"),
+                "archive_wide_coverage_claim_ready": coverage.get("archive_wide_coverage_claim_ready"),
+            },
+            "blocker_count": len(result.get("blockers", [])),
+            "warning_count": len(result.get("warnings", [])),
+            "output": output_metadata,
+        }
+        if args.format == "json":
+            print_json(summary_result)
+        else:
+            print("WOM zet catalog summary.")
+            print(
+                f"Coverage: {coverage.get('returned_count', 0)} returned / "
+                f"{coverage.get('total_count', 0)} total"
+            )
+            print(f"Full result written to: {output_metadata['path']}")
+        return 0 if result.get("ok") else 1
     if args.format == "json":
         print_json(result)
     else:
@@ -12469,18 +12618,55 @@ def command_upgrade_check(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print("Upgrade check is read-only and requires --dry-run.", file=sys.stderr)
         return 1
+    archive_root = Path(args.archive_root)
+    reporter = CommandProgressReporter(bool(getattr(args, "progress", False)), label="upgrade-check")
+    output_metadata: dict[str, Any] | None = None
     try:
-        archive_root = Path(args.archive_root)
-        diagnostics = [item.as_dict() for item in Doctor(archive_root).run()]
+        reporter.progress("doctor", "start", None, None)
+        diagnostics = [
+            item.as_dict()
+            for item in Doctor(archive_root, progress_callback=reporter.progress).run()
+        ]
+        reporter.progress("doctor", "done", None, None)
+        reporter.progress("upgrade-readiness", "start", None, None)
         result = archive_services.upgrade_check(
             archive_root,
             diagnostics=diagnostics,
             require_restore_drill=args.require_restore_drill,
         )
-    except (archive_services.ArchiveServiceError, OSError) as exc:
+        reporter.progress("upgrade-readiness", "done", None, None)
+        if getattr(args, "output", None):
+            reporter.progress("write-output", "start", None, None)
+            output_metadata = write_command_result_output_file(
+                str(args.output),
+                archive_root,
+                result,
+                command="upgrade-check",
+            )
+            reporter.progress("write-output", "done", None, None)
+    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
         print(str(exc), file=sys.stderr)
         return 1
+    finally:
+        reporter.close()
 
+    if output_metadata is not None:
+        summary_result = {
+            "ok": bool(result.get("ok")),
+            "lifecycle_action": "upgrade_check_output_summary",
+            "archive_id": result.get("archive_id"),
+            "upgrade_readiness": result.get("upgrade_readiness"),
+            "doctor": result.get("doctor"),
+            "blocker_count": len(result.get("blockers", [])),
+            "warning_count": len(result.get("warnings", [])),
+            "output": output_metadata,
+        }
+        if args.format == "json":
+            print_json(summary_result)
+        else:
+            print(f"Upgrade check dry-run {result['upgrade_readiness']['status']}.")
+            print(f"Full result written to: {output_metadata['path']}")
+        return 0 if result["upgrade_readiness"]["status"] != "blocked" else 1
     print_upgrade_check_result(result, args.format)
     return 0 if result["upgrade_readiness"]["status"] != "blocked" else 1
 
@@ -13880,6 +14066,44 @@ def display_output_path(path: Path, archive_root: Path) -> str:
         return "<output-file>"
 
 
+def write_command_result_output_file(
+    path_arg: str,
+    archive_root: Path,
+    result: dict[str, Any],
+    *,
+    command: str,
+) -> dict[str, Any]:
+    normalized = path_arg.replace("\\", "/").strip()
+    required_prefix = ".wom-scratch/diagnostics/"
+    if not normalized.startswith(required_prefix):
+        raise ValueError(f"--output must be under {required_prefix}")
+    output_path = resolve_archive_relative_path(archive_root, normalized)
+    if output_path.suffix.lower() != ".json":
+        raise ValueError("--output must use a .json filename.")
+    if output_path.exists():
+        raise ValueError("--output refuses to overwrite an existing result file.")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    metadata = {
+        "path": display_output_path(output_path, archive_root),
+        "path_kind": "archive_relative_scratch",
+        "relative_to": "archive_root",
+        "contains": "full_command_result_json",
+        "command": command,
+        "result_artifact_written": True,
+        "archive_record_written": False,
+        "receipt_written": False,
+        "tracking_policy": "local_scratch_diagnostic_not_archive_record_do_not_commit",
+        "absolute_path_echoed": False,
+    }
+    payload = dict(result)
+    payload["cli_output_artifact"] = metadata
+    archive_services.write_text_atomic(
+        output_path,
+        json.dumps(payload, indent=2, ensure_ascii=False, default=str) + "\n",
+    )
+    return metadata
+
+
 def write_doctor_output_file(path_arg: str, archive_root: Path, diagnostics: list[Diagnostic]) -> str:
     output_path = resolve_archive_relative_path(archive_root, path_arg)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -14437,7 +14661,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Expected archive type. Mismatch warns by default and blocks with --strict.",
     )
     ai_start_here.add_argument("--strict", action="store_true", help="Treat warnings as blocking.")
-    ai_start_here.add_argument("--dry-run", action="store_true", help="Read and render only; never write files.")
+    ai_start_here.add_argument("--dry-run", action="store_true", help="Core inspection writes no archive record; --output may write one local scratch result.")
+    ai_start_here.add_argument("--progress", action="store_true", help="Stream content-free stage progress and 10-second heartbeats to stderr.")
+    ai_start_here.add_argument(
+        "--output",
+        help="Write the full JSON result under .wom-scratch/diagnostics/ and print only a compact stdout summary.",
+    )
     ai_start_here.add_argument(
         "--redact-local-paths",
         dest="redact_local_paths",
@@ -16168,7 +16397,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--continuation-token",
         help="Stateless checksum token returned by the prior strict page; required for strict cursor continuation.",
     )
-    zet_catalog.add_argument("--dry-run", action="store_true", help="Required. Read local frontmatter only; write nothing.")
+    zet_catalog.add_argument("--dry-run", action="store_true", help="Required. Core inspection writes no archive record; --output may write one local scratch result.")
+    zet_catalog.add_argument("--progress", action="store_true", help="Stream content-free scan counts, stages, and 10-second heartbeats to stderr.")
+    zet_catalog.add_argument(
+        "--output",
+        help="Write the full JSON result under .wom-scratch/diagnostics/ and print only a compact stdout summary.",
+    )
     zet_catalog.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     zet_catalog.set_defaults(func=command_zet_catalog)
 
@@ -19731,8 +19965,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     upgrade_check = subcommands.add_parser("upgrade-check", help="Check upgrade readiness without writing files.")
     upgrade_check.add_argument("archive_root", help="Archive root to inspect.")
-    upgrade_check.add_argument("--dry-run", action="store_true", help="Required; report readiness without writing files.")
+    upgrade_check.add_argument("--dry-run", action="store_true", help="Required. Core inspection writes no archive record; --output may write one local scratch result.")
     upgrade_check.add_argument("--require-restore-drill", action="store_true", help="Block if no successful restore drill receipt is present.")
+    upgrade_check.add_argument("--progress", action="store_true", help="Stream content-free stage progress and 10-second heartbeats to stderr.")
+    upgrade_check.add_argument(
+        "--output",
+        help="Write the full JSON result under .wom-scratch/diagnostics/ and print only a compact stdout summary.",
+    )
     upgrade_check.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     upgrade_check.set_defaults(func=command_upgrade_check)
 

@@ -187,7 +187,7 @@ onboard
   Plan or apply first archive setup. Dry-run writes nothing; --approve creates the archive, provider-bindings.yml, and runs strict doctor.
 
 doctor
-  Inspect an archive for missing files, invalid frontmatter, schema problems, manifest problems, unsafe zettel references, and minting-rule warnings.
+  Inspect an archive for missing files, invalid frontmatter, schema problems, manifest problems, unsafe zettel references, and minting-rule warnings. Use `--progress` for long real-archive checks.
 
 profile-list
   List a local WOM profile registry without writing files. Local registry and archive paths are redacted by default.
@@ -200,6 +200,9 @@ profile-wallet
 
 runtime-context
   Print read-only JSON context for terminal-capable AI runtimes. It confirms archive id, archive type/scope, principal/owner summary, AI write policy, safe archive-relative paths, canonical entrypoint metadata, AI guide handoff order, material-link routes, safe actions, WOM-kit version, local-sovereignty storage authority, and doctor summary. Local absolute paths are redacted by default.
+
+ai-start-here --dry-run
+  Print one compact first-read map for an entering AI operator. Optional `--progress` keeps long Doctor work visible on stderr; optional `--output .wom-scratch/diagnostics/<name>.json` stores the full result as private local scratch and leaves a compact stdout summary.
 
 local-sovereignty --dry-run
   Report the machine-readable authority model: local WOM is canonical, GitHub backs up metadata/version history, object storage backs up objet bytes, and external databases hold regenerable map backups or replicas. It performs no live audit, provider/network call, secret read, or write.
@@ -532,7 +535,7 @@ list-zettels
   List canonical and/or draft zettels.
 
 zet-catalog --dry-run
-  Enumerate every local zet node's available compact frontmatter abstract state and complete edge projection in deterministic pages. `--projection reading --coverage-mode strict` gives compact checksum-chained node coverage. It measures items, compact service-result, and response-envelope cost; optional `--response-envelope-reserve-tokens` partitions a requested total without changing the old items-only default. Keep cursor zero full, then optionally use `--response-profile continuation` to omit repeated scope diagnostics while retaining items, readiness, snapshot, token, and chain evidence. Optional verified-seed order remains exhaustive, and opt-in `routed_reading` adds each item's seed/tie/component reason at a higher token cost. Separate signals report node coverage, first-read availability, and unique-id follow-up, while strict chain hashes distinguish duplicate-id file entries without returning paths. It ranks nothing, writes no map/state, reads no body, and requires no generated index.
+  Enumerate every local zet node's available compact frontmatter abstract state and complete edge projection in deterministic pages. `--projection reading --coverage-mode strict` gives compact checksum-chained node coverage. It measures items, compact service-result, and response-envelope cost; optional `--response-envelope-reserve-tokens` partitions a requested total without changing the old items-only default. Keep cursor zero full, then optionally use `--response-profile continuation` to omit repeated scope diagnostics while retaining items, readiness, snapshot, token, and chain evidence. Optional verified-seed order remains exhaustive, and opt-in `routed_reading` adds each item's seed/tie/component reason at a higher token cost. Separate signals report node coverage, first-read availability, and unique-id follow-up, while strict chain hashes distinguish duplicate-id file entries without returning paths. `--progress` reports content-free scan counts and heartbeat on stderr; scratch-scoped `--output` can keep the full JSON off stdout. It ranks nothing, writes no map/state, reads no body, and requires no generated index. A new CLI process still performs its own live scan.
 
 read-zettel
   Read one zettel by id or archive-relative path. Use `--section overview` for the compact first read; MCP `read_zettel` accepts the same section values while keeping `body` as its compatibility default.
@@ -635,6 +638,9 @@ source-mounts
 
 recovery-plan
   Show local backup and restore readiness without writing files.
+
+upgrade-check --dry-run
+  Check Doctor, recovery, restore-drill, and manual-upgrade readiness. Optional `--progress` emits content-free liveness to stderr; optional scratch-scoped `--output` stores the full JSON and prints a compact stdout summary.
 
 restore-drill
   Plan or run a local restore drill before connecting real sources.

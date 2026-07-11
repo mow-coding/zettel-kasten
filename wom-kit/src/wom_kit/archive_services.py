@@ -5403,12 +5403,16 @@ def zet_catalog_entries(
     root: Path,
     path_entries: list[tuple[Path, str]],
     item_cache: dict[str, dict[str, Any]] | None,
+    progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
 ) -> tuple[list[tuple[Path, str, dict[str, Any], tuple[int, int] | None]], dict[str, Any]]:
     active_cache_keys: set[str] = set()
     cached_items_reused = 0
     resolved_items: list[dict[str, Any] | None] = [None] * len(path_entries)
     signatures: list[tuple[int, int] | None] = [None] * len(path_entries)
     misses: list[tuple[int, Path, str, str, tuple[int, int] | None]] = []
+    path_total = len(path_entries)
+    if progress_callback is not None:
+        progress_callback("catalog-path-metadata", "start", 0, path_total)
     for index, (path, expected_status) in enumerate(path_entries):
         relative = archive_relative_path(path, root)
         cache_key = f"{expected_status}:{relative}"
@@ -5431,6 +5435,11 @@ def zet_catalog_entries(
             cached_items_reused += 1
         else:
             misses.append((index, path, expected_status, cache_key, signature))
+        completed = index + 1
+        if progress_callback is not None and (completed == 1 or completed == path_total or completed % 250 == 0):
+            progress_callback("catalog-path-metadata", "scanned", completed, path_total)
+    if progress_callback is not None:
+        progress_callback("catalog-path-metadata", "done", path_total, path_total)
 
     worker_count = min(8, len(misses), max(1, os.cpu_count() or 1))
 
@@ -5438,13 +5447,29 @@ def zet_catalog_entries(
         index, path, expected_status, cache_key, signature = row
         return index, cache_key, signature, zet_catalog_item(path, root, expected_status)
 
-    if worker_count > 1 and len(misses) >= 64:
+    miss_total = len(misses)
+    if progress_callback is not None:
+        progress_callback("catalog-frontmatter", "start", 0, miss_total)
+    parsed_rows: list[tuple[int, str, tuple[int, int] | None, dict[str, Any]]] = []
+    if worker_count > 1 and miss_total >= 64:
         with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="wom-zet-catalog") as executor:
-            parsed_rows = list(executor.map(parse_missing, misses))
+            for completed, parsed_row in enumerate(executor.map(parse_missing, misses), start=1):
+                parsed_rows.append(parsed_row)
+                if progress_callback is not None and (
+                    completed == 1 or completed == miss_total or completed % 250 == 0
+                ):
+                    progress_callback("catalog-frontmatter", "scanned", completed, miss_total)
         scan_mode = "bounded_thread_pool"
     else:
-        parsed_rows = [parse_missing(row) for row in misses]
+        for completed, row in enumerate(misses, start=1):
+            parsed_rows.append(parse_missing(row))
+            if progress_callback is not None and (
+                completed == 1 or completed == miss_total or completed % 250 == 0
+            ):
+                progress_callback("catalog-frontmatter", "scanned", completed, miss_total)
         scan_mode = "sequential"
+    if progress_callback is not None:
+        progress_callback("catalog-frontmatter", "done", miss_total, miss_total)
 
     for index, cache_key, signature, item in parsed_rows:
         resolved_items[index] = item
@@ -6006,6 +6031,7 @@ def zet_catalog(
     dry_run: bool = False,
     item_cache: dict[str, dict[str, Any]] | None = None,
     materialize_session_snapshot: bool = False,
+    progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
 ) -> dict[str, Any]:
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
@@ -6112,6 +6138,13 @@ def zet_catalog(
             completion_revalidation_performed = True
 
     if materialized_snapshot_reused:
+        if progress_callback is not None:
+            progress_callback(
+                "catalog-session-snapshot",
+                "reused",
+                len(materialized_entries),
+                len(materialized_entries),
+            )
         entries = materialized_entries
         snapshot = cached_scope["snapshot"]
         scan = {
@@ -6127,8 +6160,17 @@ def zet_catalog(
             "snapshot_cache_reused": True,
         }
     else:
+        if progress_callback is not None:
+            progress_callback("catalog-scope", "start", None, None)
         path_entries = zet_catalog_paths(root, status) if status in {"all", "draft", "canonical"} else []
-        entries, scan = zet_catalog_entries(root, path_entries, item_cache)
+        if progress_callback is not None:
+            progress_callback("catalog-scope", "done", len(path_entries), len(path_entries))
+        entries, scan = zet_catalog_entries(
+            root,
+            path_entries,
+            item_cache,
+            progress_callback=progress_callback,
+        )
         scope_cache_reusable = bool(
             isinstance(cached_scope, dict)
             and scan["frontmatter_files_scanned"] == 0
@@ -6569,6 +6611,8 @@ def zet_catalog(
         ),
     }
     result["workload_estimate"]["response"] = response_measurement
+    if progress_callback is not None:
+        progress_callback("catalog-page", "done", next_cursor_value, total_count)
     return result
 
 
