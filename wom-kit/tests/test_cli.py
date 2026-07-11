@@ -292,7 +292,9 @@ class ArchiveCliTests(unittest.TestCase):
         progress = stderr.getvalue()
         self.assertIn("[progress-test] zettels: start", progress)
         self.assertIn("1/100 progress", progress)
-        self.assertIn("heartbeat", progress)
+        self.assertIn("1/100 heartbeat", progress)
+        self.assertIn("unit=zet_files", progress)
+        self.assertIn("stage_elapsed=", progress)
         self.assertNotIn("PRIVATE_PATH_MARKER", progress)
 
     def init_personal_archive(self, root: Path, archive_id: str = "archive:personal:test") -> tuple[int, str]:
@@ -882,6 +884,30 @@ class ArchiveCliTests(unittest.TestCase):
         self.assertIn("4/8583 fourth receipt elapsed=2.0s eta=warming_up", output)
         self.assertIn("5/8583 fifth receipt elapsed=12.0s eta=warming_up", output)
         self.assertRegex(output, r"10/8583 tenth receipt elapsed=45\.0s eta=\d+\.\d+s")
+        self.assertIn("unit=mint_receipts", output)
+        self.assertIn("rate=", output)
+
+    def test_compact_progress_suppresses_same_count_until_repeat_interval(self) -> None:
+        stream = io.StringIO()
+        with patch.object(
+            archive_cli.time,
+            "monotonic",
+            side_effect=[100.0, 100.0, 101.0, 102.0, 132.0],
+        ):
+            progress = archive_cli.make_stage_progress_callback(True, label="ai-start-here", detail="compact")
+            assert progress is not None
+            with redirect_stderr(stream):
+                progress("mint-receipts", "start", None, None)
+                progress("mint-receipts", "first substep", 1, 8583)
+                progress("mint-receipts", "second substep", 1, 8583)
+                progress("mint-receipts", "still on same receipt", 1, 8583)
+
+        output = stream.getvalue()
+        self.assertEqual(output.count("mint-receipts: 1/8583"), 2)
+        self.assertIn("first substep", output)
+        self.assertNotIn("second substep", output)
+        self.assertIn("still on same receipt", output)
+        self.assertIn("unit=mint_receipts", output)
 
     def test_doctor_progress_compact_filters_receipt_liveness_flood(self) -> None:
         stream = io.StringIO()
@@ -932,6 +958,9 @@ class ArchiveCliTests(unittest.TestCase):
         self.assertEqual(event["message"], "edge receipt index cache hit")
         self.assertEqual(event["current"], 523)
         self.assertEqual(event["total"], 8583)
+        self.assertEqual(event["unit"], "mint_receipts")
+        self.assertIn("stage_elapsed_seconds", event)
+        self.assertIn("rate_per_second", event)
 
     def test_doctor_mint_receipt_file_sha_is_cached_per_run(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -4174,7 +4203,7 @@ class ArchiveCliTests(unittest.TestCase):
             result = json.loads(output)
             self.assertTrue(result["ok"])
             self.assertEqual(result["lifecycle_action"], "ai_start_here")
-            self.assertEqual(result["schema"], "wom-kit/ai-start-here/v0.2")
+            self.assertEqual(result["schema"], "wom-kit/ai-start-here/v0.3")
             self.assertEqual(result["archive_id"], "archive:personal:fake-life")
             self.assertEqual(result["summary"]["start_here_file"], "archive.yml")
             self.assertGreater(result["summary"]["present_entrypoint_count"], 0)
@@ -4200,10 +4229,16 @@ class ArchiveCliTests(unittest.TestCase):
             )
             self.assertTrue(result["conversation_status_board"]["allowed"])
             self.assertFalse(result["conversation_status_board"]["web_ui_required"])
+            self.assertEqual(result["inspection"]["mode"], "quick")
+            self.assertFalse(result["inspection"]["full_doctor_run"])
+            self.assertFalse(result["inspection"]["doctor_summary"]["checked"])
+            self.assertIn("not an archive health claim", result["inspection"]["claim_boundary"])
             self.assertTrue(result["safety_boundaries"]["read_only"])
             self.assertFalse(result["safety_boundaries"]["provider_api_called"])
             self.assertFalse(result["safety_boundaries"]["files_written"])
             self.assertFalse(result["safety_boundaries"]["secrets_read"])
+            self.assertFalse(result["safety_boundaries"]["credential_store_accessed"])
+            self.assertFalse(result["safety_boundaries"]["archive_text_scanned_for_secret_patterns"])
             self.assertFalse(result["safety_boundaries"]["zettel_bodies_read"])
             self.assertFalse(result["safety_boundaries"]["objet_bytes_read"])
             self.assertTrue(result["safety_boundaries"]["local_paths_redacted"])
@@ -4211,12 +4246,67 @@ class ArchiveCliTests(unittest.TestCase):
             markdown_code, markdown_output = self.run_cli(["start-here", str(archive_root), "--dry-run"])
             self.assertEqual(markdown_code, 0, markdown_output)
             self.assertIn("# WOM AI Start Here", markdown_output)
+            self.assertIn("Inspection mode: `quick`", markdown_output)
+            self.assertIn("Full Doctor run: no", markdown_output)
             self.assertIn("`archive.yml`", markdown_output)
             self.assertIn("## First Commands", markdown_output)
             self.assertIn("## Storage Authority", markdown_output)
             self.assertIn("metadata_and_version_history_backup", markdown_output)
             self.assertIn("Files written: no", markdown_output)
             self.assertNotIn(str(archive_root), markdown_output)
+
+    def test_ai_start_here_quick_path_does_not_construct_doctor_or_read_zets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            unreadable = archive_root / "zettels" / "quick-path-must-not-read.md"
+            unreadable.write_bytes(b"\xff\xfe\x00\x01")
+
+            with patch.object(archive_cli, "Doctor", side_effect=AssertionError("quick path invoked Doctor")):
+                code, output = self.run_cli(
+                    ["ai-start-here", str(archive_root), "--dry-run", "--format", "json"]
+                )
+
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertEqual(result["inspection"]["mode"], "quick")
+            self.assertFalse(result["summary"]["doctor_checked"])
+            self.assertFalse(result["safety_boundaries"]["zettel_bodies_read"])
+
+    def test_ai_start_here_full_doctor_is_explicit_and_reports_broader_reads(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+
+            with patch.object(archive_cli.Doctor, "run", return_value=[]) as doctor_run:
+                code, output = self.run_cli(
+                    [
+                        "ai-start-here",
+                        str(archive_root),
+                        "--dry-run",
+                        "--full-doctor",
+                        "--format",
+                        "json",
+                    ]
+                )
+
+            self.assertEqual(code, 0, output)
+            doctor_run.assert_called_once_with()
+            result = json.loads(output)
+            self.assertEqual(result["inspection"]["mode"], "full_doctor")
+            self.assertTrue(result["inspection"]["full_doctor_run"])
+            self.assertTrue(result["summary"]["doctor_checked"])
+            self.assertFalse(result["safety_boundaries"]["secrets_read"])
+            self.assertFalse(result["safety_boundaries"]["credential_store_accessed"])
+            self.assertFalse(result["safety_boundaries"]["archive_text_scanned_for_secret_patterns"])
+            self.assertFalse(result["safety_boundaries"]["zettel_bodies_read"])
+            self.assertFalse(result["safety_boundaries"]["objet_bytes_read"])
+            self.assertEqual(
+                result["inspection"]["read_observations"],
+                {
+                    "archive_text_scanned_for_secret_patterns": False,
+                    "objet_bytes_read": False,
+                    "zettel_bodies_read": False,
+                },
+            )
 
     def test_ai_start_here_progress_and_output_keep_stdout_small_and_paths_private(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -4232,6 +4322,7 @@ class ArchiveCliTests(unittest.TestCase):
                     str(archive_root),
                     "--dry-run",
                     "--progress",
+                    "--full-doctor",
                     "--output",
                     output_relative,
                     "--format",
@@ -4250,7 +4341,20 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertNotIn(str(archive_root), stderr)
 
             saved = json.loads((archive_root / output_relative).read_text(encoding="utf-8"))
-            self.assertEqual(saved["schema"], "wom-kit/ai-start-here/v0.2")
+            self.assertEqual(saved["schema"], "wom-kit/ai-start-here/v0.3")
+            self.assertEqual(saved["inspection"]["mode"], "full_doctor")
+            self.assertTrue(saved["safety_boundaries"]["zettel_bodies_read"])
+            self.assertTrue(saved["safety_boundaries"]["objet_bytes_read"])
+            self.assertTrue(saved["safety_boundaries"]["archive_text_scanned_for_secret_patterns"])
+            self.assertFalse(saved["safety_boundaries"]["secrets_read"])
+            self.assertEqual(
+                saved["inspection"]["read_observations"]["zettel_bodies_read"],
+                saved["safety_boundaries"]["zettel_bodies_read"],
+            )
+            self.assertEqual(
+                saved["inspection"]["read_observations"]["objet_bytes_read"],
+                saved["safety_boundaries"]["objet_bytes_read"],
+            )
             self.assertTrue(saved["cli_output_artifact"]["result_artifact_written"])
             self.assertFalse(saved["cli_output_artifact"]["archive_record_written"])
 

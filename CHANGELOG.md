@@ -6,6 +6,28 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.222 - 2026-07-12
+
+Fast AI start-here and honest long-scan progress checkpoint. Additive; no
+archive migration.
+
+- **Quick by default.** `ai-start-here` now returns identity, authority,
+  entrypoints, operational context, and safe next commands without running the
+  complete Doctor or walking every zet and receipt.
+- **Explicit complete inspection.** `--full-doctor` preserves the former full
+  archive check when it is actually needed. Results identify `quick` versus
+  `full_doctor`, include the Doctor summary, and state the claim boundary.
+- **Truthful read boundary.** Quick mode reports no zet/objet body reads. Full
+  mode records whether this execution read zet bodies, read local objet bytes,
+  or scanned archive text for secret patterns while confirming that no
+  credential store/provider was accessed and nothing was written.
+- **Compact progress de-duplication.** The same stage/count is printed at most
+  once per 30 seconds unless it is a heartbeat, preventing repeated
+  `mint-receipts: 1/N` floods while preserving liveness.
+- **Meaningful progress.** Counted lines and heartbeats now include a stable
+  work unit, stage elapsed time, processed rate, and ETA. `mint-receipts` counts
+  mint receipt files, not canonical zet files or opaque graph steps.
+
 ## v0.3.221 - 2026-07-11
 
 Archive-wide abstract revision receipt and transaction-lock audit checkpoint.

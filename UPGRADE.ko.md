@@ -83,6 +83,38 @@ project folder 작업에서는 temporary intake staging이 archive of record가
 아니라는 점을 기억합니다. cleanup 전에 원본을 objet, source map, manifest,
 zet, receipt로 보존해야 합니다.
 
+## v0.3.222 빠른 AI 스타팅 메뉴얼
+
+v0.3.222는 아카이브 migration을 요구하지 않고 아카이브 상태를 쓰지
+않습니다. 평소 처음 들어올 때는 빠른 안내 명령을 사용합니다.
+
+```text
+archive ai-start-here <archive-root> --dry-run --progress --format json
+```
+
+이 경로는 정체성, 정책, 작업기록, 주요 경로의 존재 여부만 제한적으로
+읽습니다. 전체 검진을 실행하거나 모든 zet와 영수증을 순회하거나 오브제
+바이트를 읽지 않습니다. `inspection.mode: quick`과
+`inspection.doctor_summary.checked: false`는 이 결과가 출발 안내이지 전체
+아카이브 건강 증명이 아니라는 뜻입니다.
+
+전체 아카이브 검진이 실제로 필요할 때만 다음처럼 명시합니다.
+
+```text
+archive ai-start-here <archive-root> --dry-run --full-doctor --progress --format json
+```
+
+전체 검진 모드는 이전의 정밀 검사를 유지합니다. 검진은 zet 본문, 로컬
+오브제 바이트, 비밀 패턴 검사용 아카이브 텍스트를 읽을 수 있고, 결과는 이번
+실행에서 각 읽기가 실제로 일어났는지 기록합니다. 그래도 자격증명 저장소나
+외부 서비스에는 접근하지 않고, 별도로 비공개 임시 `--output`을 요청하지
+않는 한 아무것도 쓰지 않습니다.
+
+진행 표시에는 실제 단위(`mint-receipts` 단계는 `mint_receipts`), 단계 경과
+시간, 처리율, ETA가 포함되고 heartbeat도 최신 개수를 보여줍니다. compact
+출력은 같은 단계/개수를 30초 동안 다시 출력하지 않으므로 `1/N` 하위 단계가
+터미널을 도배하지 않습니다.
+
 ## v0.3.221 아카이브 전체 초록 수정 영수증 검진
 
 v0.3.221은 아카이브 migration을 요구하지 않고 아무것도 쓰지 않습니다.

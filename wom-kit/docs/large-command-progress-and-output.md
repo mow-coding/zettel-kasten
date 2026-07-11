@@ -1,6 +1,7 @@
 # Large-Command Progress And Bounded Output
 
-Status: implemented in v0.3.214; complete-only catalog JSONL in v0.3.216
+Status: implemented in v0.3.214; complete-only catalog JSONL in v0.3.216;
+same-count suppression and counted-unit/rate contract in v0.3.222
 
 ## Purpose
 
@@ -22,6 +23,7 @@ Add `--progress` to any of the three commands:
 
 ```powershell
 archive ai-start-here <archive-root> --dry-run --progress --format json
+archive ai-start-here <archive-root> --dry-run --full-doctor --progress --format json
 archive upgrade-check <archive-root> --dry-run --progress --format json
 archive zet-catalog <archive-root> `
   --status canonical `
@@ -41,9 +43,19 @@ The progress stream includes:
 
 - immediate stage start and completion lines;
 - current/total counts where the underlying operation has a safe total;
-- elapsed time;
+- total elapsed time and current-stage elapsed time;
+- a stable work unit such as `zet_files` or `mint_receipts`;
+- processed items per second;
 - `eta=warming_up` until enough counted progress exists for an estimate;
-- a 10-second quiet-interval heartbeat with the last completed stage.
+- a 10-second heartbeat with the last completed stage and latest safe count.
+
+Compact stderr prints one stage/count immediately, then suppresses that same
+stage/count for 30 seconds unless the line is a heartbeat. Detailed substeps
+remain available in Doctor verbose/progress-log surfaces, but they cannot create
+dozens of identical `1/N progress` lines in an AI start-here run.
+
+For `mint-receipts`, the count and total mean mint receipt files being checked.
+They do not mean canonical zet files, target-id resolutions, or graph steps.
 
 Progress is content-free. It does not emit local paths, zet ids, titles,
 abstracts, body text, object refs, provider values, credential refs, tokens, or
@@ -85,6 +97,12 @@ allowlisted scratch surface. It does not write zets, manifests, receipts,
 indexes, maps, provider state, or external backups.
 
 ## Honest Performance Boundary
+
+The default `ai-start-here` path no longer runs Doctor. It returns bounded
+identity, authority, entrypoint, and operational-context metadata. Use
+`--full-doctor` when complete archive diagnostics are required; that broader
+mode records its observed content-reading boundary. See
+[AI Start-Here Quick And Full Inspection](ai-start-here.md).
 
 CLI `zet-catalog --progress` reports path-metadata and frontmatter scan counts.
 It does not make that scan disappear. Separate CLI invocations still use

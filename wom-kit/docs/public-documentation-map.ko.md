@@ -46,6 +46,7 @@
 - [Input Provenance Taxonomy](input-provenance-taxonomy.md)
 - [Secret Signal Taxonomy](secret-signal-taxonomy.md)
 - [Local Sovereignty And Backup Authority](local-sovereignty-and-backup-authority.md)
+- [AI 스타팅 메뉴얼 빠른 안내와 전체 검진](ai-start-here.md)
 - [장시간 명령 진행 표시와 제한된 결과 저장](large-command-progress-and-output.md)
 - [AI Response Contract](ai-response-contract.md)
 - [Operator Envelope Classes](operator-envelope-classes.md)

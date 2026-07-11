@@ -60852,7 +60852,24 @@ def ai_start_here(
     strict: bool = False,
     redact_local_paths: bool = True,
     diagnostics: list[dict[str, Any]] | None = None,
+    inspection_mode: str | None = None,
+    inspection_reads: dict[str, bool] | None = None,
 ) -> dict[str, Any]:
+    mode = inspection_mode or ("full_doctor" if diagnostics is not None else "quick")
+    if mode not in {"quick", "full_doctor"}:
+        raise ArchiveServiceError("ai-start-here inspection_mode must be quick or full_doctor.")
+    if mode == "full_doctor" and diagnostics is None:
+        raise ArchiveServiceError("ai-start-here full_doctor mode requires Doctor diagnostics.")
+    if mode == "full_doctor" and inspection_reads is None:
+        raise ArchiveServiceError("ai-start-here full_doctor mode requires Doctor read observations.")
+    full_doctor_run = mode == "full_doctor"
+    observed_reads = {
+        "zettel_bodies_read": bool((inspection_reads or {}).get("zettel_bodies_read")),
+        "objet_bytes_read": bool((inspection_reads or {}).get("objet_bytes_read")),
+        "archive_text_scanned_for_secret_patterns": bool(
+            (inspection_reads or {}).get("archive_text_scanned_for_secret_patterns")
+        ),
+    }
     context = runtime_context(
         archive_root,
         expected_archive_id=expected_archive_id,
@@ -60900,7 +60917,7 @@ def ai_start_here(
     return {
         "ok": bool(context.get("ok")) and not missing_required,
         "lifecycle_action": "ai_start_here",
-        "schema": "wom-kit/ai-start-here/v0.2",
+        "schema": "wom-kit/ai-start-here/v0.3",
         "archive_id": context.get("archive_id"),
         "archive_type": context.get("archive_type"),
         "scope": context.get("scope"),
@@ -60916,11 +60933,28 @@ def ai_start_here(
             "present_entrypoint_count": len(present_entrypoints),
             "missing_required_count": len(missing_required),
             "operational_context_status": operational_context.get("status") or "unknown",
+            "inspection_mode": mode,
             "doctor_checked": (
                 context.get("doctor_summary", {}).get("checked")
                 if isinstance(context.get("doctor_summary"), dict)
                 else False
             ),
+        },
+        "inspection": {
+            "mode": mode,
+            "full_doctor_run": full_doctor_run,
+            "doctor_summary": context.get("doctor_summary")
+            if isinstance(context.get("doctor_summary"), dict)
+            else {"checked": False, "errors": 0, "warnings": 0, "infos": 0},
+            "claim_boundary": (
+                "Full Doctor diagnostics were run for this result."
+                if full_doctor_run
+                else "Quick start verifies identity, policy, entrypoint presence, and operating context only; it is not an archive health claim."
+            ),
+            "full_doctor_command": (
+                "archive ai-start-here <archive-root> --dry-run --full-doctor --progress --format json"
+            ),
+            "read_observations": observed_reads,
         },
         "first_read": {
             "start_here": entrypoints.get("start_here") or "archive.yml",
@@ -60954,6 +60988,11 @@ def ai_start_here(
         "next_safe_steps": unique_preserve_order(
             [
                 *next_lines,
+                (
+                    "Review the quick start map first; run ai-start-here --full-doctor only when a complete archive health check is needed."
+                    if not full_doctor_run
+                    else "Full Doctor completed for this start-here result; inspect its blocker and warning counts before broad work."
+                ),
                 "Read AGENTS.md when canonical_entrypoints marks it present.",
                 "Run zet-catalog with projection=reading and coverage_mode=strict, keep the first response_profile full, inspect item and compact response-envelope estimates, set a host-appropriate max_estimated_tokens plus an explicit response_envelope_reserve_tokens when needed, then optionally use response_profile=continuation on later pages while following every continuation token before claiming archive-wide node coverage.",
                 "Treat archive_wide_coverage_claim_ready as node visitation only; require archive_wide_abstract_reading_claim_ready before saying every required abstract was available and read, and report abstract gaps without auto-writing replacements.",
@@ -60968,8 +61007,12 @@ def ai_start_here(
             "provider_api_called": False,
             "files_written": False,
             "secrets_read": False,
-            "zettel_bodies_read": False,
-            "objet_bytes_read": False,
+            "credential_store_accessed": False,
+            "archive_text_scanned_for_secret_patterns": observed_reads[
+                "archive_text_scanned_for_secret_patterns"
+            ],
+            "zettel_bodies_read": observed_reads["zettel_bodies_read"],
+            "objet_bytes_read": observed_reads["objet_bytes_read"],
             "local_paths_redacted": bool(redact_local_paths),
             "zettel_or_objet_body_echoed": False,
         },

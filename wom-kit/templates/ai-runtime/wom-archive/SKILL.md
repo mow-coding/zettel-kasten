@@ -43,12 +43,30 @@ Before creating drafts, running mint checks, or asking for mint approval, then r
 archive runtime-context <archive-root> --format json
 ```
 
-For a compact entry map that also runs Doctor, use visible progress on a real
-archive:
+For the normal compact entry map, use:
 
 ```bash
 archive ai-start-here <archive-root> --dry-run --progress --format json
 ```
+
+This quick path reads bounded identity, policy, entrypoint, authority, and
+operational-context metadata. It does not walk every zet/receipt or make an
+archive-health claim. Require `inspection.mode=quick` and
+`inspection.doctor_summary.checked=false` rather than silently treating it as a
+green Doctor result.
+
+Only when the task needs a complete archive health check, run:
+
+```bash
+archive ai-start-here <archive-root> --dry-run --full-doctor --progress --format json
+```
+
+Full mode can read zet bodies, local objet bytes referenced by validation, and
+archive text for secret-pattern checks. Its result records which reads occurred.
+It still accesses no credential store or provider and writes no archive state.
+Progress names the counted unit, reports stage elapsed time/rate/ETA, carries
+the latest count in heartbeat, and suppresses unchanged count floods in compact
+output.
 
 If `archive` is not installed on PATH, run the repository entrypoint instead:
 
@@ -62,7 +80,8 @@ If the expected archive is known, include:
 --expected-archive-id <id> --expected-type <personal|company|family|project|relationship|child|business_unit>
 ```
 
-Use `--strict` when the AI must stop on archive type mismatch or doctor warnings.
+Use `--strict` when the AI must stop on archive type mismatch. Doctor warnings
+are part of that decision only when `--full-doctor` was also requested.
 
 Read `storage_authority` from runtime-context, or request the same contract
 directly:
