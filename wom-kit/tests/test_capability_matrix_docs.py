@@ -521,7 +521,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.220 pre-release",
+            "v0.3.221 pre-release",
             "[Version Truth Source](wom-kit/docs/version-truth-source.md)",
             "[Project Version Update](wom-kit/docs/project-version-update.md)",
             "read-only WOM-kit version truth-source checks",
@@ -870,8 +870,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, schema_text)
         for phrase in (
-            "Status: v0.3.220 receipt-audited deterministic abstract rollback checkpoint",
-            "Version: v0.3.220, release candidate",
+            "Previous checkpoint: Status: v0.3.220 receipt-audited deterministic abstract rollback checkpoint",
             "zet abstract backfill revert",
             "Any later canonical edit",
             "Reapplying later requires a newly reviewed proposal byte sequence",
@@ -907,6 +906,79 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                 self.assertIn(phrase, decision_text)
         self.assertIn("[zet Abstract Backfill Revert](zet-abstract-backfill-revert.md)", public_map_text)
         self.assertIn("[zet 초록 보충 되돌리기](zet-abstract-backfill-revert.md)", public_map_ko_text)
+
+    def test_abstract_receipt_lifecycle_audit_docs_expose_complete_bounded_content_free_contract(self) -> None:
+        guide_text = (KIT_ROOT / "docs" / "zet-abstract-backfill-receipt-audit.md").read_text(encoding="utf-8")
+        decision_text = (
+            KIT_ROOT / "docs" / "archive-infra-decision-log-2026-07-11-v03221-abstract-receipt-audit.md"
+        ).read_text(encoding="utf-8")
+        release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.221.md").read_text(encoding="utf-8")
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        changelog_text = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+        readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        readme_ko_text = (REPO_ROOT / "README.ko.md").read_text(encoding="utf-8")
+        kit_readme_text = (KIT_ROOT / "README.md").read_text(encoding="utf-8")
+        upgrade_text = (REPO_ROOT / "UPGRADE.md").read_text(encoding="utf-8")
+        upgrade_ko_text = (REPO_ROOT / "UPGRADE.ko.md").read_text(encoding="utf-8")
+        runtime_skill_text = (KIT_ROOT / "templates" / "ai-runtime" / "wom-archive" / "SKILL.md").read_text(encoding="utf-8")
+        public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
+        public_map_ko_text = (KIT_ROOT / "docs" / "public-documentation-map.ko.md").read_text(encoding="utf-8")
+        for phrase in (
+            "Status: implemented as an archive-wide read-only audit in v0.3.221",
+            "--max-receipts 5000 --max-locks 5000 --max-problems 100",
+            "Applied And Current",
+            "Reverted And Current",
+            "It reads the filename shape, never the lock file content",
+            "audit_digest",
+            "problems_truncated",
+            "writes or deletes nothing",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, guide_text)
+        for phrase in (
+            "Status: v0.3.221 archive-wide abstract receipt and lock audit checkpoint",
+            "Version: v0.3.221, release candidate",
+            "zet abstract receipt lifecycle audit",
+            "Up to 5,000 receipts and 5,000 locks",
+            "Green proves bounded local consistency",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, matrix_text)
+        for text in (readme_text, readme_ko_text, kit_readme_text, upgrade_text, upgrade_ko_text, runtime_skill_text):
+            with self.subTest(document="operator-surface"):
+                self.assertIn("zet-abstract-backfill-receipt-audit", text)
+        for text in (kit_readme_text, upgrade_text, upgrade_ko_text, runtime_skill_text):
+            with self.subTest(document="detailed-operator-surface"):
+                self.assertIn("--max-problems", text)
+        for phrase in (
+            "v0.3.221 - 2026-07-11",
+            "Complete lifecycle scan",
+            "Bounded AI output",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, changelog_text)
+        for phrase in (
+            "v0.3.221 - Archive-Wide Abstract Receipt And Lock Audit",
+            "Completed-operation locks warn",
+            "Healthy rows collapse into counts",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, release_text)
+        for phrase in (
+            "Listing every healthy receipt in JSON",
+            "Read lock filenames only",
+            "future paged audit",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, decision_text)
+        self.assertIn(
+            "[zet Abstract Receipt Lifecycle Audit](zet-abstract-backfill-receipt-audit.md)",
+            public_map_text,
+        )
+        self.assertIn(
+            "[zet 초록 수정 영수증 전체 검진](zet-abstract-backfill-receipt-audit.md)",
+            public_map_ko_text,
+        )
 
     def test_tiro_import_plan_doc_and_matrix_cover_read_only_meeting_manifest_contract(self) -> None:
         tiro_text = TIRO_IMPORT_PLAN_PATH.read_text(encoding="utf-8")

@@ -560,6 +560,9 @@ zet-abstract-backfill-write --proposal .wom-scratch/abstract-backfill/<private>.
 zet-abstract-backfill-revert --receipt receipts/revisions/abstract-backfill/<digest>.zet-abstract-backfill.json --expected-receipt-sha256 <sha256> --dry-run|--approve
   Dry-run audits the immutable applied receipt, every current after/body/abstract hash, and deterministic removal back to the exact recorded before hash. A new approved revert also requires `--reviewed-by` and `--affirm-abstract-removal-reviewed`. It preserves the source receipt, writes one text-free revert receipt last, restores the applied state on runtime failure, and returns no-write `already_reverted` on a matching retry. Any later canonical edit blocks; forced termination remains outside the in-process rollback guarantee.
 
+zet-abstract-backfill-receipt-audit --dry-run --max-receipts 5000 --max-locks 5000 --max-problems 100
+  Audit every bounded apply/revert receipt lifecycle and recognized leftover transaction lock. Healthy applied/reverted lifecycles become counts plus one audit digest; only bounded hash/index problem records are returned. Completed-lock residue is a warning, while a lock without its matching receipt blocks as an unresolved transaction. The command reads lock names but never lock content, echoes no private receipt/zet/text/reviewer/path value, and writes or deletes nothing.
+
 read-zettel
   Read one zettel by id or archive-relative path. Use `--section overview` for the compact first read; MCP `read_zettel` accepts the same section values while keeping `body` as its compatibility default. Non-redacted results include exact canonical file SHA-256 and decoded returned-body SHA-256 so a private revision proposal can bind to the version actually read; redacted hashes are suppressed.
 

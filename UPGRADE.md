@@ -91,6 +91,39 @@ For project-folder work, remember that temporary intake staging is not the
 archive of record. Preserve originals as objets, source maps, manifests, zets,
 and receipts before any cleanup.
 
+## v0.3.221 Archive-Wide Abstract Receipt Audit
+
+v0.3.221 adds no archive migration and writes nothing. After applying or
+reverting abstract batches, run one bounded archive-wide audit:
+
+```text
+archive zet-abstract-backfill-receipt-audit <archive-root> --dry-run --max-receipts 5000 --max-locks 5000 --max-problems 100 --progress --format json
+```
+
+The command verifies each applied receipt in one of two closed states:
+
+```text
+applied receipt + current applied hashes
+applied receipt + valid revert receipt + current reverted hashes
+```
+
+Malformed or orphan receipts and any canonical divergence block. Healthy
+lifecycles are returned as counts plus one `audit_digest`; only bounded problem
+records are listed. Problem records use hashes and sorted indexes rather than
+private paths, ids, bodies, abstracts, or reviewer values.
+
+Recognized locks under `.wom-scratch/abstract-backfill/` are checked without
+reading their content:
+
+- matching completed receipt exists: `attention_required` warning; inspect and
+  remove manually only after confirming no process is running;
+- matching completed receipt is absent: unresolved transaction blocker; inspect
+  receipts and canonical hashes before any cleanup.
+
+The audit never deletes locks, edits receipts, repairs canonical zets, calls a
+provider/model, or reads a secret store. A green result is local consistency
+evidence, not proof of semantic abstract quality or forced-termination safety.
+
 ## v0.3.220 Receipt-Audited Abstract Backfill Revert
 
 v0.3.220 adds no archive migration. It adds a receipt-first audit and

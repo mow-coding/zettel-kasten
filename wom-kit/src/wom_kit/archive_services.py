@@ -2797,6 +2797,7 @@ ZET_ABSTRACT_BACKFILL_WRITE_SCHEMA = "wom-kit/zet-abstract-backfill-write/v0.1"
 ZET_ABSTRACT_BACKFILL_RECEIPT_SCHEMA = "wom-kit/zet-abstract-backfill-receipt/v0.1"
 ZET_ABSTRACT_BACKFILL_REVERT_SCHEMA = "wom-kit/zet-abstract-backfill-revert/v0.1"
 ZET_ABSTRACT_BACKFILL_REVERT_RECEIPT_SCHEMA = "wom-kit/zet-abstract-backfill-revert-receipt/v0.1"
+ZET_ABSTRACT_BACKFILL_RECEIPT_AUDIT_SCHEMA = "wom-kit/zet-abstract-backfill-receipt-audit/v0.1"
 ZET_ABSTRACT_BACKFILL_PROPOSAL_PREFIX = ".wom-scratch/abstract-backfill/"
 ZET_ABSTRACT_BACKFILL_RECEIPTS_DIR = "receipts/revisions/abstract-backfill"
 ZET_ABSTRACT_BACKFILL_REVERT_RECEIPTS_DIR = "receipts/revisions/abstract-backfill-reverts"
@@ -7679,9 +7680,9 @@ def resolve_zet_abstract_backfill_receipt_path(root: Path, raw_path: str) -> tup
         normalized = normalize_archive_relative_path(raw_path)
     except ArchivePathError as exc:
         raise ArchiveServiceError("Abstract backfill receipt path must be archive-relative.") from exc
-    if (
-        not normalized.startswith(f"{ZET_ABSTRACT_BACKFILL_RECEIPTS_DIR}/")
-        or not normalized.endswith(".zet-abstract-backfill.json")
+    if not re.fullmatch(
+        rf"{re.escape(ZET_ABSTRACT_BACKFILL_RECEIPTS_DIR)}/[0-9a-f]{{64}}\.zet-abstract-backfill\.json",
+        normalized,
     ):
         raise ArchiveServiceError("Abstract backfill receipt path is outside the supported receipt directory.")
     unresolved = root.resolve()
@@ -8117,6 +8118,10 @@ def zet_abstract_backfill_revert(
     proposal_sha256 = source_receipt.get("proposal_sha256")
     if not isinstance(proposal_sha256, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", proposal_sha256):
         blockers.append("source_receipt_proposal_sha256_invalid")
+    elif source_path.name != (
+        f"{proposal_sha256.removeprefix('sha256:')}.zet-abstract-backfill.json"
+    ):
+        blockers.append("source_receipt_path_digest_mismatch")
     raw_source_items = source_receipt.get("items")
     if not isinstance(raw_source_items, list) or not raw_source_items:
         blockers.append("source_receipt_items_missing")
@@ -8397,6 +8402,378 @@ def zet_abstract_backfill_revert(
         return result_payload(
             "failed_rolled_back" if rollback["succeeded"] else "failed_rollback_incomplete"
         )
+
+
+def zet_abstract_backfill_receipt_audit(
+    archive_root: Path | str,
+    *,
+    dry_run: bool = False,
+    max_receipts: int = 5000,
+    max_locks: int = 5000,
+    max_problems: int = 100,
+    progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    requested_max_receipts = int(max_receipts)
+    requested_max_locks = int(max_locks)
+    requested_max_problems = int(max_problems)
+    effective_max_receipts = max(1, min(requested_max_receipts, 5000))
+    effective_max_locks = max(1, min(requested_max_locks, 5000))
+    effective_max_problems = max(1, min(requested_max_problems, 500))
+    blockers: list[str] = []
+    warnings: list[str] = []
+    problems: list[dict[str, Any]] = []
+    outcomes: list[dict[str, Any]] = []
+    counters = {
+        "applied_verified": 0,
+        "reverted_verified": 0,
+        "receipt_audit_failed": 0,
+        "orphan_revert_receipt": 0,
+        "stale_completed_write_lock": 0,
+        "stale_completed_revert_lock": 0,
+        "unresolved_write_lock": 0,
+        "unresolved_revert_lock": 0,
+        "unsupported_lock": 0,
+    }
+    if not dry_run:
+        blockers.append("dry_run_required")
+    if requested_max_receipts != effective_max_receipts:
+        blockers.append("max_receipts_out_of_range")
+    if requested_max_locks != effective_max_locks:
+        blockers.append("max_locks_out_of_range")
+    if requested_max_problems != effective_max_problems:
+        blockers.append("max_problems_out_of_range")
+
+    source_root = archive_internal_path(root, ZET_ABSTRACT_BACKFILL_RECEIPTS_DIR)
+    revert_root = archive_internal_path(root, ZET_ABSTRACT_BACKFILL_REVERT_RECEIPTS_DIR)
+    lock_root = archive_internal_path(root, ZET_ABSTRACT_BACKFILL_PROPOSAL_PREFIX.rstrip("/"))
+    source_paths = (
+        safe_archive_glob(source_root, "*.zet-abstract-backfill.json", root)
+        if source_root.is_dir()
+        else []
+    )
+    revert_paths = (
+        safe_archive_glob(revert_root, "*.zet-abstract-backfill-revert.json", root)
+        if revert_root.is_dir()
+        else []
+    )
+    lock_name_re = re.compile(
+        r"^\.(?P<digest>[0-9a-f]{64})\.(?P<kind>write|abstract-revert)\.lock$"
+    )
+    lock_paths = (
+        sorted(path for path in lock_root.glob(".*.lock") if lock_name_re.fullmatch(path.name))
+        if lock_root.is_dir()
+        else []
+    )
+    receipt_count = len(source_paths) + len(revert_paths)
+    if receipt_count > effective_max_receipts:
+        blockers.append("receipt_count_exceeds_max_receipts")
+    if len(lock_paths) > effective_max_locks:
+        blockers.append("lock_count_exceeds_max_locks")
+
+    def add_problem(item: dict[str, Any]) -> None:
+        if len(problems) < effective_max_problems:
+            problems.append(item)
+
+    if not blockers:
+        matched_revert_paths: set[Path] = set()
+        if progress_callback is not None:
+            progress_callback("abstract-receipt-audit", "start", 0, receipt_count)
+        for index, source_path in enumerate(source_paths):
+            source_sha256: str | None = None
+            revert_sha256: str | None = None
+            state = "blocked"
+            issue_codes: list[str] = []
+            try:
+                source_relative = archive_relative_path(source_path, root)
+                source_path, source_relative = resolve_zet_abstract_backfill_receipt_path(
+                    root,
+                    source_relative,
+                )
+                _source_bytes, source_receipt, source_sha256 = read_zet_abstract_backfill_receipt_document(
+                    source_path
+                )
+                proposal_sha256 = source_receipt.get("proposal_sha256")
+                if (
+                    validate_schema(source_receipt, "zet-abstract-backfill-receipt.schema.json")
+                    or source_receipt.get("archive_id") != archive_id
+                    or not isinstance(proposal_sha256, str)
+                    or not re.fullmatch(r"sha256:[0-9a-f]{64}", proposal_sha256)
+                    or source_path.name
+                    != f"{proposal_sha256.removeprefix('sha256:')}.zet-abstract-backfill.json"
+                ):
+                    issue_codes.append("source_receipt_invalid")
+                else:
+                    expected_revert_relative = zet_abstract_backfill_revert_receipt_relative_path(
+                        source_sha256
+                    )
+                    expected_revert_path = archive_internal_path(root, expected_revert_relative)
+                    if expected_revert_path.is_file() and not expected_revert_path.is_symlink():
+                        matched_revert_paths.add(expected_revert_path.resolve())
+                        verification = verify_zet_abstract_backfill_revert_receipt(
+                            root,
+                            expected_revert_path,
+                            archive_id=archive_id,
+                            source_receipt_sha256=source_sha256,
+                            source_receipt_relative=source_relative,
+                            max_items=ZET_ABSTRACT_BACKFILL_MAX_ITEMS,
+                        )
+                        revert_sha256 = verification.get("receipt_sha256")
+                        if verification.get("ok"):
+                            state = "reverted_verified"
+                            counters["reverted_verified"] += 1
+                        else:
+                            issue_codes.extend(str(item) for item in verification.get("blockers", []))
+                    else:
+                        verification = verify_zet_abstract_backfill_receipt(
+                            root,
+                            source_path,
+                            archive_id=archive_id,
+                            proposal_sha256=proposal_sha256,
+                            max_items=ZET_ABSTRACT_BACKFILL_MAX_ITEMS,
+                        )
+                        if verification.get("ok"):
+                            state = "applied_verified"
+                            counters["applied_verified"] += 1
+                        else:
+                            issue_codes.extend(str(item) for item in verification.get("blockers", []))
+            except (ArchiveServiceError, ArchivePathError, OSError, ValueError):
+                issue_codes.append("source_receipt_unreadable_or_unverifiable")
+            issue_codes = unique_preserve_order(issue_codes)
+            if issue_codes:
+                counters["receipt_audit_failed"] += 1
+                blockers.append("one_or_more_abstract_receipt_audits_failed")
+                add_problem(
+                    {
+                        "kind": "source_receipt",
+                        "receipt_index": index,
+                        "status": "blocked",
+                        "source_receipt_sha256": source_sha256,
+                        "revert_receipt_sha256": revert_sha256,
+                        "blocker_codes": issue_codes,
+                    }
+                )
+            outcomes.append(
+                {
+                    "kind": "source_receipt",
+                    "index": index,
+                    "state": state,
+                    "source_sha256": source_sha256,
+                    "revert_sha256": revert_sha256,
+                    "issues": issue_codes,
+                }
+            )
+            if progress_callback is not None and (
+                index == 0 or index + 1 == len(source_paths) or (index + 1) % 100 == 0
+            ):
+                progress_callback(
+                    "abstract-receipt-audit",
+                    "source-scanned",
+                    index + 1,
+                    receipt_count,
+                )
+
+        for revert_index, revert_path in enumerate(revert_paths):
+            if revert_path.resolve() in matched_revert_paths:
+                continue
+            revert_sha256: str | None = None
+            try:
+                _bytes, _receipt, revert_sha256 = read_zet_abstract_backfill_receipt_document(
+                    revert_path
+                )
+            except ArchiveServiceError:
+                pass
+            counters["orphan_revert_receipt"] += 1
+            blockers.append("one_or_more_orphan_abstract_revert_receipts")
+            add_problem(
+                {
+                    "kind": "revert_receipt",
+                    "receipt_index": revert_index,
+                    "status": "orphan_revert_receipt",
+                    "revert_receipt_sha256": revert_sha256,
+                    "blocker_codes": ["source_receipt_missing_or_invalid"],
+                }
+            )
+            outcomes.append(
+                {
+                    "kind": "revert_receipt",
+                    "index": revert_index,
+                    "state": "orphan_revert_receipt",
+                    "revert_sha256": revert_sha256,
+                }
+            )
+
+        if progress_callback is not None:
+            progress_callback("abstract-lock-audit", "start", 0, len(lock_paths))
+        for lock_index, lock_path in enumerate(lock_paths):
+            match = lock_name_re.fullmatch(lock_path.name)
+            if match is None:
+                continue
+            digest = match.group("digest")
+            kind = match.group("kind")
+            status: str
+            issue_codes: list[str] = []
+            if lock_path.is_symlink() or not is_path_within_root(lock_path, root):
+                status = "unsupported_lock"
+                issue_codes.append("lock_symlink_or_escape_unsupported")
+                counters["unsupported_lock"] += 1
+                blockers.append("one_or_more_unsupported_abstract_locks")
+            elif kind == "write":
+                completed_path = archive_internal_path(
+                    root,
+                    f"{ZET_ABSTRACT_BACKFILL_RECEIPTS_DIR}/{digest}.zet-abstract-backfill.json",
+                )
+                if completed_path.is_file() and not completed_path.is_symlink():
+                    status = "stale_completed_write_lock"
+                    counters["stale_completed_write_lock"] += 1
+                    warnings.append("one_or_more_completed_abstract_write_locks_remain")
+                else:
+                    status = "unresolved_write_lock"
+                    counters["unresolved_write_lock"] += 1
+                    issue_codes.append("applied_receipt_missing_for_write_lock")
+                    blockers.append("one_or_more_unresolved_abstract_transaction_locks")
+            else:
+                completed_path = archive_internal_path(
+                    root,
+                    f"{ZET_ABSTRACT_BACKFILL_REVERT_RECEIPTS_DIR}/{digest}.zet-abstract-backfill-revert.json",
+                )
+                if completed_path.is_file() and not completed_path.is_symlink():
+                    status = "stale_completed_revert_lock"
+                    counters["stale_completed_revert_lock"] += 1
+                    warnings.append("one_or_more_completed_abstract_revert_locks_remain")
+                else:
+                    status = "unresolved_revert_lock"
+                    counters["unresolved_revert_lock"] += 1
+                    issue_codes.append("revert_receipt_missing_for_revert_lock")
+                    blockers.append("one_or_more_unresolved_abstract_transaction_locks")
+            add_problem(
+                {
+                    "kind": "transaction_lock",
+                    "lock_index": lock_index,
+                    "lock_kind": kind,
+                    "status": status,
+                    "digest": "sha256:" + digest,
+                    "blocker_codes": issue_codes,
+                }
+            )
+            outcomes.append(
+                {
+                    "kind": "transaction_lock",
+                    "index": lock_index,
+                    "lock_kind": kind,
+                    "state": status,
+                    "digest": "sha256:" + digest,
+                    "issues": issue_codes,
+                }
+            )
+            if progress_callback is not None and (
+                lock_index == 0 or lock_index + 1 == len(lock_paths) or (lock_index + 1) % 100 == 0
+            ):
+                progress_callback(
+                    "abstract-lock-audit",
+                    "scanned",
+                    lock_index + 1,
+                    len(lock_paths),
+                )
+        if progress_callback is not None:
+            progress_callback("abstract-lock-audit", "done", len(lock_paths), len(lock_paths))
+            progress_callback("abstract-receipt-audit", "done", receipt_count, receipt_count)
+
+    blockers = unique_preserve_order(blockers)
+    warnings = unique_preserve_order(warnings)
+    complete = not any(
+        code in blockers
+        for code in (
+            "receipt_count_exceeds_max_receipts",
+            "lock_count_exceeds_max_locks",
+            "max_receipts_out_of_range",
+            "max_locks_out_of_range",
+            "max_problems_out_of_range",
+            "dry_run_required",
+        )
+    )
+    healthy_receipts = counters["applied_verified"] + counters["reverted_verified"]
+    return {
+        "ok": not blockers,
+        "dry_run": bool(dry_run),
+        "schema": ZET_ABSTRACT_BACKFILL_RECEIPT_AUDIT_SCHEMA,
+        "lifecycle_action": "zet_abstract_backfill_receipt_audit",
+        "status": "healthy" if not blockers and not warnings else "attention_required",
+        "archive_id": archive_id,
+        "audit_digest": sha256_json_value(outcomes),
+        "summary": {
+            "complete": complete,
+            "source_receipt_count": len(source_paths),
+            "revert_receipt_count": len(revert_paths),
+            "receipt_count": receipt_count,
+            "receipts_scanned": receipt_count if complete else 0,
+            "healthy_receipt_lifecycle_count": healthy_receipts,
+            **counters,
+            "lock_count": len(lock_paths),
+            "problem_count": sum(
+                counters[key]
+                for key in (
+                    "receipt_audit_failed",
+                    "orphan_revert_receipt",
+                    "stale_completed_write_lock",
+                    "stale_completed_revert_lock",
+                    "unresolved_write_lock",
+                    "unresolved_revert_lock",
+                    "unsupported_lock",
+                )
+            ),
+            "problems_returned": len(problems),
+            "problems_truncated": len(problems) < sum(
+                counters[key]
+                for key in (
+                    "receipt_audit_failed",
+                    "orphan_revert_receipt",
+                    "stale_completed_write_lock",
+                    "stale_completed_revert_lock",
+                    "unresolved_write_lock",
+                    "unresolved_revert_lock",
+                    "unsupported_lock",
+                )
+            ),
+            "max_receipts": effective_max_receipts,
+            "max_locks": effective_max_locks,
+            "max_problems": effective_max_problems,
+        },
+        "problems": problems,
+        "write_boundary": {
+            "files_written": False,
+            "files_deleted": False,
+            "locks_deleted": False,
+            "receipts_modified": False,
+            "canonical_zets_modified": False,
+        },
+        "privacy_guards": {
+            "canonical_body_text_read_for_hash_validation": bool(source_paths),
+            "canonical_body_text_echoed": False,
+            "receipt_private_metadata_read": bool(source_paths or revert_paths),
+            "receipt_paths_echoed": False,
+            "zettel_ids_echoed": False,
+            "zettel_paths_echoed": False,
+            "abstract_text_echoed": False,
+            "reviewed_by_echoed": False,
+            "lock_file_content_read": False,
+            "absolute_local_paths_echoed": False,
+            "provider_api_called": False,
+            "model_called": False,
+            "secret_store_or_environment_read": False,
+        },
+        "blockers": blockers,
+        "warnings": warnings,
+        "next_safe_actions": (
+            ["No abstract revision receipt or transaction-lock action is required."]
+            if not blockers and not warnings
+            else [
+                "Use each problem SHA/index with the single-receipt writer/revert audit; inspect locks before any manual deletion.",
+                "Never delete or rewrite immutable receipts to silence an audit failure.",
+            ]
+        ),
+    }
 
 
 def objet_ref_occurrences_in_text(text: str, *, source: str, field: str | None = None) -> list[dict[str, Any]]:
@@ -60840,7 +61217,7 @@ def runtime_context_ai_runtime_order() -> list[dict[str, Any]]:
             "step": 5,
             "action": "enumerate_zet_abstracts",
             "command": "archive zet-catalog-pass <archive-root> --status canonical --projection reading --output .wom-scratch/diagnostics/<new-name>.jsonl --dry-run --progress --format json",
-            "continuation": "require archive_wide_coverage_claim_ready=true and retain output.sha256 from the compact stdout summary; use zet-catalog-pass-read with that SHA-256 and page indexes from zero so a complete artifact is validated before at most one private page is returned; retain the first full diagnostics, check abstract and follow-up readiness separately, and when an abstract is missing use read-zettel to read that selected canonical body plus integrity.file_sha256 before preparing a private zet-abstract-backfill-plan proposal; never auto-write an abstract or infer approval from a green plan, require human review, then preview and explicitly approve zet-abstract-backfill-write with the exact proposal SHA-256; never load the whole catalog file into one response, never commit it, then preview and approve zet-catalog-pass-cleanup with the same SHA-256 after use; restart the complete pass if catalog_snapshot_changed",
+            "continuation": "require archive_wide_coverage_claim_ready=true and retain output.sha256 from the compact stdout summary; use zet-catalog-pass-read with that SHA-256 and page indexes from zero so a complete artifact is validated before at most one private page is returned; retain the first full diagnostics, check abstract and follow-up readiness separately, and when an abstract is missing use read-zettel to read that selected canonical body plus integrity.file_sha256 before preparing a private zet-abstract-backfill-plan proposal; never auto-write an abstract or infer approval from a green plan, require human review, then preview and explicitly approve zet-abstract-backfill-write with the exact proposal SHA-256; after any abstract apply/revert batch run zet-abstract-backfill-receipt-audit and never auto-delete reported locks or edit receipts; never load the whole catalog file into one response, never commit it, then preview and approve zet-catalog-pass-cleanup with the same SHA-256 after use; restart the complete pass if catalog_snapshot_changed",
             "mcp_alternative": "use zet_catalog pages with cursor, snapshot id, continuation token, full first response, compact continuation responses, and completion revalidation",
             "optional_seed_order": "when the host goal already provides verified zet ids, add --order seeded_connection_walk and repeated --start-zettel-id values; the walk still includes every disconnected component",
             "optional_route_evidence": "keep projection=reading for compact coverage; switch to routed_reading only with seeded_connection_walk when per-item seed, tie-passage, and disconnected-component reasons are needed",

@@ -170,6 +170,19 @@ retry is `already_reverted`; reapplying even the same text requires a newly
 reviewed proposal byte sequence and new proposal hash. The scratch lock does
 not protect against external editors or forced termination.
 
+After one or more abstract apply/revert batches, and at session handoff, audit
+the whole bounded receipt lifecycle:
+
+```bash
+archive zet-abstract-backfill-receipt-audit <archive-root> --dry-run --max-receipts 5000 --max-locks 5000 --max-problems 100 --progress --format json
+```
+
+Healthy lifecycles are compact counts plus `audit_digest`; investigate only the
+bounded problem rows. A completed-receipt lock is a warning, while a lock with
+no matching completed receipt is an unresolved-transaction blocker. Never read
+lock content, never auto-delete a lock, and never edit an immutable receipt to
+silence this audit.
+
 Use paged `zet-catalog` when the host needs one stdout page, manual continuation,
 or MCP rather than a complete CLI pass:
 
