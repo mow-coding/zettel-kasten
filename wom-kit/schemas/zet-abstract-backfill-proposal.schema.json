@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wom.local/schemas/zet-abstract-backfill-proposal.schema.json",
+  "title": "WOM zet abstract backfill proposal row",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "zettel_id",
+    "expected_file_sha256",
+    "abstract",
+    "generation_mode",
+    "basis"
+  ],
+  "properties": {
+    "schema": {
+      "const": "wom-kit/zet-abstract-backfill-proposal/v0.1"
+    },
+    "zettel_id": {
+      "type": "string",
+      "pattern": "^zet_[A-Za-z0-9][A-Za-z0-9_-]{0,159}$"
+    },
+    "expected_file_sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "abstract": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 360
+    },
+    "generation_mode": {
+      "type": "string",
+      "enum": ["human_written", "ai_assisted"]
+    },
+    "basis": {
+      "const": "canonical_zet_body"
+    }
+  }
+}

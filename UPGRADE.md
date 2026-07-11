@@ -91,6 +91,32 @@ For project-folder work, remember that temporary intake staging is not the
 archive of record. Preserve originals as objets, source maps, manifests, zets,
 and receipts before any cleanup.
 
+## v0.3.218 Reviewed Abstract Backfill Planning
+
+v0.3.218 adds no archive migration and writes no zet. When a validated catalog
+page reports `abstract_status: missing`, read only that selected canonical zet:
+
+```text
+archive read-zettel <archive-root> --zettel-id <verified-zet-id> --section body --format json
+```
+
+Keep `integrity.file_sha256` with the body-derived candidate. Prepare one
+private JSON object per line under `.wom-scratch/abstract-backfill/` using the
+shipped `zet-abstract-backfill-proposal.schema.json` contract, then run:
+
+```text
+archive zet-abstract-backfill-plan <archive-root> --proposal .wom-scratch/abstract-backfill/<private-name>.jsonl --max-items 500 --dry-run --progress --format json
+```
+
+The planner checks exact current file bytes, canonical identity/status, missing
+first-read state, bounded safe text, and a byte-preserving insertion that adds
+only `abstract`. It returns row indexes, counts, and hashes but no ids, paths,
+bodies, abstracts, or proposal filename.
+
+Green means `ready_for_human_review`, not approved or applied. v0.3.218 has no
+write command. Do not bulk hand-edit canonical files; the transactional,
+receipt-backed revision writer is a separate next capability.
+
 ## v0.3.217 SHA-Bound Catalog Artifact Lifecycle
 
 v0.3.217 adds no archive migration and does not rewrite a zet. A successful

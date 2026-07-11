@@ -83,6 +83,32 @@ project folder 작업에서는 temporary intake staging이 archive of record가
 아니라는 점을 기억합니다. cleanup 전에 원본을 objet, source map, manifest,
 zet, receipt로 보존해야 합니다.
 
+## v0.3.218 검토형 초록 보충 계획
+
+v0.3.218은 아카이브 migration을 추가하지 않고 zet도 쓰지 않습니다. 검증된
+카탈로그 페이지에 `abstract_status: missing`이 나오면 선택한 정본 zet 하나만
+읽습니다.
+
+```text
+archive read-zettel <archive-root> --zettel-id <검증된-zet-id> --section body --format json
+```
+
+본문에서 초록 후보를 만들 때 `integrity.file_sha256`을 함께 보관합니다.
+`.wom-scratch/abstract-backfill/` 아래 비공개 JSONL에 제공된
+`zet-abstract-backfill-proposal.schema.json` 형식으로 한 줄씩 적은 뒤 실행합니다.
+
+```text
+archive zet-abstract-backfill-plan <archive-root> --proposal .wom-scratch/abstract-backfill/<비공개-이름>.jsonl --max-items 500 --dry-run --progress --format json
+```
+
+planner는 현재 파일 바이트, 정본 아이디/상태, 초록 누락, 제한된 안전 텍스트,
+`abstract` 하나만 더하는 바이트 보존 삽입을 검사합니다. 출력에는 행 번호,
+개수, 해시만 있고 아이디·경로·본문·초록·proposal 파일명은 없습니다.
+
+green은 `ready_for_human_review`라는 뜻이지 승인 또는 적용 완료가 아닙니다.
+v0.3.218에는 쓰기 명령이 없습니다. 정본 파일을 대량 수동 편집하지 말고,
+transactional revision writer와 영수증은 다음 별도 capability로 둡니다.
+
 ## v0.3.217 해시로 묶인 카탈로그 임시 파일 수명주기
 
 v0.3.217은 아카이브 migration을 추가하지 않고 zet를 다시 쓰지 않습니다.

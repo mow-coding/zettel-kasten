@@ -122,6 +122,18 @@ use its `--approve --reviewed-by` path with the same SHA-256. If a forced
 termination leaves a hidden partial, confirm no pass is running before manual
 cleanup; WOM reports the count but never auto-deletes or accepts it as complete.
 
+If a validated catalog page reports a missing abstract, do not invent and write
+one automatically. Read only that selected zet body with `read-zettel`, retain
+its `integrity.file_sha256`, prepare a private proposal row under
+`.wom-scratch/abstract-backfill/`, and run:
+
+```bash
+archive zet-abstract-backfill-plan <archive-root> --proposal .wom-scratch/abstract-backfill/<private>.jsonl --dry-run --progress --format json
+```
+
+Treat `ready_for_human_review` as a preview only. v0.3.218 has no approved
+revision writer; never translate a green plan into manual bulk canonical edits.
+
 Use paged `zet-catalog` when the host needs one stdout page, manual continuation,
 or MCP rather than a complete CLI pass:
 
