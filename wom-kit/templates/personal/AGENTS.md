@@ -7,8 +7,8 @@ Local reviewed WOM state is canonical. GitHub backs up metadata/version history,
 
 1. Read `archive.yml`.
 2. Read relevant `views/*.yml`.
-3. For archive-wide understanding, run `archive zet-catalog <archive-root> --status canonical --projection reading --coverage-mode strict --cursor 0 --dry-run --progress --format json` so a long live scan remains visibly active.
-4. Follow every `next_cursor` with the same snapshot id and continuation token until `archive_wide_coverage_claim_ready: true`; this proves node visitation only, and a changed catalog restarts at cursor 0.
+3. For archive-wide understanding in a terminal, run one `archive zet-catalog-pass <archive-root> --status canonical --projection reading --output .wom-scratch/diagnostics/<new-name>.jsonl --dry-run --progress --format json`; it scans once, revalidates before completion, and prints no zet items to stdout.
+4. Require `archive_wide_coverage_claim_ready: true`, read the private JSONL page records incrementally, never commit it, and delete it after use. For MCP or manual pages, keep using `zet-catalog` with the same snapshot and continuation token until complete.
 5. Check `archive_wide_abstract_reading_claim_ready` before saying every required abstract was available and read. Report `abstract_coverage` gaps without inventing or auto-writing replacements.
 6. Check `archive_wide_followup_resolution_ready` before relying on id-only body reads; duplicate or unreadable ids require repair or an explicitly reviewed path.
 7. Inspect item and compact response-envelope estimates. Use `max_estimated_tokens` and, when budgeting the whole service result, an explicit `response_envelope_reserve_tokens`; never replace complete coverage with top-k search.

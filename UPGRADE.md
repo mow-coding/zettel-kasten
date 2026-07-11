@@ -91,6 +91,36 @@ For project-folder work, remember that temporary intake staging is not the
 archive of record. Preserve originals as objets, source maps, manifests, zets,
 and receipts before any cleanup.
 
+## v0.3.216 One-Process Catalog Pass
+
+v0.3.216 adds no archive migration and does not rewrite a zet. For a terminal
+AI that must enumerate a large archive, prefer one bounded command instead of
+starting a new CLI process for every page:
+
+```text
+archive zet-catalog-pass <archive-root> --status canonical --projection reading --page-size 200 --max-estimated-tokens 8000 --response-envelope-reserve-tokens 2500 --max-output-mib 256 --output .wom-scratch/diagnostics/catalog-pass.jsonl --dry-run --progress --format json
+```
+
+The first page performs the live frontmatter scan. Intermediate pages reuse
+only memory owned by that process. Before a multi-page pass can finish, the
+command rechecks the selected local file state; a changed snapshot blocks and
+the complete output path is not created.
+
+The JSONL contains one header, one record per strict page, and one completion
+footer. It may contain private zet ids, titles, abstracts, facets, ties, and
+edges. It contains no zet body text, is not an archive record or receipt, must
+not be committed, and should be read incrementally and deleted after use.
+
+The destination must be a new `.jsonl` path below
+`.wom-scratch/diagnostics/`. Existing files are never overwritten. Normal
+failures remove the new hidden partial. A forced process termination can leave
+a hidden private partial; later runs report only its count and neither read nor
+delete it automatically. Confirm that no pass is running before manual cleanup.
+
+Ordinary paged `zet-catalog` and MCP behavior remain compatible. The new
+command persists no cache, generated map, index, host goal, or loop state and
+calls no provider.
+
 ## v0.3.215 Project Version Update
 
 v0.3.215 adds the first approval-gated source-mirror and version-pin updater.

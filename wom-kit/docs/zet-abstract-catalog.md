@@ -1,6 +1,6 @@
 # zet Abstract And Live Catalog Contract
 
-Status: implemented CLI baseline in v0.3.204; MCP/host baseline in v0.3.205; scale/token baseline in v0.3.206; compact strict reading in v0.3.207; seeded exhaustive order in v0.3.208; separate first-read readiness in v0.3.209; routed order evidence in v0.3.210; response-envelope observability in v0.3.211; compact strict continuations in v0.3.212
+Status: implemented CLI baseline in v0.3.204; MCP/host baseline in v0.3.205; scale/token baseline in v0.3.206; compact strict reading in v0.3.207; seeded exhaustive order in v0.3.208; separate first-read readiness in v0.3.209; routed order evidence in v0.3.210; response-envelope observability in v0.3.211; compact strict continuations in v0.3.212; one-process CLI pass in v0.3.216
 
 ## Purpose
 
@@ -88,6 +88,26 @@ archive zet-catalog <archive-root> `
 
 If local catalog evidence changes between pages, the command returns the
 `catalog_snapshot_changed` blocker and no page items. Restart from cursor 0.
+
+## One-Process CLI Pass
+
+For a terminal AI that intends to complete every strict page, v0.3.216 adds:
+
+```powershell
+archive zet-catalog-pass <archive-root> `
+  --status canonical `
+  --projection reading `
+  --output .wom-scratch/diagnostics/catalog-pass.jsonl `
+  --dry-run `
+  --progress `
+  --format json
+```
+
+It scans frontmatter on the first page, reuses only process memory for
+intermediate pages, and revalidates the selected local state before multi-page
+completion. The final path appears only after strict coverage succeeds. The
+private JSONL must be read incrementally, never committed, and deleted after
+use. See [zet Catalog One-Process Pass](zet-catalog-one-process-pass.md).
 
 ## Snapshot Honesty
 

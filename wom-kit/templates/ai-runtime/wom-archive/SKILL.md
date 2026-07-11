@@ -99,16 +99,27 @@ they do not contain this command.
 
 Goal, loop, branching, and completion UI belong to the host LLM application.
 WOM supplies the local memory surface. Before a host claims archive-wide
-understanding, enumerate every canonical zet abstract:
+understanding, enumerate every canonical zet abstract. In a terminal CLI,
+prefer one complete pass:
+
+```bash
+archive zet-catalog-pass <archive-root> --status canonical --projection reading --page-size 200 --max-estimated-tokens 8000 --response-envelope-reserve-tokens 2500 --output .wom-scratch/diagnostics/<new-name>.jsonl --dry-run --progress --format json
+```
+
+Progress is content-free and goes to stderr. The command scans frontmatter on
+the first page, reuses process memory, and revalidates local state before
+completion. It prints only a summary and publishes the private JSONL only after
+success. Read `catalog_page` records incrementally; never inject the whole file
+into one response. Treat it as private scratch, never commit it, and delete it
+after use. If a forced termination leaves a hidden partial, confirm no pass is
+running before manual cleanup; WOM reports the count but never auto-deletes it.
+
+Use paged `zet-catalog` when the host needs one stdout page, manual continuation,
+or MCP rather than a complete CLI pass:
 
 ```bash
 archive zet-catalog <archive-root> --status canonical --projection reading --coverage-mode strict --cursor 0 --dry-run --progress --format json
 ```
-
-Progress is content-free and goes to stderr. If the complete JSON should not
-fill stdout, add `--output .wom-scratch/diagnostics/<new-name>.json`; treat that
-file as private local scratch, never as a receipt or canonical record, and do
-not commit it. The command refuses to overwrite an existing output file.
 
 When `complete` is false, call the same command with the returned `next_cursor`,
 `--expected-snapshot-id <snapshot.id>`, and
