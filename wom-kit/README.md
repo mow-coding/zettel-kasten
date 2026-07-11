@@ -139,6 +139,7 @@ docs/imap-mailbox-material-capture-execution-contract.md
 docs/imap-mailbox-material-capture-approval-plan.md
 docs/imap-mailbox-material-capture-approval-audit.md
 docs/version-truth-source.md
+docs/project-version-update.md
 docs/runtime-canonical-entrypoints.md
 docs/operational-context.md
 docs/connected-accounts.md
@@ -182,6 +183,9 @@ Current commands:
 ```text
 version
   Print the running WOM-kit CLI version and optional project pin/source mirror status. When an archive root is inspected, the command can also find a parent project installed-version pin and .zettel-kasten/source mirror, including source version and latest fetched tag drift when available. JSON output is available for AI/runtime checks and redacts local paths by default.
+
+project-version-update --dry-run|--approve --target vX.Y.Z
+  Preview locally, then approval-gate one configured-origin fetch, exact annotated-tag/main-ancestry/version verification, detached source-mirror checkout, recognized pin alignment, and schema-backed project receipt. Dirty or ambiguous state blocks; post-checkout failure rolls source and pins back. It never writes archive knowledge and requires a new process plus `archive version` verification after success. v0.3.215 is the one-time bootstrap boundary for older installs.
 
 onboard
   Plan or apply first archive setup. Dry-run writes nothing; --approve creates the archive, provider-bindings.yml, and runs strict doctor.

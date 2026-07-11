@@ -4,6 +4,8 @@
 Commands:
   version
           Print the running WOM-kit version and optional project pin status.
+  project-version-update
+          Preview or approve one verified project source-mirror and version-pin update.
   capabilities
           Print an agent-facing manifest of executable CLI commands and release identity.
   operator-feedback-plan
@@ -3401,6 +3403,47 @@ def command_version(args: argparse.Namespace) -> int:
             for warning in result["warnings"]:
                 print(f"- {warning}")
     return 0 if result.get("ok", True) else 1
+
+
+def command_project_version_update(args: argparse.Namespace) -> int:
+    reporter = CommandProgressReporter(
+        bool(getattr(args, "progress", False)),
+        label="project-version-update",
+    )
+    try:
+        result = archive_services.wom_kit_project_version_update(
+            Path(args.inspection_root),
+            target=args.target,
+            dry_run=bool(args.dry_run),
+            approve=bool(args.approve),
+            reviewed_by=args.reviewed_by,
+            progress_callback=reporter.progress,
+        )
+    except (OSError, ValueError):
+        print("Project version update failed before a privacy-safe result could be produced.", file=sys.stderr)
+        return 1
+    finally:
+        reporter.close()
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        print(f"Project WOM-kit version update: {result.get('status') or 'unknown'}")
+        target = result.get("target") if isinstance(result.get("target"), dict) else {}
+        source = result.get("source_mirror") if isinstance(result.get("source_mirror"), dict) else {}
+        runtime = result.get("runtime") if isinstance(result.get("runtime"), dict) else {}
+        print(f"Target: {target.get('tag') or '-'}")
+        print(f"Source mirror: {source.get('path') or '-'}")
+        print(f"Configured-origin ancestry verified: {str(bool(target.get('configured_origin_main_ancestry_verified'))).lower()}")
+        print(f"Restart required: {str(bool(runtime.get('restart_required'))).lower()}")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        print("Next safe actions:")
+        for action in result.get("next_safe_actions", []):
+            print(f"- {action}")
+    return 0 if result.get("ok") else 1
 
 
 def git_version_tags() -> list[str]:
@@ -14267,6 +14310,43 @@ def build_parser() -> argparse.ArgumentParser:
     )
     version.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     version.set_defaults(func=command_version)
+
+    project_version_update = subcommands.add_parser(
+        "project-version-update",
+        aliases=["version-update", "update-wom-kit"],
+        help="Safely update a project-local WOM-kit source mirror and recognized version pins.",
+    )
+    project_version_update.add_argument(
+        "inspection_root",
+        help="Project root, or its archive root when .zettel-kasten is in the parent project.",
+    )
+    project_version_update.add_argument(
+        "--target",
+        required=True,
+        help="Exact stable release tag such as v0.3.215.",
+    )
+    project_version_update_mode = project_version_update.add_mutually_exclusive_group(required=True)
+    project_version_update_mode.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Inspect local preconditions and preview the transaction without network or writes.",
+    )
+    project_version_update_mode.add_argument(
+        "--approve",
+        action="store_true",
+        help="Atomically fetch origin/main plus the exact tag, verify, checkout, align pins, and write a receipt.",
+    )
+    project_version_update.add_argument(
+        "--reviewed-by",
+        help="Safe non-secret reviewer actor id; required with --approve.",
+    )
+    project_version_update.add_argument(
+        "--progress",
+        action="store_true",
+        help="Stream content-free fetch, verify, checkout, pin, receipt, and 10-second heartbeat progress to stderr.",
+    )
+    project_version_update.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    project_version_update.set_defaults(func=command_project_version_update)
 
     capabilities = subcommands.add_parser(
         "capabilities",

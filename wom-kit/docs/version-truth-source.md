@@ -1,6 +1,6 @@
 # WOM-kit Version Truth Source
 
-Status: v0.3.137 read-only version truth-source checkpoint with project source mirror drift discovery
+Status: v0.3.215 read-only version truth plus approval-gated project update
 
 WOM-kit has several places where a human or AI might see a version-like value:
 the installed CLI, the source checkout, and a project-local pin left by a setup
@@ -15,6 +15,7 @@ archive --version
 archive version --format json
 archive version <project-or-archive-root> --format json
 archive runtime-context <archive-root> --format json
+archive project-version-update <project-or-archive-root> --target vX.Y.Z --dry-run --format json
 ```
 
 `archive --version` is the fastest human check. The structured `archive version`
@@ -91,15 +92,42 @@ or:
 consistency_state: project_source_mirror_mismatch
 ```
 
-The command does not run `git fetch`, update the mirror, switch branches, edit
-pins, or repair anything automatically.
+The read-only `archive version` command does not run `git fetch`, update the
+mirror, switch branches, edit pins, or repair anything automatically.
+
+## Approval-Gated Project Update
+
+Starting in v0.3.215, a separate command can perform that bounded update after
+an explicit preview and human approval:
+
+```powershell
+archive project-version-update <project-or-archive-root> `
+  --target vX.Y.Z `
+  --dry-run `
+  --progress `
+  --format json
+
+archive project-version-update <project-or-archive-root> `
+  --target vX.Y.Z `
+  --approve `
+  --reviewed-by <actor> `
+  --progress `
+  --format json
+```
+
+Approval changes only the project-local source mirror, recognized version pins,
+and one project update receipt. It does not update archive knowledge. See
+[Project Version Update](project-version-update.md) for the full preflight,
+origin/tag evidence, rollback, restart, and bootstrap boundary.
 
 ## Privacy Boundary
 
-The version check is local and non-secret:
+The version check is local and non-secret. The update dry-run is also local and
+does not fetch or write. Update approval may invoke the configured Git transport
+and credential helper, but WOM-kit does not read or echo credential values:
 
-- it writes no files,
-- it calls no providers,
+- the version check writes no files and calls no providers,
+- update approval writes only its declared project source/pin/receipt boundary,
 - it reads no secrets, keyrings, vaults, browser stores, mailboxes, or source
   documents,
 - it repairs no project source mirror,
@@ -107,10 +135,11 @@ The version check is local and non-secret:
 
 Use `--no-redact-local-paths` only for trusted local debugging.
 
-## Not Implemented
+## Remaining Boundary
 
-v0.3.137 does not provide automatic upgrade, installer repair, project source
-mirror repair, live provider sync, IMAP execution, secret retrieval, or project
-migration. It only gives a clear read-only signal about which WOM-kit version is
-running and whether optional project-local pin/source mirror evidence agrees
-with it.
+v0.3.215 is not an unattended auto-updater, installer repair system, live
+provider sync, secret retrieval flow, or project/archive migration engine. It
+does not verify a cryptographic tag signature, force-overwrite a colliding tag,
+reload the running Python process, update a dirty source mirror, or change user
+knowledge. Installations older than v0.3.215 need one final existing/manual
+verified update before this command is available for later releases.

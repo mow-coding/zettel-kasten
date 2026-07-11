@@ -665,6 +665,9 @@ WOM_KIT_VERSION_PIN_CANDIDATES = (
     ".zettel-kasten/installed-version.txt",
     "installed-version.txt",
 )
+WOM_KIT_PROJECT_UPDATE_TAG_RE = re.compile(r"^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
+WOM_KIT_PROJECT_UPDATE_RECEIPTS_RELATIVE = ".zettel-kasten/receipts/version-updates"
+WOM_KIT_PROJECT_UPDATE_LOCK_RELATIVE = ".zettel-kasten/version-update.lock"
 PROFILE_WALLET_NODE_KINDS = {"person", "organization", "team", "family", "project", "agent"}
 PROFILE_WALLET_CUSTODY_MODES = {
     "local_device",
@@ -56627,6 +56630,10 @@ def read_version_from_init_file(path: Path) -> str | None:
         text = path.read_text(encoding="utf-8")
     except OSError:
         return None
+    return read_version_from_init_text(text)
+
+
+def read_version_from_init_text(text: str) -> str | None:
     match = re.search(r'(?m)^__version__\s*=\s*"([^"]+)"\s*$', text)
     return match.group(1) if match else None
 
@@ -56636,6 +56643,10 @@ def read_pyproject_version_at(path: Path) -> str | None:
         text = path.read_text(encoding="utf-8")
     except OSError:
         return None
+    return read_pyproject_version_text(text)
+
+
+def read_pyproject_version_text(text: str) -> str | None:
     match = re.search(r'(?m)^version\s*=\s*"([^"]+)"\s*$', text)
     return match.group(1) if match else None
 
@@ -57850,6 +57861,830 @@ def runtime_context(
         result["local_archive_root"] = str(root)
         result["local_paths"] = runtime_context_local_paths(root, paths)
     return result
+
+
+def wom_kit_project_update_git(
+    mirror_path: Path,
+    args: list[str],
+    *,
+    timeout_seconds: int = 10,
+) -> tuple[bool, str]:
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(mirror_path), *args],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False, ""
+    if completed.returncode != 0:
+        return False, ""
+    return True, completed.stdout.strip()
+
+
+def wom_kit_project_update_source_versions(mirror_path: Path) -> dict[str, str | None]:
+    return {
+        "package": read_version_from_init_file(mirror_path / "wom-kit" / "src" / "wom_kit" / "__init__.py"),
+        "pyproject": read_pyproject_version_at(mirror_path / "wom-kit" / "pyproject.toml"),
+        "root_shim": read_version_from_init_file(mirror_path / "wom_kit" / "__init__.py"),
+    }
+
+
+def wom_kit_project_update_target_evidence(
+    mirror_path: Path,
+    target_tag: str,
+) -> dict[str, Any]:
+    tag_ref = f"refs/tags/{target_tag}"
+    tag_available, _ = wom_kit_project_update_git(mirror_path, ["show-ref", "--verify", "--quiet", tag_ref])
+    evidence: dict[str, Any] = {
+        "tag_available_locally": tag_available,
+        "annotated_tag_verified": False,
+        "target_commit": None,
+        "origin_main_available_locally": False,
+        "target_reachable_from_origin_main": False,
+        "source_versions": {
+            "package": None,
+            "pyproject": None,
+            "root_shim": None,
+        },
+        "all_source_versions_match_target": False,
+    }
+    if not tag_available:
+        return evidence
+
+    type_ok, tag_type = wom_kit_project_update_git(mirror_path, ["cat-file", "-t", tag_ref])
+    evidence["annotated_tag_verified"] = type_ok and tag_type == "tag"
+    commit_ok, target_commit = wom_kit_project_update_git(
+        mirror_path,
+        ["rev-parse", "--verify", f"{tag_ref}^{{commit}}"],
+    )
+    if not commit_ok or not re.fullmatch(r"[0-9a-fA-F]{40,64}", target_commit):
+        return evidence
+    target_commit = target_commit.lower()
+    evidence["target_commit"] = target_commit
+
+    blob_specs = {
+        "package": ("wom-kit/src/wom_kit/__init__.py", read_version_from_init_text),
+        "pyproject": ("wom-kit/pyproject.toml", read_pyproject_version_text),
+        "root_shim": ("wom_kit/__init__.py", read_version_from_init_text),
+    }
+    source_versions: dict[str, str | None] = {}
+    for label, (relative_path, parser) in blob_specs.items():
+        blob_ok, blob_text = wom_kit_project_update_git(
+            mirror_path,
+            ["show", f"{target_commit}:{relative_path}"],
+        )
+        source_versions[label] = parser(blob_text) if blob_ok else None
+    evidence["source_versions"] = source_versions
+    target_version = normalize_version_label(target_tag)
+    evidence["all_source_versions_match_target"] = bool(
+        target_version
+        and all(normalize_version_label(value) == target_version for value in source_versions.values())
+    )
+
+    main_ok, _ = wom_kit_project_update_git(
+        mirror_path,
+        ["show-ref", "--verify", "--quiet", "refs/remotes/origin/main"],
+    )
+    evidence["origin_main_available_locally"] = main_ok
+    if main_ok:
+        ancestor_ok, _ = wom_kit_project_update_git(
+            mirror_path,
+            ["merge-base", "--is-ancestor", target_commit, "refs/remotes/origin/main"],
+        )
+        evidence["target_reachable_from_origin_main"] = ancestor_ok
+    return evidence
+
+
+def write_bytes_atomic(path: Path, value: bytes) -> None:
+    temporary_path: Path | None = None
+    descriptor: int | None = None
+    try:
+        for _ in range(8):
+            candidate = path.with_name(f".{path.name}.{secrets.token_hex(8)}.tmp")
+            try:
+                descriptor = os.open(candidate, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                temporary_path = candidate
+                break
+            except FileExistsError:
+                continue
+        if temporary_path is None or descriptor is None:
+            raise OSError("could_not_reserve_atomic_temporary_file")
+        with os.fdopen(descriptor, "wb") as handle:
+            descriptor = None
+            handle.write(value)
+            handle.flush()
+            os.fsync(handle.fileno())
+        temporary_path.replace(path)
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        if temporary_path is not None and temporary_path.exists():
+            temporary_path.unlink()
+
+
+def wom_kit_project_update_receipt_path(project_root: Path, target_tag: str, timestamp: str) -> tuple[Path, str]:
+    receipts_root = project_root / WOM_KIT_PROJECT_UPDATE_RECEIPTS_RELATIVE
+    timestamp_slug = re.sub(r"[^0-9TZ]", "", timestamp)
+    base_name = f"{timestamp_slug}-{target_tag}.project-version-update.json"
+    candidate = receipts_root / base_name
+    suffix = 2
+    while candidate.exists():
+        candidate = receipts_root / f"{timestamp_slug}-{target_tag}-{suffix}.project-version-update.json"
+        suffix += 1
+    relative = PurePosixPath(*candidate.relative_to(project_root).parts).as_posix()
+    return candidate, relative
+
+
+def wom_kit_project_version_update(
+    inspection_root: Path | str,
+    *,
+    target: str,
+    dry_run: bool = False,
+    approve: bool = False,
+    reviewed_by: str | None = None,
+    progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
+) -> dict[str, Any]:
+    blockers: list[str] = []
+    warnings: list[str] = []
+    target_tag = str(target or "").strip()
+    target_version = normalize_version_label(target_tag)
+    reviewer = safe_foreign_quarantine_actor_id(reviewed_by)
+    inspection = Path(inspection_root).expanduser().resolve()
+    local_metadata_root = inspection / ".zettel-kasten"
+    parent_metadata_root = inspection.parent / ".zettel-kasten"
+    project_root = (
+        inspection.parent
+        if (
+            not local_metadata_root.exists()
+            and (inspection / "archive.yml").is_file()
+            and parent_metadata_root.exists()
+        )
+        else inspection
+    )
+    root_label = "parent_of_archive" if project_root != inspection else "inspection_root"
+    metadata_root = project_root / ".zettel-kasten"
+    mirror_path = metadata_root / "source"
+    receipts_root = project_root / WOM_KIT_PROJECT_UPDATE_RECEIPTS_RELATIVE
+    receipts_parent = metadata_root / "receipts"
+    receipts_parent_existed_before = receipts_parent.exists()
+    receipts_root_existed_before = receipts_root.exists()
+    mirror_logical = wom_kit_project_source_mirror_location(root_label)
+    lock_path = project_root / WOM_KIT_PROJECT_UPDATE_LOCK_RELATIVE
+    if progress_callback is not None:
+        progress_callback("project-preflight", "start", None, None)
+
+    if dry_run is approve:
+        blockers.append("Choose exactly one mode: --dry-run or --approve.")
+    if not WOM_KIT_PROJECT_UPDATE_TAG_RE.fullmatch(target_tag):
+        blockers.append("target must be an exact stable release tag such as v0.3.215.")
+    if approve and reviewer is None:
+        blockers.append("project-version-update approve requires a safe --reviewed-by actor id.")
+    if reviewed_by and reviewer is None:
+        blockers.append("reviewed_by must be a safe non-secret actor id.")
+    if not inspection.exists() or not inspection.is_dir():
+        blockers.append("The project/archive inspection root must be an existing directory.")
+    if not project_root.exists() or not project_root.is_dir():
+        blockers.append("The resolved project root must be an existing directory.")
+    if metadata_root.is_symlink():
+        blockers.append("The project .zettel-kasten directory must not be a symbolic link.")
+    if (
+        (metadata_root / "receipts").is_symlink()
+        or receipts_root.is_symlink()
+        or not is_path_within_root(receipts_root, project_root)
+    ):
+        blockers.append("The project version-update receipt directory must stay inside the project root.")
+    if not mirror_path.is_dir():
+        blockers.append("The project-local .zettel-kasten/source mirror is missing.")
+    elif mirror_path.is_symlink() or not is_path_within_root(mirror_path, project_root):
+        blockers.append("The project source mirror must be a real directory inside the project root.")
+    if lock_path.exists():
+        blockers.append("A project version update lock already exists; review the prior run before continuing.")
+
+    git_repo_verified = False
+    worktree_clean = False
+    origin_configured = False
+    mirror_pin_tracked = False
+    unexpected_worktree_entry_count = 0
+    head_before: str | None = None
+    head_after: str | None = None
+    original_branch: str | None = None
+    current_versions: dict[str, str | None] = {"package": None, "pyproject": None, "root_shim": None}
+
+    if mirror_path.is_dir() and not mirror_path.is_symlink():
+        inside_ok, inside_text = wom_kit_project_update_git(mirror_path, ["rev-parse", "--is-inside-work-tree"])
+        top_ok, top_text = wom_kit_project_update_git(mirror_path, ["rev-parse", "--show-toplevel"])
+        try:
+            exact_top = top_ok and Path(top_text).resolve() == mirror_path.resolve()
+        except (OSError, RuntimeError, ValueError):
+            exact_top = False
+        git_repo_verified = inside_ok and inside_text == "true" and exact_top
+        if not git_repo_verified:
+            blockers.append("The project source mirror must be the exact root of a Git working tree.")
+        else:
+            head_ok, head_text = wom_kit_project_update_git(mirror_path, ["rev-parse", "--verify", "HEAD"])
+            if head_ok and re.fullmatch(r"[0-9a-fA-F]{40,64}", head_text):
+                head_before = head_text.lower()
+                head_after = head_before
+            else:
+                blockers.append("The project source mirror has no valid HEAD commit.")
+            branch_ok, branch_text = wom_kit_project_update_git(
+                mirror_path,
+                ["symbolic-ref", "--quiet", "--short", "HEAD"],
+            )
+            original_branch = branch_text if branch_ok and branch_text else None
+            status_ok, status_text = wom_kit_project_update_git(
+                mirror_path,
+                ["status", "--porcelain=v1", "--untracked-files=all"],
+            )
+            status_lines = [line for line in status_text.splitlines() if line]
+            unexpected_lines = [line for line in status_lines if line != "?? installed-version.txt"]
+            unexpected_worktree_entry_count = len(unexpected_lines)
+            worktree_clean = status_ok and not unexpected_lines
+            if not status_ok:
+                blockers.append("The project source mirror worktree status could not be read.")
+            elif unexpected_lines:
+                blockers.append("The project source mirror has tracked changes or unknown untracked files.")
+            tracked_pin_ok, _ = wom_kit_project_update_git(
+                mirror_path,
+                ["ls-files", "--error-unmatch", "--", "installed-version.txt"],
+            )
+            mirror_pin_tracked = tracked_pin_ok
+            if mirror_pin_tracked:
+                blockers.append("The source-mirror installed-version pin must not be Git-tracked.")
+            origin_ok, origin_text = wom_kit_project_update_git(
+                mirror_path,
+                ["config", "--get", "remote.origin.url"],
+            )
+            origin_configured = origin_ok and bool(origin_text)
+            if not origin_configured:
+                blockers.append("The project source mirror must have a configured origin remote.")
+            current_versions = wom_kit_project_update_source_versions(mirror_path)
+
+    pin_specs: list[dict[str, Any]] = []
+    project_pin_path = metadata_root / "installed-version.txt"
+    pin_specs.append(
+        {
+            "path": project_pin_path,
+            "logical": (
+                ".zettel-kasten/installed-version.txt"
+                if root_label == "inspection_root"
+                else f"{root_label}/.zettel-kasten/installed-version.txt"
+            ),
+            "role": "project_pin",
+        }
+    )
+    mirror_pin_path = mirror_path / "installed-version.txt"
+    if mirror_pin_path.exists() or mirror_pin_path.is_symlink():
+        pin_specs.append(
+            {
+                "path": mirror_pin_path,
+                "logical": f"{mirror_logical}/installed-version.txt",
+                "role": "source_mirror_pin",
+            }
+        )
+    legacy_pin_path = project_root / "installed-version.txt"
+    if legacy_pin_path.exists() or legacy_pin_path.is_symlink():
+        pin_specs.append(
+            {
+                "path": legacy_pin_path,
+                "logical": "installed-version.txt" if root_label == "inspection_root" else f"{root_label}/installed-version.txt",
+                "role": "legacy_project_pin",
+            }
+        )
+
+    for spec in pin_specs:
+        path = spec["path"]
+        spec["existed"] = path.exists()
+        spec["previous_bytes"] = None
+        spec["previous_version"] = None
+        if path.is_symlink():
+            blockers.append("Recognized installed-version pins must not be symbolic links.")
+            continue
+        if path.exists():
+            try:
+                previous_bytes = path.read_bytes()
+                previous_text = previous_bytes.decode("utf-8-sig").strip()
+            except (OSError, UnicodeError):
+                blockers.append("A recognized installed-version pin is unreadable.")
+                continue
+            previous_version = normalize_version_label(previous_text)
+            if previous_version is None or not WOM_KIT_PROJECT_UPDATE_TAG_RE.fullmatch(f"v{previous_version}"):
+                blockers.append("A recognized installed-version pin does not contain an exact stable version.")
+                continue
+            spec["previous_bytes"] = previous_bytes
+            spec["previous_version"] = f"v{previous_version}"
+
+    if target_version:
+        target_key = version_sort_key(target_version)
+        known_versions = [
+            normalize_version_label(WOM_KIT_VERSION),
+            *(normalize_version_label(value) for value in current_versions.values()),
+            *(normalize_version_label(spec.get("previous_version")) for spec in pin_specs),
+        ]
+        known_keys = [version_sort_key(value) for value in known_versions if value]
+        if target_key is not None and any(key is not None and target_key < key for key in known_keys):
+            blockers.append("project-version-update is forward-only and refuses a version downgrade.")
+
+    target_evidence = (
+        wom_kit_project_update_target_evidence(mirror_path, target_tag)
+        if git_repo_verified and WOM_KIT_PROJECT_UPDATE_TAG_RE.fullmatch(target_tag)
+        else {
+            "tag_available_locally": False,
+            "annotated_tag_verified": False,
+            "target_commit": None,
+            "origin_main_available_locally": False,
+            "target_reachable_from_origin_main": False,
+            "source_versions": {"package": None, "pyproject": None, "root_shim": None},
+            "all_source_versions_match_target": False,
+        }
+    )
+    fetch_attempted = False
+    fetch_succeeded = False
+    source_checkout_changed = False
+    pin_write_attempted_paths: list[str] = []
+    pins_written: list[str] = []
+    receipt_relative: str | None = None
+    receipt_written = False
+    rollback = {
+        "attempted": False,
+        "succeeded": None,
+        "source_restored": None,
+        "pins_restored": None,
+        "lock_removed": None,
+        "fetched_refs_may_remain": False,
+    }
+    lock_acquired = False
+
+    def validate_target_evidence(*, require_local: bool, require_origin_ancestry: bool) -> None:
+        if require_local and not target_evidence.get("tag_available_locally"):
+            blockers.append("The exact target tag is not available after the configured-origin fetch.")
+            return
+        if not target_evidence.get("tag_available_locally"):
+            return
+        if not target_evidence.get("annotated_tag_verified"):
+            blockers.append("The target release ref must be an annotated Git tag.")
+        if not target_evidence.get("target_commit"):
+            blockers.append("The target release tag does not resolve to a commit.")
+        if not target_evidence.get("all_source_versions_match_target"):
+            blockers.append("The target tag package, pyproject, and root shim versions must all match the target.")
+        if not target_evidence.get("origin_main_available_locally"):
+            if require_origin_ancestry:
+                blockers.append("The configured origin/main ref is unavailable for target ancestry verification.")
+            else:
+                warnings.append("Local origin/main evidence is unavailable; approval will refresh and verify it before checkout.")
+        elif not target_evidence.get("target_reachable_from_origin_main"):
+            if require_origin_ancestry:
+                blockers.append("The target tag commit must be reachable from configured origin/main.")
+            else:
+                warnings.append("Local origin/main evidence is stale or does not contain the target; approval will refresh and verify it.")
+
+    if dry_run and target_evidence.get("tag_available_locally"):
+        validate_target_evidence(require_local=True, require_origin_ancestry=False)
+    elif dry_run and not target_evidence.get("tag_available_locally"):
+        warnings.append("The target tag is not fetched locally; approval will fetch and verify it before any checkout.")
+
+    def result_payload(status: str) -> dict[str, Any]:
+        target_commit = target_evidence.get("target_commit")
+        rolled_back = status == "failed_rolled_back" and rollback.get("succeeded") is True
+        final_pins_written = [] if rolled_back else list(pins_written)
+        source_is_target = status == "updated_restart_required" and head_after == target_commit
+        display_receipt_relative = (
+            f"{root_label}/{receipt_relative}"
+            if receipt_relative and root_label != "inspection_root"
+            else receipt_relative
+        )
+        pin_summaries = [
+            {
+                "path": spec["logical"],
+                "role": spec["role"],
+                "existed_before": bool(spec.get("existed")),
+                "previous_version": spec.get("previous_version"),
+                "target_version": target_tag if WOM_KIT_PROJECT_UPDATE_TAG_RE.fullmatch(target_tag) else None,
+                "written": spec["logical"] in final_pins_written,
+                "write_attempted": spec["logical"] in pin_write_attempted_paths,
+            }
+            for spec in pin_specs
+        ]
+        restart_required = status == "updated_restart_required"
+        if status == "blocked":
+            next_actions = ["Resolve every blocker before running project-version-update again."]
+        elif status in {"failed_rolled_back", "failed_rollback_incomplete"}:
+            next_actions = [
+                "Do not claim the target runtime is active.",
+                (
+                    "Review and restore the project source mirror and pins from backup before retrying."
+                    if status == "failed_rollback_incomplete"
+                    else "Review the generic failure stage, then rerun the dry-run before another approval."
+                ),
+            ]
+        elif status == "no_change":
+            next_actions = ["Start a new process and run archive version <project-or-archive-root> --format json."]
+        elif restart_required:
+            next_actions = [
+                "Close this Python process or terminal command invocation.",
+                "Start a new process from the project-local source mirror.",
+                "Run archive version <project-or-archive-root> --format json and require source, pin, tag, and import-origin agreement.",
+            ]
+        else:
+            next_actions = [
+                "Review this preview, then rerun with --approve --reviewed-by <actor>.",
+                "Approval will fetch and verify the exact tag before changing the source mirror or pins.",
+            ]
+        return {
+            "ok": not blockers and status not in {"failed_rolled_back", "failed_rollback_incomplete"},
+            "schema": "wom-kit/project-version-update/v0.1",
+            "lifecycle_action": "project_version_update",
+            "status": status,
+            "mode": "approve" if approve else "dry_run",
+            "target": {
+                "tag": target_tag or None,
+                "version": target_version,
+                **target_evidence,
+                "configured_origin_main_ancestry_verified": bool(
+                    target_evidence.get("target_reachable_from_origin_main")
+                ),
+                "cryptographic_tag_signature_verified": False,
+            },
+            "source_mirror": {
+                "path": mirror_logical,
+                "git_repo_verified": git_repo_verified,
+                "worktree_clean_except_untracked_local_pin": worktree_clean,
+                "unexpected_worktree_entry_count": unexpected_worktree_entry_count,
+                "source_mirror_pin_git_tracked": mirror_pin_tracked,
+                "origin_configured": origin_configured,
+                "origin_url_echoed": False,
+                "head_commit_before": head_before,
+                "head_commit_after": head_after,
+                "source_checkout_change_attempted": source_checkout_changed,
+                "source_checkout_is_verified_target": source_is_target,
+                "checkout_mode_after_result": (
+                    "detached_exact_tag"
+                    if source_is_target
+                    else "restored_original"
+                    if rolled_back
+                    else "unchanged"
+                ),
+            },
+            "pins": {
+                "target_value": target_tag if WOM_KIT_PROJECT_UPDATE_TAG_RE.fullmatch(target_tag) else None,
+                "planned": pin_summaries,
+                "written_paths": final_pins_written,
+                "write_attempted_paths": list(pin_write_attempted_paths),
+            },
+            "fetch": {
+                "remote_name": "origin",
+                "atomic_ref_update_requested": True,
+                "main_ref": "refs/remotes/origin/main",
+                "exact_target_tag_only": True,
+                "attempted": fetch_attempted,
+                "succeeded": fetch_succeeded,
+                "git_transport_called": fetch_attempted,
+                "network_may_have_been_called": fetch_attempted,
+                "fetched_refs_may_remain_after_result": fetch_succeeded,
+                "raw_git_stderr_echoed": False,
+                "remote_url_echoed": False,
+                "configured_git_transport_may_use_credential_helper": approve,
+            },
+            "receipt": {
+                "schema": "wom-kit/project-version-update-receipt/v0.1",
+                "path": display_receipt_relative,
+                "written": receipt_written,
+            },
+            "rollback": rollback,
+            "runtime": {
+                "running_version_before": WOM_KIT_VERSION,
+                "import_origin_within_project_source_mirror": (
+                    is_path_within_root(Path(__file__).resolve(), mirror_path)
+                    if mirror_path.is_dir()
+                    else False
+                ),
+                "running_process_reloaded": False,
+                "restart_required": restart_required,
+                "post_restart_verification_command": (
+                    "archive version <project-or-archive-root> --format json"
+                    if status in {"updated_restart_required", "no_change"}
+                    else None
+                ),
+            },
+            "write_boundary": {
+                "archive_zets_written": False,
+                "archive_objets_written": False,
+                "archive_manifests_written": False,
+                "provider_state_written": False,
+                "project_source_checkout_may_change": approve,
+                "recognized_version_pins_may_change": approve,
+                "project_update_receipt_may_be_written": approve,
+            },
+            "would_change": (
+                []
+                if status == "no_change"
+                else [
+                    f"{mirror_logical} detached checkout to the exact verified target tag",
+                    "recognized installed-version pins aligned to the target tag",
+                    (
+                        f"{WOM_KIT_PROJECT_UPDATE_RECEIPTS_RELATIVE}/ one update receipt"
+                        if root_label == "inspection_root"
+                        else f"{root_label}/{WOM_KIT_PROJECT_UPDATE_RECEIPTS_RELATIVE}/ one update receipt"
+                    ),
+                ]
+            ),
+            "files_written": [
+                *final_pins_written,
+                *([display_receipt_relative] if receipt_written and display_receipt_relative else []),
+            ],
+            "blockers": unique_preserve_order(blockers),
+            "warnings": unique_preserve_order(warnings),
+            "next_safe_actions": next_actions,
+            "privacy_guards": {
+                "local_absolute_paths_echoed": False,
+                "remote_urls_echoed": False,
+                "credential_values_read_by_wom_kit": False,
+                "credential_values_echoed": False,
+                "archive_body_text_read": False,
+                "objet_bytes_read": False,
+            },
+        }
+
+    if blockers:
+        if progress_callback is not None:
+            progress_callback("project-preflight", "done", None, None)
+        return result_payload("blocked")
+    if dry_run:
+        status = (
+            "ready_to_fetch_on_approve"
+            if not target_evidence.get("tag_available_locally")
+            else "ready_for_approval"
+        )
+        if progress_callback is not None:
+            progress_callback("project-preflight", "done", None, None)
+        return result_payload(status)
+
+    if progress_callback is not None:
+        progress_callback("project-preflight", "done", None, None)
+
+    try:
+        metadata_root.mkdir(parents=True, exist_ok=True)
+        with lock_path.open("x", encoding="utf-8") as handle:
+            handle.write("wom-kit project version update in progress\n")
+        lock_acquired = True
+    except FileExistsError:
+        blockers.append("A concurrent project version update acquired the lock first.")
+        return result_payload("blocked")
+    except OSError:
+        blockers.append("The project version update lock could not be created.")
+        return result_payload("blocked")
+
+    try:
+        if progress_callback is not None:
+            progress_callback("fetch-release", "start", None, None)
+        fetch_attempted = True
+        fetch_ok, _ = wom_kit_project_update_git(
+            mirror_path,
+            [
+                "fetch",
+                "--atomic",
+                "--quiet",
+                "--no-tags",
+                "--no-recurse-submodules",
+                "--no-auto-maintenance",
+                "--no-write-fetch-head",
+                "origin",
+                "refs/heads/main:refs/remotes/origin/main",
+                f"refs/tags/{target_tag}:refs/tags/{target_tag}",
+            ],
+            timeout_seconds=180,
+        )
+        fetch_succeeded = fetch_ok
+        if progress_callback is not None:
+            progress_callback("fetch-release", "done", None, None)
+        if not fetch_ok:
+            blockers.append("The atomic configured-origin fetch failed; no source checkout or pin write was attempted.")
+            return result_payload("blocked")
+
+        if progress_callback is not None:
+            progress_callback("verify-release", "start", None, None)
+        target_evidence = wom_kit_project_update_target_evidence(mirror_path, target_tag)
+        validate_target_evidence(require_local=True, require_origin_ancestry=True)
+        if progress_callback is not None:
+            progress_callback("verify-release", "done", None, None)
+        if blockers:
+            return result_payload("blocked")
+
+        target_commit = str(target_evidence["target_commit"])
+        pins_already_target = all(spec.get("previous_version") == target_tag for spec in pin_specs)
+        if head_before == target_commit and pins_already_target:
+            head_after = head_before
+            lock_path.unlink()
+            lock_acquired = False
+            return result_payload("no_change")
+
+        if progress_callback is not None:
+            progress_callback("checkout-release", "start", None, None)
+        if head_before != target_commit:
+            checkout_ok, _ = wom_kit_project_update_git(
+                mirror_path,
+                ["checkout", "--detach", "--quiet", "--no-overwrite-ignore", f"refs/tags/{target_tag}"],
+                timeout_seconds=60,
+            )
+            if not checkout_ok:
+                probe_ok, probe_head = wom_kit_project_update_git(mirror_path, ["rev-parse", "--verify", "HEAD"])
+                probe_status_ok, probe_status_text = wom_kit_project_update_git(
+                    mirror_path,
+                    ["status", "--porcelain=v1", "--untracked-files=all"],
+                )
+                probe_unexpected = [
+                    line
+                    for line in probe_status_text.splitlines()
+                    if line and line != "?? installed-version.txt"
+                ]
+                if (
+                    not probe_ok
+                    or not probe_status_ok
+                    or bool(probe_unexpected)
+                    or (head_before and probe_head.lower() != head_before)
+                ):
+                    source_checkout_changed = True
+                    head_after = probe_head.lower() if probe_ok else None
+                    raise RuntimeError("checkout_failed_after_head_change")
+                blockers.append("The verified target checkout failed before any pin write.")
+                return result_payload("blocked")
+            source_checkout_changed = True
+        head_ok, checked_out_head = wom_kit_project_update_git(mirror_path, ["rev-parse", "--verify", "HEAD"])
+        head_after = checked_out_head.lower() if head_ok else None
+        if not head_ok or head_after != target_commit:
+            raise RuntimeError("checkout_verification_failed")
+        after_versions = wom_kit_project_update_source_versions(mirror_path)
+        if not all(normalize_version_label(value) == target_version for value in after_versions.values()):
+            raise RuntimeError("source_version_verification_failed")
+        status_ok, status_text = wom_kit_project_update_git(
+            mirror_path,
+            ["status", "--porcelain=v1", "--untracked-files=all"],
+        )
+        unexpected_after = [
+            line for line in status_text.splitlines() if line and line != "?? installed-version.txt"
+        ]
+        if not status_ok or unexpected_after:
+            raise RuntimeError("post_checkout_worktree_not_clean")
+        if progress_callback is not None:
+            progress_callback("checkout-release", "done", None, None)
+
+        if progress_callback is not None:
+            progress_callback("write-pins", "start", 0, len(pin_specs))
+        target_pin_bytes = (target_tag + "\n").encode("utf-8")
+        for index, spec in enumerate(pin_specs, start=1):
+            path = spec["path"]
+            if spec.get("previous_bytes") != target_pin_bytes:
+                pin_write_attempted_paths.append(spec["logical"])
+                path.parent.mkdir(parents=True, exist_ok=True)
+                write_bytes_atomic(path, target_pin_bytes)
+                pins_written.append(spec["logical"])
+            if path.read_bytes() != target_pin_bytes:
+                raise RuntimeError("pin_verification_failed")
+            if progress_callback is not None:
+                progress_callback("write-pins", "written", index, len(pin_specs))
+        if progress_callback is not None:
+            progress_callback("write-pins", "done", len(pin_specs), len(pin_specs))
+
+        timestamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        receipt_path, receipt_relative = wom_kit_project_update_receipt_path(project_root, target_tag, timestamp)
+        receipt = {
+            "schema": "wom-kit/project-version-update-receipt/v0.1",
+            "action": "project_version_update",
+            "status": "updated_restart_required",
+            "timestamp": timestamp,
+            "reviewed_by": reviewer,
+            "target_tag": target_tag,
+            "target_version": target_version,
+            "source_mirror": mirror_logical,
+            "head_commit_before": head_before,
+            "head_commit_after": head_after,
+            "source_checkout_changed": source_checkout_changed,
+            "pins_written": list(pins_written),
+            "configured_origin": {
+                "remote_name": "origin",
+                "atomic_fetch_succeeded": fetch_succeeded,
+                "target_reachable_from_origin_main": True,
+                "annotated_tag_verified": True,
+                "cryptographic_tag_signature_verified": False,
+                "remote_url_echoed": False,
+            },
+            "runtime": {
+                "running_version_before": WOM_KIT_VERSION,
+                "running_process_reloaded": False,
+                "restart_required": True,
+            },
+            "privacy_guards": {
+                "local_absolute_paths_echoed": False,
+                "remote_urls_echoed": False,
+                "credential_values_echoed": False,
+                "archive_body_text_read": False,
+                "objet_bytes_read": False,
+            },
+        }
+        schema_issues = validate_schema(receipt, "project-version-update-receipt.schema.json")
+        if schema_issues:
+            raise RuntimeError("receipt_schema_validation_failed")
+        if progress_callback is not None:
+            progress_callback("write-receipt", "start", None, None)
+        receipt_path.parent.mkdir(parents=True, exist_ok=True)
+        write_bytes_atomic(
+            receipt_path,
+            (json.dumps(receipt, indent=2, ensure_ascii=False) + "\n").encode("utf-8"),
+        )
+        receipt_written = True
+        if progress_callback is not None:
+            progress_callback("write-receipt", "done", None, None)
+        lock_path.unlink()
+        lock_acquired = False
+        return result_payload("updated_restart_required")
+    except Exception:
+        rollback["attempted"] = source_checkout_changed or bool(pin_write_attempted_paths)
+        rollback["fetched_refs_may_remain"] = fetch_attempted
+        source_restored = True
+        pins_restored = True
+        if source_checkout_changed and head_before:
+            restore_args = (
+                ["checkout", "--quiet", "--no-overwrite-ignore", original_branch]
+                if original_branch
+                else ["checkout", "--detach", "--quiet", "--no-overwrite-ignore", head_before]
+            )
+            restored_ok, _ = wom_kit_project_update_git(mirror_path, restore_args, timeout_seconds=60)
+            verify_ok, restored_head = wom_kit_project_update_git(mirror_path, ["rev-parse", "--verify", "HEAD"])
+            restored_status_ok, restored_status_text = wom_kit_project_update_git(
+                mirror_path,
+                ["status", "--porcelain=v1", "--untracked-files=all"],
+            )
+            restored_unexpected = [
+                line
+                for line in restored_status_text.splitlines()
+                if line and line != "?? installed-version.txt"
+            ]
+            source_restored = (
+                restored_ok
+                and verify_ok
+                and restored_head.lower() == head_before
+                and restored_status_ok
+                and not restored_unexpected
+            )
+            head_after = restored_head.lower() if verify_ok else None
+        for spec in pin_specs:
+            path = spec["path"]
+            try:
+                if spec.get("existed"):
+                    previous_bytes = spec.get("previous_bytes")
+                    if not isinstance(previous_bytes, bytes):
+                        raise OSError("missing_pin_snapshot")
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    write_bytes_atomic(path, previous_bytes)
+                elif path.exists():
+                    path.unlink()
+            except OSError:
+                pins_restored = False
+        if receipt_relative:
+            receipt_candidate = project_root.joinpath(*PurePosixPath(receipt_relative).parts)
+            try:
+                if receipt_candidate.exists():
+                    receipt_candidate.unlink()
+                receipt_written = False
+            except OSError:
+                pins_restored = False
+        for directory, existed_before in (
+            (receipts_root, receipts_root_existed_before),
+            (receipts_parent, receipts_parent_existed_before),
+        ):
+            if existed_before or not directory.exists():
+                continue
+            try:
+                directory.rmdir()
+            except OSError:
+                pins_restored = False
+        rollback["source_restored"] = source_restored
+        rollback["pins_restored"] = pins_restored
+        lock_removed = True
+        if lock_acquired:
+            try:
+                lock_path.unlink()
+                lock_acquired = False
+            except OSError:
+                lock_removed = False
+        rollback["lock_removed"] = lock_removed
+        rollback["succeeded"] = source_restored and pins_restored and lock_removed
+        blockers.append(
+            "The project version update failed after local mutation and was rolled back."
+            if rollback["succeeded"]
+            else "The project version update failed and rollback could not be fully verified."
+        )
+        status = "failed_rolled_back" if rollback["succeeded"] else "failed_rollback_incomplete"
+        return result_payload(status)
+    finally:
+        if lock_acquired:
+            try:
+                lock_path.unlink()
+            except OSError:
+                pass
 
 
 def ai_start_here(

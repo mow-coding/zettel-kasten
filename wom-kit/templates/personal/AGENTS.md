@@ -26,6 +26,11 @@ Local reviewed WOM state is canonical. GitHub backs up metadata/version history,
 - Do not store provider URLs in zettels.
 - Preserve provenance, visibility, and source boundaries.
 
+## WOM-kit Updates
+
+- When available, use `project-version-update --dry-run` and then explicit human-reviewed `--approve`; do not hand-edit the source checkout or installed-version pins.
+- After `updated_restart_required`, start a new process and require `archive version` import/source/pin/tag agreement before claiming the new runtime is active. Never bypass a dirty-state, tag, metadata, lock, or rollback blocker.
+
 ## AI Intake Protocol
 
 - BEFORE copying any local file into the archive or an objet store, run `archive source-intake <archive-root> --dry-run --local-path <file>` and follow its `next_safe_actions`.

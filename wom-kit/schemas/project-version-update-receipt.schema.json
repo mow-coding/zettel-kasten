@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WOM-kit project version update receipt",
+  "type": "object",
+  "required": [
+    "schema",
+    "action",
+    "status",
+    "timestamp",
+    "reviewed_by",
+    "target_tag",
+    "target_version",
+    "source_mirror",
+    "head_commit_before",
+    "head_commit_after",
+    "source_checkout_changed",
+    "pins_written",
+    "configured_origin",
+    "runtime",
+    "privacy_guards"
+  ],
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "wom-kit/project-version-update-receipt/v0.1"
+    },
+    "action": {
+      "type": "string",
+      "const": "project_version_update"
+    },
+    "status": {
+      "type": "string",
+      "const": "updated_restart_required"
+    },
+    "timestamp": {"type": "string"},
+    "reviewed_by": {"type": "string", "minLength": 1},
+    "target_tag": {
+      "type": "string",
+      "pattern": "^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+    },
+    "target_version": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+    },
+    "source_mirror": {"type": "string"},
+    "head_commit_before": {"type": "string", "pattern": "^[0-9a-f]{40,64}$"},
+    "head_commit_after": {"type": "string", "pattern": "^[0-9a-f]{40,64}$"},
+    "source_checkout_changed": {"type": "boolean"},
+    "pins_written": {
+      "type": "array",
+      "items": {"type": "string"},
+      "uniqueItems": true
+    },
+    "configured_origin": {
+      "type": "object",
+      "required": [
+        "remote_name",
+        "atomic_fetch_succeeded",
+        "target_reachable_from_origin_main",
+        "annotated_tag_verified",
+        "cryptographic_tag_signature_verified",
+        "remote_url_echoed"
+      ],
+      "properties": {
+        "remote_name": {"type": "string", "const": "origin"},
+        "atomic_fetch_succeeded": {"type": "boolean", "const": true},
+        "target_reachable_from_origin_main": {"type": "boolean", "const": true},
+        "annotated_tag_verified": {"type": "boolean", "const": true},
+        "cryptographic_tag_signature_verified": {"type": "boolean", "const": false},
+        "remote_url_echoed": {"type": "boolean", "const": false}
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "required": [
+        "running_version_before",
+        "running_process_reloaded",
+        "restart_required"
+      ],
+      "properties": {
+        "running_version_before": {"type": "string"},
+        "running_process_reloaded": {"type": "boolean", "const": false},
+        "restart_required": {"type": "boolean", "const": true}
+      }
+    },
+    "privacy_guards": {
+      "type": "object",
+      "required": [
+        "local_absolute_paths_echoed",
+        "remote_urls_echoed",
+        "credential_values_echoed",
+        "archive_body_text_read",
+        "objet_bytes_read"
+      ],
+      "properties": {
+        "local_absolute_paths_echoed": {"type": "boolean", "const": false},
+        "remote_urls_echoed": {"type": "boolean", "const": false},
+        "credential_values_echoed": {"type": "boolean", "const": false},
+        "archive_body_text_read": {"type": "boolean", "const": false},
+        "objet_bytes_read": {"type": "boolean", "const": false}
+      }
+    }
+  }
+}

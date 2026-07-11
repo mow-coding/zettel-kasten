@@ -77,6 +77,24 @@ backup or replica regenerated from local relation-bearing records. External
 state never silently overwrites local state. Do not claim a backup from a local
 commit, `declared_uploaded`, or an unreceipted DB row.
 
+## Update WOM-kit Without Hand Editing
+
+When `project-version-update` is available, do not manually fetch, checkout, or
+edit installed-version pins. Preview first:
+
+```bash
+archive project-version-update <project-or-archive-root> --target vX.Y.Z --dry-run --progress --format json
+```
+
+Only after human review, use `--approve --reviewed-by <actor>`. Treat
+`updated_restart_required` as an update applied to disk, not proof that this
+already-running Python process changed version. Start a new process and require
+`archive version <project-or-archive-root> --format json` to show import,
+source, pin, and exact-tag agreement before saying the new runtime is active.
+Never bypass a dirty-worktree, origin/tag, metadata, lock, or rollback blocker.
+Releases before v0.3.215 require one final prior/manual bootstrap update because
+they do not contain this command.
+
 ## Read Archive Memory Through The Host Goal
 
 Goal, loop, branching, and completion UI belong to the host LLM application.

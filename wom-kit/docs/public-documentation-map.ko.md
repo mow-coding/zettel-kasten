@@ -226,6 +226,7 @@
 - [WOM-kit Capability Matrix](capability-matrix.md)
 - [View Recommendation Plan](view-recommendation-plan.md)
 - [Version Truth Source](version-truth-source.md)
+- [프로젝트 버전 갱신](project-version-update.md)
 - [Runtime Canonical Entry Points](runtime-canonical-entrypoints.md)
 - [Operational Context](operational-context.md)
 - [한국어 제품 언어 기준선](concepts/korean-product-language-baseline.ko.md)

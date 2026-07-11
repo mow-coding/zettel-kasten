@@ -475,13 +475,16 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
         public_map_ko_text = (KIT_ROOT / "docs" / "public-documentation-map.ko.md").read_text(encoding="utf-8")
         release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.57.md").read_text(encoding="utf-8")
-        current_release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.137.md").read_text(encoding="utf-8")
+        historical_release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.137.md").read_text(encoding="utf-8")
+        current_release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.215.md").read_text(encoding="utf-8")
+        update_text = (KIT_ROOT / "docs" / "project-version-update.md").read_text(encoding="utf-8")
         for phrase in (
-            "Status: v0.3.137 read-only version truth-source checkpoint with project source mirror drift discovery",
+            "Status: v0.3.215 read-only version truth plus approval-gated project update",
             "archive --version",
             "archive version --format json",
             "archive version <project-or-archive-root> --format json",
             "archive runtime-context <archive-root> --format json",
+            "archive project-version-update <project-or-archive-root> --target vX.Y.Z --dry-run --format json",
             "wom_kit.__version__",
             ".zettel-kasten/source/installed-version.txt",
             "parent_of_archive/.zettel-kasten/installed-version.txt",
@@ -490,12 +493,13 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "latest fetched semver tag",
             "consistency_state: project_source_mirror_behind_latest_fetched_tag",
             "consistency_state: project_pin_mismatch",
-            "writes no files",
-            "calls no providers",
+            "version check writes no files and calls no providers",
+            "update dry-run is also local",
             "reads no secrets",
             "repairs no project source mirror",
             "redacts local absolute paths by default",
-            "does not provide automatic upgrade",
+            "not an unattended auto-updater",
+            "does not verify a cryptographic tag signature",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, version_text)
@@ -509,22 +513,30 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "parent_of_archive/.zettel-kasten/installed-version.txt",
             "project_source_mirror_behind_latest_fetched_tag",
             "writes no files, repairs no mirror, calls no providers, and reads no secrets",
+            "Project WOM-kit version update",
+            "project-version-update",
+            "updated_restart_required",
+            "v0.3.215 is the one-time bootstrap boundary",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.137 pre-release",
+            "v0.3.215 pre-release",
             "[Version Truth Source](wom-kit/docs/version-truth-source.md)",
+            "[Project Version Update](wom-kit/docs/project-version-update.md)",
             "read-only WOM-kit version truth-source checks",
             "parent project installed-version pin discovery",
+            "project-version-update",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, readme_text)
         for phrase in (
             "docs/version-truth-source.md",
+            "docs/project-version-update.md",
             "version",
             "Print the running WOM-kit CLI version",
             "source mirror status",
+            "project-version-update",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, kit_readme_text)
@@ -541,9 +553,30 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "The version check remains read-only",
         ):
             with self.subTest(phrase=phrase):
+                self.assertIn(phrase, historical_release_text)
+        for phrase in (
+            "project-version-update",
+            "annotated-tag",
+            "rollback",
+            "cryptographic tag signature",
+            "final existing/manual verified bootstrap update",
+        ):
+            with self.subTest(phrase=phrase):
                 self.assertIn(phrase, current_release_text)
+        for phrase in (
+            "Status: implemented in v0.3.215",
+            "ready_to_fetch_on_approve",
+            "non-force, atomic Git fetch",
+            "failed_rollback_incomplete",
+            "New Process Required",
+            "Bootstrap Boundary",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, update_text)
         self.assertIn("[Version Truth Source](version-truth-source.md)", public_map_text)
         self.assertIn("[Version Truth Source](version-truth-source.md)", public_map_ko_text)
+        self.assertIn("[Project Version Update](project-version-update.md)", public_map_text)
+        self.assertIn("[프로젝트 버전 갱신](project-version-update.md)", public_map_ko_text)
 
     def test_tiro_import_plan_doc_and_matrix_cover_read_only_meeting_manifest_contract(self) -> None:
         tiro_text = TIRO_IMPORT_PLAN_PATH.read_text(encoding="utf-8")

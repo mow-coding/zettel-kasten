@@ -33,10 +33,10 @@ wom-kit/docs/releases/ - do not re-grow baseline ladders or tag lists here.
 Current public baseline:
 
 ```text
-v0.3.214 pre-release
+v0.3.215 pre-release
 ```
 
-Previous public baseline: v0.3.213 pre-release.
+Previous public baseline: v0.3.214 pre-release.
 
 Full release history: see [CHANGELOG.md](CHANGELOG.md) and [wom-kit/docs/releases/](wom-kit/docs/releases/).
 
@@ -107,7 +107,7 @@ approval-gated write, or docs-only), see the
 
 ### AI-operator contracts & runtime handoff
 
-- read-only WOM-kit version truth-source checks through `archive --version`, `archive version --format json`, parent project installed-version pin discovery from archive roots, and runtime-context version metadata,
+- read-only WOM-kit version truth-source checks through `archive --version`, `archive version --format json`, parent project installed-version pin discovery from archive roots, and runtime-context version metadata, plus approval-gated `project-version-update` for an atomic configured-origin fetch, verified exact-tag detached checkout, recognized pin alignment, rollback, receipt, and mandatory new-process verification without touching archive knowledge,
 - read-only `archive capabilities --machine` for AI operators that need a stable `ok/state/summary/data/blockers/warnings` envelope listing the executable local CLI commands, aliases, required positionals, options, nested subcommands, and local release identity without calling GitHub or providers,
 - read-only `archive operator-feedback-plan --dry-run` and approval-gated `archive operator-feedback-record --approve` for tracking operator-generated tool feedback under `ops/feedback/` with draft/delivered/acknowledged/resolved/archived lifecycle metadata, plus read-only `archive operator-feedback-ledger --dry-run` (aliases `feedback-ledger`, `feedback-board`) that aggregates delivery-status counts + a pending list and approval-gated `archive operator-feedback-mark-delivered --approve` that batches the draft->delivered boundary with a `delivered_at` stamp and a single receipt, all without reading feedback bodies, echoing feedback refs/titles, submitting externally (metadata only; `delivered` is the operator's own mark, not proof of external delivery), or mixing feedback lifecycle state into user knowledge `objets/`,
 - read-only `archive approval-handoff-plan --dry-run` and approval-gated `archive approval-handoff-record --approve` for AI-to-human approval handoff metadata under `ops/approval-handoffs/`, so sensitive operations can stop at a clear needs_review/approved_once/denied/superseded/resolved state without executing the operation, reading private material, calling providers, or echoing target/action values,
@@ -250,6 +250,7 @@ For the full design philosophy, including the human data primitive model, AX rat
 - [Derived Artifact Staleness](wom-kit/docs/derived-artifact-staleness.md)
 - [zet Quality Check](wom-kit/docs/zet-quality-check.md)
 - [Version Truth Source](wom-kit/docs/version-truth-source.md)
+- [Project Version Update](wom-kit/docs/project-version-update.md)
 - [Runtime Canonical Entry Points](wom-kit/docs/runtime-canonical-entrypoints.md)
 - [Derived Text Completeness Signal](wom-kit/docs/derived-text-completeness-signal.md)
 - [ZET Radio-Frequency Recommendation Model](wom-kit/docs/zet-radio-frequency-recommendation-model.md)
