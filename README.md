@@ -33,10 +33,10 @@ wom-kit/docs/releases/ - do not re-grow baseline ladders or tag lists here.
 Current public baseline:
 
 ```text
-v0.3.218 pre-release
+v0.3.219 pre-release
 ```
 
-Previous public baseline: v0.3.217 pre-release.
+Previous public baseline: v0.3.218 pre-release.
 
 Full release history: see [CHANGELOG.md](CHANGELOG.md) and [wom-kit/docs/releases/](wom-kit/docs/releases/).
 
@@ -91,7 +91,7 @@ approval-gated write, or docs-only), see the
 
 ### Retrieval & views
 
-- read-only preview layers for runtime context, profiles, source/objet intake, overview-first zet reading plus a human document view that hides raw YAML frontmatter, block headers with first-read summaries, and prompt boundaries; optional bounded `frontmatter.abstract` plus CLI/MCP `zet-catalog` enumerate every local zet with compact abstract-plus-tie reading, strict snapshot/token-budgeted node coverage, measured item/service-result/response-envelope cost plus an opt-in envelope reserve, a required full first page followed by optional compact continuation responses that omit only repeated diagnostics, optional verified-seed connection order, and opt-in `routed_reading` explanations for each seed/tie/disconnected-component step, while separate readiness signals distinguish complete node visitation, readable non-redacted abstracts, and unique id follow-up without requiring a generated index/map or creating persistent WOM-owned goal/loop state; non-redacted `read-zettel` now supplies exact file/body hashes for the version actually read, and `zet-abstract-backfill-plan` validates bounded private missing-abstract proposals against those current canonical bytes without echoing content or writing revisions,
+- read-only preview layers for runtime context, profiles, source/objet intake, overview-first zet reading plus a human document view that hides raw YAML frontmatter, block headers with first-read summaries, and prompt boundaries; optional bounded `frontmatter.abstract` plus CLI/MCP `zet-catalog` enumerate every local zet with compact abstract-plus-tie reading, strict snapshot/token-budgeted node coverage, measured item/service-result/response-envelope cost plus an opt-in envelope reserve, a required full first page followed by optional compact continuation responses that omit only repeated diagnostics, optional verified-seed connection order, and opt-in `routed_reading` explanations for each seed/tie/disconnected-component step, while separate readiness signals distinguish complete node visitation, readable non-redacted abstracts, and unique id follow-up without requiring a generated index/map or creating persistent WOM-owned goal/loop state; non-redacted `read-zettel` supplies exact file/body hashes for the version actually read, `zet-abstract-backfill-plan` validates bounded private missing-abstract proposals against those bytes, and separate approval-gated `zet-abstract-backfill-write` revalidates, applies only human-reviewed SHA-bound abstracts, writes a hash-only revision receipt, and rolls the whole runtime transaction back on failure without echoing private content,
 - generated index health checks, saved view health, facet role diagnostics, saved view recommendations,
 - read-only objet reference resolution, presigned URL planning, and zettel objet link previews for mapping `sha256:<hex>` refs to safe local/external candidates,
 

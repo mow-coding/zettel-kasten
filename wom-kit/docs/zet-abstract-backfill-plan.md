@@ -10,7 +10,7 @@ reporting that some zets have no usable `abstract`, `gist`, `summary`,
 
 WOM-kit must not invent and write those missing abstracts automatically. An
 abstract is a new interpretation of canonical content. It needs a visible
-source version, a private proposal, and human review before any future write.
+source version, a private proposal, and human review before any approved write.
 
 v0.3.218 adds the read-only half of that workflow:
 
@@ -88,9 +88,9 @@ The planner checks each row against the current archive:
 - byte-preserving insertion after the YAML opening delimiter;
 - semantic proof that only the new `abstract` field changes.
 
-The proposal is limited to 64 MiB, each line to 1 MiB, and a batch to at most
-5,000 rows. A real 8,000-plus gap set should therefore be reviewed in at least
-two bounded batches.
+The proposal is limited to 64 MiB, each line to 1 MiB, each selected canonical
+zet read to 16 MiB, and a batch to at most 5,000 rows. A real 8,000-plus gap set
+should therefore be reviewed in at least two bounded batches.
 
 ## Output And Privacy
 
@@ -105,12 +105,14 @@ zet, objet, map, index, or external database row.
 
 ## Honest Boundary
 
-v0.3.218 does not implement the approved revision write. A green plan means the
-private candidates are bound to current canonical bytes and are ready for human
-review. It does not mean the abstracts are true, complete, stylistically good,
-or approved.
+The v0.3.218 planner itself never writes. A green plan means the private
+candidates are bound to current canonical bytes and are ready for human review.
+It does not mean the abstracts are true, complete, stylistically good, or
+approved. Since v0.3.219, the separate approval-gated
+[`zet Abstract Backfill Write`](zet-abstract-backfill-write.md) can apply only
+the exact SHA-bound proposal after explicit attributed human review; it does not
+change this planner's read-only authority.
 
-Do not hand-edit thousands of canonical files after this preview. A separate
-approval-gated writer must re-check the proposal hash and every canonical file
-hash, insert only `abstract`, roll back the full batch on failure, and record
-before/after/abstract hashes in a revision receipt.
+Do not hand-edit thousands of canonical files after this preview. Use the
+separate writer so proposal/canonical hashes, whole-batch runtime rollback, and
+before/after/body/abstract receipt evidence remain intact.

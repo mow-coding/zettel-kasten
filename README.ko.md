@@ -31,10 +31,10 @@ tag 목록을 여기서 다시 키우지 않습니다.
 현재 공개 기준:
 
 ```text
-v0.3.218 pre-release
+v0.3.219 pre-release
 ```
 
-이전 공개 기준: v0.3.217 pre-release.
+이전 공개 기준: v0.3.218 pre-release.
 
 전체 릴리스 이력은 [CHANGELOG.md](CHANGELOG.md)와 [wom-kit/docs/releases/](wom-kit/docs/releases/)를 보세요.
 
@@ -77,7 +77,7 @@ Roadmap 요약: `v0.1.x`는 아이디어/프로토콜 언어 라인, `v0.2.x`는
 
 ### 조회와 view
 
-- runtime context, profile, source/objet intake, block header, prompt boundary를 위한 read-only preview layer. 선택형 360자 `frontmatter.abstract`와 CLI/MCP `zet-catalog`는 모든 zet를 초록+타이 compact projection으로 열거하고, strict 연속 노드 완주, snapshot/항목/전체 응답/envelope 예상 토큰 증거와 선택형 envelope 예비 공간을 제공합니다. 첫 페이지는 전체 진단을 유지하고 이후에는 항목과 완주 증거를 그대로 둔 채 반복 진단만 줄이는 선택형 compact continuation 응답을 쓸 수 있습니다. 검증된 seed의 가까운 타이부터 읽되 끊어진 모든 component까지 포함하는 연결 순서와, 각 항목이 seed인지 어떤 타이를 따라왔는지 설명하는 선택형 `routed_reading`도 제공합니다. 별도 준비 상태는 모든 노드 방문, 비공개 처리되지 않은 초록의 실제 이용 가능 여부, 후속 본문 읽기를 위한 고유 ID 상태를 구분하며, generated index/map이나 영구 WOM goal/loop 상태를 만들지 않습니다. 비공개 처리되지 않은 `read-zettel`은 AI가 실제로 읽은 파일·본문의 정확한 해시를 함께 주고, `zet-abstract-backfill-plan`은 초록 누락 후보를 그 현재 정본 바이트와 대조하되 아이디·본문·초록을 출력하거나 수정본을 쓰지 않습니다.
+- runtime context, profile, source/objet intake, block header, prompt boundary를 위한 read-only preview layer. 선택형 360자 `frontmatter.abstract`와 CLI/MCP `zet-catalog`는 모든 zet를 초록+타이 compact projection으로 열거하고, strict 연속 노드 완주, snapshot/항목/전체 응답/envelope 예상 토큰 증거와 선택형 envelope 예비 공간을 제공합니다. 첫 페이지는 전체 진단을 유지하고 이후에는 항목과 완주 증거를 그대로 둔 채 반복 진단만 줄이는 선택형 compact continuation 응답을 쓸 수 있습니다. 검증된 seed의 가까운 타이부터 읽되 끊어진 모든 component까지 포함하는 연결 순서와, 각 항목이 seed인지 어떤 타이를 따라왔는지 설명하는 선택형 `routed_reading`도 제공합니다. 별도 준비 상태는 모든 노드 방문, 비공개 처리되지 않은 초록의 실제 이용 가능 여부, 후속 본문 읽기를 위한 고유 ID 상태를 구분하며, generated index/map이나 영구 WOM goal/loop 상태를 만들지 않습니다. 비공개 처리되지 않은 `read-zettel`은 AI가 실제로 읽은 파일·본문의 정확한 해시를 함께 주고, `zet-abstract-backfill-plan`은 초록 누락 후보를 그 현재 정본 바이트와 대조합니다. 별도 승인 후 쓰기 명령 `zet-abstract-backfill-write`는 사람이 검토하고 SHA로 묶은 초록만 다시 검증해 반영하고 해시 기반 수정 영수증을 쓰며, 실행 중 하나라도 실패하면 배치 전체를 원래 바이트로 되돌립니다. 공개 출력에는 아이디·경로·본문·초록·검수자 값이 나오지 않습니다.
 - read-only objet reference resolution 및 zettel objet link preview,
 
 ### 공유와 ZET preview

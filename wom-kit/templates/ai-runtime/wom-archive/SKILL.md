@@ -131,8 +131,25 @@ its `integrity.file_sha256`, prepare a private proposal row under
 archive zet-abstract-backfill-plan <archive-root> --proposal .wom-scratch/abstract-backfill/<private>.jsonl --dry-run --progress --format json
 ```
 
-Treat `ready_for_human_review` as a preview only. v0.3.218 has no approved
-revision writer; never translate a green plan into manual bulk canonical edits.
+Treat `ready_for_human_review` as a preview only. A human must inspect every
+private proposed abstract. After that review, preview the separate writer with
+the exact `proposal.sha256` returned by the plan:
+
+```bash
+archive zet-abstract-backfill-write <archive-root> --proposal .wom-scratch/abstract-backfill/<private>.jsonl --expected-proposal-sha256 <proposal.sha256> --dry-run --progress --format json
+```
+
+Only a human-authorized run may add the reviewed abstracts:
+
+```bash
+archive zet-abstract-backfill-write <archive-root> --proposal .wom-scratch/abstract-backfill/<private>.jsonl --expected-proposal-sha256 <proposal.sha256> --approve --reviewed-by person:<reviewer> --affirm-abstracts-reviewed --progress --format json
+```
+
+Never infer the affirmation, reviewer, or approval from a green plan. The
+writer revalidates every canonical hash, changes only `frontmatter.abstract`,
+writes one revision receipt, and rolls back every attempted canonical byte on a
+runtime item or receipt failure. Do not edit the same targets concurrently.
+Forced termination has no automatic crash-recovery journal in v0.3.219.
 
 Use paged `zet-catalog` when the host needs one stdout page, manual continuation,
 or MCP rather than a complete CLI pass:

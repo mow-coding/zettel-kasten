@@ -2793,12 +2793,17 @@ ZETTEL_OVERVIEW_GIST_CHAR_LIMIT = 360
 ZET_ABSTRACT_MAX_CHARS = ZETTEL_OVERVIEW_GIST_CHAR_LIMIT
 ZET_ABSTRACT_BACKFILL_PROPOSAL_SCHEMA = "wom-kit/zet-abstract-backfill-proposal/v0.1"
 ZET_ABSTRACT_BACKFILL_PLAN_SCHEMA = "wom-kit/zet-abstract-backfill-plan/v0.1"
+ZET_ABSTRACT_BACKFILL_WRITE_SCHEMA = "wom-kit/zet-abstract-backfill-write/v0.1"
+ZET_ABSTRACT_BACKFILL_RECEIPT_SCHEMA = "wom-kit/zet-abstract-backfill-receipt/v0.1"
 ZET_ABSTRACT_BACKFILL_PROPOSAL_PREFIX = ".wom-scratch/abstract-backfill/"
+ZET_ABSTRACT_BACKFILL_RECEIPTS_DIR = "receipts/revisions/abstract-backfill"
 ZET_ABSTRACT_BACKFILL_GENERATION_MODES = {"human_written", "ai_assisted"}
 ZET_ABSTRACT_BACKFILL_BASIS = "canonical_zet_body"
 ZET_ABSTRACT_BACKFILL_MAX_ITEMS = 5000
 ZET_ABSTRACT_BACKFILL_MAX_FILE_BYTES = 64 * 1024 * 1024
 ZET_ABSTRACT_BACKFILL_MAX_LINE_BYTES = 1024 * 1024
+ZET_ABSTRACT_BACKFILL_MAX_CANONICAL_FILE_BYTES = 16 * 1024 * 1024
+ZET_ABSTRACT_BACKFILL_MAX_TOTAL_CANONICAL_BYTES = 256 * 1024 * 1024
 ZETTEL_OVERVIEW_FRONTMATTER_FIELDS = ("abstract", "gist", "summary", "description", "overview")
 ZET_CATALOG_SCHEMA = "wom-kit/zet-catalog/v0.8"
 ZET_CATALOG_MAX_PAGE_SIZE = 10000
@@ -6483,7 +6488,7 @@ def zet_catalog(
                 "Report missing or unreadable first-read text as an abstract gap; do not claim that every abstract was read or auto-write replacements."
             )
             next_safe_actions.append(
-                "For a selected missing-abstract zet, read its canonical body and integrity.file_sha256 with read-zettel, prepare a private .wom-scratch/abstract-backfill proposal row, and run zet-abstract-backfill-plan before any future approved revision."
+                "For a selected missing-abstract zet, read its canonical body and integrity.file_sha256 with read-zettel, prepare a private .wom-scratch/abstract-backfill proposal row, run zet-abstract-backfill-plan, require human review, then preview and explicitly approve zet-abstract-backfill-write with the exact proposal SHA-256; never infer approval."
             )
         if not identity_coverage["all_entries_uniquely_addressable"]:
             next_safe_actions.append(
@@ -6689,6 +6694,16 @@ def normalized_zet_abstract_candidate(value: Any, blocker_codes: list[str]) -> s
     return normalized
 
 
+def read_zet_abstract_backfill_canonical_bytes(path: Path) -> bytes:
+    if path.stat().st_size > ZET_ABSTRACT_BACKFILL_MAX_CANONICAL_FILE_BYTES:
+        raise ArchiveServiceError("Canonical zet exceeds the 16 MiB abstract backfill limit.")
+    with path.open("rb") as handle:
+        value = handle.read(ZET_ABSTRACT_BACKFILL_MAX_CANONICAL_FILE_BYTES + 1)
+    if len(value) > ZET_ABSTRACT_BACKFILL_MAX_CANONICAL_FILE_BYTES:
+        raise ArchiveServiceError("Canonical zet exceeds the 16 MiB abstract backfill limit.")
+    return value
+
+
 def zet_abstract_backfill_candidate_bytes(raw_bytes: bytes, abstract: str) -> bytes:
     try:
         text = raw_bytes.decode("utf-8")
@@ -6731,6 +6746,8 @@ def read_zet_abstract_backfill_proposal_bytes(
                 break
             chunks.append(chunk)
             completed += len(chunk)
+            if completed > ZET_ABSTRACT_BACKFILL_MAX_FILE_BYTES:
+                raise ArchiveServiceError("Abstract backfill proposal exceeds the 64 MiB safety limit.")
             if progress_callback is not None:
                 progress_callback("abstract-proposal", "scanned", completed, size)
     if progress_callback is not None:
@@ -6753,7 +6770,10 @@ def zet_abstract_backfill_plan(
     warnings: list[str] = []
     if not dry_run:
         blockers.append("dry_run_required")
-    effective_max_items = max(1, min(int(max_items), ZET_ABSTRACT_BACKFILL_MAX_ITEMS))
+    requested_max_items = int(max_items)
+    effective_max_items = max(1, min(requested_max_items, ZET_ABSTRACT_BACKFILL_MAX_ITEMS))
+    if requested_max_items != effective_max_items:
+        blockers.append("max_items_out_of_range")
     resolved_proposal = resolve_zet_abstract_backfill_proposal_path(root, proposal_path)
     raw_bytes, proposal_sha256 = read_zet_abstract_backfill_proposal_bytes(
         resolved_proposal,
@@ -6846,7 +6866,7 @@ def zet_abstract_backfill_plan(
                     if not relative.startswith("zettels/") or zettel_path.is_symlink():
                         row_blockers.append("target_not_plain_canonical_zet")
                     else:
-                        canonical_bytes = zettel_path.read_bytes()
+                        canonical_bytes = read_zet_abstract_backfill_canonical_bytes(zettel_path)
                         current_file_sha256 = "sha256:" + hashlib.sha256(canonical_bytes).hexdigest()
                         expected_matches = bool(
                             expected_file_sha256 and expected_file_sha256 == current_file_sha256
@@ -6957,6 +6977,7 @@ def zet_abstract_backfill_plan(
             "generation_mode_counts": generation_mode_counts,
             "total_abstract_chars": total_abstract_chars,
             "max_items": effective_max_items,
+            "max_canonical_file_bytes": ZET_ABSTRACT_BACKFILL_MAX_CANONICAL_FILE_BYTES,
             "all_candidates_bound_to_current_canonical_bytes": bool(ok),
         },
         "items": item_results,
@@ -7000,6 +7021,653 @@ def zet_abstract_backfill_plan(
             else ["Fix only the blocked row indexes in the private proposal and run the plan again."]
         ),
     }
+
+
+def zet_abstract_backfill_receipt_relative_path(proposal_sha256: str) -> str:
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", proposal_sha256):
+        raise ArchiveServiceError("Abstract backfill proposal SHA-256 is invalid.")
+    return (
+        f"{ZET_ABSTRACT_BACKFILL_RECEIPTS_DIR}/"
+        f"{proposal_sha256.removeprefix('sha256:')}.zet-abstract-backfill.json"
+    )
+
+
+def verify_zet_abstract_backfill_receipt(
+    root: Path,
+    receipt_path: Path,
+    *,
+    archive_id: str,
+    proposal_sha256: str,
+    max_items: int,
+) -> dict[str, Any]:
+    blockers: list[str] = []
+    items: list[dict[str, Any]] = []
+    receipt_sha256: str | None = None
+    try:
+        receipt_bytes = receipt_path.read_bytes()
+        receipt_sha256 = "sha256:" + hashlib.sha256(receipt_bytes).hexdigest()
+        receipt = json.loads(receipt_bytes.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return {
+            "ok": False,
+            "receipt_sha256": receipt_sha256,
+            "items": [],
+            "blockers": ["existing_receipt_unreadable_or_invalid_json"],
+        }
+    if not isinstance(receipt, dict):
+        blockers.append("existing_receipt_not_json_object")
+        receipt = {}
+    elif validate_schema(receipt, "zet-abstract-backfill-receipt.schema.json"):
+        blockers.append("existing_receipt_schema_invalid")
+    if receipt.get("schema") != ZET_ABSTRACT_BACKFILL_RECEIPT_SCHEMA:
+        blockers.append("existing_receipt_schema_unsupported")
+    if receipt.get("archive_id") != archive_id:
+        blockers.append("existing_receipt_archive_mismatch")
+    if receipt.get("proposal_sha256") != proposal_sha256:
+        blockers.append("existing_receipt_proposal_mismatch")
+
+    raw_items = receipt.get("items")
+    if not isinstance(raw_items, list) or not raw_items:
+        blockers.append("existing_receipt_items_missing")
+        raw_items = []
+    if len(raw_items) > max_items:
+        blockers.append("existing_receipt_exceeds_max_items")
+        raw_items = raw_items[:max_items]
+
+    seen_row_indexes: set[int] = set()
+    seen_zettel_ids: set[str] = set()
+    seen_canonical_paths: set[str] = set()
+    for index, raw_item in enumerate(raw_items):
+        item_blockers: list[str] = []
+        row_index = index
+        current_matches: bool | None = None
+        abstract_matches: bool | None = None
+        body_matches: bool | None = None
+        if not isinstance(raw_item, dict):
+            item_blockers.append("receipt_item_invalid")
+        else:
+            row_index_value = raw_item.get("row_index")
+            if isinstance(row_index_value, int) and row_index_value >= 0:
+                row_index = row_index_value
+                if row_index in seen_row_indexes:
+                    item_blockers.append("receipt_row_index_duplicate")
+                seen_row_indexes.add(row_index)
+            else:
+                item_blockers.append("receipt_row_index_invalid")
+            zettel_id = raw_item.get("zettel_id")
+            canonical_path = raw_item.get("canonical_path")
+            after_file_sha256 = raw_item.get("after_file_sha256")
+            abstract_sha256 = raw_item.get("abstract_sha256")
+            body_sha256 = raw_item.get("body_sha256")
+            if not isinstance(zettel_id, str) or not ZETTEL_EDGE_ZETTEL_ID_RE.fullmatch(zettel_id):
+                item_blockers.append("receipt_zettel_id_invalid")
+                zettel_id = None
+            elif zettel_id in seen_zettel_ids:
+                item_blockers.append("receipt_zettel_id_duplicate")
+            else:
+                seen_zettel_ids.add(zettel_id)
+            if not isinstance(canonical_path, str):
+                item_blockers.append("receipt_canonical_path_invalid")
+                canonical_path = None
+            elif canonical_path in seen_canonical_paths:
+                item_blockers.append("receipt_canonical_path_duplicate")
+            else:
+                seen_canonical_paths.add(canonical_path)
+            for value, code in (
+                (after_file_sha256, "receipt_after_file_sha256_invalid"),
+                (abstract_sha256, "receipt_abstract_sha256_invalid"),
+                (body_sha256, "receipt_body_sha256_invalid"),
+            ):
+                if not isinstance(value, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", value):
+                    item_blockers.append(code)
+            if zettel_id is not None and canonical_path is not None and not item_blockers:
+                try:
+                    path = resolve_zettel_path(root, zettel_id=zettel_id, relative_path=None)
+                    relative = archive_relative_path(path, root)
+                    if path.is_symlink() or relative != canonical_path or not relative.startswith("zettels/"):
+                        item_blockers.append("receipt_target_identity_mismatch")
+                    else:
+                        current_bytes = read_zet_abstract_backfill_canonical_bytes(path)
+                        current_matches = (
+                            "sha256:" + hashlib.sha256(current_bytes).hexdigest() == after_file_sha256
+                        )
+                        if not current_matches:
+                            item_blockers.append("receipt_current_state_diverged")
+                        frontmatter, body = split_zettel_text(current_bytes.decode("utf-8"))
+                        abstract = frontmatter.get("abstract")
+                        abstract_matches = bool(
+                            isinstance(abstract, str)
+                            and "sha256:" + hashlib.sha256(abstract.encode("utf-8")).hexdigest()
+                            == abstract_sha256
+                        )
+                        body_matches = (
+                            "sha256:" + hashlib.sha256(body.encode("utf-8")).hexdigest() == body_sha256
+                        )
+                        if not abstract_matches:
+                            item_blockers.append("receipt_abstract_state_diverged")
+                        if not body_matches:
+                            item_blockers.append("receipt_body_state_diverged")
+                except (ArchiveServiceError, ArchivePathError, OSError, UnicodeDecodeError):
+                    item_blockers.append("receipt_target_unavailable_or_unreadable")
+        item_blockers = unique_preserve_order(item_blockers)
+        blockers.extend(item_blockers)
+        items.append(
+            {
+                "row_index": row_index,
+                "status": "already_applied" if not item_blockers else "blocked",
+                "current_file_sha256_matches_receipt": current_matches,
+                "abstract_sha256_matches_receipt": abstract_matches,
+                "body_sha256_matches_receipt": body_matches,
+                "blocker_codes": item_blockers,
+            }
+        )
+    if receipt.get("item_count") != len(raw_items):
+        blockers.append("existing_receipt_item_count_mismatch")
+    return {
+        "ok": not blockers,
+        "receipt_sha256": receipt_sha256,
+        "plan_digest": receipt.get("plan_digest"),
+        "reviewed_by_present": bool(receipt.get("reviewed_by")),
+        "items": items,
+        "blockers": unique_preserve_order(blockers),
+    }
+
+
+def materialize_zet_abstract_backfill_candidates(
+    root: Path,
+    raw_proposal_bytes: bytes,
+    plan: dict[str, Any],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    candidates: list[dict[str, Any]] = []
+    blockers: list[str] = []
+    plan_items = plan.get("items") if isinstance(plan.get("items"), list) else []
+    total_canonical_bytes = 0
+    for index, raw_line in enumerate(raw_proposal_bytes.splitlines(keepends=True)):
+        try:
+            row = json.loads(raw_line.decode("utf-8"))
+            if not isinstance(row, dict):
+                raise ValueError("proposal_row_not_object")
+            zettel_id = row.get("zettel_id")
+            expected_file_sha256 = row.get("expected_file_sha256")
+            generation_mode = row.get("generation_mode")
+            row_blockers: list[str] = []
+            abstract = normalized_zet_abstract_candidate(row.get("abstract"), row_blockers)
+            if (
+                row_blockers
+                or not isinstance(zettel_id, str)
+                or not ZETTEL_EDGE_ZETTEL_ID_RE.fullmatch(zettel_id)
+                or not isinstance(expected_file_sha256, str)
+                or generation_mode not in ZET_ABSTRACT_BACKFILL_GENERATION_MODES
+                or row.get("schema") != ZET_ABSTRACT_BACKFILL_PROPOSAL_SCHEMA
+                or row.get("basis") != ZET_ABSTRACT_BACKFILL_BASIS
+                or abstract is None
+            ):
+                raise ValueError("proposal_row_changed_after_plan")
+            path = resolve_zettel_path(root, zettel_id=zettel_id, relative_path=None)
+            relative = archive_relative_path(path, root)
+            if path.is_symlink() or not relative.startswith("zettels/"):
+                raise ValueError("canonical_target_changed_after_plan")
+            before_bytes = read_zet_abstract_backfill_canonical_bytes(path)
+            total_canonical_bytes += len(before_bytes)
+            if total_canonical_bytes > ZET_ABSTRACT_BACKFILL_MAX_TOTAL_CANONICAL_BYTES:
+                blockers.append("canonical_batch_exceeds_write_limit")
+                break
+            before_file_sha256 = "sha256:" + hashlib.sha256(before_bytes).hexdigest()
+            if before_file_sha256 != expected_file_sha256:
+                raise ValueError("canonical_hash_changed_after_plan")
+            before_frontmatter, before_body = split_zettel_text(before_bytes.decode("utf-8"))
+            if (
+                before_frontmatter.get("id") != zettel_id
+                or before_frontmatter.get("status") != "canonical"
+                or "abstract" in before_frontmatter
+            ):
+                raise ValueError("canonical_metadata_changed_after_plan")
+            candidate_bytes = zet_abstract_backfill_candidate_bytes(before_bytes, abstract)
+            after_file_sha256 = "sha256:" + hashlib.sha256(candidate_bytes).hexdigest()
+            abstract_sha256 = "sha256:" + hashlib.sha256(abstract.encode("utf-8")).hexdigest()
+            body_sha256 = "sha256:" + hashlib.sha256(before_body.encode("utf-8")).hexdigest()
+            plan_item = plan_items[index] if index < len(plan_items) and isinstance(plan_items[index], dict) else {}
+            if (
+                plan_item.get("status") != "ready_for_review"
+                or plan_item.get("candidate_file_sha256") != after_file_sha256
+                or plan_item.get("abstract_sha256") != abstract_sha256
+            ):
+                raise ValueError("plan_fingerprint_changed")
+            candidates.append(
+                {
+                    "row_index": index,
+                    "zettel_id": zettel_id,
+                    "path": path,
+                    "relative_path": relative,
+                    "before_bytes": before_bytes,
+                    "before_file_sha256": before_file_sha256,
+                    "after_file_sha256": after_file_sha256,
+                    "abstract": abstract,
+                    "abstract_sha256": abstract_sha256,
+                    "body_sha256": body_sha256,
+                    "generation_mode": generation_mode,
+                }
+            )
+        except (ArchiveServiceError, ArchivePathError, OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
+            blockers.append("proposal_or_canonical_changed_after_plan")
+            break
+    if len(candidates) != len(plan_items):
+        blockers.append("materialized_candidate_count_mismatch")
+    return candidates, unique_preserve_order(blockers)
+
+
+def zet_abstract_backfill_write(
+    archive_root: Path | str,
+    *,
+    proposal_path: str,
+    expected_proposal_sha256: str,
+    max_items: int = 500,
+    dry_run: bool = False,
+    approve: bool = False,
+    reviewed_by: str | None = None,
+    affirm_abstracts_reviewed: bool = False,
+    progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    requested_max_items = int(max_items)
+    effective_max_items = max(1, min(requested_max_items, ZET_ABSTRACT_BACKFILL_MAX_ITEMS))
+    expected_sha256 = str(expected_proposal_sha256 or "").strip()
+    reviewer = safe_foreign_quarantine_actor_id(reviewed_by)
+    blockers: list[str] = []
+    if requested_max_items != effective_max_items:
+        blockers.append("max_items_out_of_range")
+    warnings: list[str] = []
+    public_items: list[dict[str, Any]] = []
+    plan_digest: str | None = None
+    actual_proposal_sha256: str | None = None
+    receipt_relative: str | None = None
+    write_lock_path: Path | None = None
+    receipt_sha256: str | None = None
+    receipt_exists = False
+    receipt_written_this_run = False
+    receipt_review_affirmation_verified = False
+    canonical_files_written: int | None = 0
+    canonical_write_attempt_count = 0
+    rollback = {
+        "attempted": False,
+        "succeeded": None,
+        "canonical_files_restored": 0,
+        "receipt_removed": None,
+        "write_lock_removed": None,
+    }
+    write_lock_removed: bool | None = None
+
+    def result_payload(status: str) -> dict[str, Any]:
+        ok = status in {"ready_to_apply", "applied", "already_applied"} and not blockers
+        valid_receipt = receipt_exists and status in {"applied", "already_applied"}
+        return {
+            "ok": ok,
+            "schema": ZET_ABSTRACT_BACKFILL_WRITE_SCHEMA,
+            "lifecycle_action": "zet_abstract_backfill_write",
+            "status": status,
+            "dry_run": bool(dry_run),
+            "approved": bool(approve and status == "applied"),
+            "archive_id": archive_id,
+            "proposal": {
+                "sha256": actual_proposal_sha256,
+                "expected_sha256_matches": bool(
+                    actual_proposal_sha256
+                    and actual_proposal_sha256 == expected_sha256
+                ),
+                "path_echoed": False,
+                "tracking_policy": "private_ai_working_file_do_not_commit",
+            },
+            "plan_digest": plan_digest,
+            "receipt": {
+                "path": receipt_relative,
+                "path_contains_only_proposal_digest": bool(receipt_relative),
+                "exists": receipt_exists,
+                "written_this_run": receipt_written_this_run,
+                "sha256": receipt_sha256,
+                "contains_private_zettel_ids_and_paths": True if valid_receipt else None,
+                "contains_abstract_text": False if valid_receipt else None,
+            },
+            "summary": {
+                "candidate_count": len(public_items),
+                "ready_count": sum(1 for item in public_items if item.get("status") == "ready_to_apply"),
+                "applied_count": sum(1 for item in public_items if item.get("status") == "applied"),
+                "already_applied_count": sum(
+                    1 for item in public_items if item.get("status") == "already_applied"
+                ),
+                "blocked_count": sum(1 for item in public_items if item.get("status") == "blocked"),
+                "canonical_files_written_this_run": canonical_files_written,
+                "canonical_write_attempt_count": canonical_write_attempt_count,
+                "max_items": effective_max_items,
+                "max_canonical_file_bytes": ZET_ABSTRACT_BACKFILL_MAX_CANONICAL_FILE_BYTES,
+                "max_total_canonical_bytes": ZET_ABSTRACT_BACKFILL_MAX_TOTAL_CANONICAL_BYTES,
+            },
+            "items": public_items,
+            "human_review": {
+                "required_for_new_write": True,
+                "reviewed_by_supplied": bool(reviewer),
+                "reviewed_by_echoed": False,
+                "all_abstracts_reviewed_affirmed": bool(affirm_abstracts_reviewed),
+                "receipt_human_affirmation_verified": receipt_review_affirmation_verified,
+                "affirmation_recorded_in_receipt": bool(
+                    receipt_exists and status in {"applied", "already_applied"}
+                ),
+            },
+            "write_boundary": {
+                "canonical_frontmatter_field_added": "abstract" if status == "applied" else None,
+                "canonical_body_bytes_changed": None if status == "failed_rollback_incomplete" else False,
+                "other_frontmatter_fields_changed": None if status == "failed_rollback_incomplete" else False,
+                "updated_at_changed": None if status == "failed_rollback_incomplete" else False,
+                "temporary_write_lock_removed": write_lock_removed,
+                "provider_state_written": False,
+                "objet_bytes_written": False,
+                "database_rows_written": False,
+            },
+            "rollback": rollback,
+            "privacy_guards": {
+                "proposal_path_echoed": False,
+                "zettel_ids_echoed": False,
+                "zettel_paths_echoed": False,
+                "zettel_titles_echoed": False,
+                "zettel_body_text_echoed": False,
+                "proposed_abstract_text_echoed": False,
+                "reviewed_by_echoed": False,
+                "absolute_local_paths_echoed": False,
+                "provider_api_called": False,
+                "model_called": False,
+                "secret_store_or_environment_read": False,
+            },
+            "blockers": unique_preserve_order(blockers),
+            "warnings": unique_preserve_order(warnings),
+            "next_safe_actions": (
+                ["Use the applied receipt as revision evidence; do not delete the private proposal until local review is complete."]
+                if status == "applied"
+                else ["No write is needed; the SHA-bound receipt and current canonical hashes already agree."]
+                if status == "already_applied"
+                else ["Run the same SHA-bound command with --approve, a safe reviewer id, and the explicit review affirmation."]
+                if status == "ready_to_apply"
+                else ["Fix blockers and generate a new private proposal when canonical bytes or reviewed text change."]
+            ),
+        }
+
+    if bool(dry_run) == bool(approve):
+        blockers.append("choose_exactly_one_of_dry_run_or_approve")
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", expected_sha256):
+        blockers.append("expected_proposal_sha256_invalid")
+
+    resolved_proposal = resolve_zet_abstract_backfill_proposal_path(root, proposal_path)
+    raw_proposal_bytes, actual_proposal_sha256 = read_zet_abstract_backfill_proposal_bytes(
+        resolved_proposal,
+        progress_callback=progress_callback,
+    )
+    if actual_proposal_sha256 != expected_sha256:
+        blockers.append("proposal_sha256_mismatch")
+    raw_line_count = len(raw_proposal_bytes.splitlines(keepends=True))
+    if raw_line_count > effective_max_items:
+        blockers.append("proposal_exceeds_max_items")
+    if not raw_line_count:
+        blockers.append("proposal_empty")
+    if actual_proposal_sha256 and re.fullmatch(r"sha256:[0-9a-f]{64}", actual_proposal_sha256):
+        receipt_relative = zet_abstract_backfill_receipt_relative_path(actual_proposal_sha256)
+        lock_digest = actual_proposal_sha256.removeprefix("sha256:")
+        write_lock_path = resolved_proposal.with_name(f".{lock_digest}.write.lock")
+    if blockers:
+        return result_payload("blocked")
+
+    assert receipt_relative is not None
+    assert write_lock_path is not None
+    receipt_path = archive_internal_path(root, receipt_relative)
+    if receipt_path.exists():
+        if write_lock_path.exists():
+            warnings.append("matching_proposal_write_lock_remains_inspect_before_cleanup")
+        receipt_exists = True
+        verification = verify_zet_abstract_backfill_receipt(
+            root,
+            receipt_path,
+            archive_id=archive_id,
+            proposal_sha256=actual_proposal_sha256,
+            max_items=effective_max_items,
+        )
+        receipt_sha256 = verification.get("receipt_sha256")
+        plan_digest = verification.get("plan_digest")
+        public_items = verification.get("items") if isinstance(verification.get("items"), list) else []
+        blockers.extend(str(item) for item in verification.get("blockers", []))
+        receipt_review_affirmation_verified = bool(verification.get("ok"))
+        return result_payload("already_applied" if verification.get("ok") else "blocked")
+
+    if approve:
+        if reviewer is None:
+            blockers.append("safe_reviewed_by_required")
+        if not affirm_abstracts_reviewed:
+            blockers.append("affirm_abstracts_reviewed_required")
+    elif reviewed_by:
+        blockers.append("reviewed_by_only_valid_with_approve")
+    elif affirm_abstracts_reviewed:
+        blockers.append("affirmation_only_valid_with_approve")
+    if blockers:
+        return result_payload("blocked")
+
+    def filtered_progress(stage: str, state: str, completed: int | None, total: int | None) -> None:
+        if progress_callback is not None and stage != "abstract-proposal":
+            progress_callback(stage, state, completed, total)
+
+    plan = zet_abstract_backfill_plan(
+        root,
+        proposal_path=proposal_path,
+        max_items=effective_max_items,
+        dry_run=True,
+        progress_callback=filtered_progress,
+    )
+    plan_digest = plan.get("plan_digest") if isinstance(plan.get("plan_digest"), str) else None
+    if plan.get("proposal", {}).get("sha256") != actual_proposal_sha256:
+        blockers.append("proposal_changed_during_plan")
+    if not plan.get("ok"):
+        blockers.extend(f"plan:{item}" for item in plan.get("blockers", []))
+        public_items = plan.get("items") if isinstance(plan.get("items"), list) else []
+        return result_payload("blocked")
+
+    latest_proposal_bytes, latest_proposal_sha256 = read_zet_abstract_backfill_proposal_bytes(
+        resolved_proposal,
+        progress_callback=None,
+    )
+    if latest_proposal_sha256 != actual_proposal_sha256:
+        blockers.append("proposal_changed_after_plan")
+        return result_payload("blocked")
+    candidates, materialize_blockers = materialize_zet_abstract_backfill_candidates(
+        root,
+        latest_proposal_bytes,
+        plan,
+    )
+    blockers.extend(materialize_blockers)
+    public_items = [
+        {
+            "row_index": item["row_index"],
+            "status": "ready_to_apply" if not blockers else "blocked",
+            "generation_mode": item["generation_mode"],
+            "before_file_sha256": item["before_file_sha256"],
+            "after_file_sha256": item["after_file_sha256"],
+            "abstract_sha256": item["abstract_sha256"],
+            "body_sha256": item["body_sha256"],
+            "blocker_codes": [] if not blockers else list(blockers),
+        }
+        for item in candidates
+    ]
+    if blockers:
+        return result_payload("blocked")
+    if dry_run:
+        return result_payload("ready_to_apply")
+
+    assert reviewer is not None
+    assert plan_digest is not None
+    applied_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    receipt = {
+        "schema": ZET_ABSTRACT_BACKFILL_RECEIPT_SCHEMA,
+        "action": "zet_abstract_backfill_write",
+        "status": "applied",
+        "applied_at": applied_at,
+        "archive_id": archive_id,
+        "proposal_sha256": actual_proposal_sha256,
+        "plan_digest": plan_digest,
+        "reviewed_by": reviewer,
+        "human_affirmation": "all_proposed_abstracts_reviewed",
+        "item_count": len(candidates),
+        "items": [
+            {
+                "row_index": item["row_index"],
+                "zettel_id": item["zettel_id"],
+                "canonical_path": item["relative_path"],
+                "generation_mode": item["generation_mode"],
+                "before_file_sha256": item["before_file_sha256"],
+                "after_file_sha256": item["after_file_sha256"],
+                "abstract_sha256": item["abstract_sha256"],
+                "body_sha256": item["body_sha256"],
+            }
+            for item in candidates
+        ],
+        "mutation_contract": {
+            "field_added": "frontmatter.abstract",
+            "body_bytes_preserved": True,
+            "other_frontmatter_semantics_preserved": True,
+            "updated_at_changed": False,
+            "rollback_on_runtime_failure": True,
+            "crash_recovery_journal_written": False,
+        },
+        "privacy_guards": {
+            "abstract_text_stored_in_receipt": False,
+            "body_text_stored_in_receipt": False,
+            "provider_api_called": False,
+            "model_called": False,
+            "secret_store_or_environment_read": False,
+        },
+    }
+    if validate_schema(receipt, "zet-abstract-backfill-receipt.schema.json"):
+        blockers.append("receipt_schema_validation_failed")
+        return result_payload("blocked")
+
+    lock_descriptor: int | None = None
+    try:
+        lock_descriptor = os.open(write_lock_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(lock_descriptor, "wb") as lock_handle:
+            lock_descriptor = None
+            lock_handle.write((actual_proposal_sha256 + "\n").encode("ascii"))
+            lock_handle.flush()
+            os.fsync(lock_handle.fileno())
+    except FileExistsError:
+        blockers.append("proposal_write_lock_exists")
+        return result_payload("blocked")
+    except OSError:
+        try:
+            if write_lock_path.exists():
+                write_lock_path.unlink()
+        except OSError:
+            pass
+        blockers.append("proposal_write_lock_create_failed")
+        return result_payload("blocked")
+    finally:
+        if lock_descriptor is not None:
+            os.close(lock_descriptor)
+
+    attempted_candidates: list[dict[str, Any]] = []
+    receipt_parent_existed = receipt_path.parent.exists()
+    receipt_write_attempted = False
+    receipt_owned_this_run = False
+    try:
+        if progress_callback is not None:
+            progress_callback("abstract-write", "start", 0, len(candidates))
+        for index, item in enumerate(candidates, start=1):
+            path = item["path"]
+            if read_zet_abstract_backfill_canonical_bytes(path) != item["before_bytes"]:
+                raise RuntimeError("canonical_changed_immediately_before_write")
+            candidate_bytes = zet_abstract_backfill_candidate_bytes(item["before_bytes"], item["abstract"])
+            attempted_candidates.append(item)
+            canonical_write_attempt_count += 1
+            write_bytes_atomic(path, candidate_bytes)
+            if read_zet_abstract_backfill_canonical_bytes(path) != candidate_bytes:
+                raise RuntimeError("canonical_write_verification_failed")
+            canonical_files_written += 1
+            public_items[index - 1]["status"] = "applied"
+            if progress_callback is not None:
+                progress_callback("abstract-write", "written", index, len(candidates))
+        for item in candidates:
+            current = read_zet_abstract_backfill_canonical_bytes(item["path"])
+            if "sha256:" + hashlib.sha256(current).hexdigest() != item["after_file_sha256"]:
+                raise RuntimeError("canonical_batch_revalidation_failed")
+        if progress_callback is not None:
+            progress_callback("abstract-write", "done", len(candidates), len(candidates))
+            progress_callback("abstract-receipt", "start", None, None)
+        receipt_path.parent.mkdir(parents=True, exist_ok=True)
+        receipt_write_attempted = True
+        try:
+            write_json_new_file(receipt_path, receipt)
+            receipt_owned_this_run = True
+        except FileExistsError:
+            receipt_write_attempted = False
+            raise RuntimeError("receipt_created_concurrently")
+        except Exception:
+            receipt_owned_this_run = receipt_path.exists()
+            raise
+        receipt_bytes = receipt_path.read_bytes()
+        written_receipt = json.loads(receipt_bytes.decode("utf-8"))
+        if validate_schema(written_receipt, "zet-abstract-backfill-receipt.schema.json"):
+            raise RuntimeError("written_receipt_schema_validation_failed")
+        receipt_sha256 = "sha256:" + hashlib.sha256(receipt_bytes).hexdigest()
+        receipt_exists = True
+        receipt_written_this_run = True
+        receipt_review_affirmation_verified = True
+        try:
+            write_lock_path.unlink()
+            write_lock_removed = True
+        except OSError:
+            write_lock_removed = False
+            warnings.append("temporary_write_lock_cleanup_failed")
+        if progress_callback is not None:
+            progress_callback("abstract-receipt", "done", None, None)
+        return result_payload("applied")
+    except Exception:
+        rollback["attempted"] = bool(attempted_candidates or receipt_write_attempted)
+        receipt_removed = True
+        if receipt_owned_this_run and receipt_path.exists():
+            try:
+                receipt_path.unlink()
+            except OSError:
+                receipt_removed = False
+        restored = 0
+        canonical_restore_ok = True
+        for item in reversed(attempted_candidates):
+            try:
+                write_bytes_atomic(item["path"], item["before_bytes"])
+                if read_zet_abstract_backfill_canonical_bytes(item["path"]) != item["before_bytes"]:
+                    raise OSError("canonical_restore_verification_failed")
+                restored += 1
+            except Exception:
+                canonical_restore_ok = False
+        try:
+            if write_lock_path.exists():
+                write_lock_path.unlink()
+            write_lock_removed = True
+        except OSError:
+            write_lock_removed = False
+        if not receipt_parent_existed:
+            cleanup_empty_archive_dirs(root, [receipt_path])
+        rollback["canonical_files_restored"] = restored
+        rollback["receipt_removed"] = receipt_removed
+        rollback["write_lock_removed"] = write_lock_removed
+        rollback["succeeded"] = canonical_restore_ok and receipt_removed and write_lock_removed
+        canonical_files_written = None if not rollback["succeeded"] else 0
+        receipt_exists = receipt_path.exists()
+        receipt_written_this_run = False
+        for item in public_items:
+            item["status"] = "rolled_back" if item.get("row_index") in {
+                candidate["row_index"] for candidate in attempted_candidates
+            } else "not_attempted"
+        blockers.append(
+            "transaction_failed_and_rolled_back"
+            if rollback["succeeded"]
+            else "transaction_failed_rollback_incomplete"
+        )
+        return result_payload(
+            "failed_rolled_back" if rollback["succeeded"] else "failed_rollback_incomplete"
+        )
 
 
 def objet_ref_occurrences_in_text(text: str, *, source: str, field: str | None = None) -> list[dict[str, Any]]:
@@ -59443,7 +60111,7 @@ def runtime_context_ai_runtime_order() -> list[dict[str, Any]]:
             "step": 5,
             "action": "enumerate_zet_abstracts",
             "command": "archive zet-catalog-pass <archive-root> --status canonical --projection reading --output .wom-scratch/diagnostics/<new-name>.jsonl --dry-run --progress --format json",
-            "continuation": "require archive_wide_coverage_claim_ready=true and retain output.sha256 from the compact stdout summary; use zet-catalog-pass-read with that SHA-256 and page indexes from zero so a complete artifact is validated before at most one private page is returned; retain the first full diagnostics, check abstract and follow-up readiness separately, and when an abstract is missing use read-zettel to read that selected canonical body plus integrity.file_sha256 before preparing a private zet-abstract-backfill-plan proposal; never auto-write an abstract, never load the whole catalog file into one response, never commit it, then preview and approve zet-catalog-pass-cleanup with the same SHA-256 after use; restart the complete pass if catalog_snapshot_changed",
+            "continuation": "require archive_wide_coverage_claim_ready=true and retain output.sha256 from the compact stdout summary; use zet-catalog-pass-read with that SHA-256 and page indexes from zero so a complete artifact is validated before at most one private page is returned; retain the first full diagnostics, check abstract and follow-up readiness separately, and when an abstract is missing use read-zettel to read that selected canonical body plus integrity.file_sha256 before preparing a private zet-abstract-backfill-plan proposal; never auto-write an abstract or infer approval from a green plan, require human review, then preview and explicitly approve zet-abstract-backfill-write with the exact proposal SHA-256; never load the whole catalog file into one response, never commit it, then preview and approve zet-catalog-pass-cleanup with the same SHA-256 after use; restart the complete pass if catalog_snapshot_changed",
             "mcp_alternative": "use zet_catalog pages with cursor, snapshot id, continuation token, full first response, compact continuation responses, and completion revalidation",
             "optional_seed_order": "when the host goal already provides verified zet ids, add --order seeded_connection_walk and repeated --start-zettel-id values; the walk still includes every disconnected component",
             "optional_route_evidence": "keep projection=reading for compact coverage; switch to routed_reading only with seeded_connection_walk when per-item seed, tie-passage, and disconnected-component reasons are needed",

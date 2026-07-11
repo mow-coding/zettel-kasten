@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wom-kit/zet-abstract-backfill-receipt/v0.1",
+  "title": "WOM-kit zet abstract backfill receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "action",
+    "status",
+    "applied_at",
+    "archive_id",
+    "proposal_sha256",
+    "plan_digest",
+    "reviewed_by",
+    "human_affirmation",
+    "item_count",
+    "items",
+    "mutation_contract",
+    "privacy_guards"
+  ],
+  "properties": {
+    "schema": {"const": "wom-kit/zet-abstract-backfill-receipt/v0.1"},
+    "action": {"const": "zet_abstract_backfill_write"},
+    "status": {"const": "applied"},
+    "applied_at": {"type": "string", "minLength": 1},
+    "archive_id": {"type": "string", "minLength": 1},
+    "proposal_sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "plan_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "reviewed_by": {"type": "string", "minLength": 1},
+    "human_affirmation": {"const": "all_proposed_abstracts_reviewed"},
+    "item_count": {"type": "integer", "minimum": 1, "maximum": 5000},
+    "items": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 5000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "row_index",
+          "zettel_id",
+          "canonical_path",
+          "generation_mode",
+          "before_file_sha256",
+          "after_file_sha256",
+          "abstract_sha256",
+          "body_sha256"
+        ],
+        "properties": {
+          "row_index": {"type": "integer", "minimum": 0},
+          "zettel_id": {"type": "string", "pattern": "^zet_[A-Za-z0-9][A-Za-z0-9_-]{0,159}$"},
+          "canonical_path": {"type": "string", "pattern": "^zettels/.+\\.md$"},
+          "generation_mode": {"enum": ["human_written", "ai_assisted"]},
+          "before_file_sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+          "after_file_sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+          "abstract_sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+          "body_sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+        }
+      }
+    },
+    "mutation_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "field_added",
+        "body_bytes_preserved",
+        "other_frontmatter_semantics_preserved",
+        "updated_at_changed",
+        "rollback_on_runtime_failure",
+        "crash_recovery_journal_written"
+      ],
+      "properties": {
+        "field_added": {"const": "frontmatter.abstract"},
+        "body_bytes_preserved": {"const": true},
+        "other_frontmatter_semantics_preserved": {"const": true},
+        "updated_at_changed": {"const": false},
+        "rollback_on_runtime_failure": {"const": true},
+        "crash_recovery_journal_written": {"const": false}
+      }
+    },
+    "privacy_guards": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "abstract_text_stored_in_receipt",
+        "body_text_stored_in_receipt",
+        "provider_api_called",
+        "model_called",
+        "secret_store_or_environment_read"
+      ],
+      "properties": {
+        "abstract_text_stored_in_receipt": {"const": false},
+        "body_text_stored_in_receipt": {"const": false},
+        "provider_api_called": {"const": false},
+        "model_called": {"const": false},
+        "secret_store_or_environment_read": {"const": false}
+      }
+    }
+  }
+}
