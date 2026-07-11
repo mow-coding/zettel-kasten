@@ -83,6 +83,17 @@ project folder 작업에서는 temporary intake staging이 archive of record가
 아니라는 점을 기억합니다. cleanup 전에 원본을 objet, source map, manifest,
 zet, receipt로 보존해야 합니다.
 
+## v0.3.213 Local sovereignty authority
+
+v0.3.213은 migration이나 기존 zet 재작성을 하지 않습니다. read-only
+`local-sovereignty` 계약을 추가하고 runtime, start-here, recovery,
+upgrade-check 출력에 동일한 `storage_authority` 모델을 제공합니다.
+
+검토된 local WOM 상태가 정본이며 GitHub, object storage, 외부 DB는
+backup/replica 계층입니다. 기존 provider binding은 바뀌지 않고 명령은 live
+backup audit를 실행하지 않습니다. `ai-start-here` schema는 v0.2로 올라가므로
+해당 결과 schema를 검증하는 caller는 새 field와 version을 받아야 합니다.
+
 ## v0.3.212 Compact strict continuation
 
 v0.3.212는 strict catalog pass의 첫 페이지 뒤에서 선택형

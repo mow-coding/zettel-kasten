@@ -91,6 +91,18 @@ For project-folder work, remember that temporary intake staging is not the
 archive of record. Preserve originals as objets, source maps, manifests, zets,
 and receipts before any cleanup.
 
+## v0.3.213 Local Sovereignty Authority
+
+v0.3.213 adds no migration and rewrites no zet. It adds a read-only
+`local-sovereignty` contract and exposes the same `storage_authority` model in
+runtime, start-here, recovery, and upgrade-check output.
+
+Local reviewed WOM state is canonical. GitHub, object storage, and external
+databases are backup/replica layers. Existing provider bindings are not changed
+and the command performs no live backup audit. `ai-start-here` schema advances
+to v0.2; callers that validate that result schema should accept the new field
+and version.
+
 ## v0.3.212 Compact Strict Continuations
 
 v0.3.212 adds optional `--response-profile continuation` after the first page

@@ -6,6 +6,28 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.213 - 2026-07-11
+
+Local-sovereignty and backup-authority checkpoint. Additive; no archive
+migration.
+
+- **One authority contract.** New read-only `local-sovereignty` CLI returns a
+  machine-readable model shared by runtime context, AI start-here, recovery,
+  and upgrade-check surfaces.
+- **Local remains canonical.** Reviewed local WOM records and registered local
+  objet bytes are the working/recovery authority. External state cannot
+  silently overwrite them.
+- **External roles are explicit.** GitHub backs up metadata and version
+  history; object storage backs up objet original bytes; external databases
+  hold map backups or replicas that must be regenerable from local records.
+- **Offline and recovery direction.** The contract lists offline-capable
+  operations, network-dependent operations, conflict precedence, and the
+  recovery order from remote backups to local WOM and then regenerated maps.
+- **No false backup proof.** Local commits do not prove GitHub remote backup,
+  `declared_uploaded` does not prove object bytes, and generic external-DB
+  backup receipts remain unimplemented. Provider-verified `wom_uploaded`
+  execution evidence keeps its narrower implemented meaning.
+
 ## v0.3.212 - 2026-07-11
 
 Compact strict-continuation checkpoint. Additive; no archive migration.

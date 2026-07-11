@@ -2,15 +2,24 @@
 
 Source maps are the first real bridge between GitHub-style versioning and the broader ontology map the archive wants to draw.
 
-Think of the roles this way:
+Storage role and canonical authority are different. Since v0.3.213, use this
+authority order:
 
 ```text
-GitHub = versioned map and review history
-Objet storage = large media/objet warehouse
-Local PC / SSD / Notion / Google Drive = source worlds
-SQLite = rebuildable search index
-WOM-kit = control plane that connects and verifies the above
+Local WOM = canonical working and recovery state
+GitHub = metadata and version-history backup
+Registered local objet bytes = canonical byte recovery source
+Object storage = objet-byte backup
+Local zet edges / ties / source maps / manifests = canonical relationship records
+External DB = map backup or replica regenerated from local records
+SQLite = disposable local search index regenerated from local records
+Notion / Google Drive / external media = intake source worlds until reviewed capture
+WOM-kit = local control plane that connects, validates, and reconciles these roles
 ```
+
+An external source world can remain the acquisition origin, but it does not
+silently outrank a reviewed local WOM record. See
+[Local Sovereignty And Backup Authority](local-sovereignty-and-backup-authority.md).
 
 ## Files
 
@@ -169,4 +178,8 @@ It does not expose a real source scan apply tool. Human-approved writes stay in 
 
 ## Indexing
 
-`archive index` includes source map entries in `db/archive-index.sqlite`. The database is still disposable: rebuild it from zettels, manifests, views, and source maps whenever needed.
+`archive index` includes source map entries in `db/archive-index.sqlite`. The
+database is still disposable: rebuild it from zettels, manifests, views, and
+source maps whenever needed. An external database may keep a map backup or
+replica, but it is not allowed to become the only irreplaceable relationship
+source.

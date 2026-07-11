@@ -1336,6 +1336,7 @@ class ArchiveCliTests(unittest.TestCase):
         self.assertIn("approval-handoff-audit", command_names)
         self.assertIn("operation-status-taxonomy", command_names)
         self.assertIn("input-provenance-taxonomy", command_names)
+        self.assertIn("local-sovereignty", command_names)
         self.assertIn("secret-signal-taxonomy", command_names)
         self.assertIn("ai-response-contract", command_names)
         self.assertIn("ai-start-here", command_names)
@@ -3312,6 +3313,13 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(result["wom_kit_version"]["project_pin"]["status"], "missing")
             self.assertTrue(result["wom_kit_version"]["redaction"]["local_paths_redacted"])
             self.assertNotIn("local_paths", result["wom_kit_version"])
+            authority = result["storage_authority"]
+            self.assertEqual(authority["canonical_authority"], "local_wom")
+            self.assertEqual(authority["plain_summary"]["github"], "metadata_and_version_history_backup")
+            self.assertEqual(authority["plain_summary"]["object_storage"], "objet_original_byte_backup")
+            self.assertEqual(authority["plain_summary"]["external_database"], "map_backup_or_replica")
+            self.assertTrue(authority["conflict_policy"]["local_wins_by_default"])
+            self.assertFalse(authority["closed_actions"]["live_backup_status_checked"])
             operational_context = result["operational_context"]
             self.assertTrue(operational_context["ok"])
             self.assertEqual(operational_context["lifecycle_action"], "operational_context")
@@ -3418,7 +3426,7 @@ class ArchiveCliTests(unittest.TestCase):
             result = json.loads(output)
             self.assertTrue(result["ok"])
             self.assertEqual(result["lifecycle_action"], "ai_start_here")
-            self.assertEqual(result["schema"], "wom-kit/ai-start-here/v0.1")
+            self.assertEqual(result["schema"], "wom-kit/ai-start-here/v0.2")
             self.assertEqual(result["archive_id"], "archive:personal:fake-life")
             self.assertEqual(result["summary"]["start_here_file"], "archive.yml")
             self.assertGreater(result["summary"]["present_entrypoint_count"], 0)
@@ -3427,6 +3435,11 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(result["operational_context"]["record_path"], "ops/operational-context.yml")
             self.assertEqual(result["first_read"]["start_here"], "archive.yml")
             self.assertEqual(result["first_read"]["source_truths"]["canonical_zets"], "zettels/")
+            self.assertEqual(result["storage_authority"]["canonical_authority"], "local_wom")
+            self.assertEqual(
+                result["storage_authority"]["plain_summary"]["external_database"],
+                "map_backup_or_replica",
+            )
             self.assertEqual(
                 result["first_commands"][0]["command"],
                 "archive runtime-context <archive-root> --format json",
@@ -3452,8 +3465,55 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertIn("# WOM AI Start Here", markdown_output)
             self.assertIn("`archive.yml`", markdown_output)
             self.assertIn("## First Commands", markdown_output)
+            self.assertIn("## Storage Authority", markdown_output)
+            self.assertIn("metadata_and_version_history_backup", markdown_output)
             self.assertIn("Files written: no", markdown_output)
             self.assertNotIn(str(archive_root), markdown_output)
+
+    def test_local_sovereignty_contract_is_machine_readable_and_read_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            before = self.snapshot_archive_files(archive_root)
+
+            missing_code, missing_output = self.run_cli(
+                ["local-sovereignty", str(archive_root), "--format", "json"]
+            )
+            self.assertEqual(missing_code, 1, missing_output)
+            self.assertIn("requires --dry-run", missing_output)
+
+            code, output = self.run_cli(
+                ["storage-authority", str(archive_root), "--dry-run", "--format", "json"]
+            )
+            self.assertEqual(code, 0, output)
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+            self.assertNotIn(str(archive_root), output)
+
+            result = json.loads(output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["lifecycle_action"], "local_sovereignty_contract")
+            self.assertEqual(result["would_change"], [])
+            authority = result["authority"]
+            self.assertEqual(authority["schema"], "wom-kit/local-sovereignty-contract/v0.1")
+            self.assertEqual(authority["contract_kind"], "normative_authority_model_not_live_backup_audit")
+            self.assertEqual(authority["authority_order"][0], "local_reviewed_wom_state")
+            self.assertTrue(authority["conflict_policy"]["local_wins_by_default"])
+            by_class = {item["data_class"]: item for item in authority["data_classes"]}
+            self.assertEqual(by_class["text_control_plane"]["external_backup"], "github_git_remote")
+            self.assertIn("cloudflare_r2", by_class["objet_original_bytes"]["external_backup"])
+            self.assertTrue(by_class["relationship_and_map_data"]["external_map_rebuildable_from_local"])
+            self.assertTrue(by_class["generated_indexes_and_caches"]["deletable_and_rebuildable"])
+            self.assertFalse(authority["backup_evidence"]["github"]["local_commit_alone_proves_remote_backup"])
+            self.assertTrue(
+                authority["backup_evidence"]["object_storage"]["live_upload_execution_receipt_implemented"]
+            )
+            self.assertFalse(
+                authority["backup_evidence"]["external_database"][
+                    "generic_wom_backup_completion_receipt_implemented"
+                ]
+            )
+            self.assertFalse(result["privacy_guards"]["archive_body_text_read"])
+            self.assertFalse(result["privacy_guards"]["objet_bytes_read"])
+            self.assertFalse(result["privacy_guards"]["provider_api_called"])
 
     def test_operational_context_dry_run_and_approve_write_reviewed_record(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -33557,6 +33617,11 @@ state:
             self.assertTrue(result["ok"])
             self.assertEqual(result["action"], "archive_recovery_plan")
             self.assertIn("db/archive-index.sqlite", result["excluded_from_restore_copy"])
+            self.assertEqual(result["storage_authority"]["canonical_authority"], "local_wom")
+            self.assertEqual(
+                result["storage_authority"]["recovery_direction"][-1],
+                "regenerate_local_indexes_and_external_database_map_replicas_from_local_records",
+            )
             after = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
             self.assertEqual(after, before)
 
@@ -34968,6 +35033,7 @@ state:
             self.assertEqual(result["would_change"], [])
             self.assertIn("upgrade_readiness", result)
             self.assertIn("migration_honesty", result)
+            self.assertEqual(result["recovery_plan"]["storage_authority"]["canonical_authority"], "local_wom")
             self.assertFalse(result["migration_honesty"]["guarantees_safe_upgrade"])
             self.assertFalse(result["upgrade_policy"]["real_archive_rewrite"])
             self.assertFalse(result["upgrade_policy"]["provider_calls"])

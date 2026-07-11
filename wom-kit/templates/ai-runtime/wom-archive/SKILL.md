@@ -57,6 +57,19 @@ If the expected archive is known, include:
 
 Use `--strict` when the AI must stop on archive type mismatch or doctor warnings.
 
+Read `storage_authority` from runtime-context, or request the same contract
+directly:
+
+```bash
+archive local-sovereignty <archive-root> --dry-run --format json
+```
+
+Treat local reviewed WOM state as canonical. GitHub is metadata/version-history
+backup, object storage is objet-byte backup, and an external database is a map
+backup or replica regenerated from local relation-bearing records. External
+state never silently overwrites local state. Do not claim a backup from a local
+commit, `declared_uploaded`, or an unreceipted DB row.
+
 ## Read Archive Memory Through The Host Goal
 
 Goal, loop, branching, and completion UI belong to the host LLM application.

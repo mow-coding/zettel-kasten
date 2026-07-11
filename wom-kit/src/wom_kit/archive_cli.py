@@ -24,6 +24,8 @@ Commands:
           Show how AI operators should classify success, partial, truncated, blocked, and failed results.
   input-provenance-taxonomy
           Show how AI operators should classify tool-discovered, receipt-verified, human-selected, and caller-supplied inputs.
+  local-sovereignty
+          Show the local-canonical and external-backup authority contract.
   secret-signal-taxonomy
           Show how AI operators should distinguish secret concept words, safe refs, and secret-like values.
   ai-response-contract
@@ -3817,6 +3819,31 @@ def command_input_provenance_taxonomy(args: argparse.Namespace) -> int:
     return 0 if result.get("ok", True) else 1
 
 
+def command_local_sovereignty(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("local-sovereignty is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.local_sovereignty_contract(Path(args.archive_root), dry_run=True)
+    except archive_services.ArchiveServiceError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    if args.format == "json":
+        print_json(result)
+    else:
+        summary = result["authority"]["plain_summary"]
+        print("WOM local sovereignty and backup authority.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Local: {summary['local']}")
+        print(f"GitHub: {summary['github']}")
+        print(f"Object storage: {summary['object_storage']}")
+        print(f"External database: {summary['external_database']}")
+        print("Conflict winner: local reviewed WOM state")
+        print("Live backup status checked: no")
+        print("Writes: none")
+    return 0 if result.get("ok", True) else 1
+
+
 def command_secret_signal_taxonomy(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print("secret-signal-taxonomy is read-only and requires --dry-run.", file=sys.stderr)
@@ -4081,6 +4108,12 @@ def render_ai_start_here_markdown(result: dict[str, Any]) -> str:
     missing = first_read.get("missing_required") if isinstance(first_read.get("missing_required"), list) else []
     blockers = result.get("blockers") if isinstance(result.get("blockers"), list) else []
     warnings = result.get("warnings") if isinstance(result.get("warnings"), list) else []
+    storage_authority = result.get("storage_authority") if isinstance(result.get("storage_authority"), dict) else {}
+    authority_summary = (
+        storage_authority.get("plain_summary")
+        if isinstance(storage_authority.get("plain_summary"), dict)
+        else {}
+    )
 
     lines = [
         "# WOM AI Start Here",
@@ -4116,6 +4149,12 @@ def render_ai_start_here_markdown(result: dict[str, Any]) -> str:
     if not commands:
         lines.append("1. `archive runtime-context <archive-root> --format json`")
         lines.append("   Purpose: confirm archive identity and entrypoints.")
+    lines.extend(["", "## Storage Authority", ""])
+    lines.append(f"- Local: `{authority_summary.get('local') or 'canonical_working_and_recovery_state'}`")
+    lines.append(f"- GitHub: `{authority_summary.get('github') or 'metadata_and_version_history_backup'}`")
+    lines.append(f"- Object storage: `{authority_summary.get('object_storage') or 'objet_original_byte_backup'}`")
+    lines.append(f"- External database: `{authority_summary.get('external_database') or 'map_backup_or_replica'}`")
+    lines.append("- Conflict default: local reviewed WOM state wins; external state requires explicit reconcile.")
     lines.extend(["", "## Next Safe Steps", ""])
     for step in steps:
         lines.append(f"- {step}")
@@ -12410,7 +12449,12 @@ def command_recovery_plan(args: argparse.Namespace) -> int:
         print_json(result)
     else:
         print(f"Recovery plan for {result['archive_id']}.")
-        print("Mode: local control-plane recovery; external originals are not copied.")
+        print("Mode: restore verified backups into local WOM, then regenerate disposable maps and indexes.")
+        authority = result["storage_authority"]["plain_summary"]
+        print(f"Canonical authority: {authority['local']}")
+        print(f"GitHub role: {authority['github']}")
+        print(f"Object storage role: {authority['object_storage']}")
+        print(f"External database role: {authority['external_database']}")
         print(f"Sources: {result['source_summary']['source_count']} configured")
         print(f"Providers: {result['provider_summary']['binding_count']} configured, manual verification required")
         if result["latest_successful_restore_drill"]:
@@ -14169,6 +14213,16 @@ def build_parser() -> argparse.ArgumentParser:
     input_provenance_taxonomy.add_argument("--dry-run", action="store_true", help="Required. Preview only; write nothing.")
     input_provenance_taxonomy.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     input_provenance_taxonomy.set_defaults(func=command_input_provenance_taxonomy)
+
+    local_sovereignty = subcommands.add_parser(
+        "local-sovereignty",
+        aliases=["storage-authority", "backup-authority"],
+        help="Read-only authority contract for local canonical state and GitHub, object-storage, and external-database backups.",
+    )
+    local_sovereignty.add_argument("archive_root", help="Archive root to inspect.")
+    local_sovereignty.add_argument("--dry-run", action="store_true", help="Required. Report the normative contract only; write nothing.")
+    local_sovereignty.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    local_sovereignty.set_defaults(func=command_local_sovereignty)
 
     secret_signal_taxonomy = subcommands.add_parser(
         "secret-signal-taxonomy",

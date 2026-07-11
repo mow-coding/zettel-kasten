@@ -45,6 +45,7 @@
 - [Operation Status Taxonomy](operation-status-taxonomy.md)
 - [Input Provenance Taxonomy](input-provenance-taxonomy.md)
 - [Secret Signal Taxonomy](secret-signal-taxonomy.md)
+- [Local Sovereignty And Backup Authority](local-sovereignty-and-backup-authority.md)
 - [AI Response Contract](ai-response-contract.md)
 - [Operator Envelope Classes](operator-envelope-classes.md)
 - [Objet Capture Enablement](capture-enablement.md)
