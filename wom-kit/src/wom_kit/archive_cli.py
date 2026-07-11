@@ -350,6 +350,74 @@ KIT_ZETTEL_KASTEN_ROOT = KIT_ROOT / "zettel-kasten"
 ZET_CATALOG_PASS_DEFAULT_MAX_OUTPUT_MIB = 256
 ZET_CATALOG_PASS_MAX_OUTPUT_MIB = 2048
 ZET_CATALOG_PASS_MIB_BYTES = 1024 * 1024
+ZET_CATALOG_PASS_SCHEMA = "wom-kit/zet-catalog-pass/v0.1"
+ZET_CATALOG_PASS_PAGE_SCHEMA = "wom-kit/zet-catalog-pass-page/v0.1"
+ZET_CATALOG_PASS_READ_SCHEMA = "wom-kit/zet-catalog-pass-read/v0.1"
+ZET_CATALOG_PASS_CLEANUP_SCHEMA = "wom-kit/zet-catalog-pass-cleanup/v0.1"
+ZET_CATALOG_PASS_RESULT_KEYS = {
+    "ok",
+    "dry_run",
+    "lifecycle_action",
+    "schema",
+    "archive_id",
+    "status_filter",
+    "projection",
+    "response_profile",
+    "response_profile_contract",
+    "order",
+    "order_evidence",
+    "snapshot",
+    "coverage",
+    "continuation_contract",
+    "abstract_counts",
+    "abstract_coverage",
+    "identity_coverage",
+    "workload_estimate",
+    "scan",
+    "session_consistency",
+    "items",
+    "privacy_guards",
+    "closed_actions",
+    "next_safe_actions",
+    "blockers",
+    "warnings",
+}
+ZET_CATALOG_PASS_FULL_ITEM_KEYS = {
+    "path",
+    "id",
+    "status",
+    "title",
+    "kind",
+    "created_at",
+    "updated_at",
+    "abstract",
+    "abstract_source",
+    "abstract_status",
+    "abstract_char_count",
+    "abstract_truncated",
+    "facets",
+    "tie_summary",
+    "edges",
+    "edges_complete",
+    "redacted",
+    "frontmatter_readable",
+    "body_read",
+    "warnings",
+}
+ZET_CATALOG_PASS_READING_ITEM_KEYS = {
+    "id",
+    "status",
+    "title",
+    "kind",
+    "updated_at",
+    "abstract",
+    "abstract_status",
+    "facets",
+    "tie_summary",
+    "edges",
+}
+ZET_CATALOG_PASS_ROUTE_ITEM_KEYS = {"catalog_order_index", "reading_route"}
+ZET_CATALOG_PASS_EDGE_KEYS = {"type", "target", "target_kind"}
 
 REQUIRED_ARCHIVE_FILES = [
     "AGENTS.md",
@@ -8422,6 +8490,66 @@ def command_zet_catalog_pass(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 1
 
 
+def command_zet_catalog_pass_read(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("zet-catalog-pass-read is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    reporter = CommandProgressReporter(bool(getattr(args, "progress", False)), label="zet-catalog-pass-read")
+    try:
+        result = inspect_zet_catalog_pass_output_file(
+            str(args.input),
+            Path(args.archive_root),
+            page_index=args.page_index,
+            expected_sha256=args.expected_sha256,
+            progress_callback=reporter.progress,
+        )
+    except archive_services.ArchiveServiceError:
+        print("zet-catalog-pass-read could not open a valid archive root.", file=sys.stderr)
+        return 1
+    except (ArchivePathError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    except OSError:
+        print("zet-catalog-pass-read failed before a privacy-safe result could be produced.", file=sys.stderr)
+        return 1
+    finally:
+        reporter.close()
+    print_json(result)
+    return 0 if result.get("ok") else 1
+
+
+def command_zet_catalog_pass_cleanup(args: argparse.Namespace) -> int:
+    if bool(args.dry_run) == bool(args.approve):
+        print("zet-catalog-pass-cleanup requires exactly one of --dry-run or --approve.", file=sys.stderr)
+        return 1
+    if args.approve and not str(args.reviewed_by or "").strip():
+        print("zet-catalog-pass-cleanup requires --reviewed-by when --approve is used.", file=sys.stderr)
+        return 1
+    reporter = CommandProgressReporter(bool(getattr(args, "progress", False)), label="zet-catalog-pass-cleanup")
+    try:
+        result = cleanup_zet_catalog_pass_output_file(
+            str(args.input),
+            Path(args.archive_root),
+            expected_sha256=str(args.expected_sha256),
+            approve=bool(args.approve),
+            reviewed_by=str(args.reviewed_by or "").strip() or None,
+            progress_callback=reporter.progress,
+        )
+    except archive_services.ArchiveServiceError:
+        print("zet-catalog-pass-cleanup could not open a valid archive root.", file=sys.stderr)
+        return 1
+    except (ArchivePathError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    except OSError:
+        print("zet-catalog-pass-cleanup failed before a privacy-safe result could be produced.", file=sys.stderr)
+        return 1
+    finally:
+        reporter.close()
+    print_json(result)
+    return 0 if result.get("ok") else 1
+
+
 def command_status_board(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print("status-board is read-only and requires --dry-run.", file=sys.stderr)
@@ -14229,13 +14357,7 @@ def write_zet_catalog_pass_output_file(
         raise ValueError(
             f"--max-output-mib must be between 1 and {ZET_CATALOG_PASS_MAX_OUTPUT_MIB}."
         )
-    normalized = path_arg.replace("\\", "/").strip()
-    required_prefix = ".wom-scratch/diagnostics/"
-    if not normalized.startswith(required_prefix):
-        raise ValueError(f"--output must be under {required_prefix}")
-    output_path = resolve_archive_relative_path(root, normalized)
-    if output_path.suffix.lower() != ".jsonl":
-        raise ValueError("zet-catalog-pass --output must use a .jsonl filename.")
+    output_path, _ = resolve_zet_catalog_pass_scratch_path(root, path_arg)
     if output_path.exists() or output_path.is_symlink():
         raise ValueError("zet-catalog-pass refuses to overwrite an existing output file.")
 
@@ -14270,6 +14392,7 @@ def write_zet_catalog_pass_output_file(
     partial_present_after_result = False
     output_bytes = 0
     output_line_count = 0
+    output_digest = hashlib.sha256()
     page_count = 0
     attempted_page_count = 0
     total_count = 0
@@ -14295,6 +14418,7 @@ def write_zet_catalog_pass_output_file(
         if output_bytes + len(encoded) > max_output_bytes:
             return False
         handle.write(encoded)
+        output_digest.update(encoded)
         output_bytes += len(encoded)
         output_line_count += 1
         return True
@@ -14354,6 +14478,7 @@ def write_zet_catalog_pass_output_file(
             "existing_destination_overwritten": False,
             "bytes_written": output_bytes if successful else 0,
             "line_count": output_line_count if successful else 0,
+            "sha256": f"sha256:{output_digest.hexdigest()}" if successful else None,
             "max_output_bytes": max_output_bytes,
             "archive_record_written": False,
             "receipt_written": False,
@@ -14368,7 +14493,7 @@ def write_zet_catalog_pass_output_file(
         return {
             "ok": successful,
             "dry_run": True,
-            "schema": "wom-kit/zet-catalog-pass/v0.1",
+            "schema": ZET_CATALOG_PASS_SCHEMA,
             "lifecycle_action": "zet_catalog_pass",
             "status": status_value,
             "archive_id": first_result.get("archive_id") if isinstance(first_result, dict) else None,
@@ -14479,7 +14604,7 @@ def write_zet_catalog_pass_output_file(
             coverage = result.get("coverage") if isinstance(result.get("coverage"), dict) else {}
             if page_count == 0:
                 header = {
-                    "schema": "wom-kit/zet-catalog-pass/v0.1",
+                    "schema": ZET_CATALOG_PASS_SCHEMA,
                     "record_type": "catalog_pass_header",
                     "archive_id": result.get("archive_id"),
                     "catalog_schema": result.get("schema"),
@@ -14504,7 +14629,7 @@ def write_zet_catalog_pass_output_file(
                     break
 
             page_record = {
-                "schema": "wom-kit/zet-catalog-pass-page/v0.1",
+                "schema": ZET_CATALOG_PASS_PAGE_SCHEMA,
                 "record_type": "catalog_page",
                 "page_index": page_count,
                 "result": result,
@@ -14558,7 +14683,7 @@ def write_zet_catalog_pass_output_file(
             return summary_payload("blocked")
 
         footer = {
-            "schema": "wom-kit/zet-catalog-pass/v0.1",
+            "schema": ZET_CATALOG_PASS_SCHEMA,
             "record_type": "catalog_pass_footer",
             "status": "complete",
             "page_count": page_count,
@@ -14598,6 +14723,8 @@ def write_zet_catalog_pass_output_file(
                 warnings.append("A hidden private partial remains beside the complete output and should be removed after review.")
         if not output_path.is_file():
             raise OSError("catalog_pass_output_publication_not_verified")
+        if output_path.stat().st_size != output_bytes:
+            raise OSError("catalog_pass_output_size_verification_failed")
         return summary_payload("complete")
     finally:
         if descriptor is not None:
@@ -14605,6 +14732,442 @@ def write_zet_catalog_pass_output_file(
         close_handle()
         if not published:
             remove_partial()
+
+
+def resolve_zet_catalog_pass_scratch_path(archive_root: Path, path_arg: str) -> tuple[Path, str]:
+    normalized = path_arg.replace("\\", "/").strip()
+    required_prefix = ".wom-scratch/diagnostics/"
+    if not normalized.startswith(required_prefix):
+        raise ValueError(f"Catalog pass artifact path must be under {required_prefix}")
+    if not normalized.lower().endswith(".jsonl"):
+        raise ValueError("Catalog pass artifact path must use a .jsonl filename.")
+
+    unresolved = archive_root.resolve()
+    for part in normalized.split("/"):
+        unresolved = unresolved / part
+        if unresolved.is_symlink():
+            raise ValueError("Catalog pass artifact paths must not contain symbolic links.")
+    return resolve_archive_relative_path(archive_root, normalized), normalized
+
+
+def normalize_zet_catalog_pass_sha256(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip().lower()
+    if re.fullmatch(r"[0-9a-f]{64}", normalized):
+        normalized = f"sha256:{normalized}"
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", normalized):
+        raise ValueError("expected_sha256 must use sha256:<64 lowercase hex> syntax.")
+    return normalized
+
+
+def inspect_zet_catalog_pass_output_file(
+    path_arg: str,
+    archive_root: Path,
+    *,
+    page_index: int | None,
+    expected_sha256: str | None,
+    progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
+) -> dict[str, Any]:
+    root = archive_services.require_existing_archive_root(archive_root)
+    artifact_path, artifact_display = resolve_zet_catalog_pass_scratch_path(root, path_arg)
+    if artifact_path.is_symlink() or not artifact_path.is_file():
+        raise ValueError("Catalog pass artifact must be an existing regular file.")
+    if page_index is not None and page_index < 0:
+        raise ValueError("page_index must be zero or greater.")
+    normalized_expected_sha256 = normalize_zet_catalog_pass_sha256(expected_sha256)
+
+    blockers: list[str] = []
+    warnings: list[str] = []
+    digest = hashlib.sha256()
+    byte_count = 0
+    line_count = 0
+    header: dict[str, Any] | None = None
+    footer: dict[str, Any] | None = None
+    selected_page: dict[str, Any] | None = None
+    page_count = 0
+    expected_cursor = 0
+    total_count: int | None = None
+    snapshot_id: str | None = None
+    last_coverage: dict[str, Any] | None = None
+    first_read_gap_count: int | None = None
+    projection: str | None = None
+    saw_complete_page = False
+    file_size = artifact_path.stat().st_size
+
+    def add_blocker(message: str) -> None:
+        if len(blockers) < 20 and message not in blockers:
+            blockers.append(message)
+
+    if progress_callback is not None:
+        progress_callback("catalog-pass-artifact", "start", 0, file_size)
+    with artifact_path.open("rb") as handle:
+        for raw_line in handle:
+            line_count += 1
+            byte_count += len(raw_line)
+            digest.update(raw_line)
+            if progress_callback is not None:
+                progress_callback("catalog-pass-artifact", "scanned", byte_count, file_size)
+            if not raw_line.strip():
+                add_blocker("The catalog pass artifact contains a blank record line.")
+                continue
+            try:
+                record = json.loads(raw_line.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                add_blocker("The catalog pass artifact contains a record that is not valid UTF-8 JSON.")
+                continue
+            if not isinstance(record, dict):
+                add_blocker("Every catalog pass artifact record must be a JSON object.")
+                continue
+
+            record_type = record.get("record_type")
+            if line_count == 1:
+                if record_type != "catalog_pass_header" or record.get("schema") != ZET_CATALOG_PASS_SCHEMA:
+                    add_blocker("The first catalog pass artifact record is not a supported header.")
+                else:
+                    header = record
+                    projection_value = record.get("projection")
+                    if isinstance(projection_value, str) and projection_value in archive_services.ZET_CATALOG_PROJECTIONS:
+                        projection = str(projection_value)
+                    else:
+                        add_blocker("The catalog pass header has an unsupported item projection.")
+                    if record.get("coverage_mode") != "strict":
+                        add_blocker("The catalog pass header does not declare strict coverage.")
+                    if record.get("contains_zettel_body_text") is not False:
+                        add_blocker("The catalog pass header does not prove that zet body text is excluded.")
+                continue
+
+            if footer is not None:
+                add_blocker("The catalog pass artifact contains records after its completion footer.")
+                continue
+            if record_type == "catalog_pass_footer":
+                if record.get("schema") != ZET_CATALOG_PASS_SCHEMA or record.get("status") != "complete":
+                    add_blocker("The catalog pass footer is not a supported complete footer.")
+                footer = record
+                continue
+            if record_type != "catalog_page" or record.get("schema") != ZET_CATALOG_PASS_PAGE_SCHEMA:
+                add_blocker("The catalog pass artifact contains an unsupported record type.")
+                continue
+            if saw_complete_page:
+                add_blocker("The catalog pass artifact contains a page after its completing page.")
+            if record.get("page_index") != page_count:
+                add_blocker("Catalog pass page indexes are not contiguous from zero.")
+
+            result = record.get("result")
+            if not isinstance(result, dict):
+                add_blocker("A catalog pass page is missing its result object.")
+                page_count += 1
+                continue
+            if set(result) - ZET_CATALOG_PASS_RESULT_KEYS:
+                add_blocker("A catalog pass page result contains unsupported fields.")
+            coverage = result.get("coverage")
+            items = result.get("items")
+            snapshot = result.get("snapshot")
+            if not isinstance(coverage, dict) or not isinstance(items, list) or not isinstance(snapshot, dict):
+                add_blocker("A catalog pass page is missing coverage, snapshot, or item data.")
+                page_count += 1
+                continue
+            if result.get("projection") != projection:
+                add_blocker("A catalog pass page projection does not match its header.")
+            result_privacy = result.get("privacy_guards")
+            if (
+                not isinstance(result_privacy, dict)
+                or result_privacy.get("zettel_body_text_read") is not False
+                or result_privacy.get("zettel_body_text_echoed") is not False
+            ):
+                add_blocker("A catalog pass page does not prove that zet body text was excluded.")
+
+            allowed_item_keys = (
+                ZET_CATALOG_PASS_FULL_ITEM_KEYS
+                if projection == "full"
+                else ZET_CATALOG_PASS_READING_ITEM_KEYS | (
+                    ZET_CATALOG_PASS_ROUTE_ITEM_KEYS if projection == "routed_reading" else set()
+                )
+            )
+            for item in items:
+                if not isinstance(item, dict) or set(item) - allowed_item_keys:
+                    add_blocker("A catalog pass page contains an item outside the declared projection schema.")
+                    continue
+                if projection == "full" and item.get("body_read") is not False:
+                    add_blocker("A full catalog item does not prove that its zet body was excluded.")
+                edges = item.get("edges")
+                if not isinstance(edges, list) or any(
+                    not isinstance(edge, dict) or set(edge) - ZET_CATALOG_PASS_EDGE_KEYS
+                    for edge in edges
+                ):
+                    add_blocker("A catalog pass item contains an unsupported edge preview.")
+
+            current_snapshot_id = snapshot.get("id")
+            if not isinstance(current_snapshot_id, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", current_snapshot_id):
+                add_blocker("A catalog pass page has an invalid snapshot id.")
+            elif snapshot_id is None:
+                snapshot_id = current_snapshot_id
+            elif current_snapshot_id != snapshot_id:
+                add_blocker("Catalog pass page snapshots do not match.")
+
+            page_total = coverage.get("total_count")
+            cursor = coverage.get("cursor")
+            returned_count = coverage.get("returned_count")
+            covered_count = coverage.get("covered_count")
+            if type(page_total) is not int or page_total < 0:
+                add_blocker("A catalog pass page has an invalid total count.")
+            elif total_count is None:
+                total_count = page_total
+            elif page_total != total_count:
+                add_blocker("Catalog pass page total counts do not match.")
+            if type(cursor) is not int or cursor != expected_cursor:
+                add_blocker("Catalog pass page cursors are not contiguous.")
+            if type(returned_count) is not int or returned_count != len(items):
+                add_blocker("A catalog pass page returned count does not match its bounded item list.")
+                returned_count = len(items)
+            if type(covered_count) is not int or covered_count != expected_cursor + returned_count:
+                add_blocker("A catalog pass page covered count does not match its contiguous prefix.")
+            if coverage.get("mode") != "strict" or coverage.get("contiguous_prefix_verified") is not True:
+                add_blocker("A catalog pass page does not carry strict contiguous-prefix proof.")
+            expected_profile = "full" if page_count == 0 else "continuation"
+            if result.get("response_profile") != expected_profile:
+                add_blocker("Catalog pass response profiles do not follow full-first then continuation order.")
+
+            complete = coverage.get("complete") is True
+            next_cursor = coverage.get("next_cursor")
+            if complete:
+                saw_complete_page = True
+                if total_count is not None and covered_count != total_count:
+                    add_blocker("The completing catalog page does not cover the declared total count.")
+                if next_cursor is not None or coverage.get("archive_wide_coverage_claim_ready") is not True:
+                    add_blocker("The completing catalog page lacks archive-wide coverage proof.")
+            else:
+                if next_cursor != covered_count or not isinstance(coverage.get("continuation_token"), str):
+                    add_blocker("A non-final catalog page lacks a safe forward continuation.")
+
+            if page_count == 0:
+                abstract_coverage = result.get("abstract_coverage")
+                if isinstance(abstract_coverage, dict) and type(abstract_coverage.get("first_read_gap_count")) is int:
+                    first_read_gap_count = abstract_coverage["first_read_gap_count"]
+            if page_index == page_count:
+                selected_page = record
+            expected_cursor += returned_count
+            last_coverage = coverage
+            page_count += 1
+
+    if progress_callback is not None:
+        progress_callback("catalog-pass-artifact", "done", byte_count, file_size)
+
+    actual_sha256 = f"sha256:{digest.hexdigest()}"
+    if header is None:
+        add_blocker("The catalog pass artifact has no supported header.")
+    if footer is None:
+        add_blocker("The catalog pass artifact has no complete footer.")
+    if page_count == 0:
+        add_blocker("The catalog pass artifact contains no catalog page.")
+    if footer is not None:
+        if footer.get("page_count") != page_count:
+            add_blocker("The catalog pass footer page count does not match the artifact.")
+        footer_coverage = footer.get("coverage")
+        footer_snapshot = footer.get("snapshot")
+        if not isinstance(footer_coverage, dict) or not isinstance(footer_snapshot, dict):
+            add_blocker("The catalog pass footer is missing coverage or snapshot proof.")
+        else:
+            for key in ("total_count", "covered_count", "complete", "archive_wide_coverage_claim_ready"):
+                if not isinstance(last_coverage, dict) or footer_coverage.get(key) != last_coverage.get(key):
+                    add_blocker("The catalog pass footer coverage does not match the final page.")
+                    break
+            if footer_snapshot.get("id") != snapshot_id:
+                add_blocker("The catalog pass footer snapshot does not match its pages.")
+        footer_session = footer.get("session_consistency")
+        if page_count > 1 and (
+            not isinstance(footer_session, dict)
+            or footer_session.get("completion_revalidation_performed") is not True
+        ):
+            add_blocker("The multi-page catalog pass footer lacks completion revalidation proof.")
+    if not isinstance(last_coverage, dict) or last_coverage.get("complete") is not True:
+        add_blocker("The final catalog pass page is not complete.")
+    if not isinstance(last_coverage, dict) or last_coverage.get("archive_wide_coverage_claim_ready") is not True:
+        add_blocker("The final catalog pass page lacks archive-wide coverage proof.")
+    structurally_complete = not blockers
+    if page_index is not None and selected_page is None:
+        add_blocker("The requested page index does not exist in this complete catalog pass.")
+    if page_index is not None and normalized_expected_sha256 is None:
+        add_blocker("An expected SHA-256 is required before a private catalog page can be returned.")
+    expected_sha256_matches = (
+        None if normalized_expected_sha256 is None else actual_sha256 == normalized_expected_sha256
+    )
+    if expected_sha256_matches is False:
+        add_blocker("The catalog pass artifact SHA-256 does not match the expected value.")
+    if normalized_expected_sha256 is None:
+        warnings.append("No expected SHA-256 was supplied; structure was validated but artifact identity was not externally pinned.")
+
+    blockers = archive_services.unique_preserve_order(blockers)
+    ok = not blockers
+    status = "page_ready" if ok and page_index is not None else "complete_validated" if ok else "blocked"
+    next_page_index = (
+        page_index + 1
+        if ok and page_index is not None and page_index + 1 < page_count
+        else None
+    )
+    return {
+        "ok": ok,
+        "dry_run": True,
+        "schema": ZET_CATALOG_PASS_READ_SCHEMA,
+        "lifecycle_action": "zet_catalog_pass_read",
+        "status": status,
+        "artifact": {
+            "path": artifact_display,
+            "path_kind": "archive_relative_private_scratch",
+            "sha256": actual_sha256,
+            "expected_sha256_supplied": normalized_expected_sha256 is not None,
+            "expected_sha256_matches": expected_sha256_matches,
+            "bytes_read": byte_count,
+            "line_count": line_count,
+            "structurally_complete": structurally_complete,
+            "contains_private_catalog_metadata": True,
+            "contains_zettel_body_text": False,
+            "tracking_policy": "local_private_scratch_not_archive_record_do_not_commit_delete_after_use",
+            "absolute_path_echoed": False,
+        },
+        "inspection": {
+            "page_count": page_count,
+            "total_count": total_count,
+            "covered_count": expected_cursor,
+            "snapshot_id": snapshot_id,
+            "first_read_gap_count": first_read_gap_count,
+            "archive_wide_coverage_claim_ready": bool(
+                ok and isinstance(last_coverage, dict) and last_coverage.get("archive_wide_coverage_claim_ready")
+            ),
+            "archive_wide_abstract_reading_claim_ready": bool(
+                ok and isinstance(last_coverage, dict) and last_coverage.get("archive_wide_abstract_reading_claim_ready")
+            ),
+        },
+        "selection": {
+            "requested_page_index": page_index,
+            "selected_page_count": 1 if ok and selected_page is not None else 0,
+            "next_page_index": next_page_index,
+            "whole_artifact_loaded_into_output": False,
+        },
+        "selected_page": selected_page if ok else None,
+        "write_boundary": {
+            "files_written": False,
+            "files_deleted": False,
+            "archive_records_written": False,
+            "provider_state_written": False,
+        },
+        "privacy_guards": {
+            "private_items_echoed_only_after_complete_validation": True,
+            "at_most_one_catalog_page_echoed": True,
+            "zettel_body_text_read": False,
+            "object_file_bytes_read": False,
+            "provider_api_called": False,
+            "secrets_read": False,
+            "absolute_local_paths_echoed": False,
+        },
+        "blockers": blockers,
+        "warnings": warnings,
+        "next_safe_actions": (
+            [
+                "Read only the selected page, then request next_page_index with the same expected SHA-256.",
+                "After the final page is consumed, preview zet-catalog-pass-cleanup with this SHA-256.",
+            ]
+            if ok and page_index is not None
+            else [
+                "Request page index 0 with this artifact SHA-256, then continue one bounded page at a time."
+            ]
+            if ok
+            else ["Discard or quarantine the untrusted artifact and run zet-catalog-pass again from the beginning."]
+        ),
+    }
+
+
+def cleanup_zet_catalog_pass_output_file(
+    path_arg: str,
+    archive_root: Path,
+    *,
+    expected_sha256: str,
+    approve: bool,
+    reviewed_by: str | None,
+    progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
+) -> dict[str, Any]:
+    root = archive_services.require_existing_archive_root(archive_root)
+    normalized_expected_sha256 = normalize_zet_catalog_pass_sha256(expected_sha256)
+    if normalized_expected_sha256 is None:
+        raise ValueError("expected_sha256 is required for catalog pass cleanup.")
+    inspection = inspect_zet_catalog_pass_output_file(
+        path_arg,
+        root,
+        page_index=None,
+        expected_sha256=normalized_expected_sha256,
+        progress_callback=progress_callback,
+    )
+    artifact_path, artifact_display = resolve_zet_catalog_pass_scratch_path(root, path_arg)
+    blockers = list(inspection.get("blockers", []))
+    if approve and not reviewed_by:
+        blockers.append("A human reviewer is required for approved private scratch deletion.")
+
+    deleted = False
+    if not blockers and approve:
+        before = artifact_path.stat()
+        current_sha256 = f"sha256:{sha256_file(artifact_path)}"
+        after = artifact_path.stat()
+        identity_before = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+        identity_after = (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
+        if current_sha256 != normalized_expected_sha256 or identity_before != identity_after:
+            blockers.append("The catalog pass artifact changed during cleanup verification; nothing was deleted.")
+        else:
+            artifact_path.unlink()
+            deleted = not artifact_path.exists()
+            if not deleted:
+                blockers.append("The catalog pass artifact deletion could not be verified.")
+
+    blockers = archive_services.unique_preserve_order(blockers)
+    ok = not blockers
+    status = "deleted" if ok and deleted else "ready_for_approval" if ok else "blocked"
+    return {
+        "ok": ok,
+        "dry_run": not approve,
+        "schema": ZET_CATALOG_PASS_CLEANUP_SCHEMA,
+        "lifecycle_action": "zet_catalog_pass_cleanup",
+        "status": status,
+        "artifact": {
+            "path": artifact_display,
+            "path_kind": "archive_relative_private_scratch",
+            "sha256": inspection.get("artifact", {}).get("sha256"),
+            "expected_sha256_matches": inspection.get("artifact", {}).get("expected_sha256_matches"),
+            "structurally_complete_before_cleanup": inspection.get("artifact", {}).get("structurally_complete"),
+            "exists_after_cleanup": artifact_path.exists(),
+            "absolute_path_echoed": False,
+        },
+        "approval": {
+            "required_for_delete": True,
+            "approved": bool(approve),
+            "reviewed_by_supplied": bool(reviewed_by),
+            "bound_to_expected_sha256": True,
+            "scope": "one_complete_private_catalog_pass_artifact",
+        },
+        "write_boundary": {
+            "private_scratch_file_deleted": deleted,
+            "archive_records_written": False,
+            "receipts_written": False,
+            "provider_state_written": False,
+        },
+        "files_deleted": [artifact_display] if deleted else [],
+        "privacy_guards": {
+            "catalog_items_echoed": False,
+            "zettel_body_text_read": False,
+            "object_file_bytes_read": False,
+            "provider_api_called": False,
+            "secrets_read": False,
+            "reviewer_value_echoed": False,
+            "absolute_local_paths_echoed": False,
+        },
+        "blockers": blockers,
+        "warnings": list(inspection.get("warnings", [])),
+        "next_safe_actions": (
+            ["The private catalog pass artifact is deleted; create a new pass for a later archive snapshot."]
+            if deleted
+            else ["Re-run this command with --approve and --reviewed-by after confirming the SHA-256 and consumption are complete."]
+            if ok
+            else ["Do not delete the file until structure, SHA-256, and approval blockers are resolved."]
+        ),
+    }
 
 
 def write_doctor_output_file(path_arg: str, archive_root: Path, diagnostics: list[Diagnostic]) -> str:
@@ -17020,6 +17583,64 @@ def build_parser() -> argparse.ArgumentParser:
     )
     zet_catalog_pass.add_argument("--format", choices=["text", "json"], default="json", help="Summary output format.")
     zet_catalog_pass.set_defaults(func=command_zet_catalog_pass)
+
+    zet_catalog_pass_read = subcommands.add_parser(
+        "zet-catalog-pass-read",
+        aliases=["catalog-pass-read"],
+        help="Validate one complete private catalog-pass JSONL and optionally return one bounded page.",
+    )
+    zet_catalog_pass_read.add_argument("archive_root", help="Archive root containing the private scratch artifact.")
+    zet_catalog_pass_read.add_argument(
+        "--input",
+        required=True,
+        help="Existing .jsonl path under .wom-scratch/diagnostics/.",
+    )
+    zet_catalog_pass_read.add_argument(
+        "--page-index",
+        type=int,
+        help="Optional zero-based page to return after whole-artifact validation; at most one page is echoed.",
+    )
+    zet_catalog_pass_read.add_argument(
+        "--expected-sha256",
+        help="Optional sha256:<64 lowercase hex> identity from the pass summary.",
+    )
+    zet_catalog_pass_read.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Required. Reads only the selected private artifact and writes nothing.",
+    )
+    zet_catalog_pass_read.add_argument(
+        "--progress",
+        action="store_true",
+        help="Stream content-free byte counts and 10-second heartbeats to stderr.",
+    )
+    zet_catalog_pass_read.set_defaults(func=command_zet_catalog_pass_read)
+
+    zet_catalog_pass_cleanup = subcommands.add_parser(
+        "zet-catalog-pass-cleanup",
+        aliases=["catalog-pass-cleanup"],
+        help="Preview or approve deletion of one complete SHA-bound private catalog-pass JSONL.",
+    )
+    zet_catalog_pass_cleanup.add_argument("archive_root", help="Archive root containing the private scratch artifact.")
+    zet_catalog_pass_cleanup.add_argument(
+        "--input",
+        required=True,
+        help="Existing .jsonl path under .wom-scratch/diagnostics/.",
+    )
+    zet_catalog_pass_cleanup.add_argument(
+        "--expected-sha256",
+        required=True,
+        help="Required sha256:<64 lowercase hex> identity from the pass summary.",
+    )
+    zet_catalog_pass_cleanup.add_argument("--dry-run", action="store_true", help="Preview deletion after validation.")
+    zet_catalog_pass_cleanup.add_argument("--approve", action="store_true", help="Delete only the validated SHA-bound scratch artifact.")
+    zet_catalog_pass_cleanup.add_argument("--reviewed-by", help="Human reviewer id required with --approve; the value is never echoed.")
+    zet_catalog_pass_cleanup.add_argument(
+        "--progress",
+        action="store_true",
+        help="Stream content-free byte counts and 10-second heartbeats to stderr.",
+    )
+    zet_catalog_pass_cleanup.set_defaults(func=command_zet_catalog_pass_cleanup)
 
     status_board = subcommands.add_parser(
         "status-board",

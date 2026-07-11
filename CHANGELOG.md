@@ -6,6 +6,28 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.217 - 2026-07-11
+
+SHA-bound catalog artifact lifecycle checkpoint. Additive; no archive migration.
+
+- **Pinned complete artifact.** `zet-catalog-pass` now reports the SHA-256 of
+  the exact header/pages/footer JSONL that it publishes after completion.
+- **Validate before private output.** New `zet-catalog-pass-read` CLI, with
+  `catalog-pass-read` alias, streams the entire artifact and verifies schemas,
+  contiguous pages/cursors, stable snapshot, final coverage and revalidation,
+  projection fields, body-exclusion guards, and the caller's expected hash
+  before returning at most one selected page.
+- **Fail closed on injected content.** Unsupported result/item fields, missing
+  footer, broken continuity, missing page hash pin, or changed bytes return no
+  private page. Read progress is content-free and stays on stderr.
+- **Explicit scratch ending.** New `zet-catalog-pass-cleanup` CLI previews first
+  and deletes only one complete SHA-matching JSONL after `--approve` and
+  `--reviewed-by`. It writes no receipt and never deletes hidden partials,
+  archive records, objets, manifests, or provider state.
+- **Honest boundary.** The file remains private disposable scratch, not WOM
+  knowledge or backup. SHA-256 proves byte identity, not signature,
+  comprehension, or abstract completeness.
+
 ## v0.3.216 - 2026-07-11
 
 One-process strict catalog checkpoint. Additive; no archive migration.

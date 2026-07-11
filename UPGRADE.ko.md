@@ -83,6 +83,44 @@ project folder 작업에서는 temporary intake staging이 archive of record가
 아니라는 점을 기억합니다. cleanup 전에 원본을 objet, source map, manifest,
 zet, receipt로 보존해야 합니다.
 
+## v0.3.217 해시로 묶인 카탈로그 임시 파일 수명주기
+
+v0.3.217은 아카이브 migration을 추가하지 않고 zet를 다시 쓰지 않습니다.
+성공한 `zet-catalog-pass`의 작은 결과에는 이제 `output.sha256`이 들어갑니다.
+현재 AI 작업 동안 비공개 임시 파일 이름과 이 값을 함께 유지합니다.
+
+비공개 항목을 출력하지 않고 완성 파일 전체를 먼저 검증합니다.
+
+```text
+archive zet-catalog-pass-read <archive-root> --input .wom-scratch/diagnostics/catalog-pass.jsonl --expected-sha256 <pass-결과의-sha256> --dry-run --progress
+```
+
+그 다음 같은 해시로 한 번에 한 페이지만 요청합니다.
+
+```text
+archive zet-catalog-pass-read <archive-root> --input .wom-scratch/diagnostics/catalog-pass.jsonl --page-index 0 --expected-sha256 <pass-결과의-sha256> --dry-run --progress
+```
+
+reader는 선택한 페이지를 돌려주기 전에 JSONL 전체를 순서대로 검증합니다.
+완주 정보 누락, 페이지 순서 단절, snapshot 변경, 허용되지 않은 필드,
+본문을 읽었다는 표시, 페이지 해시 누락, SHA 불일치가 있으면 페이지를 전혀
+출력하지 않습니다.
+
+마지막 `selection.next_page_index`가 `null`이면 삭제를 먼저 미리 봅니다.
+
+```text
+archive zet-catalog-pass-cleanup <archive-root> --input .wom-scratch/diagnostics/catalog-pass.jsonl --expected-sha256 <pass-결과의-sha256> --dry-run
+```
+
+사람이 확인한 뒤 그 파일 하나만 삭제합니다.
+
+```text
+archive zet-catalog-pass-cleanup <archive-root> --input .wom-scratch/diagnostics/catalog-pass.jsonl --expected-sha256 <pass-결과의-sha256> --approve --reviewed-by human:local-operator
+```
+
+cleanup은 영수증을 쓰지 않고 숨은 partial 파일도 지우지 않습니다. 이 파일은
+WOM 지식이나 백업이 아니라 사용 후 버리는 비공개 임시 파일입니다.
+
 ## v0.3.216 한 프로세스 카탈로그 완주
 
 v0.3.216은 아카이브 migration을 추가하지 않고 zet를 다시 쓰지 않습니다.
