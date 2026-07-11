@@ -91,6 +91,43 @@ For project-folder work, remember that temporary intake staging is not the
 archive of record. Preserve originals as objets, source maps, manifests, zets,
 and receipts before any cleanup.
 
+## v0.3.217 SHA-Bound Catalog Artifact Lifecycle
+
+v0.3.217 adds no archive migration and does not rewrite a zet. A successful
+`zet-catalog-pass` summary now includes `output.sha256`. Keep that value beside
+the private scratch filename for the current host session.
+
+Validate the complete artifact without returning private items:
+
+```text
+archive zet-catalog-pass-read <archive-root> --input .wom-scratch/diagnostics/catalog-pass.jsonl --expected-sha256 <sha256-from-pass-summary> --dry-run --progress
+```
+
+Then request one bounded page at a time with the same hash:
+
+```text
+archive zet-catalog-pass-read <archive-root> --input .wom-scratch/diagnostics/catalog-pass.jsonl --page-index 0 --expected-sha256 <sha256-from-pass-summary> --dry-run --progress
+```
+
+The reader streams and validates the whole JSONL before it returns the selected
+page. A malformed footer, broken page chain, changed snapshot, unsupported
+field, body-read claim, missing page hash pin, or SHA mismatch returns no page.
+
+After the final `selection.next_page_index` becomes `null`, preview cleanup:
+
+```text
+archive zet-catalog-pass-cleanup <archive-root> --input .wom-scratch/diagnostics/catalog-pass.jsonl --expected-sha256 <sha256-from-pass-summary> --dry-run
+```
+
+Delete only after human review:
+
+```text
+archive zet-catalog-pass-cleanup <archive-root> --input .wom-scratch/diagnostics/catalog-pass.jsonl --expected-sha256 <sha256-from-pass-summary> --approve --reviewed-by human:local-operator
+```
+
+Cleanup writes no receipt and never removes hidden partials. The artifact is
+disposable private scratch, not WOM knowledge or backup.
+
 ## v0.3.216 One-Process Catalog Pass
 
 v0.3.216 adds no archive migration and does not rewrite a zet. For a terminal

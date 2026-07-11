@@ -1479,6 +1479,8 @@ class ArchiveCliTests(unittest.TestCase):
         self.assertIn("ai-start-here", command_names)
         self.assertIn("project-version-update", command_names)
         self.assertIn("zet-catalog-pass", command_names)
+        self.assertIn("zet-catalog-pass-read", command_names)
+        self.assertIn("zet-catalog-pass-cleanup", command_names)
         capability = next(item for item in commands if item["name"] == "capabilities")
         self.assertIn("--machine", capability["options"])
         project_update = next(item for item in commands if item["name"] == "project-version-update")
@@ -1491,6 +1493,14 @@ class ArchiveCliTests(unittest.TestCase):
         self.assertEqual(catalog_pass["required_positionals"], ["archive_root"])
         for option in ("--output", "--dry-run", "--progress", "--max-output-mib"):
             self.assertIn(option, catalog_pass["options"])
+        catalog_pass_read = next(item for item in commands if item["name"] == "zet-catalog-pass-read")
+        self.assertEqual(catalog_pass_read["aliases"], ["catalog-pass-read"])
+        for option in ("--input", "--page-index", "--expected-sha256", "--dry-run", "--progress"):
+            self.assertIn(option, catalog_pass_read["options"])
+        catalog_pass_cleanup = next(item for item in commands if item["name"] == "zet-catalog-pass-cleanup")
+        self.assertEqual(catalog_pass_cleanup["aliases"], ["catalog-pass-cleanup"])
+        for option in ("--input", "--expected-sha256", "--dry-run", "--approve", "--reviewed-by"):
+            self.assertIn(option, catalog_pass_cleanup["options"])
         serialized = json.dumps(result, ensure_ascii=False)
         self.assertNotIn(str(KIT_ROOT), serialized)
         self.assertNotIn(str(Path.home()), serialized)
@@ -29420,6 +29430,287 @@ state:
             self.assertNotIn(private_body_marker, output_path.read_text(encoding="utf-8"))
             self.assertEqual(preexisting_partial.read_bytes(), preexisting_partial_bytes)
             self.assertEqual(list(output_path.parent.glob(".*.partial")), [preexisting_partial])
+
+    def test_zet_catalog_pass_read_validates_whole_artifact_before_returning_one_page(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            output_relative = ".wom-scratch/diagnostics/catalog-pass-read.jsonl"
+            pass_code, pass_stdout, pass_stderr = self.run_cli_split(
+                [
+                    "zet-catalog-pass",
+                    str(archive_root),
+                    "--projection",
+                    "reading",
+                    "--page-size",
+                    "1",
+                    "--output",
+                    output_relative,
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(pass_code, 0, pass_stdout + pass_stderr)
+            pass_summary = json.loads(pass_stdout)
+            expected_sha256 = pass_summary["output"]["sha256"]
+            output_path = archive_root / output_relative
+            self.assertEqual(expected_sha256, "sha256:" + hashlib.sha256(output_path.read_bytes()).hexdigest())
+
+            summary_code, summary_stdout, summary_stderr = self.run_cli_split(
+                [
+                    "zet-catalog-pass-read",
+                    str(archive_root),
+                    "--input",
+                    output_relative,
+                    "--expected-sha256",
+                    expected_sha256,
+                    "--dry-run",
+                    "--progress",
+                ]
+            )
+            self.assertEqual(summary_code, 0, summary_stdout + summary_stderr)
+            summary = json.loads(summary_stdout)
+            self.assertTrue(summary["ok"], summary)
+            self.assertEqual(summary["status"], "complete_validated")
+            self.assertTrue(summary["artifact"]["structurally_complete"])
+            self.assertTrue(summary["artifact"]["expected_sha256_matches"])
+            self.assertIsNone(summary["selected_page"])
+            self.assertEqual(summary["selection"]["selected_page_count"], 0)
+            self.assertTrue(summary["inspection"]["archive_wide_coverage_claim_ready"])
+            self.assertNotIn(str(archive_root), summary_stdout + summary_stderr)
+            self.assertIn("catalog-pass-artifact", summary_stderr)
+
+            page_code, page_stdout = self.run_cli(
+                [
+                    "catalog-pass-read",
+                    str(archive_root),
+                    "--input",
+                    output_relative,
+                    "--page-index",
+                    "0",
+                    "--expected-sha256",
+                    expected_sha256,
+                    "--dry-run",
+                ]
+            )
+            self.assertEqual(page_code, 0, page_stdout)
+            page = json.loads(page_stdout)
+            self.assertEqual(page["status"], "page_ready")
+            self.assertEqual(page["selected_page"]["record_type"], "catalog_page")
+            self.assertEqual(page["selected_page"]["page_index"], 0)
+            self.assertEqual(len(page["selected_page"]["result"]["items"]), 1)
+            self.assertEqual(page["selection"]["selected_page_count"], 1)
+            self.assertFalse(page["selection"]["whole_artifact_loaded_into_output"])
+
+            unbound_code, unbound_stdout = self.run_cli(
+                [
+                    "zet-catalog-pass-read",
+                    str(archive_root),
+                    "--input",
+                    output_relative,
+                    "--page-index",
+                    "0",
+                    "--dry-run",
+                ]
+            )
+            self.assertEqual(unbound_code, 1, unbound_stdout)
+            unbound = json.loads(unbound_stdout)
+            self.assertTrue(unbound["artifact"]["structurally_complete"])
+            self.assertIsNone(unbound["selected_page"])
+
+            missing_code, missing_stdout = self.run_cli(
+                [
+                    "zet-catalog-pass-read",
+                    str(archive_root),
+                    "--input",
+                    output_relative,
+                    "--page-index",
+                    str(summary["inspection"]["page_count"]),
+                    "--expected-sha256",
+                    expected_sha256,
+                    "--dry-run",
+                ]
+            )
+            self.assertEqual(missing_code, 1, missing_stdout)
+            missing = json.loads(missing_stdout)
+            self.assertFalse(missing["ok"])
+            self.assertIsNone(missing["selected_page"])
+
+            private_tamper_marker = "PRIVATE_TAMPERED_CATALOG_VALUE"
+            tampered_records = [json.loads(line) for line in output_path.read_text(encoding="utf-8").splitlines()]
+            tampered_records[1]["result"]["body"] = private_tamper_marker
+            output_path.write_text(
+                "".join(
+                    json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n"
+                    for record in tampered_records
+                ),
+                encoding="utf-8",
+            )
+            tampered_sha256 = "sha256:" + hashlib.sha256(output_path.read_bytes()).hexdigest()
+            tampered_code, tampered_stdout = self.run_cli(
+                [
+                    "zet-catalog-pass-read",
+                    str(archive_root),
+                    "--input",
+                    output_relative,
+                    "--page-index",
+                    "0",
+                    "--expected-sha256",
+                    tampered_sha256,
+                    "--dry-run",
+                ]
+            )
+            self.assertEqual(tampered_code, 1, tampered_stdout)
+            tampered = json.loads(tampered_stdout)
+            self.assertFalse(tampered["ok"])
+            self.assertIsNone(tampered["selected_page"])
+            self.assertTrue(tampered["artifact"]["expected_sha256_matches"])
+            self.assertFalse(tampered["artifact"]["structurally_complete"])
+            self.assertNotIn(private_tamper_marker, tampered_stdout)
+
+    def test_zet_catalog_pass_read_accepts_each_generated_item_projection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            for projection in ("full", "reading", "routed_reading"):
+                with self.subTest(projection=projection):
+                    output_relative = f".wom-scratch/diagnostics/catalog-pass-{projection}.jsonl"
+                    pass_command = [
+                        "zet-catalog-pass",
+                        str(archive_root),
+                        "--projection",
+                        projection,
+                        "--output",
+                        output_relative,
+                        "--dry-run",
+                    ]
+                    if projection == "routed_reading":
+                        seed_path = sorted((archive_root / "zettels").glob("*.md"))[0]
+                        seed_frontmatter = archive_services.read_zettel_frontmatter_only(seed_path)
+                        pass_command.extend(
+                            [
+                                "--order",
+                                "seeded_connection_walk",
+                                "--start-zettel-id",
+                                str(seed_frontmatter["id"]),
+                            ]
+                        )
+                    pass_code, pass_stdout = self.run_cli(
+                        pass_command
+                    )
+                    self.assertEqual(pass_code, 0, pass_stdout)
+                    expected_sha256 = json.loads(pass_stdout)["output"]["sha256"]
+                    read_code, read_stdout = self.run_cli(
+                        [
+                            "zet-catalog-pass-read",
+                            str(archive_root),
+                            "--input",
+                            output_relative,
+                            "--page-index",
+                            "0",
+                            "--expected-sha256",
+                            expected_sha256,
+                            "--dry-run",
+                        ]
+                    )
+                    self.assertEqual(read_code, 0, read_stdout)
+                    result = json.loads(read_stdout)
+                    self.assertEqual(result["selected_page"]["result"]["projection"], projection)
+
+    def test_zet_catalog_pass_cleanup_requires_complete_sha_bound_human_approval(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            output_relative = ".wom-scratch/diagnostics/catalog-pass-cleanup.jsonl"
+            pass_code, pass_stdout = self.run_cli(
+                [
+                    "zet-catalog-pass",
+                    str(archive_root),
+                    "--projection",
+                    "reading",
+                    "--page-size",
+                    "1",
+                    "--output",
+                    output_relative,
+                    "--dry-run",
+                ]
+            )
+            self.assertEqual(pass_code, 0, pass_stdout)
+            expected_sha256 = json.loads(pass_stdout)["output"]["sha256"]
+            output_path = archive_root / output_relative
+
+            preview_code, preview_stdout = self.run_cli(
+                [
+                    "zet-catalog-pass-cleanup",
+                    str(archive_root),
+                    "--input",
+                    output_relative,
+                    "--expected-sha256",
+                    expected_sha256,
+                    "--dry-run",
+                ]
+            )
+            self.assertEqual(preview_code, 0, preview_stdout)
+            preview = json.loads(preview_stdout)
+            self.assertEqual(preview["status"], "ready_for_approval")
+            self.assertTrue(output_path.exists())
+            self.assertFalse(preview["write_boundary"]["private_scratch_file_deleted"])
+
+            wrong_sha256 = "sha256:" + ("0" * 64)
+            wrong_code, wrong_stdout = self.run_cli(
+                [
+                    "zet-catalog-pass-cleanup",
+                    str(archive_root),
+                    "--input",
+                    output_relative,
+                    "--expected-sha256",
+                    wrong_sha256,
+                    "--approve",
+                    "--reviewed-by",
+                    "human:fixture-reviewer",
+                ]
+            )
+            self.assertEqual(wrong_code, 1, wrong_stdout)
+            self.assertTrue(output_path.exists())
+            self.assertEqual(json.loads(wrong_stdout)["status"], "blocked")
+
+            reviewer_marker = "PRIVATE_REVIEWER_VALUE"
+            delete_code, delete_stdout = self.run_cli(
+                [
+                    "catalog-pass-cleanup",
+                    str(archive_root),
+                    "--input",
+                    output_relative,
+                    "--expected-sha256",
+                    expected_sha256,
+                    "--approve",
+                    "--reviewed-by",
+                    reviewer_marker,
+                ]
+            )
+            self.assertEqual(delete_code, 0, delete_stdout)
+            deleted = json.loads(delete_stdout)
+            self.assertEqual(deleted["status"], "deleted")
+            self.assertFalse(output_path.exists())
+            self.assertEqual(deleted["files_deleted"], [output_relative])
+            self.assertFalse(deleted["write_boundary"]["archive_records_written"])
+            self.assertFalse(deleted["write_boundary"]["receipts_written"])
+            self.assertNotIn(reviewer_marker, delete_stdout)
+
+            both_code, _both_stdout, both_stderr = self.run_cli_split(
+                [
+                    "zet-catalog-pass-cleanup",
+                    str(archive_root),
+                    "--input",
+                    output_relative,
+                    "--expected-sha256",
+                    expected_sha256,
+                    "--dry-run",
+                    "--approve",
+                    "--reviewed-by",
+                    "human:fixture-reviewer",
+                ]
+            )
+            self.assertEqual(both_code, 1)
+            self.assertIn("exactly one", both_stderr)
 
     def test_zet_catalog_pass_discards_partial_when_final_snapshot_revalidation_changes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

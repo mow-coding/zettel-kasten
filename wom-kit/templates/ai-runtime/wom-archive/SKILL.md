@@ -109,10 +109,18 @@ archive zet-catalog-pass <archive-root> --status canonical --projection reading 
 Progress is content-free and goes to stderr. The command scans frontmatter on
 the first page, reuses process memory, and revalidates local state before
 completion. It prints only a summary and publishes the private JSONL only after
-success. Read `catalog_page` records incrementally; never inject the whole file
-into one response. Treat it as private scratch, never commit it, and delete it
-after use. If a forced termination leaves a hidden partial, confirm no pass is
-running before manual cleanup; WOM reports the count but never auto-deletes it.
+success. Retain `output.sha256`. Validate the complete file, then request one
+bounded page at a time with that same hash:
+
+```bash
+archive zet-catalog-pass-read <archive-root> --input .wom-scratch/diagnostics/<name>.jsonl --page-index <n> --expected-sha256 <sha256> --dry-run --progress
+```
+
+Never inject the whole file into one response. Treat it as private scratch and
+never commit it. After the final page, preview `zet-catalog-pass-cleanup`, then
+use its `--approve --reviewed-by` path with the same SHA-256. If a forced
+termination leaves a hidden partial, confirm no pass is running before manual
+cleanup; WOM reports the count but never auto-deletes or accepts it as complete.
 
 Use paged `zet-catalog` when the host needs one stdout page, manual continuation,
 or MCP rather than a complete CLI pass:

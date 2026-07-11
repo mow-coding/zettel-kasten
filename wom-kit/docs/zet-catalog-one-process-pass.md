@@ -76,6 +76,11 @@ Each line is standalone JSON. A host AI should read one line or a small range
 at a time, process those zet summaries, and continue until the footer. It should
 not inject the whole JSONL into one model response.
 
+Since v0.3.217, use the SHA-bound
+[`zet-catalog-pass-read`](zet-catalog-pass-artifact-lifecycle.md) command instead
+of ad hoc line parsing. It validates the complete artifact before returning at
+most one selected page and provides the matching approval-gated cleanup path.
+
 The file can contain private zet ids, titles, abstracts, facets, ties, and
 edges. It contains no zet body text or objet bytes. It is local scratch, not a
 zet, map, index, receipt, or backup. Never commit it. Delete it after the host
