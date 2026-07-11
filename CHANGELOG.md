@@ -6,6 +6,32 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.215 - 2026-07-11
+
+Project source-mirror and version-pin update checkpoint. Additive; no archive
+migration.
+
+- **One approved update transaction.** New `project-version-update` CLI, with
+  `version-update` and `update-wom-kit` aliases, previews locally and on approval
+  atomically fetches configured `origin/main` plus one exact stable tag.
+- **Release verification before checkout.** The target must be an annotated tag
+  reachable from fetched `origin/main`; package, pyproject, and root-shim
+  versions must all equal the target. This is configured-origin evidence, not a
+  cryptographic signature claim.
+- **Bounded writes and rollback.** The command changes only the project-local
+  source checkout, recognized installed-version pins, and one project update
+  receipt. A per-project lock prevents concurrency. Any post-checkout failure
+  restores the original branch/detached commit and exact prior pin bytes.
+- **No silent overwrite.** Dirty tracked state, unknown untracked files,
+  tracked/symlinked pins, non-project mirrors, invalid pins, downgrade attempts,
+  tag collisions, metadata mismatch, and ignored-file checkout collisions
+  block without raw Git stderr, remote URLs, paths, or credentials in output.
+- **Runtime and bootstrap honesty.** The updating Python process is not
+  reloaded; a new process must verify import/source/pin/tag agreement. Because
+  the command first exists in v0.3.215, earlier installations need one final
+  existing/manual verified update to this release before using it for later
+  versions.
+
 ## v0.3.214 - 2026-07-11
 
 Large-command progress and bounded-result checkpoint. Additive; no archive

@@ -83,6 +83,40 @@ project folder 작업에서는 temporary intake staging이 archive of record가
 아니라는 점을 기억합니다. cleanup 전에 원본을 objet, source map, manifest,
 zet, receipt로 보존해야 합니다.
 
+## v0.3.215 프로젝트 버전 갱신
+
+v0.3.215는 프로젝트의 WOM-kit 소스 미러와 버전 핀을 함께 갱신하는 첫
+승인형 명령을 추가합니다. 아카이브의 zet을 migration하거나 다시 쓰지
+않습니다.
+
+먼저 인터넷 연결이나 파일 쓰기 없이 미리 확인합니다.
+
+```text
+archive project-version-update <project-or-archive-root> --target vX.Y.Z --dry-run --progress --format json
+```
+
+미리보기의 차단 항목이 없음을 확인한 뒤 한 번의 승인 명령을 실행합니다.
+
+```text
+archive project-version-update <project-or-archive-root> --target vX.Y.Z --approve --reviewed-by <actor> --progress --format json
+```
+
+승인하면 설정된 `origin/main`과 정확한 대상 태그만 한 번에 받습니다. 그
+태그가 main 이력에 포함된 annotated tag인지, 세 버전 파일이 모두 대상과
+일치하는지 확인한 다음 detached checkout, 알려진 핀 갱신, 프로젝트 영수증
+쓰기를 수행합니다. 작업 폴더가 더럽거나 상태가 모호하면 멈춥니다. checkout
+이후 실패하면 이전 checkout과 핀의 원래 바이트를 복구합니다. 받아 둔 Git
+ref는 정본이 아닌 발견 상태이므로 남을 수 있습니다.
+
+이 명령을 실행한 현재 Python 프로세스는 자동으로 새 버전이 되지 않습니다.
+성공 뒤 새 프로세스를 시작하고 `archive version <root> --format json`으로
+실행 위치·소스·핀·태그 일치를 확인해야 합니다. 설정된 원격의 이력은
+검증하지만 암호학적 tag signature를 검증했다고 주장하지 않습니다.
+
+부트스트랩 한계: v0.3.215보다 오래된 설치에는 이 명령 자체가 없습니다.
+이번 한 번은 기존 안전 절차로 v0.3.215까지 올라온 뒤, 다음 릴리스부터 이
+명령을 사용합니다.
+
 ## v0.3.214 장시간 명령 진행 표시와 제한된 결과 저장
 
 v0.3.214는 migration을 추가하지 않고 기존 zet도 다시 쓰지 않습니다.

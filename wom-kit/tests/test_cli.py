@@ -166,6 +166,116 @@ class ArchiveCliTests(unittest.TestCase):
             code = archive_cli.main(args)
         return code, stdout.getvalue(), stderr.getvalue()
 
+    def git_fixture_command(self, cwd: Path, *args: str) -> str:
+        completed = subprocess.run(
+            ["git", "-C", str(cwd), *args],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return completed.stdout.strip()
+
+    def write_project_update_fixture_version(
+        self,
+        repository: Path,
+        version: str,
+        *,
+        root_shim_version: str | None = None,
+    ) -> None:
+        package_dir = repository / "wom-kit" / "src" / "wom_kit"
+        package_dir.mkdir(parents=True, exist_ok=True)
+        (package_dir / "__init__.py").write_text(
+            f'__version__ = "{version}"\n',
+            encoding="utf-8",
+        )
+        pyproject_dir = repository / "wom-kit"
+        (pyproject_dir / "pyproject.toml").write_text(
+            f'[project]\nname = "wom-kit"\nversion = "{version}"\n',
+            encoding="utf-8",
+        )
+        shim_dir = repository / "wom_kit"
+        shim_dir.mkdir(parents=True, exist_ok=True)
+        (shim_dir / "__init__.py").write_text(
+            f'__version__ = "{root_shim_version or version}"\n',
+            encoding="utf-8",
+        )
+
+    def create_project_version_update_fixture(
+        self,
+        tmp_root: Path,
+        *,
+        invalid_target_metadata: bool = False,
+        ignored_checkout_collision: bool = False,
+    ) -> dict[str, Any]:
+        version_parts = [int(part) for part in archive_cli.__version__.split(".")]
+        self.assertGreater(version_parts[2], 0)
+        target_version = ".".join(str(part) for part in version_parts)
+        old_version = f"{version_parts[0]}.{version_parts[1]}.{version_parts[2] - 1}"
+        target_tag = f"v{target_version}"
+        old_tag = f"v{old_version}"
+
+        upstream = tmp_root / "upstream"
+        upstream.mkdir(parents=True)
+        self.git_fixture_command(upstream, "init", "-b", "main")
+        self.git_fixture_command(upstream, "config", "user.name", "archive-test")
+        self.git_fixture_command(upstream, "config", "user.email", "archive-test.invalid")
+        self.write_project_update_fixture_version(upstream, old_version)
+        collision_name = "future-ignored-tool.txt"
+        if ignored_checkout_collision:
+            (upstream / ".gitignore").write_text(collision_name + "\n", encoding="utf-8")
+        self.git_fixture_command(upstream, "add", ".")
+        self.git_fixture_command(upstream, "commit", "-m", "old release")
+        self.git_fixture_command(upstream, "tag", "-a", old_tag, "-m", old_tag)
+        old_commit = self.git_fixture_command(upstream, "rev-parse", "HEAD")
+
+        project_root = tmp_root / "project"
+        metadata_root = project_root / ".zettel-kasten"
+        metadata_root.mkdir(parents=True)
+        mirror = metadata_root / "source"
+        subprocess.run(
+            ["git", "-c", "protocol.file.allow=always", "clone", "--quiet", str(upstream), str(mirror)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.git_fixture_command(mirror, "checkout", "--detach", "--quiet", old_tag)
+        (mirror / "installed-version.txt").write_text(old_tag + "\n", encoding="utf-8")
+        (metadata_root / "installed-version.txt").write_text(old_tag + "\n", encoding="utf-8")
+        archive_root = project_root / "archive"
+        archive_root.mkdir()
+        (archive_root / "archive.yml").write_text(
+            "archive_id: archive:personal:project-update-fixture\narchive_type: personal\n",
+            encoding="utf-8",
+        )
+
+        self.write_project_update_fixture_version(
+            upstream,
+            target_version,
+            root_shim_version=old_version if invalid_target_metadata else target_version,
+        )
+        if ignored_checkout_collision:
+            (upstream / collision_name).write_text("target release file\n", encoding="utf-8")
+        self.git_fixture_command(upstream, "add", ".")
+        if ignored_checkout_collision:
+            self.git_fixture_command(upstream, "add", "-f", collision_name)
+        self.git_fixture_command(upstream, "commit", "-m", "target release")
+        self.git_fixture_command(upstream, "tag", "-a", target_tag, "-m", target_tag)
+        target_commit = self.git_fixture_command(upstream, "rev-parse", "HEAD")
+        return {
+            "project_root": project_root,
+            "archive_root": archive_root,
+            "metadata_root": metadata_root,
+            "mirror": mirror,
+            "upstream": upstream,
+            "old_version": old_version,
+            "old_tag": old_tag,
+            "old_commit": old_commit,
+            "target_version": target_version,
+            "target_tag": target_tag,
+            "target_commit": target_commit,
+            "collision_name": collision_name,
+        }
+
     def test_command_progress_reporter_emits_content_free_heartbeat(self) -> None:
         stderr = io.StringIO()
         with redirect_stderr(stderr):
@@ -1367,8 +1477,14 @@ class ArchiveCliTests(unittest.TestCase):
         self.assertIn("secret-signal-taxonomy", command_names)
         self.assertIn("ai-response-contract", command_names)
         self.assertIn("ai-start-here", command_names)
+        self.assertIn("project-version-update", command_names)
         capability = next(item for item in commands if item["name"] == "capabilities")
         self.assertIn("--machine", capability["options"])
+        project_update = next(item for item in commands if item["name"] == "project-version-update")
+        self.assertEqual(project_update["aliases"], ["version-update", "update-wom-kit"])
+        self.assertEqual(project_update["required_positionals"], ["inspection_root"])
+        for option in ("--target", "--dry-run", "--approve", "--reviewed-by", "--progress"):
+            self.assertIn(option, project_update["options"])
         serialized = json.dumps(result, ensure_ascii=False)
         self.assertNotIn(str(KIT_ROOT), serialized)
         self.assertNotIn(str(Path.home()), serialized)
@@ -2287,6 +2403,503 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(visible_code, 1, visible_output)
             self.assertIn("Import module:", visible_output)
             self.assertIn("archive_services.py", visible_output)
+
+    def test_project_version_update_dry_run_defers_unfetched_tag_without_writes(self) -> None:
+        if shutil.which("git") is None:
+            self.skipTest("git is required for the project update fixture")
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = self.create_project_version_update_fixture(Path(tmp))
+            metadata_root = fixture["metadata_root"]
+            before_pin = (metadata_root / "installed-version.txt").read_bytes()
+            before_head = self.git_fixture_command(fixture["mirror"], "rev-parse", "HEAD")
+
+            code, stdout, stderr = self.run_cli_split(
+                [
+                    "project-version-update",
+                    str(fixture["archive_root"]),
+                    "--target",
+                    fixture["target_tag"],
+                    "--dry-run",
+                    "--progress",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(stdout)
+
+            self.assertEqual(code, 0, stdout + stderr)
+            self.assertEqual(result["status"], "ready_to_fetch_on_approve")
+            self.assertFalse(result["fetch"]["attempted"])
+            self.assertFalse(result["target"]["tag_available_locally"])
+            self.assertEqual(result["source_mirror"]["path"], "parent_of_archive/.zettel-kasten/source")
+            self.assertIn("project-preflight: start", stderr)
+            self.assertIn("project-preflight: done", stderr)
+            self.assertEqual(self.git_fixture_command(fixture["mirror"], "rev-parse", "HEAD"), before_head)
+            self.assertEqual((metadata_root / "installed-version.txt").read_bytes(), before_pin)
+            self.assertFalse((metadata_root / "receipts" / "version-updates").exists())
+            self.assertFalse((metadata_root / "version-update.lock").exists())
+            self.assertNotIn(str(fixture["project_root"]), stdout + stderr)
+            self.assertNotIn(str(fixture["upstream"]), stdout + stderr)
+
+    def test_project_version_update_dry_run_defers_stale_origin_main_ancestry_to_approval(self) -> None:
+        if shutil.which("git") is None:
+            self.skipTest("git is required for the project update fixture")
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = self.create_project_version_update_fixture(Path(tmp))
+            self.git_fixture_command(
+                fixture["mirror"],
+                "fetch",
+                "--quiet",
+                "--no-tags",
+                "origin",
+                f"refs/tags/{fixture['target_tag']}:refs/tags/{fixture['target_tag']}",
+            )
+
+            code, output = self.run_cli(
+                [
+                    "project-version-update",
+                    str(fixture["project_root"]),
+                    "--target",
+                    fixture["target_tag"],
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+
+            self.assertEqual(code, 0, output)
+            self.assertEqual(result["status"], "ready_for_approval")
+            self.assertTrue(result["target"]["tag_available_locally"])
+            self.assertFalse(result["target"]["configured_origin_main_ancestry_verified"])
+            self.assertFalse(result["fetch"]["attempted"])
+            self.assertTrue(any("approval will refresh and verify" in item for item in result["warnings"]))
+            self.assertEqual(
+                self.git_fixture_command(fixture["mirror"], "rev-parse", "HEAD"),
+                fixture["old_commit"],
+            )
+            self.assertNotIn(str(fixture["project_root"]), output)
+            self.assertNotIn(str(fixture["upstream"]), output)
+
+    def test_project_version_update_accepts_an_archive_and_metadata_at_the_same_root(self) -> None:
+        if shutil.which("git") is None:
+            self.skipTest("git is required for the project update fixture")
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = self.create_project_version_update_fixture(Path(tmp))
+            (fixture["project_root"] / "archive.yml").write_text(
+                "archive_id: archive:personal:same-root-project-update\narchive_type: personal\n",
+                encoding="utf-8",
+            )
+
+            code, output = self.run_cli(
+                [
+                    "project-version-update",
+                    str(fixture["project_root"]),
+                    "--target",
+                    fixture["target_tag"],
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+
+            self.assertEqual(code, 0, output)
+            self.assertEqual(result["status"], "ready_to_fetch_on_approve")
+            self.assertEqual(result["source_mirror"]["path"], ".zettel-kasten/source")
+            self.assertFalse(result["fetch"]["attempted"])
+            self.assertNotIn(str(fixture["project_root"]), output)
+
+    def test_project_version_update_approve_fetches_verifies_updates_and_is_replay_safe(self) -> None:
+        if shutil.which("git") is None:
+            self.skipTest("git is required for the project update fixture")
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = self.create_project_version_update_fixture(Path(tmp))
+            metadata_root = fixture["metadata_root"]
+            preexisting_temp = metadata_root / "installed-version.txt.tmp"
+            preexisting_temp_bytes = b"PRIVATE PREEXISTING TEMP CONTENT\n"
+            preexisting_temp.write_bytes(preexisting_temp_bytes)
+            command = [
+                "project-version-update",
+                str(fixture["project_root"]),
+                "--target",
+                fixture["target_tag"],
+                "--approve",
+                "--reviewed-by",
+                "human:archive-test",
+                "--progress",
+                "--format",
+                "json",
+            ]
+
+            code, stdout, stderr = self.run_cli_split(command)
+            result = json.loads(stdout)
+
+            self.assertEqual(code, 0, stdout + stderr)
+            self.assertEqual(result["status"], "updated_restart_required")
+            self.assertTrue(result["fetch"]["attempted"])
+            self.assertTrue(result["fetch"]["succeeded"])
+            self.assertTrue(result["target"]["annotated_tag_verified"])
+            self.assertTrue(result["target"]["configured_origin_main_ancestry_verified"])
+            self.assertTrue(result["target"]["all_source_versions_match_target"])
+            self.assertFalse(result["target"]["cryptographic_tag_signature_verified"])
+            self.assertTrue(result["source_mirror"]["source_checkout_is_verified_target"])
+            self.assertEqual(result["source_mirror"]["checkout_mode_after_result"], "detached_exact_tag")
+            self.assertTrue(result["runtime"]["restart_required"])
+            self.assertFalse(result["runtime"]["running_process_reloaded"])
+            self.assertIn("fetch-release: start", stderr)
+            self.assertIn("verify-release: done", stderr)
+            self.assertIn("write-receipt: done", stderr)
+            self.assertEqual(
+                self.git_fixture_command(fixture["mirror"], "rev-parse", "HEAD"),
+                fixture["target_commit"],
+            )
+            self.assertEqual(
+                (metadata_root / "installed-version.txt").read_text(encoding="utf-8"),
+                fixture["target_tag"] + "\n",
+            )
+            self.assertEqual(
+                (fixture["mirror"] / "installed-version.txt").read_text(encoding="utf-8"),
+                fixture["target_tag"] + "\n",
+            )
+            receipts = list((metadata_root / "receipts" / "version-updates").glob("*.json"))
+            self.assertEqual(len(receipts), 1)
+            receipt = json.loads(receipts[0].read_text(encoding="utf-8"))
+            self.assertEqual(receipt["schema"], "wom-kit/project-version-update-receipt/v0.1")
+            self.assertEqual(receipt["head_commit_after"], fixture["target_commit"])
+            self.assertTrue(receipt["configured_origin"]["target_reachable_from_origin_main"])
+            self.assertFalse(receipt["configured_origin"]["remote_url_echoed"])
+            self.assertFalse((metadata_root / "version-update.lock").exists())
+            self.assertEqual(preexisting_temp.read_bytes(), preexisting_temp_bytes)
+            self.assertNotIn("PRIVATE PREEXISTING TEMP CONTENT", stdout + stderr)
+            self.assertNotIn(str(fixture["project_root"]), stdout + stderr)
+            self.assertNotIn(str(fixture["upstream"]), stdout + stderr)
+
+            replay_code, replay_stdout, replay_stderr = self.run_cli_split(command)
+            replay_result = json.loads(replay_stdout)
+            self.assertEqual(replay_code, 0, replay_stdout + replay_stderr)
+            self.assertEqual(replay_result["status"], "no_change")
+            self.assertEqual(replay_result["files_written"], [])
+            self.assertEqual(
+                len(list((metadata_root / "receipts" / "version-updates").glob("*.json"))),
+                1,
+            )
+            self.assertFalse((metadata_root / "version-update.lock").exists())
+
+    def test_project_version_update_blocks_dirty_source_without_echoing_entry(self) -> None:
+        if shutil.which("git") is None:
+            self.skipTest("git is required for the project update fixture")
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = self.create_project_version_update_fixture(Path(tmp))
+            private_marker = "PRIVATE_UNTRACKED_UPDATE_NOTE"
+            (fixture["mirror"] / f"{private_marker}.md").write_text("private fixture\n", encoding="utf-8")
+
+            code, output = self.run_cli(
+                [
+                    "project-version-update",
+                    str(fixture["project_root"]),
+                    "--target",
+                    fixture["target_tag"],
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+
+            self.assertEqual(code, 1, output)
+            self.assertEqual(result["status"], "blocked")
+            self.assertEqual(result["source_mirror"]["unexpected_worktree_entry_count"], 1)
+            self.assertTrue(any("tracked changes or unknown untracked files" in item for item in result["blockers"]))
+            self.assertNotIn(private_marker, output)
+            self.assertNotIn(str(fixture["project_root"]), output)
+
+    def test_project_version_update_blocks_invalid_target_metadata_before_checkout(self) -> None:
+        if shutil.which("git") is None:
+            self.skipTest("git is required for the project update fixture")
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = self.create_project_version_update_fixture(Path(tmp), invalid_target_metadata=True)
+            before_head = self.git_fixture_command(fixture["mirror"], "rev-parse", "HEAD")
+
+            code, output = self.run_cli(
+                [
+                    "project-version-update",
+                    str(fixture["project_root"]),
+                    "--target",
+                    fixture["target_tag"],
+                    "--approve",
+                    "--reviewed-by",
+                    "human:archive-test",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+
+            self.assertEqual(code, 1, output)
+            self.assertEqual(result["status"], "blocked")
+            self.assertTrue(result["fetch"]["succeeded"])
+            self.assertFalse(result["target"]["all_source_versions_match_target"])
+            self.assertEqual(self.git_fixture_command(fixture["mirror"], "rev-parse", "HEAD"), before_head)
+            self.assertEqual(
+                (fixture["metadata_root"] / "installed-version.txt").read_text(encoding="utf-8"),
+                fixture["old_tag"] + "\n",
+            )
+            self.assertFalse((fixture["metadata_root"] / "receipts" / "version-updates").exists())
+            self.assertFalse((fixture["metadata_root"] / "version-update.lock").exists())
+
+    def test_project_version_update_preflight_blocks_invalid_input_lock_pin_and_downgrade(self) -> None:
+        if shutil.which("git") is None:
+            self.skipTest("git is required for the project update fixture")
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = self.create_project_version_update_fixture(Path(tmp))
+            metadata_root = fixture["metadata_root"]
+            project_pin = metadata_root / "installed-version.txt"
+            before_pin = project_pin.read_bytes()
+            before_head = self.git_fixture_command(fixture["mirror"], "rev-parse", "HEAD")
+
+            invalid_code, invalid_output = self.run_cli(
+                [
+                    "version-update",
+                    str(fixture["project_root"]),
+                    "--target",
+                    "latest",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            invalid_result = json.loads(invalid_output)
+            self.assertEqual(invalid_code, 1, invalid_output)
+            self.assertEqual(invalid_result["status"], "blocked")
+            self.assertTrue(any("exact stable release tag" in item for item in invalid_result["blockers"]))
+
+            reviewer_code, reviewer_output = self.run_cli(
+                [
+                    "update-wom-kit",
+                    str(fixture["project_root"]),
+                    "--target",
+                    fixture["target_tag"],
+                    "--approve",
+                    "--format",
+                    "json",
+                ]
+            )
+            reviewer_result = json.loads(reviewer_output)
+            self.assertEqual(reviewer_code, 1, reviewer_output)
+            self.assertEqual(reviewer_result["status"], "blocked")
+            self.assertTrue(any("--reviewed-by" in item for item in reviewer_result["blockers"]))
+
+            lock_path = metadata_root / "version-update.lock"
+            lock_path.write_text("prior interrupted run\n", encoding="utf-8")
+            lock_code, lock_output = self.run_cli(
+                [
+                    "project-version-update",
+                    str(fixture["project_root"]),
+                    "--target",
+                    fixture["target_tag"],
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            lock_result = json.loads(lock_output)
+            self.assertEqual(lock_code, 1, lock_output)
+            self.assertTrue(any("lock already exists" in item for item in lock_result["blockers"]))
+            lock_path.unlink()
+
+            project_pin.write_text("not-a-version\n", encoding="utf-8")
+            pin_code, pin_output = self.run_cli(
+                [
+                    "project-version-update",
+                    str(fixture["project_root"]),
+                    "--target",
+                    fixture["target_tag"],
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            pin_result = json.loads(pin_output)
+            self.assertEqual(pin_code, 1, pin_output)
+            self.assertTrue(any("exact stable version" in item for item in pin_result["blockers"]))
+            project_pin.write_bytes(before_pin)
+
+            downgrade_code, downgrade_output = self.run_cli(
+                [
+                    "project-version-update",
+                    str(fixture["project_root"]),
+                    "--target",
+                    fixture["old_tag"],
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            downgrade_result = json.loads(downgrade_output)
+            self.assertEqual(downgrade_code, 1, downgrade_output)
+            self.assertTrue(any("forward-only" in item for item in downgrade_result["blockers"]))
+
+            self.assertEqual(self.git_fixture_command(fixture["mirror"], "rev-parse", "HEAD"), before_head)
+            self.assertEqual(project_pin.read_bytes(), before_pin)
+            self.assertFalse((metadata_root / "receipts" / "version-updates").exists())
+            self.assertFalse(lock_path.exists())
+            combined = invalid_output + reviewer_output + lock_output + pin_output + downgrade_output
+            self.assertNotIn(str(fixture["project_root"]), combined)
+            self.assertNotIn(str(fixture["upstream"]), combined)
+
+    def test_project_version_update_does_not_force_overwrite_a_local_target_tag(self) -> None:
+        if shutil.which("git") is None:
+            self.skipTest("git is required for the project update fixture")
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = self.create_project_version_update_fixture(Path(tmp))
+            metadata_root = fixture["metadata_root"]
+            before_pin = (metadata_root / "installed-version.txt").read_bytes()
+            self.git_fixture_command(
+                fixture["mirror"],
+                "-c",
+                "user.name=archive-test",
+                "-c",
+                "user.email=archive-test.invalid",
+                "tag",
+                "-a",
+                fixture["target_tag"],
+                fixture["old_commit"],
+                "-m",
+                "local collision",
+            )
+            local_target_before = self.git_fixture_command(
+                fixture["mirror"], "rev-parse", f"{fixture['target_tag']}^{{}}"
+            )
+
+            code, output = self.run_cli(
+                [
+                    "project-version-update",
+                    str(fixture["project_root"]),
+                    "--target",
+                    fixture["target_tag"],
+                    "--approve",
+                    "--reviewed-by",
+                    "human:archive-test",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+
+            self.assertEqual(code, 1, output)
+            self.assertEqual(result["status"], "blocked")
+            self.assertTrue(result["fetch"]["attempted"])
+            self.assertFalse(result["fetch"]["succeeded"])
+            self.assertTrue(result["fetch"]["git_transport_called"])
+            self.assertTrue(result["fetch"]["network_may_have_been_called"])
+            self.assertTrue(any("atomic configured-origin fetch failed" in item for item in result["blockers"]))
+            self.assertEqual(
+                self.git_fixture_command(fixture["mirror"], "rev-parse", f"{fixture['target_tag']}^{{}}"),
+                local_target_before,
+            )
+            self.assertEqual(
+                self.git_fixture_command(fixture["mirror"], "rev-parse", "HEAD"), fixture["old_commit"]
+            )
+            self.assertEqual((metadata_root / "installed-version.txt").read_bytes(), before_pin)
+            self.assertFalse((metadata_root / "receipts" / "version-updates").exists())
+            self.assertFalse((metadata_root / "version-update.lock").exists())
+            self.assertNotIn(str(fixture["project_root"]), output)
+            self.assertNotIn(str(fixture["upstream"]), output)
+
+    def test_project_version_update_preserves_ignored_file_that_blocks_checkout(self) -> None:
+        if shutil.which("git") is None:
+            self.skipTest("git is required for the project update fixture")
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = self.create_project_version_update_fixture(
+                Path(tmp), ignored_checkout_collision=True
+            )
+            metadata_root = fixture["metadata_root"]
+            collision_path = fixture["mirror"] / fixture["collision_name"]
+            private_bytes = b"PRIVATE LOCAL IGNORED CONTENT\n"
+            collision_path.write_bytes(private_bytes)
+            before_pin = (metadata_root / "installed-version.txt").read_bytes()
+
+            code, output = self.run_cli(
+                [
+                    "project-version-update",
+                    str(fixture["project_root"]),
+                    "--target",
+                    fixture["target_tag"],
+                    "--approve",
+                    "--reviewed-by",
+                    "human:archive-test",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+
+            self.assertEqual(code, 1, output)
+            self.assertEqual(result["status"], "blocked")
+            self.assertTrue(result["fetch"]["succeeded"])
+            self.assertFalse(result["source_mirror"]["source_checkout_change_attempted"])
+            self.assertTrue(any("checkout failed before any pin write" in item for item in result["blockers"]))
+            self.assertEqual(
+                self.git_fixture_command(fixture["mirror"], "rev-parse", "HEAD"), fixture["old_commit"]
+            )
+            self.assertEqual(collision_path.read_bytes(), private_bytes)
+            self.assertEqual((metadata_root / "installed-version.txt").read_bytes(), before_pin)
+            self.assertFalse((metadata_root / "receipts" / "version-updates").exists())
+            self.assertFalse((metadata_root / "version-update.lock").exists())
+            self.assertNotIn(fixture["collision_name"], output)
+            self.assertNotIn("PRIVATE LOCAL IGNORED CONTENT", output)
+            self.assertNotIn(str(fixture["project_root"]), output)
+
+    def test_project_version_update_rolls_back_checkout_and_pins_when_receipt_write_fails(self) -> None:
+        if shutil.which("git") is None:
+            self.skipTest("git is required for the project update fixture")
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = self.create_project_version_update_fixture(Path(tmp))
+            real_atomic_write = archive_services.write_bytes_atomic
+
+            def fail_receipt_write(path: Path, value: bytes) -> None:
+                if path.suffix == ".json":
+                    raise OSError("PRIVATE_RECEIPT_FAILURE_PATH")
+                real_atomic_write(path, value)
+
+            with patch.object(archive_services, "write_bytes_atomic", side_effect=fail_receipt_write):
+                result = archive_services.wom_kit_project_version_update(
+                    fixture["project_root"],
+                    target=fixture["target_tag"],
+                    approve=True,
+                    reviewed_by="human:archive-test",
+                )
+
+            serialized = json.dumps(result, ensure_ascii=False)
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["status"], "failed_rolled_back")
+            self.assertTrue(result["rollback"]["attempted"])
+            self.assertTrue(result["rollback"]["succeeded"])
+            self.assertTrue(result["rollback"]["source_restored"])
+            self.assertTrue(result["rollback"]["pins_restored"])
+            self.assertTrue(result["rollback"]["lock_removed"])
+            self.assertTrue(result["rollback"]["fetched_refs_may_remain"])
+            self.assertEqual(result["source_mirror"]["checkout_mode_after_result"], "restored_original")
+            self.assertEqual(result["pins"]["written_paths"], [])
+            self.assertTrue(result["pins"]["write_attempted_paths"])
+            self.assertEqual(result["files_written"], [])
+            self.assertEqual(
+                self.git_fixture_command(fixture["mirror"], "rev-parse", "HEAD"),
+                fixture["old_commit"],
+            )
+            self.assertEqual(
+                (fixture["metadata_root"] / "installed-version.txt").read_text(encoding="utf-8"),
+                fixture["old_tag"] + "\n",
+            )
+            self.assertEqual(
+                (fixture["mirror"] / "installed-version.txt").read_text(encoding="utf-8"),
+                fixture["old_tag"] + "\n",
+            )
+            self.assertFalse((fixture["metadata_root"] / "version-update.lock").exists())
+            self.assertFalse((fixture["metadata_root"] / "receipts" / "version-updates").exists())
+            self.assertNotIn("PRIVATE_RECEIPT_FAILURE_PATH", serialized)
+            self.assertNotIn(str(fixture["project_root"]), serialized)
 
     def test_tiro_import_plan_manifest_preserves_structure_without_echoing_text(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

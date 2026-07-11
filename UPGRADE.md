@@ -91,6 +91,39 @@ For project-folder work, remember that temporary intake staging is not the
 archive of record. Preserve originals as objets, source maps, manifests, zets,
 and receipts before any cleanup.
 
+## v0.3.215 Project Version Update
+
+v0.3.215 adds the first approval-gated source-mirror and version-pin updater.
+It does not migrate or rewrite archive zets.
+
+Preview without network or writes:
+
+```text
+archive project-version-update <project-or-archive-root> --target vX.Y.Z --dry-run --progress --format json
+```
+
+After reviewing a clean preview, approve one transaction:
+
+```text
+archive project-version-update <project-or-archive-root> --target vX.Y.Z --approve --reviewed-by <actor> --progress --format json
+```
+
+Approval atomically fetches only configured `origin/main` and the exact target
+tag, requires an annotated tag on that main history, verifies all three package
+version files, checks out the tag detached, aligns recognized pins, and writes a
+project metadata receipt. Dirty or ambiguous state blocks. A failure after
+checkout restores the original checkout and exact prior pin bytes; fetched refs
+may remain as non-canonical discovery state.
+
+The current Python process is never reloaded. After success, start a new process
+from the project mirror and run `archive version <root> --format json` before
+claiming the target runtime is active. The check verifies configured-origin
+provenance but not a cryptographic tag signature.
+
+Bootstrap limit: installations older than v0.3.215 do not contain this command.
+They need one final existing/manual verified update to v0.3.215; use the command
+for later releases.
+
 ## v0.3.214 Large-Command Progress And Bounded Output
 
 v0.3.214 adds no migration and rewrites no zet. Long `ai-start-here`,

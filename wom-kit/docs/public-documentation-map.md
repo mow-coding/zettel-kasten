@@ -241,6 +241,7 @@ Onboarding and setup plans:
 - [WOM-kit Capability Matrix](capability-matrix.md)
 - [View Recommendation Plan](view-recommendation-plan.md)
 - [Version Truth Source](version-truth-source.md)
+- [Project Version Update](project-version-update.md)
 - [Runtime Canonical Entry Points](runtime-canonical-entrypoints.md)
 - [Operational Context](operational-context.md)
 - [ZET Publication Surface Baseline](zet-publication-surface-baseline.md)

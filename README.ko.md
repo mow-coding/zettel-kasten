@@ -31,10 +31,10 @@ tag 목록을 여기서 다시 키우지 않습니다.
 현재 공개 기준:
 
 ```text
-v0.3.214 pre-release
+v0.3.215 pre-release
 ```
 
-이전 공개 기준: v0.3.213 pre-release.
+이전 공개 기준: v0.3.214 pre-release.
 
 전체 릴리스 이력은 [CHANGELOG.md](CHANGELOG.md)와 [wom-kit/docs/releases/](wom-kit/docs/releases/)를 보세요.
 
@@ -92,6 +92,7 @@ Roadmap 요약: `v0.1.x`는 아이디어/프로토콜 언어 라인, `v0.2.x`는
 
 ### AI operator 계약과 runtime handoff
 
+- read-only `archive version`으로 현재 실행 버전·프로젝트 핀·소스 미러를 확인하고, 승인형 `archive project-version-update`로 설정된 원격의 `main`과 정확한 릴리스 태그를 한 번에 받아 검증한 뒤 소스 미러와 알려진 버전 핀을 함께 갱신합니다. 더러운 작업 폴더, 버전 불일치, downgrade, 알 수 없는 파일은 차단하고 중간 실패 시 checkout과 핀을 복구하며 영수증을 남깁니다. 성공 직후에도 현재 Python 프로세스는 이전 버전이므로 새 프로세스에서 `archive version`을 다시 확인해야 하며, 이 명령이 처음 들어가는 v0.3.215 이전 설치는 이번 한 번만 기존 안전 절차로 v0.3.215까지 올라와야 합니다.
 - read-only `archive capabilities --machine`으로 AI 운영자가 현재 설치본의 실행 가능한 CLI 명령, alias, 필수 인자, option, nested subcommand, local release identity를 안정된 `ok/state/summary/data/blockers/warnings` 봉투로 확인할 수 있습니다. GitHub나 provider는 호출하지 않습니다.
 - read-only `archive operator-feedback-plan --dry-run`과 승인형 `archive operator-feedback-record --approve`로 AI 운영자가 만든 도구 피드백을 `ops/feedback/` 아래 draft/delivered/acknowledged/resolved/archived 상태 메타데이터로 추적합니다. 여기에 더해 read-only `archive operator-feedback-ledger --dry-run`(별칭 `feedback-ledger`, `feedback-board`)은 전달 상태를 상태별 카운트와 대기(draft) 목록으로 집계하고, 승인형 `archive operator-feedback-mark-delivered --approve`는 draft→delivered 전달 경계를 한 번에 처리하며 `delivered_at`를 찍고 receipt 하나를 씁니다. 피드백 본문은 읽지 않고, 피드백 ref/제목을 노출하지 않으며, 외부 제출도 하지 않고(메타데이터일 뿐이며 `delivered`는 운영자가 직접 찍은 표시일 뿐 외부 전달의 증거가 아닙니다), 사용자 지식 `objets/`를 피드백 수명주기 표면으로 쓰지 않게 합니다.
 - read-only `archive approval-handoff-plan --dry-run`과 승인형 `archive approval-handoff-record --approve`로 AI가 사람 승인으로 넘겨야 하는 순간을 `ops/approval-handoffs/` 아래 needs_review/approved_once/denied/superseded/resolved 상태 메타데이터로 기록합니다. 실제 작업 실행, private material 읽기, provider 호출, target/action 값 재출력은 하지 않습니다.
