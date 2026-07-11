@@ -140,6 +140,7 @@ docs/imap-mailbox-material-capture-approval-plan.md
 docs/imap-mailbox-material-capture-approval-audit.md
 docs/version-truth-source.md
 docs/project-version-update.md
+docs/ai-start-here.md
 docs/zet-catalog-one-process-pass.md
 docs/runtime-canonical-entrypoints.md
 docs/operational-context.md
@@ -207,7 +208,7 @@ runtime-context
   Print read-only JSON context for terminal-capable AI runtimes. It confirms archive id, archive type/scope, principal/owner summary, AI write policy, safe archive-relative paths, canonical entrypoint metadata, AI guide handoff order, material-link routes, safe actions, WOM-kit version, local-sovereignty storage authority, and doctor summary. Local absolute paths are redacted by default.
 
 ai-start-here --dry-run
-  Print one compact first-read map for an entering AI operator. Optional `--progress` keeps long Doctor work visible on stderr; optional `--output .wom-scratch/diagnostics/<name>.json` stores the full result as private local scratch and leaves a compact stdout summary.
+  Print one compact first-read map for an entering AI operator without scanning every zet or receipt. Add `--full-doctor` only when a complete archive health check is needed. Optional `--progress` reports de-duplicated counts, work units, stage elapsed time, rate, ETA, and count-bearing heartbeats on stderr; optional `--output .wom-scratch/diagnostics/<name>.json` stores the full result as private local scratch and leaves a compact stdout summary.
 
 local-sovereignty --dry-run
   Report the machine-readable authority model: local WOM is canonical, GitHub backs up metadata/version history, object storage backs up objet bytes, and external databases hold regenerable map backups or replicas. It performs no live audit, provider/network call, secret read, or write.

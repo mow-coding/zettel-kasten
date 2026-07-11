@@ -91,6 +91,38 @@ For project-folder work, remember that temporary intake staging is not the
 archive of record. Preserve originals as objets, source maps, manifests, zets,
 and receipts before any cleanup.
 
+## v0.3.222 Fast AI Start-Here
+
+v0.3.222 adds no archive migration and writes no archive state. The ordinary
+start command is now the fast entry map:
+
+```text
+archive ai-start-here <archive-root> --dry-run --progress --format json
+```
+
+It reads bounded identity/policy/operational-context metadata and entrypoint
+presence. It does not run the complete Doctor, walk every zet, validate every
+receipt, or read objet bytes. Check `inspection.mode: quick` and
+`inspection.doctor_summary.checked: false`; this is an entry map, not an archive
+health claim.
+
+Run the complete archive inspection only when needed:
+
+```text
+archive ai-start-here <archive-root> --dry-run --full-doctor --progress --format json
+```
+
+Full mode preserves the prior health-check behavior. Doctor can read zet bodies,
+local objet bytes, and archive text for secret-pattern checks. The result records
+which of those reads actually occurred in this execution. It still accesses no
+credential store or provider and writes nothing unless the operator separately
+requests a private scratch `--output` file.
+
+Progress now names its unit (`mint_receipts` for the receipt stage), includes
+stage elapsed time, rate, and ETA, and carries the latest count in heartbeats.
+Compact output suppresses the same stage/count for 30 seconds, so substeps can
+no longer flood the terminal with repeated `1/N` lines.
+
 ## v0.3.221 Archive-Wide Abstract Receipt Audit
 
 v0.3.221 adds no archive migration and writes nothing. After applying or

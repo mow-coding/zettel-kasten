@@ -655,6 +655,33 @@ class ValidationScope:
 
 ProgressCallback = Callable[[str, str, int | None, int | None], None]
 
+PROGRESS_STAGE_UNITS = {
+    "zettels": "zet_files",
+    "mint-receipts": "mint_receipts",
+    "retired-draft-receipts": "retired_draft_receipts",
+    "reconcile-receipts": "reconcile_receipts",
+    "external-import-receipts": "external_import_receipts",
+    "source-scan-receipts": "source_scan_receipts",
+    "recovery-receipts": "recovery_receipts",
+    "lineage-receipts": "lineage_receipts",
+    "catalog-path-metadata": "zet_paths",
+    "catalog-frontmatter": "zet_frontmatters",
+    "catalog-page": "zet_rows",
+    "catalog-pass-artifact": "bytes",
+    "abstract-candidates": "zet_candidates",
+    "abstract-write": "zet_writes",
+    "abstract-revert-write": "zet_reverts",
+    "abstract-receipt-audit": "revision_receipts",
+    "abstract-lock-audit": "transaction_locks",
+    "source-hash": "bytes",
+    "store-hash": "bytes",
+}
+PROGRESS_SAME_COUNT_REPEAT_SECONDS = 30.0
+
+
+def progress_stage_unit(stage: str) -> str:
+    return PROGRESS_STAGE_UNITS.get(stage, "items")
+
 
 def parse_validate_scope_filters(raw_filters: list[str] | None) -> tuple[dict[str, str], list[str]]:
     filters: dict[str, str] = {}
@@ -919,6 +946,7 @@ def make_stage_progress_callback(
     started = time.monotonic()
     stage_started: dict[str, float] = {}
     last_stderr_by_stage: dict[str, float] = {}
+    last_count_by_stage: dict[str, tuple[int, int, float]] = {}
 
     def should_print_to_stderr(stage: str, message: str, current: int | None, total: int | None, now: float) -> bool:
         if not enabled:
@@ -927,6 +955,14 @@ def make_stage_progress_callback(
             return True
         if message in {"start", "done"} or current is None or not total:
             return True
+        previous_count = last_count_by_stage.get(stage)
+        if (
+            previous_count is not None
+            and previous_count[:2] == (current, total)
+            and not message.startswith("heartbeat")
+            and now - previous_count[2] < PROGRESS_SAME_COUNT_REPEAT_SECONDS
+        ):
+            return False
         if current in {1, total} or current % 250 == 0:
             return True
         if (
@@ -944,17 +980,20 @@ def make_stage_progress_callback(
         elapsed = max(0.0, now - started)
         if message == "start" or stage not in stage_started:
             stage_started[stage] = now
+        stage_elapsed = max(0.0, now - stage_started.get(stage, now))
+        unit = progress_stage_unit(stage)
         eta_text: str | None = None
+        rate_per_second: float | None = None
         if current is not None and total:
-            stage_elapsed = max(0.0, now - stage_started.get(stage, now))
+            if stage_elapsed > 0:
+                rate_per_second = current / stage_elapsed
             eta_text = "0.0s"
             if current < total:
                 if current < 10 or stage_elapsed < 30.0:
                     eta_text = "warming_up"
                 else:
-                    rate = current / stage_elapsed
                     remaining = max(0, total - current)
-                    eta = remaining / rate if rate else 0.0
+                    eta = remaining / rate_per_second if rate_per_second else 0.0
                     eta_text = f"{eta:.1f}s"
         if log_path is not None:
             with log_path.open("a", encoding="utf-8") as handle:
@@ -967,6 +1006,9 @@ def make_stage_progress_callback(
                             "current": current,
                             "total": total,
                             "elapsed_seconds": round(elapsed, 3),
+                            "stage_elapsed_seconds": round(stage_elapsed, 3),
+                            "unit": unit if current is not None and total else None,
+                            "rate_per_second": round(rate_per_second, 6) if rate_per_second is not None else None,
                             "eta": eta_text,
                         },
                         ensure_ascii=False,
@@ -978,8 +1020,11 @@ def make_stage_progress_callback(
             return
         last_stderr_by_stage[stage] = now
         if current is not None and total:
+            last_count_by_stage[stage] = (current, total, now)
+            rate_text = f"{rate_per_second:.2f}/s" if rate_per_second is not None else "warming_up"
             print(
-                f"[{label}] {stage}: {current}/{total} {message} elapsed={elapsed:.1f}s eta={eta_text}",
+                f"[{label}] {stage}: {current}/{total} {message} elapsed={elapsed:.1f}s eta={eta_text} "
+                f"stage_elapsed={stage_elapsed:.1f}s unit={unit} rate={rate_text}",
                 file=sys.stderr,
                 flush=True,
             )
@@ -1003,6 +1048,8 @@ class CommandProgressReporter:
         self._callback_lock = threading.Lock()
         self._stop = threading.Event()
         self._current_stage = "starting"
+        self._current = None
+        self._total = None
         self._last_completed_stage: str | None = None
         self._thread: threading.Thread | None = None
         if self._callback is not None:
@@ -1019,6 +1066,12 @@ class CommandProgressReporter:
         safe_message = self._content_free_message(message, current, total)
         with self._state_lock:
             self._current_stage = stage
+            if current is not None and total is not None:
+                self._current = current
+                self._total = total
+            elif message in {"start", "done"}:
+                self._current = None
+                self._total = None
             if message == "done":
                 self._last_completed_stage = stage
         if safe_message == "working":
@@ -1040,13 +1093,15 @@ class CommandProgressReporter:
         while not self._stop.wait(self._interval):
             with self._state_lock:
                 stage = self._current_stage
+                current = self._current
+                total = self._total
                 last_completed = self._last_completed_stage
             message = "heartbeat"
             if last_completed:
                 message += f" last_completed={last_completed}"
             with self._callback_lock:
                 if self._callback is not None:
-                    self._callback(stage, message, None, None)
+                    self._callback(stage, message, current, total)
 
     def close(self) -> None:
         self._stop.set()
@@ -1100,6 +1155,14 @@ class Doctor:
         self._zettel_frontmatter_cache_misses = 0
         self._zettel_bom_cache_hits = 0
         self._zettel_bom_cache_misses = 0
+        self._read_observations = {
+            "zettel_bodies_read": False,
+            "objet_bytes_read": False,
+            "archive_text_scanned_for_secret_patterns": False,
+        }
+
+    def read_observations(self) -> dict[str, bool]:
+        return dict(self._read_observations)
 
     def run(self) -> list[Diagnostic]:
         if not self.archive_root.exists():
@@ -1856,6 +1919,7 @@ class Doctor:
             if isinstance(expected_size, int) and local_path.stat().st_size != expected_size:
                 self.error("local_object_size_mismatch", f"Local object size mismatch: {relative_path}", local_path)
             if isinstance(expected_sha, str):
+                self._read_observations["objet_bytes_read"] = True
                 actual_sha = sha256_file(local_path)
                 if actual_sha != expected_sha:
                     self.error("local_object_sha_mismatch", f"Local object SHA-256 mismatch: {relative_path}", local_path)
@@ -1944,6 +2008,7 @@ class Doctor:
             if cached.get("forbidden_location_reference_found"):
                 self.error("provider_url_in_zettel", "Zettel appears to contain a provider URL or local absolute path.", path)
         else:
+            self._read_observations["zettel_bodies_read"] = True
             text = path.read_text(encoding="utf-8")
             self._zettel_bom_cache[self._file_cache_key(path)] = text.startswith("\ufeff")
             if contains_forbidden_location_reference(text):
@@ -3177,6 +3242,7 @@ class Doctor:
                     continue
                 if self._should_scan_secret_content(path):
                     secret_content_files += 1
+                    self._read_observations["archive_text_scanned_for_secret_patterns"] = True
                     if self._file_contains_secret_value(path, stage=stage, progress_label=relative):
                         self.error("secret_value_detected", f"Secret-like value found in archive file: {relative}", path)
                 if self._is_local_profile_path(path):
@@ -4262,13 +4328,23 @@ def command_ai_start_here(args: argparse.Namespace) -> int:
     archive_root = Path(args.archive_root)
     reporter = CommandProgressReporter(bool(getattr(args, "progress", False)), label="ai-start-here")
     output_metadata: dict[str, Any] | None = None
+    full_doctor = bool(getattr(args, "full_doctor", False))
     try:
-        reporter.progress("doctor", "start", None, None)
-        diagnostics = [
-            item.as_dict()
-            for item in Doctor(archive_root, progress_callback=reporter.progress).run()
-        ]
-        reporter.progress("doctor", "done", None, None)
+        diagnostics: list[dict[str, Any]] | None = None
+        inspection_reads = {
+            "zettel_bodies_read": False,
+            "objet_bytes_read": False,
+            "archive_text_scanned_for_secret_patterns": False,
+        }
+        if full_doctor:
+            reporter.progress("doctor", "start", None, None)
+            doctor = Doctor(archive_root, progress_callback=reporter.progress)
+            diagnostics = [
+                item.as_dict()
+                for item in doctor.run()
+            ]
+            inspection_reads = doctor.read_observations()
+            reporter.progress("doctor", "done", None, None)
         reporter.progress("compose-start-here", "start", None, None)
         result = archive_services.ai_start_here(
             archive_root,
@@ -4277,6 +4353,8 @@ def command_ai_start_here(args: argparse.Namespace) -> int:
             strict=args.strict,
             redact_local_paths=args.redact_local_paths,
             diagnostics=diagnostics,
+            inspection_mode="full_doctor" if full_doctor else "quick",
+            inspection_reads=inspection_reads,
         )
         reporter.progress("compose-start-here", "done", None, None)
         if getattr(args, "output", None):
@@ -4300,6 +4378,7 @@ def command_ai_start_here(args: argparse.Namespace) -> int:
             "lifecycle_action": "ai_start_here_output_summary",
             "archive_id": result.get("archive_id"),
             "summary": result.get("summary"),
+            "inspection": result.get("inspection"),
             "blocker_count": len(result.get("blockers", [])),
             "warning_count": len(result.get("warnings", [])),
             "output": output_metadata,
@@ -4330,6 +4409,7 @@ def render_ai_start_here_markdown(result: dict[str, Any]) -> str:
     blockers = result.get("blockers") if isinstance(result.get("blockers"), list) else []
     warnings = result.get("warnings") if isinstance(result.get("warnings"), list) else []
     storage_authority = result.get("storage_authority") if isinstance(result.get("storage_authority"), dict) else {}
+    inspection = result.get("inspection") if isinstance(result.get("inspection"), dict) else {}
     authority_summary = (
         storage_authority.get("plain_summary")
         if isinstance(storage_authority.get("plain_summary"), dict)
@@ -4348,6 +4428,8 @@ def render_ai_start_here_markdown(result: dict[str, Any]) -> str:
         f"- Scope: `{result.get('scope') or '-'}`",
         f"- Start-here file: `{summary.get('start_here_file') or first_read.get('start_here') or 'archive.yml'}`",
         f"- Operational context: `{operational_context.get('status') or summary.get('operational_context_status') or 'unknown'}`",
+        f"- Inspection mode: `{inspection.get('mode') or summary.get('inspection_mode') or 'quick'}`",
+        f"- Full Doctor run: {'yes' if inspection.get('full_doctor_run') else 'no'}",
         "",
         "## Read First",
         "",
@@ -4384,6 +4466,10 @@ def render_ai_start_here_markdown(result: dict[str, Any]) -> str:
     lines.append(f"- Files written: {'yes' if safety.get('files_written') else 'no'}")
     lines.append(f"- Provider API called: {'yes' if safety.get('provider_api_called') else 'no'}")
     lines.append(f"- Secrets read: {'yes' if safety.get('secrets_read') else 'no'}")
+    lines.append(f"- Credential store accessed: {'yes' if safety.get('credential_store_accessed') else 'no'}")
+    lines.append(
+        f"- Archive text scanned for secret patterns: {'yes' if safety.get('archive_text_scanned_for_secret_patterns') else 'no'}"
+    )
     lines.append(f"- Zettel bodies read: {'yes' if safety.get('zettel_bodies_read') else 'no'}")
     lines.append(f"- Objet bytes read: {'yes' if safety.get('objet_bytes_read') else 'no'}")
     lines.append(f"- Local paths redacted: {'yes' if safety.get('local_paths_redacted') else 'no'}")
@@ -15916,6 +16002,11 @@ def build_parser() -> argparse.ArgumentParser:
     ai_start_here.add_argument("--strict", action="store_true", help="Treat warnings as blocking.")
     ai_start_here.add_argument("--dry-run", action="store_true", help="Core inspection writes no archive record; --output may write one local scratch result.")
     ai_start_here.add_argument("--progress", action="store_true", help="Stream content-free stage progress and 10-second heartbeats to stderr.")
+    ai_start_here.add_argument(
+        "--full-doctor",
+        action="store_true",
+        help="Run the complete archive Doctor before composing start-here. The default quick path does not scan all zets or receipts.",
+    )
     ai_start_here.add_argument(
         "--output",
         help="Write the full JSON result under .wom-scratch/diagnostics/ and print only a compact stdout summary.",

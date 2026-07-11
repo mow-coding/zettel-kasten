@@ -937,7 +937,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                 self.assertIn(phrase, guide_text)
         for phrase in (
             "Status: v0.3.221 archive-wide abstract receipt and lock audit checkpoint",
-            "Version: v0.3.221, release candidate",
+            "Version: v0.3.222, release candidate",
             "zet abstract receipt lifecycle audit",
             "Up to 5,000 receipts and 5,000 locks",
             "Green proves bounded local consistency",
@@ -5896,6 +5896,65 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, text)
+
+    def test_ai_start_here_docs_separate_quick_entry_from_full_doctor(self) -> None:
+        start_here_text = (KIT_ROOT / "docs" / "ai-start-here.md").read_text(encoding="utf-8")
+        progress_text = (KIT_ROOT / "docs" / "large-command-progress-and-output.md").read_text(encoding="utf-8")
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        readme_ko_text = (REPO_ROOT / "README.ko.md").read_text(encoding="utf-8")
+        kit_readme_text = (KIT_ROOT / "README.md").read_text(encoding="utf-8")
+        upgrade_text = (REPO_ROOT / "UPGRADE.md").read_text(encoding="utf-8")
+        upgrade_ko_text = (REPO_ROOT / "UPGRADE.ko.md").read_text(encoding="utf-8")
+        changelog_text = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+        release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.222.md").read_text(encoding="utf-8")
+        public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
+        public_map_ko_text = (KIT_ROOT / "docs" / "public-documentation-map.ko.md").read_text(encoding="utf-8")
+        runtime_skill_text = (
+            KIT_ROOT / "templates" / "ai-runtime" / "wom-archive" / "SKILL.md"
+        ).read_text(encoding="utf-8")
+
+        for phrase in (
+            "Status: quick/default and explicit full-Doctor contract implemented in v0.3.222",
+            "inspection.mode: quick",
+            "inspection.doctor_summary.checked: false",
+            "--full-doctor",
+            "mint-receipts -> mint_receipts",
+            "at most once per 30 seconds",
+            "no credential store accessed",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, start_here_text)
+        for phrase in (
+            "same-count suppression and counted-unit/rate contract in v0.3.222",
+            "stage elapsed time",
+            "processed items per second",
+            "stage/count for 30 seconds",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, progress_text)
+        for phrase in (
+            "Status: v0.3.222 fast AI start-here and honest progress checkpoint",
+            "Previous checkpoint: Status: v0.3.221",
+            "Default `inspection.mode: quick`",
+            "`mint-receipts` explicitly counts mint receipt files",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, matrix_text)
+        for text in (
+            readme_text,
+            readme_ko_text,
+            kit_readme_text,
+            upgrade_text,
+            upgrade_ko_text,
+            changelog_text,
+            release_text,
+            runtime_skill_text,
+        ):
+            with self.subTest(document="operator-surface"):
+                self.assertIn("--full-doctor", text)
+        self.assertIn("[AI Start-Here Quick And Full Inspection](ai-start-here.md)", public_map_text)
+        self.assertIn("[AI 스타팅 메뉴얼 빠른 안내와 전체 검진](ai-start-here.md)", public_map_ko_text)
 
 
 if __name__ == "__main__":
