@@ -8550,6 +8550,40 @@ def command_zet_catalog_pass_cleanup(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 1
 
 
+def command_zet_abstract_backfill_plan(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("zet-abstract-backfill-plan is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    reporter = CommandProgressReporter(bool(getattr(args, "progress", False)), label="zet-abstract-backfill-plan")
+    try:
+        result = archive_services.zet_abstract_backfill_plan(
+            Path(args.archive_root),
+            proposal_path=str(args.proposal),
+            max_items=int(args.max_items),
+            dry_run=True,
+            progress_callback=reporter.progress,
+        )
+    except archive_services.ArchiveServiceError:
+        print("zet-abstract-backfill-plan could not read a safe private proposal or archive target.", file=sys.stderr)
+        return 1
+    except (ArchivePathError, OSError, ValueError):
+        print("zet-abstract-backfill-plan failed before a privacy-safe result could be produced.", file=sys.stderr)
+        return 1
+    finally:
+        reporter.close()
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+        print(f"WOM zet abstract backfill plan: {result.get('status') or 'unknown'}")
+        print(f"Candidates: {summary.get('candidate_count', 0)}")
+        print(f"Ready for review: {summary.get('ready_for_review_count', 0)}")
+        print(f"Blocked: {summary.get('blocked_count', 0)}")
+        print("Writes: none")
+    return 0 if result.get("ok") else 1
+
+
 def command_status_board(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print("status-board is read-only and requires --dry-run.", file=sys.stderr)
@@ -17641,6 +17675,36 @@ def build_parser() -> argparse.ArgumentParser:
         help="Stream content-free byte counts and 10-second heartbeats to stderr.",
     )
     zet_catalog_pass_cleanup.set_defaults(func=command_zet_catalog_pass_cleanup)
+
+    zet_abstract_backfill_plan = subcommands.add_parser(
+        "zet-abstract-backfill-plan",
+        aliases=["abstract-backfill-plan"],
+        help="Validate private reviewed abstract proposals against exact current canonical zet bytes without writing.",
+    )
+    zet_abstract_backfill_plan.add_argument("archive_root", help="Archive root containing canonical zets.")
+    zet_abstract_backfill_plan.add_argument(
+        "--proposal",
+        required=True,
+        help="Private JSONL under .wom-scratch/abstract-backfill/; its path and values are never echoed.",
+    )
+    zet_abstract_backfill_plan.add_argument(
+        "--max-items",
+        type=int,
+        default=500,
+        help=f"Maximum proposal rows to inspect (1-{archive_services.ZET_ABSTRACT_BACKFILL_MAX_ITEMS}).",
+    )
+    zet_abstract_backfill_plan.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Required. Reads proposal and selected canonical zets but writes nothing.",
+    )
+    zet_abstract_backfill_plan.add_argument(
+        "--progress",
+        action="store_true",
+        help="Stream content-free byte and row counts plus 10-second heartbeats to stderr.",
+    )
+    zet_abstract_backfill_plan.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    zet_abstract_backfill_plan.set_defaults(func=command_zet_abstract_backfill_plan)
 
     status_board = subcommands.add_parser(
         "status-board",

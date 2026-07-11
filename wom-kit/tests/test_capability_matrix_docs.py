@@ -521,7 +521,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.216 pre-release",
+            "v0.3.218 pre-release",
             "[Version Truth Source](wom-kit/docs/version-truth-source.md)",
             "[Project Version Update](wom-kit/docs/project-version-update.md)",
             "read-only WOM-kit version truth-source checks",
@@ -662,8 +662,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, lifecycle_text)
         for phrase in (
-            "Status: v0.3.217 SHA-bound catalog artifact lifecycle checkpoint",
-            "Version: v0.3.217, release candidate",
+            "Previous checkpoint: Status: v0.3.217 SHA-bound catalog artifact lifecycle checkpoint",
             "zet-catalog-pass-read",
             "zet-catalog-pass-cleanup",
             "writes no receipt",
@@ -690,6 +689,70 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                 self.assertIn(phrase, release_text)
         self.assertIn("[zet Catalog Pass Artifact Lifecycle](zet-catalog-pass-artifact-lifecycle.md)", public_map_text)
         self.assertIn("[zet Catalog Pass 임시 파일 수명주기](zet-catalog-pass-artifact-lifecycle.md)", public_map_ko_text)
+
+    def test_abstract_backfill_plan_docs_expose_exact_version_private_review_boundary(self) -> None:
+        plan_text = (KIT_ROOT / "docs" / "zet-abstract-backfill-plan.md").read_text(encoding="utf-8")
+        schema_text = (KIT_ROOT / "schemas" / "zet-abstract-backfill-proposal.schema.json").read_text(encoding="utf-8")
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        readme_ko_text = (REPO_ROOT / "README.ko.md").read_text(encoding="utf-8")
+        kit_readme_text = (KIT_ROOT / "README.md").read_text(encoding="utf-8")
+        upgrade_text = (REPO_ROOT / "UPGRADE.md").read_text(encoding="utf-8")
+        upgrade_ko_text = (REPO_ROOT / "UPGRADE.ko.md").read_text(encoding="utf-8")
+        changelog_text = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+        release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.218.md").read_text(encoding="utf-8")
+        public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
+        public_map_ko_text = (KIT_ROOT / "docs" / "public-documentation-map.ko.md").read_text(encoding="utf-8")
+        runtime_skill_text = (KIT_ROOT / "templates" / "ai-runtime" / "wom-archive" / "SKILL.md").read_text(encoding="utf-8")
+        for phrase in (
+            "Status: implemented as read-only planning in v0.3.218",
+            "find gap -> read one canonical body -> pin exact file bytes",
+            "integrity.file_sha256",
+            "archive zet-abstract-backfill-plan <archive-root>",
+            "5,000 rows",
+            "does not implement the approved revision write",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, plan_text)
+        for phrase in (
+            "wom-kit/zet-abstract-backfill-proposal/v0.1",
+            "expected_file_sha256",
+            "canonical_zet_body",
+            "ai_assisted",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, schema_text)
+        for phrase in (
+            "Status: v0.3.218 reviewed abstract backfill planning checkpoint",
+            "Version: v0.3.218, release candidate",
+            "zet abstract backfill plan",
+            "ready_for_human_review",
+            "approval-gated transactional revision remains unimplemented",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, matrix_text)
+        for text in (readme_text, readme_ko_text, kit_readme_text, upgrade_text, upgrade_ko_text, runtime_skill_text):
+            with self.subTest(document="operator-surface"):
+                self.assertIn("zet-abstract-backfill-plan", text)
+        for text in (kit_readme_text, upgrade_text, upgrade_ko_text, runtime_skill_text):
+            with self.subTest(document="detailed-operator-surface"):
+                self.assertIn(".wom-scratch/abstract-backfill/", text)
+        for phrase in (
+            "v0.3.218 - 2026-07-11",
+            "Exact source-version binding",
+            "No automatic repair",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, changelog_text)
+        for phrase in (
+            "v0.3.218 - Reviewed Abstract Backfill Planning",
+            "Redacted zet hashes remain suppressed",
+            "does not approve or apply a revision",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, release_text)
+        self.assertIn("[zet Abstract Backfill Plan](zet-abstract-backfill-plan.md)", public_map_text)
+        self.assertIn("[zet 초록 보충 계획](zet-abstract-backfill-plan.md)", public_map_ko_text)
 
     def test_tiro_import_plan_doc_and_matrix_cover_read_only_meeting_manifest_contract(self) -> None:
         tiro_text = TIRO_IMPORT_PLAN_PATH.read_text(encoding="utf-8")

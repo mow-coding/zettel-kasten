@@ -6,6 +6,28 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.218 - 2026-07-11
+
+Reviewed abstract backfill planning checkpoint. Additive; no archive migration.
+
+- **Exact source-version binding.** `read-zettel` now returns exact canonical
+  file SHA-256 and decoded returned-body SHA-256 for non-redacted zets. Redacted
+  zet hashes remain suppressed.
+- **Private proposal contract.** New JSONL rows under
+  `.wom-scratch/abstract-backfill/` bind a proposed abstract to exact canonical
+  bytes and label preparation as `human_written` or `ai_assisted`. A standard
+  JSON Schema ships with the contract.
+- **Read-only validation gate.** New `zet-abstract-backfill-plan` CLI, with
+  `abstract-backfill-plan` alias, verifies current hash, identity/status,
+  first-read absence, bounded safe text, and semantic one-field-only insertion.
+- **Bounded and private.** The planner caps proposal/file/line size, emits
+  content-free progress, and returns only row indexes, counts, hashes, and
+  blocker codes. It echoes no zet id, path, title, body, abstract, or private
+  proposal filename.
+- **No automatic repair.** This release reads selected bodies for validation
+  but writes nothing and calls no model/provider. A green result means ready
+  for human review, not true, complete, understood, approved, or applied.
+
 ## v0.3.217 - 2026-07-11
 
 SHA-bound catalog artifact lifecycle checkpoint. Additive; no archive migration.

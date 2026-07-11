@@ -551,8 +551,11 @@ zet-catalog-pass-read --dry-run --input <scratch.jsonl> [--page-index <n>] --exp
 zet-catalog-pass-cleanup --input <scratch.jsonl> --expected-sha256 <sha256> --dry-run|--approve --reviewed-by <actor>
   Preview or approve deletion of one complete matching private scratch JSONL after consumption. It never deletes hidden partials or archive records, writes no receipt, and echoes no reviewer value.
 
+zet-abstract-backfill-plan --proposal .wom-scratch/abstract-backfill/<private>.jsonl --dry-run
+  Validate bounded missing-abstract proposals against exact current canonical file bytes. It checks the shipped row schema, identity/status, hash, first-read absence, safe abstract shape, and a byte-preserving one-field insertion. It returns only row indexes, counts, and hashes; writes nothing and echoes no ids, paths, bodies, abstracts, or proposal filename. Approved revision is not implemented in v0.3.218.
+
 read-zettel
-  Read one zettel by id or archive-relative path. Use `--section overview` for the compact first read; MCP `read_zettel` accepts the same section values while keeping `body` as its compatibility default.
+  Read one zettel by id or archive-relative path. Use `--section overview` for the compact first read; MCP `read_zettel` accepts the same section values while keeping `body` as its compatibility default. Non-redacted results include exact canonical file SHA-256 and decoded returned-body SHA-256 so a private revision proposal can bind to the version actually read; redacted hashes are suppressed.
 
 tools/benchmark_zet_catalog.py
   Build a temporary synthetic 1,000- or 10,000-zet archive, exhaustively page the live catalog in full/reading, page/strict, and path/seeded order modes, verify unique coverage and strict claim readiness, and report order, scan, timing, cache, and heuristic workload evidence. It reads no real archive and persists no fixture.

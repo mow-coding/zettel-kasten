@@ -1481,6 +1481,7 @@ class ArchiveCliTests(unittest.TestCase):
         self.assertIn("zet-catalog-pass", command_names)
         self.assertIn("zet-catalog-pass-read", command_names)
         self.assertIn("zet-catalog-pass-cleanup", command_names)
+        self.assertIn("zet-abstract-backfill-plan", command_names)
         capability = next(item for item in commands if item["name"] == "capabilities")
         self.assertIn("--machine", capability["options"])
         project_update = next(item for item in commands if item["name"] == "project-version-update")
@@ -1501,6 +1502,10 @@ class ArchiveCliTests(unittest.TestCase):
         self.assertEqual(catalog_pass_cleanup["aliases"], ["catalog-pass-cleanup"])
         for option in ("--input", "--expected-sha256", "--dry-run", "--approve", "--reviewed-by"):
             self.assertIn(option, catalog_pass_cleanup["options"])
+        abstract_backfill = next(item for item in commands if item["name"] == "zet-abstract-backfill-plan")
+        self.assertEqual(abstract_backfill["aliases"], ["abstract-backfill-plan"])
+        for option in ("--proposal", "--max-items", "--dry-run", "--progress"):
+            self.assertIn(option, abstract_backfill["options"])
         serialized = json.dumps(result, ensure_ascii=False)
         self.assertNotIn(str(KIT_ROOT), serialized)
         self.assertNotIn(str(Path.home()), serialized)
@@ -29712,6 +29717,265 @@ state:
             self.assertEqual(both_code, 1)
             self.assertIn("exactly one", both_stderr)
 
+    def test_zet_abstract_backfill_plan_binds_private_proposal_to_exact_canonical_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            zettel_path = sorted((archive_root / "zettels").glob("*.md"))[0]
+            zettel_id = archive_services.read_zettel_frontmatter_only(zettel_path)["id"]
+            canonical_before = zettel_path.read_bytes()
+            expected_file_sha256 = "sha256:" + hashlib.sha256(canonical_before).hexdigest()
+            private_abstract = "PRIVATE REVIEWED ABSTRACT SENTENCE"
+            private_proposal_name = "PRIVATE_PROPOSAL_NAME.jsonl"
+            proposal_relative = f".wom-scratch/abstract-backfill/{private_proposal_name}"
+            proposal_path = archive_root / proposal_relative
+            proposal_path.parent.mkdir(parents=True, exist_ok=True)
+            proposal_path.write_text(
+                json.dumps(
+                    {
+                        "schema": "wom-kit/zet-abstract-backfill-proposal/v0.1",
+                        "zettel_id": zettel_id,
+                        "expected_file_sha256": expected_file_sha256,
+                        "abstract": private_abstract,
+                        "generation_mode": "ai_assisted",
+                        "basis": "canonical_zet_body",
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            proposal_sha256 = "sha256:" + hashlib.sha256(proposal_path.read_bytes()).hexdigest()
+
+            missing_code, _missing_stdout, missing_stderr = self.run_cli_split(
+                [
+                    "zet-abstract-backfill-plan",
+                    str(archive_root),
+                    "--proposal",
+                    proposal_relative,
+                ]
+            )
+            self.assertEqual(missing_code, 1)
+            self.assertIn("requires --dry-run", missing_stderr)
+
+            code, stdout, stderr = self.run_cli_split(
+                [
+                    "abstract-backfill-plan",
+                    str(archive_root),
+                    "--proposal",
+                    proposal_relative,
+                    "--max-items",
+                    "10",
+                    "--dry-run",
+                    "--progress",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, stdout + stderr)
+            result = json.loads(stdout)
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["status"], "ready_for_human_review")
+            self.assertEqual(result["proposal"]["sha256"], proposal_sha256)
+            self.assertFalse(result["proposal"]["path_echoed"])
+            self.assertEqual(result["summary"]["candidate_count"], 1)
+            self.assertEqual(result["summary"]["ready_for_review_count"], 1)
+            self.assertEqual(result["summary"]["blocked_count"], 0)
+            self.assertTrue(result["summary"]["all_candidates_bound_to_current_canonical_bytes"])
+            self.assertEqual(result["summary"]["generation_mode_counts"]["ai_assisted"], 1)
+            self.assertEqual(result["items"][0]["status"], "ready_for_review")
+            self.assertTrue(result["items"][0]["expected_file_sha256_matches"])
+            candidate_bytes = archive_services.zet_abstract_backfill_candidate_bytes(
+                canonical_before,
+                private_abstract,
+            )
+            self.assertEqual(
+                result["items"][0]["candidate_file_sha256"],
+                "sha256:" + hashlib.sha256(candidate_bytes).hexdigest(),
+            )
+            self.assertFalse(result["approval_contract"]["approved_write_implemented"])
+            self.assertFalse(result["write_boundary"]["files_written"])
+            self.assertTrue(result["privacy_guards"]["zettel_body_text_read"])
+            self.assertFalse(result["privacy_guards"]["zettel_body_text_echoed"])
+            self.assertEqual(zettel_path.read_bytes(), canonical_before)
+            self.assertNotIn(zettel_id, stdout + stderr)
+            self.assertNotIn(private_abstract, stdout + stderr)
+            self.assertNotIn(private_proposal_name, stdout + stderr)
+            self.assertNotIn(str(archive_root), stdout + stderr)
+            self.assertIn("abstract-proposal", stderr)
+            self.assertIn("abstract-candidates", stderr)
+
+    def test_zet_abstract_backfill_plan_blocks_stale_duplicate_existing_and_unsafe_rows_without_values(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            zettel_paths = sorted((archive_root / "zettels").glob("*.md"))
+            self.assertGreaterEqual(len(zettel_paths), 4)
+            rows: list[dict[str, Any]] = []
+            first_id = archive_services.read_zettel_frontmatter_only(zettel_paths[0])["id"]
+            first_hash = "sha256:" + hashlib.sha256(zettel_paths[0].read_bytes()).hexdigest()
+            rows.append(
+                {
+                    "schema": "wom-kit/zet-abstract-backfill-proposal/v0.1",
+                    "zettel_id": first_id,
+                    "expected_file_sha256": "sha256:" + ("0" * 64),
+                    "abstract": "Stale candidate marker",
+                    "generation_mode": "ai_assisted",
+                    "basis": "canonical_zet_body",
+                }
+            )
+            unnormalized_id = archive_services.read_zettel_frontmatter_only(zettel_paths[3])["id"]
+            rows.append(
+                {
+                    "schema": "wom-kit/zet-abstract-backfill-proposal/v0.1",
+                    "zettel_id": unnormalized_id,
+                    "expected_file_sha256": "sha256:" + hashlib.sha256(zettel_paths[3].read_bytes()).hexdigest(),
+                    "abstract": "Unnormalized  candidate marker",
+                    "generation_mode": "human_written",
+                    "basis": "canonical_zet_body",
+                }
+            )
+            rows.append(
+                {
+                    "schema": "wom-kit/zet-abstract-backfill-proposal/v0.1",
+                    "zettel_id": first_id,
+                    "expected_file_sha256": first_hash,
+                    "abstract": "Duplicate candidate marker",
+                    "generation_mode": "human_written",
+                    "basis": "canonical_zet_body",
+                }
+            )
+
+            existing_id = archive_services.read_zettel_frontmatter_only(zettel_paths[1])["id"]
+            existing_bytes = archive_services.zet_abstract_backfill_candidate_bytes(
+                zettel_paths[1].read_bytes(),
+                "Existing first read marker",
+            )
+            zettel_paths[1].write_bytes(existing_bytes)
+            rows.append(
+                {
+                    "schema": "wom-kit/zet-abstract-backfill-proposal/v0.1",
+                    "zettel_id": existing_id,
+                    "expected_file_sha256": "sha256:" + hashlib.sha256(existing_bytes).hexdigest(),
+                    "abstract": "Replacement candidate marker",
+                    "generation_mode": "ai_assisted",
+                    "basis": "canonical_zet_body",
+                }
+            )
+
+            unsafe_id = archive_services.read_zettel_frontmatter_only(zettel_paths[2])["id"]
+            unsafe_value = "Private locator " + "C:" + "\\Users\\fixture\\note.txt"
+            rows.append(
+                {
+                    "schema": "wom-kit/zet-abstract-backfill-proposal/v0.1",
+                    "zettel_id": unsafe_id,
+                    "expected_file_sha256": "sha256:" + hashlib.sha256(zettel_paths[2].read_bytes()).hexdigest(),
+                    "abstract": unsafe_value,
+                    "generation_mode": "ai_assisted",
+                    "basis": "canonical_zet_body",
+                }
+            )
+            proposal_relative = ".wom-scratch/abstract-backfill/blocked.jsonl"
+            proposal_path = archive_root / proposal_relative
+            proposal_path.parent.mkdir(parents=True, exist_ok=True)
+            proposal_path.write_text(
+                "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows),
+                encoding="utf-8",
+            )
+
+            code, output = self.run_cli(
+                [
+                    "zet-abstract-backfill-plan",
+                    str(archive_root),
+                    "--proposal",
+                    proposal_relative,
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 1, output)
+            result = json.loads(output)
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["summary"]["blocked_count"], 5)
+            blocker_codes = [set(item["blocker_codes"]) for item in result["items"]]
+            self.assertIn("canonical_file_sha256_mismatch", blocker_codes[0])
+            self.assertIn("abstract_not_normalized_single_line", blocker_codes[1])
+            self.assertIn("zettel_id_duplicate", blocker_codes[2])
+            self.assertIn("abstract_key_already_present", blocker_codes[3])
+            self.assertIn("abstract_private_locator_or_secret_like", blocker_codes[4])
+            serialized = json.dumps(result, ensure_ascii=False)
+            for private_value in (
+                first_id,
+                existing_id,
+                unsafe_id,
+                unnormalized_id,
+                "Stale candidate marker",
+                "Duplicate candidate marker",
+                "Replacement candidate marker",
+                unsafe_value,
+                "Unnormalized  candidate marker",
+            ):
+                self.assertNotIn(private_value, serialized)
+
+    def test_zet_abstract_backfill_plan_honors_max_items_before_canonical_reads(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            zettel_paths = sorted((archive_root / "zettels").glob("*.md"))[:2]
+            rows = []
+            for index, zettel_path in enumerate(zettel_paths):
+                rows.append(
+                    {
+                        "schema": "wom-kit/zet-abstract-backfill-proposal/v0.1",
+                        "zettel_id": archive_services.read_zettel_frontmatter_only(zettel_path)["id"],
+                        "expected_file_sha256": "sha256:" + hashlib.sha256(zettel_path.read_bytes()).hexdigest(),
+                        "abstract": f"Bounded candidate {index}.",
+                        "generation_mode": "ai_assisted",
+                        "basis": "canonical_zet_body",
+                    }
+                )
+            proposal_relative = ".wom-scratch/abstract-backfill/bounded.jsonl"
+            proposal_path = archive_root / proposal_relative
+            proposal_path.parent.mkdir(parents=True, exist_ok=True)
+            proposal_path.write_text(
+                "".join(json.dumps(row) + "\n" for row in rows),
+                encoding="utf-8",
+            )
+
+            real_resolve = archive_services.resolve_zettel_path
+            with patch.object(archive_services, "resolve_zettel_path", wraps=real_resolve) as resolve:
+                code, output = self.run_cli(
+                    [
+                        "zet-abstract-backfill-plan",
+                        str(archive_root),
+                        "--proposal",
+                        proposal_relative,
+                        "--max-items",
+                        "1",
+                        "--dry-run",
+                    ]
+                )
+            self.assertEqual(code, 1, output)
+            result = json.loads(output)
+            self.assertIn("proposal_exceeds_max_items", result["blockers"])
+            self.assertEqual(result["summary"]["proposal_line_count"], 2)
+            self.assertEqual(result["summary"]["inspected_count"], 1)
+            self.assertTrue(result["summary"]["truncated_due_to_max_items"])
+            self.assertEqual(resolve.call_count, 1)
+
+    def test_zet_abstract_backfill_candidate_insertion_preserves_bom_crlf_and_body_bytes(self) -> None:
+        original = (
+            b"\xef\xbb\xbf---\r\n"
+            b"id: zet_20260711_bom_crlf\r\n"
+            b"title: BOM CRLF fixture\r\n"
+            b"status: canonical\r\n"
+            b"---\r\n"
+            b"\r\n# Body\r\n\r\nExact body bytes.\r\n"
+        )
+        abstract = "Compact reviewed first read."
+        candidate = archive_services.zet_abstract_backfill_candidate_bytes(original, abstract)
+        inserted = f"abstract: {json.dumps(abstract)}\r\n".encode("utf-8")
+        self.assertTrue(candidate.startswith(b"\xef\xbb\xbf---\r\n" + inserted))
+        self.assertEqual(candidate.replace(inserted, b"", 1), original)
+
     def test_zet_catalog_pass_discards_partial_when_final_snapshot_revalidation_changes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
@@ -30283,6 +30547,17 @@ state:
         result = json.loads(output)
         self.assertEqual(result["frontmatter"]["id"], zettel_id)
         self.assertIn("private personal reflection", result["body"])
+        zettel_path = archive_root / result["path"]
+        self.assertEqual(
+            result["integrity"]["file_sha256"],
+            "sha256:" + hashlib.sha256(zettel_path.read_bytes()).hexdigest(),
+        )
+        self.assertEqual(
+            result["integrity"]["body_sha256"],
+            "sha256:" + hashlib.sha256(result["body"].encode("utf-8")).hexdigest(),
+        )
+        self.assertTrue(result["integrity"]["exact_file_bytes_hashed"])
+        self.assertTrue(result["integrity"]["body_text_returned"])
 
         windows_style_path = result["path"].replace("/", "\\")
         path_code, path_output = self.run_cli(["read-zettel", str(archive_root), "--path", windows_style_path, "--format", "json"])
@@ -34582,6 +34857,8 @@ state:
             read = archive_services.read_zettel(archive_root, zettel_id=zid)
             self.assertTrue(read.get("redacted"))
             self.assertEqual(read["body"], "")
+            self.assertTrue(read["integrity"]["suppressed_for_redacted"])
+            self.assertIsNone(read["integrity"]["file_sha256"])
             self.assertNotIn(secret, json.dumps(read), "no redacted content may leak via read_zettel")
 
             # block_header_preview: blocked + content suppressed.

@@ -2791,6 +2791,14 @@ FRONTMATTER_V03_LEGACY_REF_ROLE = "legacy_provenance_source"
 ZETTEL_READ_SECTIONS = {"overview", "body", "document", "details", "all"}
 ZETTEL_OVERVIEW_GIST_CHAR_LIMIT = 360
 ZET_ABSTRACT_MAX_CHARS = ZETTEL_OVERVIEW_GIST_CHAR_LIMIT
+ZET_ABSTRACT_BACKFILL_PROPOSAL_SCHEMA = "wom-kit/zet-abstract-backfill-proposal/v0.1"
+ZET_ABSTRACT_BACKFILL_PLAN_SCHEMA = "wom-kit/zet-abstract-backfill-plan/v0.1"
+ZET_ABSTRACT_BACKFILL_PROPOSAL_PREFIX = ".wom-scratch/abstract-backfill/"
+ZET_ABSTRACT_BACKFILL_GENERATION_MODES = {"human_written", "ai_assisted"}
+ZET_ABSTRACT_BACKFILL_BASIS = "canonical_zet_body"
+ZET_ABSTRACT_BACKFILL_MAX_ITEMS = 5000
+ZET_ABSTRACT_BACKFILL_MAX_FILE_BYTES = 64 * 1024 * 1024
+ZET_ABSTRACT_BACKFILL_MAX_LINE_BYTES = 1024 * 1024
 ZETTEL_OVERVIEW_FRONTMATTER_FIELDS = ("abstract", "gist", "summary", "description", "overview")
 ZET_CATALOG_SCHEMA = "wom-kit/zet-catalog/v0.8"
 ZET_CATALOG_MAX_PAGE_SIZE = 10000
@@ -5211,7 +5219,9 @@ def read_zettel(
         raise ArchiveServiceError("section must be one of: overview, body, document, details, all")
 
     path = resolve_zettel_path(root, zettel_id=zettel_id, relative_path=relative_path)
-    frontmatter, body = split_zettel_text(path.read_text(encoding="utf-8"))
+    raw_bytes = path.read_bytes()
+    text = raw_bytes.decode("utf-8")
+    frontmatter, body = split_zettel_text(text)
     frontmatter = json_safe(frontmatter)
     if frontmatter.get("status") == "redacted":
         # Privacy: a redacted zettel's body and frontmatter are suppressed on read; only its id and
@@ -5227,6 +5237,11 @@ def read_zettel(
             "frontmatter_hidden": True,
             "raw_frontmatter_delimiters_echoed": False,
             "redacted": True,
+            "integrity": {
+                "suppressed_for_redacted": True,
+                "file_sha256": None,
+                "body_sha256": None,
+            },
             "warnings": overview_warnings,
         }
     overview, overview_warnings = zettel_first_read_summary(frontmatter, body)
@@ -5244,6 +5259,14 @@ def read_zettel(
         "frontmatter_hidden": not include_full_frontmatter,
         "raw_frontmatter_delimiters_echoed": False,
         "redacted": False,
+        "integrity": {
+            "suppressed_for_redacted": False,
+            "file_sha256": "sha256:" + hashlib.sha256(raw_bytes).hexdigest(),
+            "body_sha256": "sha256:" + hashlib.sha256(body.encode("utf-8")).hexdigest(),
+            "exact_file_bytes_hashed": True,
+            "body_hash_basis": "decoded_canonical_body_before_section_omission",
+            "body_text_returned": include_body,
+        },
         "warnings": unique_preserve_order(overview_warnings),
     }
 
@@ -6459,6 +6482,9 @@ def zet_catalog(
             next_safe_actions.append(
                 "Report missing or unreadable first-read text as an abstract gap; do not claim that every abstract was read or auto-write replacements."
             )
+            next_safe_actions.append(
+                "For a selected missing-abstract zet, read its canonical body and integrity.file_sha256 with read-zettel, prepare a private .wom-scratch/abstract-backfill proposal row, and run zet-abstract-backfill-plan before any future approved revision."
+            )
         if not identity_coverage["all_entries_uniquely_addressable"]:
             next_safe_actions.append(
                 "Resolve duplicate, missing, or unsafe zet ids before relying on id-only follow-up body reads."
@@ -6617,6 +6643,363 @@ def zet_catalog(
     if progress_callback is not None:
         progress_callback("catalog-page", "done", next_cursor_value, total_count)
     return result
+
+
+def resolve_zet_abstract_backfill_proposal_path(root: Path, raw_path: str) -> Path:
+    try:
+        normalized = normalize_archive_relative_path(raw_path)
+    except ArchivePathError as exc:
+        raise ArchiveServiceError("Abstract backfill proposal path must be archive-relative.") from exc
+    if not normalized.startswith(ZET_ABSTRACT_BACKFILL_PROPOSAL_PREFIX) or not normalized.lower().endswith(".jsonl"):
+        raise ArchiveServiceError(
+            f"Abstract backfill proposal must be a .jsonl file under {ZET_ABSTRACT_BACKFILL_PROPOSAL_PREFIX}"
+        )
+    unresolved = root.resolve()
+    for part in normalized.split("/"):
+        unresolved = unresolved / part
+        if unresolved.is_symlink():
+            raise ArchiveServiceError("Abstract backfill proposal paths must not contain symbolic links.")
+    path = resolve_archive_relative_path(root, normalized)
+    if path.is_symlink() or not path.is_file():
+        raise ArchiveServiceError("Abstract backfill proposal must be an existing regular file.")
+    return path
+
+
+def normalized_zet_abstract_candidate(value: Any, blocker_codes: list[str]) -> str | None:
+    if not isinstance(value, str):
+        blocker_codes.append("abstract_not_string")
+        return None
+    normalized = re.sub(r"\s+", " ", value).strip()
+    if not normalized:
+        blocker_codes.append("abstract_empty")
+        return None
+    if normalized != value:
+        blocker_codes.append("abstract_not_normalized_single_line")
+        return None
+    if len(normalized) > ZET_ABSTRACT_MAX_CHARS:
+        blocker_codes.append("abstract_too_long")
+        return None
+    if (
+        header_string_is_private_or_unsafe(normalized)
+        or source_intake_has_provider_url(normalized)
+        or source_intake_secret_like(normalized)
+    ):
+        blocker_codes.append("abstract_private_locator_or_secret_like")
+        return None
+    return normalized
+
+
+def zet_abstract_backfill_candidate_bytes(raw_bytes: bytes, abstract: str) -> bytes:
+    try:
+        text = raw_bytes.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ArchiveServiceError("Canonical zet is not valid UTF-8.") from exc
+    has_bom = text.startswith("\ufeff")
+    payload = text[1:] if has_bom else text
+    opening = re.match(r"\A---[ \t]*(\r\n|\n)", payload)
+    if opening is None:
+        raise ArchiveServiceError("Canonical zet has no supported YAML frontmatter opening.")
+    newline = opening.group(1)
+    serialized = json.dumps(abstract, ensure_ascii=False)
+    candidate_payload = payload[: opening.end()] + f"abstract: {serialized}{newline}" + payload[opening.end() :]
+    candidate_text = ("\ufeff" if has_bom else "") + candidate_payload
+
+    before_frontmatter, before_body = split_zettel_text(text)
+    after_frontmatter, after_body = split_zettel_text(candidate_text)
+    inserted_abstract = after_frontmatter.pop("abstract", None)
+    if inserted_abstract != abstract or after_frontmatter != before_frontmatter or after_body != before_body:
+        raise ArchiveServiceError("Abstract insertion would change canonical content beyond the new abstract field.")
+    return candidate_text.encode("utf-8")
+
+
+def read_zet_abstract_backfill_proposal_bytes(
+    proposal_path: Path,
+    *,
+    progress_callback: Callable[[str, str, int | None, int | None], None] | None,
+) -> tuple[bytes, str]:
+    size = proposal_path.stat().st_size
+    if size > ZET_ABSTRACT_BACKFILL_MAX_FILE_BYTES:
+        raise ArchiveServiceError("Abstract backfill proposal exceeds the 64 MiB safety limit.")
+    chunks: list[bytes] = []
+    completed = 0
+    if progress_callback is not None:
+        progress_callback("abstract-proposal", "start", 0, size)
+    with proposal_path.open("rb") as handle:
+        while True:
+            chunk = handle.read(1024 * 1024)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            completed += len(chunk)
+            if progress_callback is not None:
+                progress_callback("abstract-proposal", "scanned", completed, size)
+    if progress_callback is not None:
+        progress_callback("abstract-proposal", "done", completed, size)
+    raw_bytes = b"".join(chunks)
+    return raw_bytes, "sha256:" + hashlib.sha256(raw_bytes).hexdigest()
+
+
+def zet_abstract_backfill_plan(
+    archive_root: Path | str,
+    *,
+    proposal_path: str,
+    max_items: int = 500,
+    dry_run: bool = False,
+    progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if not dry_run:
+        blockers.append("dry_run_required")
+    effective_max_items = max(1, min(int(max_items), ZET_ABSTRACT_BACKFILL_MAX_ITEMS))
+    resolved_proposal = resolve_zet_abstract_backfill_proposal_path(root, proposal_path)
+    raw_bytes, proposal_sha256 = read_zet_abstract_backfill_proposal_bytes(
+        resolved_proposal,
+        progress_callback=progress_callback,
+    )
+    raw_lines = raw_bytes.splitlines(keepends=True)
+    if not raw_lines:
+        blockers.append("proposal_empty")
+    truncated_due_to_max_items = len(raw_lines) > effective_max_items
+    if truncated_due_to_max_items:
+        blockers.append("proposal_exceeds_max_items")
+
+    rows: list[dict[str, Any] | None] = []
+    for raw_line in raw_lines[:effective_max_items]:
+        if len(raw_line) > ZET_ABSTRACT_BACKFILL_MAX_LINE_BYTES:
+            rows.append(None)
+            continue
+        if not raw_line.strip():
+            rows.append(None)
+            continue
+        try:
+            parsed = json.loads(raw_line.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            parsed = None
+        rows.append(parsed if isinstance(parsed, dict) else None)
+
+    seen_zettel_ids: set[str] = set()
+    item_results: list[dict[str, Any]] = []
+    fingerprint_rows: list[dict[str, Any]] = []
+    generation_mode_counts = {mode: 0 for mode in sorted(ZET_ABSTRACT_BACKFILL_GENERATION_MODES)}
+    total_abstract_chars = 0
+    if progress_callback is not None:
+        progress_callback("abstract-candidates", "start", 0, len(rows))
+    for index, row in enumerate(rows):
+        row_blockers: list[str] = []
+        expected_file_sha256: str | None = None
+        normalized_abstract: str | None = None
+        generation_mode: str | None = None
+        expected_matches: bool | None = None
+        current_file_sha256: str | None = None
+        candidate_file_sha256: str | None = None
+        abstract_sha256: str | None = None
+
+        if row is None:
+            row_blockers.append("row_not_valid_json_object")
+        else:
+            allowed_keys = {
+                "schema",
+                "zettel_id",
+                "expected_file_sha256",
+                "abstract",
+                "generation_mode",
+                "basis",
+            }
+            if set(row) - allowed_keys:
+                row_blockers.append("unsupported_fields")
+            if row.get("schema") != ZET_ABSTRACT_BACKFILL_PROPOSAL_SCHEMA:
+                row_blockers.append("unsupported_schema")
+            zettel_id = row.get("zettel_id")
+            if not isinstance(zettel_id, str) or not ZETTEL_EDGE_ZETTEL_ID_RE.fullmatch(zettel_id):
+                row_blockers.append("zettel_id_invalid")
+                zettel_id = None
+            elif zettel_id in seen_zettel_ids:
+                row_blockers.append("zettel_id_duplicate")
+            else:
+                seen_zettel_ids.add(zettel_id)
+
+            raw_expected_sha256 = row.get("expected_file_sha256")
+            if (
+                not isinstance(raw_expected_sha256, str)
+                or not re.fullmatch(r"sha256:[0-9a-f]{64}", raw_expected_sha256)
+            ):
+                row_blockers.append("expected_file_sha256_invalid")
+            else:
+                expected_file_sha256 = raw_expected_sha256
+            generation_value = row.get("generation_mode")
+            if generation_value not in ZET_ABSTRACT_BACKFILL_GENERATION_MODES:
+                row_blockers.append("generation_mode_invalid")
+            else:
+                generation_mode = str(generation_value)
+                generation_mode_counts[generation_mode] += 1
+            if row.get("basis") != ZET_ABSTRACT_BACKFILL_BASIS:
+                row_blockers.append("basis_must_be_canonical_zet_body")
+            normalized_abstract = normalized_zet_abstract_candidate(row.get("abstract"), row_blockers)
+
+            if zettel_id is not None:
+                try:
+                    zettel_path = resolve_zettel_path(root, zettel_id=zettel_id, relative_path=None)
+                    relative = archive_relative_path(zettel_path, root)
+                    if not relative.startswith("zettels/") or zettel_path.is_symlink():
+                        row_blockers.append("target_not_plain_canonical_zet")
+                    else:
+                        canonical_bytes = zettel_path.read_bytes()
+                        current_file_sha256 = "sha256:" + hashlib.sha256(canonical_bytes).hexdigest()
+                        expected_matches = bool(
+                            expected_file_sha256 and expected_file_sha256 == current_file_sha256
+                        )
+                        if not expected_matches:
+                            row_blockers.append("canonical_file_sha256_mismatch")
+                        frontmatter = read_zettel_frontmatter_only(zettel_path)
+                        if not frontmatter or frontmatter.get("id") != zettel_id:
+                            row_blockers.append("canonical_frontmatter_identity_mismatch")
+                        if frontmatter.get("status") != "canonical":
+                            row_blockers.append("target_status_not_canonical")
+                        if "abstract" in frontmatter:
+                            row_blockers.append("abstract_key_already_present")
+                        current_abstract, _source, abstract_status, _truncated = zet_catalog_abstract(
+                            frontmatter,
+                            [],
+                        )
+                        if current_abstract is not None or abstract_status != "missing":
+                            row_blockers.append("first_read_text_already_available")
+                        if normalized_abstract is not None and not row_blockers:
+                            candidate_bytes = zet_abstract_backfill_candidate_bytes(
+                                canonical_bytes,
+                                normalized_abstract,
+                            )
+                            candidate_file_sha256 = "sha256:" + hashlib.sha256(candidate_bytes).hexdigest()
+                            abstract_sha256 = "sha256:" + hashlib.sha256(
+                                normalized_abstract.encode("utf-8")
+                            ).hexdigest()
+                except (ArchiveServiceError, ArchivePathError, OSError):
+                    row_blockers.append("canonical_target_unavailable_or_unreadable")
+
+        row_blockers = unique_preserve_order(row_blockers)
+        ready = not row_blockers
+        if ready and normalized_abstract is not None:
+            total_abstract_chars += len(normalized_abstract)
+            fingerprint_rows.append(
+                {
+                    "row_index": index,
+                    "expected_file_sha256": expected_file_sha256,
+                    "candidate_file_sha256": candidate_file_sha256,
+                    "abstract_sha256": abstract_sha256,
+                    "generation_mode": generation_mode,
+                }
+            )
+        item_results.append(
+            {
+                "row_index": index,
+                "status": "ready_for_review" if ready else "blocked",
+                "generation_mode": generation_mode,
+                "abstract_char_count": len(normalized_abstract) if normalized_abstract is not None else 0,
+                "expected_file_sha256_matches": expected_matches,
+                "candidate_file_sha256": candidate_file_sha256 if ready else None,
+                "abstract_sha256": abstract_sha256 if ready else None,
+                "blocker_codes": row_blockers,
+            }
+        )
+        if progress_callback is not None and (
+            index == 0 or index + 1 == len(rows) or (index + 1) % 250 == 0
+        ):
+            progress_callback("abstract-candidates", "scanned", index + 1, len(rows))
+    if progress_callback is not None:
+        progress_callback("abstract-candidates", "done", len(rows), len(rows))
+
+    ready_count = sum(1 for item in item_results if item["status"] == "ready_for_review")
+    blocked_count = len(item_results) - ready_count
+    if blocked_count:
+        blockers.append("one_or_more_proposals_blocked")
+    if not item_results:
+        blockers.append("no_proposal_rows")
+    if len(item_results) >= 1000:
+        warnings.append("Large proposal batch: review in bounded groups before any future approved write.")
+    blockers = unique_preserve_order(blockers)
+    ok = not blockers
+    return {
+        "ok": ok,
+        "dry_run": bool(dry_run),
+        "schema": ZET_ABSTRACT_BACKFILL_PLAN_SCHEMA,
+        "lifecycle_action": "zet_abstract_backfill_plan",
+        "status": "ready_for_human_review" if ok else "blocked",
+        "archive_id": archive_id,
+        "proposal": {
+            "schema": ZET_ABSTRACT_BACKFILL_PROPOSAL_SCHEMA,
+            "sha256": proposal_sha256,
+            "path_policy": ZET_ABSTRACT_BACKFILL_PROPOSAL_PREFIX + "<private>.jsonl",
+            "path_echoed": False,
+            "bytes_read": len(raw_bytes),
+            "line_count": len(raw_lines),
+            "contains_private_zettel_ids_and_abstracts": True,
+            "expected_content": "proposal_metadata_and_abstract_text_not_canonical_body_text",
+            "untrusted_extra_content_possible": True,
+            "untrusted_content_echoed": False,
+            "tracking_policy": "private_ai_working_file_do_not_commit",
+        },
+        "plan_digest": sha256_json_value(
+            {
+                "proposal_sha256": proposal_sha256,
+                "archive_id": archive_id,
+                "items": fingerprint_rows,
+            }
+        ),
+        "summary": {
+            "candidate_count": len(item_results),
+            "proposal_line_count": len(raw_lines),
+            "inspected_count": len(item_results),
+            "truncated_due_to_max_items": truncated_due_to_max_items,
+            "ready_for_review_count": ready_count,
+            "blocked_count": blocked_count,
+            "generation_mode_counts": generation_mode_counts,
+            "total_abstract_chars": total_abstract_chars,
+            "max_items": effective_max_items,
+            "all_candidates_bound_to_current_canonical_bytes": bool(ok),
+        },
+        "items": item_results,
+        "approval_contract": {
+            "approved_write_implemented": False,
+            "human_review_required": True,
+            "future_write_must_bind_proposal_sha256": True,
+            "future_write_must_revalidate_each_canonical_sha256": True,
+            "future_write_must_record_before_after_and_abstract_hashes": True,
+            "manual_canonical_edit_recommended": False,
+        },
+        "write_boundary": {
+            "files_written": False,
+            "canonical_zets_changed": False,
+            "receipts_written": False,
+            "provider_state_written": False,
+        },
+        "privacy_guards": {
+            "proposal_path_echoed": False,
+            "zettel_ids_echoed": False,
+            "zettel_paths_echoed": False,
+            "zettel_titles_echoed": False,
+            "zettel_body_text_read": True,
+            "zettel_body_text_echoed": False,
+            "proposed_abstract_text_echoed": False,
+            "object_file_bytes_read": False,
+            "provider_api_called": False,
+            "model_called": False,
+            "untrusted_proposal_text_read": True,
+            "secret_store_or_environment_read": False,
+            "absolute_local_paths_echoed": False,
+        },
+        "blockers": blockers,
+        "warnings": warnings,
+        "next_safe_actions": (
+            [
+                "Review the private proposal JSONL in bounded groups and retain proposal.sha256 plus plan_digest.",
+                "Do not edit canonical zets manually; an approval-gated revision writer is a separate capability.",
+            ]
+            if ok
+            else ["Fix only the blocked row indexes in the private proposal and run the plan again."]
+        ),
+    }
 
 
 def objet_ref_occurrences_in_text(text: str, *, source: str, field: str | None = None) -> list[dict[str, Any]]:
@@ -59060,7 +59443,7 @@ def runtime_context_ai_runtime_order() -> list[dict[str, Any]]:
             "step": 5,
             "action": "enumerate_zet_abstracts",
             "command": "archive zet-catalog-pass <archive-root> --status canonical --projection reading --output .wom-scratch/diagnostics/<new-name>.jsonl --dry-run --progress --format json",
-            "continuation": "require archive_wide_coverage_claim_ready=true and retain output.sha256 from the compact stdout summary; use zet-catalog-pass-read with that SHA-256 and page indexes from zero so a complete artifact is validated before at most one private page is returned; retain the first full diagnostics, check abstract and follow-up readiness separately, never load the whole private file into one response, never commit it, then preview and approve zet-catalog-pass-cleanup with the same SHA-256 after use; restart the complete pass if catalog_snapshot_changed",
+            "continuation": "require archive_wide_coverage_claim_ready=true and retain output.sha256 from the compact stdout summary; use zet-catalog-pass-read with that SHA-256 and page indexes from zero so a complete artifact is validated before at most one private page is returned; retain the first full diagnostics, check abstract and follow-up readiness separately, and when an abstract is missing use read-zettel to read that selected canonical body plus integrity.file_sha256 before preparing a private zet-abstract-backfill-plan proposal; never auto-write an abstract, never load the whole catalog file into one response, never commit it, then preview and approve zet-catalog-pass-cleanup with the same SHA-256 after use; restart the complete pass if catalog_snapshot_changed",
             "mcp_alternative": "use zet_catalog pages with cursor, snapshot id, continuation token, full first response, compact continuation responses, and completion revalidation",
             "optional_seed_order": "when the host goal already provides verified zet ids, add --order seeded_connection_walk and repeated --start-zettel-id values; the walk still includes every disconnected component",
             "optional_route_evidence": "keep projection=reading for compact coverage; switch to routed_reading only with seeded_connection_walk when per-item seed, tie-passage, and disconnected-component reasons are needed",

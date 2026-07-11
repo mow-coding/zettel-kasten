@@ -45,6 +45,12 @@ The one-zet `read-zettel --section overview` compatibility surface may still
 derive a gist from the first safe body paragraph. The archive-wide catalog does
 not use that fallback because its contract is frontmatter-only enumeration.
 
+Since v0.3.218, a selected `missing` item can enter the read-only
+[`zet Abstract Backfill Plan`](zet-abstract-backfill-plan.md). The host reads
+that one canonical body, binds a private candidate to the exact file SHA-256,
+and validates it without writing. The catalog itself still never invents or
+auto-writes replacement text.
+
 ## Live Catalog
 
 ```powershell
