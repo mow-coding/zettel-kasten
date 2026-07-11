@@ -59,6 +59,7 @@
 - [zet Catalog Pass 임시 파일 수명주기](zet-catalog-pass-artifact-lifecycle.md)
 - [zet 초록 보충 계획](zet-abstract-backfill-plan.md)
 - [zet 초록 승인 후 쓰기](zet-abstract-backfill-write.md)
+- [zet 초록 보충 되돌리기](zet-abstract-backfill-revert.md)
 - [연속 Node 읽기](zet-catalog-contiguous-reading.md)
 - [Seed 기반 연결 읽기 순서](seeded-connection-reading-order.md)
 - [Seed 기반 읽기 경로 근거](seeded-reading-route-evidence.md)

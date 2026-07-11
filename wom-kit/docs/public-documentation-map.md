@@ -61,6 +61,7 @@ Supporting philosophy and model docs:
 - [zet Catalog Pass Artifact Lifecycle](zet-catalog-pass-artifact-lifecycle.md)
 - [zet Abstract Backfill Plan](zet-abstract-backfill-plan.md)
 - [zet Abstract Backfill Write](zet-abstract-backfill-write.md)
+- [zet Abstract Backfill Revert](zet-abstract-backfill-revert.md)
 - [Contiguous Node Reading](zet-catalog-contiguous-reading.md)
 - [Seeded Connection Reading Order](seeded-connection-reading-order.md)
 - [Seeded Reading Route Evidence](seeded-reading-route-evidence.md)

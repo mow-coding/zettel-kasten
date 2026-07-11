@@ -91,6 +91,46 @@ For project-folder work, remember that temporary intake staging is not the
 archive of record. Preserve originals as objets, source maps, manifests, zets,
 and receipts before any cleanup.
 
+## v0.3.220 Receipt-Audited Abstract Backfill Revert
+
+v0.3.220 adds no archive migration. It adds a receipt-first audit and
+approval-gated inverse for a successful v0.3.219 abstract batch. The original
+private proposal is not required; retain the applied writer's receipt path and
+`receipt.sha256`.
+
+First audit exact reversibility without writing:
+
+```text
+archive zet-abstract-backfill-revert <archive-root> --receipt receipts/revisions/abstract-backfill/<digest>.zet-abstract-backfill.json --expected-receipt-sha256 <receipt.sha256> --max-items 500 --dry-run --progress --format json
+```
+
+`ready_to_revert` means every current canonical file still matches the receipt's
+applied after-hash and removing exactly the deterministic inserted `abstract:`
+line reconstructs the recorded before-hash. It does not authorize removal.
+
+After a human reviews removal of every recorded abstract, approve the same
+receipt explicitly:
+
+```text
+archive zet-abstract-backfill-revert <archive-root> --receipt receipts/revisions/abstract-backfill/<digest>.zet-abstract-backfill.json --expected-receipt-sha256 <receipt.sha256> --max-items 500 --approve --reviewed-by person:<reviewer> --affirm-abstract-removal-reviewed --progress --format json
+```
+
+The revert restores the exact pre-backfill file bytes, preserves the applied
+source receipt, and writes one immutable text-free receipt under
+`receipts/revisions/abstract-backfill-reverts/`. Any later canonical edit,
+abstract change, body change, receipt mismatch, or non-deterministic line shape
+blocks the entire batch. An item or revert-receipt runtime failure restores the
+applied state.
+
+A matching re-run returns `already_reverted` without writing. To add the same
+abstract again later, prepare and review a new proposal byte sequence so it has
+a new proposal SHA-256 and a new receipt identity; the old applied receipt stays
+closed by its revert receipt.
+
+The short-lived lock is under `.wom-scratch/abstract-backfill/` and does not lock
+external editors. Forced termination still has no crash-recovery journal. Do
+not delete a leftover lock blindly; inspect both receipts and current hashes.
+
 ## v0.3.219 Approval-Gated Abstract Backfill Write
 
 v0.3.219 adds no archive migration. It adds a separate writer for private

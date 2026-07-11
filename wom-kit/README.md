@@ -557,6 +557,9 @@ zet-abstract-backfill-plan --proposal .wom-scratch/abstract-backfill/<private>.j
 zet-abstract-backfill-write --proposal .wom-scratch/abstract-backfill/<private>.jsonl --expected-proposal-sha256 <sha256> --dry-run|--approve
   Preview first. A new approved write also requires `--reviewed-by` and `--affirm-abstracts-reviewed`. It reruns the plan, revalidates every exact canonical hash, adds only `frontmatter.abstract`, and writes one hash-evidence receipt. Any runtime item/receipt failure restores all attempted canonical bytes. A matching receipt makes retries no-write `already_applied`. Per-file and batch byte limits bound rollback memory; forced termination has no crash-recovery journal.
 
+zet-abstract-backfill-revert --receipt receipts/revisions/abstract-backfill/<digest>.zet-abstract-backfill.json --expected-receipt-sha256 <sha256> --dry-run|--approve
+  Dry-run audits the immutable applied receipt, every current after/body/abstract hash, and deterministic removal back to the exact recorded before hash. A new approved revert also requires `--reviewed-by` and `--affirm-abstract-removal-reviewed`. It preserves the source receipt, writes one text-free revert receipt last, restores the applied state on runtime failure, and returns no-write `already_reverted` on a matching retry. Any later canonical edit blocks; forced termination remains outside the in-process rollback guarantee.
+
 read-zettel
   Read one zettel by id or archive-relative path. Use `--section overview` for the compact first read; MCP `read_zettel` accepts the same section values while keeping `body` as its compatibility default. Non-redacted results include exact canonical file SHA-256 and decoded returned-body SHA-256 so a private revision proposal can bind to the version actually read; redacted hashes are suppressed.
 

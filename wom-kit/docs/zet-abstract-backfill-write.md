@@ -125,6 +125,12 @@ re-run, WOM-kit validates the receipt and every current canonical after-hash,
 abstract hash, and body hash. A complete match returns `already_applied` and
 writes nothing. Divergence blocks; it is not silently repaired or overwritten.
 
+Since v0.3.220, the applied receipt can enter the separate
+[`zet Abstract Backfill Revert`](zet-abstract-backfill-revert.md). That command
+can remove only this exact batch when every canonical file still matches the
+recorded applied state and deterministic line removal restores every before
+hash. It preserves this source receipt and writes a separate inverse receipt.
+
 ## Public Output Boundary
 
 Command output may include row indexes, counts, generation modes, hashes,
