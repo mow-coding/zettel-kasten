@@ -83,6 +83,31 @@ project folder 작업에서는 temporary intake staging이 archive of record가
 아니라는 점을 기억합니다. cleanup 전에 원본을 objet, source map, manifest,
 zet, receipt로 보존해야 합니다.
 
+## v0.3.223 전체 검진 영수증 내부 단계
+
+v0.3.223은 아카이브 migration을 요구하지 않으며 v0.3.222의 빠른 기본
+`ai-start-here` 동작을 바꾸지 않습니다. 선택적 전체 검진에서는 다음 명령을
+사용합니다.
+
+```text
+archive ai-start-here <archive-root> --dry-run --full-doctor --progress --format json
+```
+
+mint 영수증 하나에서 바깥 개수가 오래 유지되면 heartbeat가 비공개 내용 없는
+고정 `phase`를 함께 보여줍니다. 예시는 `target_file_ref`, `file_hash`,
+`target_edge_evolution`, `edge_receipt_index`입니다. 영수증 경로, zet 경로·아이디,
+오브제 참조, 엣지 값, 제목, 본문, 초록, 외부 서비스 값, 비밀값은 노출하지
+않습니다.
+
+공유 명령 reporter는 같은 단계/개수의 일반 진행을 한 번만 formatter에
+전달합니다. 이후 같은 개수의 하위 단계는 heartbeat phase만 갱신하고 formatter
+잠금을 다시 잡지 않습니다. 검증, 해시, 영수증, 아카이브 파일을 건너뛰는
+최적화가 아닙니다.
+
+직접 실행하는 `doctor --progress-detail verbose`와 명시적 비공개 Doctor 진행
+로그의 상세 이벤트는 그대로 유지됩니다. 전체 검진은 대형 아카이브에서 계속
+수분 걸릴 수 있으며, phase는 생존 신호이지 완료 보증이 아닙니다.
+
 ## v0.3.222 빠른 AI 스타팅 메뉴얼
 
 v0.3.222는 아카이브 migration을 요구하지 않고 아카이브 상태를 쓰지

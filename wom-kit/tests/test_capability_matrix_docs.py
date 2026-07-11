@@ -521,7 +521,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.221 pre-release",
+            "v0.3.223 pre-release",
             "[Version Truth Source](wom-kit/docs/version-truth-source.md)",
             "[Project Version Update](wom-kit/docs/project-version-update.md)",
             "read-only WOM-kit version truth-source checks",
@@ -937,7 +937,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                 self.assertIn(phrase, guide_text)
         for phrase in (
             "Status: v0.3.221 archive-wide abstract receipt and lock audit checkpoint",
-            "Version: v0.3.222, release candidate",
+            "Version: v0.3.223, release candidate",
             "zet abstract receipt lifecycle audit",
             "Up to 5,000 receipts and 5,000 locks",
             "Green proves bounded local consistency",
@@ -5955,6 +5955,59 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                 self.assertIn("--full-doctor", text)
         self.assertIn("[AI Start-Here Quick And Full Inspection](ai-start-here.md)", public_map_text)
         self.assertIn("[AI 스타팅 메뉴얼 빠른 안내와 전체 검진](ai-start-here.md)", public_map_ko_text)
+
+    def test_full_doctor_phase_docs_keep_shared_output_bounded(self) -> None:
+        start_here_text = (KIT_ROOT / "docs" / "ai-start-here.md").read_text(encoding="utf-8")
+        progress_text = (KIT_ROOT / "docs" / "large-command-progress-and-output.md").read_text(encoding="utf-8")
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        readme_ko_text = (REPO_ROOT / "README.ko.md").read_text(encoding="utf-8")
+        kit_readme_text = (KIT_ROOT / "README.md").read_text(encoding="utf-8")
+        upgrade_text = (REPO_ROOT / "UPGRADE.md").read_text(encoding="utf-8")
+        upgrade_ko_text = (REPO_ROOT / "UPGRADE.ko.md").read_text(encoding="utf-8")
+        changelog_text = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+        release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.223.md").read_text(encoding="utf-8")
+        runtime_skill_text = (
+            KIT_ROOT / "templates" / "ai-runtime" / "wom-archive" / "SKILL.md"
+        ).read_text(encoding="utf-8")
+
+        for phrase in (
+            "safe full-Doctor receipt phase and callback coalescing added in v0.3.223",
+            "fixed safe",
+            "edge_receipt_index",
+            "before formatter/lock work",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, start_here_text)
+        for phrase in (
+            "phase and reporter coalescing in v0.3.223",
+            "source_file_ref",
+            "target_edge_evolution",
+            "Path-bearing source text is never copied",
+            "work is skipped",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, progress_text)
+        for phrase in (
+            "Status: v0.3.223 full-Doctor receipt phase and callback coalescing checkpoint",
+            "Previous checkpoint: Status: v0.3.222",
+            "nine fixed safe mint-receipt phases",
+            "coalesced before the shared formatter/lock",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, matrix_text)
+        for text in (
+            readme_text,
+            readme_ko_text,
+            kit_readme_text,
+            upgrade_text,
+            upgrade_ko_text,
+            changelog_text,
+            release_text,
+            runtime_skill_text,
+        ):
+            with self.subTest(document="operator-surface"):
+                self.assertIn("edge_receipt_index", text)
 
 
 if __name__ == "__main__":

@@ -297,6 +297,66 @@ class ArchiveCliTests(unittest.TestCase):
         self.assertIn("stage_elapsed=", progress)
         self.assertNotIn("PRIVATE_PATH_MARKER", progress)
 
+    def test_command_progress_reporter_coalesces_same_count_before_callback(self) -> None:
+        events: list[tuple[str, str, int | None, int | None]] = []
+
+        def capture(stage: str, message: str, current: int | None, total: int | None) -> None:
+            events.append((stage, message, current, total))
+
+        with patch.object(archive_cli, "make_stage_progress_callback", return_value=capture):
+            reporter = archive_cli.CommandProgressReporter(
+                True,
+                label="progress-test",
+                heartbeat_interval_seconds=60.0,
+            )
+            reporter.progress("mint-receipts", "start", None, None)
+            reporter.progress("mint-receipts", "PRIVATE_RECEIPT_PATH", 1, 8583)
+            reporter.progress("mint-receipts", "loading target frontmatter", 1, 8583)
+            reporter.progress("mint-receipts", "loading edge receipt index", 1, 8583)
+            reporter.progress("mint-receipts", "PRIVATE_TARGET_PATH", 1, 8583)
+            reporter.close()
+
+        self.assertEqual(
+            events,
+            [
+                ("mint-receipts", "start", None, None),
+                ("mint-receipts", "progress", 1, 8583),
+            ],
+        )
+
+    def test_command_progress_reporter_heartbeat_exposes_only_safe_receipt_phase(self) -> None:
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            reporter = archive_cli.CommandProgressReporter(
+                True,
+                label="progress-test",
+                heartbeat_interval_seconds=0.02,
+            )
+            reporter.progress("lineage-receipts", "done", None, None)
+            reporter.progress("mint-receipts", "start", None, None)
+            reporter.progress("mint-receipts", "PRIVATE_RECEIPT_PATH", 1, 8583)
+            reporter.progress("mint-receipts", "loading edge receipt index PRIVATE_EDGE_PATH", 1, 8583)
+            time.sleep(0.05)
+            reporter.close()
+
+        progress = stderr.getvalue()
+        self.assertIn("1/8583 heartbeat phase=edge_receipt_index last_completed=lineage-receipts", progress)
+        self.assertNotIn("PRIVATE_RECEIPT_PATH", progress)
+        self.assertNotIn("PRIVATE_EDGE_PATH", progress)
+
+    def test_command_progress_reporter_receipt_phase_taxonomy_is_bounded(self) -> None:
+        phase = archive_cli.CommandProgressReporter._content_free_phase
+        self.assertEqual(phase("mint-receipts", "hashing target file bytes"), "file_hash")
+        self.assertEqual(phase("mint-receipts", "loading target frontmatter"), "target_frontmatter")
+        self.assertEqual(phase("mint-receipts", "reading target mint block"), "mint_link")
+        self.assertEqual(phase("mint-receipts", "checking source file ref"), "source_file_ref")
+        self.assertEqual(phase("mint-receipts", "checking target file ref"), "target_file_ref")
+        self.assertEqual(phase("mint-receipts", "checking snapshot file ref"), "snapshot_file_ref")
+        self.assertEqual(phase("mint-receipts", "checking target edge-receipt evolution"), "target_edge_evolution")
+        self.assertEqual(phase("mint-receipts", "still scanning edge receipts 250/9000"), "edge_receipt_index")
+        self.assertEqual(phase("mint-receipts", "PRIVATE_UNRECOGNIZED_DETAIL"), None)
+        self.assertEqual(phase("zettels", "loading edge receipt index"), None)
+
     def init_personal_archive(self, root: Path, archive_id: str = "archive:personal:test") -> tuple[int, str]:
         return self.run_cli(
             [

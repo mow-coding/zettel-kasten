@@ -6,6 +6,25 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.223 - 2026-07-12
+
+Full-Doctor receipt phase and callback coalescing checkpoint. Additive; no
+archive migration.
+
+- **Safe internal phase heartbeat.** When one mint receipt holds the outer
+  count, `ai-start-here --full-doctor --progress` heartbeat can now report a
+  fixed content-free phase such as `file_hash` or `edge_receipt_index` instead
+  of only the previously completed outer stage.
+- **Bounded phase vocabulary.** Receipt detail is reduced to nine allowlisted
+  phase labels. Unknown detail produces no phase, and raw path-bearing receipt,
+  zet, object, or edge values never enter the shared reporter output.
+- **Early same-count coalescing.** The shared command reporter forwards generic
+  counted progress only once per stage/count. Later substeps still update phase
+  state for heartbeat but skip the output lock and compact formatter.
+- **Detailed diagnostics preserved.** Direct Doctor verbose output and private
+  JSONL progress logs keep their existing detailed events; the optimization is
+  limited to the content-free shared AI command reporter.
+
 ## v0.3.222 - 2026-07-12
 
 Fast AI start-here and honest long-scan progress checkpoint. Additive; no

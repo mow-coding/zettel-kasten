@@ -1050,6 +1050,8 @@ class CommandProgressReporter:
         self._current_stage = "starting"
         self._current = None
         self._total = None
+        self._current_phase: str | None = None
+        self._last_forwarded_progress: tuple[str, int | None, int | None] | None = None
         self._last_completed_stage: str | None = None
         self._thread: threading.Thread | None = None
         if self._callback is not None:
@@ -1064,17 +1066,36 @@ class CommandProgressReporter:
         if self._callback is None:
             return
         safe_message = self._content_free_message(message, current, total)
+        phase = self._content_free_phase(stage, message)
+        forward = True
         with self._state_lock:
+            stage_changed = stage != self._current_stage
+            count_changed = current != self._current or total != self._total
             self._current_stage = stage
+            if stage_changed or message == "start":
+                self._current_phase = None
+                self._last_forwarded_progress = None
             if current is not None and total is not None:
+                if count_changed:
+                    self._current_phase = "receipt_checks" if stage == "mint-receipts" else None
                 self._current = current
                 self._total = total
             elif message in {"start", "done"}:
                 self._current = None
                 self._total = None
+            if phase is not None:
+                self._current_phase = phase
             if message == "done":
                 self._last_completed_stage = stage
-        if safe_message == "working":
+                self._current_phase = None
+                self._last_forwarded_progress = None
+            if safe_message == "progress":
+                progress_key = (stage, current, total)
+                if progress_key == self._last_forwarded_progress:
+                    forward = False
+                else:
+                    self._last_forwarded_progress = progress_key
+        if safe_message == "working" or not forward:
             return
         with self._callback_lock:
             self._callback(stage, safe_message, current, total)
@@ -1089,14 +1110,47 @@ class CommandProgressReporter:
             return "progress"
         return "working"
 
+    @staticmethod
+    def _content_free_phase(stage: str, message: str) -> str | None:
+        if stage != "mint-receipts":
+            return None
+        normalized = message.lower()
+        if (
+            "edge receipt index" in normalized
+            or normalized.startswith("listing edge receipts")
+            or normalized.startswith("scanning edge receipts")
+            or normalized.startswith("still scanning edge receipts")
+        ):
+            return "edge_receipt_index"
+        if "edge-receipt evolution" in normalized or "target edge" in normalized or "evolution history" in normalized:
+            return "target_edge_evolution"
+        if "hashing " in normalized or "hashed " in normalized or "sha256" in normalized:
+            return "file_hash"
+        if "frontmatter" in normalized or "bom cache" in normalized:
+            return "target_frontmatter"
+        if "mint receipt link" in normalized or "mint block" in normalized:
+            return "mint_link"
+        if "source file ref" in normalized:
+            return "source_file_ref"
+        if "target file ref" in normalized:
+            return "target_file_ref"
+        if "snapshot file ref" in normalized:
+            return "snapshot_file_ref"
+        if "receipt checks" in normalized or "checking schema" in normalized or "checking source status" in normalized or "checking target status" in normalized:
+            return "receipt_checks"
+        return None
+
     def _heartbeat_loop(self) -> None:
         while not self._stop.wait(self._interval):
             with self._state_lock:
                 stage = self._current_stage
                 current = self._current
                 total = self._total
+                phase = self._current_phase
                 last_completed = self._last_completed_stage
             message = "heartbeat"
+            if phase:
+                message += f" phase={phase}"
             if last_completed:
                 message += f" last_completed={last_completed}"
             with self._callback_lock:
