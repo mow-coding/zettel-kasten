@@ -91,6 +91,45 @@ For project-folder work, remember that temporary intake staging is not the
 archive of record. Preserve originals as objets, source maps, manifests, zets,
 and receipts before any cleanup.
 
+## v0.3.227 Aggregate Full-Doctor Edge Progress
+
+v0.3.227 adds no archive migration and changes no Doctor diagnostic or read
+decision. It changes only how the optional compact progress stream represents
+the targeted edge-receipt work introduced in v0.3.225.
+
+The same complete command remains:
+
+```text
+archive runtime-context <archive-root> --full-doctor --progress --format json
+```
+
+A fast `edge-receipt-index` now prints start and done. If it remains active for
+a 10-second interval, heartbeat may include its safe count. The source-load phase keeps
+one aggregate across the complete Doctor run:
+
+```text
+sources=<sources loaded so far>
+candidates=<candidate receipt documents opened so far>
+cache_hits=<source-result cache hits so far>
+```
+
+The final `done` line contains the completed totals. WOM-kit does not add a
+second broad scan merely to predict the dynamic final source count.
+
+For each individual source batch, use direct Doctor verbose output or a private
+progress log. Those events use the `edge-receipt-source-load-detail` stage:
+
+```text
+archive doctor <archive-root> --strict --progress --progress-detail verbose
+archive doctor <archive-root> --strict --progress --progress-log logs/doctor-progress.jsonl
+```
+
+The JSONL can contain detailed local diagnostic timing and should remain
+private. The compact stream remains content-free. A synthetic 8,583-source and
+21,539-index-event benchmark produced 4 shared compact lines (358 bytes) versus
+51,457 verbose lines (about 6.3 MB); its in-memory timing is only a lower bound
+for interactive terminal rendering cost.
+
 ## v0.3.226 Archive Identity Consistency And Reviewed Repair
 
 v0.3.226 adds no automatic migration. Quick runtime-context, AI start-here,

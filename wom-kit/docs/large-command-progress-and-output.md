@@ -3,7 +3,7 @@
 Status: implemented in v0.3.214; complete-only catalog JSONL in v0.3.216;
 same-count suppression and counted-unit/rate contract in v0.3.222; safe receipt
 phase and reporter coalescing in v0.3.223; explicit runtime-context full-Doctor
-progress in v0.3.224
+progress in v0.3.224; aggregate edge-receipt progress in v0.3.227
 
 ## Purpose
 
@@ -82,6 +82,28 @@ generic progress only once per stage/count; later same-count substeps update
 phase state without invoking the compact formatter again. Direct Doctor verbose
 output and explicit private progress logs retain detailed events. No validation
 work is skipped.
+
+Since v0.3.227, the filename index and targeted source-load phases have an
+additional compact contract. A fast filename index prints start and done; only
+an index that remains active for 10 seconds can add a count heartbeat. Targeted
+source loads keep one aggregate across the complete Doctor run:
+
+```text
+sources=<sources loaded so far>
+candidates=<candidate receipt documents opened so far>
+cache_hits=<source-result cache hits so far>
+```
+
+The shared runtime reporter keeps that aggregate alive across surrounding
+`mint-receipts` events and includes it in a 10-second heartbeat. Complete
+Doctor exit prints one final `done` summary. The final source count is dynamic:
+WOM-kit does not add a second broad pass merely to predict how many sources
+will later require historical SHA checks.
+
+Each source's `start`, `0/N`, `1/N`, `N/N`, and `done` events move to the
+`edge-receipt-source-load-detail` trace. Compact stderr suppresses that trace;
+direct `doctor --progress-detail verbose` and private `--progress-log` JSONL
+retain it. Counts and fixed labels remain content-free in every mode.
 
 Progress is content-free. It does not emit local paths, zet ids, titles,
 abstracts, body text, object refs, provider values, credential refs, tokens, or

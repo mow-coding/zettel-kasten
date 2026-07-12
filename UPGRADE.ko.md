@@ -83,6 +83,44 @@ project folder 작업에서는 temporary intake staging이 archive of record가
 아니라는 점을 기억합니다. cleanup 전에 원본을 objet, source map, manifest,
 zet, receipt로 보존해야 합니다.
 
+## v0.3.227 전체 검진 엣지 진행 표시 집계
+
+v0.3.227은 아카이브 migration을 하지 않고 검진의 판정이나 읽기 범위를
+바꾸지 않습니다. v0.3.225에서 도입한 대상별 엣지 영수증 작업을 기본 compact
+진행 표시에 어떻게 보여주는지만 바꿉니다.
+
+전체 검진 명령은 같습니다.
+
+```text
+archive runtime-context <archive-root> --full-doctor --progress --format json
+```
+
+빠른 `edge-receipt-index`는 시작과 완료만 출력합니다. 실제로 10초 이상
+걸릴 때만 heartbeat에 안전한 개수가 추가될 수 있습니다. source load는 전체
+검진 동안 다음 누계를 하나만 유지합니다.
+
+```text
+sources=<지금까지 읽은 source 수>
+candidates=<지금까지 연 후보 영수증 수>
+cache_hits=<source 결과 cache hit 수>
+```
+
+마지막 `done` 줄이 최종 합계를 보여줍니다. 앞으로 읽게 될 source 수를 미리
+예측하려고 별도의 전체 스캔을 추가하지 않습니다.
+
+source별 상세 묶음이 필요하면 직접 검진의 verbose 또는 비공개 progress log를
+사용합니다. 이 이벤트의 stage는 `edge-receipt-source-load-detail`입니다.
+
+```text
+archive doctor <archive-root> --strict --progress --progress-detail verbose
+archive doctor <archive-root> --strict --progress --progress-log logs/doctor-progress.jsonl
+```
+
+JSONL은 상세한 로컬 진단 시간을 담을 수 있으므로 비공개로 보관해야 합니다.
+8,583개 source와 21,539개 index 이벤트를 사용한 합성 벤치마크에서 shared
+compact는 4줄(358바이트), verbose는 51,457줄(약 6.3MB)이었습니다. 메모리
+출력 시간은 실제 대화형 터미널 렌더링 비용보다 보수적인 하한선입니다.
+
 ## v0.3.226 아카이브 신원 일치 점검과 검토 후 수정
 
 v0.3.226은 자동 migration을 하지 않습니다. 빠른 인수인계 문서,

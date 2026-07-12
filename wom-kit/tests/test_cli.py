@@ -286,7 +286,9 @@ class ArchiveCliTests(unittest.TestCase):
             )
             reporter.progress("zettels", "start", None, None)
             reporter.progress("zettels", "PRIVATE_PATH_MARKER.md", 1, 100)
-            time.sleep(0.06)
+            deadline = time.monotonic() + 1.0
+            while "heartbeat" not in stderr.getvalue() and time.monotonic() < deadline:
+                time.sleep(0.01)
             reporter.close()
 
         progress = stderr.getvalue()
@@ -336,13 +338,160 @@ class ArchiveCliTests(unittest.TestCase):
             reporter.progress("mint-receipts", "start", None, None)
             reporter.progress("mint-receipts", "PRIVATE_RECEIPT_PATH", 1, 8583)
             reporter.progress("mint-receipts", "loading edge receipt index PRIVATE_EDGE_PATH", 1, 8583)
-            time.sleep(0.05)
+            deadline = time.monotonic() + 1.0
+            while "heartbeat phase=edge_receipt_index" not in stderr.getvalue() and time.monotonic() < deadline:
+                time.sleep(0.01)
             reporter.close()
 
         progress = stderr.getvalue()
         self.assertIn("1/8583 heartbeat phase=edge_receipt_index last_completed=lineage-receipts", progress)
         self.assertNotIn("PRIVATE_RECEIPT_PATH", progress)
         self.assertNotIn("PRIVATE_EDGE_PATH", progress)
+
+    def test_command_progress_reporter_coalesces_edge_index_and_source_batches(self) -> None:
+        events: list[tuple[str, str, int | None, int | None]] = []
+
+        def capture(stage: str, message: str, current: int | None, total: int | None) -> None:
+            events.append((stage, message, current, total))
+
+        with patch.object(archive_cli, "make_stage_progress_callback", return_value=capture):
+            reporter = archive_cli.CommandProgressReporter(
+                True,
+                label="progress-test",
+                heartbeat_interval_seconds=0.02,
+            )
+            reporter.progress("edge-receipt-index", "start", None, None)
+            reporter.progress("edge-receipt-index", "scanned", 0, 21539)
+            reporter.progress("edge-receipt-index", "scanned", 250, 21539)
+            reporter.progress("edge-receipt-index", "done", 21539, 21539)
+            reporter.progress("edge-receipt-source-load", "start", None, None)
+            for total in (1, 2, 16, 49):
+                reporter.progress("edge-receipt-source-load-detail", "start", None, None)
+                reporter.progress("edge-receipt-source-load-detail", "loaded", 0, total)
+                reporter.progress("edge-receipt-source-load-detail", "loaded", total, total)
+                reporter.progress("edge-receipt-source-load-detail", "done", total, total)
+            reporter.progress(
+                "edge-receipt-source-load",
+                "aggregate sources=4 candidates=68 cache_hits=3 PRIVATE_PATH",
+                None,
+                None,
+            )
+            reporter.progress(
+                "edge-receipt-source-load",
+                "aggregate sources=4 candidates=68 cache_hits=3",
+                None,
+                None,
+            )
+            reporter.progress("mint-receipts", "PRIVATE_RECEIPT_PATH", 9, 8583)
+            deadline = time.monotonic() + 1.0
+            while not any(
+                stage == "edge-receipt-source-load" and message.startswith("heartbeat sources=4")
+                for stage, message, _current, _total in events
+            ) and time.monotonic() < deadline:
+                time.sleep(0.01)
+            reporter.progress(
+                "edge-receipt-source-load",
+                "done sources=4 candidates=68 cache_hits=3",
+                None,
+                None,
+            )
+            reporter.close()
+
+        self.assertIn(("edge-receipt-index", "start", None, None), events)
+        self.assertIn(("edge-receipt-index", "done", 21539, 21539), events)
+        self.assertFalse(any(stage == "edge-receipt-source-load-detail" for stage, *_rest in events))
+        self.assertFalse(any(stage == "edge-receipt-index" and message == "scanned" for stage, message, *_rest in events))
+        self.assertFalse(any(message.startswith("aggregate ") for _stage, message, *_rest in events))
+        self.assertNotIn("PRIVATE_PATH", repr(events))
+        self.assertNotIn("PRIVATE_RECEIPT_PATH", repr(events))
+        self.assertTrue(
+            any(
+                stage == "edge-receipt-source-load"
+                and message == "heartbeat sources=4 candidates=68 cache_hits=3 last_completed=edge-receipt-index"
+                for stage, message, _current, _total in events
+            )
+        )
+        self.assertIn(
+            (
+                "edge-receipt-source-load",
+                "done sources=4 candidates=68 cache_hits=3",
+                None,
+                None,
+            ),
+            events,
+        )
+
+    def test_compact_edge_progress_keeps_lifecycle_and_value_free_summary_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            progress_log = Path(tmp) / "edge-progress.jsonl"
+            compact_stream = io.StringIO()
+            compact = archive_cli.make_stage_progress_callback(
+                True,
+                label="doctor",
+                detail="compact",
+                progress_log_path=progress_log,
+            )
+            assert compact is not None
+            with redirect_stderr(compact_stream):
+                compact("edge-receipt-index", "start", None, None)
+                compact("edge-receipt-index", "scanned", 0, 21539)
+                for current in range(250, 21539, 250):
+                    compact("edge-receipt-index", "scanned", current, 21539)
+                compact("edge-receipt-index", "done", 21539, 21539)
+                compact("edge-receipt-source-load", "start", None, None)
+                candidate_total = 0
+                for source_index in range(20):
+                    candidate_count = (source_index % 5) + 1
+                    candidate_total += candidate_count
+                    compact("edge-receipt-source-load-detail", "start", None, None)
+                    compact("edge-receipt-source-load-detail", "loaded", 0, candidate_count)
+                    compact(
+                        "edge-receipt-source-load-detail",
+                        "loaded",
+                        candidate_count,
+                        candidate_count,
+                    )
+                    compact(
+                        "edge-receipt-source-load-detail",
+                        "done",
+                        candidate_count,
+                        candidate_count,
+                    )
+                    compact(
+                        "edge-receipt-source-load",
+                        f"aggregate sources={source_index + 1} candidates={candidate_total} cache_hits=0",
+                        None,
+                        None,
+                    )
+                compact(
+                    "edge-receipt-source-load",
+                    f"done sources=20 candidates={candidate_total} cache_hits=0",
+                    None,
+                    None,
+                )
+
+            compact_lines = compact_stream.getvalue().splitlines()
+            self.assertEqual(len(compact_lines), 4)
+            self.assertTrue(any("edge-receipt-index: start" in line for line in compact_lines))
+            self.assertTrue(any("edge-receipt-index: 21539/21539 done" in line for line in compact_lines))
+            self.assertTrue(any("edge-receipt-source-load: start" in line for line in compact_lines))
+            self.assertTrue(any("done sources=20 candidates=60 cache_hits=0" in line for line in compact_lines))
+            self.assertNotIn("source-load-detail", compact_stream.getvalue())
+            self.assertNotIn("aggregate sources=", compact_stream.getvalue())
+
+            log_rows = [json.loads(line) for line in progress_log.read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(
+                sum(1 for row in log_rows if row["stage"] == "edge-receipt-source-load-detail"),
+                80,
+            )
+            self.assertTrue(
+                any(
+                    row["stage"] == "edge-receipt-index"
+                    and row["message"] == "scanned"
+                    and row["current"] == 250
+                    for row in log_rows
+                )
+            )
 
     def test_command_progress_reporter_receipt_phase_taxonomy_is_bounded(self) -> None:
         phase = archive_cli.CommandProgressReporter._content_free_phase
@@ -1285,6 +1434,7 @@ class ArchiveCliTests(unittest.TestCase):
                 source_zettel_id=source_zettel_id,
                 progress_callback=detail_events.append,
             )
+            doctor._finish_edge_receipt_source_load_progress()
 
         self.assertIs(first, second)
         self.assertEqual(len(first), 2)
@@ -1293,9 +1443,77 @@ class ArchiveCliTests(unittest.TestCase):
         self.assertIn(("edge-receipt-index", "scanned", 0, 2), edge_events)
         self.assertIn(("edge-receipt-index", "done", 2, 2), edge_events)
         source_events = [event for event in progress_events if event[0] == "edge-receipt-source-load"]
-        self.assertIn(("edge-receipt-source-load", "done", 2, 2), source_events)
+        self.assertEqual(
+            source_events,
+            [
+                ("edge-receipt-source-load", "start", None, None),
+                (
+                    "edge-receipt-source-load",
+                    "aggregate sources=1 candidates=2 cache_hits=0",
+                    None,
+                    None,
+                ),
+                (
+                    "edge-receipt-source-load",
+                    "aggregate sources=1 candidates=2 cache_hits=1",
+                    None,
+                    None,
+                ),
+                (
+                    "edge-receipt-source-load",
+                    "done sources=1 candidates=2 cache_hits=1",
+                    None,
+                    None,
+                ),
+            ],
+        )
+        source_detail_events = [
+            event for event in progress_events if event[0] == "edge-receipt-source-load-detail"
+        ]
+        self.assertIn(("edge-receipt-source-load-detail", "done", 2, 2), source_detail_events)
+        self.assertIn(("edge-receipt-source-load-detail", "cache_hit", None, None), source_detail_events)
         self.assertEqual(detail_events.count("loading edge receipt index"), 1)
         self.assertEqual(detail_events.count("edge receipt index cache hit"), 1)
+
+    def test_doctor_mint_stage_finishes_aggregate_edge_source_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            events: list[tuple[str, str, int | None, int | None]] = []
+            archive_root = Path(tmp) / "archive"
+            archive_root.mkdir()
+            doctor = archive_cli.Doctor(
+                archive_root,
+                progress_callback=lambda stage, message, current, total: events.append(
+                    (stage, message, current, total)
+                ),
+            )
+
+            def load_two_sources() -> None:
+                for candidate_count in (2, 5):
+                    doctor._edge_receipt_source_load_event("start", None, None)
+                    doctor._edge_receipt_source_load_event("loaded", 0, candidate_count)
+                    doctor._edge_receipt_source_load_event(
+                        "loaded",
+                        candidate_count,
+                        candidate_count,
+                    )
+                    doctor._edge_receipt_source_load_event(
+                        "done",
+                        candidate_count,
+                        candidate_count,
+                    )
+                doctor._record_edge_receipt_source_cache_hit()
+
+            with patch.object(doctor, "_full_stages", return_value=[("mint-receipts", load_two_sources)]):
+                doctor.run()
+
+        final_summary = (
+            "edge-receipt-source-load",
+            "done sources=2 candidates=7 cache_hits=1",
+            None,
+            None,
+        )
+        self.assertIn(final_summary, events)
+        self.assertGreater(events.index(final_summary), events.index(("mint-receipts", "done", None, None)))
 
     def test_indexed_edge_receipt_load_keeps_direct_legacy_receipt_reference(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
