@@ -1752,6 +1752,27 @@ class Doctor:
         scope = identity.get("scope")
         if scope and scope != self.archive_config.get("type"):
             self.warn("archive_identity_scope_mismatch", "archive-identity.yml identity.scope should match archive.yml type.", path)
+        consistency = archive_services.archive_identity_consistency(self.archive_config, data)
+        for finding in consistency["findings"]:
+            if finding["code"] in {"archive_identity_archive_id_mismatch", "archive_identity_scope_mismatch"}:
+                continue
+            kwargs = {
+                "hint": (
+                    "Run the identity reconcile dry-run, inspect both declarations, and approve only after the "
+                    "principal metadata and proposed fields are confirmed."
+                    if finding["repairable"]
+                    else None
+                ),
+                "suggested_command": (
+                    "archive identity-reconcile <archive-root> --dry-run --format json"
+                    if finding["repairable"]
+                    else None
+                ),
+            }
+            if finding["severity"] == "ERROR":
+                self.error(finding["code"], finding["message"], path, **kwargs)
+            else:
+                self.warn(finding["code"], finding["message"], path, **kwargs)
 
     def _check_provider_bindings_yml(self) -> None:
         path = self.archive_root / "provider-bindings.yml"
@@ -2338,26 +2359,47 @@ class Doctor:
 
     def _check_lineage_receipts(self) -> None:
         root = self.archive_root / "receipts" / "lineage"
-        if not root.is_dir():
-            return
-        for path in sorted(root.glob("*.ownership-transfer.json")):
-            if not self._path_stays_inside_archive(path):
-                continue
-            data = self._load_json_file(path)
-            if not isinstance(data, dict):
-                continue
-            self._check_schema(data, "ownership-transfer-receipt.schema.json", path)
-            if data.get("action") != "transfer_archive_ownership":
-                self.error(
-                    "ownership_transfer_receipt_action_invalid",
-                    "Ownership transfer receipt action must be transfer_archive_ownership.",
-                    path,
-                )
-            for field in ["scope_manifest", "trust_gate", "ownership_gate"]:
-                if not isinstance(data.get(field), dict):
+        if root.is_dir():
+            for path in sorted(root.glob("*.ownership-transfer.json")):
+                if not self._path_stays_inside_archive(path):
+                    continue
+                data = self._load_json_file(path)
+                if not isinstance(data, dict):
+                    continue
+                self._check_schema(data, "ownership-transfer-receipt.schema.json", path)
+                if data.get("action") != "transfer_archive_ownership":
                     self.error(
-                        "ownership_transfer_receipt_gate_missing",
-                        f"Ownership transfer receipt must contain object field: {field}.",
+                        "ownership_transfer_receipt_action_invalid",
+                        "Ownership transfer receipt action must be transfer_archive_ownership.",
+                        path,
+                    )
+                for field in ["scope_manifest", "trust_gate", "ownership_gate"]:
+                    if not isinstance(data.get(field), dict):
+                        self.error(
+                            "ownership_transfer_receipt_gate_missing",
+                            f"Ownership transfer receipt must contain object field: {field}.",
+                            path,
+                        )
+
+        identity_root = self.archive_root / archive_services.ARCHIVE_IDENTITY_RECONCILE_RECEIPTS_DIR
+        if identity_root.is_dir():
+            for path in sorted(identity_root.glob("*.archive-identity-reconcile.json")):
+                if not self._path_stays_inside_archive(path):
+                    continue
+                data = self._load_json_file(path)
+                if not isinstance(data, dict):
+                    continue
+                self._check_schema(data, "archive-identity-reconcile-receipt.schema.json", path)
+                if data.get("action") != "reconcile_archive_identity":
+                    self.error(
+                        "archive_identity_reconcile_receipt_action_invalid",
+                        "Archive identity reconcile receipt action must be reconcile_archive_identity.",
+                        path,
+                    )
+                if data.get("receipt_path") != self._display_path(path):
+                    self.error(
+                        "archive_identity_reconcile_receipt_path_mismatch",
+                        "Archive identity reconcile receipt_path must match its archive-relative path.",
                         path,
                     )
 
@@ -4533,6 +4575,11 @@ def render_ai_start_here_markdown(result: dict[str, Any]) -> str:
     warnings = result.get("warnings") if isinstance(result.get("warnings"), list) else []
     storage_authority = result.get("storage_authority") if isinstance(result.get("storage_authority"), dict) else {}
     inspection = result.get("inspection") if isinstance(result.get("inspection"), dict) else {}
+    identity_consistency = (
+        result.get("identity_consistency")
+        if isinstance(result.get("identity_consistency"), dict)
+        else {}
+    )
     authority_summary = (
         storage_authority.get("plain_summary")
         if isinstance(storage_authority.get("plain_summary"), dict)
@@ -4553,6 +4600,7 @@ def render_ai_start_here_markdown(result: dict[str, Any]) -> str:
         f"- Operational context: `{operational_context.get('status') or summary.get('operational_context_status') or 'unknown'}`",
         f"- Inspection mode: `{inspection.get('mode') or summary.get('inspection_mode') or 'quick'}`",
         f"- Full Doctor run: {'yes' if inspection.get('full_doctor_run') else 'no'}",
+        f"- Identity consistency: `{identity_consistency.get('status') or 'unknown'}`",
         "",
         "## Read First",
         "",
@@ -14251,6 +14299,49 @@ def command_transfer_ownership(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_identity_reconcile(args: argparse.Namespace) -> int:
+    if args.dry_run == args.approve:
+        print("identity-reconcile requires exactly one of --dry-run or --approve.", file=sys.stderr)
+        return 1
+    try:
+        if args.dry_run:
+            result = archive_services.archive_identity_reconcile_plan(Path(args.archive_root))
+        else:
+            result = archive_services.reconcile_archive_identity(
+                Path(args.archive_root),
+                reviewed_by=args.reviewed_by,
+                expected_archive_sha256=args.expected_archive_sha256,
+                expected_identity_sha256=args.expected_identity_sha256,
+                expected_proposed_identity_sha256=args.expected_proposed_identity_sha256,
+                affirm_principal_metadata_reviewed=args.affirm_principal_metadata_reviewed,
+            )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    elif args.dry_run:
+        print(f"Archive identity reconcile dry-run: {result['status']}.")
+        print("The command wrote nothing.")
+        if result["proposed_changes"]:
+            print("Proposed fields:")
+            for change in result["proposed_changes"]:
+                print(f"- {change['field']} (from {change['value_source']})")
+        if result["approval_command"]:
+            print("Next reviewed command:")
+            print(result["approval_command"])
+        for blocker in result["blockers"]:
+            print(f"Blocked: {blocker}")
+        for warning in result["warnings"]:
+            print(f"Warning: {warning}")
+    else:
+        print("Archive identity reconcile applied.")
+        print(f"Receipt: {result['receipt_path']}")
+        print("Changed fields: " + ", ".join(result["changed_fields"]))
+    return 0 if result["ok"] else 1
+
+
 def command_init(args: argparse.Namespace) -> int:
     require_yaml()
 
@@ -14478,10 +14569,10 @@ def update_archive_identity_yml(target: Path, args: argparse.Namespace) -> None:
 
     identity = data.get("identity") if isinstance(data.get("identity"), dict) else {}
     identity["archive_id"] = args.archive_id
-    identity.setdefault("identity_id", f"identity:{args.archive_id}")
+    identity["identity_id"] = f"identity:{args.archive_id}"
     identity["scope"] = args.type
     identity["principal_id"] = args.principal_id
-    identity.setdefault("display_name", args.principal_name or args.principal_id)
+    identity["display_name"] = args.principal_name or args.principal_id
     identity.setdefault("public_keys", [])
     data["identity"] = identity
 
@@ -21848,6 +21939,35 @@ def build_parser() -> argparse.ArgumentParser:
     transfer_ownership.add_argument("--reviewed-by", help="Reviewer id required for real transfer, e.g. person:me.")
     transfer_ownership.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     transfer_ownership.set_defaults(func=command_transfer_ownership)
+
+    identity_reconcile = subcommands.add_parser(
+        "identity-reconcile",
+        aliases=["archive-identity-reconcile", "reconcile-identity"],
+        help="Preview or apply a reviewed archive identity metadata repair.",
+    )
+    identity_reconcile.add_argument("archive_root", help="Archive root to inspect.")
+    identity_reconcile.add_argument("--dry-run", action="store_true", help="Preview identity consistency and write nothing.")
+    identity_reconcile.add_argument("--approve", action="store_true", help="Apply only the dry-run's reviewed repair.")
+    identity_reconcile.add_argument("--reviewed-by", help="Safe reviewer id required for approval.")
+    identity_reconcile.add_argument(
+        "--expected-archive-sha256",
+        help="archive.yml SHA-256 returned by the dry-run.",
+    )
+    identity_reconcile.add_argument(
+        "--expected-identity-sha256",
+        help="archive-identity.yml SHA-256 returned by the dry-run.",
+    )
+    identity_reconcile.add_argument(
+        "--expected-proposed-identity-sha256",
+        help="Proposed archive-identity.yml SHA-256 returned by the dry-run.",
+    )
+    identity_reconcile.add_argument(
+        "--affirm-principal-metadata-reviewed",
+        action="store_true",
+        help="Confirm the principal metadata and proposed fields were reviewed.",
+    )
+    identity_reconcile.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    identity_reconcile.set_defaults(func=command_identity_reconcile)
 
     init = subcommands.add_parser("init", help="Initialize a new archive from a template.")
     init.add_argument("archive_root", help="Target archive root. Must be absent or empty.")

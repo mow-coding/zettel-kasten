@@ -2,7 +2,8 @@
 
 Status: quick/default and explicit full-Doctor contract implemented in v0.3.222;
 safe full-Doctor receipt phase and callback coalescing added in v0.3.223;
-no-repeat runtime-context handoff added in v0.3.224
+no-repeat runtime-context handoff added in v0.3.224; identity consistency and
+review routing added in v0.3.226
 
 ## Purpose
 
@@ -38,6 +39,23 @@ Markdown output separates `Already Included` from `Next Commands`.
 The source operational-context record remains unchanged. If its default next
 list says `Run runtime-context first.`, start-here does not copy that already
 satisfied sentence into `next_safe_steps`.
+
+## Identity Consistency
+
+Quick mode compares the principal declaration in `archive.yml` with the
+identity and ownership core in `archive-identity.yml`. The JSON result exposes
+`identity_consistency`; Markdown shows its status in the Archive section. A
+mismatch is not silently resolved and adds this read-only next step:
+
+```text
+archive identity-reconcile <archive-root> --dry-run --format json
+```
+
+The preview reads no zet or objet content and does not expose duplicated
+identity values. Principal or archive-id conflicts block automatic repair.
+Only a same-principal display mismatch and a missing or template-like identity
+id can proceed through the separate reviewed approval command. See
+[Archive Identity Reconcile](archive-identity-reconcile.md).
 
 ## Explicit Full Doctor
 

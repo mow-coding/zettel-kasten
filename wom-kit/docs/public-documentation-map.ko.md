@@ -47,6 +47,7 @@
 - [Secret Signal Taxonomy](secret-signal-taxonomy.md)
 - [Local Sovereignty And Backup Authority](local-sovereignty-and-backup-authority.md)
 - [AI 스타팅 메뉴얼 빠른 안내와 전체 검진](ai-start-here.md)
+- [아카이브 신원 일치 점검과 검토 후 수정](archive-identity-reconcile.md)
 - [빠른 인수인계 문서와 전체 검진](runtime-context-quick-and-full-inspection.md)
 - [장시간 명령 진행 표시와 제한된 결과 저장](large-command-progress-and-output.md)
 - [AI Response Contract](ai-response-contract.md)

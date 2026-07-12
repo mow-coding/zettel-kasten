@@ -125,6 +125,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         text = MATRIX_PATH.read_text(encoding="utf-8")
         required_rows = (
             "Archive doctor",
+            "Archive identity reconcile",
             "AI response concept guide",
             "AI usage observability",
             "Mint lifecycle",
@@ -200,6 +201,31 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         for row in required_rows:
             with self.subTest(row=row):
                 self.assertIn(row, text)
+
+    def test_archive_identity_reconcile_public_contract_is_documented(self) -> None:
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        guide_text = (KIT_ROOT / "docs" / "archive-identity-reconcile.md").read_text(encoding="utf-8")
+        release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.226.md").read_text(encoding="utf-8")
+        upgrade_text = (REPO_ROOT / "UPGRADE.md").read_text(encoding="utf-8")
+        versioning_text = (REPO_ROOT / "VERSIONING.md").read_text(encoding="utf-8")
+        public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
+        for phrase in (
+            "archive.yml principal",
+            "identity-reconcile <archive-root> --dry-run",
+            "proposed `archive-identity.yml` SHA-256",
+            "stores no display-name or identity value",
+            "Forced process or machine termination",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, guide_text)
+        for text in (matrix_text, release_text, upgrade_text):
+            with self.subTest(document="release-surface"):
+                self.assertIn("identity-reconcile", text)
+                self.assertIn("proposed", text)
+                self.assertIn("SHA-256", text)
+        self.assertIn("v0.3.226 pre-release", versioning_text)
+        self.assertIn("0.3.226", versioning_text)
+        self.assertIn("archive-identity-reconcile.md", public_map_text)
 
     def test_external_import_docs_explain_source_ref_preservation_boundary(self) -> None:
         imports_text = EXTERNAL_IMPORTS_PATH.read_text(encoding="utf-8")
@@ -521,7 +547,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.224 pre-release",
+            "v0.3.226 pre-release",
             "[Version Truth Source](wom-kit/docs/version-truth-source.md)",
             "[Project Version Update](wom-kit/docs/project-version-update.md)",
             "read-only WOM-kit version truth-source checks",
@@ -937,7 +963,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                 self.assertIn(phrase, guide_text)
         for phrase in (
             "Status: v0.3.221 archive-wide abstract receipt and lock audit checkpoint",
-            "Version: v0.3.225, release candidate",
+            "Version: v0.3.226, release candidate",
             "zet abstract receipt lifecycle audit",
             "Up to 5,000 receipts and 5,000 locks",
             "Green proves bounded local consistency",
@@ -1138,7 +1164,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.58.md").read_text(encoding="utf-8")
         current_release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.106.md").read_text(encoding="utf-8")
         for phrase in (
-            "Status: v0.3.224 quick runtime-context and no-repeat handoff checkpoint",
+            "Status: v0.3.226 quick handoff and archive identity consistency checkpoint",
             "archive runtime-context <archive-root> --format json",
             "operational_context",
             "ops/operational-context.yml",
@@ -6052,7 +6078,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, start_here_text)
         for phrase in (
-            "Status: v0.3.224 quick runtime-context and no-repeat handoff checkpoint",
+            "Status: v0.3.226 quick handoff and archive identity consistency checkpoint",
             "Do not run both back-to-back",
             "canonical_entrypoints.next_commands",
         ):

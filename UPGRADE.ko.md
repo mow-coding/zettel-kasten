@@ -83,6 +83,43 @@ project folder 작업에서는 temporary intake staging이 archive of record가
 아니라는 점을 기억합니다. cleanup 전에 원본을 objet, source map, manifest,
 zet, receipt로 보존해야 합니다.
 
+## v0.3.226 아카이브 신원 일치 점검과 검토 후 수정
+
+v0.3.226은 자동 migration을 하지 않습니다. 빠른 인수인계 문서,
+AI 스타팅 메뉴얼, 검진이 `archive.yml`의 주체 선언과
+`archive-identity.yml`의 신원/소유권 정보를 비교합니다. 두 문서가 다르면
+먼저 읽은 값을 조용히 채택하지 않고 불일치 상태를 알려줍니다.
+
+`identity_consistency.status`가 `aligned`가 아니면 먼저 미리보기만 실행합니다.
+
+```text
+archive identity-reconcile <archive-root> --dry-run --format json
+```
+
+v0.3.226의 `init` 또는 온보딩으로 새로 만든 아카이브는 템플릿 신원 아이디와
+표시정보를 사용자가 정한 아카이브/주체 정보로 바꾸므로 처음부터 일치합니다.
+기존 아카이브는 버전만 올렸다고 자동으로 바뀌지 않습니다.
+
+미리보기는 두 설정 문서만 읽고 아무것도 쓰지 않습니다. 사람 이름이나 신원값은
+출력하지 않고, 바뀔 필드명과 현재/수정 후 SHA-256만 보여줍니다. 서로 다른 주체,
+아카이브 아이디, 범위, 잘못된 문서는 자동 수정을 막습니다. 같은 주체의 표시정보와
+비어 있거나 템플릿 상태인 신원 아이디만 수정 후보가 될 수 있습니다.
+
+결과가 `repair_ready`이면 두 원본 문서를 사람이 확인한 뒤, 그 미리보기가 반환한
+`approval_command` 전체를 사용합니다. 승인에는 검토자, 주체정보 검토 확인, 그리고
+아카이브/현재 신원/수정 후 신원의 세 해시가 모두 필요합니다. 하나라도 달라지면
+쓰지 않고 다시 미리보기를 요구합니다.
+
+승인은 `archive-identity.yml`만 수정하고, 결과 해시를 검증한 뒤
+`receipts/identity-reconciles/`에 실제 신원값이 없는 영수증을 씁니다. YAML을 다시
+직렬화하므로 주석이나 서식은 정리될 수 있지만 의미상 변경은 표시된 필드로
+제한됩니다. 처리 중 영수증 쓰기가 실패하면 원래 신원 문서 바이트를 복원합니다.
+
+```text
+archive runtime-context <archive-root> --strict --format json
+archive doctor <archive-root> --strict
+```
+
 ## v0.3.225 전체 검진의 엣지 영수증 대상별 읽기
 
 v0.3.225는 아카이브 migration이나 상태 쓰기가 없습니다. 명시적으로 실행한
