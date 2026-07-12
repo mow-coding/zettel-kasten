@@ -325,8 +325,8 @@ import threading
 import time
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from pathlib import Path
-from typing import Any, Callable
+from pathlib import Path, PurePosixPath
+from typing import Any, Callable, Iterable
 
 from . import __version__, archive_services
 from .paths import (
@@ -658,6 +658,8 @@ ProgressCallback = Callable[[str, str, int | None, int | None], None]
 PROGRESS_STAGE_UNITS = {
     "zettels": "zet_files",
     "mint-receipts": "mint_receipts",
+    "edge-receipt-index": "edge_receipts",
+    "edge-receipt-source-load": "edge_receipts",
     "retired-draft-receipts": "retired_draft_receipts",
     "reconcile-receipts": "reconcile_receipts",
     "external-import-receipts": "external_import_receipts",
@@ -1195,7 +1197,8 @@ class Doctor:
         self.archive_config: dict[str, Any] = {}
         self.manifest_objects: dict[str, dict[str, Any]] = {}
         self.allowed_link_types = self._load_allowed_link_types()
-        self.edge_receipts_by_source: dict[str, list[dict[str, Any]]] | None = None
+        self.edge_receipt_paths_by_source_segment: dict[str, list[tuple[Path, str]]] | None = None
+        self.edge_receipts_by_source: dict[str, list[dict[str, Any]]] = {}
         self.validate_scope = validate_scope or ValidationScope()
         self.progress_callback = progress_callback
         self.use_zettel_index_cache = use_zettel_index_cache
@@ -1489,14 +1492,36 @@ class Doctor:
         self,
         source_relative: str,
         *,
+        source_zettel_id: str | None = None,
+        referenced_receipt_paths: Iterable[str] = (),
         progress_callback: Callable[[str], None] | None = None,
     ) -> list[dict[str, Any]]:
-        if self.edge_receipts_by_source is None:
+        if source_relative not in self.edge_receipts_by_source:
             if progress_callback is not None:
                 progress_callback("loading edge receipt index")
-            self.edge_receipts_by_source = archive_services.edge_receipts_by_source(
+            if self.edge_receipt_paths_by_source_segment is None:
+                self.edge_receipt_paths_by_source_segment = archive_services.edge_receipt_paths_by_source_segment(
+                    self.archive_root,
+                    progress_event_callback=lambda message, current, total: self._progress(
+                        "edge-receipt-index",
+                        message,
+                        current,
+                        total,
+                    ),
+                )
+            resolved_source_id = str(source_zettel_id or PurePosixPath(source_relative).stem)
+            self.edge_receipts_by_source[source_relative] = archive_services.edge_receipts_for_indexed_source(
                 self.archive_root,
-                progress_callback=progress_callback,
+                source_relative,
+                resolved_source_id,
+                self.edge_receipt_paths_by_source_segment,
+                referenced_receipt_paths=referenced_receipt_paths,
+                progress_event_callback=lambda message, current, total: self._progress(
+                    "edge-receipt-source-load",
+                    message,
+                    current,
+                    total,
+                ),
             )
             if progress_callback is not None:
                 progress_callback("loaded edge receipt index")
@@ -1521,7 +1546,29 @@ class Doctor:
         if progress_callback is not None:
             progress_callback(f"target edge evolution target {target_relative}")
             progress_callback("loading target edge receipt candidates")
-        edge_receipts = self._edge_receipts_for_source(target_relative, progress_callback=progress_callback)
+        target_frontmatter = self._load_zettel_frontmatter_cached(
+            target_path,
+            progress_callback=progress_callback,
+        )
+        source_zettel_id = None
+        referenced_receipt_paths: list[str] = []
+        if isinstance(target_frontmatter, dict):
+            raw_source_zettel_id = target_frontmatter.get("id")
+            if isinstance(raw_source_zettel_id, str):
+                source_zettel_id = raw_source_zettel_id
+            raw_edges = target_frontmatter.get("edges")
+            if isinstance(raw_edges, list):
+                referenced_receipt_paths = [
+                    str(edge.get("receipt"))
+                    for edge in raw_edges
+                    if isinstance(edge, dict) and isinstance(edge.get("receipt"), str)
+                ]
+        edge_receipts = self._edge_receipts_for_source(
+            target_relative,
+            source_zettel_id=source_zettel_id,
+            referenced_receipt_paths=referenced_receipt_paths,
+            progress_callback=progress_callback,
+        )
         if progress_callback is not None:
             progress_callback(f"checking target edge receipt candidates {len(edge_receipts)}")
         return archive_services.target_sha_evolved_by_edge_receipts(

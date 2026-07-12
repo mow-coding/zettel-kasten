@@ -6,6 +6,25 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.225 - 2026-07-12
+
+Targeted full-Doctor edge-receipt index checkpoint. Additive; no archive
+migration.
+
+- **Filename-only shared index.** Doctor scans edge-receipt filenames once per
+  run instead of reopening every receipt JSON when the first historical mint
+  target SHA is encountered.
+- **Targeted receipt loading.** The SHA evolution check opens only receipts
+  named for the mismatched source zet plus any legacy receipt paths referenced
+  directly by its current edges. Loaded rows are still checked against the
+  receipt's source path and creation time.
+- **Independent progress counts.** Full-Doctor progress now reports
+  `edge-receipt-index` and `edge-receipt-source-load` with their own safe counts
+  instead of holding only the outer mint-receipt count.
+- **Scale regression evidence.** A temporary-only benchmark covers 8,583 edge
+  receipts, proves one Doctor index build and one source load, proves the second
+  lookup is a cache hit, and confirms the full receipt corpus is not opened.
+
 ## v0.3.224 - 2026-07-12
 
 Quick runtime-context and no-repeat AI handoff checkpoint. Additive; no archive

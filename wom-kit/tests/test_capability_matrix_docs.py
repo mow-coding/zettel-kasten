@@ -319,8 +319,8 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "failed_items",
             "do not spawn per-item shell processes",
             "source-zettel-path edge receipt index",
-            "Doctor-level edge receipt cache",
-            "do not rescan all edge receipts per receipt",
+            "filename-only edge-receipt index per Doctor",
+            "neither rescan nor reopen the full edge receipt corpus per receipt",
             "Archive validation",
             "validate --since",
             "validate --scope",
@@ -937,7 +937,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                 self.assertIn(phrase, guide_text)
         for phrase in (
             "Status: v0.3.221 archive-wide abstract receipt and lock audit checkpoint",
-            "Version: v0.3.224, release candidate",
+            "Version: v0.3.225, release candidate",
             "zet abstract receipt lifecycle audit",
             "Up to 5,000 receipts and 5,000 locks",
             "Green proves bounded local consistency",
