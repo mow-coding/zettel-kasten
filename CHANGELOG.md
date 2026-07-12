@@ -6,6 +6,26 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.227 - 2026-07-12
+
+Aggregate full-Doctor edge progress checkpoint. Additive; no archive migration
+or diagnostic behavior change.
+
+- **Time-coalesced filename index.** Compact stderr keeps edge-receipt index
+  start/done and a 10-second count heartbeat only when the index actually lasts
+  that long. Fast 250-item milestones no longer flood the console.
+- **Whole-run targeted-load aggregate.** Candidate loads report cumulative
+  source, candidate-receipt, and cache-hit counts through heartbeat plus one
+  final Doctor summary instead of printing every short source batch.
+- **Detailed trace preserved.** Per-source `start`, `0/N`, `1/N`, `N/N`,
+  `done`, and cache-hit events remain available through direct Doctor
+  `--progress-detail verbose` and private `--progress-log` JSONL.
+- **Measured output boundary.** A synthetic 8,583-source / 21,539-index-event
+  benchmark produces 4 compact lines and 358 bytes versus 51,457 verbose lines
+  and about 6.3 MB, with no real archive, provider, credential, or file write.
+- **README version alignment.** The lower versioning example now matches the
+  current public baseline instead of labeling v0.3.162 as current.
+
 ## v0.3.226 - 2026-07-12
 
 Archive identity consistency and reviewed repair checkpoint. Additive; no

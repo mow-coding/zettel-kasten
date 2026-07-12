@@ -3,7 +3,8 @@
 Status: quick/default and explicit full-Doctor contract implemented in v0.3.222;
 safe full-Doctor receipt phase and callback coalescing added in v0.3.223;
 no-repeat runtime-context handoff added in v0.3.224; identity consistency and
-review routing added in v0.3.226
+review routing added in v0.3.226; aggregate edge-receipt progress added in
+v0.3.227
 
 ## Purpose
 
@@ -106,6 +107,12 @@ phase such as `file_hash`, `target_edge_evolution`, or `edge_receipt_index`.
 Private substep text never enters the phase. The shared reporter coalesces later
 same-count callbacks before formatter/lock work while continuing to update the
 phase used by heartbeat.
+
+In v0.3.227, a fast edge-receipt filename index prints only lifecycle lines in
+compact mode. Targeted source loads keep content-free cumulative `sources`,
+`candidates`, and `cache_hits` in the 10-second heartbeat and one final summary
+instead of printing each short candidate batch. Direct Doctor verbose output
+and private progress-log JSONL retain those per-source events.
 
 ## Output And Privacy
 

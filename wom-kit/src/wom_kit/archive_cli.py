@@ -660,6 +660,7 @@ PROGRESS_STAGE_UNITS = {
     "mint-receipts": "mint_receipts",
     "edge-receipt-index": "edge_receipts",
     "edge-receipt-source-load": "edge_receipts",
+    "edge-receipt-source-load-detail": "edge_receipts",
     "retired-draft-receipts": "retired_draft_receipts",
     "reconcile-receipts": "reconcile_receipts",
     "external-import-receipts": "external_import_receipts",
@@ -679,6 +680,10 @@ PROGRESS_STAGE_UNITS = {
     "store-hash": "bytes",
 }
 PROGRESS_SAME_COUNT_REPEAT_SECONDS = 30.0
+PROGRESS_NESTED_AGGREGATE_SECONDS = 10.0
+EDGE_RECEIPT_SOURCE_PROGRESS_RE = re.compile(
+    r"^(?:aggregate|done) sources=(?P<sources>\d+) candidates=(?P<candidates>\d+) cache_hits=(?P<cache_hits>\d+)$"
+)
 
 
 def progress_stage_unit(stage: str) -> str:
@@ -955,7 +960,22 @@ def make_stage_progress_callback(
             return False
         if detail == "verbose":
             return True
-        if message in {"start", "done"} or current is None or not total:
+        if stage == "edge-receipt-source-load-detail":
+            return False
+        done_message = message == "done" or message.startswith("done ")
+        if stage == "edge-receipt-index":
+            if message == "start" or done_message or message.startswith("heartbeat"):
+                return True
+            previous = last_stderr_by_stage.get(stage, stage_started.get(stage, now))
+            return now - previous >= PROGRESS_NESTED_AGGREGATE_SECONDS
+        if stage == "edge-receipt-source-load":
+            if message == "start" or done_message or message.startswith("heartbeat"):
+                return True
+            if message.startswith("aggregate "):
+                previous = last_stderr_by_stage.get(stage, stage_started.get(stage, now))
+                return now - previous >= PROGRESS_NESTED_AGGREGATE_SECONDS
+            return False
+        if message == "start" or done_message or current is None or not total:
             return True
         previous_count = last_count_by_stage.get(stage)
         if (
@@ -1053,6 +1073,8 @@ class CommandProgressReporter:
         self._current = None
         self._total = None
         self._current_phase: str | None = None
+        self._edge_source_summary: str | None = None
+        self._edge_source_summary_active = False
         self._last_forwarded_progress: tuple[str, int | None, int | None] | None = None
         self._last_completed_stage: str | None = None
         self._thread: threading.Thread | None = None
@@ -1067,7 +1089,14 @@ class CommandProgressReporter:
     def progress(self, stage: str, message: str, current: int | None, total: int | None) -> None:
         if self._callback is None:
             return
-        safe_message = self._content_free_message(message, current, total)
+        if stage == "edge-receipt-source-load-detail":
+            return
+        edge_source_summary = self._edge_receipt_source_summary(stage, message)
+        safe_message = (
+            edge_source_summary
+            if edge_source_summary is not None and edge_source_summary.startswith("done ")
+            else self._content_free_message(message, current, total)
+        )
         phase = self._content_free_phase(stage, message)
         forward = True
         with self._state_lock:
@@ -1077,20 +1106,31 @@ class CommandProgressReporter:
             if stage_changed or message == "start":
                 self._current_phase = None
                 self._last_forwarded_progress = None
+            if stage == "edge-receipt-source-load" and message == "start":
+                self._edge_source_summary = None
+                self._edge_source_summary_active = True
+            if edge_source_summary is not None:
+                self._edge_source_summary = edge_source_summary.split(" ", 1)[1]
             if current is not None and total is not None:
                 if count_changed:
                     self._current_phase = "receipt_checks" if stage == "mint-receipts" else None
                 self._current = current
                 self._total = total
-            elif message in {"start", "done"}:
+            elif message == "start" or message == "done" or safe_message.startswith("done "):
                 self._current = None
                 self._total = None
             if phase is not None:
                 self._current_phase = phase
-            if message == "done":
+            if message == "done" or safe_message.startswith("done "):
                 self._last_completed_stage = stage
                 self._current_phase = None
                 self._last_forwarded_progress = None
+                if stage == "edge-receipt-source-load":
+                    self._edge_source_summary_active = False
+            if stage == "edge-receipt-index" and message == "scanned":
+                forward = False
+            if edge_source_summary is not None and edge_source_summary.startswith("aggregate "):
+                forward = False
             if safe_message == "progress":
                 progress_key = (stage, current, total)
                 if progress_key == self._last_forwarded_progress:
@@ -1111,6 +1151,12 @@ class CommandProgressReporter:
         if current is not None and total is not None:
             return "progress"
         return "working"
+
+    @staticmethod
+    def _edge_receipt_source_summary(stage: str, message: str) -> str | None:
+        if stage != "edge-receipt-source-load":
+            return None
+        return message if EDGE_RECEIPT_SOURCE_PROGRESS_RE.fullmatch(message) else None
 
     @staticmethod
     def _content_free_phase(stage: str, message: str) -> str | None:
@@ -1149,10 +1195,22 @@ class CommandProgressReporter:
                 current = self._current
                 total = self._total
                 phase = self._current_phase
+                edge_source_summary = (
+                    self._edge_source_summary
+                    if self._edge_source_summary_active
+                    else None
+                )
                 last_completed = self._last_completed_stage
+            if edge_source_summary:
+                stage = "edge-receipt-source-load"
+                current = None
+                total = None
+                phase = None
             message = "heartbeat"
             if phase:
                 message += f" phase={phase}"
+            if edge_source_summary:
+                message += f" {edge_source_summary}"
             if last_completed:
                 message += f" last_completed={last_completed}"
             with self._callback_lock:
@@ -1212,6 +1270,14 @@ class Doctor:
         self._zettel_frontmatter_cache_misses = 0
         self._zettel_bom_cache_hits = 0
         self._zettel_bom_cache_misses = 0
+        self._edge_source_progress_started = False
+        self._edge_source_progress_finished = False
+        self._edge_source_batch_active = False
+        self._edge_source_batch_total = 0
+        self._edge_source_batch_loaded = 0
+        self._edge_source_sources_loaded = 0
+        self._edge_source_candidates_loaded = 0
+        self._edge_source_cache_hits = 0
         self._read_observations = {
             "zettel_bodies_read": False,
             "objet_bytes_read": False,
@@ -1246,6 +1312,7 @@ class Doctor:
         stages = self._scoped_stages() if self.validate_scope.active() else self._full_stages()
         for stage_name, stage_func in stages:
             self._run_stage(stage_name, stage_func)
+        self._finish_edge_receipt_source_load_progress()
         return self.diagnostics
 
     def _full_stages(self) -> list[tuple[str, Callable[[], None]]]:
@@ -1308,6 +1375,75 @@ class Doctor:
     def _progress(self, stage: str, message: str, current: int | None, total: int | None) -> None:
         if self.progress_callback is not None:
             self.progress_callback(stage, message, current, total)
+
+    def _edge_receipt_source_load_summary(self, prefix: str) -> str:
+        return (
+            f"{prefix} sources={self._edge_source_sources_loaded} "
+            f"candidates={self._edge_source_candidates_loaded} "
+            f"cache_hits={self._edge_source_cache_hits}"
+        )
+
+    def _edge_receipt_source_load_event(
+        self,
+        message: str,
+        current: int | None,
+        total: int | None,
+    ) -> None:
+        self._progress("edge-receipt-source-load-detail", message, current, total)
+        if message == "start":
+            self._edge_source_batch_active = True
+            self._edge_source_batch_total = 0
+            self._edge_source_batch_loaded = 0
+            if not self._edge_source_progress_started:
+                self._edge_source_progress_started = True
+                self._progress("edge-receipt-source-load", "start", None, None)
+            return
+        if message == "loaded" and self._edge_source_batch_active:
+            if total is not None:
+                self._edge_source_batch_total = max(self._edge_source_batch_total, total)
+            if current is not None:
+                self._edge_source_batch_loaded = max(self._edge_source_batch_loaded, current)
+            return
+        if message != "done" or not self._edge_source_batch_active:
+            return
+        if total is not None:
+            self._edge_source_batch_total = max(self._edge_source_batch_total, total)
+        if current is not None:
+            self._edge_source_batch_loaded = max(self._edge_source_batch_loaded, current)
+        self._edge_source_sources_loaded += 1
+        self._edge_source_candidates_loaded += max(
+            self._edge_source_batch_total,
+            self._edge_source_batch_loaded,
+        )
+        self._edge_source_batch_active = False
+        self._progress(
+            "edge-receipt-source-load",
+            self._edge_receipt_source_load_summary("aggregate"),
+            None,
+            None,
+        )
+
+    def _record_edge_receipt_source_cache_hit(self) -> None:
+        self._edge_source_cache_hits += 1
+        self._progress("edge-receipt-source-load-detail", "cache_hit", None, None)
+        if self._edge_source_progress_started:
+            self._progress(
+                "edge-receipt-source-load",
+                self._edge_receipt_source_load_summary("aggregate"),
+                None,
+                None,
+            )
+
+    def _finish_edge_receipt_source_load_progress(self) -> None:
+        if not self._edge_source_progress_started or self._edge_source_progress_finished:
+            return
+        self._edge_source_progress_finished = True
+        self._progress(
+            "edge-receipt-source-load",
+            self._edge_receipt_source_load_summary("done"),
+            None,
+            None,
+        )
 
     def _file_cache_key(self, path: Path) -> str:
         try:
@@ -1516,17 +1652,14 @@ class Doctor:
                 resolved_source_id,
                 self.edge_receipt_paths_by_source_segment,
                 referenced_receipt_paths=referenced_receipt_paths,
-                progress_event_callback=lambda message, current, total: self._progress(
-                    "edge-receipt-source-load",
-                    message,
-                    current,
-                    total,
-                ),
+                progress_event_callback=self._edge_receipt_source_load_event,
             )
             if progress_callback is not None:
                 progress_callback("loaded edge receipt index")
-        elif progress_callback is not None:
-            progress_callback("edge receipt index cache hit")
+        else:
+            self._record_edge_receipt_source_cache_hit()
+            if progress_callback is not None:
+                progress_callback("edge receipt index cache hit")
         return self.edge_receipts_by_source.get(source_relative, [])
 
     def _target_sha_evolved_by_edge_receipts(
