@@ -13021,26 +13021,135 @@ def edge_receipts_for_source(
     return edge_receipts_by_source(archive_root, progress_callback=progress_callback).get(source_relative, [])
 
 
+def edge_receipt_paths_by_source_segment(
+    archive_root: Path,
+    *,
+    progress_event_callback: Callable[[str, int | None, int | None], None] | None = None,
+) -> dict[str, list[tuple[Path, str]]]:
+    """Index edge-receipt filenames without opening every receipt JSON document."""
+
+    root = archive_root / ZETTEL_EDGE_RECEIPTS_DIR
+    if progress_event_callback is not None:
+        progress_event_callback("start", None, None)
+    rows = safe_archive_direct_files(root, "*.zettel-edge.json", archive_root)
+    total = len(rows)
+    if progress_event_callback is not None:
+        progress_event_callback("scanned", 0, total)
+    by_segment: dict[str, list[tuple[Path, str]]] = {}
+    for index, row in enumerate(rows, start=1):
+        source_segment = row[0].name.split(".", 1)[0]
+        if source_segment:
+            by_segment.setdefault(source_segment, []).append(row)
+        if progress_event_callback is not None and (index == 1 or index % 250 == 0 or index == total):
+            progress_event_callback("scanned", index, total)
+    if progress_event_callback is not None:
+        progress_event_callback("done", total, total)
+    return by_segment
+
+
+def edge_receipts_for_indexed_source(
+    archive_root: Path,
+    source_relative: str,
+    source_zettel_id: str,
+    paths_by_source_segment: dict[str, list[tuple[Path, str]]],
+    *,
+    referenced_receipt_paths: Iterable[str] = (),
+    progress_event_callback: Callable[[str, int | None, int | None], None] | None = None,
+) -> list[dict[str, Any]]:
+    """Load only receipts named for or directly referenced by one source zet."""
+
+    root = archive_root.resolve()
+    source_segment = zettel_edge_filename_segment(source_zettel_id)
+    candidates = {
+        relative: path
+        for path, relative in paths_by_source_segment.get(source_segment, [])
+    }
+    for raw_relative in referenced_receipt_paths:
+        try:
+            relative = normalize_archive_relative_path(str(raw_relative))
+        except ArchivePathError:
+            continue
+        if (
+            not relative.startswith(f"{ZETTEL_EDGE_RECEIPTS_DIR}/")
+            or not relative.endswith(".zettel-edge.json")
+        ):
+            continue
+        unresolved = root
+        contains_symlink = False
+        for part in relative.split("/"):
+            unresolved = unresolved / part
+            if unresolved.is_symlink():
+                contains_symlink = True
+                break
+        if contains_symlink:
+            continue
+        try:
+            path = resolve_archive_relative_path(root, relative)
+        except ArchivePathError:
+            continue
+        if path.is_file() and not path.is_symlink():
+            candidates.setdefault(relative, path)
+
+    rows = sorted(((path, relative) for relative, path in candidates.items()), key=lambda item: item[1])
+    total = len(rows)
+    if progress_event_callback is not None:
+        progress_event_callback("start", None, None)
+        progress_event_callback("loaded", 0, total)
+    receipts: list[dict[str, Any]] = []
+    for index, (path, receipt_relative) in enumerate(rows, start=1):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            data = None
+        if (
+            isinstance(data, dict)
+            and data.get("receipt_kind") == "zettel_edge_write"
+            and str(data.get("source_zettel_path") or "").strip() == source_relative
+        ):
+            created_at = parse_receipt_time(data.get("created_at"))
+            if created_at is not None:
+                receipts.append(
+                    {
+                        "receipt_path": receipt_relative,
+                        "edge_id": str(data.get("edge_id") or "").strip(),
+                        "created_at": created_at,
+                        "created_at_raw": data.get("created_at"),
+                    }
+                )
+        if progress_event_callback is not None and (index == 1 or index == total or index % 250 == 0):
+            progress_event_callback("loaded", index, total)
+    if progress_event_callback is not None:
+        progress_event_callback("done", total, total)
+    return receipts
+
+
 def edge_receipts_by_source(
     archive_root: Path,
     *,
     progress_callback: Callable[[str], None] | None = None,
+    progress_event_callback: Callable[[str, int | None, int | None], None] | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     root = archive_root / ZETTEL_EDGE_RECEIPTS_DIR
     if not root.is_dir():
         if progress_callback is not None:
             progress_callback("edge receipt directory missing")
+        if progress_event_callback is not None:
+            progress_event_callback("done", 0, 0)
         return {}
     if progress_callback is not None:
         progress_callback("listing edge receipts")
-    paths = safe_archive_glob(root, "*.zettel-edge.json", archive_root)
-    total = len(paths)
+    if progress_event_callback is not None:
+        progress_event_callback("start", None, None)
+    path_rows = safe_archive_direct_files(root, "*.zettel-edge.json", archive_root)
+    total = len(path_rows)
     if progress_callback is not None:
         progress_callback(f"scanning edge receipts 0/{total}")
+    if progress_event_callback is not None:
+        progress_event_callback("scanned", 0, total)
     by_source: dict[str, list[dict[str, Any]]] = {}
     indexed = 0
     last_liveness = time.monotonic()
-    for index, path in enumerate(paths, start=1):
+    for index, (path, receipt_relative) in enumerate(path_rows, start=1):
         if progress_callback is not None and (index == 1 or index % 250 == 0 or index == total):
             progress_callback(f"scanning edge receipts {index}/{total}")
             last_liveness = time.monotonic()
@@ -13049,6 +13158,8 @@ def edge_receipts_by_source(
             if now - last_liveness >= 30.0:
                 progress_callback(f"still scanning edge receipts {index}/{total}")
                 last_liveness = now
+        if progress_event_callback is not None and (index == 1 or index % 250 == 0 or index == total):
+            progress_event_callback("scanned", index, total)
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, UnicodeError, json.JSONDecodeError):
@@ -13066,7 +13177,7 @@ def edge_receipts_by_source(
         indexed += 1
         by_source.setdefault(source_relative, []).append(
             {
-                "receipt_path": archive_relative_path(path, archive_root),
+                "receipt_path": receipt_relative,
                 "edge_id": str(data.get("edge_id") or "").strip(),
                 "created_at": created_at,
                 "created_at_raw": data.get("created_at"),
@@ -13074,6 +13185,8 @@ def edge_receipts_by_source(
         )
     if progress_callback is not None:
         progress_callback(f"edge receipt index ready sources={len(by_source)} receipts={indexed}/{total}")
+    if progress_event_callback is not None:
+        progress_event_callback("done", total, total)
     return by_source
 
 
@@ -69617,6 +69730,39 @@ def safe_archive_glob(root: Path, pattern: str, archive_root: Path, *, recursive
 
     iterator = root.rglob(pattern) if recursive else root.glob(pattern)
     return sorted(path for path in iterator if path.is_file() and is_path_within_root(path, archive_root))
+
+
+def safe_archive_direct_files(root: Path, pattern: str, archive_root: Path) -> list[tuple[Path, str]]:
+    """Return safe direct files and stable relative paths without resolving every child."""
+
+    try:
+        resolved_archive_root = archive_root.resolve(strict=True)
+        resolved_root = root.resolve(strict=True)
+    except (OSError, RuntimeError, ValueError):
+        return []
+    if not resolved_root.is_relative_to(resolved_archive_root) or not resolved_root.is_dir():
+        return []
+
+    relative_root = resolved_root.relative_to(resolved_archive_root)
+    rows: list[tuple[Path, str]] = []
+    try:
+        with os.scandir(resolved_root) as entries:
+            for entry in entries:
+                if not fnmatch.fnmatchcase(entry.name, pattern):
+                    continue
+                try:
+                    # Direct symlinks are excluded. This establishes the containment
+                    # contract once at the directory boundary instead of resolving
+                    # both roots again for every receipt.
+                    if entry.is_symlink() or not entry.is_file(follow_symlinks=False):
+                        continue
+                except OSError:
+                    continue
+                relative = PurePosixPath(*relative_root.parts, entry.name).as_posix()
+                rows.append((Path(entry.path), relative))
+    except OSError:
+        return []
+    return sorted(rows, key=lambda item: item[1])
 
 
 def make_snippet(text: str, query: str, size: int = 160) -> str:

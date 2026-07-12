@@ -91,6 +91,38 @@ For project-folder work, remember that temporary intake staging is not the
 archive of record. Preserve originals as objets, source maps, manifests, zets,
 and receipts before any cleanup.
 
+## v0.3.225 Targeted Full-Doctor Edge Receipt Index
+
+v0.3.225 adds no archive migration and writes no archive state. In an explicit
+full Doctor run, the first historical mint target SHA no longer causes every
+edge receipt JSON document to be opened. Doctor now builds one filename-only
+index for the run, then opens only receipts named for the mismatched source zet
+and legacy receipt paths referenced directly by that zet's current edges.
+
+Progress uses two independent, content-free stages:
+
+```text
+edge-receipt-index: <current>/<total>
+edge-receipt-source-load: <current>/<total>
+```
+
+The first count is the complete receipt filename inventory; the second is the
+small candidate set whose JSON is actually loaded for that zet. Neither stage
+prints receipt paths, zet ids, edge values, titles, bodies, abstracts, provider
+values, or secrets.
+
+Maintainers can reproduce the 8,583-receipt synthetic regression without
+reading a real archive:
+
+```text
+python tools/benchmark_doctor_edge_receipt_index.py --receipt-count 8583 --format json
+```
+
+The benchmark uses a temporary fixture, calls no provider, persists nothing,
+and verifies one index build, one target load, and a second-lookup cache hit.
+It covers the previously stalled Doctor phase; a real archive should still run
+the explicit full Doctor to verify its complete local workload.
+
 ## v0.3.224 Quick Runtime Context And No-Repeat Handoff
 
 v0.3.224 adds no archive migration and writes no archive state. CLI and MCP

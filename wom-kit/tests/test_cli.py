@@ -1179,8 +1179,15 @@ class ArchiveCliTests(unittest.TestCase):
                     encoding="utf-8",
                 )
             events: list[str] = []
+            progress_events: list[tuple[str, int | None, int | None]] = []
 
-            by_source = archive_services.edge_receipts_by_source(archive_root, progress_callback=events.append)
+            by_source = archive_services.edge_receipts_by_source(
+                archive_root,
+                progress_callback=events.append,
+                progress_event_callback=lambda message, current, total: progress_events.append(
+                    (message, current, total)
+                ),
+            )
 
         self.assertEqual(len(by_source["zettels/example.md"]), 2)
         self.assertIn("listing edge receipts", events)
@@ -1188,6 +1195,137 @@ class ArchiveCliTests(unittest.TestCase):
         self.assertIn("scanning edge receipts 1/2", events)
         self.assertIn("scanning edge receipts 2/2", events)
         self.assertIn("edge receipt index ready sources=1 receipts=2/2", events)
+        self.assertEqual(
+            progress_events,
+            [("start", None, None), ("scanned", 0, 2), ("scanned", 1, 2), ("scanned", 2, 2), ("done", 2, 2)],
+        )
+
+    def test_safe_archive_direct_files_rejects_outside_root_and_direct_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "archive"
+            edge_root = archive_root / archive_services.ZETTEL_EDGE_RECEIPTS_DIR
+            edge_root.mkdir(parents=True)
+            first = edge_root / "b.zettel-edge.json"
+            second = edge_root / "a.zettel-edge.json"
+            first.write_text("{}", encoding="utf-8")
+            second.write_text("{}", encoding="utf-8")
+            (edge_root / "ignored.txt").write_text("{}", encoding="utf-8")
+            outside_root = Path(tmp) / "outside"
+            outside_root.mkdir()
+            (outside_root / "outside.zettel-edge.json").write_text("{}", encoding="utf-8")
+            link = edge_root / "linked.zettel-edge.json"
+            try:
+                link.symlink_to(first)
+            except OSError:
+                link = None
+
+            rows = archive_services.safe_archive_direct_files(
+                edge_root,
+                "*.zettel-edge.json",
+                archive_root,
+            )
+            outside_rows = archive_services.safe_archive_direct_files(
+                outside_root,
+                "*.zettel-edge.json",
+                archive_root,
+            )
+
+        self.assertEqual([relative for _path, relative in rows], [
+            "receipts/edges/a.zettel-edge.json",
+            "receipts/edges/b.zettel-edge.json",
+        ])
+        if link is not None:
+            self.assertNotIn("receipts/edges/linked.zettel-edge.json", [relative for _path, relative in rows])
+        self.assertEqual(outside_rows, [])
+
+    def test_doctor_edge_receipt_index_has_own_count_stage_and_builds_once(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "archive"
+            edge_root = archive_root / archive_services.ZETTEL_EDGE_RECEIPTS_DIR
+            edge_root.mkdir(parents=True)
+            source_zettel_id = "zet_20260712_example"
+            source_relative = f"zettels/{source_zettel_id}.md"
+            for index in range(2):
+                (edge_root / f"{source_zettel_id}.semantic.{index}.zettel-edge.json").write_text(
+                    json.dumps(
+                        {
+                            "receipt_kind": "zettel_edge_write",
+                            "source_zettel_path": source_relative,
+                            "edge_id": f"edge-{index}",
+                            "created_at": f"2026-07-07T00:00:0{index + 1}+00:00",
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+            progress_events: list[tuple[str, str, int | None, int | None]] = []
+            detail_events: list[str] = []
+            doctor = archive_cli.Doctor(
+                archive_root,
+                progress_callback=lambda stage, message, current, total: progress_events.append(
+                    (stage, message, current, total)
+                ),
+            )
+
+            first = doctor._edge_receipts_for_source(
+                source_relative,
+                source_zettel_id=source_zettel_id,
+                progress_callback=detail_events.append,
+            )
+            second = doctor._edge_receipts_for_source(
+                source_relative,
+                source_zettel_id=source_zettel_id,
+                progress_callback=detail_events.append,
+            )
+
+        self.assertIs(first, second)
+        self.assertEqual(len(first), 2)
+        edge_events = [event for event in progress_events if event[0] == "edge-receipt-index"]
+        self.assertEqual(sum(1 for _stage, message, _current, _total in edge_events if message == "start"), 1)
+        self.assertIn(("edge-receipt-index", "scanned", 0, 2), edge_events)
+        self.assertIn(("edge-receipt-index", "done", 2, 2), edge_events)
+        source_events = [event for event in progress_events if event[0] == "edge-receipt-source-load"]
+        self.assertIn(("edge-receipt-source-load", "done", 2, 2), source_events)
+        self.assertEqual(detail_events.count("loading edge receipt index"), 1)
+        self.assertEqual(detail_events.count("edge receipt index cache hit"), 1)
+
+    def test_indexed_edge_receipt_load_keeps_direct_legacy_receipt_reference(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "archive"
+            edge_root = archive_root / archive_services.ZETTEL_EDGE_RECEIPTS_DIR
+            edge_root.mkdir(parents=True)
+            source_zettel_id = "zet_20260712_legacy_reference"
+            source_relative = f"zettels/{source_zettel_id}.md"
+            receipt_relative = "receipts/edges/legacy-name.zettel-edge.json"
+            (archive_root / receipt_relative).write_text(
+                json.dumps(
+                    {
+                        "receipt_kind": "zettel_edge_write",
+                        "source_zettel_path": source_relative,
+                        "edge_id": "edge:legacy-reference",
+                        "created_at": "2026-07-12T00:00:00Z",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            path_index = archive_services.edge_receipt_paths_by_source_segment(archive_root)
+            without_reference = archive_services.edge_receipts_for_indexed_source(
+                archive_root,
+                source_relative,
+                source_zettel_id,
+                path_index,
+            )
+            with_reference = archive_services.edge_receipts_for_indexed_source(
+                archive_root,
+                source_relative,
+                source_zettel_id,
+                path_index,
+                referenced_receipt_paths=[receipt_relative],
+            )
+
+        self.assertEqual(without_reference, [])
+        self.assertEqual(len(with_reference), 1)
+        self.assertEqual(with_reference[0]["receipt_path"], receipt_relative)
 
     def test_doctor_mint_receipt_file_ref_reports_target_edge_evolution_progress(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -33784,17 +33922,29 @@ state:
             )
             self.assertEqual(edge_code, 0, edge_output)
 
-            original_edge_index = archive_services.edge_receipts_by_source
+            original_edge_index = archive_services.edge_receipt_paths_by_source_segment
             edge_index_calls: list[Path] = []
 
-            def counted_edge_index(root: Path, **kwargs: Any) -> dict[str, list[dict[str, Any]]]:
+            def counted_edge_index(root: Path, **kwargs: Any) -> dict[str, list[tuple[Path, str]]]:
                 edge_index_calls.append(Path(root))
                 return original_edge_index(root, **kwargs)
 
-            with patch.object(archive_services, "edge_receipts_by_source", side_effect=counted_edge_index), patch.object(
-                archive_services,
-                "edge_receipts_for_source",
-                side_effect=AssertionError("validate should use the Doctor edge receipt cache"),
+            with (
+                patch.object(
+                    archive_services,
+                    "edge_receipt_paths_by_source_segment",
+                    side_effect=counted_edge_index,
+                ),
+                patch.object(
+                    archive_services,
+                    "edge_receipts_by_source",
+                    side_effect=AssertionError("validate should not open every edge receipt"),
+                ),
+                patch.object(
+                    archive_services,
+                    "edge_receipts_for_source",
+                    side_effect=AssertionError("validate should use the Doctor edge receipt cache"),
+                ),
             ):
                 validate_code, validate_output = self.run_cli(["validate", str(archive_root), "--format", "json"])
             validate_result = json.loads(validate_output)
