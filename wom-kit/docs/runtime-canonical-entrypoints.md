@@ -1,6 +1,6 @@
 # Runtime Canonical Entry Points
 
-Status: v0.3.224 quick runtime-context and no-repeat handoff checkpoint
+Status: v0.3.226 quick handoff and archive identity consistency checkpoint
 
 When an AI runtime enters a WOM archive, it needs a small, explicit "start
 here" map. The archive may contain zets, source bindings, provider metadata,
@@ -61,6 +61,12 @@ anything:
 This order keeps archive identity, operational mission/state, local
 instructions, beginner-facing wording, and material-link safety gates aligned
 before any later approval-gated write.
+
+Runtime context treats `archive.yml principal` as the archive principal
+declaration and `archive-identity.yml` as the identity and ownership core. Its
+`identity_consistency` block reports whether duplicated metadata agrees. A
+non-aligned result routes first to `archive identity-reconcile <archive-root>
+--dry-run --format json`; it never grants automatic write authority.
 
 To inspect only the operational handoff, run:
 

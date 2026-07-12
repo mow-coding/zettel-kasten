@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WOM-kit archive identity reconcile receipt",
+  "type": "object",
+  "required": [
+    "schema",
+    "receipt_id",
+    "receipt_path",
+    "action",
+    "dry_run",
+    "timestamp",
+    "archive_id",
+    "reviewed_by",
+    "preconditions",
+    "authority",
+    "changes",
+    "identity_yml_after_sha256",
+    "result"
+  ],
+  "properties": {
+    "schema": {"const": "wom-kit/archive-identity-reconcile-receipt/v0.1"},
+    "receipt_id": {"type": "string"},
+    "receipt_path": {"type": "string"},
+    "action": {"const": "reconcile_archive_identity"},
+    "dry_run": {"const": false},
+    "timestamp": {"type": "string"},
+    "archive_id": {"type": "string"},
+    "reviewed_by": {"type": "string"},
+    "preconditions": {
+      "type": "object",
+      "required": [
+        "archive_yml_sha256",
+        "identity_yml_before_sha256",
+        "identity_yml_proposed_sha256",
+        "principal_metadata_reviewed"
+      ],
+      "properties": {
+        "archive_yml_sha256": {"type": "string"},
+        "identity_yml_before_sha256": {"type": "string"},
+        "identity_yml_proposed_sha256": {"type": "string"},
+        "principal_metadata_reviewed": {"const": true}
+      }
+    },
+    "authority": {"type": "object"},
+    "changes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["field", "value_source", "values_stored"],
+        "properties": {
+          "field": {"enum": ["identity.display_name", "identity.identity_id"]},
+          "value_source": {"type": "string"},
+          "values_stored": {"const": false}
+        }
+      }
+    },
+    "identity_yml_after_sha256": {"type": "string"},
+    "result": {
+      "type": "object",
+      "required": [
+        "changed_paths",
+        "archive_yml_written",
+        "archive_identity_yml_written",
+        "receipt_written",
+        "provider_api_called",
+        "credential_store_read",
+        "zettels_or_objets_read",
+        "identity_values_stored_in_receipt",
+        "semantic_changes_limited_to_listed_fields",
+        "yaml_reserialized"
+      ],
+      "properties": {
+        "changed_paths": {"type": "array", "items": {"type": "string"}},
+        "archive_yml_written": {"const": false},
+        "archive_identity_yml_written": {"const": true},
+        "receipt_written": {"const": true},
+        "provider_api_called": {"const": false},
+        "credential_store_read": {"const": false},
+        "zettels_or_objets_read": {"const": false},
+        "identity_values_stored_in_receipt": {"const": false},
+        "semantic_changes_limited_to_listed_fields": {"const": true},
+        "yaml_reserialized": {"const": true}
+      }
+    }
+  }
+}

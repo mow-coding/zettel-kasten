@@ -141,6 +141,7 @@ docs/imap-mailbox-material-capture-approval-audit.md
 docs/version-truth-source.md
 docs/project-version-update.md
 docs/ai-start-here.md
+docs/archive-identity-reconcile.md
 docs/zet-catalog-one-process-pass.md
 docs/runtime-canonical-entrypoints.md
 docs/operational-context.md
@@ -205,10 +206,13 @@ profile-wallet
   Preview wallet-ready WOM profile/node identity metadata. Dry-run only; never generates keys, signs data, stores secrets, or calls blockchain/provider APIs.
 
 runtime-context
-  Print quick read-only JSON context for terminal-capable AI runtimes. It confirms archive id, archive type/scope, principal/owner summary, AI write policy, safe archive-relative paths, canonical entrypoint metadata, AI guide handoff order, material-link routes, safe actions, WOM-kit version, and local-sovereignty storage authority without constructing Doctor by default. Add `--full-doctor --progress` only for a complete archive health check. Local absolute paths are redacted by default.
+  Print quick read-only JSON context for terminal-capable AI runtimes. It confirms archive id, archive type/scope, principal/owner summary, cross-file identity consistency, AI write policy, safe archive-relative paths, canonical entrypoint metadata, AI guide handoff order, material-link routes, safe actions, WOM-kit version, and local-sovereignty storage authority without constructing Doctor by default. Add `--full-doctor --progress` only for a complete archive health check. Local absolute paths are redacted by default.
 
 ai-start-here --dry-run
-  Print one compact first-read map for an entering AI operator without scanning every zet or receipt. The result marks runtime-context already included and separates `completed_commands` from executable `next_commands` so an AI does not repeat the handoff. Add `--full-doctor` only when a complete archive health check is needed. Optional `--progress` reports de-duplicated counts, work units, stage elapsed time, rate, ETA, and count-bearing heartbeats on stderr; a long mint receipt heartbeat also uses a fixed safe phase such as `file_hash` or `edge_receipt_index`, while same-count private substeps are coalesced before formatter work. Optional `--output .wom-scratch/diagnostics/<name>.json` stores the full result as private local scratch and leaves a compact stdout summary.
+  Print one compact first-read map for an entering AI operator without scanning every zet or receipt. The result marks runtime-context already included, surfaces identity consistency, routes a mismatch to the read-only identity-reconcile preview, and separates `completed_commands` from executable `next_commands` so an AI does not repeat the handoff. Add `--full-doctor` only when a complete archive health check is needed. Optional `--progress` reports de-duplicated counts, work units, stage elapsed time, rate, ETA, and count-bearing heartbeats on stderr; a long mint receipt heartbeat also uses a fixed safe phase such as `file_hash` or `edge_receipt_index`, while same-count private substeps are coalesced before formatter work. Optional `--output .wom-scratch/diagnostics/<name>.json` stores the full result as private local scratch and leaves a compact stdout summary.
+
+identity-reconcile --dry-run|--approve
+  Compare the principal declaration in `archive.yml` with the identity and ownership core in `archive-identity.yml`. Dry-run returns only field names and current/proposed SHA-256 digests. Same-principal display metadata and a missing or template-like identity id can be repaired only through a reviewed, three-digest-bound approval; principal conflicts fail closed. Approval edits only `archive-identity.yml`, writes a value-free receipt, and restores exact prior bytes on handled receipt failure.
 
 local-sovereignty --dry-run
   Report the machine-readable authority model: local WOM is canonical, GitHub backs up metadata/version history, object storage backs up objet bytes, and external databases hold regenerable map backups or replicas. It performs no live audit, provider/network call, secret read, or write.

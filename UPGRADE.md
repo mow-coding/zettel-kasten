@@ -91,6 +91,46 @@ For project-folder work, remember that temporary intake staging is not the
 archive of record. Preserve originals as objets, source maps, manifests, zets,
 and receipts before any cleanup.
 
+## v0.3.226 Archive Identity Consistency And Reviewed Repair
+
+v0.3.226 adds no automatic migration. Quick runtime-context, AI start-here,
+and Doctor now compare the principal declaration in `archive.yml` with the
+identity and ownership core in `archive-identity.yml`. They report a mismatch
+instead of silently choosing one file by read order.
+
+Begin with the read-only preview when `identity_consistency.status` is not
+`aligned`:
+
+```text
+archive identity-reconcile <archive-root> --dry-run --format json
+```
+
+Archives created by v0.3.226 `init` or onboarding begin aligned because their
+template identity id/display metadata is replaced with the reviewed archive
+and principal values. Existing archives are never changed by upgrade alone.
+
+The preview reads only the two control files, writes nothing, and returns field
+names and SHA-256 digests without identity values. Principal, archive-id,
+scope, or invalid-document conflicts block automatic repair. Only
+same-principal display metadata and a missing or template-like identity id can
+be proposed.
+
+If the result is `repair_ready`, inspect both source files and use the complete
+`approval_command` returned by that exact preview. It requires an attributed
+reviewer, an explicit principal-metadata affirmation, and the exact archive,
+current identity, and proposed identity digests. Any drift refuses the write.
+
+Approval edits only `archive-identity.yml`, reserializes its YAML, verifies the
+result digest, and writes a value-free receipt under
+`receipts/identity-reconciles/`. Parsed semantic changes are limited to the
+listed fields, but comments or YAML formatting may normalize. A handled
+receipt failure restores the exact original identity bytes. After approval:
+
+```text
+archive runtime-context <archive-root> --strict --format json
+archive doctor <archive-root> --strict
+```
+
 ## v0.3.225 Targeted Full-Doctor Edge Receipt Index
 
 v0.3.225 adds no archive migration and writes no archive state. In an explicit

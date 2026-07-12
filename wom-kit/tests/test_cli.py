@@ -488,6 +488,15 @@ class ArchiveCliTests(unittest.TestCase):
         shutil.copytree(KIT_ROOT / "examples" / "fake-life-archive", root)
         return root
 
+    def make_identity_template_mismatch(self, root: Path) -> Path:
+        archive_root = self.copy_fake_archive(root)
+        identity_path = archive_root / "archive-identity.yml"
+        identity = archive_cli.load_yaml(identity_path.read_text(encoding="utf-8"))
+        identity["identity"]["identity_id"] = "identity:archive:personal:template"
+        identity["identity"]["display_name"] = "Template Person"
+        identity_path.write_text(archive_cli.dump_yaml(identity), encoding="utf-8")
+        return archive_root
+
     def create_abstract_backfill_proposal(
         self,
         archive_root: Path,
@@ -28635,6 +28644,238 @@ state:
             self.assertIsNone(result["ai_write_policy"]["default"])
             self.assertEqual(result["ai_write_policy"]["summary"], "unavailable")
 
+    def test_runtime_context_warns_on_identity_template_mismatch_and_prefers_archive_principal(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.make_identity_template_mismatch(Path(tmp) / "archive")
+
+            code, output = self.run_cli(["runtime-context", str(archive_root), "--format", "json"])
+            strict_code, strict_output = self.run_cli(
+                ["runtime-context", str(archive_root), "--strict", "--format", "json"]
+            )
+            start_code, start_output = self.run_cli(
+                ["ai-start-here", str(archive_root), "--dry-run", "--format", "json"]
+            )
+            markdown_code, markdown_output = self.run_cli(
+                ["ai-start-here", str(archive_root), "--dry-run", "--format", "markdown"]
+            )
+            doctor_code, doctor_output = self.run_cli(["doctor", str(archive_root), "--strict"])
+
+        result = json.loads(output)
+        strict_result = json.loads(strict_output)
+        self.assertEqual(code, 0, output)
+        self.assertEqual(result["principal"]["display_name"], "Fake User")
+        self.assertEqual(result["identity_consistency"]["status"], "repair_ready")
+        finding_codes = {item["code"] for item in result["identity_consistency"]["findings"]}
+        self.assertIn("archive_identity_display_name_mismatch", finding_codes)
+        self.assertIn("archive_identity_template_residue", finding_codes)
+        self.assertTrue(result["warnings"])
+        self.assertEqual(strict_code, 1, strict_output)
+        self.assertFalse(strict_result["ok"])
+        self.assertTrue(strict_result["blockers"])
+        self.assertEqual(start_code, 0, start_output)
+        start_result = json.loads(start_output)
+        self.assertEqual(start_result["identity_consistency"]["status"], "repair_ready")
+        self.assertTrue(any("identity-reconcile" in step for step in start_result["next_safe_steps"]))
+        self.assertEqual(markdown_code, 0, markdown_output)
+        self.assertIn("Identity consistency: `repair_ready`", markdown_output)
+        self.assertIn("identity-reconcile", markdown_output)
+        self.assertEqual(doctor_code, 1, doctor_output)
+        self.assertIn("archive_identity_display_name_mismatch", doctor_output)
+        self.assertIn("archive_identity_template_residue", doctor_output)
+
+    def test_identity_reconcile_dry_run_is_content_free_and_writes_nothing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.make_identity_template_mismatch(Path(tmp) / "archive")
+            archive_before = (archive_root / "archive.yml").read_bytes()
+            identity_before = (archive_root / "archive-identity.yml").read_bytes()
+
+            code, output = self.run_cli(
+                ["identity-reconcile", str(archive_root), "--dry-run", "--format", "json"]
+            )
+
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertEqual(result["status"], "repair_ready")
+            self.assertEqual(
+                {item["field"] for item in result["proposed_changes"]},
+                {"identity.display_name", "identity.identity_id"},
+            )
+            self.assertTrue(result["expected_archive_sha256"].startswith("sha256:"))
+            self.assertTrue(result["expected_identity_sha256"].startswith("sha256:"))
+            self.assertTrue(result["proposed_identity_sha256"].startswith("sha256:"))
+            self.assertIn("--expected-proposed-identity-sha256", result["approval_command"])
+            self.assertIn("--affirm-principal-metadata-reviewed", result["approval_command"])
+            self.assertEqual(result["files_written"], [])
+            self.assertNotIn("Template Person", output)
+            self.assertNotIn("Fake User", output)
+            self.assertEqual((archive_root / "archive.yml").read_bytes(), archive_before)
+            self.assertEqual((archive_root / "archive-identity.yml").read_bytes(), identity_before)
+            self.assertFalse((archive_root / archive_services.ARCHIVE_IDENTITY_RECONCILE_RECEIPTS_DIR).exists())
+
+    def test_identity_reconcile_approve_repairs_metadata_and_writes_value_free_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.make_identity_template_mismatch(Path(tmp) / "archive")
+            archive_before = (archive_root / "archive.yml").read_bytes()
+            plan = archive_services.archive_identity_reconcile_plan(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "identity-reconcile",
+                    str(archive_root),
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test-reviewer",
+                    "--expected-archive-sha256",
+                    plan["expected_archive_sha256"],
+                    "--expected-identity-sha256",
+                    plan["expected_identity_sha256"],
+                    "--expected-proposed-identity-sha256",
+                    plan["proposed_identity_sha256"],
+                    "--affirm-principal-metadata-reviewed",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertEqual(result["status"], "applied")
+            self.assertEqual((archive_root / "archive.yml").read_bytes(), archive_before)
+            identity = archive_cli.load_yaml((archive_root / "archive-identity.yml").read_text(encoding="utf-8"))
+            self.assertEqual(identity["identity"]["display_name"], "Fake User")
+            self.assertEqual(identity["identity"]["identity_id"], "identity:archive:personal:fake-life")
+            receipt_path = archive_root / result["receipt_path"]
+            receipt_text = receipt_path.read_text(encoding="utf-8")
+            receipt = json.loads(receipt_text)
+            self.assertEqual(
+                archive_cli.validate_schema(receipt, "archive-identity-reconcile-receipt.schema.json"),
+                [],
+            )
+            self.assertNotIn("Template Person", receipt_text)
+            self.assertNotIn("Fake User", receipt_text)
+            self.assertFalse(receipt["result"]["identity_values_stored_in_receipt"])
+            self.assertTrue(receipt["result"]["semantic_changes_limited_to_listed_fields"])
+            self.assertTrue(receipt["result"]["yaml_reserialized"])
+            self.assertEqual(
+                receipt["preconditions"]["identity_yml_proposed_sha256"],
+                plan["proposed_identity_sha256"],
+            )
+            runtime_code, runtime_output = self.run_cli(
+                ["runtime-context", str(archive_root), "--strict", "--format", "json"]
+            )
+            self.assertEqual(runtime_code, 0, runtime_output)
+            self.assertEqual(json.loads(runtime_output)["identity_consistency"]["status"], "aligned")
+            doctor_code, doctor_output = self.run_cli(["doctor", str(archive_root), "--strict"])
+            self.assertEqual(doctor_code, 0, doctor_output)
+
+    def test_identity_reconcile_blocks_stale_archive_digest_without_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.make_identity_template_mismatch(Path(tmp) / "archive")
+            plan = archive_services.archive_identity_reconcile_plan(archive_root)
+            identity_before = (archive_root / "archive-identity.yml").read_bytes()
+            archive_path = archive_root / "archive.yml"
+            archive_doc = archive_cli.load_yaml(archive_path.read_text(encoding="utf-8"))
+            archive_doc["name"] = "Changed after dry-run"
+            archive_path.write_text(archive_cli.dump_yaml(archive_doc), encoding="utf-8")
+
+            code, output = self.run_cli(
+                [
+                    "identity-reconcile",
+                    str(archive_root),
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test-reviewer",
+                    "--expected-archive-sha256",
+                    plan["expected_archive_sha256"],
+                    "--expected-identity-sha256",
+                    plan["expected_identity_sha256"],
+                    "--expected-proposed-identity-sha256",
+                    plan["proposed_identity_sha256"],
+                    "--affirm-principal-metadata-reviewed",
+                ]
+            )
+
+            self.assertEqual(code, 1)
+            self.assertIn("archive.yml changed after", output)
+            self.assertEqual((archive_root / "archive-identity.yml").read_bytes(), identity_before)
+            self.assertFalse((archive_root / archive_services.ARCHIVE_IDENTITY_RECONCILE_RECEIPTS_DIR).exists())
+
+    def test_identity_reconcile_blocks_principal_id_conflict(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.make_identity_template_mismatch(Path(tmp) / "archive")
+            identity_path = archive_root / "archive-identity.yml"
+            identity = archive_cli.load_yaml(identity_path.read_text(encoding="utf-8"))
+            identity["identity"]["principal_id"] = "person:different-principal"
+            identity_path.write_text(archive_cli.dump_yaml(identity), encoding="utf-8")
+            before = identity_path.read_bytes()
+
+            code, output = self.run_cli(
+                ["identity-reconcile", str(archive_root), "--dry-run", "--format", "json"]
+            )
+
+            result = json.loads(output)
+            self.assertEqual(code, 1, output)
+            self.assertEqual(result["status"], "blocked")
+            self.assertIn(
+                "archive_identity_principal_id_mismatch",
+                {item["code"] for item in result["identity_consistency"]["findings"]},
+            )
+            self.assertEqual(result["would_write"], [])
+            self.assertEqual(identity_path.read_bytes(), before)
+
+    def test_identity_reconcile_blocks_unreviewed_proposed_digest_without_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.make_identity_template_mismatch(Path(tmp) / "archive")
+            identity_path = archive_root / "archive-identity.yml"
+            identity_before = identity_path.read_bytes()
+            plan = archive_services.archive_identity_reconcile_plan(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "identity-reconcile",
+                    str(archive_root),
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test-reviewer",
+                    "--expected-archive-sha256",
+                    plan["expected_archive_sha256"],
+                    "--expected-identity-sha256",
+                    plan["expected_identity_sha256"],
+                    "--expected-proposed-identity-sha256",
+                    "sha256:" + ("0" * 64),
+                    "--affirm-principal-metadata-reviewed",
+                ]
+            )
+
+            self.assertEqual(code, 1)
+            self.assertIn("proposed archive-identity.yml changed", output)
+            self.assertEqual(identity_path.read_bytes(), identity_before)
+            self.assertFalse((archive_root / archive_services.ARCHIVE_IDENTITY_RECONCILE_RECEIPTS_DIR).exists())
+
+    def test_identity_reconcile_receipt_failure_restores_exact_identity_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.make_identity_template_mismatch(Path(tmp) / "archive")
+            identity_path = archive_root / "archive-identity.yml"
+            identity_before = identity_path.read_bytes()
+            plan = archive_services.archive_identity_reconcile_plan(archive_root)
+
+            with patch.object(archive_services, "write_json_new_file", side_effect=OSError("fixture failure")):
+                with self.assertRaisesRegex(
+                    archive_services.ArchiveServiceError,
+                    "failed and was rolled back",
+                ):
+                    archive_services.reconcile_archive_identity(
+                        archive_root,
+                        reviewed_by="person:test-reviewer",
+                        expected_archive_sha256=plan["expected_archive_sha256"],
+                        expected_identity_sha256=plan["expected_identity_sha256"],
+                        expected_proposed_identity_sha256=plan["proposed_identity_sha256"],
+                        affirm_principal_metadata_reviewed=True,
+                    )
+
+            self.assertEqual(identity_path.read_bytes(), identity_before)
+            self.assertFalse((archive_root / archive_services.ARCHIVE_IDENTITY_RECONCILE_RECEIPTS_DIR).exists())
+
     def test_init_then_doctor_passes_strict(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = Path(tmp) / "personal-archive"
@@ -28643,6 +28884,24 @@ state:
 
             archive_yml = archive_cli.load_yaml((archive_root / "archive.yml").read_text(encoding="utf-8"))
             self.assertEqual(archive_yml["ai_write_policy"]["canonical_requires"], "human_minting")
+            identity_yml = archive_cli.load_yaml((archive_root / "archive-identity.yml").read_text(encoding="utf-8"))
+            self.assertEqual(
+                identity_yml["identity"]["display_name"],
+                archive_yml["principal"]["display_name"],
+            )
+            self.assertEqual(
+                identity_yml["identity"]["identity_id"],
+                f"identity:{archive_yml['archive_id']}",
+            )
+            self.assertFalse(
+                any(
+                    archive_services.identity_value_is_template_like(value)
+                    for value in (
+                        identity_yml["identity"]["display_name"],
+                        identity_yml["identity"]["identity_id"],
+                    )
+                )
+            )
 
             doctor_code, doctor_output = self.run_cli(["doctor", str(archive_root), "--strict"])
             self.assertEqual(doctor_code, 0, doctor_output)

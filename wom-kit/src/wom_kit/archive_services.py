@@ -266,6 +266,8 @@ OWNER_KINDS = {
     "client",
     "server",
 }
+ARCHIVE_IDENTITY_RECONCILE_RECEIPTS_DIR = "receipts/identity-reconciles"
+IDENTITY_TEMPLATE_TOKEN_RE = re.compile(r"(?:^|[:_\-\s])template(?:$|[:_\-\s])", re.IGNORECASE)
 SENSITIVE_SHARE_CATEGORIES = {"medical", "psychological", "journal", "relationship-private"}
 SENSITIVE_CATEGORY_ALIASES = {"diary": "journal", "therapy": "psychological", "mental-health": "psychological"}
 EXTERNAL_IMPORT_SOURCES = {"notion", "google_drive"}
@@ -980,6 +982,7 @@ RUNTIME_CONTEXT_SAFE_ACTIONS = [
     "run ai-response-concept-guide dry-run",
     "run operational-context dry-run",
     "run operator-feedback-plan dry-run",
+    "run identity-reconcile dry-run",
     "create draft in inbox",
     "run mint dry-run",
     "run check-safe-html dry-run",
@@ -54384,6 +54387,302 @@ def write_text_atomic(path: Path, text: str) -> None:
             temporary_path.unlink()
 
 
+def write_bytes_atomic(path: Path, data: bytes) -> None:
+    temporary_path = path.with_name(path.name + ".tmp")
+    try:
+        temporary_path.write_bytes(data)
+        temporary_path.replace(path)
+    finally:
+        if temporary_path.exists():
+            temporary_path.unlink()
+
+
+def _archive_identity_reconcile_analysis(
+    archive_root: Path | str,
+) -> tuple[dict[str, Any], bytes, bytes]:
+    root = require_existing_archive_root(archive_root)
+    archive_path = archive_internal_path(root, "archive.yml")
+    identity_path = archive_internal_path(root, "archive-identity.yml")
+    if not archive_path.is_file():
+        raise ArchiveServiceError("archive.yml is required for identity reconcile.")
+    if not identity_path.is_file():
+        raise ArchiveServiceError("archive-identity.yml is required for identity reconcile.")
+
+    archive_bytes = archive_path.read_bytes()
+    identity_bytes = identity_path.read_bytes()
+    try:
+        archive_doc = load_yaml(archive_bytes.decode("utf-8"))
+        identity_doc = load_yaml(identity_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise ArchiveServiceError("archive.yml and archive-identity.yml must be readable UTF-8 YAML.") from exc
+    if not isinstance(archive_doc, dict):
+        raise ArchiveServiceError("archive.yml must be a YAML object.")
+    if not isinstance(identity_doc, dict):
+        raise ArchiveServiceError("archive-identity.yml must be a YAML object.")
+
+    consistency = archive_identity_consistency(archive_doc, identity_doc)
+    findings = consistency["findings"]
+    blockers = [
+        finding["message"]
+        for finding in findings
+        if finding["severity"] == "ERROR" or not finding["repairable"]
+    ]
+    warnings = [finding["message"] for finding in findings if finding["severity"] == "WARN"]
+    principal = archive_doc.get("principal") if isinstance(archive_doc.get("principal"), dict) else {}
+    archive_id = archive_doc.get("archive_id")
+    archive_display_name = principal.get("display_name")
+    if not isinstance(archive_id, str) or not archive_id.strip():
+        blockers.append("archive.yml archive_id is required for identity reconcile.")
+    if not isinstance(principal.get("principal_id"), str) or not principal.get("principal_id"):
+        blockers.append("archive.yml principal.principal_id is required for identity reconcile.")
+    if not isinstance(archive_display_name, str) or not archive_display_name:
+        blockers.append("archive.yml principal.display_name is required for identity reconcile.")
+
+    proposed_doc = copy.deepcopy(identity_doc)
+    proposed_identity = proposed_doc.get("identity") if isinstance(proposed_doc.get("identity"), dict) else {}
+    if not isinstance(proposed_identity, dict):
+        proposed_identity = {}
+    proposed_changes: list[dict[str, Any]] = []
+    if not blockers and "identity.display_name" in consistency["repairable_fields"]:
+        proposed_identity["display_name"] = archive_display_name
+        proposed_changes.append(
+            {
+                "field": "identity.display_name",
+                "value_source": "archive.yml principal.display_name",
+                "values_stored_in_output": False,
+            }
+        )
+    if not blockers and "identity.identity_id" in consistency["repairable_fields"]:
+        proposed_identity["identity_id"] = f"identity:{archive_id}"
+        proposed_changes.append(
+            {
+                "field": "identity.identity_id",
+                "value_source": "derived from archive.yml archive_id",
+                "values_stored_in_output": False,
+            }
+        )
+    proposed_doc["identity"] = proposed_identity
+    proposed_bytes = dump_yaml(json_safe(proposed_doc)).encode("utf-8")
+    if not proposed_changes:
+        proposed_bytes = identity_bytes
+    elif proposed_bytes == identity_bytes:
+        proposed_changes = []
+
+    schema_issues = validate_schema(proposed_doc, "archive-identity.schema.json")
+    if schema_issues:
+        blockers.extend(
+            f"Proposed archive-identity.yml remains invalid at {issue.data_path}."
+            for issue in schema_issues
+        )
+
+    archive_sha = "sha256:" + hashlib.sha256(archive_bytes).hexdigest()
+    identity_before_sha = "sha256:" + hashlib.sha256(identity_bytes).hexdigest()
+    identity_after_sha = "sha256:" + hashlib.sha256(proposed_bytes).hexdigest()
+    receipt_relative = None
+    if proposed_changes:
+        receipt_relative = (
+            f"{ARCHIVE_IDENTITY_RECONCILE_RECEIPTS_DIR}/"
+            f"{identity_after_sha.removeprefix('sha256:')}.archive-identity-reconcile.json"
+        )
+        if (root / receipt_relative).exists():
+            blockers.append("The proposed archive identity reconcile receipt already exists.")
+
+    if blockers:
+        status = "blocked"
+    elif proposed_changes:
+        status = "repair_ready"
+    elif findings:
+        status = "manual_review_required"
+    else:
+        status = "aligned"
+    approval_command = None
+    if status == "repair_ready":
+        approval_command = (
+            "archive identity-reconcile <archive-root> --approve --reviewed-by <reviewer> "
+            f"--expected-archive-sha256 {archive_sha} "
+            f"--expected-identity-sha256 {identity_before_sha} "
+            f"--expected-proposed-identity-sha256 {identity_after_sha} "
+            "--affirm-principal-metadata-reviewed --format json"
+        )
+    public_result = {
+        "ok": not blockers,
+        "status": status,
+        "dry_run": True,
+        "lifecycle_action": "archive_identity_reconcile",
+        "archive_id": archive_id,
+        "identity_consistency": consistency,
+        "authority": consistency["authority"],
+        "expected_archive_sha256": archive_sha,
+        "expected_identity_sha256": identity_before_sha,
+        "proposed_identity_sha256": identity_after_sha,
+        "proposed_changes": proposed_changes,
+        "proposed_receipt_path": receipt_relative,
+        "approval_command": approval_command,
+        "approval_requirements": {
+            "reviewed_by": True,
+            "expected_archive_sha256": True,
+            "expected_identity_sha256": True,
+            "expected_proposed_identity_sha256": True,
+            "affirm_principal_metadata_reviewed": True,
+        },
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+        "would_write": ["archive-identity.yml", receipt_relative] if receipt_relative and not blockers else [],
+        "files_written": [],
+        "write_boundary": {
+            "archive_yml_written": False,
+            "archive_identity_yml_written": False,
+            "receipt_written": False,
+            "provider_api_called": False,
+            "credential_store_read": False,
+            "zettels_or_objets_read": False,
+        },
+    }
+    return public_result, identity_bytes, proposed_bytes
+
+
+def archive_identity_reconcile_plan(archive_root: Path | str) -> dict[str, Any]:
+    result, _identity_before, _identity_after = _archive_identity_reconcile_analysis(archive_root)
+    return result
+
+
+def normalize_archive_identity_reconcile_sha256(value: str | None, label: str) -> str:
+    normalized = str(value or "").strip().lower().removeprefix("sha256:")
+    if not SHA256_RE.fullmatch(normalized):
+        raise ArchiveServiceError(f"{label} must be a SHA-256 digest from the identity reconcile dry-run.")
+    return "sha256:" + normalized
+
+
+def reconcile_archive_identity(
+    archive_root: Path | str,
+    *,
+    reviewed_by: str,
+    expected_archive_sha256: str,
+    expected_identity_sha256: str,
+    expected_proposed_identity_sha256: str,
+    affirm_principal_metadata_reviewed: bool,
+) -> dict[str, Any]:
+    reviewer = str(reviewed_by or "").strip()
+    if not reviewer or not safe_source_intake_plan_scalar(reviewer):
+        raise ArchiveServiceError("identity-reconcile --approve requires a safe --reviewed-by value.")
+    if not affirm_principal_metadata_reviewed:
+        raise ArchiveServiceError("identity-reconcile --approve requires --affirm-principal-metadata-reviewed.")
+    expected_archive = normalize_archive_identity_reconcile_sha256(
+        expected_archive_sha256,
+        "--expected-archive-sha256",
+    )
+    expected_identity = normalize_archive_identity_reconcile_sha256(
+        expected_identity_sha256,
+        "--expected-identity-sha256",
+    )
+    expected_proposed_identity = normalize_archive_identity_reconcile_sha256(
+        expected_proposed_identity_sha256,
+        "--expected-proposed-identity-sha256",
+    )
+
+    root = require_existing_archive_root(archive_root)
+    plan, identity_before_bytes, identity_after_bytes = _archive_identity_reconcile_analysis(root)
+    if not plan["ok"] or plan["status"] != "repair_ready":
+        raise ArchiveServiceError("Archive identity reconcile is not repair-ready; run the dry-run and resolve blockers first.")
+    if plan["expected_archive_sha256"] != expected_archive:
+        raise ArchiveServiceError("archive.yml changed after the identity reconcile dry-run; rerun the dry-run.")
+    if plan["expected_identity_sha256"] != expected_identity:
+        raise ArchiveServiceError("archive-identity.yml changed after the identity reconcile dry-run; rerun the dry-run.")
+    if plan["proposed_identity_sha256"] != expected_proposed_identity:
+        raise ArchiveServiceError("The proposed archive-identity.yml changed after the identity reconcile dry-run; rerun the dry-run.")
+
+    identity_path = archive_internal_path(root, "archive-identity.yml")
+    receipt_relative = str(plan["proposed_receipt_path"])
+    receipt_path = archive_internal_path(root, receipt_relative)
+    if receipt_path.exists():
+        raise ArchiveServiceError("The proposed archive identity reconcile receipt already exists.")
+    now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    receipt = {
+        "schema": "wom-kit/archive-identity-reconcile-receipt/v0.1",
+        "receipt_id": "receipt:archive-identity-reconcile:" + plan["proposed_identity_sha256"].removeprefix("sha256:"),
+        "receipt_path": receipt_relative,
+        "action": "reconcile_archive_identity",
+        "dry_run": False,
+        "timestamp": now,
+        "archive_id": plan["archive_id"],
+        "reviewed_by": reviewer,
+        "preconditions": {
+            "archive_yml_sha256": plan["expected_archive_sha256"],
+            "identity_yml_before_sha256": plan["expected_identity_sha256"],
+            "identity_yml_proposed_sha256": plan["proposed_identity_sha256"],
+            "principal_metadata_reviewed": True,
+        },
+        "authority": plan["authority"],
+        "changes": [
+            {
+                "field": change["field"],
+                "value_source": change["value_source"],
+                "values_stored": False,
+            }
+            for change in plan["proposed_changes"]
+        ],
+        "identity_yml_after_sha256": plan["proposed_identity_sha256"],
+        "result": {
+            "changed_paths": ["archive-identity.yml", receipt_relative],
+            "archive_yml_written": False,
+            "archive_identity_yml_written": True,
+            "receipt_written": True,
+            "provider_api_called": False,
+            "credential_store_read": False,
+            "zettels_or_objets_read": False,
+            "identity_values_stored_in_receipt": False,
+            "semantic_changes_limited_to_listed_fields": True,
+            "yaml_reserialized": True,
+        },
+    }
+    receipt_issues = validate_schema(receipt, "archive-identity-reconcile-receipt.schema.json")
+    if receipt_issues:
+        raise ArchiveServiceError("Archive identity reconcile receipt failed schema validation.")
+
+    receipt_parent_existed = receipt_path.parent.exists()
+    receipt_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        write_bytes_atomic(identity_path, identity_after_bytes)
+        if "sha256:" + sha256_path(identity_path) != plan["proposed_identity_sha256"]:
+            raise ArchiveServiceError("archive-identity.yml verification failed after write.")
+        write_json_new_file(receipt_path, receipt)
+    except Exception as exc:
+        rollback_errors: list[str] = []
+        try:
+            if receipt_path.exists():
+                receipt_path.unlink()
+        except OSError:
+            rollback_errors.append("receipt_cleanup_failed")
+        try:
+            write_bytes_atomic(identity_path, identity_before_bytes)
+            if "sha256:" + sha256_path(identity_path) != plan["expected_identity_sha256"]:
+                rollback_errors.append("identity_restore_digest_mismatch")
+        except OSError:
+            rollback_errors.append("identity_restore_failed")
+        if not receipt_parent_existed:
+            cleanup_empty_archive_dirs(root, [receipt_path])
+        if rollback_errors:
+            raise ArchiveServiceError(
+                "Archive identity reconcile failed and rollback is incomplete: " + ", ".join(rollback_errors)
+            ) from exc
+        raise ArchiveServiceError("Archive identity reconcile failed and was rolled back.") from exc
+
+    return {
+        "ok": True,
+        "status": "applied",
+        "dry_run": False,
+        "lifecycle_action": "archive_identity_reconcile",
+        "archive_id": plan["archive_id"],
+        "reviewed_by": reviewer,
+        "changed_fields": [change["field"] for change in plan["proposed_changes"]],
+        "receipt_path": receipt_relative,
+        "identity_yml_before_sha256": plan["expected_identity_sha256"],
+        "identity_yml_after_sha256": plan["proposed_identity_sha256"],
+        "files_written": ["archive-identity.yml", receipt_relative],
+        "write_boundary": receipt["result"],
+    }
+
+
 def normalize_unique_strings(values: list[str] | None) -> list[str]:
     result: list[str] = []
     for value in values or []:
@@ -60169,6 +60468,13 @@ def runtime_context(
             else:
                 warnings.append(message)
 
+    identity_consistency = archive_identity_consistency(archive_config, identity_doc)
+    for finding in identity_consistency["findings"]:
+        if finding["severity"] == "ERROR":
+            blockers.append(finding["message"])
+        else:
+            warnings.append(finding["message"])
+
     doctor_summary = runtime_context_doctor_summary(diagnostics, strict=strict, blockers=blockers, warnings=warnings)
     paths = runtime_context_paths(root, archive_config, warnings)
     canonical_entrypoints = runtime_context_handoff_entrypoints(
@@ -60188,6 +60494,7 @@ def runtime_context(
         "archive_type": archive_type,
         "scope": scope,
         "principal": runtime_context_principal_summary(archive_config, identity_doc),
+        "identity_consistency": identity_consistency,
         "owner": runtime_context_owner_summary(identity_doc),
         "ai_write_policy": runtime_context_ai_write_policy_summary(archive_config),
         "paths": paths,
@@ -61091,6 +61398,11 @@ def ai_start_here(
         inspection_reads=observed_reads,
     )
     entrypoints = context.get("canonical_entrypoints") if isinstance(context.get("canonical_entrypoints"), dict) else {}
+    identity_consistency = (
+        context.get("identity_consistency")
+        if isinstance(context.get("identity_consistency"), dict)
+        else {"status": "identity_document_unavailable"}
+    )
     operational_context = context.get("operational_context") if isinstance(context.get("operational_context"), dict) else {}
     read_order = entrypoints.get("read_order") if isinstance(entrypoints.get("read_order"), list) else []
     present_entrypoints = [
@@ -61158,6 +61470,7 @@ def ai_start_here(
         "archive_type": context.get("archive_type"),
         "scope": context.get("scope"),
         "principal": context.get("principal"),
+        "identity_consistency": identity_consistency,
         "owner": context.get("owner"),
         "storage_authority": context.get("storage_authority")
         if isinstance(context.get("storage_authority"), dict)
@@ -61172,6 +61485,7 @@ def ai_start_here(
             "inspection_mode": mode,
             "runtime_context_included": True,
             "runtime_context_rerun_required": False,
+            "identity_consistency_status": identity_consistency.get("status"),
             "doctor_checked": (
                 context.get("doctor_summary", {}).get("checked")
                 if isinstance(context.get("doctor_summary"), dict)
@@ -61234,6 +61548,13 @@ def ai_start_here(
         "next_safe_steps": unique_preserve_order(
             [
                 "This ai-start-here result already includes runtime-context; do not run runtime-context again before using this map.",
+                *(
+                    [
+                        "Identity declarations need review; run archive identity-reconcile <archive-root> --dry-run --format json before relying on the conflicting metadata."
+                    ]
+                    if identity_consistency.get("status") not in {"aligned", "identity_document_unavailable"}
+                    else []
+                ),
                 *next_lines,
                 (
                     "Review the quick start map first; run ai-start-here --full-doctor only when a complete archive health check is needed."
@@ -61627,12 +61948,136 @@ def runtime_context_local_paths(root: Path, paths: dict[str, str | None]) -> dic
     return local_paths
 
 
+def identity_value_is_template_like(value: Any) -> bool:
+    return isinstance(value, str) and bool(IDENTITY_TEMPLATE_TOKEN_RE.search(value.strip()))
+
+
+def archive_identity_consistency(archive_config: dict[str, Any], identity_doc: dict[str, Any]) -> dict[str, Any]:
+    principal = archive_config.get("principal") if isinstance(archive_config.get("principal"), dict) else {}
+    identity = identity_doc.get("identity") if isinstance(identity_doc.get("identity"), dict) else {}
+    if not identity:
+        return {
+            "status": "identity_document_unavailable",
+            "findings": [],
+            "repairable_fields": [],
+            "repair_command": "archive identity-reconcile <archive-root> --dry-run --format json",
+            "authority": {
+                "archive_principal_declaration": "archive.yml principal",
+                "identity_and_ownership_core": "archive-identity.yml",
+                "duplicate_display_metadata_must_match": True,
+            },
+        }
+
+    findings: list[dict[str, Any]] = []
+    repairable_fields: list[str] = []
+
+    def add_finding(code: str, severity: str, message: str, field: str, *, repairable: bool = False) -> None:
+        findings.append(
+            {
+                "code": code,
+                "severity": severity,
+                "message": message,
+                "field": field,
+                "repairable": repairable,
+            }
+        )
+        if repairable and field not in repairable_fields:
+            repairable_fields.append(field)
+
+    archive_id = archive_config.get("archive_id")
+    identity_archive_id = identity.get("archive_id")
+    if archive_id and identity_archive_id != archive_id:
+        add_finding(
+            "archive_identity_archive_id_mismatch",
+            "ERROR",
+            "archive-identity.yml identity.archive_id does not match archive.yml archive_id.",
+            "identity.archive_id",
+        )
+
+    archive_type = archive_config.get("type")
+    identity_scope = identity.get("scope")
+    if archive_type and identity_scope and identity_scope != archive_type:
+        add_finding(
+            "archive_identity_scope_mismatch",
+            "WARN",
+            "archive-identity.yml identity.scope does not match archive.yml type.",
+            "identity.scope",
+        )
+
+    archive_principal_id = principal.get("principal_id")
+    identity_principal_id = identity.get("principal_id")
+    same_principal = bool(archive_principal_id and identity_principal_id == archive_principal_id)
+    if archive_principal_id and identity_principal_id != archive_principal_id:
+        add_finding(
+            "archive_identity_principal_id_mismatch",
+            "ERROR",
+            "archive.yml and archive-identity.yml identify different principals; automatic repair is blocked.",
+            "identity.principal_id",
+        )
+
+    archive_display_name = principal.get("display_name")
+    identity_display_name = identity.get("display_name")
+    if same_principal and isinstance(archive_display_name, str) and archive_display_name:
+        if identity_display_name != archive_display_name:
+            add_finding(
+                "archive_identity_display_name_mismatch",
+                "WARN",
+                "archive.yml and archive-identity.yml describe the same principal with different display metadata.",
+                "identity.display_name",
+                repairable=True,
+            )
+
+    identity_id = identity.get("identity_id")
+    if not isinstance(identity_id, str) or not identity_id.strip():
+        add_finding(
+            "archive_identity_identity_id_missing",
+            "WARN",
+            "archive-identity.yml identity.identity_id is missing and needs reviewed repair.",
+            "identity.identity_id",
+            repairable=bool(archive_id),
+        )
+
+    template_fields = [
+        field
+        for field, value in [
+            ("identity.identity_id", identity_id),
+            ("identity.display_name", identity_display_name),
+        ]
+        if identity_value_is_template_like(value)
+    ]
+    if template_fields:
+        for field in template_fields:
+            if field == "identity.identity_id" and archive_id and field not in repairable_fields:
+                repairable_fields.append(field)
+        add_finding(
+            "archive_identity_template_residue",
+            "WARN",
+            "archive-identity.yml still contains template-like identity metadata.",
+            template_fields[0],
+            repairable=all(field in repairable_fields for field in template_fields),
+        )
+
+    has_error = any(finding["severity"] == "ERROR" for finding in findings)
+    status = "blocked" if has_error else ("repair_ready" if repairable_fields else ("warning" if findings else "aligned"))
+    return {
+        "status": status,
+        "findings": findings,
+        "repairable_fields": repairable_fields,
+        "repair_command": "archive identity-reconcile <archive-root> --dry-run --format json",
+        "authority": {
+            "archive_principal_declaration": "archive.yml principal",
+            "identity_and_ownership_core": "archive-identity.yml",
+            "duplicate_display_metadata_must_match": True,
+        },
+    }
+
+
 def runtime_context_principal_summary(archive_config: dict[str, Any], identity_doc: dict[str, Any]) -> dict[str, Any]:
     principal = archive_config.get("principal") if isinstance(archive_config.get("principal"), dict) else {}
     identity = identity_doc.get("identity") if isinstance(identity_doc.get("identity"), dict) else {}
     return {
-        "principal_id": identity.get("principal_id") or principal.get("principal_id"),
-        "display_name": identity.get("display_name") or principal.get("display_name"),
+        "principal_id": principal.get("principal_id") or identity.get("principal_id"),
+        "display_name": principal.get("display_name") or identity.get("display_name"),
         "kind": principal.get("kind"),
         "identity_id": identity.get("identity_id"),
     }

@@ -6,6 +6,32 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.226 - 2026-07-12
+
+Archive identity consistency and reviewed repair checkpoint. Additive; no
+automatic archive migration.
+
+- **Explicit identity authority.** Runtime context and AI start-here treat
+  `archive.yml principal` as the archive principal declaration and
+  `archive-identity.yml` as the identity/ownership core, then report duplicate
+  metadata conflicts instead of silently preferring read order.
+- **Aligned new archives.** `init` and onboarding now replace template identity
+  id/display metadata with the reviewed archive/principal values instead of
+  preserving template residue in every newly created archive.
+- **Quick operator diagnosis.** Runtime context, AI start-here, and Doctor
+  surface a bounded `identity_consistency` status. Repairable findings route to
+  `archive identity-reconcile <archive-root> --dry-run --format json`.
+- **Reviewed repair only.** Dry-run exposes changed field names and three
+  SHA-256 digests without identity values. Approval is bound to the archive,
+  current identity, and proposed identity digests and requires an attributed
+  reviewer plus an explicit principal-metadata affirmation.
+- **Value-free receipt and rollback.** Approval edits only
+  `archive-identity.yml`, verifies the proposed digest, writes a schema-backed
+  receipt without display or identity values, and restores the exact original
+  bytes on handled receipt failure. Principal conflicts fail closed.
+- **Public version truth.** `VERSIONING.md` no longer labels the historical
+  v0.3.1 showcase checkpoint as the current package and public baseline.
+
 ## v0.3.225 - 2026-07-12
 
 Targeted full-Doctor edge-receipt index checkpoint. Additive; no archive

@@ -33,10 +33,10 @@ wom-kit/docs/releases/ - do not re-grow baseline ladders or tag lists here.
 Current public baseline:
 
 ```text
-v0.3.225 pre-release
+v0.3.226 pre-release
 ```
 
-Previous public baseline: v0.3.224 pre-release.
+Previous public baseline: v0.3.225 pre-release.
 
 Full release history: see [CHANGELOG.md](CHANGELOG.md) and [wom-kit/docs/releases/](wom-kit/docs/releases/).
 
@@ -117,7 +117,7 @@ approval-gated write, or docs-only), see the
 - read-only `archive ai-response-contract --dry-run` for AI operators that need a conversational status-board contract before answering a human: outcome, evidence basis, privacy/approval boundary, remaining work, and no web UI requirement,
 - core read-only operator commands now expose top-level `status_class`, `input_provenance_class`, `secret_signal_class`, and `operator_envelope` fields so AI operators can apply the response contract without inferring those classes from prose,
 - runtime-context canonical entrypoint metadata so AI runtimes can see which archive-relative files/directories to treat as start-here and authoritative sources, plus machine-readable `ai_runtime_order`, `recommended_first_commands`, and `material_link_routes` that hand off from `runtime-context` to `AGENTS.md` and `ai-response-concept-guide`,
-- read-only `archive ai-start-here <archive-root> --dry-run --format markdown|json` and quick-default CLI/MCP `runtime-context` project identity, canonical entrypoints, authority, and operational context without walking every zet or receipt; complete Doctor work is explicit through `--full-doctor`, its edge-receipt evolution check builds one filename-only index and opens only receipts belonging to the mismatched zet while reporting separate content-free index/load counts, and start-here marks runtime-context as already included while exposing separate `completed_commands` and `next_commands` so an AI does not immediately repeat the expensive handoff step,
+- read-only `archive ai-start-here <archive-root> --dry-run --format markdown|json` and quick-default CLI/MCP `runtime-context` project identity, canonical entrypoints, authority, operational context, and cross-file identity consistency without walking every zet or receipt; complete Doctor work is explicit through `--full-doctor`, its edge-receipt evolution check builds one filename-only index and opens only receipts belonging to the mismatched zet while reporting separate content-free index/load counts, start-here marks runtime-context as already included while exposing separate `completed_commands` and `next_commands`, new archives replace template identity metadata during initialization, and existing same-principal template/display mismatches route to the value-free `identity-reconcile --dry-run` plus an explicit three-digest-bound approval instead of a silent metadata rewrite,
 - AI operational context rehydration through `ops/operational-context.yml`, runtime-context field `operational_context`, and approval-gated `archive operational-context` updates with receipts, so an AI runtime can recover mission, scope, state, gotchas, reviewed decisions, and next actions after context compression without reading broad archive bodies first,
 - AI token usage observability through read-only `archive ai-usage-plan --dry-run`, approval-gated `archive ai-usage-record --approve`, and read-only `archive ai-usage-report --dry-run`, so WOM can estimate explicit context packs, record non-secret runtime token counters, and aggregate bottlenecks without storing prompts or responses,
 - read-only `archive ai-response-concept-guide --dry-run` for beginner-facing AI explanation cards about sha256 object identity vs location, manifests vs zets, the objet -> derived text -> zet layer split, operational term translations for edge types, lifecycle states, and connection kinds including `contains` for structural child page/database containment, plus safe routing to Notion import material-clue audits, source-map material-link planning, connection import planning, nested tree recovery planning, and ancestor crawl request planning when provider locators were omitted from imported zettel bodies or structural relations need model review, without overclaiming upload, availability, stronger tie meaning, or forced edge-type mappings,
