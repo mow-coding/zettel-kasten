@@ -6,6 +6,32 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.230 - 2026-07-13
+
+Digest-bound content-change review checkpoint. Additive receipt fields; no
+archive migration or automatic archive write.
+
+- **Content-free human review plan.** A `content_change` dry-run now returns an
+  ordered `human_review_plan` for the canonical zet, mint snapshot, source, and
+  relevant receipts. It names paths, roles, changed fields or refs, and SHA-256
+  evidence without embedding zet bodies, titles, frontmatter values, or local
+  absolute paths.
+- **Three explicit decisions.** The plan separates `intentional_change`,
+  `unintentional_change`, and `uncertain`, with an exact next command and
+  fail-closed stop conditions for each. Retired-draft changes are reviewed per
+  changed ref; success on one reconcile target never approves another.
+- **Approval bound to reviewed bytes.** A content-change approval now requires
+  `--reviewed-plan-sha256` in addition to `--reviewed-by` and
+  `--content-changed-ack`. WOM-kit recomputes the plan before writing and stops
+  if any bound evidence changed after the human dry-run.
+- **Auditable completion.** Successful content-change approvals record the
+  reviewed plan digest in both provenance and the immutable audit receipt, then
+  report the human review as completed. Format-only approvals remain compatible
+  and do not require the new digest.
+- **BOM command parity.** Generated review and approval commands preserve
+  `--strip-bom`, so a human-approved BOM cleanup cannot silently lose its
+  explicit strip intent between dry-run and apply.
+
 ## v0.3.229 - 2026-07-13
 
 Executable BOM reconcile guidance checkpoint. Additive; no archive migration

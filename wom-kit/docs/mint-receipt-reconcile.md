@@ -30,13 +30,16 @@ into the mint receipt — so `doctor` goes GREEN on that receipt afterward. That
 green is **not** independent proof that the content is unchanged or correct; it
 records that a named human (`--reviewed-by`) looked at the on-disk content and
 vouched for it. The `--content-changed-ack` gate lets a reviewer bless an
-*arbitrary* content change. The integrity guarantee of a `content_change`
-reconcile record is therefore bounded entirely by that reviewer's judgment — the
-receipt attests "a human accepted these bytes on this date," not "these bytes are
-byte-identical to what was minted." A `format_drift` reconcile carries the
-stronger, machine-checkable claim (bytes differ only by newline/BOM); a
-`content_change` reconcile does not. Treat the reviewer field as the actual
-warrant.
+*arbitrary* content change, while `--reviewed-plan-sha256` proves only that the
+bytes and receipt refs have not changed since that review plan was produced. It
+does not judge whether the change is correct. The integrity guarantee of a
+`content_change` reconcile record is therefore bounded by the named human's
+judgment over the digest-bound evidence — the receipt attests "this human
+accepted these reviewed bytes on this date," not "these bytes are identical to
+what was minted." A `format_drift` reconcile carries the stronger,
+machine-checkable claim (bytes differ only by newline/BOM); a `content_change`
+reconcile does not. Treat the reviewer and reviewed-plan digest together as the
+actual warrant.
 
 ## Command
 
@@ -45,6 +48,7 @@ archive remint-reconcile <archive-root> (--zettel-id <id> | --path <rel>)
         [--dry-run | --approve]
         [--reviewed-by <actor>]
         [--content-changed-ack]
+        [--reviewed-plan-sha256 <sha256>]
         [--strip-bom]
         [--diagnostic-only]
         [--format text|json]
@@ -53,6 +57,8 @@ archive remint-reconcile <archive-root> (--zettel-id <id> | --path <rel>)
 - `--dry-run` (the default) classifies and previews with zero writes.
 - `--approve` re-issues the receipt after review; it requires `--reviewed-by`.
 - `--content-changed-ack` is required to approve a `content_change`.
+- `--reviewed-plan-sha256` is also required for `content_change`; copy it from
+  the reviewed dry-run so approval is bound to exactly that evidence state.
 - `--strip-bom` (opt-in) removes a single leading UTF-8 BOM; see below.
 - `--diagnostic-only` is dry-run JSON only. It omits canonical body text and
   frontmatter values while keeping drift and body-diff diagnostics; see below.
@@ -85,6 +91,31 @@ change, any content frontmatter change (for example a title correction, a
 canonical frontmatter, not the snapshot), and every case where the snapshot
 cannot be trusted as a clean anchor.
 
+## Content-change human review plan
+
+A `content_change` dry-run returns a `human_review_plan` and a
+`review_plan_sha256`. The plan is deliberately content-free: it contains only
+archive-relative paths, evidence roles, presence flags, recorded/current
+SHA-256 values, changed frontmatter field names or receipt-ref names, and fixed
+instructions. It never embeds a zet body, title, frontmatter value, local
+absolute path, or secret.
+
+Review the named local files in the plan's order. Do not paste their raw content
+into a public issue, release report, or AI handoff. Then choose exactly one:
+
+1. `intentional_change`: a named human explains every changed field or ref and
+   runs `commands.approve_if_intentional`. That command contains the exact
+   `--reviewed-plan-sha256` and retains `--strip-bom` when it was part of the
+   dry-run.
+2. `unintentional_change`: restore or repair the affected content, then run
+   `commands.recheck_after_repair`. Do not approve the old plan.
+3. `uncertain`: stop without writing and ask the human owner. A classifier,
+   another reconcile target, or a successful Doctor run is not an approval.
+
+Before any write, approval recomputes the plan from current bytes and refs. A
+missing, malformed, or stale `--reviewed-plan-sha256` fails closed. This protects
+the time between review and approval; it does not replace the human decision.
+
 ## Hard refusals (before classification)
 
 Reconcile refuses — no sha is recomputed, nothing is written — when:
@@ -104,8 +135,9 @@ Reconcile refuses — no sha is recomputed, nothing is written — when:
    added, carrying the prior/new shas, the drift class, the reviewer, and a
    `normalized_content_digest` (the sha256 of the newline+BOM-normalized
    canonical bytes) so a later human or `doctor` can re-derive the class
-   independently. The latest block is mirrored at the top of `reconcile` so
-   `doctor` reads one shape.
+   independently. For `content_change`, it also carries the
+   `reviewed_plan_sha256` that bound the approval. The latest block is mirrored
+   at the top of `reconcile` so `doctor` reads one shape.
 2. **Separate immutable audit receipt** under `receipts/mint/reconciles/<id>.reconcile.json`
    (a monotonic numeric suffix is used for a second reconcile of the same id).
 
@@ -188,7 +220,8 @@ dirty. The `drift_class` enum is unchanged: `format_drift` or `content_change`.
 ## Retire-draft reconcile (sibling command)
 
 `archive retire-draft-reconcile <archive-root> --zettel-id <id> [--dry-run |
---approve] [--reviewed-by <actor>] [--content-changed-ack] [--strip-bom]` is the
+--approve] [--reviewed-by <actor>] [--content-changed-ack]
+[--reviewed-plan-sha256 <sha256>] [--strip-bom]` is the
 sibling for a **retire-draft** receipt, which binds four raw-byte refs
 (`source` / `target` / `mint_receipt` / `snapshot`) rather than the mint receipt's
 three-sha shape. It is a separate command (not a flag on `remint-reconcile`) so the
@@ -273,6 +306,8 @@ projection for operator diagnostics. It keeps:
 - `body_changed` and the content-free `body_diff_diagnostic`;
 - blockers, warnings, next safe actions, and write status;
 - frontmatter field names/counts.
+- the content-free `human_review_plan` and `review_plan_sha256` when the result
+  is `content_change`.
 
 It omits `current_canonical_text` and the full `frontmatter_field_changes` value list. This
 lets an operator inspect which residual body-diff category they have without copying the

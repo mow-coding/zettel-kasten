@@ -83,6 +83,50 @@ project folder 작업에서는 temporary intake staging이 archive of record가
 아니라는 점을 기억합니다. cleanup 전에 원본을 objet, source map, manifest,
 zet, receipt로 보존해야 합니다.
 
+## v0.3.230 검토한 내용과 승인을 묶는 SHA-256
+
+v0.3.230은 아카이브 migration을 요구하지 않고 reconcile을 자동 실행하지도
+않습니다. 달라지는 것은 미리보기 결과가 `drift_class: content_change`일 때의
+승인 절차입니다. 공식 업데이트 뒤 AI 운영 프로세스를 새로 시작합니다. 이
+패치만 확인하려고 전체 검진을 다시 돌릴 필요는 없고, 문제가 있던 zet만 아래
+미리보기를 다시 실행하면 됩니다.
+
+BOM이 있는 canonical과 별도의 retired-draft 불일치는 서로 독립적으로
+검토합니다.
+
+```text
+archive remint-reconcile <archive-root> --zettel-id <bom-zet-id> --dry-run --strip-bom --diagnostic-only --format json
+archive retire-draft-reconcile <archive-root> --zettel-id <retired-draft-zet-id> --dry-run --format json
+```
+
+둘 중 하나가 `content_change`이면 결과의 `human_review_plan`과
+`review_plan_sha256`을 읽습니다. 이 계획은 문서 내용을 JSON에 복사하지 않고,
+사람이 로컬에서 확인할 파일의 아카이브 상대경로와 순서, SHA-256, 달라진 초록
+데이터 필드 또는 영수증 참조 이름만 보여줍니다. 사람은 해당 파일을 직접
+비교한 뒤 셋 중 하나를 고릅니다.
+
+1. `intentional_change`: 달라진 필드나 참조를 모두 설명할 수 있을 때만
+   `human_review_plan.commands.approve_if_intentional`에 나온 명령을 그대로
+   실행합니다. `<actor>`에는 실제로 검토한 사람을 적습니다. 내용 변경 승인
+   명령의 형태는 다음과 같습니다.
+
+   ```text
+   archive remint-reconcile <archive-root> --zettel-id <bom-zet-id> --approve --reviewed-by <actor> --content-changed-ack --reviewed-plan-sha256 <review-plan-sha256> --strip-bom --format json
+   archive retire-draft-reconcile <archive-root> --zettel-id <retired-draft-zet-id> --approve --reviewed-by <actor> --content-changed-ack --reviewed-plan-sha256 <review-plan-sha256> --format json
+   ```
+
+2. `unintentional_change`: 잘못 바뀐 내용을 복구하거나 고친 뒤, 그 대상의
+   미리보기를 다시 실행합니다. 예전 SHA-256으로 승인하면 안 됩니다.
+3. `uncertain`: 아무것도 쓰지 않고 멈춘 뒤 사람 소유자에게 묻습니다. 한쪽
+   대상의 성공, 분류 결과, 깨끗한 검진 결과는 다른 쪽의 승인이 아닙니다.
+
+승인 명령은 파일을 쓰기 전에 현재 근거로 검토 계획을 다시 계산합니다.
+`--reviewed-plan-sha256`이 없거나 형식이 틀리거나 검토 뒤 근거가 바뀌었으면
+멈춥니다. 내용 변경 승인이 성공하면 이 SHA-256을 provenance와 별도의 불변
+감사 영수증에 기록하고, `content_change_ack_required: false`와
+`human_review_plan.status: completed`를 반환합니다. 기존 `format_drift` 승인은
+새 옵션 없이도 이전처럼 작동합니다.
+
 ## v0.3.229 실행 가능한 BOM reconcile 안내
 
 v0.3.229는 아카이브 migration이나 아카이브 쓰기 경로를 바꾸지 않습니다.

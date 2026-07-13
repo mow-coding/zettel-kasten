@@ -41,6 +41,7 @@
         "reconciled_by": {"type": "string"},
         "drift_class": {"type": "string", "enum": ["clean", "format_drift", "content_change"]},
         "content_change_ack": {"type": "boolean"},
+        "reviewed_plan_sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
         "bom_stripped": {"type": "boolean"},
         "ref_reports": {"type": "array", "items": {"type": "object"}}
       }

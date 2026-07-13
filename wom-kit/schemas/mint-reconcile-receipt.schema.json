@@ -29,6 +29,7 @@
     "classification_basis": {"type": "string", "enum": ["clean_anchor", "normalized_content_match", "content_change_fallback"]},
     "bom_stripped": {"type": "boolean"},
     "content_change_ack": {"type": "boolean"},
+    "reviewed_plan_sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
     "prior_target_sha256": {"type": "string"},
     "new_target_sha256": {"type": "string"},
     "prior_source_sha256": {"type": "string"},

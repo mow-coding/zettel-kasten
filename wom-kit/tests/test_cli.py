@@ -34855,6 +34855,22 @@ state:
             self.assertTrue(result["approval_requires_content_changed_ack"])
             self.assertTrue(any("--content-changed-ack" in action for action in result["next_safe_actions"]))
             self.assertTrue(any(change["field"] == "title" for change in result["frontmatter_field_changes"]))
+            self.assertRegex(result["review_plan_sha256"], r"^sha256:[0-9a-f]{64}$")
+            review = result["human_review_plan"]
+            self.assertTrue(review["required"])
+            self.assertEqual(review["review_kind"], "content_change")
+            self.assertFalse(review["content_included"])
+            self.assertEqual(review["review_plan_sha256"], result["review_plan_sha256"])
+            self.assertEqual(
+                [item["role"] for item in review["evidence"]],
+                ["mint_snapshot", "current_canonical", "mint_receipt", "source_draft"],
+            )
+            self.assertEqual(review["changed_frontmatter_fields"], ["title"])
+            self.assertEqual(
+                [item["decision"] for item in review["decision_options"]],
+                ["intentional_change", "unintentional_change", "uncertain"],
+            )
+            self.assertIn(result["review_plan_sha256"], review["commands"]["approve_if_intentional"])
             # Invariant: the class is driven by the frontmatter title edit, NOT a body
             # diff. Body must be byte-identical (only the title changed). Asserting this
             # pins the classifier to the frontmatter comparison and guards against any
@@ -34867,6 +34883,14 @@ state:
             )
             self.assertEqual(code, 1, output)
 
+            # Ack alone is not enough: approval must be bound to the reviewed bytes.
+            code, output = self.run_cli(
+                ["remint-reconcile", str(archive_root), "--zettel-id", zid, "--approve",
+                 "--reviewed-by", "person:test", "--content-changed-ack", "--format", "json"]
+            )
+            self.assertEqual(code, 1, output)
+            self.assertIn("--reviewed-plan-sha256", output)
+
             # approve WITH ack -> success, reviewer recorded in both receipts
             code, output = self.run_cli(
                 [
@@ -34878,6 +34902,8 @@ state:
                     "--reviewed-by",
                     "person:test",
                     "--content-changed-ack",
+                    "--reviewed-plan-sha256",
+                    result["review_plan_sha256"],
                     "--format",
                     "json",
                 ]
@@ -34885,6 +34911,10 @@ state:
             self.assertEqual(code, 0, output)
             result = json.loads(output)
             self.assertTrue(result["content_change_ack"])
+            self.assertEqual(result["reviewed_plan_sha256"], result["review_plan_sha256"])
+            self.assertFalse(result["content_change_ack_required"])
+            self.assertEqual(result["human_review_plan"]["status"], "completed")
+            self.assertFalse(result["human_review_plan"]["required"])
             self.assertEqual(result["status"], "reconcile_applied")
             self.assertEqual(result["overall_status"], "reconcile_applied")
             self.assertEqual(result["suggested_next_action"], "run_doctor_to_verify_reconcile")
@@ -34895,10 +34925,12 @@ state:
             mint_receipt = json.loads((archive_root / mint["mint_receipt_path"]).read_text(encoding="utf-8"))
             self.assertEqual(mint_receipt["reconcile"]["drift_class"], "content_change")
             self.assertTrue(mint_receipt["reconcile"]["content_change_ack"])
+            self.assertEqual(mint_receipt["reconcile"]["reviewed_plan_sha256"], result["review_plan_sha256"])
             self.assertEqual(mint_receipt["reconcile"]["history"][0]["reconciled_by"], "person:test")
             audit = json.loads((archive_root / result["reconcile_receipt_path"]).read_text(encoding="utf-8"))
             self.assertEqual(audit["reviewed_by"], "person:test")
             self.assertTrue(audit["content_change_ack"])
+            self.assertEqual(audit["reviewed_plan_sha256"], result["review_plan_sha256"])
 
     def test_remint_reconcile_body_change_without_ack_blocks(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -34917,6 +34949,65 @@ state:
                 ["remint-reconcile", str(archive_root), "--zettel-id", zid, "--approve", "--reviewed-by", "person:test", "--format", "json"]
             )
             self.assertEqual(code, 1, output)
+
+    def test_remint_reconcile_content_review_digest_blocks_stale_approval(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            mint = self._mint_lunch_for_reconcile(archive_root)
+            zid = mint["zettel_id"]
+            canonical = archive_root / mint["canonical_path"]
+            canonical.write_text(
+                canonical.read_text(encoding="utf-8") + "\nFirst reviewed edit.\n",
+                encoding="utf-8",
+            )
+            code, output = self.run_cli(
+                ["remint-reconcile", str(archive_root), "--zettel-id", zid, "--dry-run", "--format", "json"]
+            )
+            self.assertEqual(code, 0, output)
+            plan = json.loads(output)
+            mint_receipt = archive_root / mint["mint_receipt_path"]
+            receipt_before = mint_receipt.read_bytes()
+
+            canonical.write_text(
+                canonical.read_text(encoding="utf-8") + "\nUnreviewed later edit.\n",
+                encoding="utf-8",
+            )
+            code, output = self.run_cli(
+                [
+                    "remint-reconcile",
+                    str(archive_root),
+                    "--zettel-id",
+                    zid,
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--content-changed-ack",
+                    "--reviewed-plan-sha256",
+                    plan["review_plan_sha256"],
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 1, output)
+            self.assertIn("changed after the human review dry-run", output)
+            self.assertEqual(mint_receipt.read_bytes(), receipt_before)
+            reconcile_dir = archive_root / "receipts" / "mint" / "reconciles"
+            self.assertFalse(reconcile_dir.exists() and list(reconcile_dir.glob("*")))
+
+    def test_reconcile_human_review_evidence_redacts_unsafe_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            for unsafe_path in (str(Path(tmp) / "private-note.md"), "../private-note.md"):
+                with self.subTest(unsafe_path=unsafe_path):
+                    item = archive_services._reconcile_review_evidence_item(
+                        archive_root,
+                        role="source_draft",
+                        path=unsafe_path,
+                        purpose="Synthetic privacy boundary check.",
+                    )
+                    self.assertIsNone(item["path"])
+                    self.assertFalse(item["present"])
+                    self.assertNotIn(unsafe_path, json.dumps(item))
 
     def test_remint_reconcile_non_allowlist_frontmatter_edits_are_content_change(self) -> None:
         # R0 cardinal-sin guard: an edit to ANY content-bearing canonical frontmatter
@@ -35394,10 +35485,17 @@ state:
             self.assertEqual(canonical.read_bytes(), with_bom)
             reconcile_dir = archive_root / "receipts" / "mint" / "reconciles"
             self.assertFalse(reconcile_dir.exists() and list(reconcile_dir.glob("*")))
+            plan_code, plan_output = self.run_cli(
+                ["remint-reconcile", str(archive_root), "--zettel-id", zid, "--dry-run",
+                 "--strip-bom", "--format", "json"]
+            )
+            self.assertEqual(plan_code, 0, plan_output)
+            review_digest = json.loads(plan_output)["review_plan_sha256"]
             # WITH ack -> proceeds as content_change AND strips the BOM.
             code, output = self.run_cli(
                 ["remint-reconcile", str(archive_root), "--zettel-id", zid, "--approve",
-                 "--reviewed-by", "person:test", "--strip-bom", "--content-changed-ack", "--format", "json"]
+                 "--reviewed-by", "person:test", "--strip-bom", "--content-changed-ack",
+                 "--reviewed-plan-sha256", review_digest, "--format", "json"]
             )
             self.assertEqual(code, 0, output)
             result = json.loads(output)
@@ -35509,6 +35607,14 @@ state:
             self.assertTrue(result["content_change_ack_required"], result)
             # strip-intent metadata is STILL previewed, but did not change the class.
             self.assertTrue(result["bom_stripped"], result)
+            review = result["human_review_plan"]
+            self.assertIn("--strip-bom", review["commands"]["review_visible_dry_run"])
+            self.assertIn("--strip-bom", review["commands"]["approve_if_intentional"])
+            self.assertIn(result["review_plan_sha256"], review["commands"]["approve_if_intentional"])
+            self.assertTrue(
+                any("--strip-bom" in action and "--content-changed-ack" in action for action in result["next_safe_actions"]),
+                result,
+            )
 
     def test_remint_reconcile_strip_bom_apply_content_edit_matches_dry_run(self) -> None:  # 2.T5
         # Apply agrees with the 2.T4 dry-run: BOM + title edit without ack is BLOCKED;
@@ -35533,10 +35639,17 @@ state:
             )
             self.assertEqual(code, 1, output)
             self.assertTrue(canonical.read_bytes().startswith(b"\xef\xbb\xbf"))
+            plan_code, plan_output = self.run_cli(
+                ["remint-reconcile", str(archive_root), "--zettel-id", zid, "--dry-run",
+                 "--strip-bom", "--format", "json"]
+            )
+            self.assertEqual(plan_code, 0, plan_output)
+            review_digest = json.loads(plan_output)["review_plan_sha256"]
             # WITH ack -> content_change AND strips.
             code, output = self.run_cli(
                 ["remint-reconcile", str(archive_root), "--zettel-id", zid, "--approve",
-                 "--reviewed-by", "person:test", "--strip-bom", "--content-changed-ack", "--format", "json"]
+                 "--reviewed-by", "person:test", "--strip-bom", "--content-changed-ack",
+                 "--reviewed-plan-sha256", review_digest, "--format", "json"]
             )
             self.assertEqual(code, 0, output)
             result = json.loads(output)
@@ -35634,6 +35747,17 @@ state:
             self.assertTrue(plan["approval_would_write"], plan)
             self.assertTrue(plan["approval_requires_content_changed_ack"], plan)
             self.assertTrue(any("--content-changed-ack" in action for action in plan["next_safe_actions"]), plan)
+            self.assertRegex(plan["review_plan_sha256"], r"^sha256:[0-9a-f]{64}$")
+            review = plan["human_review_plan"]
+            self.assertTrue(review["required"])
+            self.assertEqual(review["review_kind"], "content_change")
+            self.assertFalse(review["content_included"])
+            self.assertEqual(review["changed_refs"], ["snapshot"])
+            self.assertEqual(
+                [item["role"] for item in review["evidence"]],
+                ["mint_snapshot", "current_canonical", "mint_receipt", "retire_receipt", "retired_source"],
+            )
+            self.assertIn(plan["review_plan_sha256"], review["commands"]["approve_if_intentional"])
             code, text_output = self.run_cli(
                 ["retire-draft-reconcile", str(archive_root), "--zettel-id", zid, "--dry-run", "--format", "text"]
             )
@@ -35651,11 +35775,14 @@ state:
             # approve WITH ack -> proceeds.
             code, output = self.run_cli(
                 ["retire-draft-reconcile", str(archive_root), "--zettel-id", zid, "--approve",
-                 "--reviewed-by", "person:test", "--content-changed-ack", "--format", "json"]
+                 "--reviewed-by", "person:test", "--content-changed-ack",
+                 "--reviewed-plan-sha256", plan["review_plan_sha256"], "--format", "json"]
             )
             self.assertEqual(code, 0, output)
             result = json.loads(output)
             self.assertTrue(result["content_change_ack"])
+            self.assertFalse(result["content_change_ack_required"])
+            self.assertEqual(result["human_review_plan"]["status"], "completed")
             self.assertEqual(result["status"], "reconcile_applied")
             self.assertEqual(result["overall_status"], "reconcile_applied")
             self.assertEqual(result["suggested_next_action"], "run_doctor_to_verify_reconcile")
@@ -35663,6 +35790,50 @@ state:
             self.assertFalse(result["approval_would_write"])
             self.assertFalse(result["approval_requires_content_changed_ack"])
             self.assertTrue(any("archive doctor" in action for action in result["next_safe_actions"]))
+
+    def test_retire_draft_reconcile_content_review_digest_blocks_stale_approval(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            retire = self._mint_and_retire_lunch(archive_root)
+            zid = retire["zettel_id"]
+            canonical = archive_root / retire["canonical_path"]
+            canonical.write_text(
+                canonical.read_text(encoding="utf-8") + "\nReviewed canonical edit.\n",
+                encoding="utf-8",
+            )
+            code, output = self.run_cli(
+                ["retire-draft-reconcile", str(archive_root), "--zettel-id", zid, "--dry-run", "--format", "json"]
+            )
+            self.assertEqual(code, 0, output)
+            plan = json.loads(output)
+            retire_receipt = archive_root / retire["retire_receipt_path"]
+            receipt_before = retire_receipt.read_bytes()
+
+            canonical.write_text(
+                canonical.read_text(encoding="utf-8") + "\nUnreviewed later edit.\n",
+                encoding="utf-8",
+            )
+            code, output = self.run_cli(
+                [
+                    "retire-draft-reconcile",
+                    str(archive_root),
+                    "--zettel-id",
+                    zid,
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--content-changed-ack",
+                    "--reviewed-plan-sha256",
+                    plan["review_plan_sha256"],
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 1, output)
+            self.assertIn("changed after the human review dry-run", output)
+            self.assertEqual(retire_receipt.read_bytes(), receipt_before)
+            reconcile_dir = archive_root / "receipts" / "mint" / "retired-draft-reconciles"
+            self.assertFalse(reconcile_dir.exists() and list(reconcile_dir.glob("*")))
 
     def test_retire_draft_reconcile_tampered_frontmatter_is_content_change(self) -> None:
         # v0.3.167 Item 2 (inherits Item 1.4): a tampered snapshot title that matches a
@@ -35733,6 +35904,42 @@ state:
             # The target ref specifically must NOT be format_drift.
             target_ref = next(r for r in plan["ref_reports"] if r["ref"] == "target")
             self.assertNotEqual(target_ref["drift_class"], "format_drift", plan)
+
+    def test_retire_draft_reconcile_review_plan_orders_target_and_mint_receipt_changes(self) -> None:
+        body_marker = "PRIVATECANONICALREVIEWMARKER"
+        receipt_marker = "PRIVATERECEIPTREVIEWMARKER"
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            retire = self._mint_and_retire_lunch(archive_root)
+            zid = retire["zettel_id"]
+            canonical = archive_root / retire["canonical_path"]
+            canonical.write_text(
+                canonical.read_text(encoding="utf-8") + f"\n{body_marker}\n",
+                encoding="utf-8",
+            )
+            mint_receipt_path = archive_root / retire["mint_receipt_path"]
+            mint_receipt = json.loads(mint_receipt_path.read_text(encoding="utf-8"))
+            mint_receipt["synthetic_review_marker"] = receipt_marker
+            mint_receipt_path.write_text(json.dumps(mint_receipt, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+            code, output = self.run_cli(
+                ["retire-draft-reconcile", str(archive_root), "--zettel-id", zid, "--dry-run", "--format", "json"]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            review = result["human_review_plan"]
+            serialized_review = json.dumps(review, ensure_ascii=False)
+            self.assertEqual(result["drift_class"], "content_change", result)
+            self.assertEqual(review["changed_refs"], ["target", "mint_receipt"])
+            self.assertEqual(
+                [item["role"] for item in review["evidence"]],
+                ["mint_snapshot", "current_canonical", "mint_receipt", "retire_receipt", "retired_source"],
+            )
+            self.assertNotIn(body_marker, serialized_review)
+            self.assertNotIn(receipt_marker, serialized_review)
+            self.assertFalse(review["content_included"])
+            self.assertIn(zid, review["commands"]["approve_if_intentional"])
+            self.assertIn(result["review_plan_sha256"], review["commands"]["approve_if_intentional"])
 
     def test_retire_draft_reconcile_pointer_ref_mismatch_is_content_change(self) -> None:
         # v0.3.167 Item 2: the mint_receipt pointer ref has no format dimension; ANY
@@ -36103,6 +36310,12 @@ state:
         self.assertIn("current_canonical_text", result["omitted_fields"])
         self.assertIn("frontmatter_field_changes", result["omitted_fields"])
         self.assertEqual(result["frontmatter_field_change_fields"], ["title"])
+        self.assertRegex(result["review_plan_sha256"], r"^sha256:[0-9a-f]{64}$")
+        self.assertFalse(result["human_review_plan"]["content_included"])
+        self.assertEqual(
+            result["human_review_plan"]["review_plan_sha256"],
+            result["review_plan_sha256"],
+        )
         self.assertNotIn(body_marker, serialized)
         self.assertNotIn(title_marker, serialized)
 
