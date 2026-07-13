@@ -1243,6 +1243,7 @@ class McpServerTests(unittest.TestCase):
                 self.assertEqual(structured["inspection"]["mode"], "quick")
                 self.assertFalse(structured["inspection"]["full_doctor_run"])
                 self.assertFalse(structured["doctor_summary"]["checked"])
+                self.assertFalse(structured["doctor_findings"]["checked"])
                 self.assertTrue(structured["redaction"]["local_paths_redacted"])
                 self.assertNotIn(str(allowed_archive), json.dumps(structured))
 
@@ -1267,6 +1268,7 @@ class McpServerTests(unittest.TestCase):
                 self.assertEqual(full_structured["inspection"]["mode"], "full_doctor")
                 self.assertTrue(full_structured["inspection"]["full_doctor_run"])
                 self.assertTrue(full_structured["doctor_summary"]["checked"])
+                self.assertTrue(full_structured["doctor_findings"]["checked"])
 
                 outside_response = self.send(
                     process,

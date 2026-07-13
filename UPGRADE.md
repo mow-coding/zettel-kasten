@@ -91,6 +91,58 @@ For project-folder work, remember that temporary intake staging is not the
 archive of record. Preserve originals as objets, source maps, manifests, zets,
 and receipts before any cleanup.
 
+## v0.3.228 Actionable Full-Doctor Results And Current-Stage Progress
+
+v0.3.228 requires no archive migration and changes no archive write path. Start
+a new process after the official project update, then run the complete
+inspection only when archive health evidence is required:
+
+```text
+archive runtime-context <archive-root> --full-doctor --progress --format json
+```
+
+The result now includes `doctor_findings`. It keeps complete ERROR/WARN counts
+by diagnostic code, up to 100 actionable items, and up to 20 unique suggested
+commands. Each item can retain its severity, code, archive-relative path,
+message, hint, suggested command, and compatibility target. INFO remains
+count-only. `truncated` and `suggested_commands_truncated` say when the bounded
+handoff does not contain every item or command.
+
+This is a forward result contract. A saved v0.3.227 `runtime-context` JSON that
+contains only severity totals cannot truthfully reconstruct the discarded
+codes, paths, and messages. Identifying those old counts therefore requires one
+new Doctor run; v0.3.228 prevents that new completed result from losing the
+same evidence again.
+
+During `local-profile-secret-safety`, compact heartbeat now reports only safe
+current-stage counters:
+
+```text
+checked_files=<files visited>
+content_scanned=<text-like files scanned>
+local_profiles=<local profile files checked>
+skipped_dirs=<ignored directories skipped>
+```
+
+The previous edge source-load aggregate remains available for its final `done`
+line, but it no longer hides the active safety stage. Ordinary files reuse the
+directory boundary already verified by the walk; symlinks still use resolved
+containment and ignored-target checks. Secret filename, content, and local
+profile rules are unchanged.
+
+The synthetic benchmark writes only a temporary fixture and reads no real
+archive:
+
+```text
+python tools/benchmark_local_profile_secret_safety.py --file-count 5000 --format json
+```
+
+On the release workstation, an immediate same-fixture before/after measurement
+improved from 20.838 seconds to 11.644 seconds. The public post-change command
+completed another run in 13.693 seconds. These are synthetic workstation
+measurements, not a promise for archives with different file sizes, storage, or
+antivirus behavior.
+
 ## v0.3.227 Aggregate Full-Doctor Edge Progress
 
 v0.3.227 adds no archive migration and changes no Doctor diagnostic or read

@@ -223,8 +223,8 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                 self.assertIn("identity-reconcile", text)
                 self.assertIn("proposed", text)
                 self.assertIn("SHA-256", text)
-        self.assertIn("v0.3.227 pre-release", versioning_text)
-        self.assertIn("0.3.227", versioning_text)
+        self.assertIn("v0.3.228 pre-release", versioning_text)
+        self.assertIn("0.3.228", versioning_text)
         self.assertIn("archive-identity-reconcile.md", public_map_text)
 
     def test_aggregate_edge_progress_public_contract_is_documented(self) -> None:
@@ -248,7 +248,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         )
         for phrase in (
             "Status: v0.3.227 aggregate full-Doctor edge progress checkpoint",
-            "Version: v0.3.227, release candidate",
+            "Version: v0.3.228, release candidate",
             "cumulative source/candidate/cache-hit counts",
             "does not perform another broad pass",
         ):
@@ -268,8 +268,58 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, benchmark_text)
-        self.assertIn("v0.3.227 (current checkpoint)", readme_text)
-        self.assertIn("v0.3.227 (현재 checkpoint)", readme_ko_text)
+        self.assertIn("v0.3.228 (current checkpoint)", readme_text)
+        self.assertIn("v0.3.228 (현재 checkpoint)", readme_ko_text)
+
+    def test_actionable_full_doctor_results_and_current_profile_progress_are_documented(
+        self,
+    ) -> None:
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        runtime_text = (
+            KIT_ROOT / "docs" / "runtime-context-quick-and-full-inspection.md"
+        ).read_text(encoding="utf-8")
+        progress_text = (
+            KIT_ROOT / "docs" / "large-command-progress-and-output.md"
+        ).read_text(encoding="utf-8")
+        release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.228.md").read_text(
+            encoding="utf-8"
+        )
+        decision_text = (
+            KIT_ROOT
+            / "docs"
+            / "archive-infra-decision-log-2026-07-13-v03228-actionable-full-doctor-results.md"
+        ).read_text(encoding="utf-8")
+        benchmark_text = (
+            KIT_ROOT / "tools" / "benchmark_local_profile_secret_safety.py"
+        ).read_text(encoding="utf-8")
+        for phrase in (
+            "Status: v0.3.228 actionable full-Doctor result and current-stage progress checkpoint",
+            "Version: v0.3.228, release candidate",
+            "doctor_findings",
+            "up to 100 detailed items",
+            "up to 20 deduplicated suggested commands",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, matrix_text)
+        for text in (runtime_text, release_text, decision_text):
+            with self.subTest(document="finding-contract"):
+                self.assertIn("doctor_findings", text)
+                self.assertIn("ERROR/WARN", text)
+                self.assertIn("cannot truthfully reconstruct", text)
+        for text in (matrix_text, progress_text, release_text, decision_text):
+            with self.subTest(document="current-stage-progress"):
+                self.assertIn("checked_files", text)
+                self.assertIn("content_scanned", text)
+                self.assertIn("local_profiles", text)
+                self.assertIn("skipped_dirs", text)
+        for phrase in (
+            "real_archive_read",
+            "persistent_files_written",
+            "file_count",
+            "elapsed_seconds",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, benchmark_text)
 
     def test_external_import_docs_explain_source_ref_preservation_boundary(self) -> None:
         imports_text = EXTERNAL_IMPORTS_PATH.read_text(encoding="utf-8")
@@ -591,7 +641,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.227 pre-release",
+            "v0.3.228 pre-release",
             "[Version Truth Source](wom-kit/docs/version-truth-source.md)",
             "[Project Version Update](wom-kit/docs/project-version-update.md)",
             "read-only WOM-kit version truth-source checks",
@@ -1007,7 +1057,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                 self.assertIn(phrase, guide_text)
         for phrase in (
             "Status: v0.3.221 archive-wide abstract receipt and lock audit checkpoint",
-            "Version: v0.3.227, release candidate",
+            "Version: v0.3.228, release candidate",
             "zet abstract receipt lifecycle audit",
             "Up to 5,000 receipts and 5,000 locks",
             "Green proves bounded local consistency",

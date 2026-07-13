@@ -661,6 +661,7 @@ PROGRESS_STAGE_UNITS = {
     "edge-receipt-index": "edge_receipts",
     "edge-receipt-source-load": "edge_receipts",
     "edge-receipt-source-load-detail": "edge_receipts",
+    "local-profile-secret-safety": "archive_files",
     "retired-draft-receipts": "retired_draft_receipts",
     "reconcile-receipts": "reconcile_receipts",
     "external-import-receipts": "external_import_receipts",
@@ -683,6 +684,16 @@ PROGRESS_SAME_COUNT_REPEAT_SECONDS = 30.0
 PROGRESS_NESTED_AGGREGATE_SECONDS = 10.0
 EDGE_RECEIPT_SOURCE_PROGRESS_RE = re.compile(
     r"^(?:aggregate|done) sources=(?P<sources>\d+) candidates=(?P<candidates>\d+) cache_hits=(?P<cache_hits>\d+)$"
+)
+LOCAL_PROFILE_SECRET_SAFETY_PROGRESS_RE = re.compile(
+    r"^(?:checked archive files|still checking local profile secret safety) "
+    r"files=(?P<checked_files>\d+) content=(?P<content_scanned>\d+) "
+    r"profiles=(?P<local_profiles>\d+) skipped_dirs=(?P<skipped_dirs>\d+)$"
+)
+LOCAL_PROFILE_SECRET_SAFETY_SUMMARY_RE = re.compile(
+    r"^local profile secret safety summary "
+    r"checked_files=(?P<checked_files>\d+) content_scanned=(?P<content_scanned>\d+) "
+    r"local_profiles=(?P<local_profiles>\d+) skipped_dirs=(?P<skipped_dirs>\d+)$"
 )
 
 
@@ -1075,6 +1086,8 @@ class CommandProgressReporter:
         self._current_phase: str | None = None
         self._edge_source_summary: str | None = None
         self._edge_source_summary_active = False
+        self._local_profile_summary: str | None = None
+        self._local_profile_summary_active = False
         self._last_forwarded_progress: tuple[str, int | None, int | None] | None = None
         self._last_completed_stage: str | None = None
         self._thread: threading.Thread | None = None
@@ -1092,10 +1105,15 @@ class CommandProgressReporter:
         if stage == "edge-receipt-source-load-detail":
             return
         edge_source_summary = self._edge_receipt_source_summary(stage, message)
+        local_profile_summary = self._local_profile_secret_safety_summary(stage, message)
         safe_message = (
             edge_source_summary
             if edge_source_summary is not None and edge_source_summary.startswith("done ")
-            else self._content_free_message(message, current, total)
+            else (
+                local_profile_summary
+                if local_profile_summary is not None and local_profile_summary.startswith("summary ")
+                else self._content_free_message(message, current, total)
+            )
         )
         phase = self._content_free_phase(stage, message)
         forward = True
@@ -1111,6 +1129,11 @@ class CommandProgressReporter:
                 self._edge_source_summary_active = True
             if edge_source_summary is not None:
                 self._edge_source_summary = edge_source_summary.split(" ", 1)[1]
+            if stage == "local-profile-secret-safety" and (stage_changed or message == "start"):
+                self._local_profile_summary = None
+                self._local_profile_summary_active = True
+            if local_profile_summary is not None:
+                self._local_profile_summary = local_profile_summary.split(" ", 1)[1]
             if current is not None and total is not None:
                 if count_changed:
                     self._current_phase = "receipt_checks" if stage == "mint-receipts" else None
@@ -1127,9 +1150,13 @@ class CommandProgressReporter:
                 self._last_forwarded_progress = None
                 if stage == "edge-receipt-source-load":
                     self._edge_source_summary_active = False
+                if stage == "local-profile-secret-safety":
+                    self._local_profile_summary_active = False
             if stage == "edge-receipt-index" and message == "scanned":
                 forward = False
             if edge_source_summary is not None and edge_source_summary.startswith("aggregate "):
+                forward = False
+            if local_profile_summary is not None and local_profile_summary.startswith("aggregate "):
                 forward = False
             if safe_message == "progress":
                 progress_key = (stage, current, total)
@@ -1157,6 +1184,24 @@ class CommandProgressReporter:
         if stage != "edge-receipt-source-load":
             return None
         return message if EDGE_RECEIPT_SOURCE_PROGRESS_RE.fullmatch(message) else None
+
+    @staticmethod
+    def _local_profile_secret_safety_summary(stage: str, message: str) -> str | None:
+        if stage != "local-profile-secret-safety":
+            return None
+        match = LOCAL_PROFILE_SECRET_SAFETY_PROGRESS_RE.fullmatch(message)
+        prefix = "aggregate"
+        if match is None:
+            match = LOCAL_PROFILE_SECRET_SAFETY_SUMMARY_RE.fullmatch(message)
+            prefix = "summary"
+        if match is None:
+            return None
+        return (
+            f"{prefix} checked_files={match.group('checked_files')} "
+            f"content_scanned={match.group('content_scanned')} "
+            f"local_profiles={match.group('local_profiles')} "
+            f"skipped_dirs={match.group('skipped_dirs')}"
+        )
 
     @staticmethod
     def _content_free_phase(stage: str, message: str) -> str | None:
@@ -1200,8 +1245,20 @@ class CommandProgressReporter:
                     if self._edge_source_summary_active
                     else None
                 )
+                local_profile_summary = (
+                    self._local_profile_summary
+                    if self._local_profile_summary_active
+                    and self._current_stage == "local-profile-secret-safety"
+                    else None
+                )
                 last_completed = self._last_completed_stage
-            if edge_source_summary:
+            if local_profile_summary:
+                stage = "local-profile-secret-safety"
+                current = None
+                total = None
+                phase = None
+                edge_source_summary = None
+            elif edge_source_summary:
                 stage = "edge-receipt-source-load"
                 current = None
                 total = None
@@ -1211,6 +1268,8 @@ class CommandProgressReporter:
                 message += f" phase={phase}"
             if edge_source_summary:
                 message += f" {edge_source_summary}"
+            if local_profile_summary:
+                message += f" {local_profile_summary}"
             if last_completed:
                 message += f" last_completed={last_completed}"
             with self._callback_lock:
@@ -3486,8 +3545,6 @@ class Doctor:
             skipped_dirs += before_dirs - len(dirnames)
             for filename in filenames:
                 path = dir_path / filename
-                if self._is_ignored_scan_path(path):
-                    continue
                 checked_files += 1
                 now = time.monotonic()
                 if checked_files == 1 or checked_files % SECRET_SAFETY_PROGRESS_EVERY_FILES == 0:
@@ -3510,10 +3567,27 @@ class Doctor:
                         None,
                     )
                     last_progress = now
-                if not path.is_file() or not self._path_stays_inside_archive(path) or self._is_ignored_scan_path(path):
-                    continue
-                relative = self._display_path(path) or str(path)
-                if self._is_secret_filename(path):
+                if path.is_symlink():
+                    if (
+                        not path.is_file()
+                        or not self._path_stays_inside_archive(path)
+                        or self._is_ignored_scan_path(path)
+                    ):
+                        continue
+                    relative = self._display_path(path) or str(path)
+                else:
+                    if not path.is_file():
+                        continue
+                    try:
+                        relative = PurePosixPath(*path.relative_to(self.archive_root).parts).as_posix()
+                    except ValueError:
+                        self.error(
+                            "archive_path_escapes_root",
+                            "Archive file is outside the archive root during local profile safety inspection.",
+                            path,
+                        )
+                        continue
+                if self._is_secret_filename(path, relative=relative):
                     self.error("secret_file_detected", f"Secret-like local file should not live in the archive: {relative}", path)
                     continue
                 if self._should_scan_secret_content(path):
@@ -3521,7 +3595,7 @@ class Doctor:
                     self._read_observations["archive_text_scanned_for_secret_patterns"] = True
                     if self._file_contains_secret_value(path, stage=stage, progress_label=relative):
                         self.error("secret_value_detected", f"Secret-like value found in archive file: {relative}", path)
-                if self._is_local_profile_path(path):
+                if self._is_local_profile_path(path, relative=relative):
                     local_profile_files += 1
                     self._check_local_profile_file(path)
         self._progress(
@@ -3558,8 +3632,8 @@ class Doctor:
             return False
         return any(part in SECRET_SAFETY_IGNORED_DIRS for part in relative_parts)
 
-    def _is_secret_filename(self, path: Path) -> bool:
-        relative = self._display_path(path) or path.name
+    def _is_secret_filename(self, path: Path, *, relative: str | None = None) -> bool:
+        relative = relative or self._display_path(path) or path.name
         normalized = relative.replace("\\", "/")
         name = path.name.lower()
         if name == ".env.example":
@@ -3575,8 +3649,8 @@ class Doctor:
     def _should_scan_secret_content(self, path: Path) -> bool:
         return path.suffix.lower() in SECRET_SCAN_EXTENSIONS or path.name.lower().startswith(".env")
 
-    def _is_local_profile_path(self, path: Path) -> bool:
-        relative = (self._display_path(path) or "").replace("\\", "/")
+    def _is_local_profile_path(self, path: Path, *, relative: str | None = None) -> bool:
+        relative = (relative or self._display_path(path) or "").replace("\\", "/")
         return relative.endswith(".local.yml") or relative.endswith(".local.yaml") or relative.startswith(LOCAL_PROFILE_ROOTS)
 
     def _file_contains_secret_value(self, path: Path, *, stage: str, progress_label: str) -> bool:

@@ -33,6 +33,8 @@ from typing import Any, Callable, Iterable, Protocol
 from . import __version__ as WOM_KIT_VERSION
 from .paths import (
     ArchivePathError,
+    UNC_PATH_RE,
+    WINDOWS_ABSOLUTE_RE,
     archive_relative_path,
     contains_forbidden_location_reference,
     is_path_within_root,
@@ -977,6 +979,8 @@ PROFILE_RAW_TOKEN_KEYS = {
 }
 PROFILE_IGNORABLE_QUERY_CHARS = dict.fromkeys(map(ord, "\ufeff\u200b\u200c\u200d\u2060"), None)
 RUNTIME_CONTEXT_ARCHIVE_TYPES = {"personal", "company", "family", "project", "relationship", "child", "business_unit"}
+RUNTIME_CONTEXT_DOCTOR_FINDING_LIMIT = 100
+RUNTIME_CONTEXT_DOCTOR_COMMAND_LIMIT = 20
 RUNTIME_CONTEXT_SAFE_ACTIONS = [
     "run local-sovereignty dry-run",
     "run ai-response-concept-guide dry-run",
@@ -60422,6 +60426,7 @@ def runtime_context(
     inspection_mode: str | None = None,
     inspection_reads: dict[str, bool] | None = None,
 ) -> dict[str, Any]:
+    input_root = Path(archive_root).expanduser().absolute()
     mode = inspection_mode or ("full_doctor" if diagnostics is not None else "quick")
     if mode not in {"quick", "full_doctor"}:
         raise ArchiveServiceError("runtime-context inspection_mode must be quick or full_doctor.")
@@ -60476,6 +60481,12 @@ def runtime_context(
             warnings.append(finding["message"])
 
     doctor_summary = runtime_context_doctor_summary(diagnostics, strict=strict, blockers=blockers, warnings=warnings)
+    doctor_findings = runtime_context_doctor_findings(
+        diagnostics,
+        root=root,
+        redact_local_paths=redact_local_paths,
+        root_aliases=(str(input_root),),
+    )
     paths = runtime_context_paths(root, archive_config, warnings)
     canonical_entrypoints = runtime_context_handoff_entrypoints(
         runtime_context_canonical_entrypoints(root, archive_config, paths)
@@ -60511,10 +60522,12 @@ def runtime_context(
         },
         "available_safe_actions": list(RUNTIME_CONTEXT_SAFE_ACTIONS),
         "doctor_summary": doctor_summary,
+        "doctor_findings": doctor_findings,
         "inspection": {
             "mode": mode,
             "full_doctor_run": full_doctor_run,
             "doctor_summary": doctor_summary,
+            "doctor_findings_field": "doctor_findings",
             "claim_boundary": (
                 "Full Doctor diagnostics were run for this runtime context."
                 if full_doctor_run
@@ -61498,6 +61511,7 @@ def ai_start_here(
             "doctor_summary": context.get("doctor_summary")
             if isinstance(context.get("doctor_summary"), dict)
             else {"checked": False, "errors": 0, "warnings": 0, "infos": 0},
+            "doctor_findings_field": "doctor_findings",
             "claim_boundary": (
                 "Full Doctor diagnostics were run for this result."
                 if full_doctor_run
@@ -61508,6 +61522,13 @@ def ai_start_here(
             ),
             "read_observations": observed_reads,
         },
+        "doctor_findings": context.get("doctor_findings")
+        if isinstance(context.get("doctor_findings"), dict)
+        else runtime_context_doctor_findings(
+            None,
+            root=require_existing_archive_root(archive_root),
+            redact_local_paths=redact_local_paths,
+        ),
         "first_read": {
             "start_here": entrypoints.get("start_here") or "archive.yml",
             "read_order": present_entrypoints,
@@ -61651,6 +61672,156 @@ def runtime_context_doctor_summary(
         else:
             warnings.append(message)
     return {"checked": True, "errors": errors, "warnings": warning_count, "infos": infos}
+
+
+def runtime_context_doctor_findings(
+    diagnostics: list[dict[str, Any]] | None,
+    *,
+    root: Path,
+    redact_local_paths: bool,
+    root_aliases: tuple[str, ...] = (),
+) -> dict[str, Any]:
+    selected_levels = ["ERROR", "WARN"]
+    if diagnostics is None:
+        return {
+            "checked": False,
+            "selected_levels": selected_levels,
+            "total": 0,
+            "returned": 0,
+            "truncated": False,
+            "code_counts": [],
+            "items": [],
+            "suggested_commands": [],
+            "suggested_commands_truncated": False,
+            "claim_boundary": "Doctor did not run; no archive health findings are available.",
+        }
+
+    findings: list[dict[str, Any]] = []
+    code_counts: dict[tuple[str, str], int] = {}
+    suggested_commands: list[str] = []
+    for raw_item in diagnostics:
+        if not isinstance(raw_item, dict):
+            continue
+        severity = str(raw_item.get("severity") or "").upper()
+        if severity not in selected_levels:
+            continue
+        code = str(raw_item.get("code") or "unknown_diagnostic").strip() or "unknown_diagnostic"
+        code_counts[(severity, code)] = code_counts.get((severity, code), 0) + 1
+        item: dict[str, Any] = {
+            "severity": severity,
+            "code": code,
+            "message": runtime_context_doctor_finding_text(
+                raw_item.get("message"),
+                root=root,
+                redact_local_paths=redact_local_paths,
+                root_aliases=root_aliases,
+            )
+            or "",
+            "path": runtime_context_doctor_finding_path(
+                raw_item.get("path"),
+                root=root,
+                redact_local_paths=redact_local_paths,
+            ),
+        }
+        for field in ("hint", "suggested_command", "compatibility_target"):
+            value = runtime_context_doctor_finding_text(
+                raw_item.get(field),
+                root=root,
+                redact_local_paths=redact_local_paths,
+                root_aliases=root_aliases,
+            )
+            if value:
+                item[field] = value
+        command = item.get("suggested_command")
+        if isinstance(command, str) and command not in suggested_commands:
+            suggested_commands.append(command)
+        findings.append(item)
+
+    severity_order = {"ERROR": 0, "WARN": 1}
+    count_rows = [
+        {"severity": severity, "code": code, "count": count}
+        for (severity, code), count in sorted(
+            code_counts.items(),
+            key=lambda row: (severity_order[row[0][0]], row[0][1]),
+        )
+    ]
+    returned_items = findings[:RUNTIME_CONTEXT_DOCTOR_FINDING_LIMIT]
+    returned_commands = suggested_commands[:RUNTIME_CONTEXT_DOCTOR_COMMAND_LIMIT]
+    return {
+        "checked": True,
+        "selected_levels": selected_levels,
+        "total": len(findings),
+        "returned": len(returned_items),
+        "truncated": len(returned_items) < len(findings),
+        "code_counts": count_rows,
+        "items": returned_items,
+        "suggested_commands": returned_commands,
+        "suggested_commands_truncated": len(returned_commands) < len(suggested_commands),
+        "claim_boundary": (
+            "ERROR and WARN findings are included so an operator can identify the completed Doctor result "
+            "without rerunning it. INFO diagnostics remain count-only."
+        ),
+    }
+
+
+def runtime_context_doctor_finding_path(
+    value: Any,
+    *,
+    root: Path,
+    redact_local_paths: bool,
+) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    candidate = Path(text)
+    is_absolute = bool(candidate.is_absolute() or WINDOWS_ABSOLUTE_RE.match(text) or UNC_PATH_RE.match(text))
+    if not is_absolute:
+        normalized = text.replace("\\", "/")
+        if contains_forbidden_location_reference(text):
+            return "<local-path-redacted>"
+        if normalized == ".":
+            return normalized
+        try:
+            return normalize_archive_relative_path(normalized)
+        except ArchivePathError:
+            return "<local-path-redacted>"
+    if not redact_local_paths:
+        return text
+    try:
+        return archive_relative_path(candidate, root)
+    except (ArchivePathError, OSError, RuntimeError, ValueError):
+        return "<local-path-redacted>"
+
+
+def runtime_context_doctor_finding_text(
+    value: Any,
+    *,
+    root: Path,
+    redact_local_paths: bool,
+    root_aliases: tuple[str, ...] = (),
+) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text or not redact_local_paths:
+        return text or None
+    root_text = str(root)
+    variants = {
+        root_text,
+        root_text.replace("\\", "/"),
+        root_text.replace("/", "\\"),
+    }
+    for alias in root_aliases:
+        variants.add(alias)
+        variants.add(alias.replace("\\", "/"))
+        variants.add(alias.replace("/", "\\"))
+    for variant in sorted((item for item in variants if item), key=len, reverse=True):
+        text = re.sub(re.escape(variant), "<archive-root>", text, flags=re.IGNORECASE)
+    if contains_forbidden_location_reference(text):
+        return "<sensitive-diagnostic-text-redacted>"
+    return text
 
 
 def runtime_context_paths(root: Path, archive_config: dict[str, Any], warnings: list[str]) -> dict[str, str | None]:
