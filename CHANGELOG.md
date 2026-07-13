@@ -6,6 +6,24 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.229 - 2026-07-13
+
+Executable BOM reconcile guidance checkpoint. Additive; no archive migration
+or archive write-path change.
+
+- **Actual zet id in BOM guidance.** `zettel_has_bom` now builds its
+  `remint-reconcile --dry-run --strip-bom --diagnostic-only` command from the
+  canonical frontmatter's validated zet id instead of emitting `<id>`.
+- **Fail-closed selector.** If the canonical id is absent or outside the safe
+  zet-id grammar, Doctor keeps the finding and hint but omits the suggested
+  command. It never guesses from a filename or emits a shell-unsafe selector.
+- **One-result handoff preserved.** The completed command flows unchanged into
+  `doctor_findings.items` and the deduplicated `suggested_commands` collection,
+  so an AI operator can review the exact dry-run without another broad Doctor.
+- **Review and stop rules documented.** Public reconcile guidance now separates
+  redacted diagnosis, review-visible dry-run, format-only approval, content
+  review, and blocked/no-op stopping points for BOM and retired-draft drift.
+
 ## v0.3.228 - 2026-07-13
 
 Actionable full-Doctor result and current-stage progress checkpoint. Additive;

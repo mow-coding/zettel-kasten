@@ -83,6 +83,46 @@ project folder 작업에서는 temporary intake staging이 archive of record가
 아니라는 점을 기억합니다. cleanup 전에 원본을 objet, source map, manifest,
 zet, receipt로 보존해야 합니다.
 
+## v0.3.229 실행 가능한 BOM reconcile 안내
+
+v0.3.229는 아카이브 migration이나 아카이브 쓰기 경로를 바꾸지 않습니다.
+`zettel_has_bom` 검진 항목은 이제 canonical 초록 데이터에서 확인한 안전한 zet
+아이디를 실제 미리보기 명령에 채웁니다.
+
+```text
+archive remint-reconcile <archive-root> --zettel-id <actual-id> --dry-run --strip-bom --diagnostic-only --format json
+```
+
+파일명만 보고 아이디를 추측하지 않습니다. canonical 초록 데이터에 안전한
+아이디가 없으면 경고와 힌트는 유지하지만 권장 명령은 생략합니다. 이 경우는
+placeholder를 수동으로 채우라는 뜻이 아니라 신원 metadata를 먼저 검토하라는
+실패 폐쇄 신호입니다.
+
+BOM 경고와 별도의 retired-draft 영수증 SHA 불일치는 서로 독립된 아래 두
+미리보기로 확인합니다. 두 명령 모두 쓰지 않습니다.
+
+```text
+archive remint-reconcile <archive-root> --zettel-id <bom-zet-id> --dry-run --strip-bom --diagnostic-only --format json
+archive retire-draft-reconcile <archive-root> --zettel-id <retired-draft-zet-id> --dry-run --format json
+```
+
+BOM 쪽은 `ok: false`, blocker 존재, `content_change`, `body_changed: true`,
+`approval_requires_content_changed_ack: true` 중 하나라도 나오면 멈춥니다.
+내용을 가린 결과가 `format_drift`, `bom_stripped: true`, 내용 변경 확인 불필요로
+나온 경우에만 `--diagnostic-only`를 뺀 같은 미리보기를 다시 실행해 현재 본문과
+초록 데이터를 사람이 확인합니다. 그 확인 뒤에만 다음 승인을 검토합니다.
+
+```text
+archive remint-reconcile <archive-root> --zettel-id <bom-zet-id> --approve --reviewed-by <actor> --strip-bom --format json
+```
+
+retired-draft 쪽에서 `blocked`나 `unclassified`가 나오면 멈춥니다.
+`format_drift_ready_for_review`는 모든 `ref_reports` 행을 검토한 뒤 승인할 수
+있습니다. `needs_content_change_review`는 자동 승인 신호가 아닙니다. 현재
+canonical과 영수증 근거를 사람이 확인하고 변경이 의도된 경우에만
+`--content-changed-ack`를 사용할 수 있습니다. 한쪽 reconcile 성공은 다른
+쪽에 대한 승인으로 간주되지 않습니다.
+
 ## v0.3.228 실행 가능한 전체 검진 결과와 현재 단계 진행 표시
 
 v0.3.228은 아카이브 migration과 아카이브 쓰기 경로를 바꾸지 않습니다.

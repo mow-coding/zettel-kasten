@@ -33,10 +33,10 @@ wom-kit/docs/releases/ - do not re-grow baseline ladders or tag lists here.
 Current public baseline:
 
 ```text
-v0.3.228 pre-release
+v0.3.229 pre-release
 ```
 
-Previous public baseline: v0.3.227 pre-release.
+Previous public baseline: v0.3.228 pre-release.
 
 Full release history: see [CHANGELOG.md](CHANGELOG.md) and [wom-kit/docs/releases/](wom-kit/docs/releases/).
 
@@ -68,7 +68,7 @@ approval-gated write, or docs-only), see the
 - object-storage doctor now accepts same-key `skipped_remote_same` coverage, offers approval-gated `object-storage-wom-location-reconcile` for genuine missing `wom_uploaded` manifest bindings, and validates that command's audit receipts with a dedicated schema,
 - generated-index-backed duplicate checks, metadata-backed mint staleness fast paths, SQLite busy-timeout/WAL hardening for generated-index write paths, and standard-id source-path fast resolution for large archives,
 - scoped `validate --since` / `validate --scope` checks with generated-index body SHA cache support and optional `--progress`, plus stage/count progress output for long `doctor --strict`, large `object-storage-adopt-existing`, and `staged-cleanup-check` runs; large adopt plan resolution now uses a per-run manifest index, explicit `--skip-existing-wom-uploaded` resume helper, read-only `--stop-after-plan` diagnostics, resume-gap counts for matching `declared_uploaded` versus `wom_uploaded` locations, same-provider nonmatching store/key diagnostics, and same-store `wom_uploaded` raw-vs-gating counts, doctor reuses per-run file SHA/frontmatter caches and reports deeper `mint-receipts` target-frontmatter, mint-link, receipt-completion progress, every-receipt heartbeat, every-receipt file-ref liveness, target file-ref drilldown, target edge-receipt index lifecycle plus aggregate source/candidate/cache-hit heartbeats and a final summary, hash start/end liveness, retired-source skips, local-profile secret-safety liveness, early ETA warm-up, compact default `--progress`, opt-in verbose tracing, JSONL progress logs, full result capture with archive-relative `--output`, compact summaries, stdout severity filters, output/progress-log path-policy metadata, and staged cleanup can show content-free walk/verify/hash progress while remaining report-only; per-source edge candidate details stay in verbose/JSONL output instead of flooding compact stderr, while `ai-start-here`, `upgrade-check`, and CLI `zet-catalog` share content-free progress, 10-second heartbeat, and scratch-scoped full-result output; `zet-catalog-pass` completes all strict pages in one process with ephemeral memory reuse and final local revalidation before publishing one SHA-pinned private scratch JSONL, `zet-catalog-pass-read` validates that whole artifact before returning one bounded page, and `zet-catalog-pass-cleanup` deletes only the matching complete scratch file after preview and explicit human approval,
-- completed full-Doctor handoffs retain bounded ERROR/WARN items, complete code counts, and suggested commands instead of collapsing actionable findings to severity totals; compact heartbeat prioritizes the current local-profile secret-safety file/content/profile counts over a preserved older edge aggregate, and the regular-file safety walk reuses its checked directory boundary while keeping strict symlink escape checks,
+- completed full-Doctor handoffs retain bounded ERROR/WARN items, complete code counts, and suggested commands instead of collapsing actionable findings to severity totals; a BOM finding now fills its reconcile dry-run with the validated canonical zet id and omits the command when that id is absent or unsafe instead of emitting an unresolved placeholder; compact heartbeat prioritizes the current local-profile secret-safety file/content/profile counts over a preserved older edge aggregate, and the regular-file safety walk reuses its checked directory boundary while keeping strict symlink escape checks,
 - read-only `archive zet-quality-check --dry-run` for entity-term, document-type, OCR/parse metadata, table-structure, correction-event, source-rights, audience, and derived-artifact dependency risks before mint; optional `zet-quality-rules.yml` project rules can make forbidden entity aliases mint blockers without echoing matched terms,
 - read-only `archive status-board --dry-run` for beginner-facing archive state counts across canonical zets, active drafts, minted drafts pending retire, document/audience metadata gaps, source metadata gaps, derived-artifact sync gaps, and optional body-inspecting quality counts without echoing titles, bodies, source values, provider URLs, or local paths,
 - read-only `archive derived-artifact-staleness --dry-run` for checking whether declared `derived_artifacts` may be stale because a source zet is newer than the artifact's last reviewed sync. It writes nothing, opens no external report, and does not echo artifact refs, titles, bodies, provider URLs, or local paths,
@@ -457,7 +457,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
-v0.3.228 (current checkpoint)
+v0.3.229 (current checkpoint)
 ```
 
 Public releases from `v0.2.5` onward are tagged as compatibility checkpoints.
