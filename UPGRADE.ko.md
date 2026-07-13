@@ -83,6 +83,55 @@ project folder 작업에서는 temporary intake staging이 archive of record가
 아니라는 점을 기억합니다. cleanup 전에 원본을 objet, source map, manifest,
 zet, receipt로 보존해야 합니다.
 
+## v0.3.228 실행 가능한 전체 검진 결과와 현재 단계 진행 표시
+
+v0.3.228은 아카이브 migration과 아카이브 쓰기 경로를 바꾸지 않습니다.
+공식 프로젝트 업데이트 뒤 새 프로세스를 시작하고, 아카이브 건강 근거가
+필요할 때만 전체 검진을 실행합니다.
+
+```text
+archive runtime-context <archive-root> --full-doctor --progress --format json
+```
+
+결과의 `doctor_findings`는 진단 코드별 전체 ERROR/WARN 개수, 최대 100개의
+실행 가능한 항목, 최대 20개의 고유 권장 명령을 남깁니다. 각 항목에는 심각도,
+코드, 아카이브 상대경로, 설명, 힌트, 권장 명령, 호환 대상이 포함될 수
+있습니다. INFO는 개수만 유지합니다. `truncated`와
+`suggested_commands_truncated`는 제한 때문에 모든 항목이나 명령을 싣지
+못했는지 명시합니다.
+
+이 계약은 앞으로 생성되는 결과에 적용됩니다. 심각도별 개수만 저장한
+v0.3.227 `runtime-context` JSON에서는 이미 버려진 코드, 경로, 설명을 정직하게
+복원할 수 없습니다. 따라서 그 과거 개수를 식별하려면 새 검진 한 번은
+필요합니다. v0.3.228은 새로 완료된 결과가 같은 근거를 다시 잃지 않게 합니다.
+
+`local-profile-secret-safety`가 실행 중일 때 compact heartbeat는 현재 단계의
+안전한 개수만 보여줍니다.
+
+```text
+checked_files=<방문한 파일 수>
+content_scanned=<내용을 검사한 텍스트형 파일 수>
+local_profiles=<검사한 로컬 프로필 수>
+skipped_dirs=<건너뛴 무시 대상 디렉터리 수>
+```
+
+이전 엣지 source-load 집계는 마지막 `done` 줄을 위해 보존되지만, 더는 현재
+안전 검사 단계를 가리지 않습니다. 일반 파일은 순회가 이미 확인한 디렉터리
+경계를 재사용하고, 심볼릭 링크는 기존처럼 해석된 경계와 무시 대상 검사를
+거칩니다. 비밀값처럼 보이는 파일명, 내용, 로컬 프로필 판정 규칙은 바뀌지
+않습니다.
+
+합성 벤치마크는 임시 fixture만 만들고 실제 아카이브를 읽지 않습니다.
+
+```text
+python tools/benchmark_local_profile_secret_safety.py --file-count 5000 --format json
+```
+
+릴리스 작업 환경의 같은 fixture 즉시 전후 측정은 20.838초에서 11.644초로
+개선됐고, 공개 변경 후 도구의 별도 실행은 13.693초였습니다. 파일 크기,
+저장장치, 백신 환경이 다른 실제 아카이브의 완료 시간을 보장하는 수치는
+아닙니다.
+
 ## v0.3.227 전체 검진 엣지 진행 표시 집계
 
 v0.3.227은 아카이브 migration을 하지 않고 검진의 판정이나 읽기 범위를

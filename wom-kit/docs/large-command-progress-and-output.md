@@ -3,7 +3,8 @@
 Status: implemented in v0.3.214; complete-only catalog JSONL in v0.3.216;
 same-count suppression and counted-unit/rate contract in v0.3.222; safe receipt
 phase and reporter coalescing in v0.3.223; explicit runtime-context full-Doctor
-progress in v0.3.224; aggregate edge-receipt progress in v0.3.227
+progress in v0.3.224; aggregate edge-receipt progress in v0.3.227; current
+local-profile safety counters in v0.3.228
 
 ## Purpose
 
@@ -104,6 +105,23 @@ Each source's `start`, `0/N`, `1/N`, `N/N`, and `done` events move to the
 `edge-receipt-source-load-detail` trace. Compact stderr suppresses that trace;
 direct `doctor --progress-detail verbose` and private `--progress-log` JSONL
 retain it. Counts and fixed labels remain content-free in every mode.
+
+Since v0.3.228, an older edge aggregate cannot hide a newer long-running
+Doctor stage. While `local-profile-secret-safety` is current, shared compact
+heartbeat uses only the fixed numeric form:
+
+```text
+checked_files=<files visited>
+content_scanned=<text-like files scanned>
+local_profiles=<local profile files checked>
+skipped_dirs=<ignored directories skipped>
+```
+
+The final local-profile summary uses the same fields. The edge aggregate stays
+available for the complete Doctor `done` summary after the safety stage, but it
+does not override the current stage. A strict regular expression accepts only
+those labels and non-negative integers; source paths and arbitrary trace text
+cannot enter shared progress.
 
 Progress is content-free. It does not emit local paths, zet ids, titles,
 abstracts, body text, object refs, provider values, credential refs, tokens, or

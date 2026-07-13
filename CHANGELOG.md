@@ -6,6 +6,36 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.228 - 2026-07-13
+
+Actionable full-Doctor result and current-stage progress checkpoint. Additive;
+no archive migration or write-path change.
+
+- **Completed findings stay actionable.** Full `runtime-context` and
+  `ai-start-here` results now retain bounded ERROR/WARN items, complete
+  severity/code counts, and bounded suggested commands. INFO remains
+  count-only, so a completed long scan no longer collapses its repair evidence
+  into three severity totals or floods the AI context.
+- **Explicit truncation boundary.** At most 100 finding items and 20 unique
+  suggested commands enter the handoff result. Complete code counts and
+  truncation flags remain available when an unhealthy archive exceeds either
+  bound.
+- **Current-stage heartbeat wins.** While
+  `local-profile-secret-safety` is active, compact runtime progress reports
+  checked files, content scans, local profiles, and skipped directories instead
+  of replaying a stale edge source-load aggregate. The final edge aggregate is
+  still preserved and emitted once.
+- **Safe regular-file walk reuse.** The local-profile secret-safety scan reuses
+  the already-checked `os.walk` directory boundary for ordinary files instead
+  of repeatedly resolving every path. Symlinks retain strict resolved-boundary
+  and ignored-target checks; secret filename/content/profile policies are
+  unchanged.
+- **Reproducible synthetic benchmark.** A new temporary-fixture benchmark reads
+  no real archive. On the release workstation, the same 5,000-safe-JSON fixture
+  improved from 20.838 seconds to 11.644 seconds in the immediate before/after
+  run; the public post-change tool also completed in 13.693 seconds. Real
+  archive timing remains storage-, size-, and antivirus-dependent.
+
 ## v0.3.227 - 2026-07-12
 
 Aggregate full-Doctor edge progress checkpoint. Additive; no archive migration

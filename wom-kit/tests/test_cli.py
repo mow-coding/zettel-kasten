@@ -421,6 +421,82 @@ class ArchiveCliTests(unittest.TestCase):
             events,
         )
 
+    def test_command_progress_reporter_prioritizes_current_local_profile_counts(self) -> None:
+        events: list[tuple[str, str, int | None, int | None]] = []
+
+        def capture(stage: str, message: str, current: int | None, total: int | None) -> None:
+            events.append((stage, message, current, total))
+
+        with patch.object(archive_cli, "make_stage_progress_callback", return_value=capture):
+            reporter = archive_cli.CommandProgressReporter(
+                True,
+                label="progress-test",
+                heartbeat_interval_seconds=0.02,
+            )
+            reporter.progress("edge-receipt-source-load", "start", None, None)
+            reporter.progress(
+                "edge-receipt-source-load",
+                "aggregate sources=7103 candidates=21074 cache_hits=3905",
+                None,
+                None,
+            )
+            reporter.progress("local-profile-secret-safety", "start", None, None)
+            reporter.progress(
+                "local-profile-secret-safety",
+                "checked archive files files=250 content=20 profiles=2 skipped_dirs=3",
+                250,
+                None,
+            )
+            reporter.progress(
+                "local-profile-secret-safety",
+                "checked archive files files=999 content=99 profiles=9 skipped_dirs=9 PRIVATE_PATH",
+                999,
+                None,
+            )
+            deadline = time.monotonic() + 1.0
+            while not any(
+                stage == "local-profile-secret-safety"
+                and message.startswith("heartbeat checked_files=250 content_scanned=20")
+                for stage, message, _current, _total in events
+            ) and time.monotonic() < deadline:
+                time.sleep(0.01)
+            reporter.progress(
+                "local-profile-secret-safety",
+                "local profile secret safety summary checked_files=60403 content_scanned=50000 "
+                "local_profiles=4 skipped_dirs=8",
+                None,
+                None,
+            )
+            reporter.progress("local-profile-secret-safety", "done", None, None)
+            reporter.close()
+
+        self.assertTrue(
+            any(
+                stage == "local-profile-secret-safety"
+                and message == (
+                    "heartbeat checked_files=250 content_scanned=20 local_profiles=2 skipped_dirs=3"
+                )
+                for stage, message, _current, _total in events
+            )
+        )
+        self.assertIn(
+            (
+                "local-profile-secret-safety",
+                "summary checked_files=60403 content_scanned=50000 local_profiles=4 skipped_dirs=8",
+                None,
+                None,
+            ),
+            events,
+        )
+        self.assertNotIn("PRIVATE_PATH", repr(events))
+        local_start = events.index(("local-profile-secret-safety", "start", None, None))
+        self.assertFalse(
+            any(
+                stage == "edge-receipt-source-load" and message.startswith("heartbeat ")
+                for stage, message, _current, _total in events[local_start:]
+            )
+        )
+
     def test_compact_edge_progress_keeps_lifecycle_and_value_free_summary_only(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             progress_log = Path(tmp) / "edge-progress.jsonl"
@@ -1627,6 +1703,65 @@ class ArchiveCliTests(unittest.TestCase):
 
         codes = {item.code for item in doctor.diagnostics}
         self.assertIn("secret_value_detected", codes)
+
+    def test_doctor_local_profile_secret_safety_reuses_walk_boundary_for_regular_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "archive"
+            archive_root.mkdir()
+            (archive_root / ".gitignore").write_text(
+                "\n".join(archive_cli.RECOMMENDED_GITIGNORE_PATTERNS) + "\n",
+                encoding="utf-8",
+            )
+            data_root = archive_root / "data"
+            data_root.mkdir()
+            for index in range(100):
+                (data_root / f"safe-{index:03d}.json").write_text('{"safe":"value"}\n', encoding="utf-8")
+            ignored_root = archive_root / ".venv"
+            ignored_root.mkdir()
+            (ignored_root / "ignored-secret.json").write_text(
+                '{"api_key":"should-not-be-scanned"}\n',
+                encoding="utf-8",
+            )
+            doctor = archive_cli.Doctor(archive_root)
+
+            with (
+                patch.object(
+                    doctor,
+                    "_path_stays_inside_archive",
+                    wraps=doctor._path_stays_inside_archive,
+                ) as path_boundary,
+                patch.object(
+                    doctor,
+                    "_is_ignored_scan_path",
+                    wraps=doctor._is_ignored_scan_path,
+                ) as ignored_path,
+            ):
+                doctor._check_local_profile_and_secret_safety()
+
+        self.assertEqual(path_boundary.call_count, 0)
+        self.assertEqual(ignored_path.call_count, 0)
+        self.assertFalse(any(item.severity == "ERROR" for item in doctor.diagnostics))
+
+    def test_doctor_local_profile_secret_safety_keeps_symlink_escape_check(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "archive"
+            archive_root.mkdir()
+            (archive_root / ".gitignore").write_text(
+                "\n".join(archive_cli.RECOMMENDED_GITIGNORE_PATTERNS) + "\n",
+                encoding="utf-8",
+            )
+            outside = Path(tmp) / "outside.txt"
+            outside.write_text("safe note\n", encoding="utf-8")
+            link = archive_root / "outside-link.txt"
+            try:
+                link.symlink_to(outside)
+            except OSError as exc:
+                self.skipTest(f"symlink creation is unavailable: {exc}")
+            doctor = archive_cli.Doctor(archive_root)
+
+            doctor._check_local_profile_and_secret_safety()
+
+        self.assertIn("archive_path_escapes_root", {item.code for item in doctor.diagnostics})
 
     def test_doctor_ignored_scan_path_allows_outside_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -4496,6 +4631,8 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(result["inspection"]["mode"], "quick")
             self.assertFalse(result["inspection"]["full_doctor_run"])
             self.assertFalse(result["doctor_summary"]["checked"])
+            self.assertFalse(result["doctor_findings"]["checked"])
+            self.assertEqual(result["doctor_findings"]["items"], [])
             self.assertIn("not an archive health claim", result["inspection"]["claim_boundary"])
             self.assertEqual(result["archive_id"], "archive:personal:fake-life")
             self.assertEqual(result["archive_type"], "personal")
@@ -4684,6 +4821,114 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertIn("[runtime-context] compose-runtime-context: done", stderr)
             self.assertNotIn(private_marker, stderr)
             self.assertNotIn(str(archive_root), stderr)
+
+    def test_runtime_context_full_doctor_keeps_bounded_actionable_findings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            inside_path = archive_root / "zettels" / "problem.md"
+            outside_path = Path(tmp) / "outside-private.txt"
+            diagnostics = [
+                {
+                    "severity": "ERROR",
+                    "code": "example_error",
+                    "message": f"Repair the file under {archive_root} before continuing.",
+                    "path": str(inside_path),
+                    "hint": "Review the source receipt.",
+                    "suggested_command": "archive example-repair <archive-root> --dry-run --format json",
+                },
+                {
+                    "severity": "WARN",
+                    "code": "example_warning",
+                    "message": f"Review the external reference at {outside_path}.",
+                    "path": str(outside_path),
+                    "hint": "Inspect r2://private-provider-location before continuing.",
+                },
+                {
+                    "severity": "INFO",
+                    "code": "example_info",
+                    "message": "This high-volume informational row stays count-only.",
+                    "path": "zettels/info.md",
+                },
+            ]
+
+            result = archive_services.runtime_context(
+                archive_root,
+                diagnostics=diagnostics,
+                inspection_mode="full_doctor",
+                inspection_reads={
+                    "zettel_bodies_read": True,
+                    "objet_bytes_read": True,
+                    "archive_text_scanned_for_secret_patterns": True,
+                },
+            )
+
+        self.assertFalse(result["ok"])
+        findings = result["doctor_findings"]
+        self.assertTrue(findings["checked"])
+        self.assertEqual(findings["selected_levels"], ["ERROR", "WARN"])
+        self.assertEqual(findings["total"], 2)
+        self.assertEqual(findings["returned"], 2)
+        self.assertFalse(findings["truncated"])
+        self.assertEqual(
+            findings["code_counts"],
+            [
+                {"severity": "ERROR", "code": "example_error", "count": 1},
+                {"severity": "WARN", "code": "example_warning", "count": 1},
+            ],
+        )
+        self.assertEqual(findings["items"][0]["path"], "zettels/problem.md")
+        self.assertEqual(findings["items"][1]["path"], "<local-path-redacted>")
+        self.assertIn("<archive-root>", findings["items"][0]["message"])
+        self.assertEqual(
+            findings["items"][1]["message"],
+            "<sensitive-diagnostic-text-redacted>",
+        )
+        self.assertEqual(
+            findings["items"][1]["hint"],
+            "<sensitive-diagnostic-text-redacted>",
+        )
+        self.assertNotIn(str(archive_root), json.dumps(findings))
+        self.assertNotIn(str(outside_path), json.dumps(findings))
+        self.assertNotIn("r2://", json.dumps(findings))
+        self.assertNotIn("example_info", json.dumps(findings))
+        self.assertEqual(
+            findings["suggested_commands"],
+            ["archive example-repair <archive-root> --dry-run --format json"],
+        )
+        self.assertEqual(result["inspection"]["doctor_findings_field"], "doctor_findings")
+
+    def test_runtime_context_doctor_findings_caps_items_but_counts_every_code(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            diagnostics = [
+                {
+                    "severity": "ERROR",
+                    "code": "repeated_error",
+                    "message": f"Repeated finding {index}",
+                    "path": f"zettels/problem-{index}.md",
+                }
+                for index in range(archive_services.RUNTIME_CONTEXT_DOCTOR_FINDING_LIMIT + 5)
+            ]
+
+            findings = archive_services.runtime_context_doctor_findings(
+                diagnostics,
+                root=archive_root,
+                redact_local_paths=True,
+            )
+
+        self.assertEqual(findings["total"], archive_services.RUNTIME_CONTEXT_DOCTOR_FINDING_LIMIT + 5)
+        self.assertEqual(findings["returned"], archive_services.RUNTIME_CONTEXT_DOCTOR_FINDING_LIMIT)
+        self.assertTrue(findings["truncated"])
+        self.assertEqual(
+            findings["code_counts"],
+            [
+                {
+                    "severity": "ERROR",
+                    "code": "repeated_error",
+                    "count": archive_services.RUNTIME_CONTEXT_DOCTOR_FINDING_LIMIT + 5,
+                }
+            ],
+        )
 
     def test_ai_start_here_returns_compact_safe_first_read_map(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
