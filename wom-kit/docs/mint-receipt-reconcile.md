@@ -120,7 +120,10 @@ content; it records the sha of the bytes as they are.
   and points to `remint-reconcile`. An un-reconciled mismatch keeps the plain
   `mint_receipt_sha_mismatch` error plus a suggested `remint-reconcile --dry-run`
   command. Both are ERRORs — they fail `doctor` and `--strict`. A UTF-8 BOM on a
-  canonical zet also raises a `zettel_has_bom` WARN naming the cause.
+  canonical zet also raises a `zettel_has_bom` WARN naming the cause. Since
+  v0.3.229, that warning's redacted dry-run command contains the actual validated
+  canonical frontmatter id. If the id is absent or unsafe, Doctor omits the
+  command instead of guessing from the filename or emitting `<id>`.
 - `archive retire-draft`: when — and only when — retirement is blocked by the
   mint-target sha-mismatch blocker, the output lists a `remint-reconcile
   --dry-run` next-safe action. No retire gate is relaxed.
@@ -277,6 +280,14 @@ canonical body into a JSON transcript.
 
 `--diagnostic-only` is refused with `--approve`. Approval must remain review-visible: the
 operator has to see the current on-disk content before recomputing receipt hashes.
+
+For a BOM finding, use the diagnostic-only command first. If it reports
+`format_drift`, `bom_stripped: true`, no blockers, `body_changed: false`, and no
+content-change acknowledgment requirement, repeat the dry-run without
+`--diagnostic-only` and review its current content/frontmatter before approving.
+Stop on `content_change`, a body change, any blocker, or an acknowledgment
+requirement. A separate retired-draft mismatch has its own dry-run and decision;
+one reconcile result never authorizes the other.
 
 ## Scope note: contract-preview vs run-outcome (adapter honesty)
 

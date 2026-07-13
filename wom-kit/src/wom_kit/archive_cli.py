@@ -2679,6 +2679,15 @@ class Doctor:
                 # (not info, which doctor filters out of --strict).
                 receipt_progress("checking target bom cache")
                 if self._zettel_has_bom_cached(target_path):
+                    raw_target_id = target_data.get("id")
+                    target_zettel_id = raw_target_id.strip() if isinstance(raw_target_id, str) else ""
+                    bom_reconcile_command = (
+                        "archive remint-reconcile <archive-root> "
+                        f"--zettel-id {target_zettel_id} "
+                        "--dry-run --strip-bom --diagnostic-only --format json"
+                        if archive_services.valid_draft_zettel_id(target_zettel_id)
+                        else None
+                    )
                     self.warn(
                         "zettel_has_bom",
                         "File has a UTF-8 BOM; WOM does not write BOMs. Run archive remint-reconcile after confirming content.",
@@ -2687,10 +2696,7 @@ class Doctor:
                             "Use remint-reconcile --strip-bom first as a dry-run; approve only after "
                             "the diagnostic class is understood."
                         ),
-                        suggested_command=(
-                            "archive remint-reconcile <archive-root> --zettel-id <id> "
-                            "--dry-run --strip-bom --diagnostic-only --format json"
-                        ),
+                        suggested_command=bom_reconcile_command,
                     )
                 receipt_progress("checking target mint receipt link")
                 receipt_progress("reading target mint block")

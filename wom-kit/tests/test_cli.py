@@ -36277,14 +36277,62 @@ state:
             canonical = archive_root / mint["canonical_path"]
             canonical.write_bytes(b"\xef\xbb\xbf" + canonical.read_bytes())
             doctor_code, doctor_output = self.run_cli(["doctor", str(archive_root), "--format", "json"])
-            codes = {item["code"] for item in json.loads(doctor_output)}
-            self.assertIn("zettel_has_bom", codes)
+            diagnostics = json.loads(doctor_output)
+            bom_findings = [item for item in diagnostics if item["code"] == "zettel_has_bom"]
+            self.assertEqual(len(bom_findings), 1, diagnostics)
+            expected_command = (
+                "archive remint-reconcile <archive-root> "
+                f"--zettel-id {zid} "
+                "--dry-run --strip-bom --diagnostic-only --format json"
+            )
+            self.assertEqual(
+                bom_findings[0]["suggested_command"],
+                expected_command,
+            )
+            self.assertNotIn("<id>", bom_findings[0]["suggested_command"])
+            context = archive_services.runtime_context(
+                archive_root,
+                diagnostics=diagnostics,
+                inspection_mode="full_doctor",
+                inspection_reads={
+                    "zettel_bodies_read": True,
+                    "objet_bytes_read": False,
+                    "archive_text_scanned_for_secret_patterns": True,
+                },
+            )
+            self.assertIn(expected_command, context["doctor_findings"]["suggested_commands"])
             # BOM tolerance did NOT hide the byte drift: reconcile still sees drift.
             code, output = self.run_cli(
                 ["remint-reconcile", str(archive_root), "--zettel-id", zid, "--dry-run", "--format", "json"]
             )
             result = json.loads(output)
             self.assertEqual(result["drift_class"], "format_drift")
+
+    def test_bom_diagnostic_omits_command_when_frontmatter_id_is_unsafe(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            mint = self._mint_lunch_for_reconcile(archive_root)
+            canonical = archive_root / mint["canonical_path"]
+            text = canonical.read_text(encoding="utf-8")
+            match = archive_cli.FRONTMATTER_RE.match(text)
+            assert match is not None
+            frontmatter = archive_cli.load_yaml(match.group(1))
+            body = text[match.end():]
+            frontmatter["id"] = "unsafe id"
+            canonical.write_text(
+                "\ufeff---\n" + archive_cli.dump_yaml(frontmatter) + "---\n" + body,
+                encoding="utf-8",
+            )
+
+            _doctor_code, doctor_output = self.run_cli(
+                ["doctor", str(archive_root), "--format", "json"]
+            )
+            diagnostics = json.loads(doctor_output)
+            bom_findings = [item for item in diagnostics if item["code"] == "zettel_has_bom"]
+
+            self.assertEqual(len(bom_findings), 1, diagnostics)
+            self.assertNotIn("suggested_command", bom_findings[0])
+            self.assertNotIn("<id>", json.dumps(bom_findings[0]))
 
     def test_mint_still_refuses_re_mint_after_reconcile_feature(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

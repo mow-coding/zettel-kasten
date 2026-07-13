@@ -91,6 +91,47 @@ For project-folder work, remember that temporary intake staging is not the
 archive of record. Preserve originals as objets, source maps, manifests, zets,
 and receipts before any cleanup.
 
+## v0.3.229 Executable BOM Reconcile Guidance
+
+v0.3.229 requires no archive migration and changes no archive write path. A
+`zettel_has_bom` Doctor finding now fills the redacted reconcile dry-run with
+the validated id read from canonical frontmatter:
+
+```text
+archive remint-reconcile <archive-root> --zettel-id <actual-id> --dry-run --strip-bom --diagnostic-only --format json
+```
+
+WOM-kit does not infer the id from the filename. If canonical frontmatter has no
+safe id, the finding and hint remain but the suggested command is omitted. This
+is a fail-closed signal to repair or review identity metadata, not an invitation
+to substitute a guessed selector.
+
+For a BOM finding and a separate retired-draft receipt mismatch, use independent
+dry-runs. Neither command writes:
+
+```text
+archive remint-reconcile <archive-root> --zettel-id <bom-zet-id> --dry-run --strip-bom --diagnostic-only --format json
+archive retire-draft-reconcile <archive-root> --zettel-id <retired-draft-zet-id> --dry-run --format json
+```
+
+For the BOM route, stop on `ok: false`, any blocker, `content_change`,
+`body_changed: true`, or `approval_requires_content_changed_ack: true`. If the
+redacted result is `format_drift`, reports `bom_stripped: true`, and requires no
+content-change acknowledgment, run the same BOM dry-run once without
+`--diagnostic-only` and review the current content and frontmatter before any
+approval. Only then may a reviewer use:
+
+```text
+archive remint-reconcile <archive-root> --zettel-id <bom-zet-id> --approve --reviewed-by <actor> --strip-bom --format json
+```
+
+For retired-draft reconcile, `blocked` or `unclassified` means stop.
+`format_drift_ready_for_review` may proceed after reviewing every `ref_reports`
+row. `needs_content_change_review` is not an automatic approval: inspect the
+current canonical and receipt evidence, and use `--content-changed-ack` only
+when a named human confirms that the changed bytes are intentional. The two
+reconcile targets are independent; success on one does not authorize the other.
+
 ## v0.3.228 Actionable Full-Doctor Results And Current-Stage Progress
 
 v0.3.228 requires no archive migration and changes no archive write path. Start
