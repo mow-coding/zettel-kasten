@@ -13776,6 +13776,8 @@ def remint_reconcile_diagnostic_view(result: dict[str, Any]) -> dict[str, Any]:
         "content_change_ack_required",
         "body_changed",
         "body_diff_diagnostic",
+        "review_plan_sha256",
+        "human_review_plan",
         "bom_stripped",
         "bom_strip_note",
         "blockers",
@@ -13812,7 +13814,364 @@ def remint_reconcile_diagnostic_view(result: dict[str, Any]) -> dict[str, Any]:
     return view
 
 
-def _reconcile_plan_guidance(*, command_name: str, zettel_id: str, drift_class: str, blockers: list[str]) -> dict[str, Any]:
+def _reconcile_followup_command(
+    *,
+    command_name: str,
+    zettel_id: str,
+    mode: str,
+    strip_bom: bool,
+    content_change: bool = False,
+    review_plan_sha256: str | None = None,
+    output_format: str = "json",
+) -> str | None:
+    """Build a shell-safe reconcile follow-up command for a validated zet id."""
+    if not ZETTEL_EDGE_ZETTEL_ID_RE.fullmatch(str(zettel_id or "")):
+        return None
+    parts = [
+        "archive",
+        command_name,
+        "<archive-root>",
+        "--zettel-id",
+        zettel_id,
+        mode,
+    ]
+    if mode == "--approve":
+        parts.extend(["--reviewed-by", "<actor>"])
+        if content_change:
+            parts.append("--content-changed-ack")
+            if review_plan_sha256:
+                parts.extend(["--reviewed-plan-sha256", review_plan_sha256])
+    if strip_bom:
+        parts.append("--strip-bom")
+    parts.extend(["--format", output_format])
+    return " ".join(parts)
+
+
+def _reconcile_archive_relative_file_sha256(root: Path, relative_path: Any) -> tuple[bool, str | None]:
+    if not isinstance(relative_path, str) or not relative_path:
+        return False, None
+    try:
+        path = resolve_archive_relative_path(root, relative_path)
+    except ArchivePathError:
+        return False, None
+    if not path.is_file():
+        return False, None
+    try:
+        return True, sha256_path(path)
+    except OSError:
+        return False, None
+
+
+def _reconcile_review_evidence_item(
+    root: Path,
+    *,
+    role: str,
+    path: Any,
+    purpose: str,
+    recorded_sha256: Any = None,
+    current_sha256: Any = None,
+    ref: str | None = None,
+    drift_class: str | None = None,
+    classification_basis: str | None = None,
+) -> dict[str, Any]:
+    safe_path = path if isinstance(path, str) and path else None
+    if safe_path:
+        try:
+            resolve_archive_relative_path(root, safe_path)
+        except ArchivePathError:
+            safe_path = None
+    present, measured_sha256 = _reconcile_archive_relative_file_sha256(root, safe_path)
+    recorded = recorded_sha256 if isinstance(recorded_sha256, str) and SHA256_RE.fullmatch(recorded_sha256) else None
+    current = current_sha256 if isinstance(current_sha256, str) and SHA256_RE.fullmatch(current_sha256) else measured_sha256
+    item: dict[str, Any] = {
+        "role": role,
+        "path": safe_path,
+        "purpose": purpose,
+        "present": present,
+        "recorded_sha256": recorded,
+        "current_sha256": current,
+    }
+    if ref:
+        item["ref"] = ref
+    if drift_class:
+        item["drift_class"] = drift_class
+    if classification_basis:
+        item["classification_basis"] = classification_basis
+    return item
+
+
+def _remint_reconcile_review_evidence(
+    root: Path,
+    *,
+    canonical_relative: str,
+    receipt_relative: str,
+    snapshot_relative: str | None,
+    receipt_source: dict[str, Any],
+    receipt_target: dict[str, Any],
+    receipt_snapshot: dict[str, Any],
+) -> list[dict[str, Any]]:
+    source_relative = receipt_source.get("path") if isinstance(receipt_source.get("path"), str) else None
+    return [
+        _reconcile_review_evidence_item(
+            root,
+            role="mint_snapshot",
+            path=snapshot_relative,
+            purpose="Mint-time draft baseline for local body and frontmatter comparison.",
+            recorded_sha256=receipt_snapshot.get("sha256"),
+            ref="snapshot",
+        ),
+        _reconcile_review_evidence_item(
+            root,
+            role="current_canonical",
+            path=canonical_relative,
+            purpose="Current canonical zet whose bytes would be accepted by reconcile.",
+            recorded_sha256=receipt_target.get("sha256"),
+            ref="target",
+        ),
+        _reconcile_review_evidence_item(
+            root,
+            role="mint_receipt",
+            path=receipt_relative,
+            purpose="Mint receipt containing recorded refs and any prior reconcile history.",
+            ref="mint_receipt",
+        ),
+        _reconcile_review_evidence_item(
+            root,
+            role="source_draft",
+            path=source_relative,
+            purpose="Original source draft if it still exists; reconcile also rebinds this ref.",
+            recorded_sha256=receipt_source.get("sha256"),
+            ref="source",
+        ),
+    ]
+
+
+def _retire_reconcile_review_evidence(
+    root: Path,
+    *,
+    receipt_relative: str,
+    ref_reports: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    reports = {
+        str(report.get("ref")): report
+        for report in ref_reports
+        if isinstance(report, dict) and isinstance(report.get("ref"), str)
+    }
+
+    def from_ref(ref: str, role: str, purpose: str) -> dict[str, Any]:
+        report = reports.get(ref, {})
+        return _reconcile_review_evidence_item(
+            root,
+            role=role,
+            path=report.get("path"),
+            purpose=purpose,
+            recorded_sha256=report.get("prior_sha256"),
+            current_sha256=report.get("new_sha256"),
+            ref=ref,
+            drift_class=report.get("drift_class") if isinstance(report.get("drift_class"), str) else None,
+            classification_basis=(
+                report.get("classification_basis")
+                if isinstance(report.get("classification_basis"), str)
+                else None
+            ),
+        )
+
+    return [
+        from_ref("snapshot", "mint_snapshot", "Mint-time draft baseline for comparison with the current canonical zet."),
+        from_ref("target", "current_canonical", "Current canonical zet referenced by the retired-draft receipt."),
+        from_ref("mint_receipt", "mint_receipt", "Current mint receipt; inspect reconcile history before accepting its new SHA."),
+        _reconcile_review_evidence_item(
+            root,
+            role="retire_receipt",
+            path=receipt_relative,
+            purpose="Retired-draft receipt whose recorded refs would be re-issued.",
+            ref="retire_receipt",
+        ),
+        from_ref("source", "retired_source", "Historical source draft ref; absence after retirement is expected."),
+    ]
+
+
+def _reconcile_review_plan_digest(
+    *,
+    command_name: str,
+    zettel_id: str,
+    strip_bom: bool,
+    drift_class: str,
+    evidence: list[dict[str, Any]],
+    changed_frontmatter_fields: list[str] | None = None,
+    body_changed: bool | None = None,
+    changed_refs: list[str] | None = None,
+) -> str:
+    technical_evidence = [
+        {
+            key: item.get(key)
+            for key in (
+                "role",
+                "ref",
+                "path",
+                "present",
+                "recorded_sha256",
+                "current_sha256",
+                "drift_class",
+                "classification_basis",
+            )
+            if key in item
+        }
+        for item in evidence
+    ]
+    return sha256_json_value(
+        {
+            "schema": "wom-kit/reconcile-human-review/v0.1",
+            "command_name": command_name,
+            "zettel_id": zettel_id,
+            "strip_bom": strip_bom,
+            "drift_class": drift_class,
+            "evidence": technical_evidence,
+            "changed_frontmatter_fields": sorted(set(changed_frontmatter_fields or [])),
+            "body_changed": body_changed,
+            "changed_refs": list(changed_refs or []),
+        }
+    )
+
+
+def _reconcile_human_review_plan(
+    *,
+    command_name: str,
+    zettel_id: str,
+    strip_bom: bool,
+    review_plan_sha256: str,
+    evidence: list[dict[str, Any]],
+    changed_frontmatter_fields: list[str] | None = None,
+    body_changed: bool | None = None,
+    changed_refs: list[str] | None = None,
+) -> dict[str, Any]:
+    review_command = _reconcile_followup_command(
+        command_name=command_name,
+        zettel_id=zettel_id,
+        mode="--dry-run",
+        strip_bom=strip_bom,
+        output_format="text",
+    )
+    approval_command = _reconcile_followup_command(
+        command_name=command_name,
+        zettel_id=zettel_id,
+        mode="--approve",
+        strip_bom=strip_bom,
+        content_change=True,
+        review_plan_sha256=review_plan_sha256,
+        output_format="json",
+    )
+    recheck_command = _reconcile_followup_command(
+        command_name=command_name,
+        zettel_id=zettel_id,
+        mode="--dry-run",
+        strip_bom=strip_bom,
+        output_format="json",
+    )
+    if command_name == "retire-draft-reconcile":
+        review_steps = [
+            {
+                "order": 1,
+                "action": "compare_snapshot_to_canonical",
+                "instruction": "Compare the local mint_snapshot with current_canonical and decide whether every content change is intentional.",
+            },
+            {
+                "order": 2,
+                "action": "inspect_mint_receipt_history",
+                "instruction": "Inspect the local mint_receipt reconcile history and explain every changed receipt ref.",
+            },
+            {
+                "order": 3,
+                "action": "classify_each_changed_ref",
+                "instruction": "Record an intentional, unintentional, or uncertain decision for each changed ref independently.",
+            },
+        ]
+    else:
+        review_steps = [
+            {
+                "order": 1,
+                "action": "compare_snapshot_to_canonical",
+                "instruction": "Compare the local mint_snapshot with current_canonical, including body and every changed frontmatter field.",
+            },
+            {
+                "order": 2,
+                "action": "inspect_receipt_and_source",
+                "instruction": "Inspect the local mint_receipt history and source_draft when present because reconcile rebinds those refs too.",
+            },
+            {
+                "order": 3,
+                "action": "choose_one_decision",
+                "instruction": "Choose intentional, unintentional, or uncertain; do not infer approval from the classifier.",
+            },
+        ]
+    return {
+        "required": True,
+        "review_kind": "content_change",
+        "review_scope": "one_reconcile_target",
+        "content_included": False,
+        "local_only": True,
+        "share_policy": "Do not paste raw canonical, snapshot, source, or receipt content into reports or public logs.",
+        "review_plan_sha256": review_plan_sha256,
+        "evidence": evidence,
+        "changed_frontmatter_fields": sorted(set(changed_frontmatter_fields or [])),
+        "body_changed": body_changed,
+        "changed_refs": list(changed_refs or []),
+        "review_steps": review_steps,
+        "decision_options": [
+            {
+                "decision": "intentional_change",
+                "next_action": "approve_only_after_named_human_review",
+                "command": approval_command,
+            },
+            {
+                "decision": "unintentional_change",
+                "next_action": "restore_or_repair_the_changed_content_then_rerun_the_dry_run",
+                "command": recheck_command,
+            },
+            {
+                "decision": "uncertain",
+                "next_action": "stop_without_writing_and_escalate_to_the_human_owner",
+                "command": None,
+            },
+        ],
+        "approval_requirements": {
+            "named_human_reviewer": True,
+            "content_changed_ack": True,
+            "reviewed_plan_sha256": review_plan_sha256,
+            "all_changed_refs_explained": True,
+        },
+        "commands": {
+            "review_visible_dry_run": review_command,
+            "approve_if_intentional": approval_command,
+            "recheck_after_repair": recheck_command,
+        },
+        "stop_conditions": [
+            "any_changed_byte_or_ref_is_unexplained",
+            "the_human_decision_is_uncertain",
+            "the_review_plan_sha256_no_longer_matches",
+            "any_new_blocker_appears",
+        ],
+    }
+
+
+def normalize_reconcile_review_plan_sha256(value: str | None) -> str:
+    normalized = str(value or "").strip().lower().removeprefix("sha256:")
+    if not SHA256_RE.fullmatch(normalized):
+        raise ArchiveServiceError(
+            "--reviewed-plan-sha256 must be the SHA-256 digest from the content-change reconcile dry-run."
+        )
+    return "sha256:" + normalized
+
+
+def _reconcile_plan_guidance(
+    *,
+    command_name: str,
+    zettel_id: str,
+    drift_class: str,
+    blockers: list[str],
+    strip_bom: bool = False,
+    review_plan_sha256: str | None = None,
+) -> dict[str, Any]:
     if blockers:
         return {
             "status": "blocked",
@@ -13824,16 +14183,28 @@ def _reconcile_plan_guidance(*, command_name: str, zettel_id: str, drift_class: 
             "approval_requires_content_changed_ack": False,
         }
 
-    selector = f"--zettel-id {zettel_id}" if zettel_id else "--zettel-id <id>"
-    approve_command = f"archive {command_name} <archive-root> {selector} --approve --reviewed-by <actor>"
     if drift_class == "content_change":
+        approve_command = _reconcile_followup_command(
+            command_name=command_name,
+            zettel_id=zettel_id,
+            mode="--approve",
+            strip_bom=strip_bom,
+            content_change=True,
+            review_plan_sha256=review_plan_sha256,
+            output_format="json",
+        )
+        approval_action = (
+            f"If every content change is intentional, rerun `{approve_command}`."
+            if approve_command
+            else "The zet id is not safe for an executable command; stop and review identity metadata."
+        )
         return {
             "status": "needs_content_change_review",
             "overall_status": "needs_content_change_review",
             "suggested_next_action": "review_content_change_before_approval",
             "next_safe_actions": [
-                "Review the current canonical and receipt/snapshot evidence outside the redacted JSON summary.",
-                f"If the content change is intentional, rerun `{approve_command} --content-changed-ack`.",
+                "Follow human_review_plan locally; it orders the canonical, receipt, snapshot, and source evidence without embedding their content.",
+                approval_action,
                 "If the content change is not intentional, stop and restore or repair the content before reconciling.",
             ],
             "would_write": False,
@@ -13841,13 +14212,25 @@ def _reconcile_plan_guidance(*, command_name: str, zettel_id: str, drift_class: 
             "approval_requires_content_changed_ack": True,
         }
     if drift_class == "format_drift":
+        approve_command = _reconcile_followup_command(
+            command_name=command_name,
+            zettel_id=zettel_id,
+            mode="--approve",
+            strip_bom=strip_bom,
+            output_format="json",
+        )
+        approval_action = (
+            f"If the drift is only newline/BOM format drift, rerun `{approve_command}`."
+            if approve_command
+            else "The zet id is not safe for an executable command; stop and review identity metadata."
+        )
         return {
             "status": "format_drift_ready_for_review",
             "overall_status": "format_drift_ready_for_review",
             "suggested_next_action": "approve_reconcile_after_format_review",
             "next_safe_actions": [
                 "Review the format-drift classification and receipt refs before approving.",
-                f"If the drift is only newline/BOM format drift, rerun `{approve_command}`.",
+                approval_action,
                 "Do not use --content-changed-ack unless a later dry-run classifies content_change.",
             ],
             "would_write": False,
@@ -14006,6 +14389,7 @@ def remint_reconcile_plan(
                 zettel_id=str(receipt_id or resolved_id or ""),
                 drift_class="unclassified",
                 blockers=blockers,
+                strip_bom=strip_bom,
             )
         )
         if strip_bom_preview is not None:
@@ -14155,12 +14539,64 @@ def remint_reconcile_plan(
         "warnings": warnings,
         "writes": "none",
     }
+    if drift_class == "content_change":
+        changed_frontmatter_fields = sorted(
+            {
+                str(change.get("field"))
+                for change in frontmatter_field_changes
+                if isinstance(change, dict) and str(change.get("field") or "").strip()
+            }
+        )
+        review_evidence = _remint_reconcile_review_evidence(
+            root,
+            canonical_relative=canonical_relative,
+            receipt_relative=str(receipt_relative),
+            snapshot_relative=snapshot_relative,
+            receipt_source=receipt_source,
+            receipt_target=receipt_target,
+            receipt_snapshot=receipt_snapshot,
+        )
+        changed_refs = [
+            str(item.get("ref"))
+            for item in review_evidence
+            if item.get("ref") in {"target", "snapshot", "source"}
+            and (
+                (item.get("ref") != "source" and not item.get("present"))
+                or (
+                    item.get("present")
+                    and item.get("recorded_sha256") != item.get("current_sha256")
+                )
+            )
+        ]
+        review_plan_sha256 = _reconcile_review_plan_digest(
+            command_name="remint-reconcile",
+            zettel_id=resolved_id,
+            strip_bom=strip_bom,
+            drift_class=drift_class,
+            evidence=review_evidence,
+            changed_frontmatter_fields=changed_frontmatter_fields,
+            body_changed=body_changed,
+            changed_refs=changed_refs,
+        )
+        classified_result["review_plan_sha256"] = review_plan_sha256
+        classified_result["human_review_plan"] = _reconcile_human_review_plan(
+            command_name="remint-reconcile",
+            zettel_id=resolved_id,
+            strip_bom=strip_bom,
+            review_plan_sha256=review_plan_sha256,
+            evidence=review_evidence,
+            changed_frontmatter_fields=changed_frontmatter_fields,
+            body_changed=body_changed,
+            changed_refs=changed_refs,
+        )
     classified_result.update(
         _reconcile_plan_guidance(
             command_name="remint-reconcile",
             zettel_id=resolved_id,
             drift_class=drift_class,
             blockers=blockers,
+            strip_bom=strip_bom,
+            review_plan_sha256=classified_result.get("review_plan_sha256"),
         )
     )
     # v0.3.176: CONTENT-FREE body-diff diagnostic. A STRICT CLASSIFICATION NO-OP added to
@@ -14196,8 +14632,9 @@ def _reconcile_provenance_block(
     reconcile_receipt_relative: str,
     classification_basis: str = "content_change_fallback",
     bom_stripped: bool = False,
+    reviewed_plan_sha256: str | None = None,
 ) -> dict[str, Any]:
-    return {
+    provenance = {
         "reconciled_at": now,
         "reconciled_by": reviewed_by,
         "drift_class": drift_class,
@@ -14213,6 +14650,9 @@ def _reconcile_provenance_block(
         "normalized_content_digest": normalized_content_digest,
         "reconcile_receipt_path": reconcile_receipt_relative,
     }
+    if reviewed_plan_sha256:
+        provenance["reviewed_plan_sha256"] = reviewed_plan_sha256
+    return provenance
 
 
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -14273,6 +14713,7 @@ def remint_reconcile_apply(
     relative_path: str | None = None,
     reviewed_by: str,
     content_changed_ack: bool = False,
+    reviewed_plan_sha256: str | None = None,
     strip_bom: bool = False,
 ) -> dict[str, Any]:
     """Re-issue an honest mint receipt after human review. Writes both receipts.
@@ -14306,6 +14747,13 @@ def remint_reconcile_apply(
         raise ArchiveServiceError(
             "Reconcile blocked: drift classified as content_change; rerun with --content-changed-ack to approve."
         )
+    reviewed_plan_digest: str | None = None
+    if drift_class == "content_change":
+        reviewed_plan_digest = normalize_reconcile_review_plan_sha256(reviewed_plan_sha256)
+        if plan.get("review_plan_sha256") != reviewed_plan_digest:
+            raise ArchiveServiceError(
+                "Reconcile blocked: archive evidence changed after the human review dry-run; rerun the dry-run and review the new plan."
+            )
 
     receipt_relative = plan["mint_receipt_path"]
     canonical_relative = plan["canonical_path"]
@@ -14407,6 +14855,7 @@ def remint_reconcile_apply(
         reconcile_receipt_relative=reconcile_receipt_relative,
         classification_basis=classification_basis,
         bom_stripped=bom_stripped,
+        reviewed_plan_sha256=reviewed_plan_digest,
     )
 
     # In-place mint-receipt update: preserve ALL fields; only recompute the three
@@ -14468,6 +14917,8 @@ def remint_reconcile_apply(
             "created_paths": [reconcile_receipt_relative],
         },
     }
+    if reviewed_plan_digest:
+        audit_receipt["reviewed_plan_sha256"] = reviewed_plan_digest
     if source_note:
         audit_receipt["source_note"] = source_note
     _atomic_write_json(reconcile_receipt_path, audit_receipt)
@@ -14482,6 +14933,7 @@ def remint_reconcile_apply(
             "classification_basis": classification_basis,
             "bom_stripped": bom_stripped,
             "content_change_ack": bool(content_changed_ack) if drift_class == "content_change" else False,
+            "content_change_ack_required": False,
             "reconcile_receipt_path": reconcile_receipt_relative,
             "updated_paths": [receipt_relative],
             "created_paths": [reconcile_receipt_relative],
@@ -14489,6 +14941,15 @@ def remint_reconcile_apply(
             "writes": "applied",
         }
     )
+    if reviewed_plan_digest:
+        result["reviewed_plan_sha256"] = reviewed_plan_digest
+        result["human_review_plan"] = {
+            "required": False,
+            "status": "completed",
+            "content_included": False,
+            "local_only": True,
+            "reviewed_plan_sha256": reviewed_plan_digest,
+        }
     result.update(_reconcile_apply_guidance(command_name="remint-reconcile", zettel_id=str(zettel_id_value)))
     if source_note:
         result["source_note"] = source_note
@@ -14804,6 +15265,7 @@ def retire_draft_reconcile_plan(
                 zettel_id=zid,
                 drift_class="unclassified",
                 blockers=blockers,
+                strip_bom=strip_bom,
             )
         )
         return blocked_result
@@ -14821,12 +15283,44 @@ def retire_draft_reconcile_plan(
         "warnings": warnings,
         "writes": "none",
     }
+    if overall == "content_change":
+        review_evidence = _retire_reconcile_review_evidence(
+            root,
+            receipt_relative=receipt_relative,
+            ref_reports=ref_reports,
+        )
+        changed_refs = [
+            str(report.get("ref"))
+            for report in ref_reports
+            if isinstance(report, dict)
+            and report.get("drift_class") != "clean"
+            and isinstance(report.get("ref"), str)
+        ]
+        review_plan_sha256 = _reconcile_review_plan_digest(
+            command_name="retire-draft-reconcile",
+            zettel_id=zid,
+            strip_bom=strip_bom,
+            drift_class=overall,
+            evidence=review_evidence,
+            changed_refs=changed_refs,
+        )
+        classified_result["review_plan_sha256"] = review_plan_sha256
+        classified_result["human_review_plan"] = _reconcile_human_review_plan(
+            command_name="retire-draft-reconcile",
+            zettel_id=zid,
+            strip_bom=strip_bom,
+            review_plan_sha256=review_plan_sha256,
+            evidence=review_evidence,
+            changed_refs=changed_refs,
+        )
     classified_result.update(
         _reconcile_plan_guidance(
             command_name="retire-draft-reconcile",
             zettel_id=zid,
             drift_class=overall,
             blockers=blockers,
+            strip_bom=strip_bom,
+            review_plan_sha256=classified_result.get("review_plan_sha256"),
         )
     )
     # v0.3.176: CONTENT-FREE body-diff diagnostic threaded up from the inner remint plan.
@@ -14848,6 +15342,7 @@ def retire_draft_reconcile_apply(
     zettel_id: str,
     reviewed_by: str,
     content_changed_ack: bool = False,
+    reviewed_plan_sha256: str | None = None,
     strip_bom: bool = False,
 ) -> dict[str, Any]:
     """Re-issue an honest retire-draft receipt after human review. Writes both the
@@ -14859,7 +15354,7 @@ def retire_draft_reconcile_apply(
     if not reviewer:
         raise ArchiveServiceError("Retire-draft reconcile requires --reviewed-by.")
     root = require_existing_archive_root(archive_root)
-    plan = retire_draft_reconcile_plan(root, zettel_id=zettel_id)
+    plan = retire_draft_reconcile_plan(root, zettel_id=zettel_id, strip_bom=strip_bom)
     if not plan.get("ok"):
         raise ArchiveServiceError(
             "Retire-draft reconcile blocked: " + "; ".join(str(b) for b in plan.get("blockers", []))
@@ -14869,6 +15364,13 @@ def retire_draft_reconcile_apply(
         raise ArchiveServiceError(
             "Retire-draft reconcile blocked: drift classified as content_change; rerun with --content-changed-ack to approve."
         )
+    reviewed_plan_digest: str | None = None
+    if overall == "content_change":
+        reviewed_plan_digest = normalize_reconcile_review_plan_sha256(reviewed_plan_sha256)
+        if plan.get("review_plan_sha256") != reviewed_plan_digest:
+            raise ArchiveServiceError(
+                "Retire-draft reconcile blocked: archive evidence changed after the human review dry-run; rerun the dry-run and review the new plan."
+            )
 
     zid = plan["zettel_id"]
     receipt_relative = plan["retire_receipt_path"]
@@ -14935,6 +15437,8 @@ def retire_draft_reconcile_apply(
         "bom_stripped": bom_stripped,
         "ref_reports": ref_provenance,
     }
+    if reviewed_plan_digest:
+        provenance["reviewed_plan_sha256"] = reviewed_plan_digest
     existing = updated_receipt.get("reconcile")
     history: list[dict[str, Any]] = []
     if isinstance(existing, dict) and isinstance(existing.get("history"), list):
@@ -14984,6 +15488,8 @@ def retire_draft_reconcile_apply(
             "created_paths": [audit_relative],
         },
     }
+    if reviewed_plan_digest:
+        audit_receipt["reviewed_plan_sha256"] = reviewed_plan_digest
     _atomic_write_json(audit_path, audit_receipt)
 
     result = dict(plan)
@@ -14994,6 +15500,7 @@ def retire_draft_reconcile_apply(
             "reviewed_by": reviewer,
             "drift_class": overall,
             "content_change_ack": bool(content_changed_ack) if overall == "content_change" else False,
+            "content_change_ack_required": False,
             "bom_stripped": bom_stripped,
             "ref_reports": ref_provenance,
             "reconcile_receipt_path": audit_relative,
@@ -15002,6 +15509,15 @@ def retire_draft_reconcile_apply(
             "writes": "applied",
         }
     )
+    if reviewed_plan_digest:
+        result["reviewed_plan_sha256"] = reviewed_plan_digest
+        result["human_review_plan"] = {
+            "required": False,
+            "status": "completed",
+            "content_included": False,
+            "local_only": True,
+            "reviewed_plan_sha256": reviewed_plan_digest,
+        }
     result.update(_reconcile_apply_guidance(command_name="retire-draft-reconcile", zettel_id=str(zid)))
     if bom_strip_note:
         result["bom_strip_note"] = bom_strip_note

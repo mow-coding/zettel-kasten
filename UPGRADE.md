@@ -91,6 +91,50 @@ For project-folder work, remember that temporary intake staging is not the
 archive of record. Preserve originals as objets, source maps, manifests, zets,
 and receipts before any cleanup.
 
+## v0.3.230 Digest-Bound Content-Change Review
+
+v0.3.230 requires no archive migration and runs no reconcile automatically.
+It changes the approval contract only when a dry-run reports
+`drift_class: content_change`. Restart the operator process after the official
+update. You do not need to repeat a full Doctor just to use this patch; rerun
+only the affected per-zet dry-runs.
+
+For a BOM canonical and a separate retired-draft mismatch, keep the two reviews
+independent:
+
+```text
+archive remint-reconcile <archive-root> --zettel-id <bom-zet-id> --dry-run --strip-bom --diagnostic-only --format json
+archive retire-draft-reconcile <archive-root> --zettel-id <retired-draft-zet-id> --dry-run --format json
+```
+
+When either result is `content_change`, read its `human_review_plan` and
+`review_plan_sha256`. The plan orders the archive-relative evidence files and
+reports SHA-256 values, changed field or ref names, and fixed instructions
+without copying document content into the JSON. A human reviews those files
+locally and chooses one decision:
+
+1. `intentional_change`: explain every changed field or ref, then run the exact
+   `human_review_plan.commands.approve_if_intentional` command. Replace
+   `<actor>` with the named human reviewer. Its content-change form is:
+
+   ```text
+   archive remint-reconcile <archive-root> --zettel-id <bom-zet-id> --approve --reviewed-by <actor> --content-changed-ack --reviewed-plan-sha256 <review-plan-sha256> --strip-bom --format json
+   archive retire-draft-reconcile <archive-root> --zettel-id <retired-draft-zet-id> --approve --reviewed-by <actor> --content-changed-ack --reviewed-plan-sha256 <review-plan-sha256> --format json
+   ```
+
+2. `unintentional_change`: restore or repair the named content, then rerun that
+   target's dry-run. Do not approve the old digest.
+3. `uncertain`: stop without writing and ask the human owner. One target's
+   success, a classifier label, or a clean Doctor result does not approve the
+   other target.
+
+The approval command recomputes the review plan before any write. A missing,
+malformed, or stale `--reviewed-plan-sha256` stops the run. Successful
+content-change approval records that digest in provenance and the immutable
+audit receipt, returns `content_change_ack_required: false`, and reports
+`human_review_plan.status: completed`. Existing `format_drift` approval remains
+compatible and does not require this new flag.
+
 ## v0.3.229 Executable BOM Reconcile Guidance
 
 v0.3.229 requires no archive migration and changes no archive write path. A

@@ -11043,6 +11043,29 @@ def command_retire_draft(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 1
 
 
+def print_reconcile_human_review_plan(result: dict[str, Any]) -> None:
+    plan = result.get("human_review_plan")
+    if not isinstance(plan, dict) or not plan.get("required"):
+        return
+    print("Human review plan (local evidence only):")
+    print(f"- Review plan SHA-256: {plan.get('review_plan_sha256') or '-'}")
+    print("- Evidence order:")
+    for item in plan.get("evidence") or []:
+        if not isinstance(item, dict):
+            continue
+        state = "present" if item.get("present") else "missing or retired"
+        print(f"  {item.get('role')}: {item.get('path') or '-'} ({state})")
+    print("- Review steps:")
+    for step in plan.get("review_steps") or []:
+        if isinstance(step, dict):
+            print(f"  {step.get('order')}. {step.get('instruction')}")
+    commands = plan.get("commands") if isinstance(plan.get("commands"), dict) else {}
+    if commands.get("approve_if_intentional"):
+        print(f"- Intentional change approval: {commands['approve_if_intentional']}")
+    print("- Unintentional change: restore or repair it, then rerun the dry-run.")
+    print("- Uncertain: stop without writing and ask the human owner.")
+
+
 def command_remint_reconcile(args: argparse.Namespace) -> int:
     if args.dry_run and args.approve:
         print("Use either --dry-run or --approve, not both.", file=sys.stderr)
@@ -11067,6 +11090,7 @@ def command_remint_reconcile(args: argparse.Namespace) -> int:
                 relative_path=args.path,
                 reviewed_by=args.reviewed_by,
                 content_changed_ack=bool(args.content_changed_ack),
+                reviewed_plan_sha256=getattr(args, "reviewed_plan_sha256", None),
                 strip_bom=bool(getattr(args, "strip_bom", False)),
             )
         else:
@@ -11125,6 +11149,7 @@ def command_remint_reconcile(args: argparse.Namespace) -> int:
                 print("--- canonical text (begin) ---")
                 print(text.rstrip("\n"))
                 print("--- canonical text (end) ---")
+        print_reconcile_human_review_plan(result)
         if result.get("content_change_ack_required"):
             print("Content change acknowledgment required: rerun --approve with --content-changed-ack.")
         if result.get("bom_strip_note"):
@@ -11164,6 +11189,7 @@ def command_retire_draft_reconcile(args: argparse.Namespace) -> int:
                 zettel_id=args.zettel_id,
                 reviewed_by=args.reviewed_by,
                 content_changed_ack=bool(args.content_changed_ack),
+                reviewed_plan_sha256=getattr(args, "reviewed_plan_sha256", None),
                 strip_bom=bool(getattr(args, "strip_bom", False)),
             )
         else:
@@ -11203,6 +11229,7 @@ def command_retire_draft_reconcile(args: argparse.Namespace) -> int:
                     else ""
                 )
             )
+        print_reconcile_human_review_plan(result)
         if result.get("content_change_ack_required"):
             print("Content change acknowledgment required: rerun --approve with --content-changed-ack.")
         if result.get("bom_strip_note"):
@@ -19362,6 +19389,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Human acknowledgment required to approve a content_change reconcile.",
     )
     remint_reconcile.add_argument(
+        "--reviewed-plan-sha256",
+        help="SHA-256 from the content-change dry-run; binds approval to the exact evidence a human reviewed.",
+    )
+    remint_reconcile.add_argument(
         "--strip-bom",
         action="store_true",
         help="Opt-in: remove a single leading UTF-8 BOM from the canonical file (format_drift by definition; never bypasses the content-change ack gate).",
@@ -19388,6 +19419,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--content-changed-ack",
         action="store_true",
         help="Human acknowledgment required to approve a content_change reconcile.",
+    )
+    retire_draft_reconcile.add_argument(
+        "--reviewed-plan-sha256",
+        help="SHA-256 from the content-change dry-run; binds approval to the exact evidence a human reviewed.",
     )
     retire_draft_reconcile.add_argument(
         "--strip-bom",
