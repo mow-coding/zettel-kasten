@@ -30378,6 +30378,13 @@ state:
             self.assertEqual(result["counts"]["missing"], 3)
             self.assertEqual(result["scan"]["receipt_index_passes"], 1)
             self.assertEqual(result["scan"]["canonical_passes"], 1)
+            self.assertEqual(result["scan"]["canonical_frontmatter_files_scanned"], 4)
+            self.assertEqual(result["scan"]["canonical_body_files_read"], 1)
+            self.assertEqual(result["scan"]["canonical_body_files_not_read"], 3)
+            self.assertEqual(
+                result["scan"]["canonical_body_read_policy"],
+                "valid_explicit_abstract_targets_only",
+            )
             self.assertFalse(result["privacy_guards"]["abstract_text_echoed"])
             self.assertFalse(result["privacy_guards"]["body_text_echoed"])
             self.assertFalse(result["privacy_guards"]["hash_values_echoed"])
@@ -30444,10 +30451,103 @@ state:
                 "direct_publication_receipt_by_safe_zettel_id",
             )
             self.assertEqual(result["scan"]["publication_target_id_count"], 1)
+            self.assertEqual(result["scan"]["canonical_body_files_read"], 1)
+            self.assertEqual(result["scan"]["canonical_body_files_not_read"], 3)
             self.assertFalse(result["scan"]["whole_receipt_tree_enumerated"])
             self.assertFalse(result["scan"]["persistent_cache_used"])
+            opened_canonical_paths = [
+                path.resolve()
+                for path in opened_paths
+                if path.resolve().parent == (archive_root / "zettels").resolve()
+            ]
+            self.assertEqual(opened_canonical_paths, [canonical_path.resolve()])
             self.assertNotIn(unrelated, opened_paths)
             self.assertNotIn("PRIVATE_UNRELATED_RECEIPT", json.dumps(result))
+
+    def test_abstract_freshness_does_not_read_bodies_without_explicit_abstracts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            canonical_paths = sorted((archive_root / "zettels").glob("*.md"))
+            opened_paths: list[Path] = []
+            original_reader = archive_services.read_bounded_abstract_evidence_file
+
+            def tracked_reader(path: Path, max_bytes: int) -> bytes:
+                opened_paths.append(path)
+                return original_reader(path, max_bytes)
+
+            with patch.object(
+                archive_services,
+                "read_bounded_abstract_evidence_file",
+                side_effect=tracked_reader,
+            ):
+                result = archive_services.abstract_freshness(
+                    archive_root,
+                    dry_run=True,
+                    max_items=2,
+                )
+
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["counts"]["missing"], len(canonical_paths))
+            self.assertEqual(
+                result["scan"]["canonical_frontmatter_files_scanned"],
+                len(canonical_paths),
+            )
+            self.assertEqual(result["scan"]["canonical_body_files_read"], 0)
+            self.assertEqual(
+                result["scan"]["canonical_body_files_not_read"],
+                len(canonical_paths),
+            )
+            self.assertEqual(
+                [
+                    path.resolve()
+                    for path in opened_paths
+                    if path.resolve() in {candidate.resolve() for candidate in canonical_paths}
+                ],
+                [],
+            )
+            self.assertEqual(
+                result["scan"]["candidate_lookup_mode"],
+                "no_explicit_abstract_targets",
+            )
+
+    def test_abstract_freshness_uses_bounded_parallel_frontmatter_scan(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            for index in range(64):
+                (archive_root / "zettels" / f"zet_20260715_parallel_{index:03d}.md").write_text(
+                    "---\n"
+                    f"id: zet_20260715_parallel_{index:03d}\n"
+                    "status: canonical\n"
+                    "---\n\n"
+                    f"PRIVATE_PARALLEL_BODY_{index:03d}\n",
+                    encoding="utf-8",
+                )
+
+            result = archive_services.abstract_freshness(
+                archive_root,
+                dry_run=True,
+                max_items=2,
+            )
+
+            expected_workers = min(
+                8,
+                result["canonical_zet_count"],
+                max(1, os.cpu_count() or 1),
+            )
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["scan"]["canonical_body_files_read"], 0)
+            self.assertEqual(
+                result["scan"]["canonical_body_files_not_read"],
+                result["canonical_zet_count"],
+            )
+            self.assertEqual(
+                result["scan"]["canonical_scan_mode"],
+                "bounded_thread_pool" if expected_workers > 1 else "sequential",
+            )
+            self.assertEqual(
+                result["scan"]["canonical_scan_workers"],
+                expected_workers if expected_workers > 1 else 1,
+            )
 
     def test_abstract_freshness_uses_bounded_fallback_for_unsafe_evidence_target_id(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

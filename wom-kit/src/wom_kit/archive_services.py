@@ -6186,6 +6186,46 @@ def read_bounded_abstract_evidence_file(path: Path, max_bytes: int) -> bytes:
     return data
 
 
+def read_bounded_abstract_freshness_frontmatter(
+    path: Path,
+    max_file_bytes: int,
+) -> dict[str, Any]:
+    """Read only one bounded zet frontmatter block for freshness triage."""
+    if path.is_symlink() or not path.is_file():
+        raise OSError("Canonical zet is unavailable.")
+    before = path.stat()
+    if before.st_size > max_file_bytes:
+        raise OSError("Canonical zet exceeds the bounded read limit.")
+
+    with path.open("rb") as handle:
+        first = handle.readline()
+        if first.removeprefix(b"\xef\xbb\xbf").strip() != b"---":
+            raise ValueError("Canonical zet frontmatter is unavailable.")
+        frontmatter_lines: list[bytes] = []
+        bytes_read = len(first)
+        while True:
+            line = handle.readline()
+            if not line:
+                raise ValueError("Canonical zet frontmatter is not terminated.")
+            bytes_read += len(line)
+            if bytes_read > max_file_bytes:
+                raise OSError("Canonical zet frontmatter exceeds the bounded read limit.")
+            if line.strip() == b"---":
+                break
+            frontmatter_lines.append(line)
+
+    after = path.stat()
+    if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
+        raise OSError("Canonical zet changed during frontmatter inspection.")
+    try:
+        frontmatter = load_yaml(b"".join(frontmatter_lines).decode("utf-8"))
+    except Exception as exc:
+        raise ValueError("Canonical zet frontmatter is unreadable.") from exc
+    if not isinstance(frontmatter, dict):
+        raise ValueError("Canonical zet frontmatter must be an object.")
+    return frontmatter
+
+
 def parse_abstract_evidence_zettel_bytes(data: bytes) -> tuple[dict[str, Any], str] | None:
     try:
         return split_zettel_text(decode_utf8_with_universal_newlines(data))
@@ -6635,19 +6675,20 @@ def abstract_freshness(
     if progress_callback is not None:
         progress_callback("abstract-canonical", "start", 0, len(canonical_paths))
 
-    for index, (path, _expected_status) in enumerate(canonical_paths, start=1):
+    def inspect_canonical(row: tuple[Path, str]) -> dict[str, Any]:
+        path, _expected_status = row
         relative = archive_relative_path(path, root)
         status = "unreadable"
         reason = "canonical_unreadable"
         zettel_id: str | None = None
         abstract_sha256: str | None = None
         body_sha256_candidates: set[str] = set()
+        body_read = False
         try:
-            raw_bytes = read_bounded_abstract_evidence_file(path, ABSTRACT_FRESHNESS_MAX_ZET_BYTES)
-            parsed = parse_abstract_evidence_zettel_bytes(raw_bytes)
-            if parsed is None:
-                raise ValueError("Canonical zet is unreadable.")
-            frontmatter, body = parsed
+            frontmatter = read_bounded_abstract_freshness_frontmatter(
+                path,
+                ABSTRACT_FRESHNESS_MAX_ZET_BYTES,
+            )
             raw_id = frontmatter.get("id")
             if isinstance(raw_id, str) and ZETTEL_EDGE_ZETTEL_ID_RE.fullmatch(raw_id):
                 zettel_id = raw_id
@@ -6656,41 +6697,121 @@ def abstract_freshness(
                 reason = "redacted_by_policy"
             else:
                 first_read_check = explicit_abstract_publication_check(frontmatter)
-                abstract_sha256 = first_read_check.get("abstract_sha256")
+                frontmatter_abstract_sha256 = first_read_check.get("abstract_sha256")
                 if not first_read_check.get("ready_for_publication") or not isinstance(
-                    abstract_sha256, str
+                    frontmatter_abstract_sha256, str
                 ):
                     status = "missing"
                     reason = "abstract_" + str(first_read_check.get("status") or "invalid")
                 else:
-                    status = "pending_evidence"
-                    reason = "pending_evidence"
-                    body_sha256_candidates.add(canonical_body_sha256(body))
-                    try:
-                        raw_frontmatter, raw_body = split_zettel_text(raw_bytes.decode("utf-8"))
-                        if raw_frontmatter:
-                            body_sha256_candidates.add(canonical_body_sha256(raw_body))
-                    except Exception:
-                        pass
-                    if zettel_id is None:
-                        publication_lookup_requires_fallback = True
+                    body_read = True
+                    raw_bytes = read_bounded_abstract_evidence_file(
+                        path,
+                        ABSTRACT_FRESHNESS_MAX_ZET_BYTES,
+                    )
+                    parsed = parse_abstract_evidence_zettel_bytes(raw_bytes)
+                    if parsed is None:
+                        raise ValueError("Canonical zet is unreadable.")
+                    complete_frontmatter, body = parsed
+                    complete_id = complete_frontmatter.get("id")
+                    zettel_id = (
+                        complete_id
+                        if isinstance(complete_id, str)
+                        and ZETTEL_EDGE_ZETTEL_ID_RE.fullmatch(complete_id)
+                        else None
+                    )
+                    if complete_frontmatter.get("status") == "redacted":
+                        status = "excluded"
+                        reason = "redacted_by_policy"
+                        abstract_sha256 = None
                     else:
-                        publication_zettel_ids.add(zettel_id)
+                        complete_first_read = explicit_abstract_publication_check(
+                            complete_frontmatter
+                        )
+                        complete_abstract_sha256 = complete_first_read.get(
+                            "abstract_sha256"
+                        )
+                        if not complete_first_read.get(
+                            "ready_for_publication"
+                        ) or not isinstance(complete_abstract_sha256, str):
+                            status = "missing"
+                            reason = "abstract_" + str(
+                                complete_first_read.get("status") or "invalid"
+                            )
+                            abstract_sha256 = None
+                        else:
+                            status = "pending_evidence"
+                            reason = "pending_evidence"
+                            abstract_sha256 = complete_abstract_sha256
+                            body_sha256_candidates.add(canonical_body_sha256(body))
+                            try:
+                                raw_frontmatter, raw_body = split_zettel_text(
+                                    raw_bytes.decode("utf-8")
+                                )
+                                if raw_frontmatter:
+                                    body_sha256_candidates.add(
+                                        canonical_body_sha256(raw_body)
+                                    )
+                            except Exception:
+                                pass
         except (OSError, UnicodeDecodeError, ValueError):
             pass
 
-        canonical_records.append(
-            {
-                "path": relative,
-                "zettel_id": zettel_id,
-                "status": status,
-                "reason": reason,
-                "abstract_sha256": abstract_sha256,
-                "body_sha256_candidates": body_sha256_candidates,
-            }
-        )
-        if progress_callback is not None and (index == len(canonical_paths) or index % 100 == 0):
-            progress_callback("abstract-canonical", "scan", index, len(canonical_paths))
+        return {
+            "path": relative,
+            "zettel_id": zettel_id,
+            "status": status,
+            "reason": reason,
+            "abstract_sha256": abstract_sha256,
+            "body_sha256_candidates": body_sha256_candidates,
+            "body_read": body_read,
+        }
+
+    canonical_worker_count = min(
+        8,
+        len(canonical_paths),
+        max(1, os.cpu_count() or 1),
+    )
+    if canonical_worker_count > 1 and len(canonical_paths) >= 64:
+        with ThreadPoolExecutor(
+            max_workers=canonical_worker_count,
+            thread_name_prefix="wom-abstract-freshness",
+        ) as executor:
+            inspected_records = executor.map(inspect_canonical, canonical_paths)
+            for index, record in enumerate(inspected_records, start=1):
+                canonical_records.append(record)
+                if progress_callback is not None and (
+                    index == len(canonical_paths) or index % 100 == 0
+                ):
+                    progress_callback(
+                        "abstract-canonical",
+                        "scan",
+                        index,
+                        len(canonical_paths),
+                    )
+        canonical_scan_mode = "bounded_thread_pool"
+    else:
+        for index, row in enumerate(canonical_paths, start=1):
+            canonical_records.append(inspect_canonical(row))
+            if progress_callback is not None and (
+                index == len(canonical_paths) or index % 100 == 0
+            ):
+                progress_callback(
+                    "abstract-canonical",
+                    "scan",
+                    index,
+                    len(canonical_paths),
+                )
+        canonical_scan_mode = "sequential"
+
+    for record in canonical_records:
+        if record["status"] != "pending_evidence":
+            continue
+        zettel_id = record["zettel_id"]
+        if zettel_id is None:
+            publication_lookup_requires_fallback = True
+        else:
+            publication_zettel_ids.add(str(zettel_id))
 
     if progress_callback is not None:
         progress_callback("abstract-canonical", "done", len(canonical_paths), len(canonical_paths))
@@ -6750,6 +6871,9 @@ def abstract_freshness(
                 )
     all_required_fresh = attention_count == 0
     state = "blocked" if blockers else "ready" if all_required_fresh else "needs_attention"
+    canonical_body_files_read = sum(
+        1 for record in canonical_records if record["body_read"]
+    )
     warnings: list[str] = []
     if evidence_scan["invalid_or_oversized_receipt_count"]:
         warnings.append("Some receipt files were invalid or exceeded the bounded read limit.")
@@ -6785,6 +6909,17 @@ def abstract_freshness(
             "explicit_abstract_evidence_target_count": sum(
                 1 for record in canonical_records if record["status"] == "pending_evidence"
             ),
+            "canonical_frontmatter_files_scanned": len(canonical_records),
+            "canonical_body_files_read": canonical_body_files_read,
+            "canonical_body_files_not_read": len(canonical_records)
+            - canonical_body_files_read,
+            "canonical_body_read_policy": "valid_explicit_abstract_targets_only",
+            "canonical_scan_mode": canonical_scan_mode,
+            "canonical_scan_workers": (
+                canonical_worker_count
+                if canonical_scan_mode == "bounded_thread_pool"
+                else 1
+            ),
             "publication_lookup_fallback_required": publication_lookup_requires_fallback,
             "max_canonical_file_bytes": ABSTRACT_FRESHNESS_MAX_ZET_BYTES,
             **evidence_scan,
@@ -6794,6 +6929,7 @@ def abstract_freshness(
             "not_checked": [
                 "abstract semantic quality or factual correctness",
                 "whether a model consumed the abstract",
+                "body readability for zets without a valid explicit abstract",
                 "objet bytes or derived text",
                 "provider or backup freshness",
             ],

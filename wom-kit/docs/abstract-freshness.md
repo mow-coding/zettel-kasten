@@ -56,12 +56,26 @@ abstracts, plus the bounded canonical-revision and abstract-backfill receipt
 directories. If an explicit-abstract target lacks a safe id, it conservatively
 falls back to bounded publication-directory scans instead of losing evidence.
 
+The canonical pass reads bounded frontmatter for every zet with at most eight
+workers. It opens complete zet bytes only when that frontmatter contains a
+valid explicit abstract whose current body hash is required. Before trusting
+the pair, it parses the complete bytes again and rechecks the id and abstract.
+Missing, redacted, or unreadable-frontmatter rows therefore avoid unnecessary
+body reads without weakening evidence for any pair that can become `fresh`.
+
 Its complexity contract is
 `O(canonical_zets + evidence_candidate_receipts + receipt_items)`, not one full
 receipt scan per zet and not a recursive scan of the whole receipt tree. The
 candidate route is rebuilt from current canonical frontmatter on every run;
 no persistent cache file can become stale. Receipt and zet reads remain
 bounded and the candidate receipt count is capped.
+
+The `scan` result reports `canonical_frontmatter_files_scanned`,
+`canonical_body_files_read`, `canonical_body_files_not_read`,
+`canonical_body_read_policy`, `canonical_scan_mode`, and
+`canonical_scan_workers`. These counts let a real archive prove that missing
+abstracts did not trigger body reads. They do not claim that a skipped body is
+readable or valid; broader file health remains a Doctor/validation concern.
 
 With `--progress`, `abstract-canonical` is `stage=1/2` and
 `abstract-evidence` is `stage=2/2`. ETA belongs to the named current stage. A
@@ -79,6 +93,9 @@ A `fresh` result proves an exact local hash-pair match to retained human-review
 evidence. It does not prove that the abstract is true, complete, useful, or
 understood by a model. A non-fresh result is a human review queue, never
 permission for an AI to rewrite memory automatically.
+
+For a zet without a valid explicit abstract, freshness checks frontmatter only
+and does not claim body readability. That zet is already a review item.
 
 When a legacy archive has many missing abstracts, use the
 [three-zet abstract backfill pilot](abstract-backfill-pilot.md) before
