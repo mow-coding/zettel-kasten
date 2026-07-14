@@ -123,8 +123,18 @@ they do not contain this command.
 
 Goal, loop, branching, and completion UI belong to the host LLM application.
 WOM supplies the local memory surface. Before a host claims archive-wide
-understanding, enumerate every canonical zet abstract. In a terminal CLI,
-prefer one complete pass:
+understanding, first check whether every canonical zet has an explicit compact
+first read and a uniquely resolvable id:
+
+```bash
+archive first-read-readiness <archive-root> --dry-run --progress --format json
+```
+
+This gate reads frontmatter only. A non-ready result is a repair queue, not a
+crash and never permission to invent or auto-write an abstract. It does not
+judge abstract quality or prove that the host consumed anything. When the gate
+is ready, enumerate every canonical zet abstract. In a terminal CLI, prefer one
+complete pass:
 
 ```bash
 archive zet-catalog-pass <archive-root> --status canonical --projection reading --page-size 200 --max-estimated-tokens 8000 --response-envelope-reserve-tokens 2500 --output .wom-scratch/diagnostics/<new-name>.jsonl --dry-run --progress --format json

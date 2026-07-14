@@ -1,6 +1,6 @@
 # Runtime Canonical Entry Points
 
-Status: v0.3.226 quick handoff and archive identity consistency checkpoint
+Status: v0.3.231 quick handoff and first-read readiness checkpoint
 
 When an AI runtime enters a WOM archive, it needs a small, explicit "start
 here" map. The archive may contain zets, source bindings, provider metadata,
@@ -43,14 +43,19 @@ anything:
 3. Read `operational_context.session_start_injection` when present.
 4. Read `canonical_entrypoints`, especially `archive.yml`, `AGENTS.md`, and
    `ops/operational-context.yml`.
-5. Run `archive ai-response-concept-guide <archive-root> --topic all --dry-run`
+5. Run `archive first-read-readiness <archive-root> --dry-run --progress
+   --format json`. Repair explicit-abstract or unique-id gaps through reviewed
+   flows before claiming memory-reconstruction readiness.
+6. Run the complete private `zet-catalog-pass`, validate and read it from page
+   zero, and distinguish generated node coverage from actual host consumption.
+7. Run `archive ai-response-concept-guide <archive-root> --topic all --dry-run`
    when the human is asking what to do next.
-6. For Notion material links, choose the route from that guide:
+8. For Notion material links, choose the route from that guide:
    `notion-objet-import-clue-audit` to check omitted-locator imports,
    `notion-objet-source-map-link-plan` when source maps or ledgers can recover
    a candidate, or `notion-objet-link-index` / `notion-objet-link-plan` when
    body locators still exist.
-7. Run `archive operator-feedback-plan <archive-root> --dry-run` (read-only)
+9. Run `archive operator-feedback-plan <archive-root> --dry-run` (read-only)
    when the human reports tool friction, a workflow gap, or asks where
    feedback records live; recording still needs a separate
    `archive operator-feedback-record --approve` review gate. From v0.3.160 the

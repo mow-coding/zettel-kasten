@@ -738,6 +738,11 @@ class McpServerTests(unittest.TestCase):
             self.assertIn("source_registration_plan", tool_names)
             self.assertIn("source_mount_plan", tool_names)
             self.assertIn("zet_catalog", tool_names)
+            self.assertIn("first_read_readiness", tool_names)
+            self.assertEqual(
+                tools_by_name["first_read_readiness"]["inputSchema"]["properties"]["max_items"]["maximum"],
+                500,
+            )
             self.assertIn("section", tools_by_name["read_zettel"]["inputSchema"]["properties"])
             self.assertEqual(
                 tools_by_name["read_zettel"]["inputSchema"]["properties"]["section"]["default"],
@@ -7039,6 +7044,37 @@ class McpServerTests(unittest.TestCase):
             self.assertGreaterEqual(len(zettels), 1)
             self.assertNotIn("\\", zettels[0]["path"])
             self.assertIsInstance(zettels[0]["created_at"], str)
+        finally:
+            self.stop_server(process)
+
+    def test_first_read_readiness_tool_reports_gaps_without_content(self) -> None:
+        process = self.start_server()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+                response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "first_read_readiness",
+                            "arguments": {
+                                "archive_root": str(archive_root),
+                                "max_items": 1,
+                            },
+                        },
+                    },
+                )
+                result = response["result"]
+                self.assertFalse(result["isError"])
+                content = result["structuredContent"]
+                self.assertFalse(content["ok"])
+                self.assertEqual(content["state"], "needs_attention")
+                self.assertEqual(content["attention"]["returned_count"], 1)
+                self.assertFalse(content["scan"]["zettel_bodies_read"])
+                self.assertFalse(content["privacy_guards"]["abstract_text_echoed"])
         finally:
             self.stop_server(process)
 

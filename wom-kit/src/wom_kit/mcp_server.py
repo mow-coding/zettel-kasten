@@ -1957,6 +1957,19 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "first_read_readiness",
+        "description": "Check whether every canonical zet has an explicit compact first read and a uniquely resolvable safe id. Frontmatter-only and read-only; does not return abstract text, read bodies, inspect objets, call providers, or access secrets.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string"},
+                "max_items": {"type": "integer", "minimum": 1, "maximum": 500, "default": 100},
+                "dry_run": {"type": "boolean", "default": True},
+            },
+            "required": ["archive_root"],
+        },
+    },
+    {
         "name": "read_zettel",
         "description": "Read one zettel by zettel id or archive-relative path. Use section=overview for the compact first read before requesting a body.",
         "inputSchema": {
@@ -2970,6 +2983,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_list_zettels(arguments)
     if name == "zet_catalog":
         return tool_zet_catalog(arguments)
+    if name == "first_read_readiness":
+        return tool_first_read_readiness(arguments)
     if name == "read_zettel":
         return tool_read_zettel(arguments)
     if name == "zettel_objet_links":
@@ -4721,6 +4736,24 @@ def tool_zet_catalog(arguments: dict[str, Any]) -> dict[str, Any]:
         state = "node_complete_with_abstract_gaps"
     return tool_success_result(
         f"zet_catalog: {state}, {coverage.get('returned_count', 0)} returned, {coverage.get('remaining_count', 0)} remaining.",
+        result,
+    )
+
+
+def tool_first_read_readiness(arguments: dict[str, Any]) -> dict[str, Any]:
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("first_read_readiness is dry-run only.")
+    archive_root = require_path_arg(arguments, "archive_root")
+    result = call_service(
+        archive_services.first_read_readiness,
+        archive_root,
+        dry_run=True,
+        max_items=int(arguments.get("max_items", 100)),
+        item_cache=zet_catalog_item_cache(archive_root, "canonical"),
+    )
+    return tool_success_result(
+        "first_read_readiness: "
+        f"{result.get('state', 'unknown')}, {result.get('canonical_zet_count', 0)} canonical zet(s) checked.",
         result,
     )
 

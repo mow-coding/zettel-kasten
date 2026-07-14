@@ -8,6 +8,8 @@ Commands:
           Preview or approve one verified project source-mirror and version-pin update.
   zet-catalog-pass
           Complete one strict catalog pass in one process and publish one private scratch JSONL.
+  first-read-readiness
+          Check explicit compact first reads and unique follow-up ids without reading zet bodies.
   capabilities
           Print an agent-facing manifest of executable CLI commands and release identity.
   operator-feedback-plan
@@ -8909,6 +8911,52 @@ def command_zet_catalog(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 1
 
 
+def command_first_read_readiness(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("first-read-readiness is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    reporter = CommandProgressReporter(
+        bool(getattr(args, "progress", False)),
+        label="first-read-readiness",
+    )
+    try:
+        result = archive_services.first_read_readiness(
+            Path(args.archive_root),
+            dry_run=True,
+            max_items=args.max_items,
+            progress_callback=reporter.progress,
+        )
+    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    finally:
+        reporter.close()
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        abstract_counts = result.get("abstract_coverage", {}).get("counts", {})
+        identity = result.get("identity_coverage", {})
+        readiness = result.get("readiness", {})
+        print(f"WOM first-read readiness: {result.get('state') or 'unknown'}")
+        print(f"Canonical zets checked: {result.get('canonical_zet_count', 0)}")
+        print(f"Explicit abstract: {abstract_counts.get('explicit', 0)}")
+        print(f"Compatibility-only first read: {abstract_counts.get('compatibility_field', 0)}")
+        print(f"Missing first read: {abstract_counts.get('missing', 0)}")
+        print(f"Unreadable frontmatter: {abstract_counts.get('frontmatter_unreadable', 0)}")
+        print(f"Duplicate-id entries: {identity.get('duplicate_id_entry_count', 0)}")
+        print(f"Unaddressable entries: {identity.get('unaddressable_entry_count', 0)}")
+        print(
+            "Ready for exhaustive first read: "
+            + ("yes" if readiness.get("first_read_surface_ready") else "no")
+        )
+        if result.get("next_actions"):
+            print("Next actions:")
+            for action in result["next_actions"]:
+                print(f"- {action}")
+    return 0 if result.get("ok") else 1
+
+
 def command_zet_catalog_pass(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print("zet-catalog-pass requires --dry-run; only its explicit private scratch output may be written.", file=sys.stderr)
@@ -9204,6 +9252,7 @@ def command_status_board(args: argparse.Namespace) -> int:
         print(f"Audience missing: {counts.get('audience_missing', 0)}")
         print(f"Source metadata gaps: {counts.get('source_metadata_gap', 0)}")
         print(f"Derived artifact gaps: {counts.get('derived_artifact_gap', 0)}")
+        print(f"First-read attention: {counts.get('first_read_attention', 0)}")
         if args.include_quality:
             print(f"Quality blocker candidates: {counts.get('quality_blocker_candidate', 0)}")
             print(f"Quality warning candidates: {counts.get('quality_warning_candidate', 0)}")
@@ -18219,6 +18268,36 @@ def build_parser() -> argparse.ArgumentParser:
     )
     zet_catalog.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     zet_catalog.set_defaults(func=command_zet_catalog)
+
+    first_read_readiness = subcommands.add_parser(
+        "first-read-readiness",
+        aliases=["zet-first-readiness", "memory-readiness"],
+        help="Check explicit compact first reads and unique follow-up ids without reading zet bodies.",
+    )
+    first_read_readiness.add_argument("archive_root", help="Archive root to inspect.")
+    first_read_readiness.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Required. Read canonical frontmatter only; write nothing.",
+    )
+    first_read_readiness.add_argument(
+        "--max-items",
+        type=int,
+        default=100,
+        help="Maximum content-free abstract-attention records to return (1-500).",
+    )
+    first_read_readiness.add_argument(
+        "--progress",
+        action="store_true",
+        help="Stream content-free scan counts, stages, and 10-second heartbeats to stderr.",
+    )
+    first_read_readiness.add_argument(
+        "--format",
+        choices=["text", "json"],
+        default="text",
+        help="Output format.",
+    )
+    first_read_readiness.set_defaults(func=command_first_read_readiness)
 
     zet_catalog_pass = subcommands.add_parser(
         "zet-catalog-pass",

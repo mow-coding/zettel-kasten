@@ -3126,6 +3126,12 @@ def archive_status_board(
         "derived_artifact_gap": 0,
         "quality_blocker_candidate": 0,
         "quality_warning_candidate": 0,
+        "first_read_explicit": 0,
+        "first_read_compatibility_only": 0,
+        "first_read_missing": 0,
+        "first_read_unreadable": 0,
+        "first_read_redacted": 0,
+        "first_read_attention": 0,
     }
     boards: dict[str, list[dict[str, Any]]] = {
         "canonical": [],
@@ -3138,6 +3144,7 @@ def archive_status_board(
         "source_metadata_gaps": [],
         "derived_artifact_gaps": [],
         "quality_attention": [],
+        "first_read_attention": [],
     }
 
     for folder, expected_status in [("zettels", "canonical"), ("inbox", "draft")]:
@@ -3160,6 +3167,37 @@ def archive_status_board(
 
             if folder == "zettels":
                 counts["canonical_folder"] += 1
+                if item["redacted"]:
+                    abstract_status = "redacted"
+                elif not frontmatter:
+                    abstract_status = "frontmatter_unreadable"
+                else:
+                    _abstract, _source, abstract_status, _truncated = zet_catalog_abstract(
+                        frontmatter,
+                        [],
+                    )
+                item["abstract_status"] = abstract_status
+                abstract_count_key = {
+                    "explicit": "first_read_explicit",
+                    "compatibility_field": "first_read_compatibility_only",
+                    "missing": "first_read_missing",
+                    "frontmatter_unreadable": "first_read_unreadable",
+                    "redacted": "first_read_redacted",
+                }.get(abstract_status, "first_read_missing")
+                counts[abstract_count_key] += 1
+                if abstract_status not in {"explicit", "redacted"}:
+                    counts["first_read_attention"] += 1
+                    append_limited(
+                        boards["first_read_attention"],
+                        {
+                            **item,
+                            "next_command": (
+                                "archive first-read-readiness <archive-root> "
+                                "--dry-run --progress --format json"
+                            ),
+                        },
+                        max_items,
+                    )
                 append_limited(boards["canonical"], item, max_items)
                 if "mint" not in frontmatter and "promotion" not in frontmatter:
                     counts["canonical_lifecycle_metadata_missing"] += 1
@@ -3235,6 +3273,10 @@ def archive_status_board(
         next_actions.append("Review source_refs with missing acquisition, verification, or rights metadata.")
     if counts["derived_artifact_gap"]:
         next_actions.append("Add source links and sync status to derived_artifacts before treating reports as current.")
+    if counts["first_read_attention"]:
+        next_actions.append(
+            "Run first-read-readiness before claiming that every canonical zet has an explicit compact first read."
+        )
     if not include_quality:
         next_actions.append("Rerun status-board with --include-quality when you want body-inspecting quality counts.")
 
@@ -3253,6 +3295,7 @@ def archive_status_board(
         "would_change": [],
         "privacy_guards": {
             "body_text_echoed": False,
+            "abstract_text_echoed": False,
             "title_values_echoed": False,
             "unrecognized_frontmatter_values_echoed": False,
             "source_ref_values_echoed": False,
@@ -6053,6 +6096,154 @@ def zet_catalog_identity_coverage(
         "unaddressable_entry_count": unaddressable_entry_count,
         "all_entries_uniquely_addressable": all_entries_uniquely_addressable,
         "paths_or_duplicate_id_values_echoed": False,
+    }
+
+
+def first_read_readiness(
+    archive_root: Path | str,
+    *,
+    dry_run: bool = False,
+    max_items: int = 100,
+    item_cache: dict[str, dict[str, Any]] | None = None,
+    progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
+) -> dict[str, Any]:
+    """Check whether every canonical zet has a compact, uniquely addressable first read."""
+    root = require_existing_archive_root(archive_root)
+    blockers: list[str] = []
+    max_items = max(1, min(int(max_items), 500))
+    if not dry_run:
+        blockers.append("first-read-readiness is read-only and requires --dry-run.")
+
+    path_entries = zet_catalog_paths(root, "canonical")
+    entries, scan = zet_catalog_entries(
+        root,
+        path_entries,
+        item_cache,
+        progress_callback=progress_callback,
+    )
+    snapshot = zet_catalog_snapshot(root, entries)
+    abstract_coverage = zet_catalog_abstract_coverage(entries)
+    identity_coverage = zet_catalog_identity_coverage(entries)
+    abstract_counts = abstract_coverage["counts"]
+    required_count = int(abstract_coverage["first_read_required_count"])
+    all_required_explicit = int(abstract_counts["explicit"]) == required_count
+    compact_first_reads_available = bool(
+        abstract_coverage["all_required_first_reads_available"]
+    )
+    followup_ids_ready = bool(identity_coverage["all_entries_uniquely_addressable"])
+    surface_ready = all_required_explicit and followup_ids_ready
+
+    attention_items: list[dict[str, Any]] = []
+    abstract_attention_count = 0
+    for _path, _expected_status, item, _signature in entries:
+        abstract_status = str(item.get("abstract_status") or "missing")
+        if abstract_status in {"explicit", "redacted"}:
+            continue
+        abstract_attention_count += 1
+        if len(attention_items) >= max_items:
+            continue
+        zettel_id = item.get("id")
+        safe_zettel_id = (
+            zettel_id
+            if isinstance(zettel_id, str) and ZETTEL_EDGE_ZETTEL_ID_RE.match(zettel_id)
+            else None
+        )
+        attention_items.append(
+            {
+                "path": item.get("path"),
+                "zettel_id": safe_zettel_id,
+                "abstract_status": abstract_status,
+                "frontmatter_readable": bool(item.get("frontmatter_readable")),
+                "redacted": bool(item.get("redacted")),
+            }
+        )
+
+    if blockers:
+        state = "blocked"
+    elif surface_ready:
+        state = "ready"
+    elif compact_first_reads_available and followup_ids_ready:
+        state = "compatibility_only"
+    else:
+        state = "needs_attention"
+
+    next_actions: list[str] = []
+    if abstract_attention_count:
+        next_actions.append(
+            "Review the listed canonical zets and prepare human-reviewed explicit abstract backfills; do not auto-write them."
+        )
+    if not followup_ids_ready:
+        next_actions.append(
+            "Resolve missing, unsafe, or duplicate canonical zet ids before relying on id-based follow-up reads."
+        )
+    if surface_ready:
+        next_actions.append(
+            "Proceed to zet-catalog-pass for the private exhaustive first-read artifact, then consume it from page zero."
+        )
+    elif not blockers:
+        next_actions.append(
+            "Rerun first-read-readiness after reviewed fixes; do not claim archive-wide explicit first-read readiness yet."
+        )
+
+    return {
+        "ok": not blockers and surface_ready,
+        "schema": "wom-kit/first-read-readiness/v0.1",
+        "lifecycle_action": "first_read_readiness",
+        "state": state,
+        "archive_id": read_archive_id(root),
+        "dry_run": True,
+        "canonical_zet_count": len(entries),
+        "abstract_coverage": abstract_coverage,
+        "identity_coverage": identity_coverage,
+        "readiness": {
+            "canonical_node_inventory_checked": not blockers,
+            "all_required_compact_first_reads_available": compact_first_reads_available,
+            "all_required_explicit_abstracts_present": all_required_explicit,
+            "all_followup_ids_uniquely_resolvable": followup_ids_ready,
+            "first_read_surface_ready": surface_ready,
+            "redacted_entries_excluded_from_abstract_requirement": True,
+        },
+        "attention": {
+            "total_count": abstract_attention_count,
+            "returned_count": len(attention_items),
+            "truncated": abstract_attention_count > len(attention_items),
+            "max_items": max_items,
+            "items": attention_items,
+            "duplicate_id_values_echoed": False,
+        },
+        "scan": {
+            **scan,
+            "status": "canonical",
+            "frontmatter_only": True,
+            "zettel_bodies_read": False,
+            "objet_bytes_read": False,
+            "provider_api_called": False,
+            "secrets_read": False,
+        },
+        "snapshot": snapshot,
+        "claim_boundary": {
+            "checked": "Canonical zet paths, frontmatter abstract status, and safe frontmatter id uniqueness at this snapshot.",
+            "not_checked": [
+                "zet body meaning or completeness",
+                "abstract semantic quality",
+                "whether a host model actually consumed every abstract",
+                "objet bytes or derived text",
+                "provider or backup freshness",
+            ],
+        },
+        "blockers": blockers,
+        "warnings": [],
+        "next_actions": next_actions,
+        "would_change": [],
+        "privacy_guards": {
+            "abstract_text_echoed": False,
+            "title_values_echoed": False,
+            "body_text_echoed": False,
+            "duplicate_id_values_echoed": False,
+            "local_absolute_paths_echoed": False,
+            "provider_urls_echoed": False,
+            "writes": False,
+        },
     }
 
 
@@ -62099,6 +62290,7 @@ def ai_start_here(
                     else "Full Doctor completed for this start-here result; inspect its blocker and warning counts before broad work."
                 ),
                 "Read AGENTS.md when canonical_entrypoints marks it present.",
+                "Run first-read-readiness before the exhaustive catalog pass; treat a non-ready result as an explicit abstract or unique-id repair queue, not as permission to invent or auto-write missing memory.",
                 "Run zet-catalog with projection=reading and coverage_mode=strict, keep the first response_profile full, inspect item and compact response-envelope estimates, set a host-appropriate max_estimated_tokens plus an explicit response_envelope_reserve_tokens when needed, then optionally use response_profile=continuation on later pages while following every continuation token before claiming archive-wide node coverage.",
                 "Treat archive_wide_coverage_claim_ready as node visitation only; require archive_wide_abstract_reading_claim_ready before saying every required abstract was available and read, and report abstract gaps without auto-writing replacements.",
                 "If the host goal already supplies verified zet ids, use seeded_connection_walk with those ids; never invent a seed or stop after the seeded component.",
@@ -62470,6 +62662,10 @@ def runtime_context_recommended_first_commands() -> list[dict[str, str]]:
             "purpose": "load the AI-facing mission, scope, state, gotchas, and decisions record before choosing next actions",
         },
         {
+            "command": "archive first-read-readiness <archive-root> --dry-run --progress --format json",
+            "purpose": "check explicit compact first reads and uniquely addressable zet ids before generating a private exhaustive catalog",
+        },
+        {
             "command": "archive zet-catalog-pass <archive-root> --status canonical --projection reading --output .wom-scratch/diagnostics/<new-name>.jsonl --dry-run --progress --format json",
             "purpose": "complete one strict frontmatter-only pass with process-memory reuse, final local revalidation, and private incremental JSONL",
         },
@@ -62513,6 +62709,12 @@ def runtime_context_ai_runtime_order() -> list[dict[str, Any]]:
         },
         {
             "step": 5,
+            "action": "check_first_read_readiness",
+            "command": "archive first-read-readiness <archive-root> --dry-run --progress --format json",
+            "reason": "separate structural archive health from whether every canonical node has an explicit compact first read and a uniquely resolvable id",
+        },
+        {
+            "step": 6,
             "action": "enumerate_zet_abstracts",
             "command": "archive zet-catalog-pass <archive-root> --status canonical --projection reading --output .wom-scratch/diagnostics/<new-name>.jsonl --dry-run --progress --format json",
             "continuation": "require archive_wide_coverage_claim_ready=true and retain output.sha256 from the compact stdout summary; use zet-catalog-pass-read with that SHA-256 and page indexes from zero so a complete artifact is validated before at most one private page is returned; retain the first full diagnostics, check abstract and follow-up readiness separately, and when an abstract is missing use read-zettel to read that selected canonical body plus integrity.file_sha256 before preparing a private zet-abstract-backfill-plan proposal; never auto-write an abstract or infer approval from a green plan, require human review, then preview and explicitly approve zet-abstract-backfill-write with the exact proposal SHA-256; after any abstract apply/revert batch run zet-abstract-backfill-receipt-audit and never auto-delete reported locks or edit receipts; never load the whole catalog file into one response, never commit it, then preview and approve zet-catalog-pass-cleanup with the same SHA-256 after use; restart the complete pass if catalog_snapshot_changed",
@@ -62522,19 +62724,19 @@ def runtime_context_ai_runtime_order() -> list[dict[str, Any]]:
             "reason": "give the host every local zet node's available first-read text and connection clues before it chooses a broad body-reading order; never equate node visitation with complete abstract availability",
         },
         {
-            "step": 6,
+            "step": 7,
             "action": "run_ai_response_concept_guide",
             "command": "archive ai-response-concept-guide <archive-root> --topic all --dry-run --format json",
             "reason": "load WOM concept wording, safe routing, material-link routes, and overclaim guardrails",
         },
         {
-            "step": 7,
+            "step": 8,
             "action": "choose_material_link_route",
             "field": "canonical_entrypoints.material_link_routes",
             "reason": "use omitted-locator, source-map, or body-locator routes without inventing provider calls",
         },
         {
-            "step": 8,
+            "step": 9,
             "action": "plan_operator_feedback",
             "command": "archive operator-feedback-plan <archive-root> --dry-run --format json",
             "when": "the human reports tool friction, a workflow gap, or asks where feedback records live",

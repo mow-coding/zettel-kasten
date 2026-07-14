@@ -2100,6 +2100,7 @@ class ArchiveCliTests(unittest.TestCase):
         command_names = {item["name"] for item in commands}
         self.assertIn("capabilities", command_names)
         self.assertIn("status-board", command_names)
+        self.assertIn("first-read-readiness", command_names)
         self.assertIn("derived-artifact-staleness", command_names)
         self.assertIn("approval-handoff-record", command_names)
         self.assertIn("approval-handoff-audit", command_names)
@@ -4705,14 +4706,18 @@ class ArchiveCliTests(unittest.TestCase):
             )
             self.assertEqual(
                 entrypoints["recommended_first_commands"][2]["command"],
-                "archive zet-catalog-pass <archive-root> --status canonical --projection reading --output .wom-scratch/diagnostics/<new-name>.jsonl --dry-run --progress --format json",
+                "archive first-read-readiness <archive-root> --dry-run --progress --format json",
             )
             self.assertEqual(
                 entrypoints["recommended_first_commands"][3]["command"],
-                "archive ai-response-concept-guide <archive-root> --topic all --dry-run --format json",
+                "archive zet-catalog-pass <archive-root> --status canonical --projection reading --output .wom-scratch/diagnostics/<new-name>.jsonl --dry-run --progress --format json",
             )
             self.assertEqual(
                 entrypoints["recommended_first_commands"][4]["command"],
+                "archive ai-response-concept-guide <archive-root> --topic all --dry-run --format json",
+            )
+            self.assertEqual(
+                entrypoints["recommended_first_commands"][5]["command"],
                 "archive operator-feedback-plan <archive-root> --dry-run --format json",
             )
             self.assertEqual(
@@ -4722,6 +4727,7 @@ class ArchiveCliTests(unittest.TestCase):
                     "read_operational_context",
                     "read_canonical_entrypoints",
                     "read_local_agent_instructions",
+                    "check_first_read_readiness",
                     "enumerate_zet_abstracts",
                     "run_ai_response_concept_guide",
                     "choose_material_link_route",
@@ -4984,6 +4990,10 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertIn("Run zet-catalog", " ".join(result["next_safe_steps"]))
             self.assertEqual(
                 result["first_commands"][2]["command"],
+                "archive first-read-readiness <archive-root> --dry-run --progress --format json",
+            )
+            self.assertEqual(
+                result["first_commands"][3]["command"],
                 "archive zet-catalog-pass <archive-root> --status canonical --projection reading --output .wom-scratch/diagnostics/<new-name>.jsonl --dry-run --progress --format json",
             )
             self.assertTrue(result["conversation_status_board"]["allowed"])
@@ -29814,6 +29824,117 @@ state:
         self.assertNotIn("\\", result["zettels"][0]["path"])
         self.assertIn("T", result["zettels"][0]["created_at"])
 
+    def test_first_read_readiness_requires_explicit_abstracts_without_echoing_content(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            private_markers: list[str] = []
+
+            missing_code, missing_output = self.run_cli(
+                ["first-read-readiness", str(archive_root), "--format", "json"]
+            )
+            self.assertEqual(missing_code, 1)
+            self.assertIn("requires --dry-run", missing_output)
+
+            code, output = self.run_cli(
+                [
+                    "first-read-readiness",
+                    str(archive_root),
+                    "--dry-run",
+                    "--max-items",
+                    "2",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 1, output)
+            result = json.loads(output)
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["state"], "needs_attention")
+            self.assertEqual(result["schema"], "wom-kit/first-read-readiness/v0.1")
+            self.assertEqual(result["canonical_zet_count"], 4)
+            self.assertEqual(result["abstract_coverage"]["counts"]["missing"], 4)
+            self.assertFalse(result["readiness"]["all_required_explicit_abstracts_present"])
+            self.assertFalse(result["readiness"]["first_read_surface_ready"])
+            self.assertEqual(result["attention"]["returned_count"], 2)
+            self.assertTrue(result["attention"]["truncated"])
+            self.assertFalse(result["scan"]["zettel_bodies_read"])
+            self.assertFalse(result["privacy_guards"]["abstract_text_echoed"])
+            self.assertFalse(result["privacy_guards"]["title_values_echoed"])
+
+            for index, path in enumerate(sorted((archive_root / "zettels").glob("*.md"))):
+                frontmatter, body = archive_services.split_zettel_text(path.read_text(encoding="utf-8"))
+                marker = f"PRIVATE_EXPLICIT_ABSTRACT_{index}"
+                private_markers.append(marker)
+                frontmatter["abstract"] = marker
+                path.write_text(
+                    "---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + body,
+                    encoding="utf-8",
+                )
+
+            ready_code, ready_output = self.run_cli(
+                ["memory-readiness", str(archive_root), "--dry-run", "--format", "json"]
+            )
+            self.assertEqual(ready_code, 0, ready_output)
+            ready = json.loads(ready_output)
+            self.assertTrue(ready["ok"])
+            self.assertEqual(ready["state"], "ready")
+            self.assertEqual(ready["abstract_coverage"]["counts"]["explicit"], 4)
+            self.assertTrue(ready["readiness"]["all_required_explicit_abstracts_present"])
+            self.assertTrue(ready["readiness"]["all_followup_ids_uniquely_resolvable"])
+            self.assertTrue(ready["readiness"]["first_read_surface_ready"])
+            self.assertEqual(ready["attention"]["total_count"], 0)
+            for marker in private_markers:
+                self.assertNotIn(marker, ready_output)
+
+    def test_first_read_readiness_separates_compatibility_text_from_explicit_abstract(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            for path in sorted((archive_root / "zettels").glob("*.md")):
+                frontmatter, body = archive_services.split_zettel_text(path.read_text(encoding="utf-8"))
+                frontmatter["summary"] = "PRIVATE_COMPATIBILITY_SUMMARY"
+                path.write_text(
+                    "---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + body,
+                    encoding="utf-8",
+                )
+
+            code, output = self.run_cli(
+                ["zet-first-readiness", str(archive_root), "--dry-run", "--format", "json"]
+            )
+            self.assertEqual(code, 1, output)
+            result = json.loads(output)
+            self.assertEqual(result["state"], "compatibility_only")
+            self.assertTrue(result["readiness"]["all_required_compact_first_reads_available"])
+            self.assertFalse(result["readiness"]["all_required_explicit_abstracts_present"])
+            self.assertNotIn("PRIVATE_COMPATIBILITY_SUMMARY", output)
+
+    def test_first_read_readiness_blocks_duplicate_ids_without_echoing_the_value(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            duplicate_marker = "zet_20260714_private_duplicate_marker"
+            canonical_paths = sorted((archive_root / "zettels").glob("*.md"))
+            self.assertGreaterEqual(len(canonical_paths), 2)
+            for index, path in enumerate(canonical_paths):
+                frontmatter, body = archive_services.split_zettel_text(path.read_text(encoding="utf-8"))
+                frontmatter["abstract"] = f"PRIVATE_READY_ABSTRACT_{index}"
+                if index < 2:
+                    frontmatter["id"] = duplicate_marker
+                path.write_text(
+                    "---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + body,
+                    encoding="utf-8",
+                )
+
+            code, output = self.run_cli(
+                ["first-read-readiness", str(archive_root), "--dry-run", "--format", "json"]
+            )
+            self.assertEqual(code, 1, output)
+            result = json.loads(output)
+            self.assertEqual(result["state"], "needs_attention")
+            self.assertTrue(result["readiness"]["all_required_explicit_abstracts_present"])
+            self.assertFalse(result["readiness"]["all_followup_ids_uniquely_resolvable"])
+            self.assertEqual(result["identity_coverage"]["duplicate_id_entry_count"], 2)
+            self.assertFalse(result["attention"]["duplicate_id_values_echoed"])
+            self.assertNotIn(duplicate_marker, output)
+
     def test_zet_catalog_pages_every_canonical_abstract_without_body_reads(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
@@ -32407,7 +32528,9 @@ state:
             self.assertGreaterEqual(result["counts"]["source_metadata_gap"], 1)
             self.assertGreaterEqual(result["counts"]["derived_artifact_gap"], 1)
             self.assertGreaterEqual(result["counts"]["quality_warning_candidate"], 1)
+            self.assertGreaterEqual(result["counts"]["first_read_attention"], 1)
             self.assertTrue(result["privacy_guards"]["title_values_echoed"] is False)
+            self.assertFalse(result["privacy_guards"]["abstract_text_echoed"])
             self.assertFalse(result["privacy_guards"]["source_ref_values_echoed"])
             self.assertFalse(result["privacy_guards"]["body_text_echoed"])
             serialized = json.dumps(result, ensure_ascii=False)
@@ -32418,6 +32541,7 @@ state:
             text_code, text_output = self.run_cli(["archive-status-board", str(archive_root), "--dry-run"])
             self.assertEqual(text_code, 0, text_output)
             self.assertIn("Archive status board.", text_output)
+            self.assertIn("First-read attention:", text_output)
             self.assertNotIn(body_marker, text_output)
             self.assertNotIn(title_marker, text_output)
             self.assertNotIn(source_marker, text_output)
