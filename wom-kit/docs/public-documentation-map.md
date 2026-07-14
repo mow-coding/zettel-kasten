@@ -75,6 +75,7 @@ Supporting philosophy and model docs:
 - [Abstract Freshness Check](abstract-freshness.md)
 - [Canonical zet Revision Plan](zet-revision-plan.md)
 - [Canonical zet Revision Write](zet-revision-write.md)
+- [Canonical zet Revision Receipt Audit](zet-revision-receipt-audit.md)
 - [Derived Artifact Staleness](derived-artifact-staleness.md)
 - [zet Quality Check](zet-quality-check.md)
 - [Source Object Storage Policy](source-object-storage-policy.md)

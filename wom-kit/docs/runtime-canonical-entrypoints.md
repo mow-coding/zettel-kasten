@@ -1,6 +1,6 @@
 # Runtime Canonical Entry Points
 
-Status: v0.3.235 quick handoff, abstract-freshness, and revision-write checkpoint
+Status: v0.3.236 quick handoff, abstract-freshness, and revision-audit checkpoint
 
 When an AI runtime enters a WOM archive, it needs a small, explicit "start
 here" map. The archive may contain zets, source bindings, provider metadata,
@@ -65,6 +65,12 @@ anything:
    record/receipt shapes ship as
    `wom-kit/schemas/operator-feedback.schema.json` and
    `wom-kit/schemas/operator-feedback-receipt.schema.json`.
+
+After any approved `zet-revision-write`, run the separate CLI-only
+`archive zet-revision-receipt-audit <archive-root> --dry-run --progress
+--format json` before session handoff. This is a bounded history and
+transaction-lock check, not another archive startup scan and not permission to
+delete a leftover lock.
 
 This order keeps archive identity, operational mission/state, local
 instructions, beginner-facing wording, and material-link safety gates aligned

@@ -2809,10 +2809,14 @@ ZET_REVISION_PLAN_SCHEMA = "wom-kit/zet-revision-plan/v0.1"
 ZET_REVISION_WRITE_SCHEMA = "wom-kit/zet-revision-write/v0.1"
 ZET_REVISION_RECEIPT_SCHEMA = "wom-kit/zet-revision-receipt/v0.1"
 ZET_REVISION_WRITE_LOCK_SCHEMA = "wom-kit/zet-revision-write-lock/v0.1"
+ZET_REVISION_RECEIPT_AUDIT_SCHEMA = "wom-kit/zet-revision-receipt-audit/v0.1"
 ZET_REVISION_PROPOSAL_PREFIX = ".wom-scratch/revisions/"
 ZET_REVISION_RECEIPTS_DIR = "receipts/revisions/canonical"
 ZET_REVISION_MAX_FILE_BYTES = 16 * 1024 * 1024
 ZET_REVISION_MAX_LOCK_BYTES = 256 * 1024
+ZET_REVISION_AUDIT_MAX_RECEIPTS = 5000
+ZET_REVISION_AUDIT_MAX_LOCKS = 5000
+ZET_REVISION_AUDIT_MAX_PROBLEMS = 500
 ZET_REVISION_SYSTEM_MANAGED_FIELDS = (
     "id",
     "archive_id",
@@ -8988,6 +8992,881 @@ def zet_revision_write(
             if rollback["succeeded"]
             else "failed_rollback_incomplete"
         )
+
+
+def zet_revision_receipt_audit(
+    archive_root: Path | str,
+    *,
+    dry_run: bool = False,
+    max_receipts: int = ZET_REVISION_AUDIT_MAX_RECEIPTS,
+    max_locks: int = ZET_REVISION_AUDIT_MAX_LOCKS,
+    max_problems: int = 100,
+    progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    requested_max_receipts = int(max_receipts)
+    requested_max_locks = int(max_locks)
+    requested_max_problems = int(max_problems)
+    effective_max_receipts = max(
+        1, min(requested_max_receipts, ZET_REVISION_AUDIT_MAX_RECEIPTS)
+    )
+    effective_max_locks = max(
+        1, min(requested_max_locks, ZET_REVISION_AUDIT_MAX_LOCKS)
+    )
+    effective_max_problems = max(
+        1, min(requested_max_problems, ZET_REVISION_AUDIT_MAX_PROBLEMS)
+    )
+    blockers: list[str] = []
+    warnings: list[str] = []
+    problems: list[dict[str, Any]] = []
+    outcomes: list[dict[str, Any]] = []
+    problem_total = 0
+    counters = {
+        "valid_receipt_shape": 0,
+        "invalid_receipt": 0,
+        "current_receipt_verified": 0,
+        "superseded_receipt_verified": 0,
+        "identity_conflict": 0,
+        "branched_or_duplicate_chain": 0,
+        "current_state_drift": 0,
+        "canonical_target_unavailable": 0,
+        "state_evidence_gap": 0,
+        "non_monotonic_revision_time": 0,
+        "unreachable_receipt": 0,
+        "completed_lock_leftover": 0,
+        "recoverable_missing_receipt_lock": 0,
+        "prewrite_lock_leftover": 0,
+        "ambiguous_lock": 0,
+        "invalid_lock": 0,
+        "unsupported_lock": 0,
+    }
+
+    if not dry_run:
+        blockers.append("dry_run_required")
+    if requested_max_receipts != effective_max_receipts:
+        blockers.append("max_receipts_out_of_range")
+    if requested_max_locks != effective_max_locks:
+        blockers.append("max_locks_out_of_range")
+    if requested_max_problems != effective_max_problems:
+        blockers.append("max_problems_out_of_range")
+
+    receipt_root = archive_internal_path(root, ZET_REVISION_RECEIPTS_DIR)
+    lock_root = archive_internal_path(root, ZET_REVISION_PROPOSAL_PREFIX.rstrip("/"))
+    receipt_paths = (
+        safe_archive_glob(receipt_root, "*.zet-revision.json", root)
+        if receipt_root.is_dir()
+        else []
+    )
+    lock_paths = (
+        safe_archive_glob(lock_root, "*.write.lock", root, recursive=True)
+        if lock_root.is_dir()
+        else []
+    )
+    if len(receipt_paths) > effective_max_receipts:
+        blockers.append("receipt_count_exceeds_max_receipts")
+    if len(lock_paths) > effective_max_locks:
+        blockers.append("lock_count_exceeds_max_locks")
+
+    def add_problem(item: dict[str, Any]) -> None:
+        nonlocal problem_total
+        problem_total += 1
+        if len(problems) < effective_max_problems:
+            problems.append(item)
+
+    receipt_records: list[dict[str, Any]] = []
+    records_by_group: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    records_by_write_digest: dict[str, list[dict[str, Any]]] = {}
+    current_state_cache: dict[tuple[str, str], tuple[dict[str, Any] | None, str | None]] = {}
+    canonical_files_read = 0
+    canonical_bytes_read = 0
+
+    def current_state(
+        canonical_relative: str, zettel_id_value: str
+    ) -> tuple[dict[str, Any] | None, str | None]:
+        nonlocal canonical_files_read, canonical_bytes_read
+        key = (canonical_relative, zettel_id_value)
+        if key in current_state_cache:
+            return current_state_cache[key]
+        try:
+            canonical_path = archive_internal_path(root, canonical_relative)
+            if (
+                canonical_path.is_symlink()
+                or zet_revision_path_has_symlink_component(root, canonical_path)
+                or not canonical_path.is_file()
+            ):
+                raise ArchiveServiceError("unsafe_or_missing")
+            canonical_bytes = read_zet_revision_file_bytes(
+                canonical_path, "Canonical zet"
+            )
+            canonical_files_read += 1
+            canonical_bytes_read += len(canonical_bytes)
+            frontmatter, body = split_zettel_text(
+                decode_utf8_with_universal_newlines(canonical_bytes)
+            )
+            frontmatter = json_safe(frontmatter)
+            if (
+                frontmatter.get("id") != zettel_id_value
+                or frontmatter.get("archive_id") != archive_id
+                or frontmatter.get("status") != "canonical"
+            ):
+                raise ArchiveServiceError("canonical_identity_or_status_mismatch")
+            first_read = explicit_abstract_publication_check(frontmatter)
+            state = {
+                "file_sha256": "sha256:"
+                + hashlib.sha256(canonical_bytes).hexdigest(),
+                "semantic_sha256": zet_revision_semantic_sha256(frontmatter, body),
+                "abstract_sha256": (
+                    first_read.get("abstract_sha256")
+                    if first_read.get("ready_for_publication")
+                    else None
+                ),
+                "body_sha256": canonical_body_sha256(
+                    canonical_publication_body(body)
+                ),
+            }
+            current_state_cache[key] = (state, None)
+        except (
+            ArchiveServiceError,
+            ArchivePathError,
+            OSError,
+            UnicodeError,
+            ValueError,
+        ):
+            current_state_cache[key] = (None, "canonical_target_unavailable")
+        except yaml.YAMLError:  # type: ignore[union-attr]
+            current_state_cache[key] = (None, "canonical_target_unavailable")
+        return current_state_cache[key]
+
+    if not blockers:
+        if progress_callback is not None:
+            progress_callback("revision-receipt-audit", "start", 0, len(receipt_paths))
+        for index, receipt_path in enumerate(receipt_paths):
+            receipt_sha256: str | None = None
+            write_plan_digest: str | None = None
+            issue_codes: list[str] = []
+            receipt: dict[str, Any] = {}
+            canonical_relative: str | None = None
+            zettel_id_value: str | None = None
+            try:
+                if (
+                    receipt_path.is_symlink()
+                    or zet_revision_path_has_symlink_component(root, receipt_path)
+                ):
+                    raise ArchiveServiceError("unsafe_receipt_path")
+                receipt_bytes = read_zet_revision_file_bytes(
+                    receipt_path, "Zet revision receipt"
+                )
+                receipt_sha256 = "sha256:" + hashlib.sha256(receipt_bytes).hexdigest()
+                parsed = json.loads(receipt_bytes.decode("utf-8"))
+                if not isinstance(parsed, dict):
+                    raise ValueError("receipt_not_object")
+                receipt = parsed
+                if validate_schema(receipt, "zet-revision-receipt.schema.json"):
+                    issue_codes.append("receipt_schema_invalid")
+                if receipt.get("archive_id") != archive_id:
+                    issue_codes.append("receipt_archive_identity_mismatch")
+                raw_write_plan_digest = receipt.get("write_plan_digest")
+                if not isinstance(raw_write_plan_digest, str) or not re.fullmatch(
+                    r"sha256:[0-9a-f]{64}", raw_write_plan_digest
+                ):
+                    issue_codes.append("receipt_write_plan_digest_invalid")
+                else:
+                    write_plan_digest = raw_write_plan_digest
+                if write_plan_digest is not None and receipt_path.name != (
+                    write_plan_digest.removeprefix("sha256:")
+                    + ".zet-revision.json"
+                ):
+                    issue_codes.append("receipt_filename_digest_mismatch")
+                raw_canonical_path = receipt.get("canonical_path")
+                if not isinstance(raw_canonical_path, str):
+                    issue_codes.append("receipt_canonical_path_invalid")
+                else:
+                    try:
+                        canonical_relative = normalize_archive_relative_path(
+                            raw_canonical_path
+                        )
+                    except ArchivePathError:
+                        canonical_relative = None
+                    if (
+                        canonical_relative != raw_canonical_path
+                        or not canonical_relative
+                        or not canonical_relative.startswith("zettels/")
+                        or PurePosixPath(canonical_relative).suffix.lower() != ".md"
+                    ):
+                        issue_codes.append("receipt_canonical_path_invalid")
+                raw_zettel_id = receipt.get("zettel_id")
+                if (
+                    not isinstance(raw_zettel_id, str)
+                    or not ZETTEL_EDGE_ZETTEL_ID_RE.fullmatch(raw_zettel_id)
+                ):
+                    issue_codes.append("receipt_zettel_id_invalid")
+                else:
+                    zettel_id_value = raw_zettel_id
+                reviewer_value = receipt.get("reviewed_by")
+                if (
+                    not isinstance(reviewer_value, str)
+                    or safe_foreign_quarantine_actor_id(reviewer_value)
+                    != reviewer_value
+                ):
+                    issue_codes.append("receipt_reviewer_invalid")
+                for timestamp_field in ("applied_at", "revision_at"):
+                    timestamp = str(receipt.get(timestamp_field) or "")
+                    if (
+                        normalize_zet_revision_timestamp(
+                            timestamp, default_now=False
+                        )
+                        != timestamp
+                    ):
+                        issue_codes.append(
+                            f"receipt_{timestamp_field}_timestamp_invalid"
+                        )
+                before = receipt.get("before")
+                after = receipt.get("after")
+                human_review = receipt.get("human_review")
+                change_summary_value = receipt.get("change_summary")
+                basis = receipt.get("abstract_review_basis")
+                if not all(
+                    isinstance(value, dict)
+                    for value in (
+                        before,
+                        after,
+                        human_review,
+                        change_summary_value,
+                        basis,
+                    )
+                ):
+                    issue_codes.append("receipt_evidence_shape_invalid")
+                else:
+                    if (
+                        before.get("file_sha256") == after.get("file_sha256")
+                        or before.get("semantic_sha256")
+                        == after.get("semantic_sha256")
+                    ):
+                        issue_codes.append("receipt_revision_has_no_state_change")
+                    if (
+                        basis.get("abstract_sha256")
+                        != after.get("abstract_sha256")
+                        or basis.get("body_sha256") != after.get("body_sha256")
+                    ):
+                        issue_codes.append("receipt_abstract_review_basis_mismatch")
+                    if human_review.get("edge_review_required") != bool(
+                        change_summary_value.get("edges_changed")
+                    ):
+                        issue_codes.append("receipt_edge_review_requirement_mismatch")
+                    if (
+                        human_review.get("edge_review_required") is True
+                        and human_review.get("edge_changes_reviewed") is not True
+                    ):
+                        issue_codes.append("receipt_edge_review_missing")
+            except (
+                ArchiveServiceError,
+                OSError,
+                UnicodeError,
+                json.JSONDecodeError,
+                ValueError,
+            ):
+                issue_codes.append("receipt_unreadable_or_invalid")
+
+            issue_codes = unique_preserve_order(issue_codes)
+            if issue_codes or canonical_relative is None or zettel_id_value is None:
+                counters["invalid_receipt"] += 1
+                blockers.append("one_or_more_revision_receipts_invalid")
+                add_problem(
+                    {
+                        "kind": "revision_receipt",
+                        "receipt_index": index,
+                        "status": "invalid",
+                        "receipt_sha256": receipt_sha256,
+                        "write_plan_digest": write_plan_digest,
+                        "blocker_codes": issue_codes
+                        or ["receipt_identity_unavailable"],
+                    }
+                )
+                outcomes.append(
+                    {
+                        "kind": "revision_receipt",
+                        "index": index,
+                        "state": "invalid",
+                        "receipt_sha256": receipt_sha256,
+                        "write_plan_digest": write_plan_digest,
+                        "issues": issue_codes,
+                    }
+                )
+            else:
+                record = {
+                    "index": index,
+                    "receipt_sha256": receipt_sha256,
+                    "write_plan_digest": write_plan_digest,
+                    "canonical_path": canonical_relative,
+                    "zettel_id": zettel_id_value,
+                    "revision_at": receipt["revision_at"],
+                    "revision_time": parse_receipt_time(receipt["revision_at"]),
+                    "before": receipt["before"],
+                    "after": receipt["after"],
+                    "document": receipt,
+                }
+                receipt_records.append(record)
+                records_by_group.setdefault(
+                    (canonical_relative, zettel_id_value), []
+                ).append(record)
+                records_by_write_digest.setdefault(write_plan_digest, []).append(record)
+                counters["valid_receipt_shape"] += 1
+            if progress_callback is not None and (
+                index == 0
+                or index + 1 == len(receipt_paths)
+                or (index + 1) % 100 == 0
+            ):
+                progress_callback(
+                    "revision-receipt-audit",
+                    "receipt-scanned",
+                    index + 1,
+                    len(receipt_paths),
+                )
+
+        path_to_ids: dict[str, set[str]] = {}
+        id_to_paths: dict[str, set[str]] = {}
+        for record in receipt_records:
+            path_to_ids.setdefault(record["canonical_path"], set()).add(
+                record["zettel_id"]
+            )
+            id_to_paths.setdefault(record["zettel_id"], set()).add(
+                record["canonical_path"]
+            )
+
+        if progress_callback is not None:
+            progress_callback(
+                "revision-chain-audit", "start", 0, len(records_by_group)
+            )
+        for group_index, (group_key, group_records) in enumerate(
+            sorted(records_by_group.items()), start=1
+        ):
+            canonical_relative, zettel_id_value = group_key
+            group_issues: list[str] = []
+            if (
+                len(path_to_ids.get(canonical_relative, set())) != 1
+                or len(id_to_paths.get(zettel_id_value, set())) != 1
+            ):
+                counters["identity_conflict"] += 1
+                group_issues.append("revision_receipt_identity_conflict")
+
+            before_map: dict[str, list[dict[str, Any]]] = {}
+            after_map: dict[str, list[dict[str, Any]]] = {}
+            for record in group_records:
+                before_map.setdefault(record["before"]["file_sha256"], []).append(
+                    record
+                )
+                after_map.setdefault(record["after"]["file_sha256"], []).append(
+                    record
+                )
+            if any(len(items) != 1 for items in before_map.values()) or any(
+                len(items) != 1 for items in after_map.values()
+            ):
+                counters["branched_or_duplicate_chain"] += 1
+                group_issues.append("revision_receipt_chain_branched_or_duplicated")
+
+            state, state_error = current_state(
+                canonical_relative, zettel_id_value
+            )
+            reachable: list[dict[str, Any]] = []
+            if state is None:
+                counters["canonical_target_unavailable"] += 1
+                group_issues.append(state_error or "canonical_target_unavailable")
+            elif not group_issues:
+                cursor = state["file_sha256"]
+                seen_write_digests: set[str] = set()
+                while cursor in after_map and len(after_map[cursor]) == 1:
+                    record = after_map[cursor][0]
+                    digest = record["write_plan_digest"]
+                    if digest in seen_write_digests:
+                        group_issues.append("revision_receipt_chain_cycle")
+                        counters["branched_or_duplicate_chain"] += 1
+                        break
+                    seen_write_digests.add(digest)
+                    reachable.append(record)
+                    cursor = record["before"]["file_sha256"]
+                if not reachable:
+                    counters["current_state_drift"] += 1
+                    group_issues.append("current_canonical_not_at_revision_chain_tip")
+                else:
+                    tip = reachable[0]
+                    if any(
+                        state[field] != tip["after"][field]
+                        for field in (
+                            "file_sha256",
+                            "semantic_sha256",
+                            "abstract_sha256",
+                            "body_sha256",
+                        )
+                    ):
+                        counters["current_state_drift"] += 1
+                        group_issues.append("current_canonical_tip_evidence_mismatch")
+                    for newer, older in zip(reachable, reachable[1:]):
+                        if any(
+                            newer["before"][field] != older["after"][field]
+                            for field in (
+                                "file_sha256",
+                                "semantic_sha256",
+                                "abstract_sha256",
+                                "body_sha256",
+                            )
+                        ):
+                            counters["state_evidence_gap"] += 1
+                            group_issues.append(
+                                "revision_chain_before_after_evidence_gap"
+                            )
+                            break
+                        if (
+                            newer["revision_time"] is None
+                            or older["revision_time"] is None
+                            or newer["revision_time"] <= older["revision_time"]
+                        ):
+                            counters["non_monotonic_revision_time"] += 1
+                            group_issues.append(
+                                "revision_chain_timestamp_not_strictly_increasing"
+                            )
+                            break
+                    unreachable_count = len(group_records) - len(reachable)
+                    if unreachable_count:
+                        counters["unreachable_receipt"] += unreachable_count
+                        group_issues.append(
+                            "one_or_more_revision_receipts_not_on_current_chain"
+                        )
+
+            group_issues = unique_preserve_order(group_issues)
+            if group_issues:
+                blockers.append("one_or_more_revision_chains_invalid")
+                add_problem(
+                    {
+                        "kind": "revision_chain",
+                        "group_index": group_index - 1,
+                        "status": "blocked",
+                        "receipt_count": len(group_records),
+                        "blocker_codes": group_issues,
+                    }
+                )
+                chain_state = "blocked"
+            else:
+                counters["current_receipt_verified"] += 1
+                counters["superseded_receipt_verified"] += max(
+                    0, len(reachable) - 1
+                )
+                chain_state = "current_chain_verified"
+            outcomes.append(
+                {
+                    "kind": "revision_chain",
+                    "group_index": group_index - 1,
+                    "state": chain_state,
+                    "receipt_count": len(group_records),
+                    "reachable_receipt_count": len(reachable),
+                    "issues": group_issues,
+                }
+            )
+            if progress_callback is not None and (
+                group_index == len(records_by_group) or group_index % 100 == 0
+            ):
+                progress_callback(
+                    "revision-chain-audit",
+                    "chain-scanned",
+                    group_index,
+                    len(records_by_group),
+                )
+        if progress_callback is not None:
+            progress_callback(
+                "revision-chain-audit",
+                "done",
+                len(records_by_group),
+                len(records_by_group),
+            )
+
+        for write_digest, records in records_by_write_digest.items():
+            if len(records) > 1:
+                counters["branched_or_duplicate_chain"] += 1
+                blockers.append("one_or_more_revision_write_digests_duplicated")
+                add_problem(
+                    {
+                        "kind": "revision_write_digest",
+                        "status": "duplicated",
+                        "write_plan_digest": write_digest,
+                        "receipt_count": len(records),
+                        "blocker_codes": ["duplicate_write_plan_digest"],
+                    }
+                )
+
+        lock_name_re = re.compile(
+            r"^\.(?P<digest>[0-9a-f]{64})\.canonical\.write\.lock$"
+        )
+        if progress_callback is not None:
+            progress_callback("revision-lock-audit", "start", 0, len(lock_paths))
+        for lock_index, lock_path in enumerate(lock_paths):
+            lock_ref = sha256_json_value(
+                {
+                    "schema": ZET_REVISION_WRITE_LOCK_SCHEMA,
+                    "archive_id": archive_id,
+                    "lock_filename_sha256": "sha256:"
+                    + hashlib.sha256(lock_path.name.encode("utf-8")).hexdigest(),
+                }
+            )
+            write_plan_digest: str | None = None
+            lock_status = "invalid_lock"
+            lock_issue_codes: list[str] = []
+            lock_document: dict[str, Any] = {}
+            name_match = lock_name_re.fullmatch(lock_path.name)
+            if name_match is None:
+                counters["unsupported_lock"] += 1
+                blockers.append("one_or_more_revision_locks_unsupported")
+                lock_status = "unsupported_lock"
+                lock_issue_codes.append("revision_lock_filename_unsupported")
+            else:
+                lock_ref = "sha256:" + name_match.group("digest")
+                try:
+                    if (
+                        lock_path.is_symlink()
+                        or zet_revision_path_has_symlink_component(root, lock_path)
+                        or lock_path.stat().st_size > ZET_REVISION_MAX_LOCK_BYTES
+                    ):
+                        raise ArchiveServiceError("unsafe_or_oversized_lock")
+                    parsed_lock = json.loads(lock_path.read_text(encoding="utf-8"))
+                    if not isinstance(parsed_lock, dict):
+                        raise ValueError("lock_not_object")
+                    lock_document = parsed_lock
+                    raw_write_plan_digest = lock_document.get("write_plan_digest")
+                    zettel_id_value = lock_document.get("zettel_id")
+                    canonical_relative = lock_document.get("canonical_path")
+                    transaction_started_at = str(
+                        lock_document.get("transaction_started_at") or ""
+                    )
+                    if (
+                        lock_document.get("schema")
+                        != ZET_REVISION_WRITE_LOCK_SCHEMA
+                        or lock_document.get("archive_id") != archive_id
+                        or not isinstance(zettel_id_value, str)
+                        or not ZETTEL_EDGE_ZETTEL_ID_RE.fullmatch(zettel_id_value)
+                        or not isinstance(canonical_relative, str)
+                    ):
+                        lock_issue_codes.append("revision_lock_identity_invalid")
+                    else:
+                        try:
+                            normalized_canonical = normalize_archive_relative_path(
+                                canonical_relative
+                            )
+                        except ArchivePathError:
+                            normalized_canonical = ""
+                        if (
+                            normalized_canonical != canonical_relative
+                            or not canonical_relative.startswith("zettels/")
+                            or PurePosixPath(canonical_relative).suffix.lower()
+                            != ".md"
+                        ):
+                            lock_issue_codes.append(
+                                "revision_lock_canonical_path_invalid"
+                            )
+                        expected_lock_path = zet_revision_write_lock_path(
+                            root,
+                            archive_id=archive_id,
+                            zettel_id=zettel_id_value,
+                        )
+                        if lock_path != expected_lock_path:
+                            lock_issue_codes.append(
+                                "revision_lock_filename_identity_mismatch"
+                            )
+                    if not isinstance(raw_write_plan_digest, str) or not re.fullmatch(
+                        r"sha256:[0-9a-f]{64}", raw_write_plan_digest
+                    ):
+                        lock_issue_codes.append("revision_lock_write_digest_invalid")
+                    else:
+                        write_plan_digest = raw_write_plan_digest
+                    if (
+                        normalize_zet_revision_timestamp(
+                            transaction_started_at, default_now=False
+                        )
+                        != transaction_started_at
+                    ):
+                        lock_issue_codes.append(
+                            "revision_lock_transaction_timestamp_invalid"
+                        )
+                    synthetic_receipt = zet_revision_receipt_from_lock(
+                        lock_document,
+                        transaction_started_at=transaction_started_at,
+                        resumed_from_existing_lock=True,
+                        finalized_from_already_written_candidate=True,
+                    )
+                    if validate_schema(
+                        synthetic_receipt, "zet-revision-receipt.schema.json"
+                    ):
+                        lock_issue_codes.append("revision_lock_evidence_invalid")
+                except (
+                    ArchiveServiceError,
+                    KeyError,
+                    OSError,
+                    UnicodeError,
+                    json.JSONDecodeError,
+                    ValueError,
+                ):
+                    lock_issue_codes.append("revision_lock_unreadable_or_invalid")
+
+                lock_issue_codes = unique_preserve_order(lock_issue_codes)
+                if lock_issue_codes:
+                    counters["invalid_lock"] += 1
+                    blockers.append("one_or_more_revision_locks_invalid")
+                    lock_status = "invalid_lock"
+                else:
+                    zettel_id_value = lock_document["zettel_id"]
+                    canonical_relative = lock_document["canonical_path"]
+                    matching_records = records_by_write_digest.get(
+                        write_plan_digest, []
+                    )
+                    if len(matching_records) == 1:
+                        receipt_document = matching_records[0]["document"]
+                        matching_fields = (
+                            "archive_id",
+                            "zettel_id",
+                            "canonical_path",
+                            "proposal_sha256",
+                            "proposal_semantic_sha256",
+                            "plan_digest",
+                            "write_plan_digest",
+                            "revision_at",
+                            "reviewed_by",
+                            "human_review",
+                            "change_summary",
+                        )
+                        lock_matches_receipt = all(
+                            lock_document.get(field)
+                            == receipt_document.get(field)
+                            for field in matching_fields
+                        ) and (
+                            lock_document.get("transaction_started_at")
+                            == receipt_document.get("applied_at")
+                        ) and all(
+                            lock_document.get(lock_field)
+                            == receipt_document[state_name].get(receipt_field)
+                            for lock_field, state_name, receipt_field in (
+                                ("canonical_sha256", "before", "file_sha256"),
+                                (
+                                    "before_semantic_sha256",
+                                    "before",
+                                    "semantic_sha256",
+                                ),
+                                (
+                                    "before_abstract_sha256",
+                                    "before",
+                                    "abstract_sha256",
+                                ),
+                                ("before_body_sha256", "before", "body_sha256"),
+                                (
+                                    "candidate_file_sha256",
+                                    "after",
+                                    "file_sha256",
+                                ),
+                                (
+                                    "candidate_semantic_sha256",
+                                    "after",
+                                    "semantic_sha256",
+                                ),
+                                (
+                                    "candidate_abstract_sha256",
+                                    "after",
+                                    "abstract_sha256",
+                                ),
+                                (
+                                    "candidate_body_sha256",
+                                    "after",
+                                    "body_sha256",
+                                ),
+                            )
+                        )
+                        if lock_matches_receipt:
+                            counters["completed_lock_leftover"] += 1
+                            warnings.append(
+                                "one_or_more_completed_revision_locks_remain"
+                            )
+                            lock_status = "completed_lock_leftover"
+                        else:
+                            counters["ambiguous_lock"] += 1
+                            blockers.append(
+                                "one_or_more_revision_locks_ambiguous"
+                            )
+                            lock_status = "ambiguous_lock"
+                            lock_issue_codes.append(
+                                "revision_lock_receipt_evidence_mismatch"
+                            )
+                    elif len(matching_records) > 1:
+                        counters["ambiguous_lock"] += 1
+                        blockers.append("one_or_more_revision_locks_ambiguous")
+                        lock_status = "ambiguous_lock"
+                        lock_issue_codes.append(
+                            "revision_lock_matches_multiple_receipts"
+                        )
+                    else:
+                        state, _state_error = current_state(
+                            canonical_relative, zettel_id_value
+                        )
+                        if state is None:
+                            counters["ambiguous_lock"] += 1
+                            blockers.append("one_or_more_revision_locks_ambiguous")
+                            lock_status = "ambiguous_lock"
+                            lock_issue_codes.append(
+                                "revision_lock_canonical_state_unavailable"
+                            )
+                        elif (
+                            state["file_sha256"]
+                            == lock_document["candidate_file_sha256"]
+                        ):
+                            counters["recoverable_missing_receipt_lock"] += 1
+                            blockers.append(
+                                "one_or_more_revision_receipts_need_recovery"
+                            )
+                            lock_status = "recoverable_missing_receipt"
+                            lock_issue_codes.append(
+                                "canonical_candidate_present_receipt_missing"
+                            )
+                        elif (
+                            state["file_sha256"]
+                            == lock_document["canonical_sha256"]
+                        ):
+                            counters["prewrite_lock_leftover"] += 1
+                            blockers.append(
+                                "one_or_more_revision_prewrite_locks_remain"
+                            )
+                            lock_status = "prewrite_lock_leftover"
+                            lock_issue_codes.append(
+                                "canonical_unchanged_receipt_missing"
+                            )
+                        else:
+                            counters["ambiguous_lock"] += 1
+                            blockers.append("one_or_more_revision_locks_ambiguous")
+                            lock_status = "ambiguous_lock"
+                            lock_issue_codes.append(
+                                "canonical_matches_neither_lock_state"
+                            )
+
+            add_problem(
+                {
+                    "kind": "revision_transaction_lock",
+                    "lock_index": lock_index,
+                    "status": lock_status,
+                    "lock_ref": lock_ref,
+                    "write_plan_digest": write_plan_digest,
+                    "blocker_codes": unique_preserve_order(lock_issue_codes),
+                }
+            )
+            outcomes.append(
+                {
+                    "kind": "revision_transaction_lock",
+                    "index": lock_index,
+                    "state": lock_status,
+                    "lock_ref": lock_ref,
+                    "write_plan_digest": write_plan_digest,
+                    "issues": unique_preserve_order(lock_issue_codes),
+                }
+            )
+            if progress_callback is not None and (
+                lock_index == 0
+                or lock_index + 1 == len(lock_paths)
+                or (lock_index + 1) % 100 == 0
+            ):
+                progress_callback(
+                    "revision-lock-audit",
+                    "lock-scanned",
+                    lock_index + 1,
+                    len(lock_paths),
+                )
+        if progress_callback is not None:
+            progress_callback(
+                "revision-lock-audit", "done", len(lock_paths), len(lock_paths)
+            )
+            progress_callback(
+                "revision-receipt-audit",
+                "done",
+                len(receipt_paths),
+                len(receipt_paths),
+            )
+
+    blockers = unique_preserve_order(blockers)
+    warnings = unique_preserve_order(warnings)
+    complete = not any(
+        code in blockers
+        for code in (
+            "dry_run_required",
+            "max_receipts_out_of_range",
+            "max_locks_out_of_range",
+            "max_problems_out_of_range",
+            "receipt_count_exceeds_max_receipts",
+            "lock_count_exceeds_max_locks",
+        )
+    )
+    return {
+        "ok": not blockers,
+        "dry_run": bool(dry_run),
+        "schema": ZET_REVISION_RECEIPT_AUDIT_SCHEMA,
+        "lifecycle_action": "zet_revision_receipt_audit",
+        "status": "healthy" if not blockers and not warnings else "attention_required",
+        "archive_id": archive_id,
+        "audit_digest": sha256_json_value(outcomes),
+        "summary": {
+            "complete": complete,
+            "receipt_count": len(receipt_paths),
+            "lock_count": len(lock_paths),
+            "receipts_scanned": len(receipt_paths) if complete else 0,
+            "locks_scanned": len(lock_paths) if complete else 0,
+            "revision_chain_count": len(records_by_group),
+            "canonical_files_read": canonical_files_read,
+            "canonical_bytes_read": canonical_bytes_read,
+            **counters,
+            "problem_count": problem_total,
+            "problems_returned": len(problems),
+            "problems_truncated": len(problems) < problem_total,
+            "max_receipts": effective_max_receipts,
+            "max_locks": effective_max_locks,
+            "max_problems": effective_max_problems,
+        },
+        "complexity": {
+            "class": "O(receipt_files + revision_chains + lock_files)",
+            "receipt_files_opened_once": complete,
+            "canonical_files_opened_once_per_identity": complete,
+            "lock_files_opened_once": complete,
+            "full_zettel_tree_rescanned_per_receipt": False,
+        },
+        "problems": problems,
+        "write_boundary": {
+            "files_written": False,
+            "files_deleted": False,
+            "locks_deleted": False,
+            "receipts_modified": False,
+            "canonical_zets_modified": False,
+        },
+        "privacy_guards": {
+            "canonical_body_text_read_for_hash_validation": bool(
+                canonical_files_read
+            ),
+            "canonical_body_text_echoed": False,
+            "receipt_private_metadata_read": bool(receipt_paths),
+            "receipt_paths_echoed": False,
+            "zettel_ids_echoed": False,
+            "zettel_paths_echoed": False,
+            "title_text_echoed": False,
+            "abstract_text_echoed": False,
+            "reviewed_by_echoed": False,
+            "lock_file_content_read": bool(lock_paths),
+            "lock_private_metadata_echoed": False,
+            "absolute_local_paths_echoed": False,
+            "provider_api_called": False,
+            "model_called": False,
+            "secret_store_or_environment_read": False,
+        },
+        "blockers": blockers,
+        "warnings": warnings,
+        "next_safe_actions": (
+            ["No canonical revision receipt or transaction-lock action is required."]
+            if not blockers and not warnings
+            else [
+                "For recoverable_missing_receipt, rerun the exact original approved zet-revision-write command; do not write the canonical zet again by hand.",
+                "For prewrite or ambiguous locks, keep the lock and inspect the bound hashes before any cleanup.",
+                "Never delete or rewrite immutable revision receipts to silence this audit.",
+            ]
+        ),
+    }
 
 
 def resolve_zet_abstract_backfill_proposal_path(root: Path, raw_path: str) -> Path:
