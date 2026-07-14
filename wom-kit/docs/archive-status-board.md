@@ -1,6 +1,6 @@
 # Archive Status Board
 
-Status: v0.3.232 read-only archive state and abstract-publication checkpoint
+Status: v0.3.233 read-only archive state and abstract-freshness checkpoint
 
 `archive status-board` gives a beginner-facing status summary for one WOM
 archive without making the operator inspect `inbox/`, `zettels/`, mint
@@ -8,6 +8,11 @@ receipts, and draft snapshots by hand.
 
 It is a CLI/read-only surface that an AI operator can summarize directly in
 conversation. A web UI is not required.
+
+The board keeps its fast frontmatter-oriented scope. It reports whether an
+explicit abstract is present, but does not hash bodies or claim that an
+abstract is current. Run `archive abstract-freshness <archive-root> --dry-run`
+for that separate review-evidence check.
 
 ## Command
 

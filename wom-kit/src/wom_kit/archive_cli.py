@@ -8957,6 +8957,58 @@ def command_first_read_readiness(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 1
 
 
+def command_abstract_freshness(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("abstract-freshness is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    reporter = CommandProgressReporter(
+        bool(getattr(args, "progress", False)),
+        label="abstract-freshness",
+    )
+    try:
+        result = archive_services.abstract_freshness(
+            Path(args.archive_root),
+            dry_run=True,
+            max_items=args.max_items,
+            progress_callback=reporter.progress,
+        )
+    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    finally:
+        reporter.close()
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        counts = result.get("counts", {})
+        print(f"WOM abstract freshness: {result.get('state') or 'unknown'}")
+        print(f"Canonical zets checked: {result.get('canonical_zet_count', 0)}")
+        print(f"Current reviewed abstract: {counts.get('fresh', 0)}")
+        print(f"Review needed after a change: {counts.get('stale', 0)}")
+        print(f"No retained review evidence: {counts.get('unverified', 0)}")
+        print(f"Explicit abstract missing or invalid: {counts.get('missing', 0)}")
+        print(f"Unreadable canonical zets: {counts.get('unreadable', 0)}")
+        print(f"Redacted by policy: {counts.get('excluded', 0)}")
+        if result.get("attention", {}).get("items"):
+            print("Review queue:")
+            for item in result["attention"]["items"]:
+                print(
+                    "- "
+                    f"{item.get('path')} [{item.get('status')}: {item.get('reason')}]"
+                )
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+        print("Writes: none")
+    return 0 if result.get("ok") else 1
+
+
 def command_zet_catalog_pass(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print("zet-catalog-pass requires --dry-run; only its explicit private scratch output may be written.", file=sys.stderr)
@@ -18298,6 +18350,36 @@ def build_parser() -> argparse.ArgumentParser:
         help="Output format.",
     )
     first_read_readiness.set_defaults(func=command_first_read_readiness)
+
+    abstract_freshness = subcommands.add_parser(
+        "abstract-freshness",
+        aliases=["zet-abstract-freshness", "first-read-freshness"],
+        help="Compare each canonical abstract/body pair with retained human-review evidence without echoing text.",
+    )
+    abstract_freshness.add_argument("archive_root", help="Archive root to inspect.")
+    abstract_freshness.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Required. Read canonical zets and receipts; write nothing.",
+    )
+    abstract_freshness.add_argument(
+        "--max-items",
+        type=int,
+        default=100,
+        help="Maximum content-free review records to return (1-500).",
+    )
+    abstract_freshness.add_argument(
+        "--progress",
+        action="store_true",
+        help="Stream content-free receipt and canonical scan counts to stderr.",
+    )
+    abstract_freshness.add_argument(
+        "--format",
+        choices=["text", "json"],
+        default="text",
+        help="Output format.",
+    )
+    abstract_freshness.set_defaults(func=command_abstract_freshness)
 
     zet_catalog_pass = subcommands.add_parser(
         "zet-catalog-pass",

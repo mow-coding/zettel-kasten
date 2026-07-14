@@ -50,8 +50,11 @@ abstract text and does not read the body for this decision.
 
 Existing canonical zets and receipts are not migrated or rejected. Use
 `first-read-readiness` to find older gaps and the separately reviewed abstract
-backfill workflow to repair them.
+backfill workflow to repair them. After the gate is ready, run
+`abstract-freshness` to check whether retained review evidence still matches
+each current abstract/body pair.
 
 This gate does not decide whether an abstract is true, complete, semantically
-fresh, or understood by a model. Those remain separate human-review and
-runtime-consumption claims.
+useful, or understood by a model. The separate freshness check proves only
+exact hash-pair continuity; semantic review and runtime consumption remain
+separate claims.

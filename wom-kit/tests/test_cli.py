@@ -2101,6 +2101,7 @@ class ArchiveCliTests(unittest.TestCase):
         self.assertIn("capabilities", command_names)
         self.assertIn("status-board", command_names)
         self.assertIn("first-read-readiness", command_names)
+        self.assertIn("abstract-freshness", command_names)
         self.assertIn("derived-artifact-staleness", command_names)
         self.assertIn("approval-handoff-record", command_names)
         self.assertIn("approval-handoff-audit", command_names)
@@ -4710,14 +4711,18 @@ class ArchiveCliTests(unittest.TestCase):
             )
             self.assertEqual(
                 entrypoints["recommended_first_commands"][3]["command"],
-                "archive zet-catalog-pass <archive-root> --status canonical --projection reading --output .wom-scratch/diagnostics/<new-name>.jsonl --dry-run --progress --format json",
+                "archive abstract-freshness <archive-root> --dry-run --progress --format json",
             )
             self.assertEqual(
                 entrypoints["recommended_first_commands"][4]["command"],
-                "archive ai-response-concept-guide <archive-root> --topic all --dry-run --format json",
+                "archive zet-catalog-pass <archive-root> --status canonical --projection reading --output .wom-scratch/diagnostics/<new-name>.jsonl --dry-run --progress --format json",
             )
             self.assertEqual(
                 entrypoints["recommended_first_commands"][5]["command"],
+                "archive ai-response-concept-guide <archive-root> --topic all --dry-run --format json",
+            )
+            self.assertEqual(
+                entrypoints["recommended_first_commands"][6]["command"],
                 "archive operator-feedback-plan <archive-root> --dry-run --format json",
             )
             self.assertEqual(
@@ -4728,6 +4733,7 @@ class ArchiveCliTests(unittest.TestCase):
                     "read_canonical_entrypoints",
                     "read_local_agent_instructions",
                     "check_first_read_readiness",
+                    "check_abstract_freshness",
                     "enumerate_zet_abstracts",
                     "run_ai_response_concept_guide",
                     "choose_material_link_route",
@@ -4994,6 +5000,10 @@ class ArchiveCliTests(unittest.TestCase):
             )
             self.assertEqual(
                 result["first_commands"][3]["command"],
+                "archive abstract-freshness <archive-root> --dry-run --progress --format json",
+            )
+            self.assertEqual(
+                result["first_commands"][4]["command"],
                 "archive zet-catalog-pass <archive-root> --status canonical --projection reading --output .wom-scratch/diagnostics/<new-name>.jsonl --dry-run --progress --format json",
             )
             self.assertTrue(result["conversation_status_board"]["allowed"])
@@ -29947,6 +29957,315 @@ state:
             self.assertFalse(result["attention"]["duplicate_id_values_echoed"])
             self.assertNotIn(duplicate_marker, output)
 
+    def test_abstract_freshness_requires_dry_run_and_marks_existing_zet_unverified_without_text_echo(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            canonical_path = sorted((archive_root / "zettels").glob("*.md"))[0]
+            frontmatter, body = archive_services.split_zettel_text(
+                canonical_path.read_text(encoding="utf-8")
+            )
+            abstract_marker = "PRIVATE_UNVERIFIED_ABSTRACT_MARKER"
+            body_marker = "PRIVATE_UNVERIFIED_BODY_MARKER"
+            frontmatter["abstract"] = abstract_marker
+            canonical_path.write_text(
+                "---\n"
+                + archive_cli.dump_yaml(frontmatter)
+                + "---\n\n"
+                + body.rstrip()
+                + f"\n\n{body_marker}\n",
+                encoding="utf-8",
+            )
+
+            missing_code, missing_output = self.run_cli(
+                ["abstract-freshness", str(archive_root), "--format", "json"]
+            )
+            self.assertEqual(missing_code, 1)
+            self.assertIn("requires --dry-run", missing_output)
+
+            code, output = self.run_cli(
+                [
+                    "first-read-freshness",
+                    str(archive_root),
+                    "--dry-run",
+                    "--max-items",
+                    "2",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["schema"], "wom-kit/abstract-freshness/v0.1")
+            self.assertEqual(result["state"], "needs_attention")
+            self.assertEqual(result["counts"]["unverified"], 1)
+            self.assertEqual(result["counts"]["missing"], 3)
+            self.assertEqual(result["scan"]["receipt_index_passes"], 1)
+            self.assertEqual(result["scan"]["canonical_passes"], 1)
+            self.assertFalse(result["privacy_guards"]["abstract_text_echoed"])
+            self.assertFalse(result["privacy_guards"]["body_text_echoed"])
+            self.assertFalse(result["privacy_guards"]["hash_values_echoed"])
+            self.assertNotIn(abstract_marker, output)
+            self.assertNotIn(body_marker, output)
+
+    def test_abstract_freshness_tracks_mint_frontmatter_only_and_content_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            self.make_fake_lunch_draft_promotion_ready(archive_root)
+            mint_code, mint_output = self.run_cli(
+                [
+                    "mint-zettel",
+                    str(archive_root),
+                    "--path",
+                    "inbox/zet_20260519_draft_ai_lunch_note.md",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(mint_code, 0, mint_output)
+            minted = json.loads(mint_output)
+            canonical_path = archive_root / minted["canonical_path"]
+
+            def freshness() -> tuple[dict[str, Any], str]:
+                code, output = self.run_cli(
+                    [
+                        "zet-abstract-freshness",
+                        str(archive_root),
+                        "--dry-run",
+                        "--format",
+                        "json",
+                    ]
+                )
+                self.assertEqual(code, 0, output)
+                return json.loads(output), output
+
+            fresh, fresh_output = freshness()
+            self.assertEqual(fresh["counts"]["fresh"], 1)
+            self.assertEqual(fresh["counts"]["stale"], 0)
+            self.assertNotIn("sha256:", fresh_output)
+
+            frontmatter, original_body = archive_services.split_zettel_text(
+                canonical_path.read_text(encoding="utf-8")
+            )
+            original_abstract = frontmatter["abstract"]
+            frontmatter["edges"] = [
+                {"type": "references", "target": "zet_20240504_fake_lunch_thought"}
+            ]
+            canonical_path.write_text(
+                "---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + original_body,
+                encoding="utf-8",
+            )
+            edge_only, _edge_output = freshness()
+            self.assertEqual(edge_only["counts"]["fresh"], 1)
+            self.assertEqual(edge_only["counts"]["stale"], 0)
+
+            body_marker = "PRIVATE_CHANGED_BODY_MARKER"
+            canonical_path.write_text(
+                "---\n"
+                + archive_cli.dump_yaml(frontmatter)
+                + "---\n\n"
+                + original_body.rstrip()
+                + f"\n\n{body_marker}\n",
+                encoding="utf-8",
+            )
+            body_stale, body_output = freshness()
+            body_item = next(
+                item
+                for item in body_stale["attention"]["items"]
+                if item["path"] == minted["canonical_path"]
+            )
+            self.assertEqual(body_item["status"], "stale")
+            self.assertEqual(body_item["reason"], "body_changed")
+            self.assertNotIn(body_marker, body_output)
+
+            abstract_marker = "PRIVATE_CHANGED_ABSTRACT_MARKER"
+            frontmatter["abstract"] = abstract_marker
+            canonical_path.write_text(
+                "---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + original_body,
+                encoding="utf-8",
+            )
+            abstract_stale, abstract_output = freshness()
+            abstract_item = next(
+                item
+                for item in abstract_stale["attention"]["items"]
+                if item["path"] == minted["canonical_path"]
+            )
+            self.assertEqual(abstract_item["status"], "stale")
+            self.assertEqual(abstract_item["reason"], "abstract_changed")
+            self.assertNotIn(abstract_marker, abstract_output)
+            self.assertNotEqual(frontmatter["abstract"], original_abstract)
+
+            both_marker = "PRIVATE_CHANGED_ABSTRACT_AND_BODY_MARKER"
+            canonical_path.write_text(
+                "---\n"
+                + archive_cli.dump_yaml(frontmatter)
+                + "---\n\n"
+                + original_body.rstrip()
+                + f"\n\n{both_marker}\n",
+                encoding="utf-8",
+            )
+            both_stale, both_output = freshness()
+            both_item = next(
+                item
+                for item in both_stale["attention"]["items"]
+                if item["path"] == minted["canonical_path"]
+            )
+            self.assertEqual(both_item["status"], "stale")
+            self.assertEqual(both_item["reason"], "abstract_and_body_changed")
+            self.assertNotIn(abstract_marker, both_output)
+            self.assertNotIn(both_marker, both_output)
+
+    def test_canonical_publication_body_matches_empty_published_body(self) -> None:
+        self.assertEqual(archive_services.canonical_publication_body(""), "")
+        self.assertEqual(archive_services.canonical_publication_body(" \n\t"), "")
+        self.assertEqual(archive_services.canonical_publication_body("Body\n\n"), "Body\n")
+
+    def test_abstract_freshness_reconstructs_legacy_mint_snapshot_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            self.make_fake_lunch_draft_promotion_ready(archive_root)
+            mint_code, mint_output = self.run_cli(
+                [
+                    "mint-zettel",
+                    str(archive_root),
+                    "--path",
+                    "inbox/zet_20260519_draft_ai_lunch_note.md",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(mint_code, 0, mint_output)
+            minted = json.loads(mint_output)
+            receipt_path = archive_root / minted["mint_receipt_path"]
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            receipt.pop("abstract_review_basis")
+            receipt_path.write_text(
+                json.dumps(receipt, indent=2, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+
+            code, output = self.run_cli(
+                ["abstract-freshness", str(archive_root), "--dry-run", "--format", "json"]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertEqual(result["counts"]["fresh"], 1)
+            self.assertEqual(result["scan"]["legacy_evidence_unavailable_count"], 0)
+            self.assertEqual(result["scan"]["recognized_receipt_count"], 1)
+
+    def test_abstract_freshness_recognizes_reviewed_backfill_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            canonical_path = sorted((archive_root / "zettels").glob("*.md"))[0]
+            frontmatter, body = archive_services.split_zettel_text(
+                canonical_path.read_text(encoding="utf-8")
+            )
+            frontmatter["abstract"] = "A reviewed compact abstract for an existing canonical zet."
+            canonical_path.write_text(
+                "---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + body,
+                encoding="utf-8",
+            )
+            current_bytes = canonical_path.read_bytes()
+            current_frontmatter, current_body = archive_services.split_zettel_text(
+                current_bytes.decode("utf-8")
+            )
+            abstract_sha256 = "sha256:" + hashlib.sha256(
+                current_frontmatter["abstract"].encode("utf-8")
+            ).hexdigest()
+            body_sha256 = archive_services.canonical_body_sha256(current_body)
+            file_sha256 = "sha256:" + hashlib.sha256(current_bytes).hexdigest()
+            zettel_id = current_frontmatter["id"]
+            canonical_relative = canonical_path.relative_to(archive_root).as_posix()
+            receipt = {
+                "schema": "wom-kit/zet-abstract-backfill-receipt/v0.1",
+                "action": "zet_abstract_backfill_write",
+                "status": "applied",
+                "applied_at": "2026-07-14T00:00:00Z",
+                "archive_id": archive_services.read_archive_id(archive_root),
+                "proposal_sha256": "sha256:" + "a" * 64,
+                "plan_digest": "sha256:" + "b" * 64,
+                "reviewed_by": "person:test",
+                "human_affirmation": "all_proposed_abstracts_reviewed",
+                "item_count": 1,
+                "items": [
+                    {
+                        "row_index": 0,
+                        "zettel_id": zettel_id,
+                        "canonical_path": canonical_relative,
+                        "generation_mode": "human_written",
+                        "before_file_sha256": file_sha256,
+                        "after_file_sha256": file_sha256,
+                        "abstract_sha256": abstract_sha256,
+                        "body_sha256": body_sha256,
+                    }
+                ],
+                "mutation_contract": {
+                    "field_added": "frontmatter.abstract",
+                    "body_bytes_preserved": True,
+                    "other_frontmatter_semantics_preserved": True,
+                    "updated_at_changed": False,
+                    "rollback_on_runtime_failure": True,
+                    "crash_recovery_journal_written": False,
+                },
+                "privacy_guards": {
+                    "abstract_text_stored_in_receipt": False,
+                    "body_text_stored_in_receipt": False,
+                    "provider_api_called": False,
+                    "model_called": False,
+                    "secret_store_or_environment_read": False,
+                },
+            }
+            self.assertEqual(
+                archive_cli.validate_schema(
+                    receipt, "zet-abstract-backfill-receipt.schema.json"
+                ),
+                [],
+            )
+            receipt_path = (
+                archive_root
+                / "receipts"
+                / "revisions"
+                / "abstract-backfill"
+                / "fixture.zet-abstract-backfill.json"
+            )
+            receipt_path.parent.mkdir(parents=True, exist_ok=True)
+            receipt_path.write_text(
+                json.dumps(receipt, indent=2, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+
+            code, output = self.run_cli(
+                ["abstract-freshness", str(archive_root), "--dry-run", "--format", "json"]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertEqual(result["counts"]["fresh"], 1)
+            self.assertEqual(result["counts"]["unverified"], 0)
+            self.assertEqual(result["scan"]["recognized_receipt_count"], 1)
+
+    def test_abstract_freshness_contains_malformed_canonical_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            broken_path = archive_root / "zettels" / "zet_20260714_broken_abstract.md"
+            broken_path.write_text(
+                "---\nid: zet_20260714_broken_abstract\nabstract: [unterminated\n---\n\nPRIVATE_BROKEN_BODY\n",
+                encoding="utf-8",
+            )
+
+            code, output = self.run_cli(
+                ["abstract-freshness", str(archive_root), "--dry-run", "--format", "json"]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertEqual(result["counts"]["unreadable"], 1)
+            self.assertNotIn("PRIVATE_BROKEN_BODY", output)
+
     def test_zet_catalog_pages_every_canonical_abstract_without_body_reads(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
@@ -33715,6 +34034,18 @@ state:
             self.assertEqual(receipt["target"]["path"], "zettels/zet_20260519_draft_ai_lunch_note.md")
             self.assertEqual(receipt["zettel"]["id"], "zet_20260519_draft_ai_lunch_note")
             self.assertEqual(receipt["result"]["created_paths"], result["created_paths"])
+            self.assertEqual(
+                receipt["abstract_review_basis"]["review_status"],
+                "reviewed_at_publication",
+            )
+            self.assertEqual(
+                receipt["abstract_review_basis"]["evidence_kind"],
+                "promote_zettel",
+            )
+
+            freshness = archive_services.abstract_freshness(archive_root, dry_run=True)
+            self.assertEqual(freshness["counts"]["fresh"], 1)
+            self.assertEqual(freshness["counts"]["stale"], 0)
 
             doctor_code, doctor_output = self.run_cli(["doctor", str(archive_root), "--strict"])
             self.assertEqual(doctor_code, 0, doctor_output)
@@ -34190,6 +34521,14 @@ state:
             self.assertEqual(receipt["result"]["created_paths"], result["created_paths"])
             self.assertEqual(receipt["first_read_check"]["status"], "ready")
             self.assertTrue(receipt["first_read_check"]["ready_for_publication"])
+            review_basis = receipt["abstract_review_basis"]
+            self.assertEqual(review_basis["contract"], "wom-kit/abstract-review-basis/v0.1")
+            self.assertEqual(review_basis["review_status"], "reviewed_at_publication")
+            self.assertEqual(review_basis["evidence_kind"], "mint_zettel")
+            self.assertRegex(review_basis["abstract_sha256"], r"^sha256:[0-9a-f]{64}$")
+            self.assertRegex(review_basis["body_sha256"], r"^sha256:[0-9a-f]{64}$")
+            self.assertFalse(review_basis["abstract_text_stored"])
+            self.assertFalse(review_basis["body_text_stored"])
             self.assertNotIn(
                 "An AI-created lunch reflection waiting for human review before canonical publication.",
                 json.dumps(receipt, ensure_ascii=False),

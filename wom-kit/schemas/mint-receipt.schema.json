@@ -85,6 +85,36 @@
       },
       "additionalProperties": false
     },
+    "abstract_review_basis": {
+      "type": "object",
+      "required": [
+        "contract",
+        "review_status",
+        "evidence_kind",
+        "abstract_sha256",
+        "body_sha256",
+        "body_hash_basis",
+        "abstract_text_stored",
+        "body_text_stored"
+      ],
+      "properties": {
+        "contract": {"type": "string", "const": "wom-kit/abstract-review-basis/v0.1"},
+        "review_status": {
+          "type": "string",
+          "enum": ["pending_human_approval", "reviewed_at_publication"]
+        },
+        "evidence_kind": {"type": "string", "enum": ["mint_zettel", "promote_zettel"]},
+        "abstract_sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "body_sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "body_hash_basis": {
+          "type": "string",
+          "const": "decoded_canonical_body_utf8_universal_newlines"
+        },
+        "abstract_text_stored": {"type": "boolean", "const": false},
+        "body_text_stored": {"type": "boolean", "const": false}
+      },
+      "additionalProperties": false
+    },
     "checklist": {
       "type": "array",
       "items": {"type": "object"}

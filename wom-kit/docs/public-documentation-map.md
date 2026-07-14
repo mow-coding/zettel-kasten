@@ -72,6 +72,7 @@ Supporting philosophy and model docs:
 - [Archive Status Board](archive-status-board.md)
 - [First-Read Readiness](first-read-readiness.md)
 - [Explicit Abstract Publication Gate](explicit-abstract-publication.md)
+- [Abstract Freshness Check](abstract-freshness.md)
 - [Derived Artifact Staleness](derived-artifact-staleness.md)
 - [zet Quality Check](zet-quality-check.md)
 - [Source Object Storage Policy](source-object-storage-policy.md)
