@@ -544,6 +544,12 @@ validate
 list-zettels
   List canonical and/or draft zettels.
 
+first-read-readiness --dry-run
+  Check every canonical frontmatter for an explicit abstract and uniquely resolvable safe id without reading bodies. Result schema v0.2 uses `ok` for diagnostic completion and `readiness_met` for the readiness verdict; completed attention queues exit zero, while blocked input and execution failure remain nonzero. A large legacy gap must begin with the official three-zet human-review pilot, never automatic bulk fill.
+
+abstract-freshness --dry-run
+  Compare current abstract/body hash pairs with retained human-review evidence. It scans canonical zets first, then opens only deterministic publication receipts for safe explicit-abstract ids plus bounded revision/backfill receipt directories; unsafe target ids use a conservative fallback. It creates no persistent cache, and `--progress` labels the work `stage=1/2` and `stage=2/2`.
+
 zet-catalog --dry-run
   Enumerate every local zet node's available compact frontmatter abstract state and complete edge projection in deterministic pages. `--projection reading --coverage-mode strict` gives compact checksum-chained node coverage. It measures items, compact service-result, and response-envelope cost; optional `--response-envelope-reserve-tokens` partitions a requested total without changing the old items-only default. Keep cursor zero full, then optionally use `--response-profile continuation` to omit repeated scope diagnostics while retaining items, readiness, snapshot, token, and chain evidence. Optional verified-seed order remains exhaustive, and opt-in `routed_reading` adds each item's seed/tie/component reason at a higher token cost. Separate signals report node coverage, first-read availability, and unique-id follow-up, while strict chain hashes distinguish duplicate-id file entries without returning paths. `--progress` reports content-free scan counts and heartbeat on stderr; scratch-scoped `--output` can keep the full JSON off stdout. It ranks nothing, writes no map/state, reads no body, and requires no generated index. A new CLI process still performs its own live scan.
 

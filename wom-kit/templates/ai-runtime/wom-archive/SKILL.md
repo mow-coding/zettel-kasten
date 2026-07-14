@@ -130,10 +130,14 @@ first read and a uniquely resolvable id:
 archive first-read-readiness <archive-root> --dry-run --progress --format json
 ```
 
-This gate reads frontmatter only. A non-ready result is a repair queue, not a
-crash and never permission to invent or auto-write an abstract. It does not
-judge abstract quality or prove that the host consumed anything. Next, check
-whether each reviewed abstract still belongs to the current canonical body:
+This gate reads frontmatter only. Since result schema v0.2, process exit zero
+and `ok: true` mean the diagnostic completed; only `readiness_met` means the
+gate is ready. A non-ready result is a repair queue, not permission to proceed.
+When a legacy archive has a large gap, select only the first three safe
+attention rows and follow `docs/abstract-backfill-pilot.md`; stop after that
+pilot before selecting a fourth zet. The gate does not judge abstract quality
+or prove that the host consumed anything. Next, check whether each reviewed
+abstract still belongs to the current canonical body:
 
 ```bash
 archive abstract-freshness <archive-root> --dry-run --progress --format json
@@ -143,7 +147,9 @@ archive abstract-freshness <archive-root> --dry-run --progress --format json
 evidence. `stale` means one or both changed, `unverified` means no recognized
 evidence remains, and `missing` means the explicit abstract is absent or
 invalid. This text-free scan never repairs a zet and never decides whether an
-abstract is true. Treat every non-fresh row as a human review queue. Then
+abstract is true. Progress names the canonical pass `stage=1/2` and evidence
+pass `stage=2/2`; a zero ETA for the first stage is not whole-command
+completion. Treat every non-fresh row as a human review queue. Then
 enumerate every canonical zet abstract. In a terminal CLI, prefer one complete
 pass:
 

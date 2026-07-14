@@ -6,6 +6,33 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.240 - 2026-07-14
+
+Scalable first-read diagnostics checkpoint. Additive archive behavior; no
+archive migration, canonical write, receipt write, provider call, or cache
+file is introduced by the diagnostics.
+
+- **Freshness no longer opens the whole receipt tree.** Canonical zets are
+  scanned first. Only safe ids with explicit abstracts are used for direct
+  mint/promotion receipt lookup, plus the bounded canonical-revision and
+  abstract-backfill receipt directories. An unsafe target id falls back to
+  bounded publication-directory scans instead of risking incomplete evidence.
+- **No stale persistent cache.** The candidate route is rebuilt from current
+  canonical frontmatter on every run. Output states the lookup mode, target
+  count, and that the whole receipt tree was not enumerated.
+- **Two-stage progress is explicit.** `abstract-freshness --progress` labels
+  canonical and evidence work as `stage=1/2` and `stage=2/2`; the first done
+  event names the next stage so `eta=0.0s` cannot be mistaken for command
+  completion.
+- **Attention is not execution failure.** First-read result schema v0.2 uses
+  `ok` for safe diagnostic completion and `readiness_met` for the gate verdict.
+  `needs_attention` and `compatibility_only` now exit zero when the scan itself
+  completed; blocked input and execution failure remain nonzero.
+- **Small human pilot is official.** New English/Korean guidance limits the
+  first legacy abstract backfill to three deterministic candidates, requires
+  private proposal review and explicit approval, then stops after readiness,
+  freshness, and receipt-audit verification. Bulk auto-fill remains forbidden.
+
 ## v0.3.239 - 2026-07-14
 
 Approval-gated exact-byte canonical restore checkpoint. Additive; one approved

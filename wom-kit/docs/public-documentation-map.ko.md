@@ -71,6 +71,8 @@
 - [First-Read Readiness](first-read-readiness.md)
 - [명시적 초록 데이터 발행 게이트](explicit-abstract-publication.md)
 - [초록 데이터 최신성 검진](abstract-freshness.md)
+- [정본 zet 3건 초록 데이터 보완 표본 절차](abstract-backfill-pilot.ko.md)
+- [정본 zet 3건 초록 데이터 보완 표본 절차 - English](abstract-backfill-pilot.md)
 - [정본 zet 수정 계획](zet-revision-plan.md)
 - [정본 zet 수정 쓰기](zet-revision-write.md)
 - [정본 zet 수정 이력 검진](zet-revision-receipt-audit.md)

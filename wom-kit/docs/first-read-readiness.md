@@ -37,9 +37,17 @@ separately reports:
 A compatibility field can make compact text available, but it does not satisfy
 the explicit-abstract readiness gate.
 
-The top-level `ok` is therefore a gate result. A successful scan with gaps
-returns `ok: false` and `state: needs_attention` or `compatibility_only`; this
-is evidence that the command worked and stopped an overclaim.
+Since result schema v0.2, the top-level `ok` reports whether the diagnostic ran
+safely. The separate `readiness_met` and
+`readiness.first_read_surface_ready` fields report the gate verdict. A
+successful scan with gaps therefore returns `ok: true`,
+`readiness_met: false`, and `state: needs_attention` or
+`compatibility_only`.
+
+The CLI returns process exit zero for those completed attention states. This is
+not permission to claim readiness. Nonzero exit is reserved for blocked input
+or execution failure, and the result includes an explicit `exit_policy` object
+so an AI operator does not have to infer this distinction.
 
 ## What It Does Not Prove
 
@@ -56,7 +64,8 @@ id values are counted but not echoed.
 1. Run `ai-start-here` and read archive-local instructions.
 2. Run `first-read-readiness`.
 3. If it is not ready, prepare reviewed repairs; never invent or auto-write
-   missing abstracts.
+   missing abstracts. For a large legacy archive, begin with the
+   [three-zet pilot](abstract-backfill-pilot.md) and stop after its review.
 4. When it is ready, run `abstract-freshness`; presence and review freshness
    are separate checks, and every non-fresh row still needs human review.
 5. Run `zet-catalog-pass` to create one complete private

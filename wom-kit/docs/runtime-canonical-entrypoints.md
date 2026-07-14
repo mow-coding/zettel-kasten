@@ -1,6 +1,6 @@
 # Runtime Canonical Entry Points
 
-Status: v0.3.239 quick handoff, chronological revision-audit, and exact-restore checkpoint
+Status: v0.3.240 quick handoff, scalable first-read diagnostics, chronological revision-audit, and exact-restore checkpoint
 
 When an AI runtime enters a WOM archive, it needs a small, explicit "start
 here" map. The archive may contain zets, source bindings, provider metadata,
@@ -45,10 +45,13 @@ anything:
    `ops/operational-context.yml`.
 5. Run `archive first-read-readiness <archive-root> --dry-run --progress
    --format json`. Repair explicit-abstract or unique-id gaps through reviewed
-   flows before claiming memory-reconstruction readiness.
+   flows before claiming memory-reconstruction readiness. Process exit zero
+   means the diagnostic completed; only `readiness_met` proves this gate is
+   ready. For a large legacy gap, use only the official three-zet pilot first.
 6. Run `archive abstract-freshness <archive-root> --dry-run --progress --format
    json`. Treat stale, unverified, or missing rows as a human review queue;
-   never auto-rewrite an abstract or body.
+   never auto-rewrite an abstract or body. Its progress is two stages;
+   `stage=1/2` ending is not whole-command completion.
 7. Run the complete private `zet-catalog-pass`, validate and read it from page
    zero, and distinguish generated node coverage from actual host consumption.
 8. Run `archive ai-response-concept-guide <archive-root> --topic all --dry-run`

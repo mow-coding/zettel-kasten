@@ -24,6 +24,28 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.240 Scalable First-Read Diagnostics
+
+No archive migration is required. Restart the AI operator process so the new
+diagnostic contract and progress labels are visible.
+
+`first-read-readiness` result schema v0.2 separates command completion from
+readiness. A completed scan with `state: needs_attention` or
+`compatibility_only` now returns `ok: true`, `readiness_met: false`, and process
+exit zero. Automation must inspect `readiness_met` or
+`readiness.first_read_surface_ready` instead of treating process exit zero as
+proof that every explicit abstract exists. Blocked input or execution failure
+still returns nonzero.
+
+`abstract-freshness` now scans canonical zets first and opens only evidence
+candidate receipts for current explicit-abstract targets. It does not create a
+persistent cache. Progress names `stage=1/2` and `stage=2/2`; an ETA of zero
+therefore means the current stage ended, not necessarily the whole command.
+
+For a large legacy archive, do not bulk-generate missing abstracts. Follow the
+three-zet pilot in `wom-kit/docs/abstract-backfill-pilot.md`, stop after its
+verification commands, and report the human review experience before scaling.
+
 ## v0.3.239 Approved Exact-Byte Canonical Restore
 
 No archive migration is required. Restart the AI operator process so the new

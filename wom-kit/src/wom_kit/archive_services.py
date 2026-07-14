@@ -2801,6 +2801,7 @@ ZET_ABSTRACT_MAX_CHARS = ZETTEL_OVERVIEW_GIST_CHAR_LIMIT
 ABSTRACT_REVIEW_BASIS_CONTRACT = "wom-kit/abstract-review-basis/v0.1"
 ABSTRACT_REVIEW_BODY_HASH_BASIS = "decoded_canonical_body_utf8_universal_newlines"
 ABSTRACT_FRESHNESS_SCHEMA = "wom-kit/abstract-freshness/v0.1"
+FIRST_READ_READINESS_SCHEMA = "wom-kit/first-read-readiness/v0.2"
 ABSTRACT_FRESHNESS_MAX_RECEIPTS = 100000
 ABSTRACT_FRESHNESS_MAX_RECEIPT_BYTES = 16 * 1024 * 1024
 ABSTRACT_FRESHNESS_MAX_ZET_BYTES = 16 * 1024 * 1024
@@ -6268,19 +6269,69 @@ def legacy_publication_abstract_evidence(
     )
 
 
+def abstract_review_evidence_candidate_paths(
+    root: Path,
+    publication_zettel_ids: set[str] | None,
+) -> tuple[list[Path], str]:
+    paths: list[Path] = []
+    if publication_zettel_ids is None:
+        lookup_mode = "bounded_publication_directory_fallback"
+        for relative_root, pattern in (
+            (MINT_RECEIPTS_DIR, "*.mint.json"),
+            ("receipts/promotion", "*.promotion.json"),
+        ):
+            candidate_root = archive_internal_path(root, relative_root)
+            if candidate_root.is_dir():
+                paths.extend(
+                    safe_archive_glob(
+                        candidate_root,
+                        pattern,
+                        root,
+                        recursive=True,
+                    )
+                )
+    elif publication_zettel_ids:
+        lookup_mode = "direct_publication_receipt_by_safe_zettel_id"
+        for zettel_id in sorted(publication_zettel_ids):
+            for relative in (
+                f"{MINT_RECEIPTS_DIR}/{zettel_id}.mint.json",
+                f"receipts/promotion/{zettel_id}.promotion.json",
+            ):
+                candidate = archive_internal_path(root, relative)
+                if candidate.is_file():
+                    paths.append(candidate)
+    else:
+        lookup_mode = "no_explicit_abstract_targets"
+
+    if publication_zettel_ids is None or publication_zettel_ids:
+        for relative_root, pattern in (
+            (ZET_REVISION_RECEIPTS_DIR, "*.zet-revision.json"),
+            (
+                ZET_ABSTRACT_BACKFILL_RECEIPTS_DIR,
+                "*.zet-abstract-backfill.json",
+            ),
+        ):
+            candidate_root = archive_internal_path(root, relative_root)
+            if candidate_root.is_dir():
+                paths.extend(safe_archive_glob(candidate_root, pattern, root))
+
+    unique_paths = list(dict.fromkeys(paths))
+    unique_paths.sort(key=lambda path: archive_relative_path(path, root))
+    return unique_paths, lookup_mode
+
+
 def index_abstract_review_evidence(
     root: Path,
     *,
+    publication_zettel_ids: set[str] | None = None,
     progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
 ) -> tuple[dict[str, dict[tuple[str, str], set[str]]], dict[str, Any], list[str]]:
     evidence_by_path: dict[str, dict[tuple[str, str], set[str]]] = {}
     blockers: list[str] = []
     archive_id = read_archive_id(root)
-    receipt_root = root / "receipts"
-    receipt_paths = (
-        safe_archive_glob(receipt_root, "*.json", root, recursive=True)
-        if receipt_root.is_dir()
-        else []
+    receipt_paths, lookup_mode = abstract_review_evidence_candidate_paths(
+        root,
+        publication_zettel_ids,
     )
     discovered_count = len(receipt_paths)
     if discovered_count > ABSTRACT_FRESHNESS_MAX_RECEIPTS:
@@ -6295,6 +6346,14 @@ def index_abstract_review_evidence(
         "legacy_evidence_unavailable_count": 0,
         "invalid_or_oversized_receipt_count": 0,
         "unrelated_receipt_count": 0,
+        "candidate_lookup_mode": lookup_mode,
+        "publication_target_id_count": (
+            len(publication_zettel_ids)
+            if publication_zettel_ids is not None
+            else None
+        ),
+        "whole_receipt_tree_enumerated": False,
+        "persistent_cache_used": False,
         "max_receipts": ABSTRACT_FRESHNESS_MAX_RECEIPTS,
         "max_receipt_bytes": ABSTRACT_FRESHNESS_MAX_RECEIPT_BYTES,
     }
@@ -6558,11 +6617,10 @@ def abstract_freshness(
     if not dry_run:
         blockers.append("abstract-freshness is read-only and requires --dry-run.")
 
-    evidence_by_path, evidence_scan, evidence_blockers = index_abstract_review_evidence(
-        root, progress_callback=progress_callback
-    )
-    blockers.extend(evidence_blockers)
     canonical_paths = zet_catalog_paths(root, "canonical")
+    canonical_records: list[dict[str, Any]] = []
+    publication_zettel_ids: set[str] = set()
+    publication_lookup_requires_fallback = False
     counts = {
         "fresh": 0,
         "stale": 0,
@@ -6575,14 +6633,15 @@ def abstract_freshness(
     attention_items: list[dict[str, Any]] = []
     attention_count = 0
     if progress_callback is not None:
-        progress_callback("abstract-freshness", "start", 0, len(canonical_paths))
+        progress_callback("abstract-canonical", "start", 0, len(canonical_paths))
 
     for index, (path, _expected_status) in enumerate(canonical_paths, start=1):
         relative = archive_relative_path(path, root)
         status = "unreadable"
         reason = "canonical_unreadable"
         zettel_id: str | None = None
-        evidence_count = 0
+        abstract_sha256: str | None = None
+        body_sha256_candidates: set[str] = set()
         try:
             raw_bytes = read_bounded_abstract_evidence_file(path, ABSTRACT_FRESHNESS_MAX_ZET_BYTES)
             parsed = parse_abstract_evidence_zettel_bytes(raw_bytes)
@@ -6604,35 +6663,76 @@ def abstract_freshness(
                     status = "missing"
                     reason = "abstract_" + str(first_read_check.get("status") or "invalid")
                 else:
-                    body_sha256_candidates = {canonical_body_sha256(body)}
+                    status = "pending_evidence"
+                    reason = "pending_evidence"
+                    body_sha256_candidates.add(canonical_body_sha256(body))
                     try:
                         raw_frontmatter, raw_body = split_zettel_text(raw_bytes.decode("utf-8"))
                         if raw_frontmatter:
                             body_sha256_candidates.add(canonical_body_sha256(raw_body))
                     except Exception:
                         pass
-                    pairs = evidence_by_path.get(relative, {})
-                    evidence_count = sum(len(kinds) for kinds in pairs.values())
-                    if any(
-                        (abstract_sha256, body_sha256) in pairs
-                        for body_sha256 in body_sha256_candidates
-                    ):
-                        status = "fresh"
-                        reason = "reviewed_pair_matches"
-                    elif not pairs:
-                        status = "unverified"
-                        reason = "no_review_evidence"
-                    elif any(pair[0] == abstract_sha256 for pair in pairs):
-                        status = "stale"
-                        reason = "body_changed"
-                    elif any(pair[1] in body_sha256_candidates for pair in pairs):
-                        status = "stale"
-                        reason = "abstract_changed"
+                    if zettel_id is None:
+                        publication_lookup_requires_fallback = True
                     else:
-                        status = "stale"
-                        reason = "abstract_and_body_changed"
+                        publication_zettel_ids.add(zettel_id)
         except (OSError, UnicodeDecodeError, ValueError):
             pass
+
+        canonical_records.append(
+            {
+                "path": relative,
+                "zettel_id": zettel_id,
+                "status": status,
+                "reason": reason,
+                "abstract_sha256": abstract_sha256,
+                "body_sha256_candidates": body_sha256_candidates,
+            }
+        )
+        if progress_callback is not None and (index == len(canonical_paths) or index % 100 == 0):
+            progress_callback("abstract-canonical", "scan", index, len(canonical_paths))
+
+    if progress_callback is not None:
+        progress_callback("abstract-canonical", "done", len(canonical_paths), len(canonical_paths))
+
+    evidence_by_path, evidence_scan, evidence_blockers = index_abstract_review_evidence(
+        root,
+        publication_zettel_ids=(
+            None
+            if publication_lookup_requires_fallback
+            else publication_zettel_ids
+        ),
+        progress_callback=progress_callback,
+    )
+    blockers.extend(evidence_blockers)
+
+    for record in canonical_records:
+        status = str(record["status"])
+        reason = str(record["reason"])
+        evidence_count = 0
+        if status == "pending_evidence":
+            abstract_sha256 = record["abstract_sha256"]
+            body_sha256_candidates = record["body_sha256_candidates"]
+            pairs = evidence_by_path.get(str(record["path"]), {})
+            evidence_count = sum(len(kinds) for kinds in pairs.values())
+            if any(
+                (abstract_sha256, body_sha256) in pairs
+                for body_sha256 in body_sha256_candidates
+            ):
+                status = "fresh"
+                reason = "reviewed_pair_matches"
+            elif not pairs:
+                status = "unverified"
+                reason = "no_review_evidence"
+            elif any(pair[0] == abstract_sha256 for pair in pairs):
+                status = "stale"
+                reason = "body_changed"
+            elif any(pair[1] in body_sha256_candidates for pair in pairs):
+                status = "stale"
+                reason = "abstract_changed"
+            else:
+                status = "stale"
+                reason = "abstract_and_body_changed"
 
         counts[status] += 1
         reasons[reason] = reasons.get(reason, 0) + 1
@@ -6641,18 +6741,13 @@ def abstract_freshness(
             if len(attention_items) < effective_max_items:
                 attention_items.append(
                     {
-                        "path": relative,
-                        "zettel_id": zettel_id,
+                        "path": record["path"],
+                        "zettel_id": record["zettel_id"],
                         "status": status,
                         "reason": reason,
                         "review_evidence_count": evidence_count,
                     }
                 )
-        if progress_callback is not None and (index == len(canonical_paths) or index % 100 == 0):
-            progress_callback("abstract-freshness", "scan", index, len(canonical_paths))
-
-    if progress_callback is not None:
-        progress_callback("abstract-freshness", "done", len(canonical_paths), len(canonical_paths))
     all_required_fresh = attention_count == 0
     state = "blocked" if blockers else "ready" if all_required_fresh else "needs_attention"
     warnings: list[str] = []
@@ -6686,7 +6781,11 @@ def abstract_freshness(
             "canonical_paths_scanned": len(canonical_paths),
             "receipt_index_passes": 1,
             "canonical_passes": 1,
-            "complexity_contract": "O(canonical_zets + receipt_files + receipt_items)",
+            "complexity_contract": "O(canonical_zets + evidence_candidate_receipts + receipt_items)",
+            "explicit_abstract_evidence_target_count": sum(
+                1 for record in canonical_records if record["status"] == "pending_evidence"
+            ),
+            "publication_lookup_fallback_required": publication_lookup_requires_fallback,
             "max_canonical_file_bytes": ABSTRACT_FRESHNESS_MAX_ZET_BYTES,
             **evidence_scan,
         },
@@ -6808,10 +6907,11 @@ def first_read_readiness(
         )
 
     return {
-        "ok": not blockers and surface_ready,
-        "schema": "wom-kit/first-read-readiness/v0.1",
+        "ok": not blockers,
+        "schema": FIRST_READ_READINESS_SCHEMA,
         "lifecycle_action": "first_read_readiness",
         "state": state,
+        "readiness_met": surface_ready,
         "archive_id": read_archive_id(root),
         "dry_run": True,
         "canonical_zet_count": len(entries),
@@ -6855,6 +6955,11 @@ def first_read_readiness(
         },
         "blockers": blockers,
         "warnings": [],
+        "exit_policy": {
+            "zero_when_diagnostic_completed": True,
+            "needs_attention_is_command_failure": False,
+            "nonzero_reserved_for_blocked_input_or_execution_failure": True,
+        },
         "next_actions": next_actions,
         "would_change": [],
         "privacy_guards": {

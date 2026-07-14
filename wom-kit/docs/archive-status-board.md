@@ -1,6 +1,6 @@
 # Archive Status Board
 
-Status: v0.3.239 archive state and exact-restore checkpoint
+Status: v0.3.240 archive state and scalable first-read diagnostics checkpoint
 
 `archive status-board` gives a beginner-facing status summary for one WOM
 archive without making the operator inspect `inbox/`, `zettels/`, mint
