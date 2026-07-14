@@ -674,6 +674,8 @@ PROGRESS_STAGE_UNITS = {
     "catalog-frontmatter": "zet_frontmatters",
     "catalog-page": "zet_rows",
     "catalog-pass-artifact": "bytes",
+    "abstract-canonical": "zet_files",
+    "abstract-evidence": "receipt_files",
     "abstract-candidates": "zet_candidates",
     "abstract-write": "zet_writes",
     "abstract-revert-write": "zet_reverts",
@@ -975,6 +977,7 @@ def make_stage_progress_callback(
             return True
         if stage == "edge-receipt-source-load-detail":
             return False
+        start_message = message == "start" or message.startswith("start ")
         done_message = message == "done" or message.startswith("done ")
         if stage == "edge-receipt-index":
             if message == "start" or done_message or message.startswith("heartbeat"):
@@ -988,7 +991,7 @@ def make_stage_progress_callback(
                 previous = last_stderr_by_stage.get(stage, stage_started.get(stage, now))
                 return now - previous >= PROGRESS_NESTED_AGGREGATE_SECONDS
             return False
-        if message == "start" or done_message or current is None or not total:
+        if start_message or done_message or current is None or not total:
             return True
         previous_count = last_count_by_stage.get(stage)
         if (
@@ -1013,7 +1016,7 @@ def make_stage_progress_callback(
     def progress(stage: str, message: str, current: int | None, total: int | None) -> None:
         now = time.monotonic()
         elapsed = max(0.0, now - started)
-        if message == "start" or stage not in stage_started:
+        if message == "start" or message.startswith("start ") or stage not in stage_started:
             stage_started[stage] = now
         stage_elapsed = max(0.0, now - stage_started.get(stage, now))
         unit = progress_stage_unit(stage)
@@ -1076,6 +1079,7 @@ class CommandProgressReporter:
         *,
         label: str,
         heartbeat_interval_seconds: float = 10.0,
+        stage_order: tuple[str, ...] | None = None,
     ) -> None:
         self._callback = make_stage_progress_callback(enabled, label=label, detail="compact")
         self._interval = max(0.01, heartbeat_interval_seconds)
@@ -1092,6 +1096,11 @@ class CommandProgressReporter:
         self._local_profile_summary_active = False
         self._last_forwarded_progress: tuple[str, int | None, int | None] | None = None
         self._last_completed_stage: str | None = None
+        self._stage_order = tuple(dict.fromkeys(stage_order or ()))
+        self._stage_positions = {
+            stage: index
+            for index, stage in enumerate(self._stage_order, start=1)
+        }
         self._thread: threading.Thread | None = None
         if self._callback is not None:
             self._thread = threading.Thread(
@@ -1117,6 +1126,9 @@ class CommandProgressReporter:
                 else self._content_free_message(message, current, total)
             )
         )
+        stage_annotation = self._stage_annotation(stage, message)
+        if stage_annotation:
+            safe_message = f"{safe_message} {stage_annotation}"
         phase = self._content_free_phase(stage, message)
         forward = True
         with self._state_lock:
@@ -1160,13 +1172,13 @@ class CommandProgressReporter:
                 forward = False
             if local_profile_summary is not None and local_profile_summary.startswith("aggregate "):
                 forward = False
-            if safe_message == "progress":
+            if safe_message == "progress" or safe_message.startswith("progress "):
                 progress_key = (stage, current, total)
                 if progress_key == self._last_forwarded_progress:
                     forward = False
                 else:
                     self._last_forwarded_progress = progress_key
-        if safe_message == "working" or not forward:
+        if safe_message == "working" or safe_message.startswith("working ") or not forward:
             return
         with self._callback_lock:
             self._callback(stage, safe_message, current, total)
@@ -1180,6 +1192,15 @@ class CommandProgressReporter:
         if current is not None and total is not None:
             return "progress"
         return "working"
+
+    def _stage_annotation(self, stage: str, message: str) -> str:
+        position = self._stage_positions.get(stage)
+        if position is None:
+            return ""
+        parts = [f"stage={position}/{len(self._stage_order)}"]
+        if message == "done" and position < len(self._stage_order):
+            parts.append(f"next={self._stage_order[position]}")
+        return " ".join(parts)
 
     @staticmethod
     def _edge_receipt_source_summary(stage: str, message: str) -> str | None:
@@ -1274,6 +1295,9 @@ class CommandProgressReporter:
                 message += f" {local_profile_summary}"
             if last_completed:
                 message += f" last_completed={last_completed}"
+            stage_annotation = self._stage_annotation(stage, "heartbeat")
+            if stage_annotation:
+                message += f" {stage_annotation}"
             with self._callback_lock:
                 if self._callback is not None:
                     self._callback(stage, message, current, total)
@@ -8950,6 +8974,8 @@ def command_first_read_readiness(args: argparse.Namespace) -> int:
             "Ready for exhaustive first read: "
             + ("yes" if readiness.get("first_read_surface_ready") else "no")
         )
+        if result.get("state") in {"needs_attention", "compatibility_only"}:
+            print("Command completed: yes; readiness attention is not a command failure.")
         if result.get("next_actions"):
             print("Next actions:")
             for action in result["next_actions"]:
@@ -8964,6 +8990,7 @@ def command_abstract_freshness(args: argparse.Namespace) -> int:
     reporter = CommandProgressReporter(
         bool(getattr(args, "progress", False)),
         label="abstract-freshness",
+        stage_order=("abstract-canonical", "abstract-evidence"),
     )
     try:
         result = archive_services.abstract_freshness(

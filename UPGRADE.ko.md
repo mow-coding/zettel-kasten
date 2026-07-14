@@ -2,6 +2,27 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.3.240 확장 가능한 첫 읽기 진단
+
+보관함 마이그레이션은 필요하지 않습니다. 새 진단 계약과 진행 단계 표시가
+보이도록 AI 운영자 프로세스를 다시 시작합니다.
+
+`first-read-readiness` 결과 스키마 v0.2는 명령 완료와 준비 완료를 분리합니다.
+검사가 정상 완료됐지만 `state`가 `needs_attention` 또는 `compatibility_only`이면
+이제 `ok: true`, `readiness_met: false`, 프로세스 종료코드 0을 반환합니다.
+자동화는 종료코드 0을 모든 초록 데이터가 준비됐다는 뜻으로 해석하지 말고
+`readiness_met` 또는 `readiness.first_read_surface_ready`를 확인해야 합니다.
+입력이 차단됐거나 실행이 실패하면 계속 0이 아닌 종료코드를 반환합니다.
+
+`abstract-freshness`는 이제 정본 zet를 먼저 검사하고, 현재 명시적 초록 데이터
+대상에 필요한 증거 후보 영수증만 엽니다. 영속 캐시 파일은 만들지 않습니다.
+진행 출력의 `stage=1/2`, `stage=2/2`를 확인하세요. ETA 0은 현재 단계가 끝났다는
+뜻이며 전체 명령 완료를 뜻하지 않을 수 있습니다.
+
+대형 옛 보관함의 누락 초록 데이터를 자동으로 대량 생성하지 마세요.
+`wom-kit/docs/abstract-backfill-pilot.ko.md`의 3건 표본 절차를 실행하고 검증 뒤
+멈춘 다음, 사람 검토 경험을 보고한 후에만 범위 확대를 판단합니다.
+
 ## v0.3.239 승인된 정확 바이트 정본 zet 복원
 
 보관함 마이그레이션은 필요하지 않습니다. 새 CLI 전용 복원 쓰기와 통합 사건

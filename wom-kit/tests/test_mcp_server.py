@@ -7088,7 +7088,9 @@ class McpServerTests(unittest.TestCase):
                 result = response["result"]
                 self.assertFalse(result["isError"])
                 content = result["structuredContent"]
-                self.assertFalse(content["ok"])
+                self.assertTrue(content["ok"])
+                self.assertFalse(content["readiness_met"])
+                self.assertEqual(content["schema"], "wom-kit/first-read-readiness/v0.2")
                 self.assertEqual(content["state"], "needs_attention")
                 self.assertEqual(content["attention"]["returned_count"], 1)
                 self.assertFalse(content["scan"]["zettel_bodies_read"])

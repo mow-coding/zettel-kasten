@@ -299,6 +299,40 @@ class ArchiveCliTests(unittest.TestCase):
         self.assertIn("stage_elapsed=", progress)
         self.assertNotIn("PRIVATE_PATH_MARKER", progress)
 
+    def test_command_progress_reporter_labels_bounded_stage_order(self) -> None:
+        events: list[tuple[str, str, int | None, int | None]] = []
+
+        def capture(stage: str, message: str, current: int | None, total: int | None) -> None:
+            events.append((stage, message, current, total))
+
+        with patch.object(archive_cli, "make_stage_progress_callback", return_value=capture):
+            reporter = archive_cli.CommandProgressReporter(
+                True,
+                label="progress-test",
+                heartbeat_interval_seconds=60.0,
+                stage_order=("abstract-canonical", "abstract-evidence"),
+            )
+            reporter.progress("abstract-canonical", "start", 0, 2)
+            reporter.progress("abstract-canonical", "scan", 1, 2)
+            reporter.progress("abstract-canonical", "done", 2, 2)
+            reporter.progress("abstract-evidence", "start", 0, 1)
+            reporter.close()
+
+        self.assertEqual(
+            events,
+            [
+                ("abstract-canonical", "start stage=1/2", 0, 2),
+                ("abstract-canonical", "progress stage=1/2", 1, 2),
+                (
+                    "abstract-canonical",
+                    "done stage=1/2 next=abstract-evidence",
+                    2,
+                    2,
+                ),
+                ("abstract-evidence", "start stage=2/2", 0, 1),
+            ],
+        )
+
     def test_command_progress_reporter_coalesces_same_count_before_callback(self) -> None:
         events: list[tuple[str, str, int | None, int | None]] = []
 
@@ -30188,11 +30222,14 @@ state:
                     "json",
                 ]
             )
-            self.assertEqual(code, 1, output)
+            self.assertEqual(code, 0, output)
             result = json.loads(output)
-            self.assertFalse(result["ok"])
+            self.assertTrue(result["ok"])
             self.assertEqual(result["state"], "needs_attention")
-            self.assertEqual(result["schema"], "wom-kit/first-read-readiness/v0.1")
+            self.assertFalse(result["readiness_met"])
+            self.assertEqual(result["schema"], "wom-kit/first-read-readiness/v0.2")
+            self.assertTrue(result["exit_policy"]["zero_when_diagnostic_completed"])
+            self.assertFalse(result["exit_policy"]["needs_attention_is_command_failure"])
             self.assertEqual(result["canonical_zet_count"], 4)
             self.assertEqual(result["abstract_coverage"]["counts"]["missing"], 4)
             self.assertFalse(result["readiness"]["all_required_explicit_abstracts_present"])
@@ -30202,6 +30239,23 @@ state:
             self.assertFalse(result["scan"]["zettel_bodies_read"])
             self.assertFalse(result["privacy_guards"]["abstract_text_echoed"])
             self.assertFalse(result["privacy_guards"]["title_values_echoed"])
+
+            text_code, text_output = self.run_cli(
+                [
+                    "first-read-readiness",
+                    str(archive_root),
+                    "--dry-run",
+                    "--max-items",
+                    "2",
+                    "--format",
+                    "text",
+                ]
+            )
+            self.assertEqual(text_code, 0, text_output)
+            self.assertIn(
+                "Command completed: yes; readiness attention is not a command failure.",
+                text_output,
+            )
 
             for index, path in enumerate(sorted((archive_root / "zettels").glob("*.md"))):
                 frontmatter, body = archive_services.split_zettel_text(path.read_text(encoding="utf-8"))
@@ -30242,8 +30296,9 @@ state:
             code, output = self.run_cli(
                 ["zet-first-readiness", str(archive_root), "--dry-run", "--format", "json"]
             )
-            self.assertEqual(code, 1, output)
+            self.assertEqual(code, 0, output)
             result = json.loads(output)
+            self.assertTrue(result["ok"])
             self.assertEqual(result["state"], "compatibility_only")
             self.assertTrue(result["readiness"]["all_required_compact_first_reads_available"])
             self.assertFalse(result["readiness"]["all_required_explicit_abstracts_present"])
@@ -30268,8 +30323,9 @@ state:
             code, output = self.run_cli(
                 ["first-read-readiness", str(archive_root), "--dry-run", "--format", "json"]
             )
-            self.assertEqual(code, 1, output)
+            self.assertEqual(code, 0, output)
             result = json.loads(output)
+            self.assertTrue(result["ok"])
             self.assertEqual(result["state"], "needs_attention")
             self.assertTrue(result["readiness"]["all_required_explicit_abstracts_present"])
             self.assertFalse(result["readiness"]["all_followup_ids_uniquely_resolvable"])
@@ -30327,6 +30383,118 @@ state:
             self.assertFalse(result["privacy_guards"]["hash_values_echoed"])
             self.assertNotIn(abstract_marker, output)
             self.assertNotIn(body_marker, output)
+
+            progress_code, progress_output = self.run_cli(
+                [
+                    "abstract-freshness",
+                    str(archive_root),
+                    "--dry-run",
+                    "--max-items",
+                    "2",
+                    "--progress",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(progress_code, 0, progress_output)
+            self.assertIn("abstract-canonical: 0/4 start stage=1/2", progress_output)
+            self.assertIn("stage=1/2", progress_output)
+            self.assertIn("next=abstract-evidence", progress_output)
+            self.assertIn("stage=2/2", progress_output)
+            self.assertNotIn(abstract_marker, progress_output)
+            self.assertNotIn(body_marker, progress_output)
+
+    def test_abstract_freshness_does_not_open_unrelated_receipt_tree(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            canonical_path = sorted((archive_root / "zettels").glob("*.md"))[0]
+            frontmatter, body = archive_services.split_zettel_text(
+                canonical_path.read_text(encoding="utf-8")
+            )
+            frontmatter["abstract"] = "PRIVATE_REVIEW_TARGET_ABSTRACT"
+            canonical_path.write_text(
+                "---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + body,
+                encoding="utf-8",
+            )
+            unrelated = archive_root / "receipts" / "providers" / "noise.json"
+            unrelated.parent.mkdir(parents=True, exist_ok=True)
+            unrelated.write_text('{"private_marker":"PRIVATE_UNRELATED_RECEIPT"}\n', encoding="utf-8")
+
+            opened_paths: list[Path] = []
+            original_reader = archive_services.read_bounded_abstract_evidence_file
+
+            def tracked_reader(path: Path, max_bytes: int) -> bytes:
+                opened_paths.append(path)
+                return original_reader(path, max_bytes)
+
+            with patch.object(
+                archive_services,
+                "read_bounded_abstract_evidence_file",
+                side_effect=tracked_reader,
+            ):
+                result = archive_services.abstract_freshness(
+                    archive_root,
+                    dry_run=True,
+                    max_items=2,
+                )
+
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(
+                result["scan"]["candidate_lookup_mode"],
+                "direct_publication_receipt_by_safe_zettel_id",
+            )
+            self.assertEqual(result["scan"]["publication_target_id_count"], 1)
+            self.assertFalse(result["scan"]["whole_receipt_tree_enumerated"])
+            self.assertFalse(result["scan"]["persistent_cache_used"])
+            self.assertNotIn(unrelated, opened_paths)
+            self.assertNotIn("PRIVATE_UNRELATED_RECEIPT", json.dumps(result))
+
+    def test_abstract_freshness_uses_bounded_fallback_for_unsafe_evidence_target_id(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            canonical_path = sorted((archive_root / "zettels").glob("*.md"))[0]
+            frontmatter, body = archive_services.split_zettel_text(
+                canonical_path.read_text(encoding="utf-8")
+            )
+            unsafe_id_marker = "PRIVATE UNSAFE TARGET ID"
+            frontmatter["id"] = unsafe_id_marker
+            frontmatter["abstract"] = "PRIVATE_UNSAFE_ID_ABSTRACT"
+            canonical_path.write_text(
+                "---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + body,
+                encoding="utf-8",
+            )
+            unrelated = archive_root / "receipts" / "providers" / "noise.json"
+            unrelated.parent.mkdir(parents=True, exist_ok=True)
+            unrelated.write_text('{"private_marker":"PRIVATE_UNRELATED_RECEIPT"}\n', encoding="utf-8")
+
+            opened_paths: list[Path] = []
+            original_reader = archive_services.read_bounded_abstract_evidence_file
+
+            def tracked_reader(path: Path, max_bytes: int) -> bytes:
+                opened_paths.append(path)
+                return original_reader(path, max_bytes)
+
+            with patch.object(
+                archive_services,
+                "read_bounded_abstract_evidence_file",
+                side_effect=tracked_reader,
+            ):
+                result = archive_services.abstract_freshness(
+                    archive_root,
+                    dry_run=True,
+                    max_items=2,
+                )
+
+            self.assertTrue(result["ok"], result)
+            self.assertTrue(result["scan"]["publication_lookup_fallback_required"])
+            self.assertEqual(
+                result["scan"]["candidate_lookup_mode"],
+                "bounded_publication_directory_fallback",
+            )
+            self.assertIsNone(result["scan"]["publication_target_id_count"])
+            self.assertFalse(result["scan"]["whole_receipt_tree_enumerated"])
+            self.assertNotIn(unrelated, opened_paths)
+            self.assertNotIn(unsafe_id_marker, json.dumps(result))
 
     def test_abstract_freshness_tracks_mint_frontmatter_only_and_content_changes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

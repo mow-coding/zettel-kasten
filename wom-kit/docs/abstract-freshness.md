@@ -50,10 +50,23 @@ automatically.
 
 ## Scale And Privacy
 
-The command builds the receipt evidence index once and scans canonical zets
-once. Its complexity contract is
-`O(canonical_zets + receipt_files + receipt_items)`, not one full receipt scan
-per zet. Receipt and zet reads are bounded, and the receipt count is capped.
+The command scans canonical zets first. It then looks up deterministic
+mint/promotion receipt names only for safe ids that currently have explicit
+abstracts, plus the bounded canonical-revision and abstract-backfill receipt
+directories. If an explicit-abstract target lacks a safe id, it conservatively
+falls back to bounded publication-directory scans instead of losing evidence.
+
+Its complexity contract is
+`O(canonical_zets + evidence_candidate_receipts + receipt_items)`, not one full
+receipt scan per zet and not a recursive scan of the whole receipt tree. The
+candidate route is rebuilt from current canonical frontmatter on every run;
+no persistent cache file can become stale. Receipt and zet reads remain
+bounded and the candidate receipt count is capped.
+
+With `--progress`, `abstract-canonical` is `stage=1/2` and
+`abstract-evidence` is `stage=2/2`. ETA belongs to the named current stage. A
+zero ETA on stage one is followed by the explicitly named stage two and is not
+whole-command completion.
 
 Output may identify an attention row by archive-relative canonical path and a
 safe zet id. It does not return title, abstract text, body text, hash values,
@@ -66,3 +79,7 @@ A `fresh` result proves an exact local hash-pair match to retained human-review
 evidence. It does not prove that the abstract is true, complete, useful, or
 understood by a model. A non-fresh result is a human review queue, never
 permission for an AI to rewrite memory automatically.
+
+When a legacy archive has many missing abstracts, use the
+[three-zet abstract backfill pilot](abstract-backfill-pilot.md) before
+considering any larger reviewed batch.

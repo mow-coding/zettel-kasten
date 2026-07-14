@@ -73,6 +73,8 @@ Supporting philosophy and model docs:
 - [First-Read Readiness](first-read-readiness.md)
 - [Explicit Abstract Publication Gate](explicit-abstract-publication.md)
 - [Abstract Freshness Check](abstract-freshness.md)
+- [Three-zet Abstract Backfill Pilot](abstract-backfill-pilot.md)
+- [Three-zet Abstract Backfill Pilot - Korean](abstract-backfill-pilot.ko.md)
 - [Canonical zet Revision Plan](zet-revision-plan.md)
 - [Canonical zet Revision Write](zet-revision-write.md)
 - [Canonical zet Revision Receipt Audit](zet-revision-receipt-audit.md)
