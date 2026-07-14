@@ -24,6 +24,29 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.238 Chronological Revision Event Chain
+
+No archive migration is required. Restart the AI operator process so the
+updated read-only audit and restore planner are visible.
+
+Run the ordinary receipt audit before preparing any restore:
+
+```text
+archive zet-revision-receipt-audit <archive-root> --dry-run --max-receipts 5000 --max-locks 5000 --max-problems 100 --progress --format json
+```
+
+The audit now orders each canonical zet's receipts by normalized event time
+and requires exact adjacent before/after evidence. An exact repeated state
+such as `A -> B -> A` is allowed when the event chain is continuous. Branches,
+partial evidence gaps, duplicate event times, and current-tip drift still
+block. Complexity is `O(receipt_files log receipt_files + revision_chains +
+lock_files)`; canonical targets are still opened at most once per identity.
+
+`zet-revision-restore-plan` now also requires the selected receipt to be the
+actual newest event. Matching an older after-state by coincidence is not
+enough. This remains read-only: v0.3.238 has no restore writer and grants no
+manual-copy authority.
+
 ## v0.3.237 Canonical Revision Restore Plan
 
 No archive migration is required. Restart the AI operator process so the new

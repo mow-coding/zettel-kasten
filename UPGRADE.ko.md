@@ -2,6 +2,29 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.3.238 시간순 정본 zet 수정 사건 이력
+
+보관함 마이그레이션은 필요하지 않습니다. 갱신된 읽기 전용 검진과 복구
+계획기가 보이도록 AI 운영자 프로세스를 다시 시작합니다.
+
+복구를 준비하기 전에 다음 검진을 실행합니다.
+
+```text
+archive zet-revision-receipt-audit <archive-root> --dry-run --max-receipts 5000 --max-locks 5000 --max-problems 100 --progress --format json
+```
+
+검진은 이제 정본 zet별 영수증을 표준화된 사건 시간으로 정렬하고, 바로
+앞 사건의 전체 `after` 상태와 다음 사건의 전체 `before` 상태가 정확히
+이어지는지 확인합니다. 정확한 복원처럼 `A -> B -> A`로 상태가 반복되어도
+사건 이력이 이어지면 정상입니다. 분기, 부분 해시 단절, 중복 사건 시간,
+현재 끝점 불일치는 계속 차단합니다. 복잡도는
+`O(receipt_files log receipt_files + revision_chains + lock_files)`이며 정본
+파일은 비공개 아이디별 최대 한 번만 읽습니다.
+
+`zet-revision-restore-plan`은 선택한 영수증이 실제 최신 사건인지도 확인합니다.
+과거 `after` 상태와 현재 바이트가 우연히 다시 같아진 것만으로는 부족합니다.
+이 릴리스도 읽기 전용이며 복구 쓰기나 수동 복사 권한을 제공하지 않습니다.
+
 ## v0.3.237 정본 zet 복구 계획
 
 보관함 마이그레이션은 필요하지 않습니다. 새 CLI 전용 읽기 명령이 보이도록

@@ -1,6 +1,6 @@
 # Archive Status Board
 
-Status: v0.3.237 archive state and canonical-restore-plan checkpoint
+Status: v0.3.238 archive state and chronological revision-event checkpoint
 
 `archive status-board` gives a beginner-facing status summary for one WOM
 archive without making the operator inspect `inbox/`, `zettels/`, mint

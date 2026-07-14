@@ -9410,21 +9410,6 @@ def zet_revision_receipt_audit(
                 counters["identity_conflict"] += 1
                 group_issues.append("revision_receipt_identity_conflict")
 
-            before_map: dict[str, list[dict[str, Any]]] = {}
-            after_map: dict[str, list[dict[str, Any]]] = {}
-            for record in group_records:
-                before_map.setdefault(record["before"]["file_sha256"], []).append(
-                    record
-                )
-                after_map.setdefault(record["after"]["file_sha256"], []).append(
-                    record
-                )
-            if any(len(items) != 1 for items in before_map.values()) or any(
-                len(items) != 1 for items in after_map.values()
-            ):
-                counters["branched_or_duplicate_chain"] += 1
-                group_issues.append("revision_receipt_chain_branched_or_duplicated")
-
             state, state_error = current_state(
                 canonical_relative, zettel_id_value
             )
@@ -9433,65 +9418,89 @@ def zet_revision_receipt_audit(
                 counters["canonical_target_unavailable"] += 1
                 group_issues.append(state_error or "canonical_target_unavailable")
             elif not group_issues:
-                cursor = state["file_sha256"]
-                seen_write_digests: set[str] = set()
-                while cursor in after_map and len(after_map[cursor]) == 1:
-                    record = after_map[cursor][0]
-                    digest = record["write_plan_digest"]
-                    if digest in seen_write_digests:
-                        group_issues.append("revision_receipt_chain_cycle")
-                        counters["branched_or_duplicate_chain"] += 1
-                        break
-                    seen_write_digests.add(digest)
-                    reachable.append(record)
-                    cursor = record["before"]["file_sha256"]
-                if not reachable:
-                    counters["current_state_drift"] += 1
-                    group_issues.append("current_canonical_not_at_revision_chain_tip")
-                else:
-                    tip = reachable[0]
-                    if any(
-                        state[field] != tip["after"][field]
-                        for field in (
-                            "file_sha256",
-                            "semantic_sha256",
-                            "abstract_sha256",
-                            "body_sha256",
-                        )
+                state_fields = (
+                    "file_sha256",
+                    "semantic_sha256",
+                    "abstract_sha256",
+                    "body_sha256",
+                )
+                ordered_records = sorted(
+                    group_records,
+                    key=lambda item: (
+                        item["revision_time"],
+                        item["write_plan_digest"],
+                    ),
+                )
+                seen_revision_times: set[datetime] = set()
+                for record in ordered_records:
+                    revision_time = record["revision_time"]
+                    if (
+                        revision_time is None
+                        or revision_time in seen_revision_times
                     ):
-                        counters["current_state_drift"] += 1
-                        group_issues.append("current_canonical_tip_evidence_mismatch")
-                    for newer, older in zip(reachable, reachable[1:]):
+                        counters["non_monotonic_revision_time"] += 1
+                        group_issues.append(
+                            "revision_chain_timestamp_not_strictly_increasing"
+                        )
+                        break
+                    seen_revision_times.add(revision_time)
+
+                if not group_issues:
+                    for position, (older, newer) in enumerate(
+                        zip(ordered_records, ordered_records[1:]), start=1
+                    ):
                         if any(
                             newer["before"][field] != older["after"][field]
-                            for field in (
-                                "file_sha256",
-                                "semantic_sha256",
-                                "abstract_sha256",
-                                "body_sha256",
-                            )
+                            for field in state_fields
                         ):
-                            counters["state_evidence_gap"] += 1
-                            group_issues.append(
-                                "revision_chain_before_after_evidence_gap"
+                            reverse_time_link = all(
+                                older["before"][field]
+                                == newer["after"][field]
+                                for field in state_fields
                             )
+                            prior_before_file_hashes = {
+                                item["before"]["file_sha256"]
+                                for item in ordered_records[:position]
+                            }
+                            if reverse_time_link:
+                                counters["non_monotonic_revision_time"] += 1
+                                group_issues.append(
+                                    "revision_chain_timestamp_not_strictly_increasing"
+                                )
+                            elif (
+                                newer["before"]["file_sha256"]
+                                != older["after"]["file_sha256"]
+                                and newer["before"]["file_sha256"]
+                                in prior_before_file_hashes
+                            ):
+                                counters["branched_or_duplicate_chain"] += 1
+                                group_issues.append(
+                                    "revision_receipt_chain_branched_or_duplicated"
+                                )
+                            else:
+                                counters["state_evidence_gap"] += 1
+                                group_issues.append(
+                                    "revision_chain_before_after_evidence_gap"
+                                )
                             break
-                        if (
-                            newer["revision_time"] is None
-                            or older["revision_time"] is None
-                            or newer["revision_time"] <= older["revision_time"]
-                        ):
-                            counters["non_monotonic_revision_time"] += 1
-                            group_issues.append(
-                                "revision_chain_timestamp_not_strictly_increasing"
-                            )
-                            break
-                    unreachable_count = len(group_records) - len(reachable)
-                    if unreachable_count:
-                        counters["unreachable_receipt"] += unreachable_count
+
+                if not group_issues:
+                    tip = ordered_records[-1]
+                    if state["file_sha256"] != tip["after"]["file_sha256"]:
+                        counters["current_state_drift"] += 1
                         group_issues.append(
-                            "one_or_more_revision_receipts_not_on_current_chain"
+                            "current_canonical_not_at_revision_chain_tip"
                         )
+                    elif any(
+                        state[field] != tip["after"][field]
+                        for field in state_fields
+                    ):
+                        counters["current_state_drift"] += 1
+                        group_issues.append(
+                            "current_canonical_tip_evidence_mismatch"
+                        )
+                    else:
+                        reachable = list(reversed(ordered_records))
 
             group_issues = unique_preserve_order(group_issues)
             if group_issues:
@@ -9882,7 +9891,7 @@ def zet_revision_receipt_audit(
             "max_problems": effective_max_problems,
         },
         "complexity": {
-            "class": "O(receipt_files + revision_chains + lock_files)",
+            "class": "O(receipt_files log receipt_files + revision_chains + lock_files)",
             "receipt_files_opened_once": complete,
             "canonical_files_opened_once_per_identity": complete,
             "lock_files_opened_once": complete,
@@ -9927,6 +9936,95 @@ def zet_revision_receipt_audit(
             ]
         ),
     }
+
+
+def latest_zet_revision_event_for_target(
+    root: Path,
+    *,
+    archive_id: str,
+    canonical_path: str,
+    zettel_id: str,
+) -> dict[str, Any] | None:
+    receipt_root = archive_internal_path(root, ZET_REVISION_RECEIPTS_DIR)
+    receipt_paths = (
+        safe_archive_glob(receipt_root, "*.zet-revision.json", root)
+        if receipt_root.is_dir()
+        else []
+    )
+    if len(receipt_paths) > ZET_REVISION_AUDIT_MAX_RECEIPTS:
+        raise ArchiveServiceError(
+            "Canonical revision receipt count exceeds the bounded audit limit."
+        )
+    matches: list[dict[str, Any]] = []
+    for receipt_path in receipt_paths:
+        try:
+            if (
+                receipt_path.is_symlink()
+                or zet_revision_path_has_symlink_component(root, receipt_path)
+            ):
+                raise ArchiveServiceError("unsafe_receipt_path")
+            receipt_bytes = read_zet_revision_file_bytes(
+                receipt_path, "Zet revision receipt"
+            )
+            parsed = json.loads(receipt_bytes.decode("utf-8"))
+        except (
+            ArchiveServiceError,
+            OSError,
+            UnicodeError,
+            json.JSONDecodeError,
+        ) as exc:
+            raise ArchiveServiceError(
+                "Canonical revision chain tip could not be resolved safely."
+            ) from exc
+        if (
+            not isinstance(parsed, dict)
+            or validate_schema(parsed, "zet-revision-receipt.schema.json")
+        ):
+            raise ArchiveServiceError(
+                "Canonical revision chain tip could not be resolved safely."
+            )
+        if (
+            parsed.get("archive_id") != archive_id
+            or parsed.get("canonical_path") != canonical_path
+            or parsed.get("zettel_id") != zettel_id
+        ):
+            continue
+        revision_at = str(parsed.get("revision_at") or "")
+        revision_time = parse_receipt_time(revision_at)
+        write_plan_digest = parsed.get("write_plan_digest")
+        if (
+            normalize_zet_revision_timestamp(revision_at, default_now=False)
+            != revision_at
+            or revision_time is None
+            or not isinstance(write_plan_digest, str)
+            or not re.fullmatch(r"sha256:[0-9a-f]{64}", write_plan_digest)
+            or receipt_path.name
+            != write_plan_digest.removeprefix("sha256:")
+            + ".zet-revision.json"
+        ):
+            raise ArchiveServiceError(
+                "Canonical revision chain tip could not be resolved safely."
+            )
+        matches.append(
+            {
+                "revision_at": revision_at,
+                "revision_time": revision_time,
+                "write_plan_digest": write_plan_digest,
+                "receipt_sha256": "sha256:"
+                + hashlib.sha256(receipt_bytes).hexdigest(),
+            }
+        )
+    if not matches:
+        return None
+    ordered = sorted(
+        matches,
+        key=lambda item: (item["revision_time"], item["write_plan_digest"]),
+    )
+    if len({item["revision_time"] for item in ordered}) != len(ordered):
+        raise ArchiveServiceError(
+            "Canonical revision chain tip could not be resolved safely."
+        )
+    return ordered[-1]
 
 
 def zet_revision_restore_plan(
@@ -10168,6 +10266,33 @@ def zet_revision_restore_plan(
     if before is not None and proposal_state != before:
         blockers.append("restore_proposal_does_not_match_receipt_before_state")
 
+    selected_receipt_is_chain_tip = False
+    latest_event: dict[str, Any] | None = None
+    if (
+        history_audit.get("ok")
+        and canonical_relative is not None
+        and zettel_id_value is not None
+        and write_plan_digest is not None
+    ):
+        try:
+            latest_event = latest_zet_revision_event_for_target(
+                root,
+                archive_id=archive_id,
+                canonical_path=canonical_relative,
+                zettel_id=zettel_id_value,
+            )
+        except ArchiveServiceError:
+            blockers.append("revision_chain_tip_unavailable")
+        if latest_event is None:
+            blockers.append("revision_chain_tip_unavailable")
+        else:
+            selected_receipt_is_chain_tip = bool(
+                latest_event.get("write_plan_digest") == write_plan_digest
+                and latest_event.get("receipt_sha256") == receipt_sha256
+            )
+            if not selected_receipt_is_chain_tip:
+                blockers.append("selected_revision_receipt_not_chain_tip")
+
     if zettel_id_value is not None:
         if current_frontmatter.get("id") != zettel_id_value:
             blockers.append("current_canonical_frontmatter_identity_mismatch")
@@ -10319,6 +10444,17 @@ def zet_revision_restore_plan(
             "canonical_path": canonical_relative,
             "receipt_sha256": receipt_sha256,
             "receipt_write_plan_digest": write_plan_digest,
+            "selected_receipt_is_chain_tip": selected_receipt_is_chain_tip,
+            "latest_event_write_plan_digest": (
+                latest_event.get("write_plan_digest")
+                if latest_event is not None
+                else None
+            ),
+            "latest_event_receipt_sha256": (
+                latest_event.get("receipt_sha256")
+                if latest_event is not None
+                else None
+            ),
             "receipt_before": before,
             "receipt_after": after,
             "current_state": current_state,
@@ -10374,6 +10510,7 @@ def zet_revision_restore_plan(
                 expected_receipt_valid
                 and expected_receipt_sha256 == receipt_sha256
             ),
+            "is_current_chain_tip": selected_receipt_is_chain_tip,
             "before": before,
             "after": after,
             "path_echoed": False,
@@ -10418,6 +10555,7 @@ def zet_revision_restore_plan(
             "approved_restore_implemented": False,
             "human_review_required": True,
             "future_write_must_bind_receipt_sha256": True,
+            "future_write_must_bind_current_chain_tip": True,
             "future_write_must_bind_current_after_state": True,
             "future_write_must_bind_restore_before_state": True,
             "future_write_must_bind_plan_digest": True,

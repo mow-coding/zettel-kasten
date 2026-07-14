@@ -238,7 +238,10 @@ After one or more approved revisions, and before session handoff, run:
 archive zet-revision-receipt-audit <archive-root> --dry-run --max-receipts 5000 --max-locks 5000 --max-problems 100 --progress --format json
 ```
 
-The audit must reconstruct one continuous receipt chain to each current zet.
+The audit must reconstruct one chronological receipt-event chain to each
+current zet. Exact repeated states such as `A -> B -> A` are allowed only when
+every adjacent full before/after state connects and event timestamps remain
+unique and increasing.
 Treat missing-receipt, prewrite, ambiguous, invalid, or unsupported locks as
 human-review stops. A completed leftover lock is only a warning, but still must
 not be auto-deleted. Hash receipts cannot recreate old zet content, so never
@@ -252,10 +255,11 @@ CLI-only read plan:
 archive zet-revision-restore-plan <archive-root> --receipt receipts/revisions/canonical/<digest>.zet-revision.json --expected-receipt-sha256 <sha256> --restore-proposal .wom-scratch/revisions/restores/<private>.md --dry-run --format json
 ```
 
-Proceed to private human review only when the whole history is healthy, current
-bytes match the receipt `after` state, recovered bytes match every `before`
-hash, and current publication policy passes. A green plan still has no writer
-authority. Never copy the scratch file over the canonical zet by hand.
+Proceed to private human review only when the whole history is healthy, the
+selected receipt is the actual newest event, current bytes match that receipt's
+`after` state, recovered bytes match every `before` hash, and current
+publication policy passes. A green plan still has no writer authority. Never
+copy the scratch file over the canonical zet by hand.
 
 Use paged `zet-catalog` when the host needs one stdout page, manual continuation,
 or MCP rather than a complete CLI pass:

@@ -857,6 +857,57 @@ class ArchiveCliTests(unittest.TestCase):
         self.assertEqual(applied["status"], "applied")
         return {"preview": preview, "applied": applied, "arguments": base}
 
+    def zet_revision_state_for_bytes(self, value: bytes) -> dict[str, Any]:
+        frontmatter, body = archive_services.split_zettel_text(
+            archive_services.decode_utf8_with_universal_newlines(value)
+        )
+        frontmatter = archive_services.json_safe(frontmatter)
+        first_read = archive_services.explicit_abstract_publication_check(
+            frontmatter
+        )
+        self.assertTrue(first_read["ready_for_publication"], first_read)
+        return {
+            "file_sha256": "sha256:" + hashlib.sha256(value).hexdigest(),
+            "semantic_sha256": archive_services.zet_revision_semantic_sha256(
+                frontmatter, body
+            ),
+            "abstract_sha256": first_read["abstract_sha256"],
+            "body_sha256": archive_services.canonical_body_sha256(
+                archive_services.canonical_publication_body(body)
+            ),
+        }
+
+    def rewrite_latest_revision_event_after_state(
+        self,
+        archive_root: Path,
+        *,
+        canonical_path: Path,
+        target_bytes: bytes,
+    ) -> Path:
+        receipt_root = archive_root / "receipts" / "revisions" / "canonical"
+        receipts = [
+            (path, json.loads(path.read_text(encoding="utf-8")))
+            for path in receipt_root.glob("*.zet-revision.json")
+        ]
+        receipt_path, receipt = max(
+            receipts, key=lambda item: item[1]["revision_at"]
+        )
+        target_state = self.zet_revision_state_for_bytes(target_bytes)
+        self.assertNotEqual(receipt["before"]["file_sha256"], target_state["file_sha256"])
+        receipt["after"] = target_state
+        receipt["abstract_review_basis"]["abstract_sha256"] = target_state[
+            "abstract_sha256"
+        ]
+        receipt["abstract_review_basis"]["body_sha256"] = target_state[
+            "body_sha256"
+        ]
+        receipt_path.write_text(
+            json.dumps(receipt, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        canonical_path.write_bytes(target_bytes)
+        return receipt_path
+
     def create_followup_zet_revision_proposal(
         self,
         archive_root: Path,
@@ -31393,7 +31444,7 @@ state:
             self.assertEqual(summary["problem_count"], 0)
             self.assertEqual(
                 result["complexity"]["class"],
-                "O(receipt_files + revision_chains + lock_files)",
+                "O(receipt_files log receipt_files + revision_chains + lock_files)",
             )
             for private_marker in (
                 first["zettel_id"],
@@ -31419,6 +31470,48 @@ state:
             self.assertIn(
                 "receipt_count_exceeds_max_receipts", bounded["blockers"]
             )
+
+    def test_zet_revision_receipt_audit_accepts_chronological_repeated_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            first = self.create_zet_revision_proposal(
+                archive_root,
+                title_marker="PRIVATE_REPEAT_FIRST_TITLE",
+                abstract_marker="PRIVATE_REPEAT_FIRST_ABSTRACT",
+                body_marker="PRIVATE_REPEAT_FIRST_BODY",
+            )
+            self.approve_zet_revision_fixture(
+                archive_root, first, revision_at="2026-07-14T14:11:00Z"
+            )
+            second = self.create_followup_zet_revision_proposal(
+                archive_root,
+                first["canonical_path"],
+                name="repeat-state-followup.md",
+                title_marker="PRIVATE_REPEAT_SECOND_TITLE",
+                abstract_marker="PRIVATE_REPEAT_SECOND_ABSTRACT",
+                body_marker="PRIVATE_REPEAT_SECOND_BODY",
+            )
+            self.approve_zet_revision_fixture(
+                archive_root, second, revision_at="2026-07-14T14:12:00Z"
+            )
+            self.rewrite_latest_revision_event_after_state(
+                archive_root,
+                canonical_path=first["canonical_path"],
+                target_bytes=first["original_bytes"],
+            )
+
+            result = archive_services.zet_revision_receipt_audit(
+                archive_root, dry_run=True
+            )
+
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["status"], "healthy")
+            self.assertEqual(result["summary"]["receipt_count"], 2)
+            self.assertEqual(result["summary"]["current_receipt_verified"], 1)
+            self.assertEqual(result["summary"]["superseded_receipt_verified"], 1)
+            self.assertEqual(result["summary"]["branched_or_duplicate_chain"], 0)
+            self.assertEqual(result["summary"]["state_evidence_gap"], 0)
+            self.assertEqual(result["summary"]["current_state_drift"], 0)
 
     def test_zet_revision_receipt_audit_blocks_current_drift_without_echoing_content(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -31850,6 +31943,7 @@ state:
             )
             self.assertTrue(result["history_audit"]["ok"])
             self.assertTrue(result["receipt"]["expected_sha256_matches"])
+            self.assertTrue(result["receipt"]["is_current_chain_tip"])
             self.assertTrue(result["current"]["matches_receipt_after"])
             self.assertTrue(
                 result["restore_proposal"]["matches_receipt_before"]
@@ -31909,6 +32003,9 @@ state:
             text_code, text_output = self.run_cli(text_args)
             self.assertEqual(text_code, 0, text_output)
             self.assertIn("Revision history healthy: yes", text_output)
+            self.assertIn(
+                "Selected receipt is current chain tip: yes", text_output
+            )
             self.assertIn("Restore proposal matches receipt before-state: yes", text_output)
             self.assertIn("Approved restore writer available: no", text_output)
             self.assertNotIn("PRIVATE_RECOVERED_OLD_ZET", text_output)
@@ -31923,6 +32020,85 @@ state:
             self.assertIn(
                 "expected_receipt_sha256_invalid",
                 json.loads(bad_output)["blockers"],
+            )
+
+    def test_zet_revision_restore_plan_requires_the_actual_repeated_state_chain_tip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            first = self.create_zet_revision_proposal(
+                archive_root,
+                title_marker="PRIVATE_TIP_FIRST_TITLE",
+                abstract_marker="PRIVATE_TIP_FIRST_ABSTRACT",
+                body_marker="PRIVATE_TIP_FIRST_BODY",
+            )
+            first_applied = self.approve_zet_revision_fixture(
+                archive_root, first, revision_at="2026-07-14T17:00:00Z"
+            )["applied"]
+            first_receipt_relative = first_applied["receipt"]["path"]
+            repeated_bytes = first["canonical_path"].read_bytes()
+
+            second = self.create_followup_zet_revision_proposal(
+                archive_root,
+                first["canonical_path"],
+                name="tip-second.md",
+                title_marker="PRIVATE_TIP_SECOND_TITLE",
+                abstract_marker="PRIVATE_TIP_SECOND_ABSTRACT",
+                body_marker="PRIVATE_TIP_SECOND_BODY",
+            )
+            self.approve_zet_revision_fixture(
+                archive_root, second, revision_at="2026-07-14T17:10:00Z"
+            )
+            self.rewrite_latest_revision_event_after_state(
+                archive_root,
+                canonical_path=first["canonical_path"],
+                target_bytes=first["original_bytes"],
+            )
+
+            third = self.create_followup_zet_revision_proposal(
+                archive_root,
+                first["canonical_path"],
+                name="tip-third.md",
+                title_marker="PRIVATE_TIP_THIRD_TITLE",
+                abstract_marker="PRIVATE_TIP_THIRD_ABSTRACT",
+                body_marker="PRIVATE_TIP_THIRD_BODY",
+            )
+            self.approve_zet_revision_fixture(
+                archive_root, third, revision_at="2026-07-14T17:20:00Z"
+            )
+            self.rewrite_latest_revision_event_after_state(
+                archive_root,
+                canonical_path=first["canonical_path"],
+                target_bytes=repeated_bytes,
+            )
+
+            audit = archive_services.zet_revision_receipt_audit(
+                archive_root, dry_run=True
+            )
+            self.assertTrue(audit["ok"], audit)
+            restore_relative = ".wom-scratch/revisions/restores/repeated-tip.md"
+            restore_path = archive_root / restore_relative
+            restore_path.parent.mkdir(parents=True, exist_ok=True)
+            restore_path.write_bytes(first["original_bytes"])
+            first_receipt_path = archive_root / first_receipt_relative
+            first_receipt_sha256 = "sha256:" + hashlib.sha256(
+                first_receipt_path.read_bytes()
+            ).hexdigest()
+
+            result = archive_services.zet_revision_restore_plan(
+                archive_root,
+                receipt_path=first_receipt_relative,
+                expected_receipt_sha256=first_receipt_sha256,
+                restore_proposal_path=restore_relative,
+                dry_run=True,
+            )
+
+            self.assertFalse(result["ok"])
+            self.assertTrue(result["history_audit"]["ok"])
+            self.assertTrue(result["current"]["matches_receipt_after"])
+            self.assertTrue(result["restore_proposal"]["matches_receipt_before"])
+            self.assertFalse(result["receipt"]["is_current_chain_tip"])
+            self.assertIn(
+                "selected_revision_receipt_not_chain_tip", result["blockers"]
             )
 
     def test_zet_revision_restore_plan_blocks_wrong_bytes_and_stale_receipt_tip(self) -> None:
