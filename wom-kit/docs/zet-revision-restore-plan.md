@@ -1,6 +1,6 @@
 # Canonical zet Revision Restore Plan
 
-Status: read-only recovered-full-zet restore planning in v0.3.237
+Status: latest-event-bound recovered-full-zet restore planning in v0.3.238
 
 `zet-revision-restore-plan` answers a narrow recovery question: does one
 complete old zet recovered from a private backup exactly match the `before`
@@ -38,6 +38,8 @@ It then requires:
 - the exact selected immutable receipt SHA-256;
 - a valid receipt schema, archive identity, digest filename, timestamp, human
   review, edge review, and abstract/body review basis;
+- proof that the selected receipt is the actual newest event for the target,
+  not an older receipt whose after-state bytes happen to match again;
 - the current canonical zet's file, semantic, abstract, and body hashes to
   equal the receipt's complete `after` state;
 - the recovered private proposal's same four hashes to equal the receipt's
@@ -51,10 +53,11 @@ self-containment checks.
 
 ## Review Digest
 
-`plan_digest` binds the full archive audit digest, selected receipt, current
-state, recovered state, fixed restore change categories, and current policy
-results. If a receipt, canonical file, recovered file, revision chain, or local
-policy changes, a later plan is different.
+`plan_digest` binds the full archive audit digest, selected receipt, actual
+event-chain tip, current state, recovered state, fixed restore change
+categories, and current policy results. If a receipt, canonical file,
+recovered file, revision chain, selected tip, or local policy changes, a later
+plan is different.
 
 The JSON output may include SHA-256 values, fixed booleans and status codes,
 bounded counts, and the plan digest. It does not echo the actual zet id/path,
@@ -67,7 +70,7 @@ frontmatter value, provider URL, absolute local path, or secret.
 must still compare the current canonical zet, recovered old zet, and selected
 receipt privately.
 
-No approved restore writer exists in v0.3.237. Do not copy the recovered file
+No approved restore writer exists in v0.3.238. Do not copy the recovered file
 over the canonical zet by hand. A future writer must repeat the whole-history
 and exact-state checks, require explicit restore and abstract/body review plus
 changed-edge review, serialize with ordinary revision writes, atomically

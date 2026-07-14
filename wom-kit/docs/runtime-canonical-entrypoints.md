@@ -1,6 +1,6 @@
 # Runtime Canonical Entry Points
 
-Status: v0.3.237 quick handoff, revision-audit, and restore-plan checkpoint
+Status: v0.3.238 quick handoff, chronological revision-audit, and restore-plan checkpoint
 
 When an AI runtime enters a WOM archive, it needs a small, explicit "start
 here" map. The archive may contain zets, source bindings, provider metadata,
@@ -77,7 +77,8 @@ backup, use CLI-only `archive zet-revision-restore-plan <archive-root>
 --receipt <canonical-revision-receipt> --expected-receipt-sha256 <sha256>
 --restore-proposal .wom-scratch/revisions/restores/<private>.md --dry-run
 --format json`. A green plan only prepares private human review; no restore
-writer or manual-copy authority exists in v0.3.237.
+writer or manual-copy authority exists in v0.3.238. The selected receipt must
+also be the actual newest event, even when current bytes repeat an older state.
 
 This order keeps archive identity, operational mission/state, local
 instructions, beginner-facing wording, and material-link safety gates aligned

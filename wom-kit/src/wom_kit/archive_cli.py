@@ -9252,6 +9252,14 @@ def command_zet_revision_restore_plan(args: argparse.Namespace) -> int:
             )
         )
         print(
+            "Selected receipt is current chain tip: "
+            + (
+                "yes"
+                if result.get("receipt", {}).get("is_current_chain_tip")
+                else "no"
+            )
+        )
+        print(
             "Current matches receipt after-state: "
             + (
                 "yes"

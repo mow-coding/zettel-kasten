@@ -6,6 +6,32 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.238 - 2026-07-14
+
+Chronological canonical revision event-chain checkpoint. Additive and
+read-only; no canonical, receipt, lock, provider, or database write.
+
+- **Repeated state is not automatically a cycle.** The revision receipt audit
+  now orders each canonical identity's events by normalized timestamp and
+  accepts evidence-complete histories such as `A -> B -> A`.
+- **Exact adjacent evidence remains mandatory.** Every newer `before` state
+  must equal the immediately older `after` file, semantic, abstract, and body
+  hashes. Branch/replay transitions, partial evidence gaps, duplicate event
+  times, identity conflicts, and current-tip drift remain blockers.
+- **Actual tip, not coincidental bytes.** `zet-revision-restore-plan` now
+  verifies that the selected receipt is the newest event for the target. An
+  older after-state that happens to equal current bytes again cannot authorize
+  review.
+- **Digest catches event drift.** The restore plan digest binds the actual
+  latest receipt digest and receipt-file SHA in addition to the whole audit,
+  selected receipt, current/recovered states, restore delta, and policy.
+- **Bounded scale remains explicit.** The audit is now
+  `O(receipt_files log receipt_files + revision_chains + lock_files)` for event
+  ordering, still opens each current canonical target at most once per private
+  identity, and performs no per-receipt whole-archive or quadratic pass.
+- **Privacy and write boundary unchanged.** Output remains content-free and
+  bounded; no writer or duplicate MCP tool was added.
+
 ## v0.3.237 - 2026-07-14
 
 Canonical revision restore-plan checkpoint. Additive and read-only; no

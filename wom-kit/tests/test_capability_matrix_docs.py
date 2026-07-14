@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import unittest
 from pathlib import Path
@@ -223,8 +223,8 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                 self.assertIn("identity-reconcile", text)
                 self.assertIn("proposed", text)
                 self.assertIn("SHA-256", text)
-        self.assertIn("v0.3.237 pre-release", versioning_text)
-        self.assertIn("0.3.237", versioning_text)
+        self.assertIn("v0.3.238 pre-release", versioning_text)
+        self.assertIn("0.3.238", versioning_text)
         self.assertIn("archive-identity-reconcile.md", public_map_text)
 
     def test_aggregate_edge_progress_public_contract_is_documented(self) -> None:
@@ -248,7 +248,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         )
         for phrase in (
             "Status: v0.3.227 aggregate full-Doctor edge progress checkpoint",
-            "Version: v0.3.237, release candidate",
+            "Version: v0.3.238, release candidate",
             "cumulative source/candidate/cache-hit counts",
             "does not perform another broad pass",
         ):
@@ -268,8 +268,8 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, benchmark_text)
-        self.assertIn("v0.3.237 (current checkpoint)", readme_text)
-        self.assertIn("v0.3.237 (현재 checkpoint)", readme_ko_text)
+        self.assertIn("v0.3.238 (current checkpoint)", readme_text)
+        self.assertIn("v0.3.238 (현재 checkpoint)", readme_ko_text)
 
     def test_actionable_full_doctor_results_and_current_profile_progress_are_documented(
         self,
@@ -294,7 +294,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         for phrase in (
             "Status: v0.3.228 actionable full-Doctor result and current-stage progress checkpoint",
-            "Version: v0.3.237, release candidate",
+            "Version: v0.3.238, release candidate",
             "doctor_findings",
             "up to 100 detailed items",
             "up to 20 deduplicated suggested commands",
@@ -346,7 +346,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
 
         for phrase in (
             "Status: v0.3.229 executable BOM reconcile guidance checkpoint",
-            "Version: v0.3.237, release candidate",
+            "Version: v0.3.238, release candidate",
             "actual validated canonical frontmatter id",
             "omits the command when the id is absent or unsafe",
         ):
@@ -383,7 +383,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
 
         for phrase in (
             "Status: v0.3.230 digest-bound content-change review checkpoint",
-            "Version: v0.3.237, release candidate",
+            "Version: v0.3.238, release candidate",
             "Previous checkpoint: Status: v0.3.229",
             "--reviewed-plan-sha256 <sha256>",
         ):
@@ -396,10 +396,10 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                 self.assertIn("intentional_change", text)
                 self.assertIn("unintentional_change", text)
                 self.assertIn("uncertain", text)
-        self.assertIn("v0.3.237 pre-release", readme_text)
-        self.assertIn("v0.3.237 pre-release", readme_ko_text)
-        self.assertIn("v0.3.237 (current checkpoint)", readme_text)
-        self.assertIn("v0.3.237 (현재 checkpoint)", readme_ko_text)
+        self.assertIn("v0.3.238 pre-release", readme_text)
+        self.assertIn("v0.3.238 pre-release", readme_ko_text)
+        self.assertIn("v0.3.238 (current checkpoint)", readme_text)
+        self.assertIn("v0.3.238 (현재 checkpoint)", readme_ko_text)
 
     def test_first_read_readiness_gate_is_documented(self) -> None:
         matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
@@ -423,7 +423,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         )
         for phrase in (
             "Status: v0.3.231 first-read readiness checkpoint",
-            "Version: v0.3.237, release candidate",
+            "Version: v0.3.238, release candidate",
             "First-read readiness gate",
             "explicit abstract",
             "uniquely resolvable safe id",
@@ -460,7 +460,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         )
         for phrase in (
             "Status: v0.3.232 explicit abstract publication checkpoint",
-            "Version: v0.3.237, release candidate",
+            "Version: v0.3.238, release candidate",
             "Explicit abstract publication invariant",
             "compatibility fields",
             "full draft SHA-256 and abstract SHA-256",
@@ -518,7 +518,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
 
         for phrase in (
             "Previous checkpoint: Status: v0.3.233 abstract freshness evidence checkpoint",
-            "Version: v0.3.237, release candidate",
+            "Version: v0.3.238, release candidate",
             "Abstract freshness evidence",
             "O(canonical_zets + receipt_files + receipt_items)",
             "semantic truth",
@@ -587,7 +587,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
 
         for phrase in (
             "Status: v0.3.234 canonical zet revision plan checkpoint",
-            "Version: v0.3.237, release candidate",
+            "Version: v0.3.238, release candidate",
             "Canonical zet revision plan",
             ".wom-scratch/revisions/",
             "plan_digest",
@@ -652,7 +652,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
 
         for phrase in (
             "Status: v0.3.235 canonical zet revision write checkpoint",
-            "Version: v0.3.237, release candidate",
+            "Version: v0.3.238, release candidate",
             "Canonical zet revision write",
             "approval-gated local CLI write",
             "MCP exposes no writer",
@@ -727,18 +727,18 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
 
         for phrase in (
             "Status: v0.3.236 canonical zet revision receipt and lock audit checkpoint",
-            "Version: v0.3.237, release candidate",
+            "Version: v0.3.238, release candidate",
             "Canonical zet revision receipt audit",
             "implemented local read-only CLI",
-            "O(receipt_files + revision_chains + lock_files)",
+            "O(receipt_files log receipt_files + revision_chains + lock_files)",
             "malformed non-hash digest values",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "archive-wide read-only receipt and lock audit in v0.3.236",
+            "chronological revision event-chain audit in v0.3.238",
             "recoverable_missing_receipt",
-            "one chain leading to the current receipt",
+            "A -> B -> A",
             "never deletes a lock",
             "old content can be recreated from hashes",
         ):
@@ -801,7 +801,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
 
         for phrase in (
             "Status: v0.3.237 canonical zet revision restore plan checkpoint",
-            "Version: v0.3.237, release candidate",
+            "Version: v0.3.238, release candidate",
             "Canonical zet revision restore plan",
             "separately recovered full-zet bytes",
             "no writer or MCP duplicate",
@@ -810,11 +810,11 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "read-only recovered-full-zet restore planning in v0.3.237",
+            "latest-event-bound recovered-full-zet restore planning in v0.3.238",
             "never tries to reconstruct text from a hash",
             "archive-wide `zet-revision-receipt-audit` to be healthy",
             "current publication policy",
-            "No approved restore writer exists in v0.3.237",
+            "No approved restore writer exists in v0.3.238",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, restore_guide_compact)
@@ -835,6 +835,73 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         self.assertIn("Add CLI-only, read-only `zet-revision-restore-plan`", decision_text)
         self.assertIn("zet-revision-restore-plan.md", public_map_text)
         self.assertIn("zet-revision-restore-plan.md", public_map_ko_text)
+
+    def test_chronological_revision_event_chain_is_documented(self) -> None:
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        audit_text = (
+            KIT_ROOT / "docs" / "zet-revision-receipt-audit.md"
+        ).read_text(encoding="utf-8")
+        restore_text = (
+            KIT_ROOT / "docs" / "zet-revision-restore-plan.md"
+        ).read_text(encoding="utf-8")
+        release_text = (
+            KIT_ROOT / "docs" / "releases" / "v0.3.238.md"
+        ).read_text(encoding="utf-8")
+        decision_text = (
+            KIT_ROOT
+            / "docs"
+            / "archive-infra-decision-log-2026-07-14-v03238-revision-event-chain.md"
+        ).read_text(encoding="utf-8")
+        upgrade_text = (REPO_ROOT / "UPGRADE.md").read_text(encoding="utf-8")
+        upgrade_ko_text = (REPO_ROOT / "UPGRADE.ko.md").read_text(
+            encoding="utf-8"
+        )
+        readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        readme_ko_text = (REPO_ROOT / "README.ko.md").read_text(
+            encoding="utf-8"
+        )
+        runtime_skill_text = (
+            KIT_ROOT / "templates" / "ai-runtime" / "wom-archive" / "SKILL.md"
+        ).read_text(encoding="utf-8")
+        audit_compact = " ".join(audit_text.split())
+        restore_compact = " ".join(restore_text.split())
+
+        for phrase in (
+            "Status: v0.3.238 chronological revision event-chain checkpoint",
+            "Version: v0.3.238, release candidate",
+            "orders each identity's events by unique normalized timestamp",
+            "A -> B -> A",
+            "O(receipt_files log receipt_files + revision_chains + lock_files)",
+            "actual newest chronological event",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, matrix_text)
+        for phrase in (
+            "chronological revision event-chain audit in v0.3.238",
+            "orders each group by event time",
+            "branch/replay transition",
+            "not the latest event",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, audit_compact)
+        for phrase in (
+            "actual newest event",
+            "after-state bytes happen to match again",
+            "actual event-chain tip",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, restore_compact)
+        for text in (
+            release_text,
+            decision_text,
+            upgrade_text,
+            upgrade_ko_text,
+            readme_text,
+            readme_ko_text,
+            runtime_skill_text,
+        ):
+            with self.subTest(document="chronological-revision-event-chain"):
+                self.assertIn("A -> B -> A", text)
 
     def test_external_import_docs_explain_source_ref_preservation_boundary(self) -> None:
         imports_text = EXTERNAL_IMPORTS_PATH.read_text(encoding="utf-8")
@@ -1156,7 +1223,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.237 pre-release",
+            "v0.3.238 pre-release",
             "[Version Truth Source](wom-kit/docs/version-truth-source.md)",
             "[Project Version Update](wom-kit/docs/project-version-update.md)",
             "read-only WOM-kit version truth-source checks",
@@ -1572,7 +1639,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                 self.assertIn(phrase, guide_text)
         for phrase in (
             "Status: v0.3.221 archive-wide abstract receipt and lock audit checkpoint",
-            "Version: v0.3.237, release candidate",
+            "Version: v0.3.238, release candidate",
             "zet abstract receipt lifecycle audit",
             "Up to 5,000 receipts and 5,000 locks",
             "Green proves bounded local consistency",
@@ -1773,7 +1840,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.58.md").read_text(encoding="utf-8")
         current_release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.106.md").read_text(encoding="utf-8")
         for phrase in (
-            "Status: v0.3.237 quick handoff, revision-audit, and restore-plan checkpoint",
+            "Status: v0.3.238 quick handoff, chronological revision-audit, and restore-plan checkpoint",
             "archive runtime-context <archive-root> --format json",
             "operational_context",
             "ops/operational-context.yml",
@@ -6687,7 +6754,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, start_here_text)
         for phrase in (
-            "Status: v0.3.237 quick handoff, revision-audit, and restore-plan checkpoint",
+            "Status: v0.3.238 quick handoff, chronological revision-audit, and restore-plan checkpoint",
             "Do not run both back-to-back",
             "canonical_entrypoints.next_commands",
         ):
