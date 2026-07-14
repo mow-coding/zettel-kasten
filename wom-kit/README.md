@@ -556,6 +556,9 @@ zet-catalog-pass-read --dry-run --input <scratch.jsonl> [--page-index <n>] --exp
 zet-catalog-pass-cleanup --input <scratch.jsonl> --expected-sha256 <sha256> --dry-run|--approve --reviewed-by <actor>
   Preview or approve deletion of one complete matching private scratch JSONL after consumption. It never deletes hidden partials or archive records, writes no receipt, and echoes no reviewer value.
 
+zet-revision-plan --zettel-id <safe-id> --proposal .wom-scratch/revisions/<private>.md --dry-run
+  Validate one complete private correction proposal against the exact current canonical zet before any canonical write. It freezes identity, creation, lifecycle, and original creator metadata; checks explicit abstract, body locator, edges, provenance, visibility, quality blockers, and semantic change; and returns hashes plus fixed change categories without echoing the actual id, path, filename, title, abstract, body, custom frontmatter value, or secret. A green plan grants no write authority; the atomic approved writer is a later capability.
+
 zet-abstract-backfill-plan --proposal .wom-scratch/abstract-backfill/<private>.jsonl --dry-run
   Validate bounded missing-abstract proposals against exact current canonical file bytes. It checks the shipped row schema, identity/status, hash, first-read absence, safe abstract shape, and a byte-preserving one-field insertion. It returns only row indexes, counts, and hashes; writes nothing and echoes no ids, paths, bodies, abstracts, or proposal filename.
 

@@ -740,6 +740,7 @@ class McpServerTests(unittest.TestCase):
             self.assertIn("zet_catalog", tool_names)
             self.assertIn("first_read_readiness", tool_names)
             self.assertIn("abstract_freshness", tool_names)
+            self.assertIn("zet_revision_plan", tool_names)
             self.assertEqual(
                 tools_by_name["first_read_readiness"]["inputSchema"]["properties"]["max_items"]["maximum"],
                 500,
@@ -747,6 +748,13 @@ class McpServerTests(unittest.TestCase):
             self.assertEqual(
                 tools_by_name["abstract_freshness"]["inputSchema"]["properties"]["max_items"]["maximum"],
                 archive_services.ABSTRACT_FRESHNESS_MAX_ATTENTION_ITEMS,
+            )
+            self.assertEqual(
+                set(tools_by_name["zet_revision_plan"]["inputSchema"]["required"]),
+                {"archive_root", "zettel_id", "proposal_path"},
+            )
+            self.assertTrue(
+                tools_by_name["zet_revision_plan"]["inputSchema"]["properties"]["dry_run"]["default"]
             )
             self.assertIn("section", tools_by_name["read_zettel"]["inputSchema"]["properties"])
             self.assertEqual(
@@ -7128,6 +7136,111 @@ class McpServerTests(unittest.TestCase):
                 serialized = json.dumps(response, ensure_ascii=False)
                 self.assertNotIn(abstract_marker, serialized)
                 self.assertNotIn(body_marker, serialized)
+        finally:
+            self.stop_server(process)
+
+    def test_zet_revision_plan_tool_returns_content_free_review_evidence(self) -> None:
+        process = self.start_server()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+                canonical_path = sorted((archive_root / "zettels").glob("*.md"))[0]
+                frontmatter, body = archive_services.split_zettel_text(
+                    canonical_path.read_text(encoding="utf-8")
+                )
+                frontmatter["abstract"] = "Current MCP revision first read."
+                canonical_path.write_text(
+                    "---\n"
+                    + archive_cli.dump_yaml(frontmatter)
+                    + "---\n\n"
+                    + body.rstrip()
+                    + "\n",
+                    encoding="utf-8",
+                )
+                proposal_frontmatter = json.loads(json.dumps(frontmatter))
+                abstract_marker = "PRIVATE_MCP_REVISION_ABSTRACT"
+                body_marker = "PRIVATE_MCP_REVISION_BODY"
+                proposal_frontmatter["abstract"] = abstract_marker
+                proposal_relative = ".wom-scratch/revisions/private-mcp-revision.md"
+                proposal_path = archive_root / proposal_relative
+                proposal_path.parent.mkdir(parents=True, exist_ok=True)
+                proposal_path.write_text(
+                    "---\n"
+                    + archive_cli.dump_yaml(proposal_frontmatter)
+                    + "---\n\n"
+                    + body.rstrip()
+                    + f"\n\n{body_marker}\n",
+                    encoding="utf-8",
+                )
+
+                response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "zet_revision_plan",
+                            "arguments": {
+                                "archive_root": str(archive_root),
+                                "zettel_id": frontmatter["id"],
+                                "proposal_path": proposal_relative,
+                            },
+                        },
+                    },
+                )
+                result = response["result"]
+                self.assertFalse(result["isError"])
+                content = result["structuredContent"]
+                self.assertTrue(content["ok"])
+                self.assertEqual(content["status"], "ready_for_human_review")
+                self.assertFalse(content["write_boundary"]["files_written"])
+                self.assertFalse(content["privacy_guards"]["zettel_id_echoed"])
+                serialized = json.dumps(response, ensure_ascii=False)
+                self.assertNotIn(frontmatter["id"], serialized)
+                self.assertNotIn("private-mcp-revision", serialized)
+                self.assertNotIn(abstract_marker, serialized)
+                self.assertNotIn(body_marker, serialized)
+        finally:
+            self.stop_server(process)
+
+    def test_zet_revision_plan_tool_redacts_values_from_failure_response(self) -> None:
+        process = self.start_server()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+                zettel_marker = "zet_private_missing_revision_target"
+                proposal_marker = "private-mcp-failure-proposal"
+                proposal_relative = f".wom-scratch/revisions/{proposal_marker}.md"
+                proposal_path = archive_root / proposal_relative
+                proposal_path.parent.mkdir(parents=True, exist_ok=True)
+                proposal_path.write_text(
+                    "---\nid: placeholder\n---\n\nPRIVATE_FAILURE_BODY\n",
+                    encoding="utf-8",
+                )
+
+                response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "zet_revision_plan",
+                            "arguments": {
+                                "archive_root": str(archive_root),
+                                "zettel_id": zettel_marker,
+                                "proposal_path": proposal_relative,
+                            },
+                        },
+                    },
+                )
+                result = response["result"]
+                self.assertTrue(result["isError"])
+                serialized = json.dumps(response, ensure_ascii=False)
+                self.assertNotIn(zettel_marker, serialized)
+                self.assertNotIn(proposal_marker, serialized)
+                self.assertNotIn(str(archive_root), serialized)
         finally:
             self.stop_server(process)
 

@@ -2,6 +2,32 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.3.234 정본 zet 수정 계획
+
+보관함 마이그레이션은 필요하지 않습니다. 새 CLI/MCP 계획 도구가 보이도록
+AI 운영자 프로세스를 다시 시작합니다. `.wom-scratch/revisions/` 아래에
+정본 zet 전체를 복사한 비공개 수정안을 만든 뒤 다음 명령을 실행합니다.
+
+```text
+archive zet-revision-plan <archive-root> --zettel-id <safe-id> --proposal .wom-scratch/revisions/<private>.md --dry-run --format json
+```
+
+수정안은 zet/보관함 아이디, 생성 시점, 발행 이력, 최초 작성자 정보를 그대로
+보존해야 합니다. 내용 필드와 본문은 바꿀 수 있지만, 안전한 명시적 초록
+데이터, 허용된 엣지, 출처 정보, 공개 범위가 필요하고 본문에 비공개 로컬
+경로나 외부 서비스 내부 위치를 넣을 수 없습니다.
+
+두 비공개 파일을 직접 함께 검토하면서 `canonical.sha256`,
+`proposal.sha256`, `proposal.semantic_sha256`, `plan_digest`, 변경 종류,
+차단 사유와 경고를 확인합니다. 명령 결과에는 실제 zet 아이디, 경로,
+파일명, 제목, 초록 문장, 본문, 사용자 frontmatter 값, 검수자 아이디,
+외부 서비스 주소, 절대 경로, 비밀정보가 나오지 않습니다.
+
+이번 버전은 쓰기 전에 정직하게 멈춥니다. 수정안을 정본 파일에 손으로
+복사하지 마세요. 승인 후 원자적 쓰기와 불변 수정 영수증은 다음 릴리스
+단계입니다. `remint-reconcile`은 이미 발생한 드리프트를 수습하는 복구
+도구이며 정상 수정 작성 절차가 아닙니다.
+
 ## v0.3.233 초록 데이터 최신성 검진
 
 보관함 마이그레이션은 필요하지 않습니다. 새 CLI/MCP 도구가 보이도록 AI

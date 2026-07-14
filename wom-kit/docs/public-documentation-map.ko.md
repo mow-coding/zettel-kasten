@@ -71,6 +71,7 @@
 - [First-Read Readiness](first-read-readiness.md)
 - [명시적 초록 데이터 발행 게이트](explicit-abstract-publication.md)
 - [초록 데이터 최신성 검진](abstract-freshness.md)
+- [정본 zet 수정 계획](zet-revision-plan.md)
 - [Derived Artifact Staleness](derived-artifact-staleness.md)
 - [zet Quality Check](zet-quality-check.md)
 - [Source Object Storage Policy](source-object-storage-policy.md)

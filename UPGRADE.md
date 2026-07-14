@@ -24,6 +24,33 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.234 Canonical zet Revision Plan
+
+No archive migration is required. Restart the AI operator process so the new
+CLI/MCP planner is visible. Prepare a complete private Markdown correction
+under `.wom-scratch/revisions/`, then run:
+
+```text
+archive zet-revision-plan <archive-root> --zettel-id <safe-id> --proposal .wom-scratch/revisions/<private>.md --dry-run --format json
+```
+
+The proposal must preserve WOM-managed identity, creation, lifecycle, and
+original creator metadata. It may change reviewed knowledge fields and the
+body, but it still needs a safe explicit abstract, valid edges, provenance,
+visibility, and no private body locator.
+
+Review `canonical.sha256`, `proposal.sha256`, `proposal.semantic_sha256`,
+`plan_digest`, change categories, blockers, and warnings together with the two
+private files. The output itself contains no actual zet id, path, filename,
+title, abstract, body, custom frontmatter value, reviewer id, provider URL,
+absolute path, or secret.
+
+This release deliberately stops before writing. Do not copy the proposal into
+the canonical file by hand. The approval-gated atomic writer and immutable
+revision receipt are the next release rung. `remint-reconcile` remains a
+recovery path for drift that already happened, not the normal correction
+authoring workflow.
+
 ## v0.3.233 Abstract Freshness Evidence
 
 No archive migration is required. Restart the AI operator process after the
