@@ -6,6 +6,42 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.235 - 2026-07-14
+
+Canonical zet revision write checkpoint. Approval-gated single-zet mutation
+with immutable local evidence; no archive migration or provider operation.
+
+- **Two review gates before mutation.** CLI `zet-revision-write` (aliases
+  `revise-zet-write`, `canonical-revision-write`) requires all four bindings
+  from `zet-revision-plan`, then creates a separate dry-run digest for the
+  writer-managed timestamp and exact candidate bytes.
+- **Explicit human authority.** Approval requires that write-plan digest, a
+  safe reviewer id, complete-revision review, and abstract/body-pair review.
+  Changed edges require one additional edge-review affirmation.
+- **Stale and concurrent state fails closed.** Canonical bytes, proposal bytes,
+  normalized proposal semantics, both plan digests, candidate bytes, and
+  review flags are revalidated after one private per-canonical-zet write lock
+  and immediately before mutation. Distinct plans for the same zet serialize
+  through that shared lock instead of racing to overwrite each other.
+- **Atomic replacement and rollback.** One canonical zet is atomically
+  replaced and verified. An ordinary runtime failure restores exact prior
+  bytes and removes any partial receipt and temporary lock.
+- **Interruption recovery.** A text-free private write-ahead lock can finish a
+  missing receipt when the process stopped after canonical replacement;
+  mismatched state remains blocked for human inspection.
+- **Immutable revision history.** One new digest-named receipt under
+  `receipts/revisions/canonical/` records reviewer, identity/path, fixed change
+  categories, and before/after hashes while storing no title, abstract/body
+  text, or custom frontmatter value.
+- **Fresh first read after correction.** The receipt's reviewed abstract/body
+  pair is recognized by `abstract-freshness`.
+- **Narrow write surface.** MCP keeps only read-only `zet_revision_plan`; the
+  approved writer is local CLI only and calls no model, provider, object store,
+  database, credential store, or network.
+- **Claim boundary.** `applied` proves reviewed local installation and receipt,
+  not truth, completeness, external sync, backup, legal clearance, or model
+  understanding.
+
 ## v0.3.234 - 2026-07-14
 
 Canonical zet revision planning checkpoint. Additive and read-only; no archive

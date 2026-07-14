@@ -2,6 +2,32 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.3.235 정본 zet 수정 쓰기
+
+보관함 마이그레이션은 필요하지 않습니다. 새 CLI 쓰기 명령이 보이도록 AI
+운영자 프로세스를 다시 시작합니다. 이 작업의 MCP 기능은 의도적으로 읽기
+전용 상태를 유지합니다.
+
+먼저 `zet-revision-plan`으로 현재 정본 zet와 비공개 수정안 전체를 함께
+검토합니다. 여기서 나온 네 해시를 `zet-revision-write --dry-run`에 넣습니다.
+결과의 `revision_at`과 `write_plan.actual_digest`를 보관한 뒤, 두 값을 그대로
+다시 넣고 `--approve`, 안전한 검토자 아이디,
+`--affirm-revision-reviewed`, `--affirm-abstract-body-pair-reviewed`를
+사용합니다. 엣지가 바뀌었다면 `--affirm-edge-changes-reviewed`도
+필요합니다.
+
+승인 후 쓰기는 정본 zet 하나를 원자적으로 교체하고
+`receipts/revisions/canonical/` 아래에 불변 수정 영수증 하나를 만듭니다.
+실행 중 오류가 나면 이전 바이트를 정확히 복구합니다. 정본 교체 뒤 영수증을
+쓰기 전에 프로세스가 멈췄다면, 같은 승인 명령을 다시 실행해 비공개 잠금
+기록으로 영수증만 마무리합니다. 같은 정본 zet를 고치는 모든 수정안은 잠금
+하나를 함께 사용하므로, 먼저 시작한 수정이 끝나기 전에는 다른 수정안이
+덮어쓰지 않고 멈춥니다.
+
+성공 뒤 `archive abstract-freshness <archive-root> --dry-run --format json`을
+실행합니다. 적용 완료는 사람이 검토한 로컬 수정과 영수증을 증명할 뿐,
+사실성, 외부 동기화, 백업, 법적 확인, AI의 실제 이해를 증명하지 않습니다.
+
 ## v0.3.234 정본 zet 수정 계획
 
 보관함 마이그레이션은 필요하지 않습니다. 새 CLI/MCP 계획 도구가 보이도록

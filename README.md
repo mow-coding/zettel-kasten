@@ -33,10 +33,10 @@ wom-kit/docs/releases/ - do not re-grow baseline ladders or tag lists here.
 Current public baseline:
 
 ```text
-v0.3.234 pre-release
+v0.3.235 pre-release
 ```
 
-Previous public baseline: v0.3.233 pre-release.
+Previous public baseline: v0.3.234 pre-release.
 
 Full release history: see [CHANGELOG.md](CHANGELOG.md) and [wom-kit/docs/releases/](wom-kit/docs/releases/).
 
@@ -71,7 +71,7 @@ approval-gated write, or docs-only), see the
 - completed full-Doctor handoffs retain bounded ERROR/WARN items, complete code counts, and suggested commands instead of collapsing actionable findings to severity totals; a BOM finding now fills its reconcile dry-run with the validated canonical zet id and omits the command when that id is absent or unsafe instead of emitting an unresolved placeholder; compact heartbeat prioritizes the current local-profile secret-safety file/content/profile counts over a preserved older edge aggregate, and the regular-file safety walk reuses its checked directory boundary while keeping strict symlink escape checks,
 - read-only `archive zet-quality-check --dry-run` for entity-term, document-type, OCR/parse metadata, table-structure, correction-event, source-rights, audience, and derived-artifact dependency risks before mint; optional `zet-quality-rules.yml` project rules can make forbidden entity aliases mint blockers without echoing matched terms,
 - read-only `archive status-board --dry-run` for beginner-facing archive state counts across canonical zets, active drafts, minted drafts pending retire, document/audience metadata gaps, source metadata gaps, derived-artifact sync gaps, and optional body-inspecting quality counts without echoing titles, bodies, source values, provider URLs, or local paths,
-- frontmatter-only `archive first-read-readiness --dry-run` and MCP `first_read_readiness` separate ordinary archive health from AI memory-reconstruction readiness: every non-redacted canonical zet needs an explicit abstract and every selected zet needs a uniquely resolvable safe id before the gate says `ready`; compatibility text and bounded content-free repair candidates remain visible without echoing titles, abstracts, bodies, duplicate-id values, absolute paths, provider values, or secrets; `create-draft` may still preserve an incomplete idea without an abstract, while `mint-zet`, `mint-zettel`, and legacy `promote` require and revalidate one explicit safe abstract before any canonical publication write; read-only `archive abstract-freshness --dry-run` and MCP `abstract_freshness` then compare each current abstract/body hash pair with retained human-review evidence, distinguish `fresh`, `stale`, `unverified`, `missing`, `unreadable`, and policy-excluded zets in one receipt-index plus one canonical pass, and never echo text or auto-rewrite memory; read-only `archive zet-revision-plan --dry-run` and MCP `zet_revision_plan` now bind one private full-zet correction proposal under `.wom-scratch/revisions/` to the exact current canonical bytes, freeze identity/lifecycle/creator metadata, and return only hashes plus fixed change categories before any normal correction write exists; this is one layer of WOM's answer to **the Memento Problem**: a new AI session should rebuild and correct durable context through reviewed local artifacts instead of trusting a fading chat session or editing memory without evidence,
+- frontmatter-only `archive first-read-readiness --dry-run` and MCP `first_read_readiness` separate ordinary archive health from AI memory-reconstruction readiness: every non-redacted canonical zet needs an explicit abstract and every selected zet needs a uniquely resolvable safe id before the gate says `ready`; compatibility text and bounded content-free repair candidates remain visible without echoing titles, abstracts, bodies, duplicate-id values, absolute paths, provider values, or secrets; `create-draft` may still preserve an incomplete idea without an abstract, while `mint-zet`, `mint-zettel`, and legacy `promote` require and revalidate one explicit safe abstract before any canonical publication write; read-only `archive abstract-freshness --dry-run` and MCP `abstract_freshness` then compare each current abstract/body hash pair with retained human-review evidence, distinguish `fresh`, `stale`, `unverified`, `missing`, `unreadable`, and policy-excluded zets in one receipt-index plus one canonical pass, and never echo text or auto-rewrite memory; read-only `archive zet-revision-plan --dry-run` and MCP `zet_revision_plan` bind one private full-zet correction proposal under `.wom-scratch/revisions/` to the exact current canonical bytes, freeze identity/lifecycle/creator metadata, and return only hashes plus fixed change categories; CLI-only `archive zet-revision-write --dry-run|--approve` then adds an exact writer-candidate digest, explicit human review gates, atomic replacement, runtime rollback, interruption-safe receipt completion, and one immutable text-free revision receipt that also restores abstract-freshness evidence; this is one layer of WOM's answer to **the Memento Problem**: a new AI session should rebuild and correct durable context through reviewed local artifacts instead of trusting a fading chat session or editing memory without evidence,
 - read-only `archive derived-artifact-staleness --dry-run` for checking whether declared `derived_artifacts` may be stale because a source zet is newer than the artifact's last reviewed sync. It writes nothing, opens no external report, and does not echo artifact refs, titles, bodies, provider URLs, or local paths,
 - a v0.2.x freeze / v0.3.0 entry boundary document plus a narrow v0.3.0 write boundary that stays local-first and body-safe,
 
@@ -461,7 +461,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
-v0.3.234 (current checkpoint)
+v0.3.235 (current checkpoint)
 ```
 
 Public releases from `v0.2.5` onward are tagged as compatibility checkpoints.

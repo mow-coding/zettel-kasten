@@ -24,6 +24,31 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.235 Canonical zet Revision Write
+
+No archive migration is required. Restart the AI operator process so the new
+CLI writer is visible. MCP deliberately remains read-only for this workflow.
+
+First run `zet-revision-plan` and review the complete private proposal with the
+current canonical zet. Pass its four hashes into `zet-revision-write --dry-run`.
+Keep the returned `revision_at` and `write_plan.actual_digest`, then reuse both
+with `--approve`, a safe reviewer id, `--affirm-revision-reviewed`, and
+`--affirm-abstract-body-pair-reviewed`. Add
+`--affirm-edge-changes-reviewed` when the plan changes edges.
+
+Approval replaces one canonical zet atomically and creates one immutable
+receipt under `receipts/revisions/canonical/`. Runtime failures restore the
+exact previous bytes. If the process stops after replacement but before the
+receipt, rerun the exact approved command so the private write lock can finish
+the receipt without rewriting the zet. The lock is shared by every revision
+plan for that canonical zet, so a second plan stops instead of overwriting an
+in-progress revision.
+
+Run `archive abstract-freshness <archive-root> --dry-run --format json` after a
+successful revision. An applied revision proves only reviewed local
+application and receipt, not truth, external synchronization, backup, legal
+clearance, or model understanding.
+
 ## v0.3.234 Canonical zet Revision Plan
 
 No archive migration is required. Restart the AI operator process so the new
