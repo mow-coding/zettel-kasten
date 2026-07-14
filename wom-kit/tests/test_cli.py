@@ -2102,6 +2102,7 @@ class ArchiveCliTests(unittest.TestCase):
         self.assertIn("status-board", command_names)
         self.assertIn("first-read-readiness", command_names)
         self.assertIn("abstract-freshness", command_names)
+        self.assertIn("zet-revision-plan", command_names)
         self.assertIn("derived-artifact-staleness", command_names)
         self.assertIn("approval-handoff-record", command_names)
         self.assertIn("approval-handoff-audit", command_names)
@@ -2143,6 +2144,13 @@ class ArchiveCliTests(unittest.TestCase):
         self.assertEqual(abstract_backfill["aliases"], ["abstract-backfill-plan"])
         for option in ("--proposal", "--max-items", "--dry-run", "--progress"):
             self.assertIn(option, abstract_backfill["options"])
+        revision_plan = next(item for item in commands if item["name"] == "zet-revision-plan")
+        self.assertEqual(
+            revision_plan["aliases"],
+            ["revise-zet-plan", "canonical-revision-plan"],
+        )
+        for option in ("--zettel-id", "--proposal", "--dry-run"):
+            self.assertIn(option, revision_plan["options"])
         abstract_backfill_write = next(item for item in commands if item["name"] == "zet-abstract-backfill-write")
         self.assertEqual(abstract_backfill_write["aliases"], ["abstract-backfill-write"])
         for option in (
@@ -30265,6 +30273,287 @@ state:
             result = json.loads(output)
             self.assertEqual(result["counts"]["unreadable"], 1)
             self.assertNotIn("PRIVATE_BROKEN_BODY", output)
+
+    def test_zet_revision_plan_binds_one_private_proposal_without_echoing_content(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            canonical_path = sorted((archive_root / "zettels").glob("*.md"))[0]
+            frontmatter, body = archive_services.split_zettel_text(
+                canonical_path.read_text(encoding="utf-8")
+            )
+            current_abstract = "Current reviewed first read for the canonical zet."
+            frontmatter["abstract"] = current_abstract
+            canonical_path.write_text(
+                "---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + body.rstrip() + "\n",
+                encoding="utf-8",
+            )
+
+            proposal_frontmatter = json.loads(json.dumps(frontmatter))
+            abstract_marker = "PRIVATE_REVISION_ABSTRACT_MARKER"
+            body_marker = "PRIVATE_REVISION_BODY_MARKER"
+            proposal_frontmatter["abstract"] = abstract_marker
+            proposal_relative = ".wom-scratch/revisions/private-filename-marker.md"
+            proposal_path = archive_root / proposal_relative
+            proposal_path.parent.mkdir(parents=True, exist_ok=True)
+            proposal_path.write_text(
+                "---\n"
+                + archive_cli.dump_yaml(proposal_frontmatter)
+                + "---\n\n"
+                + body.rstrip()
+                + f"\n\n{body_marker}\n",
+                encoding="utf-8",
+            )
+
+            missing_code, missing_output = self.run_cli(
+                [
+                    "zet-revision-plan",
+                    str(archive_root),
+                    "--zettel-id",
+                    frontmatter["id"],
+                    "--proposal",
+                    proposal_relative,
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(missing_code, 1)
+            self.assertIn("requires --dry-run", missing_output)
+
+            code, output = self.run_cli(
+                [
+                    "revise-zet-plan",
+                    str(archive_root),
+                    "--zettel-id",
+                    frontmatter["id"],
+                    "--proposal",
+                    proposal_relative,
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["schema"], "wom-kit/zet-revision-plan/v0.1")
+            self.assertEqual(result["status"], "ready_for_human_review")
+            self.assertTrue(result["change_summary"]["body_changed"])
+            self.assertTrue(result["change_summary"]["abstract_changed"])
+            self.assertTrue(result["change_summary"]["semantic_change_present"])
+            self.assertRegex(result["canonical"]["sha256"], r"^sha256:[0-9a-f]{64}$")
+            self.assertRegex(result["proposal"]["sha256"], r"^sha256:[0-9a-f]{64}$")
+            self.assertRegex(result["plan_digest"], r"^sha256:[0-9a-f]{64}$")
+            self.assertFalse(result["approval_contract"]["approved_write_implemented"])
+            self.assertFalse(result["write_boundary"]["files_written"])
+            self.assertFalse(result["privacy_guards"]["zettel_id_echoed"])
+            self.assertFalse(result["privacy_guards"]["abstract_text_echoed"])
+            self.assertFalse(result["privacy_guards"]["body_text_echoed"])
+            self.assertNotIn(frontmatter["id"], output)
+            self.assertNotIn("private-filename-marker", output)
+            self.assertNotIn(current_abstract, output)
+            self.assertNotIn(abstract_marker, output)
+            self.assertNotIn(body_marker, output)
+
+    def test_zet_revision_plan_blocks_noop_system_field_abstract_and_locator_failures(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            canonical_path = sorted((archive_root / "zettels").glob("*.md"))[0]
+            frontmatter, body = archive_services.split_zettel_text(
+                canonical_path.read_text(encoding="utf-8")
+            )
+            frontmatter["abstract"] = "Reviewed current abstract."
+            canonical_path.write_text(
+                "---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + body.rstrip() + "\n",
+                encoding="utf-8",
+            )
+            proposal_relative = ".wom-scratch/revisions/private-validation-cases.md"
+            proposal_path = archive_root / proposal_relative
+            proposal_path.parent.mkdir(parents=True, exist_ok=True)
+
+            def run_case(
+                proposed_frontmatter: dict[str, Any], proposed_body: str
+            ) -> tuple[dict[str, Any], str]:
+                proposal_path.write_text(
+                    "---\n"
+                    + archive_cli.dump_yaml(proposed_frontmatter)
+                    + "---\n\n"
+                    + proposed_body.rstrip()
+                    + "\n",
+                    encoding="utf-8",
+                )
+                code, output = self.run_cli(
+                    [
+                        "canonical-revision-plan",
+                        str(archive_root),
+                        "--zettel-id",
+                        frontmatter["id"],
+                        "--proposal",
+                        proposal_relative,
+                        "--dry-run",
+                        "--format",
+                        "json",
+                    ]
+                )
+                self.assertEqual(code, 1, output)
+                return json.loads(output), output
+
+            noop, _noop_output = run_case(json.loads(json.dumps(frontmatter)), body)
+            self.assertIn("proposal_has_no_semantic_revision", noop["blockers"])
+
+            system_changed = json.loads(json.dumps(frontmatter))
+            system_changed["created_at"] = "1999-01-01T00:00:00Z"
+            system_result, _system_output = run_case(
+                system_changed, body + "\nMeaningful body correction."
+            )
+            self.assertIn(
+                "system_managed_field_changed:created_at", system_result["blockers"]
+            )
+
+            creator_changed = json.loads(json.dumps(frontmatter))
+            creator_changed["provenance"]["created_by"] = "person:replacement"
+            creator_result, _creator_output = run_case(
+                creator_changed, body + "\nMeaningful body correction."
+            )
+            self.assertIn(
+                "system_managed_provenance_field_changed:created_by",
+                creator_result["blockers"],
+            )
+
+            missing_abstract = json.loads(json.dumps(frontmatter))
+            missing_abstract.pop("abstract")
+            abstract_result, _abstract_output = run_case(
+                missing_abstract, body + "\nMeaningful body correction."
+            )
+            self.assertTrue(
+                any(
+                    blocker.startswith("proposal_explicit_abstract_not_ready:")
+                    for blocker in abstract_result["blockers"]
+                )
+            )
+
+            locator_marker = "D:\\private-source.txt"
+            locator_result, locator_output = run_case(
+                json.loads(json.dumps(frontmatter)), body + "\n" + locator_marker
+            )
+            self.assertIn("proposal_body_contains_private_locator", locator_result["blockers"])
+            self.assertNotIn(locator_marker, locator_output)
+
+            identity_changed = json.loads(json.dumps(frontmatter))
+            identity_marker = "zet_private_replacement_identity"
+            identity_changed["id"] = identity_marker
+            identity_result, identity_output = run_case(
+                identity_changed, body + "\nMeaningful body correction."
+            )
+            self.assertIn(
+                "proposal_frontmatter_identity_mismatch", identity_result["blockers"]
+            )
+            self.assertNotIn(identity_marker, identity_output)
+
+            unknown_edge = json.loads(json.dumps(frontmatter))
+            unknown_edge["edges"] = [
+                {"type": "private_unknown_edge_type", "target": frontmatter["id"]}
+            ]
+            edge_result, edge_output = run_case(
+                unknown_edge, body + "\nMeaningful body correction."
+            )
+            self.assertIn(
+                "proposal_allowed_edges_check_blocked", edge_result["blockers"]
+            )
+            self.assertNotIn("private_unknown_edge_type", edge_output)
+
+    def test_zet_revision_plan_warns_when_body_changes_without_abstract_revision(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            canonical_path = sorted((archive_root / "zettels").glob("*.md"))[0]
+            frontmatter, body = archive_services.split_zettel_text(
+                canonical_path.read_text(encoding="utf-8")
+            )
+            frontmatter["abstract"] = "Reviewed current abstract."
+            canonical_path.write_text(
+                "---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + body.rstrip() + "\n",
+                encoding="utf-8",
+            )
+            body_marker = "PRIVATE_BODY_ONLY_REVISION_MARKER"
+            proposal_relative = ".wom-scratch/revisions/private-body-only.md"
+            proposal_path = archive_root / proposal_relative
+            proposal_path.parent.mkdir(parents=True, exist_ok=True)
+            proposal_path.write_text(
+                "---\n"
+                + archive_cli.dump_yaml(frontmatter)
+                + "---\n\n"
+                + body.rstrip()
+                + f"\n\n{body_marker}\n",
+                encoding="utf-8",
+            )
+
+            code, output = self.run_cli(
+                [
+                    "zet-revision-plan",
+                    str(archive_root),
+                    "--zettel-id",
+                    frontmatter["id"],
+                    "--proposal",
+                    proposal_relative,
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["ok"])
+            self.assertTrue(result["change_summary"]["body_changed"])
+            self.assertFalse(result["change_summary"]["abstract_changed"])
+            self.assertIn("body_changed_while_abstract_reused", result["warnings"])
+            self.assertNotIn(body_marker, output)
+
+    def test_zet_revision_change_summary_distinguishes_missing_and_null_fields(self) -> None:
+        added = archive_services.zet_revision_change_summary({}, "body", {"extra": None}, "body")
+        removed = archive_services.zet_revision_change_summary(
+            {"extra": None}, "body", {}, "body"
+        )
+
+        for summary in (added, removed):
+            self.assertTrue(summary["semantic_change_present"])
+            self.assertEqual(summary["content_frontmatter_field_change_count"], 1)
+            self.assertTrue(summary["other_content_frontmatter_changed"])
+
+    def test_zet_revision_plan_rejects_proposal_outside_private_revision_folder(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            canonical_path = sorted((archive_root / "zettels").glob("*.md"))[0]
+            frontmatter, body = archive_services.split_zettel_text(
+                canonical_path.read_text(encoding="utf-8")
+            )
+            frontmatter["abstract"] = "Reviewed current abstract."
+            canonical_path.write_text(
+                "---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + body.rstrip() + "\n",
+                encoding="utf-8",
+            )
+            outside_marker = "private-outside-revision-proposal"
+            outside = archive_root / "workbench" / f"{outside_marker}.md"
+            outside.parent.mkdir(parents=True, exist_ok=True)
+            outside.write_text(
+                "---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + body + "\nchange\n",
+                encoding="utf-8",
+            )
+
+            code, output = self.run_cli(
+                [
+                    "zet-revision-plan",
+                    str(archive_root),
+                    "--zettel-id",
+                    frontmatter["id"],
+                    "--proposal",
+                    f"workbench/{outside.name}",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 1)
+            self.assertIn("could not read one safe canonical zet", output)
+            self.assertNotIn(outside_marker, output)
 
     def test_zet_catalog_pages_every_canonical_abstract_without_body_reads(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

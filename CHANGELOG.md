@@ -6,6 +6,34 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.234 - 2026-07-14
+
+Canonical zet revision planning checkpoint. Additive and read-only; no archive
+migration, canonical mutation, or receipt write.
+
+- **Normal correction starts before mutation.** New CLI `zet-revision-plan`
+  (aliases `revise-zet-plan`, `canonical-revision-plan`) and MCP
+  `zet_revision_plan` compare one complete private revision proposal with the
+  exact current canonical zet.
+- **Private bounded proposal.** Inputs are confined to plain Markdown files
+  under `.wom-scratch/revisions/`; symbolic-link components are refused and
+  canonical/proposal reads are capped at 16 MiB each.
+- **Identity and lifecycle preservation.** zet/archive identity, creation and
+  update metadata, status, mint/promotion/revision metadata, and original
+  creator metadata must match the current canonical file exactly.
+- **Publication safety reused.** The planner rechecks required fields, explicit
+  abstract, body locator policy, allowed edges, provenance, visibility,
+  canonical note-kind policy, quality blockers, and self-containment warnings.
+- **Digest-bound review packet.** Canonical bytes, proposal bytes, normalized
+  proposal semantics, fixed change categories, and pending abstract/body
+  review evidence are bound into one `plan_digest` for the future writer.
+- **Content-free result.** Output returns hashes and category booleans but no
+  actual zet id, path, filename, title, abstract, body, custom frontmatter
+  value, reviewer id, provider URL, absolute path, or secret.
+- **Honest stop.** A green plan is not truth, approval, application, model
+  understanding, or permission for manual canonical editing. The atomic
+  approval-gated writer and immutable revision receipt remain a separate rung.
+
 ## v0.3.233 - 2026-07-14
 
 Abstract freshness evidence checkpoint. Additive receipt metadata and read-only

@@ -2805,6 +2805,19 @@ ABSTRACT_FRESHNESS_MAX_RECEIPTS = 100000
 ABSTRACT_FRESHNESS_MAX_RECEIPT_BYTES = 16 * 1024 * 1024
 ABSTRACT_FRESHNESS_MAX_ZET_BYTES = 16 * 1024 * 1024
 ABSTRACT_FRESHNESS_MAX_ATTENTION_ITEMS = 500
+ZET_REVISION_PLAN_SCHEMA = "wom-kit/zet-revision-plan/v0.1"
+ZET_REVISION_PROPOSAL_PREFIX = ".wom-scratch/revisions/"
+ZET_REVISION_MAX_FILE_BYTES = 16 * 1024 * 1024
+ZET_REVISION_SYSTEM_MANAGED_FIELDS = (
+    "id",
+    "archive_id",
+    "created_at",
+    "updated_at",
+    "status",
+    "mint",
+    "promotion",
+    "revision",
+)
 ZET_ABSTRACT_BACKFILL_PROPOSAL_SCHEMA = "wom-kit/zet-abstract-backfill-proposal/v0.1"
 ZET_ABSTRACT_BACKFILL_PLAN_SCHEMA = "wom-kit/zet-abstract-backfill-plan/v0.1"
 ZET_ABSTRACT_BACKFILL_WRITE_SCHEMA = "wom-kit/zet-abstract-backfill-write/v0.1"
@@ -7332,6 +7345,433 @@ def zet_catalog(
     if progress_callback is not None:
         progress_callback("catalog-page", "done", next_cursor_value, total_count)
     return result
+
+
+def resolve_zet_revision_proposal_path(root: Path, raw_path: str) -> Path:
+    try:
+        normalized = normalize_archive_relative_path(raw_path)
+    except ArchivePathError as exc:
+        raise ArchiveServiceError("Zet revision proposal path must be archive-relative.") from exc
+    if not normalized.startswith(ZET_REVISION_PROPOSAL_PREFIX) or PurePosixPath(
+        normalized
+    ).suffix.lower() != ".md":
+        raise ArchiveServiceError(
+            f"Zet revision proposal must be a Markdown file under {ZET_REVISION_PROPOSAL_PREFIX}"
+        )
+    unresolved = root.resolve()
+    for part in normalized.split("/"):
+        unresolved = unresolved / part
+        if unresolved.is_symlink():
+            raise ArchiveServiceError("Zet revision proposal paths must not contain symbolic links.")
+    path = resolve_archive_relative_path(root, normalized)
+    if path.is_symlink() or not path.is_file():
+        raise ArchiveServiceError("Zet revision proposal must be an existing regular file.")
+    return path
+
+
+def read_zet_revision_file_bytes(path: Path, label: str) -> bytes:
+    try:
+        size = path.stat().st_size
+    except OSError as exc:
+        raise ArchiveServiceError(f"{label} is unavailable.") from exc
+    if size > ZET_REVISION_MAX_FILE_BYTES:
+        raise ArchiveServiceError(f"{label} exceeds the 16 MiB revision safety limit.")
+    try:
+        with path.open("rb") as handle:
+            value = handle.read(ZET_REVISION_MAX_FILE_BYTES + 1)
+    except OSError as exc:
+        raise ArchiveServiceError(f"{label} is unavailable.") from exc
+    if len(value) > ZET_REVISION_MAX_FILE_BYTES:
+        raise ArchiveServiceError(f"{label} exceeds the 16 MiB revision safety limit.")
+    return value
+
+
+def zet_revision_semantic_sha256(frontmatter: dict[str, Any], body: str) -> str:
+    return sha256_json_value(
+        {
+            "frontmatter": json_safe(frontmatter),
+            "body": canonical_publication_body(body),
+        }
+    )
+
+
+def zet_revision_change_summary(
+    current_frontmatter: dict[str, Any],
+    current_body: str,
+    proposed_frontmatter: dict[str, Any],
+    proposed_body: str,
+) -> dict[str, Any]:
+    system_fields = set(ZET_REVISION_SYSTEM_MANAGED_FIELDS)
+    current_content = {
+        key: value for key, value in current_frontmatter.items() if key not in system_fields
+    }
+    proposed_content = {
+        key: value for key, value in proposed_frontmatter.items() if key not in system_fields
+    }
+    changed_content_fields = {
+        key
+        for key in set(current_content) | set(proposed_content)
+        if (
+            key not in current_content
+            or key not in proposed_content
+            or current_content[key] != proposed_content[key]
+        )
+    }
+    known_fields = {
+        "title",
+        "kind",
+        "abstract",
+        "facets",
+        "assets",
+        "edges",
+        "provenance",
+        "visibility",
+        "source_refs",
+        "source_intake",
+        "correction_events",
+        "derived_artifacts",
+        "document_type",
+        "audience",
+    }
+    body_changed = canonical_publication_body(current_body) != canonical_publication_body(
+        proposed_body
+    )
+    abstract_changed = current_frontmatter.get("abstract") != proposed_frontmatter.get("abstract")
+    return {
+        "semantic_change_present": bool(changed_content_fields or body_changed),
+        "body_changed": body_changed,
+        "abstract_changed": abstract_changed,
+        "title_changed": "title" in changed_content_fields,
+        "kind_changed": "kind" in changed_content_fields,
+        "facets_changed": "facets" in changed_content_fields,
+        "assets_changed": "assets" in changed_content_fields,
+        "edges_changed": "edges" in changed_content_fields,
+        "provenance_changed": "provenance" in changed_content_fields,
+        "visibility_changed": "visibility" in changed_content_fields,
+        "source_refs_changed": bool(
+            changed_content_fields & {"source_refs", "source_intake"}
+        ),
+        "corrections_changed": "correction_events" in changed_content_fields,
+        "derived_artifacts_changed": "derived_artifacts" in changed_content_fields,
+        "content_frontmatter_field_change_count": len(changed_content_fields),
+        "other_content_frontmatter_changed": bool(changed_content_fields - known_fields),
+        "changed_field_names_echoed": False,
+    }
+
+
+def zet_revision_plan(
+    archive_root: Path | str,
+    *,
+    zettel_id: str,
+    proposal_path: str,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    if not isinstance(zettel_id, str) or not ZETTEL_EDGE_ZETTEL_ID_RE.fullmatch(zettel_id):
+        raise ArchiveServiceError("Zet revision requires one safe --zettel-id value.")
+
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if not dry_run:
+        blockers.append("dry_run_required")
+
+    proposal = resolve_zet_revision_proposal_path(root, proposal_path)
+    try:
+        canonical = resolve_zettel_path(root, zettel_id=zettel_id, relative_path=None)
+    except (ArchiveServiceError, OSError, UnicodeError) as exc:
+        raise ArchiveServiceError("Canonical zet is unavailable or unreadable.") from exc
+    except yaml.YAMLError as exc:  # type: ignore[union-attr]
+        raise ArchiveServiceError("Canonical zet is unavailable or unreadable.") from exc
+    canonical_relative = archive_relative_path(canonical, root)
+    try:
+        canonical_lexical_relative = canonical.relative_to(root)
+    except ValueError:
+        canonical_lexical_relative = None
+    canonical_has_symlink_component = canonical_lexical_relative is None
+    if canonical_lexical_relative is not None:
+        lexical_component = root
+        for part in canonical_lexical_relative.parts:
+            lexical_component = lexical_component / part
+            if lexical_component.is_symlink():
+                canonical_has_symlink_component = True
+                break
+    if (
+        canonical_has_symlink_component
+        or canonical.is_symlink()
+        or not canonical.is_file()
+        or not canonical_relative.startswith("zettels/")
+    ):
+        raise ArchiveServiceError("Zet revision target must be one plain canonical zet.")
+
+    canonical_bytes = read_zet_revision_file_bytes(canonical, "Canonical zet")
+    proposal_bytes = read_zet_revision_file_bytes(proposal, "Zet revision proposal")
+    canonical_sha256 = "sha256:" + hashlib.sha256(canonical_bytes).hexdigest()
+    proposal_sha256 = "sha256:" + hashlib.sha256(proposal_bytes).hexdigest()
+    try:
+        current_frontmatter, current_body = split_zettel_text(
+            decode_utf8_with_universal_newlines(canonical_bytes)
+        )
+        proposed_frontmatter, proposed_body = split_zettel_text(
+            decode_utf8_with_universal_newlines(proposal_bytes)
+        )
+    except (UnicodeError, ArchiveServiceError) as exc:
+        raise ArchiveServiceError(
+            "Canonical zet or revision proposal is not valid UTF-8 Markdown with readable frontmatter."
+        ) from exc
+    except yaml.YAMLError as exc:  # type: ignore[union-attr]
+        raise ArchiveServiceError(
+            "Canonical zet or revision proposal is not valid UTF-8 Markdown with readable frontmatter."
+        ) from exc
+    current_frontmatter = json_safe(current_frontmatter)
+    proposed_frontmatter = json_safe(proposed_frontmatter)
+
+    if current_frontmatter.get("id") != zettel_id:
+        blockers.append("canonical_frontmatter_identity_mismatch")
+    if current_frontmatter.get("status") != "canonical":
+        blockers.append("target_status_not_canonical")
+    if proposed_frontmatter.get("id") != zettel_id:
+        blockers.append("proposal_frontmatter_identity_mismatch")
+    if proposed_frontmatter.get("archive_id") != archive_id:
+        blockers.append("proposal_archive_identity_mismatch")
+    if proposed_frontmatter.get("status") != "canonical":
+        blockers.append("proposal_status_must_remain_canonical")
+
+    for field in REQUIRED_ZETTEL_FIELDS:
+        if field not in proposed_frontmatter:
+            blockers.append(f"proposal_missing_required_field:{field}")
+    for field in ZET_REVISION_SYSTEM_MANAGED_FIELDS:
+        if (
+            (field in proposed_frontmatter) != (field in current_frontmatter)
+            or proposed_frontmatter.get(field) != current_frontmatter.get(field)
+        ):
+            blockers.append(f"system_managed_field_changed:{field}")
+
+    title = proposed_frontmatter.get("title")
+    if not isinstance(title, str) or not title.strip():
+        blockers.append("proposal_title_missing")
+    if not proposed_body.strip():
+        blockers.append("proposal_body_missing")
+    if zettel_body_has_forbidden_location_reference(proposed_body):
+        blockers.append("proposal_body_contains_private_locator")
+
+    provenance = proposed_frontmatter.get("provenance")
+    current_provenance = current_frontmatter.get("provenance")
+    if not isinstance(current_provenance, dict):
+        blockers.append("canonical_provenance_not_object")
+    if not isinstance(provenance, dict):
+        blockers.append("proposal_provenance_not_object")
+    else:
+        for field in ("created_by", "created_in", "source", "derived_from"):
+            if field not in provenance:
+                blockers.append(f"proposal_provenance_missing_field:{field}")
+        if isinstance(current_provenance, dict):
+            for field in ("created_by", "created_in"):
+                if (
+                    (field in provenance) != (field in current_provenance)
+                    or provenance.get(field) != current_provenance.get(field)
+                ):
+                    blockers.append(
+                        f"system_managed_provenance_field_changed:{field}"
+                    )
+    visibility = proposed_frontmatter.get("visibility")
+    if not isinstance(visibility, dict):
+        blockers.append("proposal_visibility_not_object")
+    else:
+        for field in ("scope", "source_visibility"):
+            if not visibility.get(field):
+                blockers.append(f"proposal_visibility_missing_field:{field}")
+
+    rules = load_zettel_rules(root)
+    kind = proposed_frontmatter.get("kind")
+    if isinstance(kind, str):
+        kind_rule = note_kind_rules(rules).get(kind)
+        if isinstance(kind_rule, dict) and kind_rule.get("canonical_allowed") is False:
+            blockers.append("proposal_kind_not_canonical")
+        elif kind_rule is None:
+            warnings.append("proposal_kind_not_in_local_rules")
+    elif kind is not None:
+        blockers.append("proposal_kind_invalid")
+
+    allowed_link_types = load_allowed_link_types(root)
+    object_status, _object_message = infer_promotion_checklist_item(
+        "object_id_only", proposed_frontmatter, proposed_body, allowed_link_types
+    )
+    if object_status != "passed":
+        blockers.append("proposal_object_id_only_check_blocked")
+    edge_status, _edge_message = infer_promotion_checklist_item(
+        "allowed_edges", proposed_frontmatter, proposed_body, allowed_link_types
+    )
+    if edge_status != "passed":
+        blockers.append("proposal_allowed_edges_check_blocked")
+
+    first_read_check = explicit_abstract_publication_check(proposed_frontmatter)
+    if not first_read_check.get("ready_for_publication"):
+        blockers.append(
+            "proposal_explicit_abstract_not_ready:"
+            + str(first_read_check.get("status") or "invalid")
+        )
+
+    change_summary = zet_revision_change_summary(
+        current_frontmatter,
+        current_body,
+        proposed_frontmatter,
+        proposed_body,
+    )
+    if not change_summary["semantic_change_present"]:
+        blockers.append("proposal_has_no_semantic_revision")
+    if change_summary["body_changed"] and not change_summary["abstract_changed"]:
+        warnings.append("body_changed_while_abstract_reused")
+    if change_summary["edges_changed"]:
+        warnings.append("edge_changes_require_explicit_human_review")
+
+    quality = zettel_quality_assessment(
+        root,
+        proposal,
+        proposed_frontmatter,
+        proposed_body,
+    )
+    quality_blocker_codes = sorted(
+        {
+            str(item.get("code"))
+            for item in quality.get("issues", [])
+            if isinstance(item, dict) and item.get("severity") == "blocker" and item.get("code")
+        }
+    )
+    quality_warning_codes = sorted(
+        {
+            str(item.get("code"))
+            for item in quality.get("issues", [])
+            if isinstance(item, dict) and item.get("severity") == "warning" and item.get("code")
+        }
+    )
+    for code in quality_blocker_codes:
+        blockers.append(f"proposal_quality_blocker:{code}")
+    if quality_warning_codes:
+        warnings.append("proposal_quality_warnings_require_review")
+
+    self_contained = zettel_self_contained_assessment(proposed_frontmatter, proposed_body)
+    if self_contained.get("status") != "self_contained":
+        warnings.append("proposal_self_containment_warnings_require_review")
+
+    proposal_semantic_sha256 = zet_revision_semantic_sha256(
+        proposed_frontmatter, proposed_body
+    )
+    abstract_review_basis = (
+        {
+            "contract": ABSTRACT_REVIEW_BASIS_CONTRACT,
+            "review_status": "pending_human_approval",
+            "evidence_kind": "revise_zettel",
+            "abstract_sha256": first_read_check.get("abstract_sha256"),
+            "body_sha256": canonical_body_sha256(
+                canonical_publication_body(proposed_body)
+            ),
+            "body_hash_basis": ABSTRACT_REVIEW_BODY_HASH_BASIS,
+            "abstract_text_stored": False,
+            "body_text_stored": False,
+        }
+        if first_read_check.get("ready_for_publication")
+        else None
+    )
+    plan_digest = sha256_json_value(
+        {
+            "schema": ZET_REVISION_PLAN_SCHEMA,
+            "archive_id": archive_id,
+            "zettel_id": zettel_id,
+            "canonical_path": canonical_relative,
+            "canonical_sha256": canonical_sha256,
+            "proposal_sha256": proposal_sha256,
+            "proposal_semantic_sha256": proposal_semantic_sha256,
+            "change_summary": change_summary,
+            "abstract_review_basis": abstract_review_basis,
+        }
+    )
+    blockers = unique_preserve_order(blockers)
+    warnings = unique_preserve_order(warnings)
+    ok = not blockers
+    return {
+        "ok": ok,
+        "dry_run": bool(dry_run),
+        "schema": ZET_REVISION_PLAN_SCHEMA,
+        "lifecycle_action": "zet_revision_plan",
+        "status": "ready_for_human_review" if ok else "blocked",
+        "archive_id": archive_id,
+        "canonical": {
+            "sha256": canonical_sha256,
+            "bytes_read": len(canonical_bytes),
+            "path_echoed": False,
+            "zettel_id_echoed": False,
+        },
+        "proposal": {
+            "sha256": proposal_sha256,
+            "semantic_sha256": proposal_semantic_sha256,
+            "bytes_read": len(proposal_bytes),
+            "path_policy": ZET_REVISION_PROPOSAL_PREFIX + "<private>.md",
+            "path_echoed": False,
+            "tracking_policy": "private_ai_working_file_do_not_commit",
+        },
+        "plan_digest": plan_digest,
+        "change_summary": change_summary,
+        "first_read_check": first_read_check,
+        "abstract_review_basis": abstract_review_basis,
+        "quality_review": {
+            "blocker_count": len(quality_blocker_codes),
+            "warning_count": len(quality_warning_codes),
+            "blocker_codes": quality_blocker_codes,
+            "warning_codes": quality_warning_codes,
+            "issue_values_echoed": False,
+        },
+        "self_containment_review": {
+            "status": self_contained.get("status"),
+            "warning_count": len(self_contained.get("warnings", [])),
+            "warning_values_echoed": False,
+        },
+        "approval_contract": {
+            "approved_write_implemented": False,
+            "human_review_required": True,
+            "future_write_must_bind_canonical_sha256": True,
+            "future_write_must_bind_proposal_sha256": True,
+            "future_write_must_bind_plan_digest": True,
+            "future_write_must_revalidate_both_files": True,
+            "future_write_must_record_before_after_hashes": True,
+            "future_write_must_record_reviewed_abstract_body_pair": True,
+            "manual_canonical_edit_recommended": False,
+        },
+        "write_boundary": {
+            "files_written": False,
+            "canonical_zets_changed": False,
+            "receipts_written": False,
+            "provider_state_written": False,
+        },
+        "privacy_guards": {
+            "canonical_path_echoed": False,
+            "proposal_path_echoed": False,
+            "zettel_id_echoed": False,
+            "title_text_echoed": False,
+            "abstract_text_echoed": False,
+            "body_text_echoed": False,
+            "custom_frontmatter_values_echoed": False,
+            "reviewer_id_echoed": False,
+            "absolute_local_paths_echoed": False,
+            "provider_urls_echoed": False,
+            "provider_api_called": False,
+            "model_called": False,
+            "secret_store_or_environment_read": False,
+        },
+        "blockers": blockers,
+        "warnings": warnings,
+        "next_safe_actions": (
+            [
+                "Review the current canonical zet and private proposal together, including the explicit abstract.",
+                "Retain canonical.sha256, proposal.sha256, proposal.semantic_sha256, and plan_digest for the future approval-gated writer.",
+                "Do not edit the canonical zet manually; approved revision writing is a separate capability.",
+            ]
+            if ok
+            else [
+                "Fix the private proposal only, then rerun this read-only plan. Do not edit the canonical zet."
+            ]
+        ),
+    }
 
 
 def resolve_zet_abstract_backfill_proposal_path(root: Path, raw_path: str) -> Path:

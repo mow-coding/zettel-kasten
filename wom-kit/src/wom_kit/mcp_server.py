@@ -1988,6 +1988,20 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "zet_revision_plan",
+        "description": "Validate one private full-zet revision proposal against the current canonical zet. Read-only and content-free: writes nothing and returns no zet id, path, title, abstract, body, custom frontmatter value, provider URL, reviewer id, or secret value.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string"},
+                "zettel_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"},
+                "proposal_path": {"type": "string"},
+                "dry_run": {"type": "boolean", "default": True},
+            },
+            "required": ["archive_root", "zettel_id", "proposal_path"],
+        },
+    },
+    {
         "name": "read_zettel",
         "description": "Read one zettel by zettel id or archive-relative path. Use section=overview for the compact first read before requesting a body.",
         "inputSchema": {
@@ -3005,6 +3019,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_first_read_readiness(arguments)
     if name == "abstract_freshness":
         return tool_abstract_freshness(arguments)
+    if name == "zet_revision_plan":
+        return tool_zet_revision_plan(arguments)
     if name == "read_zettel":
         return tool_read_zettel(arguments)
     if name == "zettel_objet_links":
@@ -4792,6 +4808,28 @@ def tool_abstract_freshness(arguments: dict[str, Any]) -> dict[str, Any]:
         "abstract_freshness: "
         f"{result.get('state', 'unknown')}, {result.get('canonical_zet_count', 0)} canonical zet(s) checked, "
         f"{result.get('attention', {}).get('total_count', 0)} need review.",
+        result,
+    )
+
+
+def tool_zet_revision_plan(arguments: dict[str, Any]) -> dict[str, Any]:
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("zet_revision_plan is dry-run only.")
+    try:
+        result = call_service(
+            archive_services.zet_revision_plan,
+            require_path_arg(arguments, "archive_root"),
+            zettel_id=require_string_arg(arguments, "zettel_id"),
+            proposal_path=require_string_arg(arguments, "proposal_path"),
+            dry_run=True,
+        )
+    except ToolError as exc:
+        raise ToolError(
+            "zet_revision_plan could not read one safe canonical zet and private revision proposal."
+        ) from exc
+    return tool_success_result(
+        "zet_revision_plan: "
+        f"{result.get('status', 'unknown')}; canonical files changed: no.",
         result,
     )
 

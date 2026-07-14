@@ -9009,6 +9009,56 @@ def command_abstract_freshness(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 1
 
 
+def command_zet_revision_plan(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("zet-revision-plan is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.zet_revision_plan(
+            Path(args.archive_root),
+            zettel_id=args.zettel_id,
+            proposal_path=args.proposal,
+            dry_run=True,
+        )
+    except (archive_services.ArchiveServiceError, OSError, UnicodeError, ValueError):
+        print(
+            "zet-revision-plan could not read one safe canonical zet and private revision proposal.",
+            file=sys.stderr,
+        )
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        change = result.get("change_summary", {})
+        print(f"WOM zet revision plan: {result.get('status') or 'unknown'}")
+        print("Canonical files changed: no")
+        print("Body changed: " + ("yes" if change.get("body_changed") else "no"))
+        print("Abstract changed: " + ("yes" if change.get("abstract_changed") else "no"))
+        print(
+            "Other frontmatter changed: "
+            + (
+                "yes"
+                if change.get("content_frontmatter_field_change_count", 0)
+                else "no"
+            )
+        )
+        print("Approved write available in this release: no")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Review warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+        if result.get("next_safe_actions"):
+            print("Next safe actions:")
+            for action in result["next_safe_actions"]:
+                print(f"- {action}")
+    return 0 if result.get("ok") else 1
+
+
 def command_zet_catalog_pass(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print("zet-catalog-pass requires --dry-run; only its explicit private scratch output may be written.", file=sys.stderr)
@@ -18380,6 +18430,35 @@ def build_parser() -> argparse.ArgumentParser:
         help="Output format.",
     )
     abstract_freshness.set_defaults(func=command_abstract_freshness)
+
+    zet_revision_plan = subcommands.add_parser(
+        "zet-revision-plan",
+        aliases=["revise-zet-plan", "canonical-revision-plan"],
+        help="Validate one private full-zet revision proposal against the current canonical zet without writing either file.",
+    )
+    zet_revision_plan.add_argument("archive_root", help="Archive root containing the canonical zet.")
+    zet_revision_plan.add_argument(
+        "--zettel-id",
+        required=True,
+        help="Safe canonical zet id to revise; the value is not echoed in result data.",
+    )
+    zet_revision_plan.add_argument(
+        "--proposal",
+        required=True,
+        help="Private Markdown proposal under .wom-scratch/revisions/; its path and text are not echoed.",
+    )
+    zet_revision_plan.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Required. Read and hash the canonical zet and private proposal; write nothing.",
+    )
+    zet_revision_plan.add_argument(
+        "--format",
+        choices=["text", "json"],
+        default="json",
+        help="Output format.",
+    )
+    zet_revision_plan.set_defaults(func=command_zet_revision_plan)
 
     zet_catalog_pass = subcommands.add_parser(
         "zet-catalog-pass",
