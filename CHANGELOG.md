@@ -6,6 +6,31 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.231 - 2026-07-14
+
+Explicit first-read readiness checkpoint. Additive and read-only; no archive
+migration, automatic backfill, provider call, or archive write.
+
+- **Archive health and memory readiness are separate.** New CLI
+  `first-read-readiness` and MCP `first_read_readiness` inspect every canonical
+  path and frontmatter while reading no zet body or objet bytes.
+- **Explicit abstract gate.** `state: ready` requires an explicit `abstract`
+  for every non-redacted canonical zet. Compatibility fields remain visible as
+  `compatibility_only` instead of being silently mistaken for the completed
+  contract.
+- **Reliable follow-up ids.** Missing, unsafe, and duplicate ids block
+  readiness independently from abstract coverage, so a later body read cannot
+  quietly select the wrong node.
+- **Content-free repair queue.** Bounded candidates contain only
+  archive-relative path, safe id, and status. Titles, abstracts, bodies,
+  duplicate-id values, absolute paths, provider values, and secrets are not
+  returned.
+- **AI entrypoint integration.** Status-board counts first-read attention, and
+  AI start-here/templates place the new gate before a complete private catalog
+  pass without making the quick start path scan zets.
+- **Honest claim boundary.** A green gate does not judge abstract quality or
+  prove model consumption. Repairs remain human-reviewed and approval-gated.
+
 ## v0.3.230 - 2026-07-13
 
 Digest-bound content-change review checkpoint. Additive receipt fields; no

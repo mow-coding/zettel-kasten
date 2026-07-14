@@ -2,6 +2,26 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.3.231 초록 데이터 준비도 검진
+
+보관함 마이그레이션은 필요하지 않습니다. 업데이트 뒤 AI 운영자 프로세스를
+다시 시작하고 다음 읽기 전용 명령을 실행합니다.
+
+```text
+archive first-read-readiness <archive-root> --dry-run --progress --format json
+```
+
+비공개 처리되지 않은 모든 정본 zet에 명시적 `frontmatter.abstract`가 있고,
+모든 선택 항목의 안전한 아이디가 하나로 해석될 때만 `state: ready`가 됩니다.
+기존 `gist`, `summary`, `description`, `overview`는 호환용 첫 읽기로 남지만,
+사람이 명시적 초록 데이터를 검토하고 승인하기 전에는
+`state: compatibility_only`입니다. 준비되지 않은 결과의 종료 코드가 0이
+아니어도 검진 실패가 아니라 보완할 목록을 정직하게 발견한 것입니다.
+
+이 명령은 초록 데이터만 읽고 아무것도 쓰지 않습니다. 초록 문장의 품질,
+AI의 실제 읽기 완료, 오브제 바이트, 외부 서비스, 백필 승인을 증명하지
+않습니다. 결과를 검토한 뒤에만 비공개 전체 `zet-catalog-pass`로 진행합니다.
+
 ## Frontmatter v0.3 migration
 
 The current v0.3 frontmatter contract requires nested `provenance` and

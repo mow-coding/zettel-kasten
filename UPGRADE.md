@@ -24,6 +24,27 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.231 First-Read Readiness Gate
+
+No archive migration is required. After updating and restarting the operator
+process, run:
+
+```text
+archive first-read-readiness <archive-root> --dry-run --progress --format json
+```
+
+`state: ready` means every non-redacted canonical zet has an explicit
+`frontmatter.abstract` and every selected entry has a uniquely resolvable safe
+id at the reported snapshot. Compatibility fields remain readable, but produce
+`state: compatibility_only` until a human reviews and approves an explicit
+abstract. A non-ready result is a repair queue and may exit nonzero even though
+the scan completed normally.
+
+The command reads frontmatter only and writes nothing. It does not judge
+abstract quality, prove model consumption, inspect objet bytes, call providers,
+or grant backfill approval. Run the private complete `zet-catalog-pass` only
+after reviewing the readiness result.
+
 ## Current Safe Process And Upgrade Check
 
 Today, WOM-kit relies on release notes, backups, `archive doctor --strict`, and

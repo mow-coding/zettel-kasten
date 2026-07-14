@@ -70,6 +70,7 @@ Supporting philosophy and model docs:
 - [Seeded Connection Reading Order](seeded-connection-reading-order.md)
 - [Seeded Reading Route Evidence](seeded-reading-route-evidence.md)
 - [Archive Status Board](archive-status-board.md)
+- [First-Read Readiness](first-read-readiness.md)
 - [Derived Artifact Staleness](derived-artifact-staleness.md)
 - [zet Quality Check](zet-quality-check.md)
 - [Source Object Storage Policy](source-object-storage-policy.md)
