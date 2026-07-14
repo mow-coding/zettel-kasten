@@ -23,6 +23,7 @@ Local reviewed WOM state is canonical. GitHub backs up metadata/version history,
 ## Write Policy
 
 - Write AI-generated zettel drafts only to `inbox/`.
+- A draft may be incomplete, but before `mint-zet`, `mint-zettel`, or `promote`, require one human-reviewed explicit `frontmatter.abstract`; compatibility fields do not authorize canonical publication.
 - Do not edit `zettels/` unless the user explicitly asks to promote or modify a canonical zettel.
 - Do not store provider URLs in zettels.
 - Preserve provenance, visibility, and source boundaries.

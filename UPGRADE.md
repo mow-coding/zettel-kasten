@@ -24,6 +24,32 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.232 Explicit Abstract Publication Gate
+
+No archive migration is required. Existing canonical zets and old receipts
+remain valid. New drafts may still be saved without an abstract, but a draft
+cannot cross into canonical state until a human-reviewed explicit
+`frontmatter.abstract` is present.
+
+Before minting, add one normalized single-line abstract of at most 360
+characters, then preview the ordinary mint command:
+
+```text
+archive mint-zet <archive-root> --path inbox/<draft>.md --dry-run --format json
+```
+
+Inspect `first_read_check`. Continue only when its `status` is `ready` and
+`ready_for_publication` is `true`. Compatibility fields such as `summary` do
+not satisfy this publication rule. Real minting and legacy promotion bind the
+full draft SHA-256 and abstract SHA-256, reread one byte snapshot after
+dry-run, and stop before any canonical, receipt, or snapshot write if any
+draft byte changed or the abstract is missing or invalid.
+
+The check record contains only status, character count, limit, and abstract
+SHA-256; it does not echo the abstract text or read the body for this check.
+A green result proves structural readiness only, not truth, completeness,
+semantic freshness, or model consumption.
+
 ## v0.3.231 First-Read Readiness Gate
 
 No archive migration is required. After updating and restarting the operator

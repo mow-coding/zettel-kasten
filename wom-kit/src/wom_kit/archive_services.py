@@ -12276,6 +12276,50 @@ def merge_unique_strings(*groups: list[str]) -> list[str]:
     return merged
 
 
+def decode_utf8_with_universal_newlines(data: bytes) -> str:
+    return data.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
+
+
+def explicit_abstract_publication_check(frontmatter: dict[str, Any]) -> dict[str, Any]:
+    value = frontmatter.get("abstract")
+    status = "ready"
+    normalized: str | None = None
+    if "abstract" not in frontmatter:
+        status = "missing"
+    elif not isinstance(value, str):
+        status = "not_string"
+    else:
+        normalized = re.sub(r"\s+", " ", value).strip()
+        if not normalized:
+            status = "empty"
+        elif value != normalized:
+            status = "not_normalized_single_line"
+        elif len(normalized) > ZET_ABSTRACT_MAX_CHARS:
+            status = "too_long"
+        elif (
+            header_string_is_private_or_unsafe(normalized)
+            or source_intake_has_provider_url(normalized)
+            or source_intake_secret_like(normalized)
+        ):
+            status = "private_locator_or_secret_like"
+    ready = status == "ready" and normalized is not None
+    return {
+        "contract": "wom-kit/explicit-abstract-publication/v0.1",
+        "status": status,
+        "ready_for_publication": ready,
+        "source_field": "frontmatter.abstract" if "abstract" in frontmatter else None,
+        "abstract_char_count": len(normalized) if ready and normalized is not None else 0,
+        "abstract_sha256": (
+            "sha256:" + hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+            if ready and normalized is not None
+            else None
+        ),
+        "max_chars": ZET_ABSTRACT_MAX_CHARS,
+        "abstract_text_echoed": False,
+        "body_read_for_check": False,
+    }
+
+
 def create_draft_zettel(
     archive_root: Path | str,
     *,
@@ -12461,6 +12505,7 @@ def create_draft_zettel(
     }
     if normalized_abstract:
         frontmatter["abstract"] = normalized_abstract
+    first_read_check = explicit_abstract_publication_check(frontmatter)
     if creation_mode:
         frontmatter["provenance"]["creation_mode"] = creation_mode
     if assisted:
@@ -12519,6 +12564,7 @@ def create_draft_zettel(
         "proposed_path": proposed_path,
         "frontmatter_preview": json_safe(frontmatter),
         "body_sha256": body_sha256,
+        "first_read_check": first_read_check,
         "blockers": unique_preserve_order(blockers),
         "warnings": unique_preserve_order(warnings),
         "would_change": [] if blockers else [f"write {proposed_path}"],
@@ -12541,6 +12587,7 @@ def create_draft_zettel(
         "target_archive": target_archive,
         "frontmatter": json_safe(frontmatter),
         "body_sha256": body_sha256,
+        "first_read_check": first_read_check,
         "warnings": unique_preserve_order(warnings),
         "created_paths": [archive_relative_path(path, root)],
         "approval_replay": approval_replay,
@@ -12557,7 +12604,9 @@ def promote_zettel_dry_run(
     root = require_existing_archive_root(archive_root)
     path = resolve_zettel_path(root, zettel_id=zettel_id, relative_path=relative_path)
     draft_relative = archive_relative_path(path, root)
-    frontmatter, body = split_zettel_text(path.read_text(encoding="utf-8"))
+    source_bytes = path.read_bytes()
+    source_sha256 = hashlib.sha256(source_bytes).hexdigest()
+    frontmatter, body = split_zettel_text(decode_utf8_with_universal_newlines(source_bytes))
     frontmatter = json_safe(frontmatter)
     rules = load_zettel_rules(root)
     minting_rules = lifecycle_minting_rules(rules)
@@ -12608,6 +12657,12 @@ def promote_zettel_dry_run(
         blockers.append("Body must be present.")
     if zettel_body_has_forbidden_location_reference(body):
         blockers.append("Body appears to contain a private provider locator or local absolute path.")
+    first_read_check = explicit_abstract_publication_check(frontmatter)
+    if not first_read_check["ready_for_publication"]:
+        blockers.append(
+            "Canonical publication requires a normalized, bounded, safe explicit frontmatter.abstract "
+            f"(status: {first_read_check['status']})."
+        )
 
     provenance = frontmatter.get("provenance")
     if not isinstance(provenance, dict):
@@ -12668,8 +12723,10 @@ def promote_zettel_dry_run(
         draft_path=draft_relative,
         proposed_canonical_path=proposed_path,
         proposed_receipt_path=proposed_receipt_path,
+        source_sha256=source_sha256,
         checklist=checklist,
         near_duplicates=near_duplicates,
+        first_read_check=first_read_check,
         blockers=blockers,
         warnings=warnings,
         requires_human_approval=bool(minting_rules.get("requires_human_approval", True)),
@@ -12682,11 +12739,13 @@ def promote_zettel_dry_run(
         "title": frontmatter.get("title"),
         "proposed_canonical_path": proposed_path,
         "proposed_receipt_path": proposed_receipt_path,
+        "source_sha256": source_sha256,
         "blockers": blockers,
         "warnings": warnings,
         "checklist": checklist,
         "duplicate_check": duplicate_check,
         "near_duplicates": near_duplicates,
+        "first_read_check": first_read_check,
         "receipt_preview": receipt_preview,
         "would_change": [
             "status -> canonical",
@@ -12721,8 +12780,21 @@ def promote_zettel(
         )
 
     source_path = resolve_zettel_path(root, zettel_id=zettel_id, relative_path=relative_path)
-    source_frontmatter, body = split_zettel_text(source_path.read_text(encoding="utf-8"))
+    source_bytes = source_path.read_bytes()
+    current_source_sha256 = hashlib.sha256(source_bytes).hexdigest()
+    if current_source_sha256 != dry_run.get("source_sha256"):
+        raise ArchiveServiceError("Promotion blocked because the source draft changed after dry-run.")
+    source_frontmatter, body = split_zettel_text(decode_utf8_with_universal_newlines(source_bytes))
     source_frontmatter = json_safe(source_frontmatter)
+    current_first_read_check = explicit_abstract_publication_check(source_frontmatter)
+    if (
+        not current_first_read_check["ready_for_publication"]
+        or current_first_read_check.get("abstract_sha256")
+        != dry_run.get("first_read_check", {}).get("abstract_sha256")
+    ):
+        raise ArchiveServiceError(
+            "Promotion blocked because the explicit abstract is missing, invalid, or changed after dry-run."
+        )
 
     canonical_relative = dry_run["proposed_canonical_path"]
     receipt_relative = dry_run["proposed_receipt_path"]
@@ -12762,6 +12834,7 @@ def promote_zettel(
         "reviewed_by": reviewer,
         "source": {
             "path": dry_run["draft_path"],
+            "sha256": current_source_sha256,
         },
         "target": {
             "path": canonical_relative,
@@ -12772,6 +12845,7 @@ def promote_zettel(
         },
         "checklist": dry_run["checklist"],
         "near_duplicates": dry_run["near_duplicates"],
+        "first_read_check": current_first_read_check,
         "warnings": dry_run["warnings"],
         "result": {
             "created_paths": created_paths,
@@ -12805,8 +12879,10 @@ def promote_zettel(
         "canonical_path": canonical_relative,
         "receipt_path": receipt_relative,
         "reviewed_by": reviewer,
+        "source_sha256": current_source_sha256,
         "warnings": dry_run["warnings"],
         "near_duplicates": dry_run["near_duplicates"],
+        "first_read_check": current_first_read_check,
         "checklist": dry_run["checklist"],
         "created_paths": created_paths,
         "receipt": json_safe(receipt),
@@ -12833,6 +12909,7 @@ def mint_zettel_dry_run(
     snapshot_relative = f"{MINT_DRAFT_SNAPSHOTS_DIR}/{zettel_id_value}.draft.md"
     blockers = list(promotion_dry_run["blockers"])
     warnings = list(promotion_dry_run["warnings"])
+    first_read_check = promotion_dry_run["first_read_check"]
 
     receipt_path = resolve_archive_relative_path(root, receipt_relative)
     snapshot_path = resolve_archive_relative_path(root, snapshot_relative)
@@ -12858,6 +12935,7 @@ def mint_zettel_dry_run(
         proposed_snapshot_path=snapshot_relative,
         checklist=promotion_dry_run["checklist"],
         near_duplicates=promotion_dry_run["near_duplicates"],
+        first_read_check=first_read_check,
         blockers=blockers,
         warnings=warnings,
     )
@@ -12880,6 +12958,7 @@ def mint_zettel_dry_run(
         "mint_checklist_guidance": mint_checklist_guidance(promotion_dry_run["checklist"]),
         "duplicate_check": promotion_dry_run.get("duplicate_check", {}),
         "near_duplicates": promotion_dry_run["near_duplicates"],
+        "first_read_check": first_read_check,
         "self_contained_check": self_contained_check,
         "quality_check": quality_check,
         "scratch_cleanup": scratch_cleanup,
@@ -12941,9 +13020,22 @@ def mint_zettel(
 
     source_path = resolve_zettel_path(root, zettel_id=zettel_id, relative_path=relative_path)
     source_bytes = source_path.read_bytes()
-    source_text = source_path.read_text(encoding="utf-8")
+    current_source_sha256 = hashlib.sha256(source_bytes).hexdigest()
+    expected_source_sha256 = dry_run.get("receipt_preview", {}).get("source", {}).get("sha256")
+    if current_source_sha256 != expected_source_sha256:
+        raise ArchiveServiceError("Minting blocked because the source draft changed after dry-run.")
+    source_text = decode_utf8_with_universal_newlines(source_bytes)
     source_frontmatter, body = split_zettel_text(source_text)
     source_frontmatter = json_safe(source_frontmatter)
+    current_first_read_check = explicit_abstract_publication_check(source_frontmatter)
+    if (
+        not current_first_read_check["ready_for_publication"]
+        or current_first_read_check.get("abstract_sha256")
+        != dry_run.get("first_read_check", {}).get("abstract_sha256")
+    ):
+        raise ArchiveServiceError(
+            "Minting blocked because the explicit abstract is missing, invalid, or changed after dry-run."
+        )
 
     canonical_relative = dry_run["proposed_canonical_path"]
     receipt_relative = dry_run["proposed_mint_receipt_path"]
@@ -13008,9 +13100,11 @@ def mint_zettel(
             created_files.append(snapshot_path)
             handle.write(source_bytes)
 
-        source_sha = sha256_path(source_path)
+        source_sha = current_source_sha256
         canonical_sha = sha256_path(canonical_path)
         snapshot_sha = sha256_path(snapshot_path)
+        if snapshot_sha != source_sha:
+            raise OSError("Mint draft snapshot hash does not match the approved source bytes.")
         receipt = {
             "receipt_id": f"receipt:mint:{zettel_id_value}",
             "receipt_path": receipt_relative,
@@ -13044,6 +13138,7 @@ def mint_zettel(
             "prompt_boundary": extract_mint_prompt_boundary(source_frontmatter),
             "edges": source_frontmatter.get("edges") if isinstance(source_frontmatter.get("edges"), list) else [],
             "local_ai_sessions": extract_mint_local_ai_sessions(source_frontmatter),
+            "first_read_check": current_first_read_check,
             "checklist": dry_run["checklist"],
             "affirmations": [
                 {"item_id": item_id, "affirmed_by": reviewer, "affirmed_at": now}
@@ -13107,6 +13202,7 @@ def mint_zettel(
         "generated_index_updated": generated_index_updated,
         "near_duplicates": dry_run["near_duplicates"],
         "self_contained_check": dry_run.get("self_contained_check", {}),
+        "first_read_check": current_first_read_check,
         "quality_check": dry_run.get("quality_check", {}),
         "scratch_cleanup": scratch_cleanup_result,
         "checklist": dry_run["checklist"],
@@ -17074,8 +17170,10 @@ def build_promotion_receipt_preview(
     draft_path: str,
     proposed_canonical_path: str,
     proposed_receipt_path: str,
+    source_sha256: str,
     checklist: list[dict[str, Any]],
     near_duplicates: list[dict[str, Any]],
+    first_read_check: dict[str, Any],
     blockers: list[str],
     warnings: list[str],
     requires_human_approval: bool,
@@ -17090,6 +17188,7 @@ def build_promotion_receipt_preview(
         "source": {
             "path": draft_path,
             "status": "draft",
+            "sha256": source_sha256,
         },
         "target": {
             "path": proposed_canonical_path,
@@ -17101,6 +17200,7 @@ def build_promotion_receipt_preview(
         },
         "checklist": checklist,
         "near_duplicates": near_duplicates,
+        "first_read_check": first_read_check,
         "blockers": blockers,
         "warnings": warnings,
     }
@@ -17119,6 +17219,7 @@ def build_mint_receipt_preview(
     proposed_snapshot_path: str,
     checklist: list[dict[str, Any]],
     near_duplicates: list[dict[str, Any]],
+    first_read_check: dict[str, Any],
     blockers: list[str],
     warnings: list[str],
 ) -> dict[str, Any]:
@@ -17155,6 +17256,7 @@ def build_mint_receipt_preview(
         "prompt_boundary": extract_mint_prompt_boundary(frontmatter),
         "edges": frontmatter.get("edges") if isinstance(frontmatter.get("edges"), list) else [],
         "local_ai_sessions": extract_mint_local_ai_sessions(frontmatter),
+        "first_read_check": first_read_check,
         "checklist": checklist,
         "near_duplicates": near_duplicates,
         "blockers": blockers,

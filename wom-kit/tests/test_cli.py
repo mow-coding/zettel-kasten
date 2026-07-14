@@ -21401,6 +21401,8 @@ state:
                     str(archive_root),
                     "--title",
                     "Objet backed draft",
+                    "--abstract",
+                    "A manifested objet supports this draft and remains traceable through minting.",
                     "--body",
                     "# Objet backed draft\n\nThis draft cites an existing manifested objet for test coverage.",
                     "--dry-run",
@@ -21420,6 +21422,8 @@ state:
                     str(archive_root),
                     "--title",
                     "Objet backed draft",
+                    "--abstract",
+                    "A manifested objet supports this draft and remains traceable through minting.",
                     "--body",
                     "# Objet backed draft\n\nThis draft cites an existing manifested objet for test coverage.",
                     "--source-ref",
@@ -21531,6 +21535,8 @@ state:
                     str(archive_root),
                     "--title",
                     "Project intake evidence draft",
+                    "--abstract",
+                    "Reviewed project intake context remains attached to this evidence draft.",
                     "--body",
                     body,
                     "--dry-run",
@@ -21562,6 +21568,8 @@ state:
                     str(archive_root),
                     "--title",
                     "Project intake evidence draft",
+                    "--abstract",
+                    "Reviewed project intake context remains attached to this evidence draft.",
                     "--body",
                     body,
                     "--source-intake-plan",
@@ -21678,6 +21686,8 @@ state:
                     str(archive_root),
                     "--title",
                     "Approved plan draft",
+                    "--abstract",
+                    "An approved source intake plan remains traceable through draft publication.",
                     "--body",
                     body,
                     "--source-intake-plan",
@@ -22121,6 +22131,8 @@ state:
                     str(archive_root),
                     "--title",
                     "Prompt boundary mint draft",
+                    "--abstract",
+                    "Prompt-boundary metadata remains traceable through canonical publication.",
                     "--body",
                     body,
                     "--prompt-boundary-report",
@@ -32768,6 +32780,8 @@ state:
             self.assertTrue(result["path"].startswith("inbox/"))
             self.assertTrue((archive_root / result["path"]).is_file())
             self.assertEqual(result["frontmatter"]["facets"]["domain"], "test")
+            self.assertEqual(result["first_read_check"]["status"], "missing")
+            self.assertFalse(result["first_read_check"]["ready_for_publication"])
 
     def test_create_draft_accepts_bounded_abstract_and_rejects_unsafe_or_long_values(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -32792,6 +32806,10 @@ state:
             self.assertEqual(code, 0, output)
             result = json.loads(output)
             self.assertEqual(result["frontmatter"]["abstract"], "A compact reviewed abstract for the zet node.")
+            self.assertEqual(result["first_read_check"]["status"], "ready")
+            self.assertTrue(result["first_read_check"]["ready_for_publication"])
+            self.assertRegex(result["first_read_check"]["abstract_sha256"], r"^sha256:[0-9a-f]{64}$")
+            self.assertNotIn("A compact reviewed abstract", json.dumps(result["first_read_check"]))
             stored = archive_services.read_zettel_frontmatter_only(archive_root / result["path"])
             self.assertEqual(stored["abstract"], "A compact reviewed abstract for the zet node.")
 
@@ -33220,6 +33238,55 @@ state:
             self.assertFalse((archive_root / "zettels" / "zet_20260519_draft_ai_lunch_note.md").exists())
             self.assertFalse((archive_root / "receipts" / "promotion" / "zet_20260519_draft_ai_lunch_note.promotion.json").exists())
 
+    def test_promote_requires_explicit_safe_abstract_and_does_not_accept_summary_fallback(self) -> None:
+        cases = [
+            (None, "missing"),
+            ("A first line.\nA second line.", "not_normalized_single_line"),
+            ("x" * (archive_services.ZET_ABSTRACT_MAX_CHARS + 1), "too_long"),
+            (r"Review C:\private\source.md before publishing.", "private_locator_or_secret_like"),
+        ]
+        for abstract, expected_status in cases:
+            with self.subTest(status=expected_status), tempfile.TemporaryDirectory() as tmp:
+                archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+                draft_path = self.make_fake_lunch_draft_promotion_ready(archive_root)
+                text = draft_path.read_text(encoding="utf-8")
+                match = archive_cli.FRONTMATTER_RE.match(text)
+                self.assertIsNotNone(match)
+                assert match is not None
+                frontmatter = archive_cli.load_yaml(match.group(1))
+                body = text[match.end() :].lstrip()
+                frontmatter["summary"] = "A compatibility summary that must not authorize publication."
+                if abstract is None:
+                    frontmatter.pop("abstract", None)
+                else:
+                    frontmatter["abstract"] = abstract
+                draft_path.write_text(
+                    "---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + body,
+                    encoding="utf-8",
+                )
+
+                code, output = self.run_cli(
+                    [
+                        "promote",
+                        str(archive_root),
+                        "--path",
+                        "inbox/zet_20260519_draft_ai_lunch_note.md",
+                        "--dry-run",
+                        "--format",
+                        "json",
+                    ]
+                )
+                self.assertEqual(code, 1, output)
+                result = json.loads(output)
+                self.assertEqual(result["first_read_check"]["status"], expected_status)
+                self.assertFalse(result["first_read_check"]["ready_for_publication"])
+                self.assertTrue(
+                    any("explicit frontmatter.abstract" in blocker for blocker in result["blockers"])
+                )
+                self.assertFalse(
+                    (archive_root / "zettels" / "zet_20260519_draft_ai_lunch_note.md").exists()
+                )
+
     def test_promote_dry_run_blocks_unreviewed_fleeting_capture(self) -> None:
         archive_root = KIT_ROOT / "examples" / "fake-life-archive"
         code, output = self.run_cli(
@@ -33296,6 +33363,7 @@ state:
             frontmatter = {
                 "id": "zet_20260622_external_citation_fixture",
                 "title": "External citation fixture",
+                "abstract": "A self-contained zet may retain a reviewed public citation.",
                 "created_at": "2026-06-22T10:00:00+09:00",
                 "updated_at": "2026-06-22T10:00:00+09:00",
                 "archive_id": "archive:personal:fake-life",
@@ -33499,6 +33567,7 @@ state:
             frontmatter = {
                 "id": "zet_20260622_scratch_gc_fixture",
                 "title": "Scratch GC fixture",
+                "abstract": "Durable context is preserved before temporary AI scratch material is removed.",
                 "created_at": "2026-06-22T10:10:00+09:00",
                 "updated_at": "2026-06-22T10:10:00+09:00",
                 "archive_id": "archive:personal:fake-life",
@@ -33641,12 +33710,55 @@ state:
             self.assertFalse(receipt["dry_run"])
             self.assertEqual(receipt["reviewed_by"], "person:test")
             self.assertEqual(receipt["source"]["path"], "inbox/zet_20260519_draft_ai_lunch_note.md")
+            self.assertRegex(receipt["source"]["sha256"], r"^[0-9a-f]{64}$")
+            self.assertEqual(receipt["source"]["sha256"], result["source_sha256"])
             self.assertEqual(receipt["target"]["path"], "zettels/zet_20260519_draft_ai_lunch_note.md")
             self.assertEqual(receipt["zettel"]["id"], "zet_20260519_draft_ai_lunch_note")
             self.assertEqual(receipt["result"]["created_paths"], result["created_paths"])
 
             doctor_code, doctor_output = self.run_cli(["doctor", str(archive_root), "--strict"])
             self.assertEqual(doctor_code, 0, doctor_output)
+
+    def test_promote_rechecks_full_draft_bytes_after_dry_run_before_writing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            draft_path = self.make_fake_lunch_draft_promotion_ready(archive_root)
+            original_dry_run = archive_services.promote_zettel_dry_run
+
+            def mutate_body_after_dry_run(*args: Any, **kwargs: Any) -> dict[str, Any]:
+                result = original_dry_run(*args, **kwargs)
+                draft_path.write_text(
+                    draft_path.read_text(encoding="utf-8") + "\nChanged after preview.\n",
+                    encoding="utf-8",
+                )
+                return result
+
+            with patch.object(
+                archive_services,
+                "promote_zettel_dry_run",
+                side_effect=mutate_body_after_dry_run,
+            ):
+                with self.assertRaisesRegex(
+                    archive_services.ArchiveServiceError,
+                    "source draft changed after dry-run",
+                ):
+                    archive_services.promote_zettel(
+                        archive_root,
+                        relative_path="inbox/zet_20260519_draft_ai_lunch_note.md",
+                        reviewed_by="person:test",
+                    )
+
+            self.assertFalse(
+                (archive_root / "zettels" / "zet_20260519_draft_ai_lunch_note.md").exists()
+            )
+            self.assertFalse(
+                (
+                    archive_root
+                    / "receipts"
+                    / "promotion"
+                    / "zet_20260519_draft_ai_lunch_note.promotion.json"
+                ).exists()
+            )
 
     def test_promote_real_blocks_dry_run_blockers_without_writing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -34074,10 +34186,136 @@ state:
             self.assertRegex(receipt["source"]["sha256"], r"^[0-9a-f]{64}$")
             self.assertRegex(receipt["target"]["sha256"], r"^[0-9a-f]{64}$")
             self.assertRegex(receipt["snapshot"]["sha256"], r"^[0-9a-f]{64}$")
+            self.assertEqual(receipt["source"]["sha256"], receipt["snapshot"]["sha256"])
             self.assertEqual(receipt["result"]["created_paths"], result["created_paths"])
+            self.assertEqual(receipt["first_read_check"]["status"], "ready")
+            self.assertTrue(receipt["first_read_check"]["ready_for_publication"])
+            self.assertNotIn(
+                "An AI-created lunch reflection waiting for human review before canonical publication.",
+                json.dumps(receipt, ensure_ascii=False),
+            )
+            receipt_schema = json.loads(
+                (KIT_ROOT / "schemas" / "mint-receipt.schema.json").read_text(encoding="utf-8")
+            )
+            first_read_schema = receipt_schema["properties"]["first_read_check"]
+            self.assertFalse(first_read_schema["additionalProperties"])
+            self.assertNotIn("abstract_text", first_read_schema["properties"])
 
             doctor_code, doctor_output = self.run_cli(["doctor", str(archive_root), "--strict"])
             self.assertEqual(doctor_code, 0, doctor_output)
+
+    def test_mint_rechecks_full_draft_bytes_after_dry_run_before_writing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            draft_path = self.make_fake_lunch_draft_promotion_ready(archive_root)
+            original_dry_run = archive_services.mint_zettel_dry_run
+
+            def mutate_abstract_after_dry_run(*args: Any, **kwargs: Any) -> dict[str, Any]:
+                result = original_dry_run(*args, **kwargs)
+                text = draft_path.read_text(encoding="utf-8")
+                match = archive_cli.FRONTMATTER_RE.match(text)
+                self.assertIsNotNone(match)
+                assert match is not None
+                frontmatter = archive_cli.load_yaml(match.group(1))
+                body = text[match.end() :].lstrip()
+                frontmatter["abstract"] = "A changed abstract that was not part of the approved dry run."
+                draft_path.write_text(
+                    "---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + body,
+                    encoding="utf-8",
+                )
+                return result
+
+            with patch.object(
+                archive_services,
+                "mint_zettel_dry_run",
+                side_effect=mutate_abstract_after_dry_run,
+            ):
+                with self.assertRaisesRegex(
+                    archive_services.ArchiveServiceError,
+                    "source draft changed after dry-run",
+                ):
+                    archive_services.mint_zettel(
+                        archive_root,
+                        relative_path="inbox/zet_20260519_draft_ai_lunch_note.md",
+                        reviewed_by="person:test",
+                    )
+
+            self.assertFalse(
+                (archive_root / "zettels" / "zet_20260519_draft_ai_lunch_note.md").exists()
+            )
+            self.assertFalse(
+                (archive_root / "receipts" / "mint" / "zet_20260519_draft_ai_lunch_note.mint.json").exists()
+            )
+            self.assertFalse(
+                (archive_root / "receipts" / "mint" / "drafts" / "zet_20260519_draft_ai_lunch_note.draft.md").exists()
+            )
+
+    def test_mint_zet_batch_does_not_bypass_explicit_abstract_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            zettel_id = "zet_20260620_batch_missing_abstract"
+            draft_path = self.make_batch_ready_draft(
+                archive_root,
+                zettel_id,
+                "Batch draft missing explicit abstract",
+                "A batch draft body that must not become canonical without its compact first read.\n",
+            )
+            text = draft_path.read_text(encoding="utf-8")
+            match = archive_cli.FRONTMATTER_RE.match(text)
+            self.assertIsNotNone(match)
+            assert match is not None
+            frontmatter = archive_cli.load_yaml(match.group(1))
+            body = text[match.end() :].lstrip()
+            frontmatter.pop("abstract", None)
+            frontmatter["summary"] = "A compatibility summary is not publication authority."
+            draft_path.write_text(
+                "---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + body,
+                encoding="utf-8",
+            )
+            plan_path = archive_root / "workbench" / "missing-abstract.plan.json"
+            plan_path.parent.mkdir(parents=True, exist_ok=True)
+            plan_path.write_text(
+                json.dumps(
+                    {
+                        "schema": "wom-kit/mint-zet-batch/v0.1",
+                        "policy": {
+                            "policy_id": "policy:missing-abstract-test",
+                            "policy_label": "Missing abstract gate test",
+                            "allow_warnings": False,
+                        },
+                        "items": [{"item_id": "item:missing-abstract", "zettel_id": zettel_id}],
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+
+            code, output = self.run_cli(
+                [
+                    "mint-zet-batch",
+                    str(archive_root),
+                    "--plan",
+                    "workbench/missing-abstract.plan.json",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 1, output)
+            result = json.loads(output)
+            self.assertEqual(result["summary"]["failed_item_count"], 1)
+            self.assertEqual(result["summary"]["would_write_count"], 0)
+            self.assertTrue(
+                any(
+                    "explicit frontmatter.abstract" in blocker
+                    for blocker in result["failed_items"][0]["blockers"]
+                )
+            )
+            self.assertEqual(result["files_written"], [])
+            self.assertFalse((archive_root / "zettels" / f"{zettel_id}.md").exists())
+            self.assertFalse(
+                (archive_root / "receipts" / "mint" / f"{zettel_id}.mint.json").exists()
+            )
 
     def test_mint_zet_batch_dry_run_approve_and_skip_existing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -43944,6 +44182,8 @@ class ObjetCaptureTests(unittest.TestCase):
                     str(archive_root),
                     "--title",
                     "Spine test zet",
+                    "--abstract",
+                    "A captured objet remains traceable through the full draft-to-mint spine.",
                     "--body",
                     "# Spine test zet\n\nMinted from a captured objet in the full-loop test.",
                     "--source-ref",
