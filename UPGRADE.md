@@ -24,6 +24,27 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.236 Canonical Revision Receipt Audit
+
+No archive migration is required. Restart the AI operator process so the new
+CLI-only read command is visible. After one or more ordinary canonical
+revisions, and before handing the archive to another session, run:
+
+```text
+archive zet-revision-receipt-audit <archive-root> --dry-run --max-receipts 5000 --max-locks 5000 --max-problems 100 --progress --format json
+```
+
+A healthy result means the retained receipts form one continuous hash history
+to each current zet and no recognized transaction lock needs recovery. A
+completed leftover lock is a warning; a missing-receipt, prewrite, ambiguous,
+invalid, or unsupported lock requires inspection. Never delete a lock or edit
+an immutable receipt merely to make the audit green.
+
+The command is read-only and content-free in its output. It cannot prove that
+a correction is factually true and cannot recreate an old zet from receipt
+hashes. Revert therefore remains a separate, future reviewed workflow that
+must begin with privately recovered full-zet bytes.
+
 ## v0.3.235 Canonical zet Revision Write
 
 No archive migration is required. Restart the AI operator process so the new

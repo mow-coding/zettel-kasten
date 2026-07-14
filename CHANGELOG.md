@@ -6,6 +6,38 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.236 - 2026-07-14
+
+Canonical revision receipt and transaction-lock audit checkpoint. Additive and
+read-only; no canonical, receipt, lock, provider, or database write.
+
+- **One linear history check.** CLI `zet-revision-receipt-audit` (aliases
+  `revision-receipt-audit`, `canonical-revision-audit`) validates every
+  canonical revision receipt, groups them by private canonical identity, and
+  proves that each current zet sits at the tip of one unbranched before/after
+  hash chain.
+- **Historical receipts stay meaningful.** The audit distinguishes one current
+  receipt from valid superseded receipts instead of incorrectly requiring every
+  historical receipt to match today's bytes.
+- **Full state continuity.** Adjacent receipt file, semantic, abstract, and
+  body hashes must agree, and revision timestamps must increase strictly.
+- **Crash-state diagnosis.** Private per-canonical locks are classified as
+  completed leftovers, recoverable missing-receipt states, prewrite leftovers,
+  ambiguous states, invalid locks, or unsupported legacy shapes.
+- **Bounded O(N) work.** Each receipt and lock is opened once, and each current
+  canonical target is opened at most once per identity. The command never
+  rescans the complete zet tree for every receipt.
+- **Content-free output.** Results expose counts, fixed status codes, SHA-only
+  receipt/write/lock handles, and a deterministic audit digest; no zet id/path,
+  proposal filename, title, abstract/body text, reviewer, provider URL,
+  absolute path, or secret is echoed.
+- **Narrow operator surface.** The audit is local CLI only. MCP keeps the
+  existing read-only revision planner and gains no duplicate audit or write
+  tool.
+- **Honest boundary.** The command writes and deletes nothing. It diagnoses
+  locks but never removes one, never repairs a receipt, never rewrites a zet,
+  and cannot reconstruct old content from hashes alone.
+
 ## v0.3.235 - 2026-07-14
 
 Canonical zet revision write checkpoint. Approval-gated single-zet mutation

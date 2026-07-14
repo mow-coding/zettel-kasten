@@ -9135,6 +9135,78 @@ def command_zet_revision_write(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 1
 
 
+def command_zet_revision_receipt_audit(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print(
+            "zet-revision-receipt-audit is read-only and requires --dry-run.",
+            file=sys.stderr,
+        )
+        return 1
+    reporter = CommandProgressReporter(
+        bool(getattr(args, "progress", False)),
+        label="zet-revision-receipt-audit",
+    )
+    try:
+        result = archive_services.zet_revision_receipt_audit(
+            Path(args.archive_root),
+            dry_run=True,
+            max_receipts=int(args.max_receipts),
+            max_locks=int(args.max_locks),
+            max_problems=int(args.max_problems),
+            progress_callback=reporter.progress,
+        )
+    except archive_services.ArchiveServiceError:
+        print(
+            "zet-revision-receipt-audit could not inspect the private revision history safely.",
+            file=sys.stderr,
+        )
+        return 1
+    except (ArchivePathError, OSError, UnicodeError, ValueError):
+        print(
+            "zet-revision-receipt-audit failed before a privacy-safe result could be produced.",
+            file=sys.stderr,
+        )
+        return 1
+    finally:
+        reporter.close()
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+        print(f"WOM canonical revision audit: {result.get('status') or 'unknown'}")
+        print(f"Receipts: {summary.get('receipt_count', 0)}")
+        print(
+            "Current receipts verified: "
+            + str(summary.get("current_receipt_verified", 0))
+        )
+        print(
+            "Superseded receipts verified: "
+            + str(summary.get("superseded_receipt_verified", 0))
+        )
+        print(f"Locks: {summary.get('lock_count', 0)}")
+        print(
+            "Receipt recovery needed: "
+            + str(summary.get("recoverable_missing_receipt_lock", 0))
+        )
+        print(f"Problems: {summary.get('problem_count', 0)}")
+        print("Audit complete: " + ("yes" if summary.get("complete") else "no"))
+        print(f"Audit digest: {result.get('audit_digest') or 'unavailable'}")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+        if result.get("next_safe_actions"):
+            print("Next safe actions:")
+            for action in result["next_safe_actions"]:
+                print(f"- {action}")
+    return 0 if result.get("ok") else 1
+
+
 def command_zet_catalog_pass(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print("zet-catalog-pass requires --dry-run; only its explicit private scratch output may be written.", file=sys.stderr)
@@ -18615,6 +18687,53 @@ def build_parser() -> argparse.ArgumentParser:
         "--format", choices=["text", "json"], default="json", help="Output format."
     )
     zet_revision_write.set_defaults(func=command_zet_revision_write)
+
+    zet_revision_receipt_audit = subcommands.add_parser(
+        "zet-revision-receipt-audit",
+        aliases=["revision-receipt-audit", "canonical-revision-audit"],
+        help="Audit canonical revision receipt chains and leftover transaction locks without echoing content.",
+    )
+    zet_revision_receipt_audit.add_argument(
+        "archive_root",
+        help="Archive root containing canonical zets and private revision evidence.",
+    )
+    zet_revision_receipt_audit.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Required. Reads receipts, current hashes, and text-free locks; writes nothing.",
+    )
+    zet_revision_receipt_audit.add_argument(
+        "--max-receipts",
+        type=int,
+        default=archive_services.ZET_REVISION_AUDIT_MAX_RECEIPTS,
+        help="Maximum canonical revision receipts to audit (1-5000).",
+    )
+    zet_revision_receipt_audit.add_argument(
+        "--max-locks",
+        type=int,
+        default=archive_services.ZET_REVISION_AUDIT_MAX_LOCKS,
+        help="Maximum canonical revision transaction locks to audit (1-5000).",
+    )
+    zet_revision_receipt_audit.add_argument(
+        "--max-problems",
+        type=int,
+        default=100,
+        help="Maximum content-free problem records to return (1-500).",
+    )
+    zet_revision_receipt_audit.add_argument(
+        "--progress",
+        action="store_true",
+        help="Stream content-free receipt, chain, and lock counts to stderr.",
+    )
+    zet_revision_receipt_audit.add_argument(
+        "--format",
+        choices=["text", "json"],
+        default="json",
+        help="Output format.",
+    )
+    zet_revision_receipt_audit.set_defaults(
+        func=command_zet_revision_receipt_audit
+    )
 
     zet_catalog_pass = subcommands.add_parser(
         "zet-catalog-pass",

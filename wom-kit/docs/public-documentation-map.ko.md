@@ -73,6 +73,7 @@
 - [초록 데이터 최신성 검진](abstract-freshness.md)
 - [정본 zet 수정 계획](zet-revision-plan.md)
 - [정본 zet 수정 쓰기](zet-revision-write.md)
+- [정본 zet 수정 이력 검진](zet-revision-receipt-audit.md)
 - [Derived Artifact Staleness](derived-artifact-staleness.md)
 - [zet Quality Check](zet-quality-check.md)
 - [Source Object Storage Policy](source-object-storage-policy.md)

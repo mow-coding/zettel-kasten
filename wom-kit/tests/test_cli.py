@@ -817,6 +817,93 @@ class ArchiveCliTests(unittest.TestCase):
             "body_marker": body_marker,
         }
 
+    def approve_zet_revision_fixture(
+        self,
+        archive_root: Path,
+        fixture: dict[str, Any],
+        *,
+        revision_at: str,
+        reviewed_by: str = "person:fake-reviewer",
+    ) -> dict[str, Any]:
+        plan = fixture["plan"]
+        base = {
+            "zettel_id": fixture["zettel_id"],
+            "proposal_path": fixture["proposal_relative"],
+            "expected_canonical_sha256": plan["canonical"]["sha256"],
+            "expected_proposal_sha256": plan["proposal"]["sha256"],
+            "expected_proposal_semantic_sha256": plan["proposal"][
+                "semantic_sha256"
+            ],
+            "expected_plan_digest": plan["plan_digest"],
+            "revision_at": revision_at,
+        }
+        preview = archive_services.zet_revision_write(
+            archive_root, **base, dry_run=True
+        )
+        self.assertTrue(preview["ok"], preview)
+        applied = archive_services.zet_revision_write(
+            archive_root,
+            **base,
+            expected_write_plan_digest=preview["write_plan"]["actual_digest"],
+            approve=True,
+            reviewed_by=reviewed_by,
+            affirm_revision_reviewed=True,
+            affirm_abstract_body_pair_reviewed=True,
+            affirm_edge_changes_reviewed=bool(
+                plan.get("change_summary", {}).get("edges_changed")
+            ),
+        )
+        self.assertTrue(applied["ok"], applied)
+        self.assertEqual(applied["status"], "applied")
+        return {"preview": preview, "applied": applied, "arguments": base}
+
+    def create_followup_zet_revision_proposal(
+        self,
+        archive_root: Path,
+        canonical_path: Path,
+        *,
+        name: str,
+        title_marker: str,
+        abstract_marker: str,
+        body_marker: str,
+    ) -> dict[str, Any]:
+        current_bytes = canonical_path.read_bytes()
+        frontmatter, body = archive_services.split_zettel_text(
+            canonical_path.read_text(encoding="utf-8")
+        )
+        proposed_frontmatter = json.loads(json.dumps(frontmatter))
+        proposed_frontmatter["title"] = title_marker
+        proposed_frontmatter["abstract"] = abstract_marker
+        proposal_relative = f".wom-scratch/revisions/{name}"
+        proposal_path = archive_root / proposal_relative
+        proposal_path.parent.mkdir(parents=True, exist_ok=True)
+        proposal_path.write_text(
+            "---\n"
+            + archive_cli.dump_yaml(proposed_frontmatter)
+            + "---\n\n"
+            + body.rstrip()
+            + f"\n\n{body_marker}\n",
+            encoding="utf-8",
+        )
+        plan = archive_services.zet_revision_plan(
+            archive_root,
+            zettel_id=frontmatter["id"],
+            proposal_path=proposal_relative,
+            dry_run=True,
+        )
+        self.assertTrue(plan["ok"], plan)
+        return {
+            "canonical_path": canonical_path,
+            "original_bytes": current_bytes,
+            "zettel_id": frontmatter["id"],
+            "proposal_relative": proposal_relative,
+            "proposal_path": proposal_path,
+            "plan": plan,
+            "title_marker": title_marker,
+            "abstract_marker": abstract_marker,
+            "body_marker": body_marker,
+        }
+
     def project_intake_receipt(self, tmp: str, archive_root: Path) -> str:
         decisions_path = Path(tmp) / "project-intake-decisions.json"
         decisions_path.write_text(
@@ -2155,6 +2242,7 @@ class ArchiveCliTests(unittest.TestCase):
         self.assertIn("first-read-readiness", command_names)
         self.assertIn("abstract-freshness", command_names)
         self.assertIn("zet-revision-plan", command_names)
+        self.assertIn("zet-revision-receipt-audit", command_names)
         self.assertIn("derived-artifact-staleness", command_names)
         self.assertIn("approval-handoff-record", command_names)
         self.assertIn("approval-handoff-audit", command_names)
@@ -2225,6 +2313,21 @@ class ArchiveCliTests(unittest.TestCase):
             "--affirm-edge-changes-reviewed",
         ):
             self.assertIn(option, revision_write["options"])
+        revision_audit = next(
+            item for item in commands if item["name"] == "zet-revision-receipt-audit"
+        )
+        self.assertEqual(
+            revision_audit["aliases"],
+            ["revision-receipt-audit", "canonical-revision-audit"],
+        )
+        for option in (
+            "--dry-run",
+            "--max-receipts",
+            "--max-locks",
+            "--max-problems",
+            "--progress",
+        ):
+            self.assertIn(option, revision_audit["options"])
         abstract_backfill_write = next(item for item in commands if item["name"] == "zet-abstract-backfill-write")
         self.assertEqual(abstract_backfill_write["aliases"], ["abstract-backfill-write"])
         for option in (
@@ -31164,6 +31267,511 @@ state:
             self.assertEqual(list(lock_root.glob("*.canonical.write.lock")), [])
             self.assertIn("PRIVATE_FIRST_BODY", first["canonical_path"].read_text(encoding="utf-8"))
             self.assertNotIn("PRIVATE_SECOND_BODY", first["canonical_path"].read_text(encoding="utf-8"))
+
+    def test_zet_revision_receipt_audit_empty_archive_is_read_only_and_healthy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            before_files = sorted(
+                path.relative_to(archive_root).as_posix()
+                for path in archive_root.rglob("*")
+                if path.is_file()
+            )
+
+            missing_code, missing_output = self.run_cli(
+                ["zet-revision-receipt-audit", str(archive_root)]
+            )
+            self.assertEqual(missing_code, 1)
+            self.assertIn("read-only and requires --dry-run", missing_output)
+
+            code, output = self.run_cli(
+                [
+                    "zet-revision-receipt-audit",
+                    str(archive_root),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["status"], "healthy")
+            self.assertEqual(
+                result["schema"], "wom-kit/zet-revision-receipt-audit/v0.1"
+            )
+            self.assertEqual(result["summary"]["receipt_count"], 0)
+            self.assertEqual(result["summary"]["lock_count"], 0)
+            self.assertEqual(result["summary"]["canonical_files_read"], 0)
+            self.assertFalse(result["write_boundary"]["files_written"])
+            self.assertFalse(result["write_boundary"]["files_deleted"])
+            text_code, text_output = self.run_cli(
+                [
+                    "zet-revision-receipt-audit",
+                    str(archive_root),
+                    "--dry-run",
+                    "--format",
+                    "text",
+                ]
+            )
+            self.assertEqual(text_code, 0, text_output)
+            self.assertIn("Audit complete: yes", text_output)
+            self.assertIn("Audit digest: sha256:", text_output)
+            self.assertIn("Next safe actions:", text_output)
+            out_of_range = archive_services.zet_revision_receipt_audit(
+                archive_root, dry_run=True, max_receipts=0
+            )
+            self.assertFalse(out_of_range["ok"])
+            self.assertFalse(out_of_range["summary"]["complete"])
+            self.assertIn("max_receipts_out_of_range", out_of_range["blockers"])
+            self.assertEqual(
+                before_files,
+                sorted(
+                    path.relative_to(archive_root).as_posix()
+                    for path in archive_root.rglob("*")
+                    if path.is_file()
+                ),
+            )
+
+    def test_zet_revision_receipt_audit_verifies_one_linear_history_in_one_canonical_read(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            first = self.create_zet_revision_proposal(
+                archive_root,
+                title_marker="PRIVATE_AUDIT_FIRST_TITLE",
+                abstract_marker="PRIVATE_AUDIT_FIRST_ABSTRACT",
+                body_marker="PRIVATE_AUDIT_FIRST_BODY",
+            )
+            self.approve_zet_revision_fixture(
+                archive_root, first, revision_at="2026-07-14T14:00:00Z"
+            )
+            second = self.create_followup_zet_revision_proposal(
+                archive_root,
+                first["canonical_path"],
+                name="audit-followup.md",
+                title_marker="PRIVATE_AUDIT_SECOND_TITLE",
+                abstract_marker="PRIVATE_AUDIT_SECOND_ABSTRACT",
+                body_marker="PRIVATE_AUDIT_SECOND_BODY",
+            )
+            self.approve_zet_revision_fixture(
+                archive_root, second, revision_at="2026-07-14T14:10:00Z"
+            )
+
+            code, output = self.run_cli(
+                [
+                    "zet-revision-receipt-audit",
+                    str(archive_root),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            summary = result["summary"]
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(summary["receipt_count"], 2)
+            self.assertEqual(summary["valid_receipt_shape"], 2)
+            self.assertEqual(summary["revision_chain_count"], 1)
+            self.assertEqual(summary["current_receipt_verified"], 1)
+            self.assertEqual(summary["superseded_receipt_verified"], 1)
+            self.assertEqual(summary["canonical_files_read"], 1)
+            self.assertEqual(summary["problem_count"], 0)
+            self.assertEqual(
+                result["complexity"]["class"],
+                "O(receipt_files + revision_chains + lock_files)",
+            )
+            for private_marker in (
+                first["zettel_id"],
+                first["title_marker"],
+                first["abstract_marker"],
+                first["body_marker"],
+                second["title_marker"],
+                second["abstract_marker"],
+                second["body_marker"],
+                "person:fake-reviewer",
+                first["canonical_path"].name,
+                second["proposal_path"].name,
+            ):
+                self.assertNotIn(private_marker, output)
+
+            bounded = archive_services.zet_revision_receipt_audit(
+                archive_root, dry_run=True, max_receipts=1
+            )
+            self.assertFalse(bounded["ok"])
+            self.assertFalse(bounded["summary"]["complete"])
+            self.assertEqual(bounded["summary"]["receipts_scanned"], 0)
+            self.assertEqual(bounded["summary"]["canonical_files_read"], 0)
+            self.assertIn(
+                "receipt_count_exceeds_max_receipts", bounded["blockers"]
+            )
+
+    def test_zet_revision_receipt_audit_blocks_current_drift_without_echoing_content(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            fixture = self.create_zet_revision_proposal(archive_root)
+            self.approve_zet_revision_fixture(
+                archive_root, fixture, revision_at="2026-07-14T14:20:00Z"
+            )
+            drift_marker = "PRIVATE_CANONICAL_DRIFT_AFTER_REVISION"
+            fixture["canonical_path"].write_text(
+                fixture["canonical_path"].read_text(encoding="utf-8")
+                + f"\n{drift_marker}\n",
+                encoding="utf-8",
+            )
+
+            code, output = self.run_cli(
+                [
+                    "zet-revision-receipt-audit",
+                    str(archive_root),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 1)
+            result = json.loads(output)
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["summary"]["current_state_drift"], 1)
+            self.assertIn(
+                "one_or_more_revision_chains_invalid", result["blockers"]
+            )
+            self.assertNotIn(drift_marker, output)
+            self.assertNotIn(fixture["zettel_id"], output)
+
+    def test_zet_revision_receipt_audit_classifies_missing_receipt_and_prewrite_locks(self) -> None:
+        for interruption_point in ("after_write", "before_write"):
+            with self.subTest(interruption_point=interruption_point):
+                with tempfile.TemporaryDirectory() as tmp:
+                    archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+                    fixture = self.create_zet_revision_proposal(archive_root)
+                    plan = fixture["plan"]
+                    base = {
+                        "zettel_id": fixture["zettel_id"],
+                        "proposal_path": fixture["proposal_relative"],
+                        "expected_canonical_sha256": plan["canonical"]["sha256"],
+                        "expected_proposal_sha256": plan["proposal"]["sha256"],
+                        "expected_proposal_semantic_sha256": plan["proposal"][
+                            "semantic_sha256"
+                        ],
+                        "expected_plan_digest": plan["plan_digest"],
+                        "revision_at": (
+                            "2026-07-14T14:30:00Z"
+                            if interruption_point == "after_write"
+                            else "2026-07-14T14:31:00Z"
+                        ),
+                    }
+                    preview = archive_services.zet_revision_write(
+                        archive_root, **base, dry_run=True
+                    )
+                    self.assertTrue(preview["ok"], preview)
+                    approval = {
+                        **base,
+                        "expected_write_plan_digest": preview["write_plan"][
+                            "actual_digest"
+                        ],
+                        "approve": True,
+                        "reviewed_by": "person:fake-reviewer",
+                        "affirm_revision_reviewed": True,
+                        "affirm_abstract_body_pair_reviewed": True,
+                    }
+                    patch_target = (
+                        "wom_kit.archive_services.write_json_new_file"
+                        if interruption_point == "after_write"
+                        else "wom_kit.archive_services.write_bytes_atomic"
+                    )
+                    with patch(patch_target, side_effect=KeyboardInterrupt()):
+                        with self.assertRaises(KeyboardInterrupt):
+                            archive_services.zet_revision_write(
+                                archive_root, **approval
+                            )
+
+                    code, output = self.run_cli(
+                        [
+                            "zet-revision-receipt-audit",
+                            str(archive_root),
+                            "--dry-run",
+                            "--format",
+                            "json",
+                        ]
+                    )
+                    self.assertEqual(code, 1)
+                    result = json.loads(output)
+                    self.assertEqual(result["summary"]["lock_count"], 1)
+                    self.assertEqual(result["summary"]["receipt_count"], 0)
+                    if interruption_point == "after_write":
+                        self.assertEqual(
+                            result["summary"][
+                                "recoverable_missing_receipt_lock"
+                            ],
+                            1,
+                        )
+                        self.assertEqual(
+                            result["problems"][0]["status"],
+                            "recoverable_missing_receipt",
+                        )
+                    else:
+                        self.assertEqual(
+                            result["summary"]["prewrite_lock_leftover"], 1
+                        )
+                        self.assertEqual(
+                            result["problems"][0]["status"],
+                            "prewrite_lock_leftover",
+                        )
+                    for private_marker in (
+                        fixture["zettel_id"],
+                        fixture["title_marker"],
+                        fixture["abstract_marker"],
+                        fixture["body_marker"],
+                        "person:fake-reviewer",
+                        fixture["proposal_path"].name,
+                    ):
+                        self.assertNotIn(private_marker, output)
+
+    def test_zet_revision_receipt_audit_warns_for_completed_lock_leftover(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            fixture = self.create_zet_revision_proposal(archive_root)
+            plan = fixture["plan"]
+            base = {
+                "zettel_id": fixture["zettel_id"],
+                "proposal_path": fixture["proposal_relative"],
+                "expected_canonical_sha256": plan["canonical"]["sha256"],
+                "expected_proposal_sha256": plan["proposal"]["sha256"],
+                "expected_proposal_semantic_sha256": plan["proposal"][
+                    "semantic_sha256"
+                ],
+                "expected_plan_digest": plan["plan_digest"],
+                "revision_at": "2026-07-14T14:40:00Z",
+            }
+            preview = archive_services.zet_revision_write(
+                archive_root, **base, dry_run=True
+            )
+            approval = {
+                **base,
+                "expected_write_plan_digest": preview["write_plan"]["actual_digest"],
+                "approve": True,
+                "reviewed_by": "person:fake-reviewer",
+                "affirm_revision_reviewed": True,
+                "affirm_abstract_body_pair_reviewed": True,
+            }
+            with patch(
+                "wom_kit.archive_services.write_json_new_file",
+                side_effect=KeyboardInterrupt(),
+            ):
+                with self.assertRaises(KeyboardInterrupt):
+                    archive_services.zet_revision_write(archive_root, **approval)
+            lock_root = archive_root / ".wom-scratch" / "revisions"
+            lock_path = next(lock_root.glob("*.canonical.write.lock"))
+            lock_bytes = lock_path.read_bytes()
+            recovered = archive_services.zet_revision_write(
+                archive_root, **approval
+            )
+            self.assertTrue(recovered["ok"], recovered)
+            self.assertFalse(lock_path.exists())
+            lock_path.write_bytes(lock_bytes)
+
+            result = archive_services.zet_revision_receipt_audit(
+                archive_root, dry_run=True
+            )
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["status"], "attention_required")
+            self.assertEqual(result["summary"]["current_receipt_verified"], 1)
+            self.assertEqual(result["summary"]["completed_lock_leftover"], 1)
+            self.assertEqual(result["summary"]["problem_count"], 1)
+            self.assertIn(
+                "one_or_more_completed_revision_locks_remain",
+                result["warnings"],
+            )
+
+    def test_zet_revision_receipt_audit_detects_chain_evidence_gap(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            first = self.create_zet_revision_proposal(archive_root)
+            self.approve_zet_revision_fixture(
+                archive_root, first, revision_at="2026-07-14T14:50:00Z"
+            )
+            second = self.create_followup_zet_revision_proposal(
+                archive_root,
+                first["canonical_path"],
+                name="evidence-gap-followup.md",
+                title_marker="PRIVATE_GAP_SECOND_TITLE",
+                abstract_marker="PRIVATE_GAP_SECOND_ABSTRACT",
+                body_marker="PRIVATE_GAP_SECOND_BODY",
+            )
+            self.approve_zet_revision_fixture(
+                archive_root, second, revision_at="2026-07-14T15:00:00Z"
+            )
+            receipt_paths = sorted(
+                (
+                    archive_root
+                    / "receipts"
+                    / "revisions"
+                    / "canonical"
+                ).glob("*.zet-revision.json")
+            )
+            receipt_documents = [
+                (path, json.loads(path.read_text(encoding="utf-8")))
+                for path in receipt_paths
+            ]
+            first_receipt_path, first_receipt = min(
+                receipt_documents, key=lambda item: item[1]["revision_at"]
+            )
+            first_receipt["after"]["semantic_sha256"] = "sha256:" + "0" * 64
+            first_receipt_path.write_text(
+                json.dumps(first_receipt, indent=2, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+
+            result = archive_services.zet_revision_receipt_audit(
+                archive_root, dry_run=True
+            )
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["summary"]["state_evidence_gap"], 1)
+            self.assertIn(
+                "one_or_more_revision_chains_invalid", result["blockers"]
+            )
+
+    def test_zet_revision_receipt_audit_blocks_branched_history(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            first = self.create_zet_revision_proposal(archive_root)
+            self.approve_zet_revision_fixture(
+                archive_root, first, revision_at="2026-07-14T15:05:00Z"
+            )
+            second = self.create_followup_zet_revision_proposal(
+                archive_root,
+                first["canonical_path"],
+                name="branched-followup.md",
+                title_marker="PRIVATE_BRANCH_SECOND_TITLE",
+                abstract_marker="PRIVATE_BRANCH_SECOND_ABSTRACT",
+                body_marker="PRIVATE_BRANCH_SECOND_BODY",
+            )
+            self.approve_zet_revision_fixture(
+                archive_root, second, revision_at="2026-07-14T15:06:00Z"
+            )
+            receipt_root = (
+                archive_root / "receipts" / "revisions" / "canonical"
+            )
+            receipts = [
+                (path, json.loads(path.read_text(encoding="utf-8")))
+                for path in receipt_root.glob("*.zet-revision.json")
+            ]
+            first_receipt = min(receipts, key=lambda item: item[1]["revision_at"])[1]
+            second_path, second_receipt = max(
+                receipts, key=lambda item: item[1]["revision_at"]
+            )
+            second_receipt["before"] = first_receipt["before"]
+            second_path.write_text(
+                json.dumps(second_receipt, indent=2, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+
+            result = archive_services.zet_revision_receipt_audit(
+                archive_root, dry_run=True
+            )
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["summary"]["branched_or_duplicate_chain"], 1)
+            self.assertIn(
+                "one_or_more_revision_chains_invalid", result["blockers"]
+            )
+            self.assertIn(
+                "revision_receipt_chain_branched_or_duplicated",
+                result["problems"][0]["blocker_codes"],
+            )
+
+    def test_zet_revision_receipt_audit_never_echoes_malformed_digest_values(self) -> None:
+        private_marker = "PRIVATE_MALFORMED_DIGEST_VALUE"
+        for evidence_kind in ("receipt", "lock"):
+            with self.subTest(evidence_kind=evidence_kind):
+                with tempfile.TemporaryDirectory() as tmp:
+                    archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+                    fixture = self.create_zet_revision_proposal(archive_root)
+                    if evidence_kind == "receipt":
+                        self.approve_zet_revision_fixture(
+                            archive_root,
+                            fixture,
+                            revision_at="2026-07-14T15:10:00Z",
+                        )
+                        receipt_path = next(
+                            (
+                                archive_root
+                                / "receipts"
+                                / "revisions"
+                                / "canonical"
+                            ).glob("*.zet-revision.json")
+                        )
+                        document = json.loads(receipt_path.read_text(encoding="utf-8"))
+                        document["write_plan_digest"] = private_marker
+                        receipt_path.write_text(
+                            json.dumps(document, indent=2, ensure_ascii=False) + "\n",
+                            encoding="utf-8",
+                        )
+                    else:
+                        plan = fixture["plan"]
+                        base = {
+                            "zettel_id": fixture["zettel_id"],
+                            "proposal_path": fixture["proposal_relative"],
+                            "expected_canonical_sha256": plan["canonical"]["sha256"],
+                            "expected_proposal_sha256": plan["proposal"]["sha256"],
+                            "expected_proposal_semantic_sha256": plan["proposal"][
+                                "semantic_sha256"
+                            ],
+                            "expected_plan_digest": plan["plan_digest"],
+                            "revision_at": "2026-07-14T15:20:00Z",
+                        }
+                        preview = archive_services.zet_revision_write(
+                            archive_root, **base, dry_run=True
+                        )
+                        approval = {
+                            **base,
+                            "expected_write_plan_digest": preview["write_plan"][
+                                "actual_digest"
+                            ],
+                            "approve": True,
+                            "reviewed_by": "person:fake-reviewer",
+                            "affirm_revision_reviewed": True,
+                            "affirm_abstract_body_pair_reviewed": True,
+                        }
+                        with patch(
+                            "wom_kit.archive_services.write_bytes_atomic",
+                            side_effect=KeyboardInterrupt(),
+                        ):
+                            with self.assertRaises(KeyboardInterrupt):
+                                archive_services.zet_revision_write(
+                                    archive_root, **approval
+                                )
+                        lock_path = next(
+                            (
+                                archive_root / ".wom-scratch" / "revisions"
+                            ).glob("*.canonical.write.lock")
+                        )
+                        document = json.loads(lock_path.read_text(encoding="utf-8"))
+                        document["write_plan_digest"] = private_marker
+                        lock_path.write_text(
+                            json.dumps(document, indent=2, ensure_ascii=False) + "\n",
+                            encoding="utf-8",
+                        )
+
+                    code, output = self.run_cli(
+                        [
+                            "zet-revision-receipt-audit",
+                            str(archive_root),
+                            "--dry-run",
+                            "--format",
+                            "json",
+                        ]
+                    )
+                    self.assertEqual(code, 1)
+                    self.assertNotIn(private_marker, output)
+                    result = json.loads(output)
+                    self.assertTrue(result["problems"])
+                    self.assertTrue(
+                        all(
+                            problem.get("write_plan_digest") is None
+                            for problem in result["problems"]
+                            if "write_plan_digest" in problem
+                        )
+                    )
 
     def test_zet_catalog_pages_every_canonical_abstract_without_body_reads(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

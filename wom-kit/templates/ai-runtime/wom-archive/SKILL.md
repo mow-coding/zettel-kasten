@@ -228,6 +228,22 @@ no matching completed receipt is an unresolved-transaction blocker. Never read
 lock content, never auto-delete a lock, and never edit an immutable receipt to
 silence this audit.
 
+For an ordinary correction to one canonical zet, prepare a complete private
+proposal under `.wom-scratch/revisions/`, use `zet-revision-plan`, preview the
+separate CLI-only `zet-revision-write`, and obtain explicit human approval
+before applying it. Never hand-edit the canonical file to bypass those hashes.
+After one or more approved revisions, and before session handoff, run:
+
+```bash
+archive zet-revision-receipt-audit <archive-root> --dry-run --max-receipts 5000 --max-locks 5000 --max-problems 100 --progress --format json
+```
+
+The audit must reconstruct one continuous receipt chain to each current zet.
+Treat missing-receipt, prewrite, ambiguous, invalid, or unsupported locks as
+human-review stops. A completed leftover lock is only a warning, but still must
+not be auto-deleted. Hash receipts cannot recreate old zet content, so never
+claim or attempt an automatic canonical revert from this audit.
+
 Use paged `zet-catalog` when the host needs one stdout page, manual continuation,
 or MCP rather than a complete CLI pass:
 

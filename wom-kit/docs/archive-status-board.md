@@ -1,6 +1,6 @@
 # Archive Status Board
 
-Status: v0.3.235 archive state and canonical-revision write checkpoint
+Status: v0.3.236 archive state and canonical-revision audit checkpoint
 
 `archive status-board` gives a beginner-facing status summary for one WOM
 archive without making the operator inspect `inbox/`, `zettels/`, mint
@@ -12,7 +12,9 @@ conversation. A web UI is not required.
 The board keeps its fast frontmatter-oriented scope. It reports whether an
 explicit abstract is present, but does not hash bodies or claim that an
 abstract is current. Run `archive abstract-freshness <archive-root> --dry-run`
-for that separate review-evidence check.
+for that separate review-evidence check. It also does not reconstruct canonical
+revision history; run `archive zet-revision-receipt-audit <archive-root>
+--dry-run` after revision work.
 
 ## Command
 

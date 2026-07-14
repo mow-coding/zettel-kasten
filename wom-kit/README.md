@@ -562,6 +562,9 @@ zet-revision-plan --zettel-id <safe-id> --proposal .wom-scratch/revisions/<priva
 zet-revision-write --zettel-id <safe-id> --proposal .wom-scratch/revisions/<private>.md --expected-canonical-sha256 <sha256> --expected-proposal-sha256 <sha256> --expected-proposal-semantic-sha256 <sha256> --expected-plan-digest <sha256> --dry-run|--approve
   Preview the exact writer-produced candidate first. Approval must reuse the returned `revision_at` and `write_plan.actual_digest`, provide a safe reviewer, affirm the complete revision and abstract/body pair, and separately affirm edge changes when present. It atomically replaces one canonical zet, verifies it, and creates one immutable text-free receipt; runtime failures restore exact prior bytes, and a text-free private lock can finish a missing receipt after process interruption. MCP exposes no revision writer.
 
+zet-revision-receipt-audit --dry-run --max-receipts 5000 --max-locks 5000 --max-problems 100
+  Audit every bounded canonical revision receipt as one continuous history to the current zet and classify recognized text-free transaction locks. It reports only counts, fixed codes, SHA-only handles, and one audit digest; it writes or deletes nothing, never auto-cleans a lock, and has no duplicate MCP tool.
+
 zet-abstract-backfill-plan --proposal .wom-scratch/abstract-backfill/<private>.jsonl --dry-run
   Validate bounded missing-abstract proposals against exact current canonical file bytes. It checks the shipped row schema, identity/status, hash, first-read absence, safe abstract shape, and a byte-preserving one-field insertion. It returns only row indexes, counts, and hashes; writes nothing and echoes no ids, paths, bodies, abstracts, or proposal filename.
 
