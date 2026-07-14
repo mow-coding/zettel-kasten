@@ -74,6 +74,7 @@ Supporting philosophy and model docs:
 - [Explicit Abstract Publication Gate](explicit-abstract-publication.md)
 - [Abstract Freshness Check](abstract-freshness.md)
 - [Canonical zet Revision Plan](zet-revision-plan.md)
+- [Canonical zet Revision Write](zet-revision-write.md)
 - [Derived Artifact Staleness](derived-artifact-staleness.md)
 - [zet Quality Check](zet-quality-check.md)
 - [Source Object Storage Policy](source-object-storage-policy.md)

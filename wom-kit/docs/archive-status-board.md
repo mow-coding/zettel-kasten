@@ -1,6 +1,6 @@
 # Archive Status Board
 
-Status: v0.3.234 read-only archive state and canonical-revision planning checkpoint
+Status: v0.3.235 archive state and canonical-revision write checkpoint
 
 `archive status-board` gives a beginner-facing status summary for one WOM
 archive without making the operator inspect `inbox/`, `zettels/`, mint

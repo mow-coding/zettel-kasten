@@ -1,6 +1,6 @@
 # Canonical zet Revision Plan
 
-Status: read-only single-zet planning in v0.3.234
+Status: read-only single-zet planning plus a separate approved CLI writer in v0.3.235
 
 `zet-revision-plan` is the first half of WOM's ordinary canonical correction
 workflow. It compares one complete private revision proposal with the current
@@ -87,12 +87,30 @@ title, abstract, body, custom frontmatter value, reviewer id, provider URL,
 absolute path, or secret value. It calls no model, provider, credential store,
 object store, or database.
 
+## Approved Writer Handoff
+
+Since v0.3.235, a green plan can be handed to CLI `zet-revision-write`. Keep
+these exact values:
+
+```text
+canonical.sha256
+proposal.sha256
+proposal.semantic_sha256
+plan_digest
+```
+
+The writer first creates a second no-write preview that binds `revision_at` and
+the exact writer-produced candidate. Approval must reuse that preview's
+`write_plan.actual_digest`, a safe reviewer id, and explicit review
+affirmations. See [Canonical zet Revision Write](zet-revision-write.md).
+
+MCP remains read-only and exposes no revision writer.
+
 ## Honest Stop
 
-v0.3.234 does not implement the approved writer. A green plan means only that
-the private proposal is structurally safe and bound to the current canonical
-bytes for human review. It does not mean the correction is true, approved,
-applied, understood by a model, or safe to copy into the canonical file by
-hand. Machine output keeps
-`approval_contract.approved_write_implemented: false` until that separate
-capability ships.
+A green plan means only that the private proposal is structurally safe and
+bound to the current canonical bytes for human review. It does not mean the
+correction is true, approved, applied, understood by a model, or safe to copy
+into the canonical file by hand. Machine output reports
+`approval_contract.approved_write_implemented: true`, but actual authority
+still requires the separate writer dry-run and explicit CLI approval.

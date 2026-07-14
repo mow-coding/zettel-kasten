@@ -9043,7 +9043,7 @@ def command_zet_revision_plan(args: argparse.Namespace) -> int:
                 else "no"
             )
         )
-        print("Approved write available in this release: no")
+        print("Approved write available in this release: yes, through zet-revision-write")
         if result.get("blockers"):
             print("Blockers:")
             for blocker in result["blockers"]:
@@ -9056,6 +9056,82 @@ def command_zet_revision_plan(args: argparse.Namespace) -> int:
             print("Next safe actions:")
             for action in result["next_safe_actions"]:
                 print(f"- {action}")
+    return 0 if result.get("ok") else 1
+
+
+def command_zet_revision_write(args: argparse.Namespace) -> int:
+    if bool(args.dry_run) == bool(args.approve):
+        print(
+            "zet-revision-write requires exactly one of --dry-run or --approve.",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        result = archive_services.zet_revision_write(
+            Path(args.archive_root),
+            zettel_id=str(args.zettel_id),
+            proposal_path=str(args.proposal),
+            expected_canonical_sha256=str(args.expected_canonical_sha256),
+            expected_proposal_sha256=str(args.expected_proposal_sha256),
+            expected_proposal_semantic_sha256=str(
+                args.expected_proposal_semantic_sha256
+            ),
+            expected_plan_digest=str(args.expected_plan_digest),
+            revision_at=str(args.revision_at or "").strip() or None,
+            expected_write_plan_digest=(
+                str(args.expected_write_plan_digest or "").strip() or None
+            ),
+            dry_run=bool(args.dry_run),
+            approve=bool(args.approve),
+            reviewed_by=str(args.reviewed_by or "").strip() or None,
+            affirm_revision_reviewed=bool(args.affirm_revision_reviewed),
+            affirm_abstract_body_pair_reviewed=bool(
+                args.affirm_abstract_body_pair_reviewed
+            ),
+            affirm_edge_changes_reviewed=bool(args.affirm_edge_changes_reviewed),
+        )
+    except (
+        archive_services.ArchiveServiceError,
+        ArchivePathError,
+        OSError,
+        UnicodeError,
+        ValueError,
+    ):
+        print(
+            "zet-revision-write could not produce a privacy-safe result from the bound canonical zet and private proposal.",
+            file=sys.stderr,
+        )
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        print(f"WOM zet revision write: {result.get('status') or 'unknown'}")
+        print(f"Revision timestamp: {result.get('revision_at') or 'unavailable'}")
+        print(
+            "Write-plan digest: "
+            + str(result.get("write_plan", {}).get("actual_digest") or "unavailable")
+        )
+        print(
+            "Canonical files written this run: "
+            + str(
+                result.get("write_boundary", {}).get(
+                    "canonical_files_written_this_run", 0
+                )
+            )
+        )
+        print(
+            "Immutable receipt present: "
+            + ("yes" if result.get("receipt", {}).get("exists") else "no")
+        )
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
     return 0 if result.get("ok") else 1
 
 
@@ -18459,6 +18535,86 @@ def build_parser() -> argparse.ArgumentParser:
         help="Output format.",
     )
     zet_revision_plan.set_defaults(func=command_zet_revision_plan)
+
+    zet_revision_write = subcommands.add_parser(
+        "zet-revision-write",
+        aliases=["revise-zet-write", "canonical-revision-write"],
+        help="Preview or approve one SHA-bound canonical zet replacement and immutable revision receipt.",
+    )
+    zet_revision_write.add_argument(
+        "archive_root", help="Archive root containing the canonical zet."
+    )
+    zet_revision_write.add_argument(
+        "--zettel-id",
+        required=True,
+        help="Safe canonical zet id from the reviewed revision plan; never echoed.",
+    )
+    zet_revision_write.add_argument(
+        "--proposal",
+        required=True,
+        help="Private Markdown proposal under .wom-scratch/revisions/; never echoed.",
+    )
+    zet_revision_write.add_argument(
+        "--expected-canonical-sha256",
+        required=True,
+        help="Exact canonical SHA-256 returned by zet-revision-plan.",
+    )
+    zet_revision_write.add_argument(
+        "--expected-proposal-sha256",
+        required=True,
+        help="Exact private proposal SHA-256 returned by zet-revision-plan.",
+    )
+    zet_revision_write.add_argument(
+        "--expected-proposal-semantic-sha256",
+        required=True,
+        help="Exact normalized proposal semantic SHA-256 returned by zet-revision-plan.",
+    )
+    zet_revision_write.add_argument(
+        "--expected-plan-digest",
+        required=True,
+        help="Exact plan_digest returned by zet-revision-plan.",
+    )
+    zet_revision_write.add_argument(
+        "--revision-at",
+        help="Timezone-aware revision timestamp. Dry-run generates one when omitted; approval must reuse it.",
+    )
+    zet_revision_write.add_argument(
+        "--expected-write-plan-digest",
+        help="Required for approval: exact write_plan.actual_digest returned by the write dry-run.",
+    )
+    zet_revision_write.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Build the exact candidate and write-plan digest without writing.",
+    )
+    zet_revision_write.add_argument(
+        "--approve",
+        action="store_true",
+        help="Apply the exact write plan and create one immutable revision receipt.",
+    )
+    zet_revision_write.add_argument(
+        "--reviewed-by",
+        help="Safe reviewer id required with --approve; the value is stored locally but not echoed.",
+    )
+    zet_revision_write.add_argument(
+        "--affirm-revision-reviewed",
+        action="store_true",
+        help="Required with --approve: affirm that all proposed knowledge changes were reviewed.",
+    )
+    zet_revision_write.add_argument(
+        "--affirm-abstract-body-pair-reviewed",
+        action="store_true",
+        help="Required with --approve: affirm that the proposed abstract was reviewed with the proposed body.",
+    )
+    zet_revision_write.add_argument(
+        "--affirm-edge-changes-reviewed",
+        action="store_true",
+        help="Required with --approve only when the plan changes edges.",
+    )
+    zet_revision_write.add_argument(
+        "--format", choices=["text", "json"], default="json", help="Output format."
+    )
+    zet_revision_write.set_defaults(func=command_zet_revision_write)
 
     zet_catalog_pass = subcommands.add_parser(
         "zet-catalog-pass",
