@@ -744,6 +744,7 @@ class McpServerTests(unittest.TestCase):
             self.assertNotIn("zet_revision_write", tool_names)
             self.assertNotIn("canonical_revision_write", tool_names)
             self.assertNotIn("zet_revision_receipt_audit", tool_names)
+            self.assertNotIn("zet_revision_restore_plan", tool_names)
             self.assertEqual(
                 tools_by_name["first_read_readiness"]["inputSchema"]["properties"]["max_items"]["maximum"],
                 500,

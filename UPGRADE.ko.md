@@ -2,6 +2,25 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.3.237 정본 zet 복구 계획
+
+보관함 마이그레이션은 필요하지 않습니다. 새 CLI 전용 읽기 명령이 보이도록
+AI 운영자 프로세스를 다시 시작합니다. 먼저 신뢰할 수 있는 비공개 백업에서
+과거 전체 zet 바이트를 복구해 `.wom-scratch/revisions/restores/` 아래에
+둡니다. 이 임시 파일은 커밋하지 않습니다.
+
+```text
+archive zet-revision-restore-plan <archive-root> --receipt receipts/revisions/canonical/<digest>.zet-revision.json --expected-receipt-sha256 <sha256> --restore-proposal .wom-scratch/revisions/restores/<private>.md --dry-run --format json
+```
+
+전체 수정 이력이 정상이고, 현재 zet가 영수증의 `after` 상태와 같으며,
+복구 파일이 모든 `before` 해시와 같아야 합니다. 과거에 정본이었던 파일도
+현재의 발행·품질 정책을 다시 통과해야 합니다.
+
+`ready_for_human_review`는 복구 승인이나 쓰기 권한이 아닙니다. v0.3.237에는
+복구 쓰기 명령이 없습니다. 현재 zet, 복구한 과거 zet, 영수증을 비공개로
+함께 검토하고 임시 파일을 정본 위에 손으로 복사하지 마세요.
+
 ## v0.3.236 정본 zet 수정 이력 검진
 
 보관함 마이그레이션은 필요하지 않습니다. 새 CLI 전용 읽기 명령이 보이도록

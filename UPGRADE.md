@@ -24,6 +24,28 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.237 Canonical Revision Restore Plan
+
+No archive migration is required. Restart the AI operator process so the new
+CLI-only read command is visible. First recover the complete old zet bytes from
+a trusted private backup into `.wom-scratch/revisions/restores/`. Do not commit
+that scratch file.
+
+Run:
+
+```text
+archive zet-revision-restore-plan <archive-root> --receipt receipts/revisions/canonical/<digest>.zet-revision.json --expected-receipt-sha256 <sha256> --restore-proposal .wom-scratch/revisions/restores/<private>.md --dry-run --format json
+```
+
+The command requires the whole revision history to be healthy, the current zet
+to match the receipt's `after` state, and the recovered bytes to match every
+`before` hash. It also reapplies current publication and quality policy to the
+old bytes.
+
+`ready_for_human_review` is not permission to restore. v0.3.237 has no restore
+writer. Review the current zet, recovered old zet, and receipt privately, and
+do not copy the scratch file over the canonical zet by hand.
+
 ## v0.3.236 Canonical Revision Receipt Audit
 
 No archive migration is required. Restart the AI operator process so the new

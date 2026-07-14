@@ -244,6 +244,19 @@ human-review stops. A completed leftover lock is only a warning, but still must
 not be auto-deleted. Hash receipts cannot recreate old zet content, so never
 claim or attempt an automatic canonical revert from this audit.
 
+If the human separately recovers a complete old zet from a trusted private
+backup, place it only under `.wom-scratch/revisions/restores/` and run the
+CLI-only read plan:
+
+```bash
+archive zet-revision-restore-plan <archive-root> --receipt receipts/revisions/canonical/<digest>.zet-revision.json --expected-receipt-sha256 <sha256> --restore-proposal .wom-scratch/revisions/restores/<private>.md --dry-run --format json
+```
+
+Proceed to private human review only when the whole history is healthy, current
+bytes match the receipt `after` state, recovered bytes match every `before`
+hash, and current publication policy passes. A green plan still has no writer
+authority. Never copy the scratch file over the canonical zet by hand.
+
 Use paged `zet-catalog` when the host needs one stdout page, manual continuation,
 or MCP rather than a complete CLI pass:
 

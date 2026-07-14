@@ -9207,6 +9207,85 @@ def command_zet_revision_receipt_audit(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 1
 
 
+def command_zet_revision_restore_plan(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print(
+            "zet-revision-restore-plan is read-only and requires --dry-run.",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        result = archive_services.zet_revision_restore_plan(
+            Path(args.archive_root),
+            receipt_path=str(args.receipt),
+            expected_receipt_sha256=str(args.expected_receipt_sha256),
+            restore_proposal_path=str(args.restore_proposal),
+            dry_run=True,
+        )
+    except archive_services.ArchiveServiceError:
+        print(
+            "zet-revision-restore-plan could not validate the private restore evidence safely.",
+            file=sys.stderr,
+        )
+        return 1
+    except (ArchivePathError, OSError, UnicodeError, ValueError):
+        print(
+            "zet-revision-restore-plan failed before a privacy-safe result could be produced.",
+            file=sys.stderr,
+        )
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        print(f"WOM canonical restore plan: {result.get('status') or 'unknown'}")
+        print(
+            "Revision history healthy: "
+            + ("yes" if result.get("history_audit", {}).get("ok") else "no")
+        )
+        print(
+            "Receipt hash matched: "
+            + (
+                "yes"
+                if result.get("receipt", {}).get("expected_sha256_matches")
+                else "no"
+            )
+        )
+        print(
+            "Current matches receipt after-state: "
+            + (
+                "yes"
+                if result.get("current", {}).get("matches_receipt_after")
+                else "no"
+            )
+        )
+        print(
+            "Restore proposal matches receipt before-state: "
+            + (
+                "yes"
+                if result.get("restore_proposal", {}).get(
+                    "matches_receipt_before"
+                )
+                else "no"
+            )
+        )
+        print(f"Plan digest: {result.get('plan_digest') or 'unavailable'}")
+        print("Approved restore writer available: no")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+        if result.get("next_safe_actions"):
+            print("Next safe actions:")
+            for action in result["next_safe_actions"]:
+                print(f"- {action}")
+    return 0 if result.get("ok") else 1
+
+
 def command_zet_catalog_pass(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print("zet-catalog-pass requires --dry-run; only its explicit private scratch output may be written.", file=sys.stderr)
@@ -18733,6 +18812,45 @@ def build_parser() -> argparse.ArgumentParser:
     )
     zet_revision_receipt_audit.set_defaults(
         func=command_zet_revision_receipt_audit
+    )
+
+    zet_revision_restore_plan = subcommands.add_parser(
+        "zet-revision-restore-plan",
+        aliases=["canonical-revision-restore-plan", "zet-restore-plan"],
+        help="Validate separately recovered full-zet bytes against one current revision receipt without writing.",
+    )
+    zet_revision_restore_plan.add_argument(
+        "archive_root",
+        help="Archive root containing the canonical zet and private restore evidence.",
+    )
+    zet_revision_restore_plan.add_argument(
+        "--receipt",
+        required=True,
+        help="Archive-relative canonical revision receipt path; the value is read privately and not echoed.",
+    )
+    zet_revision_restore_plan.add_argument(
+        "--expected-receipt-sha256",
+        required=True,
+        help="Exact SHA-256 of the selected immutable canonical revision receipt.",
+    )
+    zet_revision_restore_plan.add_argument(
+        "--restore-proposal",
+        required=True,
+        help="Private complete old zet under .wom-scratch/revisions/restores/; the value is not echoed.",
+    )
+    zet_revision_restore_plan.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Required. Reads and validates local evidence; writes nothing.",
+    )
+    zet_revision_restore_plan.add_argument(
+        "--format",
+        choices=["text", "json"],
+        default="json",
+        help="Output format.",
+    )
+    zet_revision_restore_plan.set_defaults(
+        func=command_zet_revision_restore_plan
     )
 
     zet_catalog_pass = subcommands.add_parser(
