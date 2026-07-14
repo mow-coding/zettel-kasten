@@ -6,6 +6,28 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.241 - 2026-07-15
+
+Selective freshness body-read checkpoint. Additive and read-only; no archive
+migration, canonical write, receipt write, provider call, or cache file.
+
+- **Missing abstracts no longer cause full-body reads.** Abstract freshness
+  reads bounded frontmatter for every canonical zet and opens complete zet
+  bytes only when the current frontmatter has a valid explicit abstract whose
+  body hash is needed.
+- **Selected pairs are still revalidated.** A body-read target is parsed again
+  from the complete bounded bytes before WOM trusts its id, abstract, or body
+  hash, so frontmatter triage never substitutes for exact pair evidence.
+- **The canonical pass uses bounded parallelism.** Archives with at least 64
+  canonical paths use at most eight frontmatter workers; small archives remain
+  sequential.
+- **The saved work is measurable.** Scan metadata now reports frontmatter files
+  scanned, body files read and not read, selection policy, scan mode, and worker
+  count. Output remains content-free.
+- **The boundary is explicit.** Canonical zets without a valid explicit abstract already
+  remain attention items, so freshness does not claim their body readability;
+  complete body validation remains a separate Doctor/validation concern.
+
 ## v0.3.240 - 2026-07-14
 
 Scalable first-read diagnostics checkpoint. Additive archive behavior; no

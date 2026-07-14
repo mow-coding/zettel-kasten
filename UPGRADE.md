@@ -24,6 +24,29 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.241 Selective Freshness Body Reads
+
+No archive migration is required. Restart the AI operator process.
+
+`abstract-freshness` now reads bounded frontmatter for every canonical zet but
+opens complete zet bytes only for a valid explicit-abstract target that needs a
+current body hash. It re-parses those complete bytes before trusting the
+abstract/body pair. Missing, redacted, and unreadable-frontmatter rows remain
+attention or excluded rows without unnecessary body reads.
+
+The result adds `canonical_frontmatter_files_scanned`,
+`canonical_body_files_read`, `canonical_body_files_not_read`,
+`canonical_body_read_policy`, `canonical_scan_mode`, and
+`canonical_scan_workers` under `scan`. These fields are additive. Existing
+freshness states, evidence lookup, exit behavior, privacy boundaries, and
+no-write behavior remain unchanged.
+
+For a large legacy archive, rerun the same read-only freshness command and
+compare the new body-read counts and elapsed time. Do not interpret skipped
+body reads as body-validation proof; a zet without a valid explicit abstract is
+already a review item, and Doctor/validation remains responsible for broader
+file health.
+
 ## v0.3.240 Scalable First-Read Diagnostics
 
 No archive migration is required. Restart the AI operator process so the new
