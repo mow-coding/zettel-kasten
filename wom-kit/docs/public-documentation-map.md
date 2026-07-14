@@ -77,6 +77,7 @@ Supporting philosophy and model docs:
 - [Canonical zet Revision Write](zet-revision-write.md)
 - [Canonical zet Revision Receipt Audit](zet-revision-receipt-audit.md)
 - [Canonical zet Revision Restore Plan](zet-revision-restore-plan.md)
+- [Canonical zet Exact-Byte Restore Write](zet-revision-restore-write.md)
 - [Derived Artifact Staleness](derived-artifact-staleness.md)
 - [zet Quality Check](zet-quality-check.md)
 - [Source Object Storage Policy](source-object-storage-policy.md)

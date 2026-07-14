@@ -24,6 +24,30 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.239 Approved Exact-Byte Canonical Restore
+
+No archive migration is required. Restart the AI operator process so the new
+CLI-only restore writer and mixed-event audit are visible.
+
+First run `zet-revision-receipt-audit --dry-run`. Recover the complete old zet
+from a trusted private backup into `.wom-scratch/revisions/restores/`, run
+`zet-revision-restore-plan`, and privately compare the current zet, recovered
+zet, and selected receipt. Then run `zet-revision-restore-write --dry-run` with
+the exact current/proposal/plan hashes. Approval must reuse the returned event
+time and write-plan digest, name a safe reviewer, and affirm restore plus
+abstract/body-pair review. Add changed-edge review when the plan requires it.
+
+The approved writer uses the same per-canonical lock as ordinary revision
+writes and installs the recovered file bytes exactly. It does not rewrite the
+historical `updated_at`, YAML, BOM, newlines, frontmatter order, or body. The
+new event time is stored in the immutable restore receipt. Handled failure
+restores the exact prior bytes; after a process interruption, rerun the same
+approved command instead of deleting the lock or copying files manually.
+
+Ordinary and restore receipts now share one chronological event chain. Run the
+receipt audit again after completion. A green result is evidence of reviewed
+local application, not factual truth, backup completeness, or external sync.
+
 ## v0.3.238 Chronological Revision Event Chain
 
 No archive migration is required. Restart the AI operator process so the

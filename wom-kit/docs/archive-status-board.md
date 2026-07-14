@@ -1,6 +1,6 @@
 # Archive Status Board
 
-Status: v0.3.238 archive state and chronological revision-event checkpoint
+Status: v0.3.239 archive state and exact-restore checkpoint
 
 `archive status-board` gives a beginner-facing status summary for one WOM
 archive without making the operator inspect `inbox/`, `zettels/`, mint
@@ -16,7 +16,9 @@ for that separate review-evidence check. It also does not reconstruct canonical
 revision history; run `archive zet-revision-receipt-audit <archive-root>
 --dry-run` after revision work. If separately recovered old full-zet bytes need
 review, use `archive zet-revision-restore-plan <archive-root> --dry-run`; the
-board itself grants no restore authority.
+board itself grants no restore authority. A separately reviewed plan may
+continue through `zet-revision-restore-write`, but that command remains outside
+the status board and requires its own exact dry-run and human approval.
 
 ## Command
 

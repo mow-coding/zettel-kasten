@@ -259,7 +259,21 @@ Proceed to private human review only when the whole history is healthy, the
 selected receipt is the actual newest event, current bytes match that receipt's
 `after` state, recovered bytes match every `before` hash, and current
 publication policy passes. A green plan still has no writer authority. Never
-copy the scratch file over the canonical zet by hand.
+copy the scratch file over the canonical zet by hand. Pass its exact receipt,
+current, proposal, and plan hashes to the separate writer preview:
+
+```bash
+archive zet-revision-restore-write <archive-root> --receipt receipts/revisions/canonical/<digest>.zet-revision.json --expected-receipt-sha256 <sha256> --restore-proposal .wom-scratch/revisions/restores/<private>.md --expected-current-sha256 <sha256> --expected-restore-proposal-sha256 <sha256> --expected-restore-proposal-semantic-sha256 <sha256> --expected-restore-plan-digest <sha256> --revision-at <timezone-aware-event-time> --dry-run --format json
+```
+
+Only after private human review may the host reuse the unchanged event time
+and `write_plan.actual_digest` with `--approve --reviewed-by <actor>
+--affirm-restore-reviewed --affirm-abstract-body-pair-reviewed`. Add
+`--affirm-edge-changes-reviewed` when required. The writer installs the
+reviewed bytes exactly and keeps their historical `updated_at`; the new event
+time lives in its restore receipt. If a process stops, rerun the exact approved
+command. Never delete the shared revision lock manually. Run the receipt audit
+again after success. MCP has no restore writer.
 
 Use paged `zet-catalog` when the host needs one stdout page, manual continuation,
 or MCP rather than a complete CLI pass:

@@ -1,6 +1,6 @@
 # Canonical zet Revision Restore Plan
 
-Status: latest-event-bound recovered-full-zet restore planning in v0.3.238
+Status: latest-event-bound recovered-full-zet restore planning in v0.3.239
 
 `zet-revision-restore-plan` answers a narrow recovery question: does one
 complete old zet recovered from a private backup exactly match the `before`
@@ -64,18 +64,20 @@ bounded counts, and the plan digest. It does not echo the actual zet id/path,
 receipt path, proposal filename, reviewer id, title, abstract/body text, custom
 frontmatter value, provider URL, absolute local path, or secret.
 
-## Honest Stop
+## Human Review And Next Step
 
 `ready_for_human_review` is not restore approval and changes no file. A human
 must still compare the current canonical zet, recovered old zet, and selected
-receipt privately.
+receipt privately. Do not copy the recovered file over the canonical zet by
+hand.
 
-No approved restore writer exists in v0.3.238. Do not copy the recovered file
-over the canonical zet by hand. A future writer must repeat the whole-history
-and exact-state checks, require explicit restore and abstract/body review plus
-changed-edge review, serialize with ordinary revision writes, atomically
-restore exact reviewed bytes, and create an immutable restore receipt with
-honest rollback and interruption recovery.
+Since v0.3.239, pass the exact plan evidence to the separate CLI-only
+`zet-revision-restore-write --dry-run`. Its approval path repeats the
+whole-history and exact-state checks, requires explicit restore and
+abstract/body review plus changed-edge review, serializes with ordinary
+revision writes, atomically installs the exact reviewed bytes, and creates an
+immutable restore receipt with runtime rollback and interruption recovery. See
+[Canonical zet Exact-Byte Restore Write](zet-revision-restore-write.md).
 
 The command calls no model, provider, object store, database, credential store,
 or network. It proves local evidence correspondence, not factual truth,
