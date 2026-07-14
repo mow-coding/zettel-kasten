@@ -6,6 +6,35 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.237 - 2026-07-14
+
+Canonical revision restore-plan checkpoint. Additive and read-only; no
+canonical, receipt, lock, provider, or database write.
+
+- **Recovered bytes, never hash-only invention.** CLI
+  `zet-revision-restore-plan` (aliases `canonical-revision-restore-plan`,
+  `zet-restore-plan`) requires a separately recovered complete private zet.
+  Receipt hashes are evidence, not a substitute for missing old content.
+- **Whole-history prerequisite.** The planner first runs the bounded canonical
+  revision receipt audit and blocks if any receipt chain or transaction lock is
+  unresolved.
+- **Exact two-sided binding.** The current canonical file must equal the
+  selected receipt's complete `after` state, while the private restore proposal
+  must equal its complete `before` file, semantic, abstract, and body hashes.
+- **Current policy still applies.** Exact historical bytes are rechecked
+  against today's schema, explicit-abstract, canonical-kind, object-reference,
+  edge, private-locator, quality, and self-containment policies.
+- **Stale plans fail closed.** One plan digest binds the archive-history audit,
+  selected receipt, current state, recovered state, restore delta, and current
+  policy results so later receipt, file, or policy drift invalidates review.
+- **Content-free output.** Results return hashes, fixed booleans/codes, bounded
+  counts, and a plan digest without echoing zet identity/path, receipt path,
+  proposal filename, reviewer, title, abstract/body text, custom frontmatter,
+  provider value, absolute path, or secret.
+- **Honest stop.** A green plan means only `ready_for_human_review`. No restore
+  writer or MCP duplicate exists, and manual canonical copying is not
+  authorized.
+
 ## v0.3.236 - 2026-07-14
 
 Canonical revision receipt and transaction-lock audit checkpoint. Additive and

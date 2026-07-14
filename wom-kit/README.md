@@ -565,6 +565,9 @@ zet-revision-write --zettel-id <safe-id> --proposal .wom-scratch/revisions/<priv
 zet-revision-receipt-audit --dry-run --max-receipts 5000 --max-locks 5000 --max-problems 100
   Audit every bounded canonical revision receipt as one continuous history to the current zet and classify recognized text-free transaction locks. It reports only counts, fixed codes, SHA-only handles, and one audit digest; it writes or deletes nothing, never auto-cleans a lock, and has no duplicate MCP tool.
 
+zet-revision-restore-plan --receipt receipts/revisions/canonical/<digest>.zet-revision.json --expected-receipt-sha256 <sha256> --restore-proposal .wom-scratch/revisions/restores/<private>.md --dry-run
+  Validate separately recovered complete old zet bytes against one selected receipt only after the archive-wide revision history is healthy. The current canonical must match the receipt `after` state, the private proposal must match all `before` hashes, and the old bytes must pass current publication/quality policy. It writes nothing, echoes no private identity/path/text, and deliberately has no restore writer or MCP duplicate.
+
 zet-abstract-backfill-plan --proposal .wom-scratch/abstract-backfill/<private>.jsonl --dry-run
   Validate bounded missing-abstract proposals against exact current canonical file bytes. It checks the shipped row schema, identity/status, hash, first-read absence, safe abstract shape, and a byte-preserving one-field insertion. It returns only row indexes, counts, and hashes; writes nothing and echoes no ids, paths, bodies, abstracts, or proposal filename.
 

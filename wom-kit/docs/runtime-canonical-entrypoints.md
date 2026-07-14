@@ -1,6 +1,6 @@
 # Runtime Canonical Entry Points
 
-Status: v0.3.236 quick handoff, abstract-freshness, and revision-audit checkpoint
+Status: v0.3.237 quick handoff, revision-audit, and restore-plan checkpoint
 
 When an AI runtime enters a WOM archive, it needs a small, explicit "start
 here" map. The archive may contain zets, source bindings, provider metadata,
@@ -71,6 +71,13 @@ After any approved `zet-revision-write`, run the separate CLI-only
 --format json` before session handoff. This is a bounded history and
 transaction-lock check, not another archive startup scan and not permission to
 delete a leftover lock.
+
+When a human separately recovers complete old zet bytes from a trusted private
+backup, use CLI-only `archive zet-revision-restore-plan <archive-root>
+--receipt <canonical-revision-receipt> --expected-receipt-sha256 <sha256>
+--restore-proposal .wom-scratch/revisions/restores/<private>.md --dry-run
+--format json`. A green plan only prepares private human review; no restore
+writer or manual-copy authority exists in v0.3.237.
 
 This order keeps archive identity, operational mission/state, local
 instructions, beginner-facing wording, and material-link safety gates aligned
