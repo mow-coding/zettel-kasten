@@ -1,9 +1,9 @@
 # Canonical zet Revision Receipt Audit
 
-Status: chronological revision event-chain audit in v0.3.238
+Status: ordinary-and-restore chronological revision event-chain audit in v0.3.239
 
 `zet-revision-receipt-audit` answers a narrow question after ordinary
-canonical corrections: do the retained receipts form one continuous history
+canonical corrections or exact restores: do the retained receipts form one continuous history
 to each current zet, and does any private transaction lock still need human
 attention?
 
@@ -23,8 +23,9 @@ Aliases are `revision-receipt-audit` and `canonical-revision-audit`.
 
 ## Receipt Chain
 
-Every valid `receipts/revisions/canonical/*.zet-revision.json` receipt has a
-before state, an after state, and one normalized event timestamp. The audit
+Every valid ordinary revision or exact-restore receipt under
+`receipts/revisions/canonical/*.zet-revision.json` has a before state, an after
+state, and one normalized event timestamp. The audit
 groups receipts by their private canonical identity, orders each group by
 event time, and then checks every adjacent transition.
 
@@ -52,9 +53,11 @@ these content-free states:
   stale lock before any later cleanup;
 - `recoverable_missing_receipt`: the canonical candidate is already present
   but its receipt is missing; rerun the exact original approved
-  `zet-revision-write` command to finish only the receipt;
+  ordinary `zet-revision-write` or restore `zet-revision-restore-write`
+  command to finish only the receipt;
 - `prewrite_lock_leftover`: the canonical zet still matches its before hash;
-  keep the lock for review because no automatic cleanup is implemented;
+  rerun the exact original approved ordinary-revision or restore command so it
+  can revalidate and resume; the audit itself never cleans the lock;
 - `ambiguous_lock`: current bytes match neither bound state or the lock and
   receipt disagree;
 - `invalid_lock`: the text-free evidence cannot satisfy the revision receipt
@@ -86,9 +89,11 @@ canonical hashes, and recognized locks that were scanned. It does not prove
 that a correction is factually true, that no external editor can race WOM,
 that backups exist, or that old content can be recreated from hashes.
 
-Canonical restore is not implemented by this command. The v0.3.235 receipt
+Canonical restore is not performed by this read-only command. The v0.3.235 receipt
 deliberately stores no old body text. `zet-revision-restore-plan` therefore
 requires separately recovered, privately reviewed full-zet bytes that match
 the selected receipt's before hashes, and v0.3.238 additionally requires that
-receipt to be the actual newest event. MCP exposes no duplicate receipt-audit
-or revision-write tool.
+receipt to be the actual newest event. Since v0.3.239, the separately approved
+CLI-only `zet-revision-restore-write` can install those exact bytes and append
+one restore event. MCP exposes no duplicate receipt-audit or revision/restore
+write tool.

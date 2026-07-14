@@ -1,6 +1,6 @@
 # Runtime Canonical Entry Points
 
-Status: v0.3.238 quick handoff, chronological revision-audit, and restore-plan checkpoint
+Status: v0.3.239 quick handoff, chronological revision-audit, and exact-restore checkpoint
 
 When an AI runtime enters a WOM archive, it needs a small, explicit "start
 here" map. The archive may contain zets, source bindings, provider metadata,
@@ -76,9 +76,14 @@ When a human separately recovers complete old zet bytes from a trusted private
 backup, use CLI-only `archive zet-revision-restore-plan <archive-root>
 --receipt <canonical-revision-receipt> --expected-receipt-sha256 <sha256>
 --restore-proposal .wom-scratch/revisions/restores/<private>.md --dry-run
---format json`. A green plan only prepares private human review; no restore
-writer or manual-copy authority exists in v0.3.238. The selected receipt must
-also be the actual newest event, even when current bytes repeat an older state.
+--format json`. A green plan only prepares private human review and grants no
+manual-copy authority. The selected receipt must be the actual newest event,
+even when current bytes repeat an older state. Since v0.3.239, pass the exact
+plan hashes through CLI-only `zet-revision-restore-write --dry-run`, then use
+its unchanged write digest and event time only after explicit human approval.
+The approved writer installs exact reviewed bytes and appends one restore
+receipt; rerun the exact approved command after interruption. MCP has no
+restore writer.
 
 This order keeps archive identity, operational mission/state, local
 instructions, beginner-facing wording, and material-link safety gates aligned

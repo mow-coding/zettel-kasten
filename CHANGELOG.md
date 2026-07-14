@@ -6,6 +6,38 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.239 - 2026-07-14
+
+Approval-gated exact-byte canonical restore checkpoint. Additive; one approved
+operation may replace one canonical zet, create one immutable restore receipt,
+and use one temporary private transaction lock.
+
+- **Recovered content is never invented from hashes.** CLI
+  `zet-revision-restore-write` (aliases `canonical-revision-restore-write`,
+  `zet-restore-write`) requires the separately recovered complete private zet,
+  selected immutable receipt, current state, restore plan, and a second writer
+  digest to agree exactly.
+- **Human review remains the authority.** Approval requires a safe reviewer,
+  complete restore review, abstract/body-pair review, and a separate changed-edge
+  affirmation when needed. MCP receives no restore writer.
+- **Exact bytes mean exact bytes.** The writer atomically installs the reviewed
+  restore proposal without rewriting YAML order, BOM, newlines, body,
+  frontmatter, or the recovered historical `updated_at`.
+- **One chronological history.** Ordinary revision and restore receipts share
+  the same digest-named directory, per-canonical lock, and audit event chain.
+  Valid repeated histories such as `A -> B -> A` remain continuous evidence.
+- **Failure and interruption are recoverable.** Handled runtime failure restores
+  the exact prior canonical bytes and removes partial transaction files. An
+  exact rerun after process interruption resumes a prewrite transaction,
+  finalizes only a missing receipt, or removes a verified completed lock.
+- **Future event time cannot move backward.** Ordinary revisions after an exact
+  restore must be later than the latest receipt event, even though the restored
+  zet keeps its older internal `updated_at`.
+- **Content-free evidence remains bounded.** Restore receipts and public output
+  retain hashes, fixed change categories, and review booleans without title,
+  abstract/body text, custom frontmatter values, private paths, reviewer output,
+  provider values, or secrets.
+
 ## v0.3.238 - 2026-07-14
 
 Chronological canonical revision event-chain checkpoint. Additive and

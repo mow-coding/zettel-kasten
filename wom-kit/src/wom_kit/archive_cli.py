@@ -9278,7 +9278,9 @@ def command_zet_revision_restore_plan(args: argparse.Namespace) -> int:
             )
         )
         print(f"Plan digest: {result.get('plan_digest') or 'unavailable'}")
-        print("Approved restore writer available: no")
+        print(
+            "Approved restore writer available: yes, through zet-revision-restore-write"
+        )
         if result.get("blockers"):
             print("Blockers:")
             for blocker in result["blockers"]:
@@ -9291,6 +9293,102 @@ def command_zet_revision_restore_plan(args: argparse.Namespace) -> int:
             print("Next safe actions:")
             for action in result["next_safe_actions"]:
                 print(f"- {action}")
+    return 0 if result.get("ok") else 1
+
+
+def command_zet_revision_restore_write(args: argparse.Namespace) -> int:
+    if bool(args.dry_run) == bool(args.approve):
+        print(
+            "zet-revision-restore-write requires exactly one of --dry-run or --approve.",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        result = archive_services.zet_revision_restore_write(
+            Path(args.archive_root),
+            receipt_path=str(args.receipt),
+            expected_receipt_sha256=str(args.expected_receipt_sha256),
+            restore_proposal_path=str(args.restore_proposal),
+            expected_current_sha256=str(args.expected_current_sha256),
+            expected_restore_proposal_sha256=str(
+                args.expected_restore_proposal_sha256
+            ),
+            expected_restore_proposal_semantic_sha256=str(
+                args.expected_restore_proposal_semantic_sha256
+            ),
+            expected_restore_plan_digest=str(
+                args.expected_restore_plan_digest
+            ),
+            revision_at=str(args.revision_at or "").strip() or None,
+            expected_write_plan_digest=(
+                str(args.expected_write_plan_digest or "").strip() or None
+            ),
+            dry_run=bool(args.dry_run),
+            approve=bool(args.approve),
+            reviewed_by=str(args.reviewed_by or "").strip() or None,
+            affirm_restore_reviewed=bool(args.affirm_restore_reviewed),
+            affirm_abstract_body_pair_reviewed=bool(
+                args.affirm_abstract_body_pair_reviewed
+            ),
+            affirm_edge_changes_reviewed=bool(
+                args.affirm_edge_changes_reviewed
+            ),
+        )
+    except (
+        archive_services.ArchiveServiceError,
+        ArchivePathError,
+        OSError,
+        UnicodeError,
+        ValueError,
+    ):
+        print(
+            "zet-revision-restore-write could not produce a privacy-safe result from the bound receipt and private restore proposal.",
+            file=sys.stderr,
+        )
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        print(f"WOM zet exact restore write: {result.get('status') or 'unknown'}")
+        print(f"Restore event timestamp: {result.get('revision_at') or 'unavailable'}")
+        print(
+            "Write-plan digest: "
+            + str(
+                result.get("write_plan", {}).get("actual_digest")
+                or "unavailable"
+            )
+        )
+        print(
+            "Canonical files written this run: "
+            + str(
+                result.get("write_boundary", {}).get(
+                    "canonical_files_written_this_run", 0
+                )
+            )
+        )
+        print(
+            "Exact restore bytes present: "
+            + (
+                "yes"
+                if result.get("write_boundary", {}).get(
+                    "canonical_replaced_with_exact_restore_bytes"
+                )
+                else "no"
+            )
+        )
+        print(
+            "Immutable restore receipt present: "
+            + ("yes" if result.get("receipt", {}).get("exists") else "no")
+        )
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
     return 0 if result.get("ok") else 1
 
 
@@ -18859,6 +18957,97 @@ def build_parser() -> argparse.ArgumentParser:
     )
     zet_revision_restore_plan.set_defaults(
         func=command_zet_revision_restore_plan
+    )
+
+    zet_revision_restore_write = subcommands.add_parser(
+        "zet-revision-restore-write",
+        aliases=["canonical-revision-restore-write", "zet-restore-write"],
+        help="Preview or approve one exact-byte canonical zet restore bound to an immutable revision receipt.",
+    )
+    zet_revision_restore_write.add_argument(
+        "archive_root",
+        help="Archive root containing the canonical zet and private restore evidence.",
+    )
+    zet_revision_restore_write.add_argument(
+        "--receipt",
+        required=True,
+        help="Archive-relative source revision receipt path; the value is read privately and not echoed.",
+    )
+    zet_revision_restore_write.add_argument(
+        "--expected-receipt-sha256",
+        required=True,
+        help="Exact immutable source receipt SHA-256 returned by zet-revision-restore-plan.",
+    )
+    zet_revision_restore_write.add_argument(
+        "--restore-proposal",
+        required=True,
+        help="Private complete old zet under .wom-scratch/revisions/restores/; the value is not echoed.",
+    )
+    zet_revision_restore_write.add_argument(
+        "--expected-current-sha256",
+        required=True,
+        help="Exact current canonical file SHA-256 returned by zet-revision-restore-plan.",
+    )
+    zet_revision_restore_write.add_argument(
+        "--expected-restore-proposal-sha256",
+        required=True,
+        help="Exact recovered restore proposal file SHA-256 returned by zet-revision-restore-plan.",
+    )
+    zet_revision_restore_write.add_argument(
+        "--expected-restore-proposal-semantic-sha256",
+        required=True,
+        help="Exact recovered restore proposal semantic SHA-256 returned by zet-revision-restore-plan.",
+    )
+    zet_revision_restore_write.add_argument(
+        "--expected-restore-plan-digest",
+        required=True,
+        help="Exact plan_digest returned by zet-revision-restore-plan.",
+    )
+    zet_revision_restore_write.add_argument(
+        "--revision-at",
+        help="Timezone-aware restore event timestamp. Dry-run generates one when omitted; approval must reuse it.",
+    )
+    zet_revision_restore_write.add_argument(
+        "--expected-write-plan-digest",
+        help="Required for approval: exact write_plan.actual_digest returned by the restore-write dry-run.",
+    )
+    zet_revision_restore_write.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Build the exact restore write-plan digest without writing.",
+    )
+    zet_revision_restore_write.add_argument(
+        "--approve",
+        action="store_true",
+        help="Apply the exact recovered bytes and create one immutable restore receipt.",
+    )
+    zet_revision_restore_write.add_argument(
+        "--reviewed-by",
+        help="Safe reviewer id required with --approve; the value is stored locally but not echoed.",
+    )
+    zet_revision_restore_write.add_argument(
+        "--affirm-restore-reviewed",
+        action="store_true",
+        help="Required with --approve: affirm that the exact restore and its knowledge changes were reviewed.",
+    )
+    zet_revision_restore_write.add_argument(
+        "--affirm-abstract-body-pair-reviewed",
+        action="store_true",
+        help="Required with --approve: affirm that the restored abstract was reviewed with the restored body.",
+    )
+    zet_revision_restore_write.add_argument(
+        "--affirm-edge-changes-reviewed",
+        action="store_true",
+        help="Required with --approve only when the restore changes edges.",
+    )
+    zet_revision_restore_write.add_argument(
+        "--format",
+        choices=["text", "json"],
+        default="json",
+        help="Output format.",
+    )
+    zet_revision_restore_write.set_defaults(
+        func=command_zet_revision_restore_write
     )
 
     zet_catalog_pass = subcommands.add_parser(
