@@ -45,6 +45,46 @@
       "type": "array",
       "items": {"type": "object"}
     },
+    "first_read_check": {
+      "type": "object",
+      "required": [
+        "contract",
+        "status",
+        "ready_for_publication",
+        "source_field",
+        "abstract_char_count",
+        "abstract_sha256",
+        "max_chars",
+        "abstract_text_echoed",
+        "body_read_for_check"
+      ],
+      "properties": {
+        "contract": {"type": "string", "const": "wom-kit/explicit-abstract-publication/v0.1"},
+        "status": {
+          "type": "string",
+          "enum": [
+            "ready",
+            "missing",
+            "not_string",
+            "empty",
+            "not_normalized_single_line",
+            "too_long",
+            "private_locator_or_secret_like"
+          ]
+        },
+        "ready_for_publication": {"type": "boolean"},
+        "source_field": {"type": ["string", "null"], "enum": ["frontmatter.abstract", null]},
+        "abstract_char_count": {"type": "integer", "minimum": 0, "maximum": 360},
+        "abstract_sha256": {
+          "type": ["string", "null"],
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "max_chars": {"type": "integer", "const": 360},
+        "abstract_text_echoed": {"type": "boolean", "const": false},
+        "body_read_for_check": {"type": "boolean", "const": false}
+      },
+      "additionalProperties": false
+    },
     "checklist": {
       "type": "array",
       "items": {"type": "object"}

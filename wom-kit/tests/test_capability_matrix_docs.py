@@ -223,8 +223,8 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                 self.assertIn("identity-reconcile", text)
                 self.assertIn("proposed", text)
                 self.assertIn("SHA-256", text)
-        self.assertIn("v0.3.231 pre-release", versioning_text)
-        self.assertIn("0.3.231", versioning_text)
+        self.assertIn("v0.3.232 pre-release", versioning_text)
+        self.assertIn("0.3.232", versioning_text)
         self.assertIn("archive-identity-reconcile.md", public_map_text)
 
     def test_aggregate_edge_progress_public_contract_is_documented(self) -> None:
@@ -248,7 +248,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         )
         for phrase in (
             "Status: v0.3.227 aggregate full-Doctor edge progress checkpoint",
-            "Version: v0.3.231, release candidate",
+            "Version: v0.3.232, release candidate",
             "cumulative source/candidate/cache-hit counts",
             "does not perform another broad pass",
         ):
@@ -268,8 +268,8 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, benchmark_text)
-        self.assertIn("v0.3.231 (current checkpoint)", readme_text)
-        self.assertIn("v0.3.231 (현재 checkpoint)", readme_ko_text)
+        self.assertIn("v0.3.232 (current checkpoint)", readme_text)
+        self.assertIn("v0.3.232 (현재 checkpoint)", readme_ko_text)
 
     def test_actionable_full_doctor_results_and_current_profile_progress_are_documented(
         self,
@@ -294,7 +294,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         for phrase in (
             "Status: v0.3.228 actionable full-Doctor result and current-stage progress checkpoint",
-            "Version: v0.3.231, release candidate",
+            "Version: v0.3.232, release candidate",
             "doctor_findings",
             "up to 100 detailed items",
             "up to 20 deduplicated suggested commands",
@@ -346,7 +346,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
 
         for phrase in (
             "Status: v0.3.229 executable BOM reconcile guidance checkpoint",
-            "Version: v0.3.231, release candidate",
+            "Version: v0.3.232, release candidate",
             "actual validated canonical frontmatter id",
             "omits the command when the id is absent or unsafe",
         ):
@@ -383,7 +383,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
 
         for phrase in (
             "Status: v0.3.230 digest-bound content-change review checkpoint",
-            "Version: v0.3.231, release candidate",
+            "Version: v0.3.232, release candidate",
             "Previous checkpoint: Status: v0.3.229",
             "--reviewed-plan-sha256 <sha256>",
         ):
@@ -396,10 +396,10 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                 self.assertIn("intentional_change", text)
                 self.assertIn("unintentional_change", text)
                 self.assertIn("uncertain", text)
-        self.assertIn("v0.3.231 pre-release", readme_text)
-        self.assertIn("v0.3.231 pre-release", readme_ko_text)
-        self.assertIn("v0.3.231 (current checkpoint)", readme_text)
-        self.assertIn("v0.3.231 (현재 checkpoint)", readme_ko_text)
+        self.assertIn("v0.3.232 pre-release", readme_text)
+        self.assertIn("v0.3.232 pre-release", readme_ko_text)
+        self.assertIn("v0.3.232 (current checkpoint)", readme_text)
+        self.assertIn("v0.3.232 (현재 checkpoint)", readme_ko_text)
 
     def test_first_read_readiness_gate_is_documented(self) -> None:
         matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
@@ -423,7 +423,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         )
         for phrase in (
             "Status: v0.3.231 first-read readiness checkpoint",
-            "Version: v0.3.231, release candidate",
+            "Version: v0.3.232, release candidate",
             "First-read readiness gate",
             "explicit abstract",
             "uniquely resolvable safe id",
@@ -436,6 +436,49 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                 self.assertIn("zet-catalog-pass", text)
                 self.assertIn("does not", text.lower())
         self.assertIn("first-read-readiness.md", public_map_text)
+
+    def test_explicit_abstract_publication_gate_is_documented(self) -> None:
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        guide_text = (KIT_ROOT / "docs" / "explicit-abstract-publication.md").read_text(
+            encoding="utf-8"
+        )
+        release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.232.md").read_text(
+            encoding="utf-8"
+        )
+        decision_text = (
+            KIT_ROOT
+            / "docs"
+            / "archive-infra-decision-log-2026-07-14-v03232-explicit-abstract-publication.md"
+        ).read_text(encoding="utf-8")
+        upgrade_text = (REPO_ROOT / "UPGRADE.md").read_text(encoding="utf-8")
+        upgrade_ko_text = (REPO_ROOT / "UPGRADE.ko.md").read_text(encoding="utf-8")
+        runtime_skill_text = (
+            KIT_ROOT / "templates" / "ai-runtime" / "wom-archive" / "SKILL.md"
+        ).read_text(encoding="utf-8")
+        public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(
+            encoding="utf-8"
+        )
+        for phrase in (
+            "Status: v0.3.232 explicit abstract publication checkpoint",
+            "Version: v0.3.232, release candidate",
+            "Explicit abstract publication invariant",
+            "compatibility fields",
+            "full draft SHA-256 and abstract SHA-256",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, matrix_text)
+        for text in (
+            guide_text,
+            release_text,
+            decision_text,
+            upgrade_text,
+            upgrade_ko_text,
+            runtime_skill_text,
+        ):
+            with self.subTest(document="explicit-abstract-publication"):
+                self.assertIn("first_read_check", text)
+                self.assertIn("abstract", text)
+        self.assertIn("explicit-abstract-publication.md", public_map_text)
 
     def test_external_import_docs_explain_source_ref_preservation_boundary(self) -> None:
         imports_text = EXTERNAL_IMPORTS_PATH.read_text(encoding="utf-8")
@@ -757,7 +800,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.231 pre-release",
+            "v0.3.232 pre-release",
             "[Version Truth Source](wom-kit/docs/version-truth-source.md)",
             "[Project Version Update](wom-kit/docs/project-version-update.md)",
             "read-only WOM-kit version truth-source checks",
@@ -1173,7 +1216,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                 self.assertIn(phrase, guide_text)
         for phrase in (
             "Status: v0.3.221 archive-wide abstract receipt and lock audit checkpoint",
-            "Version: v0.3.231, release candidate",
+            "Version: v0.3.232, release candidate",
             "zet abstract receipt lifecycle audit",
             "Up to 5,000 receipts and 5,000 locks",
             "Green proves bounded local consistency",
@@ -1374,7 +1417,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.58.md").read_text(encoding="utf-8")
         current_release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.106.md").read_text(encoding="utf-8")
         for phrase in (
-            "Status: v0.3.231 quick handoff and first-read readiness checkpoint",
+            "Status: v0.3.232 quick handoff and abstract-publication readiness checkpoint",
             "archive runtime-context <archive-root> --format json",
             "operational_context",
             "ops/operational-context.yml",
@@ -6288,7 +6331,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, start_here_text)
         for phrase in (
-            "Status: v0.3.231 quick handoff and first-read readiness checkpoint",
+            "Status: v0.3.232 quick handoff and abstract-publication readiness checkpoint",
             "Do not run both back-to-back",
             "canonical_entrypoints.next_commands",
         ):

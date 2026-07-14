@@ -1,6 +1,7 @@
 ---
 id: zet_20260519_draft_ai_lunch_note
 title: Draft AI lunch note
+abstract: An AI-created lunch reflection waiting for human review before canonical publication.
 created_at: "2026-05-19T12:10:00+09:00"
 updated_at: "2026-05-19T12:10:00+09:00"
 archive_id: archive:personal:fake-life

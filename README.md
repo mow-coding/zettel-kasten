@@ -33,10 +33,10 @@ wom-kit/docs/releases/ - do not re-grow baseline ladders or tag lists here.
 Current public baseline:
 
 ```text
-v0.3.231 pre-release
+v0.3.232 pre-release
 ```
 
-Previous public baseline: v0.3.228 pre-release.
+Previous public baseline: v0.3.231 pre-release.
 
 Full release history: see [CHANGELOG.md](CHANGELOG.md) and [wom-kit/docs/releases/](wom-kit/docs/releases/).
 
@@ -71,7 +71,7 @@ approval-gated write, or docs-only), see the
 - completed full-Doctor handoffs retain bounded ERROR/WARN items, complete code counts, and suggested commands instead of collapsing actionable findings to severity totals; a BOM finding now fills its reconcile dry-run with the validated canonical zet id and omits the command when that id is absent or unsafe instead of emitting an unresolved placeholder; compact heartbeat prioritizes the current local-profile secret-safety file/content/profile counts over a preserved older edge aggregate, and the regular-file safety walk reuses its checked directory boundary while keeping strict symlink escape checks,
 - read-only `archive zet-quality-check --dry-run` for entity-term, document-type, OCR/parse metadata, table-structure, correction-event, source-rights, audience, and derived-artifact dependency risks before mint; optional `zet-quality-rules.yml` project rules can make forbidden entity aliases mint blockers without echoing matched terms,
 - read-only `archive status-board --dry-run` for beginner-facing archive state counts across canonical zets, active drafts, minted drafts pending retire, document/audience metadata gaps, source metadata gaps, derived-artifact sync gaps, and optional body-inspecting quality counts without echoing titles, bodies, source values, provider URLs, or local paths,
-- frontmatter-only `archive first-read-readiness --dry-run` and MCP `first_read_readiness` separate ordinary archive health from AI memory-reconstruction readiness: every non-redacted canonical zet needs an explicit abstract and every selected zet needs a uniquely resolvable safe id before the gate says `ready`; compatibility text and bounded content-free repair candidates remain visible without echoing titles, abstracts, bodies, duplicate-id values, absolute paths, provider values, or secrets,
+- frontmatter-only `archive first-read-readiness --dry-run` and MCP `first_read_readiness` separate ordinary archive health from AI memory-reconstruction readiness: every non-redacted canonical zet needs an explicit abstract and every selected zet needs a uniquely resolvable safe id before the gate says `ready`; compatibility text and bounded content-free repair candidates remain visible without echoing titles, abstracts, bodies, duplicate-id values, absolute paths, provider values, or secrets; `create-draft` may still preserve an incomplete idea without an abstract, while `mint-zet`, `mint-zettel`, and legacy `promote` now require and revalidate one explicit safe abstract before any canonical publication write,
 - read-only `archive derived-artifact-staleness --dry-run` for checking whether declared `derived_artifacts` may be stale because a source zet is newer than the artifact's last reviewed sync. It writes nothing, opens no external report, and does not echo artifact refs, titles, bodies, provider URLs, or local paths,
 - a v0.2.x freeze / v0.3.0 entry boundary document plus a narrow v0.3.0 write boundary that stays local-first and body-safe,
 
@@ -250,6 +250,7 @@ For the full design philosophy, including the human data primitive model, AX rat
 - [Objet Capture Enablement](wom-kit/docs/capture-enablement.md)
 - [Archive Status Board](wom-kit/docs/archive-status-board.md)
 - [First-Read Readiness](wom-kit/docs/first-read-readiness.md)
+- [Explicit Abstract Publication Gate](wom-kit/docs/explicit-abstract-publication.md)
 - [Derived Artifact Staleness](wom-kit/docs/derived-artifact-staleness.md)
 - [zet Quality Check](wom-kit/docs/zet-quality-check.md)
 - [Version Truth Source](wom-kit/docs/version-truth-source.md)
@@ -459,7 +460,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
-v0.3.231 (current checkpoint)
+v0.3.232 (current checkpoint)
 ```
 
 Public releases from `v0.2.5` onward are tagged as compatibility checkpoints.

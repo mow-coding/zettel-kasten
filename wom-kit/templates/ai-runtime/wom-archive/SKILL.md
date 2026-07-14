@@ -310,6 +310,8 @@ Do not manually copy local paths from source intake or prompt-boundary outputs i
 
 After human draft approval, replay the same `draft_id`, `created_at`, `expected_body_sha256`, expected archive id/type, and profile id. Draft approval is only for `inbox/`; minting still needs a separate `mint-zet --approve --reviewed-by` step.
 
+An incomplete draft may remain in `inbox/` without an abstract. Before minting or legacy promotion, require one human-reviewed, normalized, bounded, safe explicit `frontmatter.abstract`. `gist`, `summary`, `description`, and `overview` never authorize canonical publication. Inspect the dry-run `first_read_check` and proceed only when `ready_for_publication` is true. The real write binds the full draft SHA-256 and abstract SHA-256, rereads one byte snapshot, and blocks before canonical, receipt, or snapshot creation if any draft byte drifted or the abstract is missing or invalid. This structural gate does not judge semantic truth, completeness, freshness, or model consumption.
+
 To preview the header for an existing draft or canonical zet:
 
 ```bash

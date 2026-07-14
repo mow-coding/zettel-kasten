@@ -1,6 +1,6 @@
 # Archive Status Board
 
-Status: v0.3.231 read-only archive state and first-read checkpoint
+Status: v0.3.232 read-only archive state and abstract-publication checkpoint
 
 `archive status-board` gives a beginner-facing status summary for one WOM
 archive without making the operator inspect `inbox/`, `zettels/`, mint

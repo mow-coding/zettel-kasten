@@ -1,6 +1,6 @@
 # Runtime Canonical Entry Points
 
-Status: v0.3.231 quick handoff and first-read readiness checkpoint
+Status: v0.3.232 quick handoff and abstract-publication readiness checkpoint
 
 When an AI runtime enters a WOM archive, it needs a small, explicit "start
 here" map. The archive may contain zets, source bindings, provider metadata,

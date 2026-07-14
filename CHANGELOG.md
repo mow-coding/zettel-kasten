@@ -6,6 +6,31 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.232 - 2026-07-14
+
+Explicit abstract publication invariant checkpoint. Additive validation and
+receipt metadata; no archive migration or automatic archive write.
+
+- **Draft freedom, publication discipline.** `create-draft` still accepts an
+  incomplete draft without `abstract`, but returns a content-free
+  `first_read_check` showing that it is not ready for canonical publication.
+- **One explicit publication field.** `mint-zet`, `mint-zettel`, and legacy
+  `promote` now require a normalized, bounded, safe explicit
+  `frontmatter.abstract`. `gist`, `summary`, `description`, and `overview`
+  remain readable compatibility fields but cannot authorize publication.
+- **Last-moment revalidation.** Real mint and promotion reread one source-byte
+  snapshot and recheck both its full SHA-256 and abstract hash after dry-run;
+  any draft-byte drift or missing, invalid, or changed abstract blocks before
+  canonical, receipt, or snapshot files are written.
+- **Text-free evidence.** Mint and promotion previews, results, and receipts
+  record status, character count, limit, and SHA-256 without copying abstract
+  text into the check record.
+- **Compatibility boundary.** Existing canonical zets and receipts remain
+  valid. The rule applies when a draft crosses into canonical state and does
+  not silently backfill older material.
+- **Honest claim boundary.** Passing the structural gate does not prove that
+  an abstract is true, complete, semantically current, or consumed by a model.
+
 ## v0.3.231 - 2026-07-14
 
 Explicit first-read readiness checkpoint. Additive and read-only; no archive
