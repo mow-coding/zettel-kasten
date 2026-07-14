@@ -1970,6 +1970,24 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "abstract_freshness",
+        "description": "Compare canonical abstract/body hash pairs with retained human-review evidence. Read-only and text-free: returns no abstract, body, title, hash, receipt path, reviewer id, provider URL, or secret value.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string"},
+                "max_items": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": archive_services.ABSTRACT_FRESHNESS_MAX_ATTENTION_ITEMS,
+                    "default": 100,
+                },
+                "dry_run": {"type": "boolean", "default": True},
+            },
+            "required": ["archive_root"],
+        },
+    },
+    {
         "name": "read_zettel",
         "description": "Read one zettel by zettel id or archive-relative path. Use section=overview for the compact first read before requesting a body.",
         "inputSchema": {
@@ -2985,6 +3003,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_zet_catalog(arguments)
     if name == "first_read_readiness":
         return tool_first_read_readiness(arguments)
+    if name == "abstract_freshness":
+        return tool_abstract_freshness(arguments)
     if name == "read_zettel":
         return tool_read_zettel(arguments)
     if name == "zettel_objet_links":
@@ -4754,6 +4774,24 @@ def tool_first_read_readiness(arguments: dict[str, Any]) -> dict[str, Any]:
     return tool_success_result(
         "first_read_readiness: "
         f"{result.get('state', 'unknown')}, {result.get('canonical_zet_count', 0)} canonical zet(s) checked.",
+        result,
+    )
+
+
+def tool_abstract_freshness(arguments: dict[str, Any]) -> dict[str, Any]:
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("abstract_freshness is dry-run only.")
+    archive_root = require_path_arg(arguments, "archive_root")
+    result = call_service(
+        archive_services.abstract_freshness,
+        archive_root,
+        dry_run=True,
+        max_items=int(arguments.get("max_items", 100)),
+    )
+    return tool_success_result(
+        "abstract_freshness: "
+        f"{result.get('state', 'unknown')}, {result.get('canonical_zet_count', 0)} canonical zet(s) checked, "
+        f"{result.get('attention', {}).get('total_count', 0)} need review.",
         result,
     )
 

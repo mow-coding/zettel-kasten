@@ -6,6 +6,39 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.233 - 2026-07-14
+
+Abstract freshness evidence checkpoint. Additive receipt metadata and read-only
+diagnosis; no archive migration or automatic canonical rewrite.
+
+- **Reviewed pair evidence.** Approved mint and legacy promotion receipts add
+  a strict text-free `abstract_review_basis` containing the explicit-abstract
+  hash, canonical-body hash, hash basis, and review status.
+- **Freshness diagnosis.** New CLI `abstract-freshness` (aliases
+  `zet-abstract-freshness`, `first-read-freshness`) and MCP
+  `abstract_freshness` classify canonical zets as `fresh`, `stale`,
+  `unverified`, `missing`, `unreadable`, or policy `excluded`.
+- **Honest compatibility.** The scanner can reconstruct evidence from retained
+  v0.3.232 mint snapshots or promotion sources and recognizes applied reviewed
+  abstract-backfill receipts. Older material without evidence remains valid
+  and is `unverified`, not falsely called stale.
+- **Change precision.** Frontmatter-only edits such as edge evolution remain
+  fresh when the abstract and body are unchanged; body, abstract, or combined
+  drift receives a distinct reason and human review row.
+- **Linear bounded scan.** Receipt evidence is indexed once and canonical zets
+  are scanned once under an
+  `O(canonical_zets + receipt_files + receipt_items)` contract with bounded
+  file and receipt-count reads.
+- **Content-free output.** Results echo no title, abstract/body text, hash
+  value, receipt path, reviewer id, absolute path, provider URL, or secret and
+  perform no repair or external call.
+- **AI runtime routing.** Canonical start-here order and shipped archive-agent
+  instructions run this check after first-read readiness and before the
+  complete private catalog pass.
+- **Claim boundary.** `fresh` proves exact local hash-pair continuity to
+  retained human-review evidence, not truth, completeness, usefulness, or
+  model consumption.
+
 ## v0.3.232 - 2026-07-14
 
 Explicit abstract publication invariant checkpoint. Additive validation and

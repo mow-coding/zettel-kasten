@@ -24,6 +24,31 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.233 Abstract Freshness Evidence
+
+No archive migration is required. Restart the AI operator process after the
+upgrade so the new CLI/MCP surface is visible, then run:
+
+```text
+archive abstract-freshness <archive-root> --dry-run --progress --format json
+```
+
+Run it after `first-read-readiness` and before the complete private catalog
+pass. `fresh` means the current abstract/body hash pair matches retained human
+review evidence. `stale` means the body, abstract, or both changed;
+`unverified` means WOM cannot reconstruct review evidence; `missing` and
+`unreadable` identify structural gaps. Redacted zets are excluded by policy.
+
+New approved mint and legacy promotion receipts add text-free review evidence.
+The scanner also recognizes retained v0.3.232 mint snapshots or promotion
+sources and existing applied reviewed abstract-backfill receipts. Existing zets
+and receipts remain valid and are never rewritten automatically.
+
+Treat every non-fresh row as a human review queue. Output contains no title,
+abstract/body text, hash value, receipt path, reviewer id, provider URL,
+absolute local path, or secret. A green result proves exact local hash-pair
+continuity only, not truth, completeness, usefulness, or model consumption.
+
 ## v0.3.232 Explicit Abstract Publication Gate
 
 No archive migration is required. Existing canonical zets and old receipts

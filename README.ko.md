@@ -31,10 +31,10 @@ tag 목록을 여기서 다시 키우지 않습니다.
 현재 공개 기준:
 
 ```text
-v0.3.232 pre-release
+v0.3.233 pre-release
 ```
 
-이전 공개 기준: v0.3.231 pre-release.
+이전 공개 기준: v0.3.232 pre-release.
 
 전체 릴리스 이력은 [CHANGELOG.md](CHANGELOG.md)와 [wom-kit/docs/releases/](wom-kit/docs/releases/)를 보세요.
 
@@ -62,7 +62,7 @@ Roadmap 요약: `v0.1.x`는 아이디어/프로토콜 언어 라인, `v0.2.x`는
 - 완료된 전체 검진 인수인계 문서는 ERROR/WARN을 단순 개수로 버리지 않고 제한된 항목, 전체 코드별 개수, 권장 명령을 남깁니다. BOM 진단은 검증된 canonical zet 아이디를 reconcile 미리보기에 실제로 채우며, 아이디가 없거나 안전하지 않으면 미완성 placeholder 명령을 내보내지 않습니다. compact heartbeat는 보존된 과거 엣지 집계보다 현재 local-profile secret-safety의 파일·내용·프로필 처리량을 우선하며, 일반 파일 안전 순회는 확인한 디렉터리 경계를 재사용하면서 심볼릭 링크 이탈 검사는 엄격하게 유지합니다.
 - read-only `archive zet-quality-check --dry-run`으로 mint 전 entity-term, document-type, OCR/parse metadata, table-structure, correction-event, source-rights, audience, derived-artifact dependency 위험을 점검합니다. 선택적 `zet-quality-rules.yml` 프로젝트 규칙은 matched term을 출력하지 않으면서 금지 entity alias를 mint blocker로 만들 수 있습니다.
 - read-only `archive status-board --dry-run`으로 canonical zet, active draft, retire 대기 minted draft, document/audience metadata gap, source metadata gap, derived-artifact sync gap, 선택적 quality count를 한 번에 요약합니다. title/body/source value/provider URL/local path는 출력하지 않습니다.
-- 초록 데이터만 읽는 `archive first-read-readiness --dry-run`과 MCP `first_read_readiness`는 일반 보관함 검진과 AI 기억 재구성 준비 상태를 분리합니다. 비공개 처리되지 않은 모든 정본 zet에 명시적 `abstract`가 있고 모든 zet 아이디가 하나로 안전하게 해석될 때만 `ready`가 됩니다. 호환용 요약과 제한된 보완 후보는 보여주되 제목, 초록 문장, 본문, 중복 아이디 값, 절대 경로, 외부 서비스 값, 비밀정보는 출력하지 않습니다. `create-draft`는 초록이 없는 미완성 생각도 보존하지만, `mint-zet`, `mint-zettel`, 이전 `promote`는 정본 발행 파일을 쓰기 전에 명시적이고 안전한 초록 데이터를 요구하고 다시 검증합니다.
+- 초록 데이터만 읽는 `archive first-read-readiness --dry-run`과 MCP `first_read_readiness`는 일반 보관함 검진과 AI 기억 재구성 준비 상태를 분리합니다. 비공개 처리되지 않은 모든 정본 zet에 명시적 `abstract`가 있고 모든 zet 아이디가 하나로 안전하게 해석될 때만 `ready`가 됩니다. 호환용 요약과 제한된 보완 후보는 보여주되 제목, 초록 문장, 본문, 중복 아이디 값, 절대 경로, 외부 서비스 값, 비밀정보는 출력하지 않습니다. `create-draft`는 초록이 없는 미완성 생각도 보존하지만, `mint-zet`, `mint-zettel`, 이전 `promote`는 정본 발행 파일을 쓰기 전에 명시적이고 안전한 초록 데이터를 요구하고 다시 검증합니다. 이어서 읽기 전용 `archive abstract-freshness --dry-run`과 MCP `abstract_freshness`는 현재 초록 데이터와 본문의 해시 짝을 사람이 검토한 근거와 대조해 `fresh`, `stale`, `unverified`, `missing`, `unreadable`, 정책상 제외 상태를 한 번의 영수증 색인과 한 번의 정본 순회로 구분하며, 문장을 출력하거나 기억을 자동 수정하지 않습니다. 이것은 WOM이 말하는 **메멘토 문제**에 대한 답의 한 층입니다. 새 AI 세션은 흐려지는 대화 기억을 믿는 대신 사람이 검토한 로컬 아티팩트에서 오래가는 맥락을 다시 세워야 합니다.
 - read-only `archive derived-artifact-staleness --dry-run`으로 `derived_artifacts`가 마지막 검토 sync 이후 더 최신 source zet을 놓치고 있는지 확인합니다. 외부 보고서 본문은 열지 않고, artifact ref/title/body/provider URL/local path는 출력하지 않습니다.
 - 오래 도는 `validate`, `doctor --strict`, 대형 `object-storage-adopt-existing` 실행을 위한 선택형 stage/count progress 출력. 진행률은 stderr로만 나가며 object id, remote key, bucket name, provider URL, 정확한 credential ref, token, secret value를 싣지 않습니다. 대형 adopt plan resolution은 이제 실행별 manifest index를 쓰고, read-only `--stop-after-plan`, matching resume count, same-provider nonmatching store/key 진단, 같은 store_ref의 `wom_uploaded` raw count와 실제 skip 후보 count 차이를 함께 보여주며, doctor는 receipt 검사 중 파일 SHA/frontmatter cache, mint-link sub-step, receipt 완료 progress, receipt별 heartbeat, receipt별 file-ref liveness, target file-ref drilldown, 엣지 영수증 파일명 인덱스의 시작/heartbeat/완료와 source·후보·cache hit 누계 및 최종 요약, hash 시작/완료 liveness, retired source skip, local-profile secret-safety liveness, 초기 ETA warm-up, compact 기본 `--progress`, opt-in verbose trace, JSONL progress log, archive-relative `--output` full result capture, compact summary, stdout severity filter, output/progress-log path-policy metadata를 제공합니다. source별 후보 묶음 상세는 compact stderr를 도배하지 않고 verbose/JSONL에 남습니다. `ai-start-here`, `upgrade-check`, CLI `zet-catalog`도 내용이 없는 진행 표시, 10초 heartbeat, 임시 결과 저장 계약을 공유합니다. `zet-catalog-pass`는 한 프로세스에서 strict 페이지를 끝까지 읽고 마지막 로컬 재검증 뒤 SHA-256이 붙은 비공개 임시 JSONL을 완성합니다. `zet-catalog-pass-read`는 전체 파일을 검증한 뒤 한 페이지만 제한해 반환하고, `zet-catalog-pass-cleanup`은 미리보기와 사람의 명시 승인 뒤 해시가 같은 완성 파일 하나만 삭제합니다. `read-zettel --section document`는 사람이 읽는 문서 화면에서 raw YAML frontmatter를 숨기는 read-only 보기 모드를 제공합니다.
 
@@ -212,6 +212,7 @@ IMAP:
 - [Archive Status Board](wom-kit/docs/archive-status-board.md)
 - [First-Read Readiness](wom-kit/docs/first-read-readiness.md)
 - [명시적 초록 데이터 발행 게이트](wom-kit/docs/explicit-abstract-publication.md)
+- [초록 데이터 최신성 검진](wom-kit/docs/abstract-freshness.md)
 - [Derived Artifact Staleness](wom-kit/docs/derived-artifact-staleness.md)
 - [zet Quality Check](wom-kit/docs/zet-quality-check.md)
 - [Public Privacy Hygiene](wom-kit/docs/public-privacy-hygiene.md)
@@ -353,7 +354,7 @@ WOM, `zettel-kasten`, `zet`, `ZET`는 버전이 있는 protocol family로 관리
 Release tag는 compatibility checkpoint입니다.
 
 ```text
-v0.3.232 (현재 checkpoint)
+v0.3.233 (현재 checkpoint)
 ```
 
 `v0.2.5` 이후의 공개 릴리스에는 compatibility checkpoint tag가 붙습니다. 전체

@@ -223,8 +223,8 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                 self.assertIn("identity-reconcile", text)
                 self.assertIn("proposed", text)
                 self.assertIn("SHA-256", text)
-        self.assertIn("v0.3.232 pre-release", versioning_text)
-        self.assertIn("0.3.232", versioning_text)
+        self.assertIn("v0.3.233 pre-release", versioning_text)
+        self.assertIn("0.3.233", versioning_text)
         self.assertIn("archive-identity-reconcile.md", public_map_text)
 
     def test_aggregate_edge_progress_public_contract_is_documented(self) -> None:
@@ -248,7 +248,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         )
         for phrase in (
             "Status: v0.3.227 aggregate full-Doctor edge progress checkpoint",
-            "Version: v0.3.232, release candidate",
+            "Version: v0.3.233, release candidate",
             "cumulative source/candidate/cache-hit counts",
             "does not perform another broad pass",
         ):
@@ -268,8 +268,8 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, benchmark_text)
-        self.assertIn("v0.3.232 (current checkpoint)", readme_text)
-        self.assertIn("v0.3.232 (현재 checkpoint)", readme_ko_text)
+        self.assertIn("v0.3.233 (current checkpoint)", readme_text)
+        self.assertIn("v0.3.233 (현재 checkpoint)", readme_ko_text)
 
     def test_actionable_full_doctor_results_and_current_profile_progress_are_documented(
         self,
@@ -294,7 +294,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         for phrase in (
             "Status: v0.3.228 actionable full-Doctor result and current-stage progress checkpoint",
-            "Version: v0.3.232, release candidate",
+            "Version: v0.3.233, release candidate",
             "doctor_findings",
             "up to 100 detailed items",
             "up to 20 deduplicated suggested commands",
@@ -346,7 +346,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
 
         for phrase in (
             "Status: v0.3.229 executable BOM reconcile guidance checkpoint",
-            "Version: v0.3.232, release candidate",
+            "Version: v0.3.233, release candidate",
             "actual validated canonical frontmatter id",
             "omits the command when the id is absent or unsafe",
         ):
@@ -383,7 +383,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
 
         for phrase in (
             "Status: v0.3.230 digest-bound content-change review checkpoint",
-            "Version: v0.3.232, release candidate",
+            "Version: v0.3.233, release candidate",
             "Previous checkpoint: Status: v0.3.229",
             "--reviewed-plan-sha256 <sha256>",
         ):
@@ -396,10 +396,10 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                 self.assertIn("intentional_change", text)
                 self.assertIn("unintentional_change", text)
                 self.assertIn("uncertain", text)
-        self.assertIn("v0.3.232 pre-release", readme_text)
-        self.assertIn("v0.3.232 pre-release", readme_ko_text)
-        self.assertIn("v0.3.232 (current checkpoint)", readme_text)
-        self.assertIn("v0.3.232 (현재 checkpoint)", readme_ko_text)
+        self.assertIn("v0.3.233 pre-release", readme_text)
+        self.assertIn("v0.3.233 pre-release", readme_ko_text)
+        self.assertIn("v0.3.233 (current checkpoint)", readme_text)
+        self.assertIn("v0.3.233 (현재 checkpoint)", readme_ko_text)
 
     def test_first_read_readiness_gate_is_documented(self) -> None:
         matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
@@ -423,7 +423,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         )
         for phrase in (
             "Status: v0.3.231 first-read readiness checkpoint",
-            "Version: v0.3.232, release candidate",
+            "Version: v0.3.233, release candidate",
             "First-read readiness gate",
             "explicit abstract",
             "uniquely resolvable safe id",
@@ -460,7 +460,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         )
         for phrase in (
             "Status: v0.3.232 explicit abstract publication checkpoint",
-            "Version: v0.3.232, release candidate",
+            "Version: v0.3.233, release candidate",
             "Explicit abstract publication invariant",
             "compatibility fields",
             "full draft SHA-256 and abstract SHA-256",
@@ -479,6 +479,86 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                 self.assertIn("first_read_check", text)
                 self.assertIn("abstract", text)
         self.assertIn("explicit-abstract-publication.md", public_map_text)
+
+    def test_abstract_freshness_evidence_is_documented(self) -> None:
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        guide_text = (KIT_ROOT / "docs" / "abstract-freshness.md").read_text(
+            encoding="utf-8"
+        )
+        release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.233.md").read_text(
+            encoding="utf-8"
+        )
+        decision_text = (
+            KIT_ROOT
+            / "docs"
+            / "archive-infra-decision-log-2026-07-14-v03233-abstract-freshness.md"
+        ).read_text(encoding="utf-8")
+        upgrade_text = (REPO_ROOT / "UPGRADE.md").read_text(encoding="utf-8")
+        upgrade_ko_text = (REPO_ROOT / "UPGRADE.ko.md").read_text(encoding="utf-8")
+        runtime_text = (KIT_ROOT / "docs" / "runtime-canonical-entrypoints.md").read_text(
+            encoding="utf-8"
+        )
+        runtime_skill_text = (
+            KIT_ROOT / "templates" / "ai-runtime" / "wom-archive" / "SKILL.md"
+        ).read_text(encoding="utf-8")
+        agent_template_texts = [
+            (KIT_ROOT / "templates" / archive_type / "AGENTS.md").read_text(
+                encoding="utf-8"
+            )
+            for archive_type in ("personal", "company", "family")
+        ]
+        public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(
+            encoding="utf-8"
+        )
+        public_map_ko_text = (
+            KIT_ROOT / "docs" / "public-documentation-map.ko.md"
+        ).read_text(encoding="utf-8")
+        readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        readme_ko_text = (REPO_ROOT / "README.ko.md").read_text(encoding="utf-8")
+
+        for phrase in (
+            "Status: v0.3.233 abstract freshness evidence checkpoint",
+            "Version: v0.3.233, release candidate",
+            "Abstract freshness evidence",
+            "O(canonical_zets + receipt_files + receipt_items)",
+            "semantic truth",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, matrix_text)
+        for text in (
+            guide_text,
+            release_text,
+            decision_text,
+            upgrade_text,
+            upgrade_ko_text,
+            runtime_text,
+            runtime_skill_text,
+        ):
+            with self.subTest(document="abstract-freshness"):
+                self.assertIn("abstract-freshness", text)
+                self.assertIn("unverified", text)
+        combined_text = "\n".join(
+            (
+                guide_text,
+                release_text,
+                decision_text,
+                upgrade_text,
+                upgrade_ko_text,
+                runtime_text,
+                runtime_skill_text,
+            )
+        )
+        self.assertTrue(
+            "human review" in combined_text.lower() or "사람 검토" in combined_text
+        )
+        for text in agent_template_texts:
+            with self.subTest(document="archive-agent-template"):
+                self.assertIn("abstract-freshness", text)
+                self.assertIn("never permission to auto-rewrite", text)
+        self.assertIn("abstract-freshness.md", public_map_text)
+        self.assertIn("abstract-freshness.md", public_map_ko_text)
+        self.assertIn("the Memento Problem", readme_text)
+        self.assertIn("메멘토 문제", readme_ko_text)
 
     def test_external_import_docs_explain_source_ref_preservation_boundary(self) -> None:
         imports_text = EXTERNAL_IMPORTS_PATH.read_text(encoding="utf-8")
@@ -800,7 +880,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.232 pre-release",
+            "v0.3.233 pre-release",
             "[Version Truth Source](wom-kit/docs/version-truth-source.md)",
             "[Project Version Update](wom-kit/docs/project-version-update.md)",
             "read-only WOM-kit version truth-source checks",
@@ -1216,7 +1296,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                 self.assertIn(phrase, guide_text)
         for phrase in (
             "Status: v0.3.221 archive-wide abstract receipt and lock audit checkpoint",
-            "Version: v0.3.232, release candidate",
+            "Version: v0.3.233, release candidate",
             "zet abstract receipt lifecycle audit",
             "Up to 5,000 receipts and 5,000 locks",
             "Green proves bounded local consistency",
@@ -1417,7 +1497,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.58.md").read_text(encoding="utf-8")
         current_release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.106.md").read_text(encoding="utf-8")
         for phrase in (
-            "Status: v0.3.232 quick handoff and abstract-publication readiness checkpoint",
+            "Status: v0.3.233 quick handoff and abstract-freshness readiness checkpoint",
             "archive runtime-context <archive-root> --format json",
             "operational_context",
             "ops/operational-context.yml",
@@ -6331,7 +6411,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, start_here_text)
         for phrase in (
-            "Status: v0.3.232 quick handoff and abstract-publication readiness checkpoint",
+            "Status: v0.3.233 quick handoff and abstract-freshness readiness checkpoint",
             "Do not run both back-to-back",
             "canonical_entrypoints.next_commands",
         ):

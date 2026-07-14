@@ -57,12 +57,16 @@ id values are counted but not echoed.
 2. Run `first-read-readiness`.
 3. If it is not ready, prepare reviewed repairs; never invent or auto-write
    missing abstracts.
-4. When it is ready, run `zet-catalog-pass` to create one complete private
+4. When it is ready, run `abstract-freshness`; presence and review freshness
+   are separate checks, and every non-fresh row still needs human review.
+5. Run `zet-catalog-pass` to create one complete private
    first-read artifact.
-5. Validate and consume that artifact from page zero, then delete it through
+6. Validate and consume that artifact from page zero, then delete it through
    the SHA-bound cleanup flow.
 
 `first-read-readiness` proves current frontmatter readiness at one snapshot.
+`abstract-freshness` separately checks whether retained review evidence matches
+the current abstract/body pair without judging its meaning.
 `zet-catalog-pass` is the separate evidence that a complete catalog artifact
 was generated. The host still has to read the validated pages before claiming
 that the AI consumed every first read.

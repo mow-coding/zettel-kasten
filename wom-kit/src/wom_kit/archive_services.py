@@ -2798,6 +2798,13 @@ FRONTMATTER_V03_LEGACY_REF_ROLE = "legacy_provenance_source"
 ZETTEL_READ_SECTIONS = {"overview", "body", "document", "details", "all"}
 ZETTEL_OVERVIEW_GIST_CHAR_LIMIT = 360
 ZET_ABSTRACT_MAX_CHARS = ZETTEL_OVERVIEW_GIST_CHAR_LIMIT
+ABSTRACT_REVIEW_BASIS_CONTRACT = "wom-kit/abstract-review-basis/v0.1"
+ABSTRACT_REVIEW_BODY_HASH_BASIS = "decoded_canonical_body_utf8_universal_newlines"
+ABSTRACT_FRESHNESS_SCHEMA = "wom-kit/abstract-freshness/v0.1"
+ABSTRACT_FRESHNESS_MAX_RECEIPTS = 100000
+ABSTRACT_FRESHNESS_MAX_RECEIPT_BYTES = 16 * 1024 * 1024
+ABSTRACT_FRESHNESS_MAX_ZET_BYTES = 16 * 1024 * 1024
+ABSTRACT_FRESHNESS_MAX_ATTENTION_ITEMS = 500
 ZET_ABSTRACT_BACKFILL_PROPOSAL_SCHEMA = "wom-kit/zet-abstract-backfill-proposal/v0.1"
 ZET_ABSTRACT_BACKFILL_PLAN_SCHEMA = "wom-kit/zet-abstract-backfill-plan/v0.1"
 ZET_ABSTRACT_BACKFILL_WRITE_SCHEMA = "wom-kit/zet-abstract-backfill-write/v0.1"
@@ -6096,6 +6103,480 @@ def zet_catalog_identity_coverage(
         "unaddressable_entry_count": unaddressable_entry_count,
         "all_entries_uniquely_addressable": all_entries_uniquely_addressable,
         "paths_or_duplicate_id_values_echoed": False,
+    }
+
+
+def normalize_abstract_evidence_sha256(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().lower()
+    if re.fullmatch(r"sha256:[0-9a-f]{64}", normalized):
+        return normalized
+    if re.fullmatch(r"[0-9a-f]{64}", normalized):
+        return "sha256:" + normalized
+    return None
+
+
+def normalize_abstract_evidence_canonical_path(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        normalized = normalize_archive_relative_path(value)
+    except ArchivePathError:
+        return None
+    if not normalized.startswith("zettels/") or PurePosixPath(normalized).suffix.lower() != ".md":
+        return None
+    return normalized
+
+
+def add_abstract_review_evidence(
+    evidence_by_path: dict[str, dict[tuple[str, str], set[str]]],
+    *,
+    canonical_path: str,
+    abstract_sha256: str,
+    body_sha256: str,
+    evidence_kind: str,
+) -> bool:
+    pairs = evidence_by_path.setdefault(canonical_path, {})
+    kinds = pairs.setdefault((abstract_sha256, body_sha256), set())
+    before = len(kinds)
+    kinds.add(evidence_kind)
+    return len(kinds) != before
+
+
+def read_bounded_abstract_evidence_file(path: Path, max_bytes: int) -> bytes:
+    if path.is_symlink() or not path.is_file():
+        raise OSError("Evidence file is unavailable.")
+    with path.open("rb") as handle:
+        data = handle.read(max_bytes + 1)
+    if len(data) > max_bytes:
+        raise OSError("Evidence file exceeds the bounded read limit.")
+    return data
+
+
+def parse_abstract_evidence_zettel_bytes(data: bytes) -> tuple[dict[str, Any], str] | None:
+    try:
+        return split_zettel_text(decode_utf8_with_universal_newlines(data))
+    except Exception:
+        return None
+
+
+def legacy_publication_abstract_evidence(
+    root: Path,
+    receipt: dict[str, Any],
+) -> tuple[str, str, str, str] | None:
+    action = receipt.get("action")
+    if action not in {"mint_zettel", "promote_zettel"} or receipt.get("dry_run") is not False:
+        return None
+    target = receipt.get("target") if isinstance(receipt.get("target"), dict) else {}
+    canonical_path = normalize_abstract_evidence_canonical_path(target.get("path"))
+    first_read_check = (
+        receipt.get("first_read_check")
+        if isinstance(receipt.get("first_read_check"), dict)
+        else {}
+    )
+    abstract_sha256 = normalize_abstract_evidence_sha256(
+        first_read_check.get("abstract_sha256")
+    )
+    if (
+        canonical_path is None
+        or first_read_check.get("contract") != "wom-kit/explicit-abstract-publication/v0.1"
+        or first_read_check.get("ready_for_publication") is not True
+        or abstract_sha256 is None
+    ):
+        return None
+
+    source = receipt.get("source") if isinstance(receipt.get("source"), dict) else {}
+    if action == "mint_zettel":
+        evidence_ref = receipt.get("snapshot") if isinstance(receipt.get("snapshot"), dict) else {}
+        evidence_path_value = evidence_ref.get("path")
+        expected_sha256 = normalize_abstract_evidence_sha256(evidence_ref.get("sha256"))
+        source_sha256 = normalize_abstract_evidence_sha256(source.get("sha256"))
+        required_prefix = f"{MINT_DRAFT_SNAPSHOTS_DIR}/"
+        evidence_kind = "legacy_mint_snapshot"
+        if expected_sha256 is None or expected_sha256 != source_sha256:
+            return None
+    else:
+        evidence_ref = source
+        evidence_path_value = evidence_ref.get("path")
+        expected_sha256 = normalize_abstract_evidence_sha256(evidence_ref.get("sha256"))
+        required_prefix = "inbox/"
+        evidence_kind = "legacy_promotion_source"
+        if expected_sha256 is None:
+            return None
+
+    if not isinstance(evidence_path_value, str):
+        return None
+    try:
+        evidence_relative = normalize_archive_relative_path(evidence_path_value)
+        if not evidence_relative.startswith(required_prefix):
+            return None
+        evidence_path = resolve_archive_relative_path(root, evidence_relative)
+        raw_bytes = read_bounded_abstract_evidence_file(
+            evidence_path, ABSTRACT_FRESHNESS_MAX_ZET_BYTES
+        )
+        if "sha256:" + hashlib.sha256(raw_bytes).hexdigest() != expected_sha256:
+            return None
+        parsed = parse_abstract_evidence_zettel_bytes(raw_bytes)
+        if parsed is None:
+            return None
+        frontmatter, body = parsed
+    except (ArchivePathError, OSError, UnicodeDecodeError):
+        return None
+    evidence_first_read = explicit_abstract_publication_check(frontmatter)
+    if (
+        not evidence_first_read.get("ready_for_publication")
+        or evidence_first_read.get("abstract_sha256") != abstract_sha256
+    ):
+        return None
+    return (
+        canonical_path,
+        abstract_sha256,
+        canonical_body_sha256(canonical_publication_body(body)),
+        evidence_kind,
+    )
+
+
+def index_abstract_review_evidence(
+    root: Path,
+    *,
+    progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
+) -> tuple[dict[str, dict[tuple[str, str], set[str]]], dict[str, Any], list[str]]:
+    evidence_by_path: dict[str, dict[tuple[str, str], set[str]]] = {}
+    blockers: list[str] = []
+    archive_id = read_archive_id(root)
+    receipt_root = root / "receipts"
+    receipt_paths = (
+        safe_archive_glob(receipt_root, "*.json", root, recursive=True)
+        if receipt_root.is_dir()
+        else []
+    )
+    discovered_count = len(receipt_paths)
+    if discovered_count > ABSTRACT_FRESHNESS_MAX_RECEIPTS:
+        blockers.append("abstract_review_receipt_scan_limit_exceeded")
+        receipt_paths = receipt_paths[:ABSTRACT_FRESHNESS_MAX_RECEIPTS]
+
+    stats = {
+        "receipt_files_discovered": discovered_count,
+        "receipt_files_scanned": 0,
+        "recognized_receipt_count": 0,
+        "evidence_record_count": 0,
+        "legacy_evidence_unavailable_count": 0,
+        "invalid_or_oversized_receipt_count": 0,
+        "unrelated_receipt_count": 0,
+        "max_receipts": ABSTRACT_FRESHNESS_MAX_RECEIPTS,
+        "max_receipt_bytes": ABSTRACT_FRESHNESS_MAX_RECEIPT_BYTES,
+    }
+    if progress_callback is not None:
+        progress_callback("abstract-evidence", "start", 0, len(receipt_paths))
+
+    for index, receipt_path in enumerate(receipt_paths, start=1):
+        stats["receipt_files_scanned"] += 1
+        try:
+            raw_bytes = read_bounded_abstract_evidence_file(
+                receipt_path, ABSTRACT_FRESHNESS_MAX_RECEIPT_BYTES
+            )
+            receipt = json.loads(raw_bytes.decode("utf-8-sig"))
+            if not isinstance(receipt, dict):
+                raise ValueError("Receipt must be an object.")
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
+            stats["invalid_or_oversized_receipt_count"] += 1
+            continue
+
+        receipt_relative = archive_relative_path(receipt_path, root)
+        added_from_receipt = 0
+        if receipt.get("schema") == ZET_ABSTRACT_BACKFILL_RECEIPT_SCHEMA:
+            if (
+                receipt_relative.startswith(f"{ZET_ABSTRACT_BACKFILL_RECEIPTS_DIR}/")
+                and receipt_relative.endswith(".zet-abstract-backfill.json")
+                and receipt.get("action") == "zet_abstract_backfill_write"
+                and receipt.get("status") == "applied"
+                and receipt.get("archive_id") == archive_id
+                and receipt.get("human_affirmation") == "all_proposed_abstracts_reviewed"
+                and not validate_schema(receipt, "zet-abstract-backfill-receipt.schema.json")
+            ):
+                for item in receipt.get("items", []):
+                    canonical_path = normalize_abstract_evidence_canonical_path(
+                        item.get("canonical_path") if isinstance(item, dict) else None
+                    )
+                    abstract_sha256 = normalize_abstract_evidence_sha256(
+                        item.get("abstract_sha256") if isinstance(item, dict) else None
+                    )
+                    body_sha256 = normalize_abstract_evidence_sha256(
+                        item.get("body_sha256") if isinstance(item, dict) else None
+                    )
+                    if canonical_path and abstract_sha256 and body_sha256:
+                        if add_abstract_review_evidence(
+                            evidence_by_path,
+                            canonical_path=canonical_path,
+                            abstract_sha256=abstract_sha256,
+                            body_sha256=body_sha256,
+                            evidence_kind="reviewed_abstract_backfill",
+                        ):
+                            added_from_receipt += 1
+            else:
+                stats["invalid_or_oversized_receipt_count"] += 1
+        elif (
+            receipt.get("action") in {"mint_zettel", "promote_zettel"}
+            and receipt.get("dry_run") is False
+        ):
+            action = str(receipt.get("action"))
+            receipt_path_matches_action = (
+                receipt_relative.startswith(f"{MINT_RECEIPTS_DIR}/")
+                and receipt_relative.endswith(".mint.json")
+                if action == "mint_zettel"
+                else receipt_relative.startswith("receipts/promotion/")
+                and receipt_relative.endswith(".promotion.json")
+            )
+            basis = receipt.get("abstract_review_basis")
+            target = receipt.get("target") if isinstance(receipt.get("target"), dict) else {}
+            if isinstance(basis, dict):
+                canonical_path = normalize_abstract_evidence_canonical_path(target.get("path"))
+                abstract_sha256 = normalize_abstract_evidence_sha256(basis.get("abstract_sha256"))
+                body_sha256 = normalize_abstract_evidence_sha256(basis.get("body_sha256"))
+                expected_kind = receipt.get("action")
+                first_read = (
+                    receipt.get("first_read_check")
+                    if isinstance(receipt.get("first_read_check"), dict)
+                    else {}
+                )
+                if (
+                    receipt_path_matches_action
+                    and canonical_path
+                    and abstract_sha256
+                    and body_sha256
+                    and basis.get("contract") == ABSTRACT_REVIEW_BASIS_CONTRACT
+                    and basis.get("review_status") == "reviewed_at_publication"
+                    and basis.get("evidence_kind") == expected_kind
+                    and basis.get("body_hash_basis") == ABSTRACT_REVIEW_BODY_HASH_BASIS
+                    and basis.get("abstract_text_stored") is False
+                    and basis.get("body_text_stored") is False
+                    and first_read.get("ready_for_publication") is True
+                    and first_read.get("abstract_sha256") == abstract_sha256
+                    and isinstance(receipt.get("reviewed_by"), str)
+                    and bool(str(receipt.get("reviewed_by")).strip())
+                ):
+                    if add_abstract_review_evidence(
+                        evidence_by_path,
+                        canonical_path=canonical_path,
+                        abstract_sha256=abstract_sha256,
+                        body_sha256=body_sha256,
+                        evidence_kind=str(expected_kind),
+                    ):
+                        added_from_receipt += 1
+                else:
+                    stats["invalid_or_oversized_receipt_count"] += 1
+            else:
+                legacy = (
+                    legacy_publication_abstract_evidence(root, receipt)
+                    if receipt_path_matches_action
+                    else None
+                )
+                if legacy is None:
+                    stats["legacy_evidence_unavailable_count"] += 1
+                else:
+                    canonical_path, abstract_sha256, body_sha256, evidence_kind = legacy
+                    if add_abstract_review_evidence(
+                        evidence_by_path,
+                        canonical_path=canonical_path,
+                        abstract_sha256=abstract_sha256,
+                        body_sha256=body_sha256,
+                        evidence_kind=evidence_kind,
+                    ):
+                        added_from_receipt += 1
+        else:
+            stats["unrelated_receipt_count"] += 1
+
+        if added_from_receipt:
+            stats["recognized_receipt_count"] += 1
+            stats["evidence_record_count"] += added_from_receipt
+        if progress_callback is not None and (index == len(receipt_paths) or index % 100 == 0):
+            progress_callback("abstract-evidence", "scan", index, len(receipt_paths))
+
+    if progress_callback is not None:
+        progress_callback("abstract-evidence", "done", len(receipt_paths), len(receipt_paths))
+    return evidence_by_path, stats, blockers
+
+
+def abstract_freshness(
+    archive_root: Path | str,
+    *,
+    dry_run: bool = False,
+    max_items: int = 100,
+    progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
+) -> dict[str, Any]:
+    """Compare canonical abstract/body hashes with human-review evidence without echoing text."""
+    root = require_existing_archive_root(archive_root)
+    blockers: list[str] = []
+    requested_max_items = int(max_items)
+    effective_max_items = max(
+        1, min(requested_max_items, ABSTRACT_FRESHNESS_MAX_ATTENTION_ITEMS)
+    )
+    if requested_max_items != effective_max_items:
+        blockers.append("max_items_out_of_range")
+    if not dry_run:
+        blockers.append("abstract-freshness is read-only and requires --dry-run.")
+
+    evidence_by_path, evidence_scan, evidence_blockers = index_abstract_review_evidence(
+        root, progress_callback=progress_callback
+    )
+    blockers.extend(evidence_blockers)
+    canonical_paths = zet_catalog_paths(root, "canonical")
+    counts = {
+        "fresh": 0,
+        "stale": 0,
+        "unverified": 0,
+        "missing": 0,
+        "unreadable": 0,
+        "excluded": 0,
+    }
+    reasons: dict[str, int] = {}
+    attention_items: list[dict[str, Any]] = []
+    attention_count = 0
+    if progress_callback is not None:
+        progress_callback("abstract-freshness", "start", 0, len(canonical_paths))
+
+    for index, (path, _expected_status) in enumerate(canonical_paths, start=1):
+        relative = archive_relative_path(path, root)
+        status = "unreadable"
+        reason = "canonical_unreadable"
+        zettel_id: str | None = None
+        evidence_count = 0
+        try:
+            raw_bytes = read_bounded_abstract_evidence_file(path, ABSTRACT_FRESHNESS_MAX_ZET_BYTES)
+            parsed = parse_abstract_evidence_zettel_bytes(raw_bytes)
+            if parsed is None:
+                raise ValueError("Canonical zet is unreadable.")
+            frontmatter, body = parsed
+            raw_id = frontmatter.get("id")
+            if isinstance(raw_id, str) and ZETTEL_EDGE_ZETTEL_ID_RE.fullmatch(raw_id):
+                zettel_id = raw_id
+            if frontmatter.get("status") == "redacted":
+                status = "excluded"
+                reason = "redacted_by_policy"
+            else:
+                first_read_check = explicit_abstract_publication_check(frontmatter)
+                abstract_sha256 = first_read_check.get("abstract_sha256")
+                if not first_read_check.get("ready_for_publication") or not isinstance(
+                    abstract_sha256, str
+                ):
+                    status = "missing"
+                    reason = "abstract_" + str(first_read_check.get("status") or "invalid")
+                else:
+                    body_sha256_candidates = {canonical_body_sha256(body)}
+                    try:
+                        raw_frontmatter, raw_body = split_zettel_text(raw_bytes.decode("utf-8"))
+                        if raw_frontmatter:
+                            body_sha256_candidates.add(canonical_body_sha256(raw_body))
+                    except Exception:
+                        pass
+                    pairs = evidence_by_path.get(relative, {})
+                    evidence_count = sum(len(kinds) for kinds in pairs.values())
+                    if any(
+                        (abstract_sha256, body_sha256) in pairs
+                        for body_sha256 in body_sha256_candidates
+                    ):
+                        status = "fresh"
+                        reason = "reviewed_pair_matches"
+                    elif not pairs:
+                        status = "unverified"
+                        reason = "no_review_evidence"
+                    elif any(pair[0] == abstract_sha256 for pair in pairs):
+                        status = "stale"
+                        reason = "body_changed"
+                    elif any(pair[1] in body_sha256_candidates for pair in pairs):
+                        status = "stale"
+                        reason = "abstract_changed"
+                    else:
+                        status = "stale"
+                        reason = "abstract_and_body_changed"
+        except (OSError, UnicodeDecodeError, ValueError):
+            pass
+
+        counts[status] += 1
+        reasons[reason] = reasons.get(reason, 0) + 1
+        if status not in {"fresh", "excluded"}:
+            attention_count += 1
+            if len(attention_items) < effective_max_items:
+                attention_items.append(
+                    {
+                        "path": relative,
+                        "zettel_id": zettel_id,
+                        "status": status,
+                        "reason": reason,
+                        "review_evidence_count": evidence_count,
+                    }
+                )
+        if progress_callback is not None and (index == len(canonical_paths) or index % 100 == 0):
+            progress_callback("abstract-freshness", "scan", index, len(canonical_paths))
+
+    if progress_callback is not None:
+        progress_callback("abstract-freshness", "done", len(canonical_paths), len(canonical_paths))
+    all_required_fresh = attention_count == 0
+    state = "blocked" if blockers else "ready" if all_required_fresh else "needs_attention"
+    warnings: list[str] = []
+    if evidence_scan["invalid_or_oversized_receipt_count"]:
+        warnings.append("Some receipt files were invalid or exceeded the bounded read limit.")
+    if evidence_scan["legacy_evidence_unavailable_count"]:
+        warnings.append("Some older publication receipts lacked a retained source needed to reconstruct review evidence.")
+
+    return {
+        "ok": not blockers,
+        "schema": ABSTRACT_FRESHNESS_SCHEMA,
+        "lifecycle_action": "abstract_freshness",
+        "state": state,
+        "archive_id": read_archive_id(root),
+        "dry_run": True,
+        "canonical_zet_count": len(canonical_paths),
+        "counts": counts,
+        "reason_counts": dict(sorted(reasons.items())),
+        "readiness": {
+            "all_required_abstracts_have_review_evidence_for_current_body": all_required_fresh,
+            "redacted_zets_excluded": True,
+        },
+        "attention": {
+            "total_count": attention_count,
+            "returned_count": len(attention_items),
+            "truncated": attention_count > len(attention_items),
+            "max_items": effective_max_items,
+            "items": attention_items,
+        },
+        "scan": {
+            "canonical_paths_scanned": len(canonical_paths),
+            "receipt_index_passes": 1,
+            "canonical_passes": 1,
+            "complexity_contract": "O(canonical_zets + receipt_files + receipt_items)",
+            "max_canonical_file_bytes": ABSTRACT_FRESHNESS_MAX_ZET_BYTES,
+            **evidence_scan,
+        },
+        "claim_boundary": {
+            "checked": "Exact current abstract/body hash pairs against retained human-review evidence.",
+            "not_checked": [
+                "abstract semantic quality or factual correctness",
+                "whether a model consumed the abstract",
+                "objet bytes or derived text",
+                "provider or backup freshness",
+            ],
+        },
+        "blockers": unique_preserve_order(blockers),
+        "warnings": warnings,
+        "next_actions": (
+            ["Review each attention item, then publish a revised zet or use the reviewed abstract backfill flow."]
+            if attention_count
+            else ["No abstract freshness review is currently required for canonical zets."]
+        ),
+        "would_change": [],
+        "privacy_guards": {
+            "abstract_text_echoed": False,
+            "body_text_echoed": False,
+            "title_values_echoed": False,
+            "hash_values_echoed": False,
+            "receipt_paths_echoed": False,
+            "reviewer_ids_echoed": False,
+            "absolute_local_paths_echoed": False,
+            "provider_urls_echoed": False,
+            "writes": False,
+        },
     }
 
 
@@ -12320,6 +12801,42 @@ def explicit_abstract_publication_check(frontmatter: dict[str, Any]) -> dict[str
     }
 
 
+def canonical_publication_body(body: str) -> str:
+    normalized = body.rstrip()
+    return normalized + "\n" if normalized else ""
+
+
+def canonical_body_sha256(body: str) -> str:
+    return "sha256:" + hashlib.sha256(body.encode("utf-8")).hexdigest()
+
+
+def build_abstract_review_basis(
+    frontmatter: dict[str, Any],
+    body: str,
+    *,
+    review_status: str,
+    evidence_kind: str,
+) -> dict[str, Any]:
+    if review_status not in {"pending_human_approval", "reviewed_at_publication"}:
+        raise ValueError("Unsupported abstract review status.")
+    if evidence_kind not in {"mint_zettel", "promote_zettel"}:
+        raise ValueError("Unsupported abstract review evidence kind.")
+    first_read_check = explicit_abstract_publication_check(frontmatter)
+    abstract_sha256 = first_read_check.get("abstract_sha256")
+    if not first_read_check.get("ready_for_publication") or not isinstance(abstract_sha256, str):
+        raise ValueError("Explicit abstract is not ready for review evidence.")
+    return {
+        "contract": ABSTRACT_REVIEW_BASIS_CONTRACT,
+        "review_status": review_status,
+        "evidence_kind": evidence_kind,
+        "abstract_sha256": abstract_sha256,
+        "body_sha256": canonical_body_sha256(canonical_publication_body(body)),
+        "body_hash_basis": ABSTRACT_REVIEW_BODY_HASH_BASIS,
+        "abstract_text_stored": False,
+        "body_text_stored": False,
+    }
+
+
 def create_draft_zettel(
     archive_root: Path | str,
     *,
@@ -12663,6 +13180,16 @@ def promote_zettel_dry_run(
             "Canonical publication requires a normalized, bounded, safe explicit frontmatter.abstract "
             f"(status: {first_read_check['status']})."
         )
+    abstract_review_basis = (
+        build_abstract_review_basis(
+            frontmatter,
+            body,
+            review_status="pending_human_approval",
+            evidence_kind="promote_zettel",
+        )
+        if first_read_check["ready_for_publication"]
+        else None
+    )
 
     provenance = frontmatter.get("provenance")
     if not isinstance(provenance, dict):
@@ -12727,6 +13254,7 @@ def promote_zettel_dry_run(
         checklist=checklist,
         near_duplicates=near_duplicates,
         first_read_check=first_read_check,
+        abstract_review_basis=abstract_review_basis,
         blockers=blockers,
         warnings=warnings,
         requires_human_approval=bool(minting_rules.get("requires_human_approval", True)),
@@ -12746,6 +13274,7 @@ def promote_zettel_dry_run(
         "duplicate_check": duplicate_check,
         "near_duplicates": near_duplicates,
         "first_read_check": first_read_check,
+        "abstract_review_basis": abstract_review_basis,
         "receipt_preview": receipt_preview,
         "would_change": [
             "status -> canonical",
@@ -12822,6 +13351,12 @@ def promote_zettel(
     canonical_frontmatter["updated_at"] = now
     canonical_frontmatter["promotion"] = promotion
     canonical_text = "---\n" + dump_yaml(canonical_frontmatter) + "---\n\n" + body.rstrip() + "\n"
+    abstract_review_basis = build_abstract_review_basis(
+        source_frontmatter,
+        body,
+        review_status="reviewed_at_publication",
+        evidence_kind="promote_zettel",
+    )
 
     zettel_id_value = str(source_frontmatter.get("id") or source_path.stem)
     title = source_frontmatter.get("title")
@@ -12846,6 +13381,7 @@ def promote_zettel(
         "checklist": dry_run["checklist"],
         "near_duplicates": dry_run["near_duplicates"],
         "first_read_check": current_first_read_check,
+        "abstract_review_basis": abstract_review_basis,
         "warnings": dry_run["warnings"],
         "result": {
             "created_paths": created_paths,
@@ -12883,6 +13419,7 @@ def promote_zettel(
         "warnings": dry_run["warnings"],
         "near_duplicates": dry_run["near_duplicates"],
         "first_read_check": current_first_read_check,
+        "abstract_review_basis": abstract_review_basis,
         "checklist": dry_run["checklist"],
         "created_paths": created_paths,
         "receipt": json_safe(receipt),
@@ -12910,6 +13447,16 @@ def mint_zettel_dry_run(
     blockers = list(promotion_dry_run["blockers"])
     warnings = list(promotion_dry_run["warnings"])
     first_read_check = promotion_dry_run["first_read_check"]
+    abstract_review_basis = (
+        build_abstract_review_basis(
+            source_frontmatter,
+            body,
+            review_status="pending_human_approval",
+            evidence_kind="mint_zettel",
+        )
+        if first_read_check["ready_for_publication"]
+        else None
+    )
 
     receipt_path = resolve_archive_relative_path(root, receipt_relative)
     snapshot_path = resolve_archive_relative_path(root, snapshot_relative)
@@ -12936,6 +13483,7 @@ def mint_zettel_dry_run(
         checklist=promotion_dry_run["checklist"],
         near_duplicates=promotion_dry_run["near_duplicates"],
         first_read_check=first_read_check,
+        abstract_review_basis=abstract_review_basis,
         blockers=blockers,
         warnings=warnings,
     )
@@ -12959,6 +13507,7 @@ def mint_zettel_dry_run(
         "duplicate_check": promotion_dry_run.get("duplicate_check", {}),
         "near_duplicates": promotion_dry_run["near_duplicates"],
         "first_read_check": first_read_check,
+        "abstract_review_basis": abstract_review_basis,
         "self_contained_check": self_contained_check,
         "quality_check": quality_check,
         "scratch_cleanup": scratch_cleanup,
@@ -13083,6 +13632,12 @@ def mint_zettel(
         else:
             canonical_frontmatter.pop("source_refs", None)
     canonical_text = "---\n" + dump_yaml(canonical_frontmatter) + "---\n\n" + body.rstrip() + "\n"
+    abstract_review_basis = build_abstract_review_basis(
+        source_frontmatter,
+        body,
+        review_status="reviewed_at_publication",
+        evidence_kind="mint_zettel",
+    )
 
     zettel_id_value = str(source_frontmatter.get("id") or source_path.stem)
     title = source_frontmatter.get("title")
@@ -13139,6 +13694,7 @@ def mint_zettel(
             "edges": source_frontmatter.get("edges") if isinstance(source_frontmatter.get("edges"), list) else [],
             "local_ai_sessions": extract_mint_local_ai_sessions(source_frontmatter),
             "first_read_check": current_first_read_check,
+            "abstract_review_basis": abstract_review_basis,
             "checklist": dry_run["checklist"],
             "affirmations": [
                 {"item_id": item_id, "affirmed_by": reviewer, "affirmed_at": now}
@@ -13203,6 +13759,7 @@ def mint_zettel(
         "near_duplicates": dry_run["near_duplicates"],
         "self_contained_check": dry_run.get("self_contained_check", {}),
         "first_read_check": current_first_read_check,
+        "abstract_review_basis": abstract_review_basis,
         "quality_check": dry_run.get("quality_check", {}),
         "scratch_cleanup": scratch_cleanup_result,
         "checklist": dry_run["checklist"],
@@ -17174,6 +17731,7 @@ def build_promotion_receipt_preview(
     checklist: list[dict[str, Any]],
     near_duplicates: list[dict[str, Any]],
     first_read_check: dict[str, Any],
+    abstract_review_basis: dict[str, Any] | None,
     blockers: list[str],
     warnings: list[str],
     requires_human_approval: bool,
@@ -17201,6 +17759,7 @@ def build_promotion_receipt_preview(
         "checklist": checklist,
         "near_duplicates": near_duplicates,
         "first_read_check": first_read_check,
+        "abstract_review_basis": abstract_review_basis,
         "blockers": blockers,
         "warnings": warnings,
     }
@@ -17220,6 +17779,7 @@ def build_mint_receipt_preview(
     checklist: list[dict[str, Any]],
     near_duplicates: list[dict[str, Any]],
     first_read_check: dict[str, Any],
+    abstract_review_basis: dict[str, Any] | None,
     blockers: list[str],
     warnings: list[str],
 ) -> dict[str, Any]:
@@ -17257,6 +17817,7 @@ def build_mint_receipt_preview(
         "edges": frontmatter.get("edges") if isinstance(frontmatter.get("edges"), list) else [],
         "local_ai_sessions": extract_mint_local_ai_sessions(frontmatter),
         "first_read_check": first_read_check,
+        "abstract_review_basis": abstract_review_basis,
         "checklist": checklist,
         "near_duplicates": near_duplicates,
         "blockers": blockers,
@@ -62393,6 +62954,7 @@ def ai_start_here(
                 ),
                 "Read AGENTS.md when canonical_entrypoints marks it present.",
                 "Run first-read-readiness before the exhaustive catalog pass; treat a non-ready result as an explicit abstract or unique-id repair queue, not as permission to invent or auto-write missing memory.",
+                "Run abstract-freshness after first-read-readiness; treat stale or unverified rows as a human review queue and never auto-rewrite an abstract or body.",
                 "Run zet-catalog with projection=reading and coverage_mode=strict, keep the first response_profile full, inspect item and compact response-envelope estimates, set a host-appropriate max_estimated_tokens plus an explicit response_envelope_reserve_tokens when needed, then optionally use response_profile=continuation on later pages while following every continuation token before claiming archive-wide node coverage.",
                 "Treat archive_wide_coverage_claim_ready as node visitation only; require archive_wide_abstract_reading_claim_ready before saying every required abstract was available and read, and report abstract gaps without auto-writing replacements.",
                 "If the host goal already supplies verified zet ids, use seeded_connection_walk with those ids; never invent a seed or stop after the seeded component.",
@@ -62768,6 +63330,10 @@ def runtime_context_recommended_first_commands() -> list[dict[str, str]]:
             "purpose": "check explicit compact first reads and uniquely addressable zet ids before generating a private exhaustive catalog",
         },
         {
+            "command": "archive abstract-freshness <archive-root> --dry-run --progress --format json",
+            "purpose": "check whether each current canonical abstract/body pair still has retained human-review evidence without echoing either text",
+        },
+        {
             "command": "archive zet-catalog-pass <archive-root> --status canonical --projection reading --output .wom-scratch/diagnostics/<new-name>.jsonl --dry-run --progress --format json",
             "purpose": "complete one strict frontmatter-only pass with process-memory reuse, final local revalidation, and private incremental JSONL",
         },
@@ -62817,6 +63383,12 @@ def runtime_context_ai_runtime_order() -> list[dict[str, Any]]:
         },
         {
             "step": 6,
+            "action": "check_abstract_freshness",
+            "command": "archive abstract-freshness <archive-root> --dry-run --progress --format json",
+            "reason": "separate abstract presence from evidence that the reviewed abstract still belongs to the current canonical body",
+        },
+        {
+            "step": 7,
             "action": "enumerate_zet_abstracts",
             "command": "archive zet-catalog-pass <archive-root> --status canonical --projection reading --output .wom-scratch/diagnostics/<new-name>.jsonl --dry-run --progress --format json",
             "continuation": "require archive_wide_coverage_claim_ready=true and retain output.sha256 from the compact stdout summary; use zet-catalog-pass-read with that SHA-256 and page indexes from zero so a complete artifact is validated before at most one private page is returned; retain the first full diagnostics, check abstract and follow-up readiness separately, and when an abstract is missing use read-zettel to read that selected canonical body plus integrity.file_sha256 before preparing a private zet-abstract-backfill-plan proposal; never auto-write an abstract or infer approval from a green plan, require human review, then preview and explicitly approve zet-abstract-backfill-write with the exact proposal SHA-256; after any abstract apply/revert batch run zet-abstract-backfill-receipt-audit and never auto-delete reported locks or edit receipts; never load the whole catalog file into one response, never commit it, then preview and approve zet-catalog-pass-cleanup with the same SHA-256 after use; restart the complete pass if catalog_snapshot_changed",
@@ -62826,19 +63398,19 @@ def runtime_context_ai_runtime_order() -> list[dict[str, Any]]:
             "reason": "give the host every local zet node's available first-read text and connection clues before it chooses a broad body-reading order; never equate node visitation with complete abstract availability",
         },
         {
-            "step": 7,
+            "step": 8,
             "action": "run_ai_response_concept_guide",
             "command": "archive ai-response-concept-guide <archive-root> --topic all --dry-run --format json",
             "reason": "load WOM concept wording, safe routing, material-link routes, and overclaim guardrails",
         },
         {
-            "step": 8,
+            "step": 9,
             "action": "choose_material_link_route",
             "field": "canonical_entrypoints.material_link_routes",
             "reason": "use omitted-locator, source-map, or body-locator routes without inventing provider calls",
         },
         {
-            "step": 9,
+            "step": 10,
             "action": "plan_operator_feedback",
             "command": "archive operator-feedback-plan <archive-root> --dry-run --format json",
             "when": "the human reports tool friction, a workflow gap, or asks where feedback records live",

@@ -132,9 +132,20 @@ archive first-read-readiness <archive-root> --dry-run --progress --format json
 
 This gate reads frontmatter only. A non-ready result is a repair queue, not a
 crash and never permission to invent or auto-write an abstract. It does not
-judge abstract quality or prove that the host consumed anything. When the gate
-is ready, enumerate every canonical zet abstract. In a terminal CLI, prefer one
-complete pass:
+judge abstract quality or prove that the host consumed anything. Next, check
+whether each reviewed abstract still belongs to the current canonical body:
+
+```bash
+archive abstract-freshness <archive-root> --dry-run --progress --format json
+```
+
+`fresh` means the current abstract/body hash pair matches retained human-review
+evidence. `stale` means one or both changed, `unverified` means no recognized
+evidence remains, and `missing` means the explicit abstract is absent or
+invalid. This text-free scan never repairs a zet and never decides whether an
+abstract is true. Treat every non-fresh row as a human review queue. Then
+enumerate every canonical zet abstract. In a terminal CLI, prefer one complete
+pass:
 
 ```bash
 archive zet-catalog-pass <archive-root> --status canonical --projection reading --page-size 200 --max-estimated-tokens 8000 --response-envelope-reserve-tokens 2500 --output .wom-scratch/diagnostics/<new-name>.jsonl --dry-run --progress --format json

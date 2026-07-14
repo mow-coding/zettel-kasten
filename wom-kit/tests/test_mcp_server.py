@@ -739,9 +739,14 @@ class McpServerTests(unittest.TestCase):
             self.assertIn("source_mount_plan", tool_names)
             self.assertIn("zet_catalog", tool_names)
             self.assertIn("first_read_readiness", tool_names)
+            self.assertIn("abstract_freshness", tool_names)
             self.assertEqual(
                 tools_by_name["first_read_readiness"]["inputSchema"]["properties"]["max_items"]["maximum"],
                 500,
+            )
+            self.assertEqual(
+                tools_by_name["abstract_freshness"]["inputSchema"]["properties"]["max_items"]["maximum"],
+                archive_services.ABSTRACT_FRESHNESS_MAX_ATTENTION_ITEMS,
             )
             self.assertIn("section", tools_by_name["read_zettel"]["inputSchema"]["properties"])
             self.assertEqual(
@@ -7075,6 +7080,54 @@ class McpServerTests(unittest.TestCase):
                 self.assertEqual(content["attention"]["returned_count"], 1)
                 self.assertFalse(content["scan"]["zettel_bodies_read"])
                 self.assertFalse(content["privacy_guards"]["abstract_text_echoed"])
+        finally:
+            self.stop_server(process)
+
+    def test_abstract_freshness_tool_reports_unverified_without_content(self) -> None:
+        process = self.start_server()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+                canonical_path = sorted((archive_root / "zettels").glob("*.md"))[0]
+                frontmatter, body = archive_services.split_zettel_text(
+                    canonical_path.read_text(encoding="utf-8")
+                )
+                abstract_marker = "PRIVATE_MCP_FRESHNESS_ABSTRACT"
+                body_marker = "PRIVATE_MCP_FRESHNESS_BODY"
+                frontmatter["abstract"] = abstract_marker
+                canonical_path.write_text(
+                    "---\n"
+                    + archive_cli.dump_yaml(frontmatter)
+                    + "---\n\n"
+                    + body.rstrip()
+                    + f"\n\n{body_marker}\n",
+                    encoding="utf-8",
+                )
+                response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "abstract_freshness",
+                            "arguments": {
+                                "archive_root": str(archive_root),
+                                "max_items": 2,
+                            },
+                        },
+                    },
+                )
+                result = response["result"]
+                self.assertFalse(result["isError"])
+                content = result["structuredContent"]
+                self.assertTrue(content["ok"])
+                self.assertEqual(content["state"], "needs_attention")
+                self.assertEqual(content["counts"]["unverified"], 1)
+                self.assertFalse(content["privacy_guards"]["abstract_text_echoed"])
+                serialized = json.dumps(response, ensure_ascii=False)
+                self.assertNotIn(abstract_marker, serialized)
+                self.assertNotIn(body_marker, serialized)
         finally:
             self.stop_server(process)
 
