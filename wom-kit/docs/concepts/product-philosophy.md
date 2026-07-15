@@ -328,3 +328,7 @@ local archive
 The project should not begin with the hardest social-network layer.
 
 It should first make private memory trustworthy.
+
+For a claim-by-claim map from this philosophy to commands, runtime rules,
+regression tests, and remaining real-use boundaries, see
+[WOM Philosophy Implementation Evidence](../philosophy-implementation-evidence.md).

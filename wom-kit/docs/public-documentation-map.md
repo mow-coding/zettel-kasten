@@ -33,6 +33,8 @@ Start here:
 - [Korean Foundational Product Whitepaper](concepts/foundational-product-whitepaper.ko.md)
 - [Product Philosophy](concepts/product-philosophy.md)
 - [Korean Product Philosophy](concepts/product-philosophy.ko.md)
+- [WOM Philosophy Implementation Evidence](philosophy-implementation-evidence.md)
+- [Korean WOM Philosophy Implementation Evidence](philosophy-implementation-evidence.ko.md)
 - [WOM Safe HTML Profile](concepts/wom-safe-html-profile.md)
 - [Korean WOM Safe HTML Profile](concepts/wom-safe-html-profile.ko.md)
 - [WOM Product Roadmap](product-roadmap.md)

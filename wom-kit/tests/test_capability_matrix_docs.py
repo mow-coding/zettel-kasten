@@ -11,7 +11,8 @@ REPO_ROOT = KIT_ROOT.parent
 CURRENT_VERSION = f"v{__version__}"
 CURRENT_RUNTIME_STATUS = (
     f"Status: {CURRENT_VERSION} installed-wheel resource, quick start, "
-    "session handoff, and local backup evidence checkpoint"
+    "session handoff, local backup evidence, and philosophy implementation "
+    "traceability checkpoint"
 )
 MATRIX_PATH = KIT_ROOT / "docs" / "capability-matrix.md"
 PRODUCT_ROADMAP_PATH = KIT_ROOT / "docs" / "product-roadmap.md"
