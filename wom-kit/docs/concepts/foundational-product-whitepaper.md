@@ -2,6 +2,7 @@
 
 Status: public product planning baseline
 Date: 2026-05-23
+Updated: 2026-07-15
 Version context: v0.2.7 planning document
 
 This document is the detailed public product philosophy for WOM, `zettel-kasten`, `zet`, and `ZET`.
@@ -39,6 +40,25 @@ source/original data
 This is not only a note-taking idea.
 
 It is a memory infrastructure idea.
+
+### 1.1 Artifact Primacy, Not Entity Certainty
+
+WOM adopts the auditable operating discipline of an ontology system without
+treating entity resolution as the purpose of human memory. A person is not a
+stable master-data table. Meanings, beliefs, names, categories, and priorities
+can drift with time and context. Yesterday's use of a word and today's use may
+need to remain distinct even when their labels match.
+
+The primary evidence is the durable, time-situated artifact. Revisions and
+contradictions stay traceable. A `canonical` zet is the subject's current
+archive record, not an objective-truth certificate. Nodes, ties, edges, search
+indexes, embeddings, and graphs are regenerable aids for reading and routing.
+They must not silently merge matching labels, erase ambiguity, or become a
+hidden authority over the artifacts.
+
+AI may spend tokens and use current model capability to infer context across
+those artifacts at reading time. That inference is replaceable. The artifacts,
+their provenance, and their chronology are the durable layer.
 
 ## 2. The Problem
 
@@ -390,6 +410,11 @@ A `.md` file can be a source object or a minted `zet` depending on its role.
 
 Role matters more than extension.
 
+The search/index layer is a rebuildable acceleration layer, not a canonical
+ontology. Entity candidates, embeddings, and graph projections may help an AI
+choose what to read first, but they do not authorize automatic identity merges
+or replace chronological artifact evidence.
+
 ## 11. Provider-Aware Archive
 
 The user should be able to say things naturally:
@@ -684,6 +709,9 @@ This project is not trying to be:
 - a token project,
 - a public SNS clone,
 - a replacement for every collaboration tool immediately,
+- a deterministic global knowledge graph that treats entity resolution as
+  objective truth,
+- an automatic identity-merging system that erases temporal ambiguity,
 - or a system that forces everyone to use zettel-kasten before using `zet`.
 
 `ZET` should eventually work as a standalone messenger/collaboration/SNS layer for people who do not want the full archive system.
@@ -727,6 +755,8 @@ The project is working when a user can:
 - see source references and provenance,
 - mint the `zet` into a private archive,
 - revise it with history,
+- preserve contradictions or changed meanings without silently merging them,
+- use maps and graphs as reading aids without treating them as truth,
 - search it later,
 - share it deliberately,
 - delegate bounded authority to agents,
@@ -738,5 +768,7 @@ The long-term ambition is simple:
 important context should not evaporate
 private memory should become durable
 AI should operate over accountable memory
+artifacts should outlive replaceable inference
+human change should remain visible instead of being normalized away
 sharing should be chosen, scoped, and verifiable
 ```

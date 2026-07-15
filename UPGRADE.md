@@ -24,6 +24,21 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.246 Artifact Primacy And Human Drift
+
+No archive migration is required. Runtime commands, schemas, stored zets,
+edges, manifests, receipts, and generated indexes are unchanged.
+
+This release clarifies the product authority model. Durable local artifacts and
+their chronology are primary evidence; entity and graph projections remain
+regenerable reading aids. `canonical` means the subject-approved current
+archive state, not objective truth, and matching labels do not authorize a
+silent identity merge.
+
+Existing archives should not rewrite, merge, or normalize records merely to
+adopt v0.3.246. Upgrade when you want package/release identity and public
+operator guidance aligned with this design boundary.
+
 ## v0.3.245 Top-Level Installation On-Ramp
 
 No archive migration is required. The root English and Korean READMEs now show

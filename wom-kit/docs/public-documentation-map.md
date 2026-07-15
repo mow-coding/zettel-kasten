@@ -3,6 +3,7 @@
 Status: public navigation baseline
 Date: 2026-06-02
 Updated: 2026-06-03
+Philosophy clarified: 2026-07-15
 
 This repository intentionally separates four kinds of public project records:
 
@@ -18,6 +19,10 @@ This separation is part of the project philosophy. The public repository should 
 ## 1. Product Blueprint / Design Philosophy
 
 These documents explain the concept, product philosophy, archive model, and `ZET` communication model.
+
+They also define WOM's artifact-first boundary: durable human records outrank
+regenerable entity and graph projections, and changing meanings must remain
+traceable instead of being silently normalized.
 
 Start here:
 
