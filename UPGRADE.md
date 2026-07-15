@@ -24,6 +24,28 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.243 Progressive AI Runtime Skill
+
+No archive migration is required. Restart the AI operator process after
+updating WOM-kit so it can discover the new packaged skill resources.
+
+The bundled `wom-archive` skill now follows the Agent Skills package shape:
+one short `SKILL.md` with YAML `name` and `description`, five focused task
+references, and one preserved complete operator contract for exact advanced
+commands. AI operators should read the root first and load only the reference
+that matches the current human goal.
+
+The release gate now runs `wom-kit/tools/check_runtime_skill.py`. It rejects
+missing or oversized entry instructions, broken or escaping Markdown links,
+undiscoverable references, symlinks, identity drift, and missing critical
+approval/privacy/trust language. The installed wheel resource manifest carries
+the same files byte-for-byte.
+
+This upgrade does not install anything into Codex, Claude, or another AI
+host's configuration directory. It also does not create a generated graph or
+change WOM authority: reviewed local zet, objet, relation, and receipt records
+remain canonical.
+
 ## v0.3.242 Self-Contained Python Tool Wheel
 
 No archive migration is required. Restart the AI operator process after
