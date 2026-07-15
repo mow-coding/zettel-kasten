@@ -76,6 +76,8 @@ token-budget contract.
   or source-body excerpts in ordinary output.
 - Never call a provider, run transport, mint, revise, retire, import, trust, or
   delete merely because an MCP/read-only check succeeded.
+- Before describing backup state, run `backup-evidence --dry-run`; never infer
+  remote completion from configuration, a local commit, or a declared label.
 - Do not hand-edit canonical zets, receipts, generated indexes, or WOM-managed
   profile state.
 - If a result is incomplete, stale, contradictory, or interrupted, stop at the

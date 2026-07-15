@@ -51,6 +51,7 @@
 - [Input Provenance Taxonomy](input-provenance-taxonomy.md)
 - [Secret Signal Taxonomy](secret-signal-taxonomy.md)
 - [Local Sovereignty And Backup Authority](local-sovereignty-and-backup-authority.md)
+- [로컬 백업 근거 상태](backup-evidence-status.md)
 - [AI 스타팅 메뉴얼 빠른 안내와 전체 검진](ai-start-here.md)
 - [아카이브 신원 일치 점검과 검토 후 수정](archive-identity-reconcile.md)
 - [빠른 인수인계 문서와 전체 검진](runtime-context-quick-and-full-inspection.md)

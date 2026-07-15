@@ -6,6 +6,29 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.251 - 2026-07-15
+
+Honest local backup-evidence status checkpoint. Compatible additive read-only
+CLI behavior; no archive migration, remote call, or write.
+
+- **Backup language now follows evidence instead of configuration.** New
+  `backup-evidence` reports GitHub, object-storage, and external-database lanes
+  separately without contacting them.
+- **Object coverage requires a real receipt chain.** Only a valid
+  `wom_uploaded` location linked to its matching provider-confirmed execution
+  receipt counts; `declared_uploaded` never proves bytes.
+- **Time scope stays explicit.** Partial or full object coverage applies only
+  at the receipts' recorded time. Current remote availability remains
+  unchecked.
+- **False completion fails closed.** Missing, forged, malformed, duplicate,
+  conflicting, or truncated evidence prevents complete object coverage.
+- **Whole-backup completion remains unverified.** A local commit is not GitHub
+  proof, and configuration or a generated index is not external-DB backup
+  proof.
+- **The inspection stays private and local.** It reads bounded manifest and
+  receipt metadata only, echoes no ids, refs, labels, paths, content, URLs, or
+  secrets, and writes nothing.
+
 ## v0.3.250 - 2026-07-15
 
 Receipt-backed AI session handoff checkpoint. Compatible additive CLI and

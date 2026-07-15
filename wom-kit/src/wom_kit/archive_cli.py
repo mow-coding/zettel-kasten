@@ -38,6 +38,8 @@ Commands:
           Show how AI operators should classify tool-discovered, receipt-verified, human-selected, and caller-supplied inputs.
   local-sovereignty
           Show the local-canonical and external-backup authority contract.
+  backup-evidence
+          Report current local backup evidence without checking remote services.
   secret-signal-taxonomy
           Show how AI operators should distinguish secret concept words, safe refs, and secret-like values.
   ai-response-contract
@@ -4561,6 +4563,23 @@ def command_local_sovereignty(args: argparse.Namespace) -> int:
         print("Conflict winner: local reviewed WOM state")
         print("Live backup status checked: no")
         print("Writes: none")
+    return 0 if result.get("ok", True) else 1
+
+
+def command_backup_evidence(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("backup-evidence is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.backup_evidence_status(
+            Path(args.archive_root),
+            max_records=args.max_records,
+            dry_run=True,
+        )
+    except archive_services.ArchiveServiceError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    print_json(result)
     return 0 if result.get("ok", True) else 1
 
 
@@ -17053,6 +17072,21 @@ def build_parser() -> argparse.ArgumentParser:
     local_sovereignty.add_argument("--dry-run", action="store_true", help="Required. Report the normative contract only; write nothing.")
     local_sovereignty.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     local_sovereignty.set_defaults(func=command_local_sovereignty)
+
+    backup_evidence = subcommands.add_parser(
+        "backup-evidence",
+        aliases=["backup-status", "storage-backup-evidence"],
+        help="Report local backup evidence without contacting GitHub, object storage, or an external database.",
+    )
+    backup_evidence.add_argument("archive_root", help="Archive root to inspect.")
+    backup_evidence.add_argument(
+        "--max-records",
+        type=int,
+        default=archive_services.BACKUP_EVIDENCE_DEFAULT_MAX_RECORDS,
+        help="Maximum object-manifest records to scan before reporting a truncated result.",
+    )
+    backup_evidence.add_argument("--dry-run", action="store_true", help="Required. Inspect local evidence only; write nothing.")
+    backup_evidence.set_defaults(func=command_backup_evidence)
 
     secret_signal_taxonomy = subcommands.add_parser(
         "secret-signal-taxonomy",

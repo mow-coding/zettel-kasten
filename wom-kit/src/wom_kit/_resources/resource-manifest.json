@@ -1,6 +1,6 @@
 {
   "schema": "wom-kit/package-resource-manifest/v0.1",
-  "version": "0.3.250",
+  "version": "0.3.251",
   "source_of_truth": "wom-kit source resource directories",
   "file_count": 91,
   "files": [
@@ -265,8 +265,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/references/operator-contract.md",
       "packaged": "templates/ai-runtime/wom-archive/references/operator-contract.md",
-      "bytes": 49351,
-      "sha256": "feff1fc797ccd8a3993684ce1605a0f5122742df688f3b49bdd37acecaebc03b"
+      "bytes": 49712,
+      "sha256": "55a561c916fd37acbb2e40fea5cc76a73557c6f2404b3527e4c206edc0ef9485"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/reading-memory-and-revision.md",
@@ -289,8 +289,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/SKILL.md",
       "packaged": "templates/ai-runtime/wom-archive/SKILL.md",
-      "bytes": 5169,
-      "sha256": "ad1f6b4a8256b71e62825a3ac2679c8d2e990a0e83138859deadad2a459ff9fd"
+      "bytes": 5325,
+      "sha256": "5626e91da78b6b597a98ebaba145b045e8c056a85d490b9a0ddc3dcfd901c58d"
     },
     {
       "source": "templates/company/AGENTS.md",
@@ -545,10 +545,10 @@
       "sha256": "d619dc26af3216498c8392dfe838b0fe752d4bad9da998a58ca682d668fc510c"
     },
     {
-      "source": "docs/releases/v0.3.250.md",
-      "packaged": "release-notes/v0.3.250.md",
-      "bytes": 2931,
-      "sha256": "6d278562a7872699f8aed51974208a12ed3b92ecaad3946ec1a476a10a2db996"
+      "source": "docs/releases/v0.3.251.md",
+      "packaged": "release-notes/v0.3.251.md",
+      "bytes": 2442,
+      "sha256": "ba868910dc75d5aa71f87fdd7b5a6a5a7fb61ac5d7baf90989cc71f7cc999cf0"
     }
   ]
 }

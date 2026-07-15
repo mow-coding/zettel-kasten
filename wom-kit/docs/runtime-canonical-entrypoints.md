@@ -1,6 +1,6 @@
 # Runtime Canonical Entry Points
 
-Status: v0.3.250 installed-wheel resource, quick start, and receipt-backed session handoff checkpoint
+Status: v0.3.251 installed-wheel resource, quick start, session handoff, and local backup evidence checkpoint
 
 When an AI runtime enters a WOM archive, it needs a small, explicit "start
 here" map. The archive may contain zets, source bindings, provider metadata,
@@ -120,6 +120,17 @@ The checkpoint requires receipt-backed operational-context bytes and a complete
 reviewed AI artifact inventory. Its separate confirmation and approval flow is
 described in [Session Handoff Checkpoint](session-handoff-checkpoint.md). It
 does not read the host chat and does not prove remote backup.
+
+Before an AI describes backup condition, use the local-only evidence surface:
+
+```powershell
+archive backup-evidence <archive-root> --dry-run
+```
+
+It reports receipt-time object coverage separately from the still-unverified
+GitHub and external-database lanes. It performs no remote check and never turns
+configuration or a declared label into backup completion. See
+[Backup Evidence Status](backup-evidence-status.md).
 
 The same order is returned in JSON:
 

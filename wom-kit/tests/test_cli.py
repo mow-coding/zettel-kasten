@@ -2380,6 +2380,7 @@ class ArchiveCliTests(unittest.TestCase):
         self.assertIn("operation-status-taxonomy", command_names)
         self.assertIn("input-provenance-taxonomy", command_names)
         self.assertIn("local-sovereignty", command_names)
+        self.assertIn("backup-evidence", command_names)
         self.assertIn("secret-signal-taxonomy", command_names)
         self.assertIn("ai-response-contract", command_names)
         self.assertIn("ai-start-here", command_names)
@@ -5576,6 +5577,11 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertTrue(by_class["relationship_and_map_data"]["external_map_rebuildable_from_local"])
             self.assertTrue(by_class["generated_indexes_and_caches"]["deletable_and_rebuildable"])
             self.assertFalse(authority["backup_evidence"]["github"]["local_commit_alone_proves_remote_backup"])
+            self.assertEqual(
+                authority["backup_evidence"]["status_command"],
+                "archive backup-evidence <archive-root> --dry-run",
+            )
+            self.assertFalse(authority["backup_evidence"]["status_command_live_checks_remote_services"])
             self.assertTrue(
                 authority["backup_evidence"]["object_storage"]["live_upload_execution_receipt_implemented"]
             )
@@ -5587,6 +5593,220 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertFalse(result["privacy_guards"]["archive_body_text_read"])
             self.assertFalse(result["privacy_guards"]["objet_bytes_read"])
             self.assertFalse(result["privacy_guards"]["provider_api_called"])
+
+    def test_backup_evidence_baseline_is_read_only_and_does_not_infer_remote_completion(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            before = self.snapshot_archive_files(archive_root)
+
+            missing_code, missing_output = self.run_cli(["backup-evidence", str(archive_root)])
+            self.assertEqual(missing_code, 1, missing_output)
+            self.assertIn("requires --dry-run", missing_output)
+
+            code, output = self.run_cli(["backup-status", str(archive_root), "--dry-run"])
+            self.assertEqual(code, 0, output)
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+            self.assertNotIn(str(archive_root), output)
+            self.assertNotIn(_FAKE_SHA_A, output)
+            self.assertNotIn(_FAKE_SHA_B, output)
+
+            result = json.loads(output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["schema"], "wom-kit/backup-evidence-status/v0.1")
+            self.assertEqual(result["lifecycle_action"], "backup_evidence_status")
+            self.assertEqual(result["lanes"]["github"]["status"], "unverified_no_generic_completion_receipt")
+            self.assertEqual(
+                result["lanes"]["external_database"]["status"],
+                "unverified_no_generic_completion_receipt",
+            )
+            objects = result["lanes"]["object_storage"]
+            self.assertEqual(objects["status"], "no_remote_byte_evidence")
+            self.assertEqual(objects["eligible_object_count"], 2)
+            self.assertEqual(objects["receipt_verified_object_count"], 0)
+            self.assertFalse(objects["current_remote_availability_checked"])
+            self.assertFalse(result["overall"]["backup_completion_claim_ready"])
+            self.assertFalse(result["closed_actions"]["objet_bytes_read"])
+            self.assertFalse(result["closed_actions"]["provider_api_called"])
+            self.assertFalse(result["closed_actions"]["network_checked"])
+            self.assertFalse(result["closed_actions"]["database_called"])
+            self.assertFalse(result["closed_actions"]["secrets_read"])
+            self.assertFalse(result["closed_actions"]["files_written"])
+            self.assertFalse(result["privacy_guards"]["object_ids_echoed"])
+            self.assertFalse(result["privacy_guards"]["receipt_paths_echoed"])
+
+            manifest_path = archive_root / "objects" / "manifests" / "files.jsonl"
+            records = [
+                json.loads(line)
+                for line in manifest_path.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+            records[0]["locations"].append(
+                {
+                    "provider": "object_storage",
+                    "provider_kind": "cloudflare-r2",
+                    "store_ref": "object-storage:test-declared-only",
+                    "availability": "declared_uploaded",
+                }
+            )
+            manifest_path.write_text(
+                "\n".join(json.dumps(record, ensure_ascii=False) for record in records) + "\n",
+                encoding="utf-8",
+            )
+            declared_code, declared_output = self.run_cli(
+                ["backup-evidence", str(archive_root), "--dry-run"]
+            )
+            self.assertEqual(declared_code, 0, declared_output)
+            self.assertNotIn("object-storage:test-declared-only", declared_output)
+            declared = json.loads(declared_output)["lanes"]["object_storage"]
+            self.assertEqual(declared["status"], "declared_only_no_wom_byte_proof")
+            self.assertEqual(declared["declared_only_object_count"], 1)
+            self.assertEqual(declared["receipt_verified_object_count"], 0)
+
+            manifest_path.unlink()
+            missing_manifest_code, missing_manifest_output = self.run_cli(
+                ["backup-evidence", str(archive_root), "--dry-run"]
+            )
+            self.assertEqual(missing_manifest_code, 0, missing_manifest_output)
+            missing_manifest = json.loads(missing_manifest_output)["lanes"]["object_storage"]
+            self.assertEqual(missing_manifest["status"], "object_manifest_missing")
+            self.assertFalse(missing_manifest["evidence_integrity_clear"])
+            self.assertFalse(missing_manifest["recorded_time_coverage_report_ready"])
+
+    def test_backup_evidence_reports_partial_then_full_recorded_time_object_coverage(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            with patch.dict(
+                archive_services.os.environ,
+                {
+                    "WOM_R2_ACCESS_KEY_ID": _R2_ACCESS_KEY_ID,
+                    "WOM_R2_SECRET_ACCESS_KEY": _R2_SECRET_HEX64,
+                },
+                clear=False,
+            ):
+                transport = _FakeObjectStorageTransport()
+                first = self._upload_run(
+                    archive_root,
+                    only=f"sha256:{_FAKE_SHA_A}",
+                    max_objects=1,
+                    reviewed_by="person:test-reviewer",
+                    approve=True,
+                    transport=transport,
+                )
+                self.assertTrue(first["ok"], first)
+
+                before_partial = self.snapshot_archive_files(archive_root)
+                partial_code, partial_output = self.run_cli(
+                    ["storage-backup-evidence", str(archive_root), "--dry-run"]
+                )
+                self.assertEqual(partial_code, 0, partial_output)
+                self.assertEqual(self.snapshot_archive_files(archive_root), before_partial)
+                partial = json.loads(partial_output)
+                partial_objects = partial["lanes"]["object_storage"]
+                self.assertEqual(
+                    partial_objects["status"],
+                    "receipt_verified_partial_coverage_at_recorded_time",
+                )
+                self.assertEqual(partial_objects["eligible_object_count"], 2)
+                self.assertEqual(partial_objects["receipt_verified_object_count"], 1)
+                self.assertFalse(partial_objects["all_manifest_objects_receipt_verified_at_recorded_time"])
+                self.assertFalse(partial["overall"]["backup_completion_claim_ready"])
+
+                second = self._upload_run(
+                    archive_root,
+                    only=f"sha256:{_FAKE_SHA_B}",
+                    max_objects=1,
+                    reviewed_by="person:test-reviewer",
+                    approve=True,
+                    transport=transport,
+                )
+                self.assertTrue(second["ok"], second)
+
+            before_full = self.snapshot_archive_files(archive_root)
+            full_code, full_output = self.run_cli(["backup-evidence", str(archive_root), "--dry-run"])
+            self.assertEqual(full_code, 0, full_output)
+            self.assertEqual(self.snapshot_archive_files(archive_root), before_full)
+            self.assertNotIn(_FAKE_SHA_A, full_output)
+            self.assertNotIn(_FAKE_SHA_B, full_output)
+            full = json.loads(full_output)
+            full_objects = full["lanes"]["object_storage"]
+            self.assertEqual(
+                full_objects["status"],
+                "receipt_verified_full_coverage_at_recorded_time",
+            )
+            self.assertEqual(full_objects["receipt_verified_object_count"], 2)
+            self.assertTrue(full_objects["all_manifest_objects_receipt_verified_at_recorded_time"])
+            self.assertFalse(full_objects["current_remote_availability_checked"])
+            self.assertFalse(full_objects["current_remote_availability_claim_ready"])
+            self.assertFalse(full["overall"]["backup_completion_claim_ready"])
+
+            first_receipt_path = archive_root / first["receipts_written"][0]
+            first_receipt = json.loads(first_receipt_path.read_text(encoding="utf-8"))
+            first_receipt["object_count"] = 2
+            first_receipt_path.write_text(
+                json.dumps(first_receipt, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            tampered_code, tampered_output = self.run_cli(
+                ["backup-evidence", str(archive_root), "--dry-run"]
+            )
+            self.assertEqual(tampered_code, 0, tampered_output)
+            tampered_objects = json.loads(tampered_output)["lanes"]["object_storage"]
+            self.assertEqual(tampered_objects["status"], "invalid_or_conflicting_evidence")
+            self.assertEqual(
+                tampered_objects["invalid_evidence_counts"]["execution_receipt_object_count_invalid"],
+                1,
+            )
+            self.assertFalse(tampered_objects["all_manifest_objects_receipt_verified_at_recorded_time"])
+
+    def test_backup_evidence_rejects_forged_or_truncated_completion_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            key_hint = archive_services.object_storage_content_addressed_key_hint(_FAKE_SHA_A)
+            changed = archive_services._object_storage_apply_wom_uploaded_location(
+                archive_root,
+                object_id=f"sha256:{_FAKE_SHA_A}",
+                provider_kind="cloudflare-r2",
+                store_ref="object-storage:test-only",
+                digest=_FAKE_SHA_A,
+                execution_receipt_ref=(
+                    "receipts/providers/object-storage-executions/"
+                    "missing.object-storage-upload.json"
+                ),
+                uploaded_at="2026-07-15T00:00:00Z",
+                remote_key=key_hint,
+                remote_size=151,
+            )
+            self.assertEqual(changed, 1)
+
+            forged_code, forged_output = self.run_cli(
+                ["backup-evidence", str(archive_root), "--dry-run"]
+            )
+            self.assertEqual(forged_code, 0, forged_output)
+            self.assertNotIn(_FAKE_SHA_A, forged_output)
+            self.assertNotIn("object-storage:test-only", forged_output)
+            self.assertNotIn("missing.object-storage-upload.json", forged_output)
+            forged = json.loads(forged_output)
+            forged_objects = forged["lanes"]["object_storage"]
+            self.assertEqual(forged_objects["status"], "invalid_or_conflicting_evidence")
+            self.assertEqual(forged_objects["receipt_verified_object_count"], 0)
+            self.assertEqual(forged_objects["invalid_wom_evidence_object_count"], 1)
+            self.assertEqual(
+                forged_objects["invalid_evidence_counts"]["execution_receipt_missing_or_unsafe"],
+                1,
+            )
+            self.assertFalse(forged["overall"]["backup_completion_claim_ready"])
+
+            truncated_code, truncated_output = self.run_cli(
+                ["backup-evidence", str(archive_root), "--max-records", "1", "--dry-run"]
+            )
+            self.assertEqual(truncated_code, 0, truncated_output)
+            truncated = json.loads(truncated_output)
+            truncated_objects = truncated["lanes"]["object_storage"]
+            self.assertEqual(truncated_objects["status"], "incomplete_truncated")
+            self.assertTrue(truncated_objects["truncated"])
+            self.assertFalse(truncated_objects["scan_complete"])
+            self.assertFalse(truncated_objects["all_manifest_objects_receipt_verified_at_recorded_time"])
+            self.assertFalse(truncated["overall"]["backup_completion_claim_ready"])
 
     def test_operational_context_dry_run_and_approve_write_reviewed_record(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

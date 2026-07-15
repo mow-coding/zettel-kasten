@@ -10,10 +10,10 @@ It is not a website, SaaS app, dashboard, or visual note-taking product. The int
 
 ## Install The Command-Line Tool
 
-v0.3.250 provides a self-contained wheel on the exact GitHub release:
+v0.3.251 provides a self-contained wheel on the exact GitHub release:
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.250/wom_kit-0.3.250-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.251/wom_kit-0.3.251-py3-none-any.whl"
 archive --version
 ```
 
@@ -251,6 +251,9 @@ identity-reconcile --dry-run|--approve
 
 local-sovereignty --dry-run
   Report the machine-readable authority model: local WOM is canonical, GitHub backs up metadata/version history, object storage backs up objet bytes, and external databases hold regenerable map backups or replicas. It performs no live audit, provider/network call, secret read, or write.
+
+backup-evidence --dry-run
+  Report locally verifiable GitHub, object-storage, and external-database backup evidence as JSON. Only valid receipt-linked `wom_uploaded` locations count as object coverage, and only at their recorded time. It performs no remote check, body/byte read, secret read, or write, and it never reports whole-backup completion.
 
 prompt-boundary
   Check untrusted text for obvious prompt-injection and unsafe-agent strings. Dry-run only; never calls LLMs, executes inspected text, approves, mints, or writes files.

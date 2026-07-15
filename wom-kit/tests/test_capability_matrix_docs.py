@@ -11,7 +11,7 @@ REPO_ROOT = KIT_ROOT.parent
 CURRENT_VERSION = f"v{__version__}"
 CURRENT_RUNTIME_STATUS = (
     f"Status: {CURRENT_VERSION} installed-wheel resource, quick start, "
-    "and receipt-backed session handoff checkpoint"
+    "session handoff, and local backup evidence checkpoint"
 )
 MATRIX_PATH = KIT_ROOT / "docs" / "capability-matrix.md"
 PRODUCT_ROADMAP_PATH = KIT_ROOT / "docs" / "product-roadmap.md"
@@ -1082,6 +1082,60 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("session-handoff-checkpoint.md", public_map_text)
         self.assertIn("session-handoff-checkpoint.md", public_map_ko_text)
+
+    def test_backup_evidence_status_is_documented_for_runtime_operators(self) -> None:
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        guide_text = (KIT_ROOT / "docs" / "backup-evidence-status.md").read_text(
+            encoding="utf-8"
+        )
+        release_text = (
+            KIT_ROOT / "docs" / "releases" / "v0.3.251.md"
+        ).read_text(encoding="utf-8")
+        decision_text = (
+            KIT_ROOT
+            / "docs"
+            / "archive-infra-decision-log-2026-07-15-v03251-backup-evidence-status.md"
+        ).read_text(encoding="utf-8")
+        combined = "\n".join(
+            (
+                matrix_text,
+                guide_text,
+                release_text,
+                decision_text,
+                (KIT_ROOT / "docs" / "local-sovereignty-and-backup-authority.md").read_text(
+                    encoding="utf-8"
+                ),
+                (KIT_ROOT / "docs" / "runtime-canonical-entrypoints.md").read_text(
+                    encoding="utf-8"
+                ),
+                (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8"),
+                (REPO_ROOT / "UPGRADE.md").read_text(encoding="utf-8"),
+                (REPO_ROOT / "UPGRADE.ko.md").read_text(encoding="utf-8"),
+                (REPO_ROOT / "README.md").read_text(encoding="utf-8"),
+                (REPO_ROOT / "README.ko.md").read_text(encoding="utf-8"),
+                read_runtime_skill_package(),
+            )
+        )
+        for phrase in (
+            "Status: v0.3.251 local backup evidence status checkpoint",
+            f"Version: {CURRENT_VERSION}, release candidate",
+            "backup-evidence",
+            "declared_uploaded",
+            "receipt_verified_full_coverage_at_recorded_time",
+            "current remote availability",
+            "overall backup completion",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, combined)
+
+        public_map_text = (
+            KIT_ROOT / "docs" / "public-documentation-map.md"
+        ).read_text(encoding="utf-8")
+        public_map_ko_text = (
+            KIT_ROOT / "docs" / "public-documentation-map.ko.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn("backup-evidence-status.md", public_map_text)
+        self.assertIn("backup-evidence-status.md", public_map_ko_text)
 
     def test_canonical_zet_exact_byte_restore_write_is_documented(self) -> None:
         matrix_text = MATRIX_PATH.read_text(encoding="utf-8")

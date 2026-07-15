@@ -985,6 +985,7 @@ RUNTIME_CONTEXT_DOCTOR_FINDING_LIMIT = 100
 RUNTIME_CONTEXT_DOCTOR_COMMAND_LIMIT = 20
 RUNTIME_CONTEXT_SAFE_ACTIONS = [
     "run local-sovereignty dry-run",
+    "run backup-evidence dry-run",
     "run ai-response-concept-guide dry-run",
     "run operational-context dry-run",
     "run operator-feedback-plan dry-run",
@@ -1063,6 +1064,10 @@ SECRET_SIGNAL_CLASSES = (
 SECRET_SIGNAL_BLOCKING_CLASSES = ("secret_value_pattern", "private_locator", "account_identifier", "unknown_sensitive_context")
 AI_RESPONSE_CONTRACT_SCHEMA = "wom-kit/ai-response-contract/v0.1"
 LOCAL_SOVEREIGNTY_CONTRACT_SCHEMA = "wom-kit/local-sovereignty-contract/v0.1"
+BACKUP_EVIDENCE_STATUS_SCHEMA = "wom-kit/backup-evidence-status/v0.1"
+BACKUP_EVIDENCE_DEFAULT_MAX_RECORDS = 100_000
+BACKUP_EVIDENCE_MAX_RECORDS = 1_000_000
+BACKUP_EVIDENCE_MAX_RECEIPT_BYTES = 4 * 1024 * 1024
 OPERATOR_ENVELOPE_CLASS_SCHEMA = "wom-kit/operator-envelope-classes/v0.1"
 AI_USAGE_RECEIPTS_DIR = "receipts/ai-usage"
 AI_USAGE_RECEIPT_SCHEMA = "wom-kit/ai-usage-receipt/v0.1"
@@ -62855,6 +62860,8 @@ def local_sovereignty_authority_model() -> dict[str, Any]:
             "regenerate_local_indexes_and_external_database_map_replicas_from_local_records",
         ],
         "backup_evidence": {
+            "status_command": "archive backup-evidence <archive-root> --dry-run",
+            "status_command_live_checks_remote_services": False,
             "github": {
                 "required_evidence": "remote_ref_or_provider_confirmed_push_evidence",
                 "local_commit_alone_proves_remote_backup": False,
@@ -62881,6 +62888,446 @@ def local_sovereignty_authority_model() -> dict[str, Any]:
             "files_written": False,
             "secrets_read": False,
         },
+    }
+
+
+def backup_evidence_receipt_validation_codes(
+    root: Path,
+    *,
+    archive_id: str,
+    object_id: str,
+    location: dict[str, Any],
+    receipt_cache: dict[str, tuple[dict[str, Any] | None, str | None]],
+) -> tuple[list[str], bool]:
+    codes: list[str] = []
+    digest = object_id.removeprefix("sha256:").lower()
+    provider_kind = str(location.get("provider_kind") or "")
+    store_ref = str(location.get("store_ref") or "")
+    if object_storage_wom_uploaded_audit_location_errors(
+        location,
+        digest=digest,
+        provider_kind=provider_kind,
+        store_ref=store_ref,
+    ):
+        codes.append("location_contract_invalid")
+    if not object_storage_location_digest_matches_record(location, object_id):
+        codes.append("location_digest_mismatch")
+
+    receipt_ref = location.get("execution_receipt_ref")
+    if not isinstance(receipt_ref, str) or not safe_object_storage_execution_receipt_relative(receipt_ref):
+        codes.append("execution_receipt_ref_invalid")
+        return unique_preserve_order(codes), False
+
+    receipt_read = False
+    if receipt_ref not in receipt_cache:
+        receipt_path = archive_internal_path(root, receipt_ref)
+        receipt: dict[str, Any] | None = None
+        load_error: str | None = None
+        try:
+            if (
+                receipt_path.is_symlink()
+                or zet_revision_path_has_symlink_component(root, receipt_path)
+                or not receipt_path.is_file()
+            ):
+                load_error = "execution_receipt_missing_or_unsafe"
+            elif receipt_path.stat().st_size > BACKUP_EVIDENCE_MAX_RECEIPT_BYTES:
+                load_error = "execution_receipt_too_large"
+            else:
+                receipt = read_json_object(receipt_path, "object-storage execution receipt")
+        except ArchiveServiceError:
+            load_error = "execution_receipt_invalid_json"
+        except (OSError, UnicodeError):
+            if load_error is None:
+                load_error = "execution_receipt_unreadable"
+        if receipt is None and load_error is None:
+            load_error = "execution_receipt_invalid_json"
+        receipt_cache[receipt_ref] = (receipt, load_error)
+        receipt_read = receipt is not None
+
+    receipt, load_error = receipt_cache[receipt_ref]
+    if load_error:
+        codes.append(load_error)
+        return unique_preserve_order(codes), receipt_read
+    assert receipt is not None
+
+    if receipt.get("schema") != OBJECT_STORAGE_UPLOAD_RECEIPT_SCHEMA:
+        codes.append("execution_receipt_schema_invalid")
+    if receipt.get("lifecycle_action") != "object_storage_upload_execute":
+        codes.append("execution_receipt_action_invalid")
+    if receipt.get("operation") != "upload_object" or receipt.get("dry_run") is not False:
+        codes.append("execution_receipt_operation_invalid")
+    if receipt.get("archive_id") != archive_id or receipt.get("object_id") != object_id:
+        codes.append("execution_receipt_identity_mismatch")
+    if receipt.get("provider_kind") != provider_kind or receipt.get("store_ref") != store_ref:
+        codes.append("execution_receipt_store_mismatch")
+    if receipt.get("receipt_path") != receipt_ref:
+        codes.append("execution_receipt_path_mismatch")
+    if receipt.get("result_status") not in {"uploaded", "skipped_remote_same"}:
+        codes.append("execution_receipt_result_not_verified")
+    if receipt.get("checksum_algorithm") != OBJECT_STORAGE_CHECKSUM_ALGORITHM:
+        codes.append("execution_receipt_checksum_invalid")
+    receipt_strategy = receipt.get("key_strategy")
+    if receipt_strategy not in OBJECT_STORAGE_UPLOAD_KEY_STRATEGIES:
+        codes.append("execution_receipt_key_strategy_invalid")
+    receipt_remote_key = (
+        receipt.get("remote_key")
+        if receipt.get("remote_key") is not None
+        else receipt.get("key_hint")
+    )
+    if (
+        not isinstance(receipt_remote_key, str)
+        or not safe_object_storage_remote_key(receipt_remote_key)
+        or digest not in receipt_remote_key
+    ):
+        codes.append("execution_receipt_remote_key_invalid")
+    if receipt_strategy == OBJECT_STORAGE_UPLOAD_KEY_STRATEGY and receipt_remote_key != receipt.get("key_hint"):
+        codes.append("execution_receipt_default_key_mismatch")
+    bytes_uploaded = receipt.get("bytes_uploaded")
+    if isinstance(bytes_uploaded, bool) or not isinstance(bytes_uploaded, int) or bytes_uploaded < 0:
+        codes.append("execution_receipt_bytes_invalid")
+    if receipt.get("object_count") != 1:
+        codes.append("execution_receipt_object_count_invalid")
+    retry_summary = receipt.get("retry_summary")
+    if not isinstance(retry_summary, dict) or any(
+        not isinstance(value, (int, float, str, bool)) and value is not None
+        for value in retry_summary.values()
+    ):
+        codes.append("execution_receipt_retry_summary_invalid")
+    if receipt.get("manifest_update_applied") is not True:
+        codes.append("execution_receipt_manifest_transition_missing")
+    reviewer = receipt.get("reviewed_by")
+    if not isinstance(reviewer, str) or safe_foreign_quarantine_actor_id(reviewer) is None:
+        codes.append("execution_receipt_reviewer_invalid")
+    if receipt.get("key_hint") != location.get("key_hint"):
+        codes.append("execution_receipt_key_hint_mismatch")
+    location_remote_key = (
+        location.get("remote_key")
+        if location.get("remote_key") is not None
+        else location.get("key_hint")
+    )
+    if receipt_remote_key != location_remote_key:
+        codes.append("execution_receipt_remote_key_mismatch")
+    privacy_guards = receipt.get("privacy_guards") if isinstance(receipt.get("privacy_guards"), dict) else {}
+    for key in (
+        "secret_values_echoed",
+        "exact_credential_refs_echoed",
+        "bucket_names_echoed",
+        "provider_urls_echoed",
+        "local_absolute_paths_echoed",
+        "generated_urls_echoed",
+    ):
+        if privacy_guards.get(key) is not False:
+            codes.append("execution_receipt_privacy_guard_invalid")
+            break
+    return unique_preserve_order(codes), receipt_read
+
+
+def backup_evidence_status(
+    archive_root: Path | str,
+    *,
+    max_records: int = BACKUP_EVIDENCE_DEFAULT_MAX_RECORDS,
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if not dry_run:
+        blockers.append("backup-evidence is read-only and requires --dry-run.")
+    try:
+        record_limit = int(max_records)
+    except (TypeError, ValueError):
+        record_limit = BACKUP_EVIDENCE_DEFAULT_MAX_RECORDS
+        blockers.append("max_records must be an integer.")
+    if record_limit < 1:
+        blockers.append("max_records must be at least 1.")
+        record_limit = 1
+    if record_limit > BACKUP_EVIDENCE_MAX_RECORDS:
+        warnings.append(f"max_records was capped at {BACKUP_EVIDENCE_MAX_RECORDS}.")
+        record_limit = BACKUP_EVIDENCE_MAX_RECORDS
+
+    manifest_relative = "objects/manifests/files.jsonl"
+    manifest_path = archive_internal_path(root, manifest_relative)
+    manifest_present = manifest_path.is_file()
+    manifest_body_read = False
+    records_scanned = 0
+    malformed_record_count = 0
+    non_object_record_count = 0
+    invalid_object_id_count = 0
+    object_digest_field_mismatch_count = 0
+    truncated = False
+    grouped_records: dict[str, list[dict[str, Any]]] = {}
+
+    if manifest_present:
+        if manifest_path.is_symlink() or zet_revision_path_has_symlink_component(root, manifest_path):
+            blockers.append("object manifest path is symbolic-link-backed and cannot be trusted for backup evidence.")
+        else:
+            manifest_body_read = True
+            try:
+                with manifest_path.open("r", encoding="utf-8-sig") as handle:
+                    for raw_line in handle:
+                        line = raw_line.strip()
+                        if not line:
+                            continue
+                        if records_scanned >= record_limit:
+                            truncated = True
+                            break
+                        records_scanned += 1
+                        try:
+                            record = json.loads(line)
+                        except json.JSONDecodeError:
+                            malformed_record_count += 1
+                            continue
+                        if not isinstance(record, dict):
+                            non_object_record_count += 1
+                            continue
+                        object_id = str(record.get("object_id") or "").lower()
+                        if not re.fullmatch(r"sha256:[0-9a-f]{64}", object_id):
+                            invalid_object_id_count += 1
+                            continue
+                        if str(record.get("sha256") or "").lower() != object_id.removeprefix("sha256:"):
+                            object_digest_field_mismatch_count += 1
+                            continue
+                        grouped_records.setdefault(object_id, []).append(record)
+            except (OSError, UnicodeError):
+                blockers.append("object manifest could not be read as a regular UTF-8 JSONL file.")
+    if truncated:
+        warnings.append("Object manifest scan reached max_records; no complete coverage claim is allowed.")
+
+    duplicate_object_id_count = sum(1 for records in grouped_records.values() if len(records) > 1)
+    duplicate_record_count = sum(max(0, len(records) - 1) for records in grouped_records.values())
+    eligible_records = [records[0] for records in grouped_records.values() if len(records) == 1]
+    eligible_object_count = len(eligible_records)
+
+    local_location_object_count = 0
+    declared_location_count = 0
+    wom_uploaded_location_count = 0
+    valid_wom_uploaded_location_count = 0
+    receipt_verified_object_count = 0
+    declared_only_object_count = 0
+    invalid_wom_evidence_object_count = 0
+    no_external_evidence_object_count = 0
+    invalid_locations_field_count = 0
+    non_object_location_count = 0
+    receipt_cache: dict[str, tuple[dict[str, Any] | None, str | None]] = {}
+    invalid_evidence_counts: dict[str, int] = {}
+
+    for record in eligible_records:
+        object_id = str(record.get("object_id") or "").lower()
+        if not isinstance(record.get("locations"), list):
+            invalid_locations_field_count += 1
+            locations = []
+        else:
+            locations = record["locations"]
+        has_local = False
+        has_declared = False
+        has_wom_claim = False
+        has_valid_wom_evidence = False
+        has_invalid_wom_evidence = False
+        for location in locations:
+            if not isinstance(location, dict):
+                non_object_location_count += 1
+                continue
+            if location.get("provider") == "local" and location.get("availability") == "available":
+                has_local = True
+            if location.get("provider") == "object_storage" and location.get("availability") == "declared_uploaded":
+                has_declared = True
+                declared_location_count += 1
+            if location.get("provider") != "object_storage" or location.get("availability") != "wom_uploaded":
+                continue
+            has_wom_claim = True
+            wom_uploaded_location_count += 1
+            validation_codes, _receipt_read = backup_evidence_receipt_validation_codes(
+                root,
+                archive_id=archive_id,
+                object_id=object_id,
+                location=location,
+                receipt_cache=receipt_cache,
+            )
+            if validation_codes:
+                has_invalid_wom_evidence = True
+                for code in validation_codes:
+                    invalid_evidence_counts[code] = invalid_evidence_counts.get(code, 0) + 1
+            else:
+                has_valid_wom_evidence = True
+                valid_wom_uploaded_location_count += 1
+
+        if has_local:
+            local_location_object_count += 1
+        if has_valid_wom_evidence:
+            receipt_verified_object_count += 1
+        if has_invalid_wom_evidence:
+            invalid_wom_evidence_object_count += 1
+        if has_declared and not has_valid_wom_evidence:
+            declared_only_object_count += 1
+        if not has_declared and not has_wom_claim:
+            no_external_evidence_object_count += 1
+
+    receipt_files_read_count = sum(1 for receipt, _error in receipt_cache.values() if receipt is not None)
+    receipt_load_error_count = sum(1 for _receipt, error in receipt_cache.values() if error is not None)
+    structural_problem_count = (
+        malformed_record_count
+        + non_object_record_count
+        + invalid_object_id_count
+        + object_digest_field_mismatch_count
+        + invalid_locations_field_count
+        + non_object_location_count
+        + duplicate_record_count
+        + sum(invalid_evidence_counts.values())
+    )
+    scan_complete = bool(not blockers and not truncated)
+    evidence_integrity_clear = bool(scan_complete and manifest_present and structural_problem_count == 0)
+    full_recorded_time_coverage = bool(
+        evidence_integrity_clear
+        and eligible_object_count > 0
+        and receipt_verified_object_count == eligible_object_count
+    )
+
+    if blockers:
+        object_storage_status = "blocked"
+    elif truncated:
+        object_storage_status = "incomplete_truncated"
+    elif not manifest_present:
+        object_storage_status = "object_manifest_missing"
+    elif structural_problem_count:
+        object_storage_status = "invalid_or_conflicting_evidence"
+    elif eligible_object_count == 0:
+        object_storage_status = "not_applicable_no_manifest_objects"
+    elif full_recorded_time_coverage:
+        object_storage_status = "receipt_verified_full_coverage_at_recorded_time"
+    elif receipt_verified_object_count:
+        object_storage_status = "receipt_verified_partial_coverage_at_recorded_time"
+    elif declared_only_object_count:
+        object_storage_status = "declared_only_no_wom_byte_proof"
+    else:
+        object_storage_status = "no_remote_byte_evidence"
+
+    object_storage_lane = {
+        "role": "objet_original_byte_backup",
+        "status": object_storage_status,
+        "manifest_present": manifest_present,
+        "records_scanned": records_scanned,
+        "scan_limit": record_limit,
+        "scan_complete": scan_complete,
+        "truncated": truncated,
+        "eligible_object_count": eligible_object_count,
+        "local_location_object_count": local_location_object_count,
+        "receipt_verified_object_count": receipt_verified_object_count,
+        "declared_only_object_count": declared_only_object_count,
+        "invalid_wom_evidence_object_count": invalid_wom_evidence_object_count,
+        "no_external_evidence_object_count": no_external_evidence_object_count,
+        "declared_location_count": declared_location_count,
+        "wom_uploaded_location_count": wom_uploaded_location_count,
+        "valid_wom_uploaded_location_count": valid_wom_uploaded_location_count,
+        "execution_receipt_files_read_count": receipt_files_read_count,
+        "execution_receipt_load_error_count": receipt_load_error_count,
+        "malformed_record_count": malformed_record_count,
+        "non_object_record_count": non_object_record_count,
+        "invalid_object_id_count": invalid_object_id_count,
+        "object_digest_field_mismatch_count": object_digest_field_mismatch_count,
+        "invalid_locations_field_count": invalid_locations_field_count,
+        "non_object_location_count": non_object_location_count,
+        "duplicate_object_id_count": duplicate_object_id_count,
+        "duplicate_record_count": duplicate_record_count,
+        "invalid_evidence_counts": dict(sorted(invalid_evidence_counts.items())),
+        "evidence_integrity_clear": evidence_integrity_clear,
+        "recorded_time_coverage_report_ready": evidence_integrity_clear,
+        "all_manifest_objects_receipt_verified_at_recorded_time": full_recorded_time_coverage,
+        "current_remote_availability_checked": False,
+        "current_remote_availability_claim_ready": False,
+        "evidence_scope": "local provider-confirmed execution receipts and linked wom_uploaded manifest locations at their recorded time",
+    }
+
+    github_lane = {
+        "role": "metadata_and_version_history_backup",
+        "status": "unverified_no_generic_completion_receipt",
+        "local_commit_inspected": False,
+        "remote_ref_checked": False,
+        "provider_api_called": False,
+        "completion_claim_ready": False,
+        "reason": "a local commit or cached remote-tracking ref is not proof that GitHub currently contains it",
+    }
+    external_database_lane = {
+        "role": "map_backup_or_replica",
+        "status": "unverified_no_generic_completion_receipt",
+        "configuration_inspected": False,
+        "snapshot_or_replication_receipt_verified": False,
+        "provider_api_called": False,
+        "completion_claim_ready": False,
+        "reason": "configured database labels and regenerable local indexes are not provider-specific snapshot or replication evidence",
+    }
+    next_safe_actions = [
+        "Do not claim complete backup: GitHub remote-ref and external-database completion evidence are not verified by this command.",
+    ]
+    if object_storage_status in {"no_remote_byte_evidence", "declared_only_no_wom_byte_proof"}:
+        next_safe_actions.append(
+            "Use the existing object-storage upload or verified-adopt workflow; declared_uploaded alone never proves remote bytes."
+        )
+    elif object_storage_status == "receipt_verified_partial_coverage_at_recorded_time":
+        next_safe_actions.append(
+            "Review the uncovered manifest-object count and continue the existing object-storage upload or verified-adopt workflow."
+        )
+    elif object_storage_status in {"invalid_or_conflicting_evidence", "object_manifest_missing", "blocked"}:
+        next_safe_actions.append(
+            "Run full Doctor and repair receipt/manifest disagreement through the owning object-storage workflow; never hand-edit evidence."
+        )
+    elif object_storage_status == "incomplete_truncated":
+        next_safe_actions.append("Rerun with a sufficient --max-records value before making any coverage claim.")
+    elif full_recorded_time_coverage:
+        next_safe_actions.append(
+            "Recorded-time object coverage is complete, but use a live provider-specific check before claiming current remote availability."
+        )
+    next_safe_actions.append(
+        "Keep local reviewed WOM state authoritative even when an external backup or replica is later verified."
+    )
+
+    return {
+        "ok": not blockers,
+        "schema": BACKUP_EVIDENCE_STATUS_SCHEMA,
+        "dry_run": True,
+        "lifecycle_action": "backup_evidence_status",
+        "archive_id": archive_id,
+        "authority": {
+            "canonical": "local_reviewed_wom_state",
+            "external_layers_never_silently_outrank_local": True,
+        },
+        "lanes": {
+            "github": github_lane,
+            "object_storage": object_storage_lane,
+            "external_database": external_database_lane,
+        },
+        "overall": {
+            "status": "backup_completion_unverified",
+            "all_intended_backup_lanes_verified": False,
+            "backup_completion_claim_ready": False,
+            "configured_services_count_as_completed_evidence": False,
+            "local_commit_counts_as_github_backup_proof": False,
+            "declared_uploaded_counts_as_remote_byte_proof": False,
+            "generated_index_counts_as_external_database_backup_proof": False,
+        },
+        "next_safe_actions": next_safe_actions,
+        "closed_actions": {
+            "manifest_metadata_body_read": manifest_body_read,
+            "execution_receipt_metadata_read": bool(receipt_cache),
+            "objet_bytes_read": False,
+            "zet_bodies_read": False,
+            "git_repository_inspected": False,
+            "provider_api_called": False,
+            "network_checked": False,
+            "database_called": False,
+            "secrets_read": False,
+            "files_written": False,
+        },
+        "privacy_guards": {
+            "object_ids_echoed": False,
+            "receipt_paths_echoed": False,
+            "provider_or_store_labels_echoed": False,
+            "local_absolute_paths_echoed": False,
+            "source_body_text_echoed": False,
+        },
+        "would_change": [],
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
     }
 
 

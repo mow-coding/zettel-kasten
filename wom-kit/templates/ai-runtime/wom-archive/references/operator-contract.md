@@ -93,6 +93,7 @@ same contract directly:
 
 ```bash
 archive local-sovereignty <archive-root> --dry-run --format json
+archive backup-evidence <archive-root> --dry-run
 ```
 
 Treat local reviewed WOM state as canonical. GitHub is metadata/version-history
@@ -100,6 +101,11 @@ backup, object storage is objet-byte backup, and an external database is a map
 backup or replica regenerated from local relation-bearing records. External
 state never silently overwrites local state. Do not claim a backup from a local
 commit, `declared_uploaded`, or an unreceipted DB row.
+
+`backup-evidence` reports locally verifiable evidence, not live remote state.
+Treat object coverage as receipt-time evidence only. Even full object coverage
+does not prove that bytes still exist remotely, and the overall backup remains
+unverified while GitHub and external-database provider evidence is absent.
 
 Before a context reset or AI session handoff, do not rely on host chat memory.
 Update the approved operational context when current mission/state changed,

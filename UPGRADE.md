@@ -24,6 +24,33 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.251 Honest Local Backup Evidence Status
+
+No archive migration is required. The release adds one read-only JSON status
+command and changes no existing manifest or receipt.
+
+Run:
+
+```powershell
+archive backup-evidence <archive-root> --dry-run
+```
+
+Read the three lanes separately. GitHub and external-database completion remain
+unverified because WOM-kit does not yet have a generic provider-confirmed
+completion receipt for them. Object-storage coverage counts only valid
+`wom_uploaded` locations linked to matching execution receipts.
+
+`receipt_verified_full_coverage_at_recorded_time` means every eligible object
+in the completed bounded manifest scan has local receipt evidence for the time
+recorded. It does not mean the remote bytes were checked now, and it does not
+make the whole WOM backup complete. `declared_uploaded`, a local commit,
+configuration, and generated indexes remain insufficient proof.
+
+The command calls no provider or network, reads no objet bytes or zet bodies,
+and writes nothing. Resolve invalid/conflicting evidence through the owning
+object-storage workflow rather than editing receipts or manifest evidence by
+hand.
+
 ## v0.3.250 Receipt-Backed Session Handoff
 
 No archive migration is required. Existing operational-context records and

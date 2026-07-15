@@ -1,6 +1,6 @@
 # Local Sovereignty And Backup Authority
 
-Status: implemented contract in v0.3.213
+Status: authority contract in v0.3.213; local evidence status in v0.3.251
 
 ## One Authority Model
 
@@ -47,19 +47,27 @@ Backup claims require boundary-specific evidence:
 - Generated local index: a successful rebuild is health evidence, not backup
   proof.
 
-The authority contract does not perform a live backup audit. It calls no
-provider, network, database, or secret store.
+The authority contract does not perform a live backup audit. Since v0.3.251,
+`backup-evidence` can inspect the local object manifest and linked provider-
+confirmed execution receipts. It distinguishes no evidence, declared-only,
+partial, full-at-recorded-time, invalid, and truncated object coverage. It
+still does not prove current remote availability or whole-archive backup
+completion.
 
 ## Machine-Readable Surfaces
 
 ```powershell
 archive local-sovereignty <archive-root> --dry-run --format json
 archive storage-authority <archive-root> --dry-run --format json
+archive backup-evidence <archive-root> --dry-run
 ```
 
 The same `storage_authority` model appears in `runtime-context`,
 `ai-start-here`, `recovery-plan`, and the recovery section of `upgrade-check`.
 This keeps AI instructions and human documentation on one contract.
+
+See [Backup Evidence Status](backup-evidence-status.md) for the status fields,
+privacy boundary, and honest interpretation rules.
 
 ## Recovery Order
 
