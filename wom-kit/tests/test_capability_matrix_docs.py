@@ -738,7 +738,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "Canonical zet revision write",
             "approval-gated local CLI write",
             "MCP exposes no writer",
-            "Distinct plans for one canonical zet serialize through that lock",
+            "Distinct plans serialize through the per-canonical lock",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
@@ -810,17 +810,17 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             f"Version: {CURRENT_VERSION}, release candidate",
             "Canonical zet revision receipt audit",
             "implemented local read-only CLI",
-            "O(receipt_files log receipt_files + revision_chains + lock_files)",
-            "malformed non-hash digest values",
+            "O(manifest_records + receipt_files log receipt_files + revision_chains + lock_files + unique_before_snapshot_bytes)",
+            "prior-byte snapshot",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "ordinary-and-restore chronological revision event-chain audit in v0.3.239",
+            "chronological revision event-chain and prior-byte audit in v0.3.248",
             "recoverable_missing_receipt",
             "A -> B -> A",
             "never deletes a lock",
-            "old content can be recreated from hashes",
+            "remote backup exists",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, guide_compact)
@@ -841,6 +841,57 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         self.assertIn("CLI-only, read-only `zet-revision-receipt-audit`", decision_text)
         self.assertIn("zet-revision-receipt-audit.md", public_map_text)
         self.assertIn("zet-revision-receipt-audit.md", public_map_ko_text)
+
+    def test_canonical_zet_revision_before_snapshot_is_documented(self) -> None:
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        write_text = (KIT_ROOT / "docs" / "zet-revision-write.md").read_text(
+            encoding="utf-8"
+        )
+        audit_text = (
+            KIT_ROOT / "docs" / "zet-revision-receipt-audit.md"
+        ).read_text(encoding="utf-8")
+        release_text = (
+            KIT_ROOT / "docs" / "releases" / "v0.3.248.md"
+        ).read_text(encoding="utf-8")
+        decision_text = (
+            KIT_ROOT
+            / "docs"
+            / "archive-infra-decision-log-2026-07-15-v03248-canonical-revision-before-snapshot.md"
+        ).read_text(encoding="utf-8")
+        schema_text = (
+            KIT_ROOT / "schemas" / "zet-revision-receipt-v0.2.schema.json"
+        ).read_text(encoding="utf-8")
+        changelog_text = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+        upgrade_text = (REPO_ROOT / "UPGRADE.md").read_text(encoding="utf-8")
+        upgrade_ko_text = (REPO_ROOT / "UPGRADE.ko.md").read_text(
+            encoding="utf-8"
+        )
+
+        for phrase in (
+            "Status: v0.3.248 canonical revision before-snapshot checkpoint",
+            f"Version: {CURRENT_VERSION}, release candidate",
+            "wom-kit/zet-revision-receipt/v0.2",
+            "objects/sha256/",
+            "before_snapshot",
+            "legacy hash-only history",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(
+                    phrase,
+                    "\n".join(
+                        (
+                            matrix_text,
+                            write_text,
+                            audit_text,
+                            release_text,
+                            decision_text,
+                            schema_text,
+                            changelog_text,
+                            upgrade_text,
+                            upgrade_ko_text,
+                        )
+                    ),
+                )
 
     def test_canonical_zet_revision_restore_plan_is_documented(self) -> None:
         matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
@@ -1022,13 +1073,13 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             f"Version: {CURRENT_VERSION}, release candidate",
             "orders each identity's events by unique normalized timestamp",
             "A -> B -> A",
-            "O(receipt_files log receipt_files + revision_chains + lock_files)",
+            "O(manifest_records + receipt_files log receipt_files + revision_chains + lock_files + unique_before_snapshot_bytes)",
             "actual newest chronological event",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "ordinary-and-restore chronological revision event-chain audit in v0.3.239",
+            "chronological revision event-chain and prior-byte audit in v0.3.248",
             "orders each group by event time",
             "branch/replay transition",
             "not the latest event",

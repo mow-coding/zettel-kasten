@@ -6,6 +6,29 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.248 - 2026-07-15
+
+Canonical revision before-snapshot checkpoint. Compatible additive receipt
+schema and local write behavior; no zet or archive migration.
+
+- **A correction now preserves what it replaces.** Before changing one
+  canonical zet, `zet-revision-write --approve` stores its exact prior bytes in
+  the ignored content-addressed `objects/sha256/` store and registers the
+  object in `objects/manifests/files.jsonl`.
+- **The receipt binds history to recoverable bytes.** New ordinary revision
+  receipts use `wom-kit/zet-revision-receipt/v0.2` and carry a text-free
+  `before_snapshot` object id, logical key, byte count, and verification state.
+- **Interruption and rollback stay idempotent.** The write-ahead lock binds the
+  same snapshot before canonical replacement. Re-runs verify or reuse it;
+  handled failures restore the canonical zet but retain the verified snapshot.
+- **Audit now checks the actual historical artifact.** Revision receipt audit
+  hashes each unique v0.2 before-snapshot at most once, verifies its local
+  manifest record, and blocks missing, unsafe, or changed bytes. Legacy v0.1
+  receipts remain valid and are counted explicitly as hash-only history.
+- **Private text remains outside receipts and stdout.** The old zet bytes live
+  only in the ignored object store. Receipts and command output retain hashes,
+  counts, fixed status codes, and content-addressed paths without zet text.
+
 ## v0.3.247 - 2026-07-15
 
 Runtime artifact-primacy checkpoint. Operator guidance and regression coverage

@@ -31179,6 +31179,19 @@ state:
                 fixture["canonical_path"].read_bytes(), fixture["original_bytes"]
             )
             self.assertFalse(preview["receipt"]["exists"])
+            expected_before_object_id = (
+                "sha256:" + hashlib.sha256(fixture["original_bytes"]).hexdigest()
+            )
+            self.assertEqual(
+                preview["before_snapshot"]["object_id"],
+                expected_before_object_id,
+            )
+            self.assertTrue(
+                preview["before_snapshot"]["planned_before_canonical_replacement"]
+            )
+            self.assertFalse(preview["before_snapshot"]["verified"])
+            preview_snapshot_path = archive_root / preview["before_snapshot"]["logical_key"]
+            self.assertFalse(preview_snapshot_path.exists())
             self.assertEqual(
                 list((archive_root / "receipts" / "revisions" / "canonical").glob("*.json"))
                 if (archive_root / "receipts" / "revisions" / "canonical").exists()
@@ -31206,6 +31219,14 @@ state:
             )
             self.assertTrue(applied["receipt"]["written_this_run"])
             self.assertTrue(applied["receipt"]["exists"])
+            self.assertTrue(applied["before_snapshot"]["verified"])
+            self.assertEqual(applied["before_snapshot"]["bytes_written_this_run"], 1)
+            self.assertEqual(
+                applied["before_snapshot"]["manifest_records_appended_this_run"],
+                1,
+            )
+            snapshot_path = archive_root / applied["before_snapshot"]["logical_key"]
+            self.assertEqual(snapshot_path.read_bytes(), fixture["original_bytes"])
             self.assertFalse(applied["privacy_guards"]["zettel_id_echoed"])
             for marker in (
                 fixture["zettel_id"],
@@ -31232,9 +31253,16 @@ state:
             receipt_path = archive_root / applied["receipt"]["path"]
             receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
             self.assertEqual(
-                archive_cli.validate_schema(receipt, "zet-revision-receipt.schema.json"),
+                archive_cli.validate_schema(
+                    receipt, "zet-revision-receipt-v0.2.schema.json"
+                ),
                 [],
             )
+            self.assertEqual(
+                receipt["schema"], "wom-kit/zet-revision-receipt/v0.2"
+            )
+            self.assertEqual(receipt["before_snapshot"]["object_id"], expected_before_object_id)
+            self.assertEqual(receipt["before_snapshot"]["logical_key"], applied["before_snapshot"]["logical_key"])
             receipt_text = receipt_path.read_text(encoding="utf-8")
             self.assertNotIn(fixture["title_marker"], receipt_text)
             self.assertNotIn(fixture["abstract_marker"], receipt_text)
@@ -31258,6 +31286,8 @@ state:
             self.assertEqual(
                 repeated["write_boundary"]["canonical_files_written_this_run"], 0
             )
+            self.assertTrue(repeated["before_snapshot"]["verified"])
+            self.assertEqual(repeated["before_snapshot"]["bytes_written_this_run"], 0)
             self.assertEqual(
                 fixture["canonical_path"].read_bytes(), canonical_after_first_apply
             )
@@ -31505,6 +31535,12 @@ state:
             self.assertTrue(failed["rollback"]["attempted"])
             self.assertTrue(failed["rollback"]["succeeded"])
             self.assertTrue(failed["rollback"]["canonical_restored"])
+            self.assertTrue(failed["rollback"]["before_snapshot_retained"])
+            self.assertTrue(failed["before_snapshot"]["verified"])
+            retained_snapshot = (
+                archive_root / failed["before_snapshot"]["logical_key"]
+            )
+            self.assertEqual(retained_snapshot.read_bytes(), fixture["original_bytes"])
             self.assertEqual(
                 fixture["canonical_path"].read_bytes(), fixture["original_bytes"]
             )
@@ -31549,6 +31585,17 @@ state:
 
             interrupted_bytes = fixture["canonical_path"].read_bytes()
             self.assertNotEqual(interrupted_bytes, fixture["original_bytes"])
+            before_digest = hashlib.sha256(fixture["original_bytes"]).hexdigest()
+            before_snapshot_path = (
+                archive_root
+                / "objects"
+                / "sha256"
+                / before_digest[:2]
+                / before_digest
+            )
+            self.assertEqual(
+                before_snapshot_path.read_bytes(), fixture["original_bytes"]
+            )
             locks = list(fixture["proposal_path"].parent.glob("*.write.lock"))
             self.assertEqual(len(locks), 1)
 
@@ -31573,6 +31620,9 @@ state:
             self.assertTrue(receipt["recovery"]["resumed_from_existing_lock"])
             self.assertTrue(
                 receipt["recovery"]["finalized_from_already_written_candidate"]
+            )
+            self.assertEqual(
+                receipt["before_snapshot"]["object_id"], f"sha256:{before_digest}"
             )
 
     def test_zet_revision_write_serializes_distinct_plans_for_one_canonical_zet(self) -> None:
@@ -31781,8 +31831,10 @@ state:
             self.assertEqual(summary["problem_count"], 0)
             self.assertEqual(
                 result["complexity"]["class"],
-                "O(receipt_files log receipt_files + revision_chains + lock_files)",
+                "O(manifest_records + receipt_files log receipt_files + revision_chains + lock_files + unique_before_snapshot_bytes)",
             )
+            self.assertEqual(summary["before_snapshot_verified"], 2)
+            self.assertEqual(summary["before_snapshot_invalid"], 0)
             for private_marker in (
                 first["zettel_id"],
                 first["title_marker"],
@@ -31849,6 +31901,188 @@ state:
             self.assertEqual(result["summary"]["branched_or_duplicate_chain"], 0)
             self.assertEqual(result["summary"]["state_evidence_gap"], 0)
             self.assertEqual(result["summary"]["current_state_drift"], 0)
+
+    def test_zet_revision_receipt_audit_accepts_legacy_v01_receipt_without_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            fixture = self.create_zet_revision_proposal(archive_root)
+            applied = self.approve_zet_revision_fixture(
+                archive_root, fixture, revision_at="2026-07-14T14:13:00Z"
+            )["applied"]
+            receipt_path = archive_root / applied["receipt"]["path"]
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            receipt["schema"] = "wom-kit/zet-revision-receipt/v0.1"
+            receipt.pop("before_snapshot")
+            receipt["mutation_contract"].pop("before_bytes_preserved_as_objet")
+            receipt["mutation_contract"].pop(
+                "before_snapshot_manifest_registered"
+            )
+            receipt["privacy_guards"].pop(
+                "before_snapshot_text_stored_in_receipt"
+            )
+            receipt_path.write_text(
+                json.dumps(receipt, indent=2, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+
+            result = archive_services.zet_revision_receipt_audit(
+                archive_root, dry_run=True
+            )
+
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(
+                result["summary"]["legacy_receipt_without_before_snapshot"], 1
+            )
+            self.assertEqual(result["summary"]["before_snapshot_verified"], 0)
+
+    def test_zet_revision_receipt_audit_blocks_tampered_before_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            fixture = self.create_zet_revision_proposal(archive_root)
+            applied = self.approve_zet_revision_fixture(
+                archive_root, fixture, revision_at="2026-07-14T14:14:00Z"
+            )["applied"]
+            snapshot_path = archive_root / applied["before_snapshot"]["logical_key"]
+            snapshot_path.write_bytes(b"X" * len(fixture["original_bytes"]))
+
+            code, output = self.run_cli(
+                [
+                    "zet-revision-receipt-audit",
+                    str(archive_root),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            self.assertEqual(code, 1)
+            result = json.loads(output)
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["summary"]["before_snapshot_invalid"], 1)
+            self.assertIn(
+                "before_snapshot_bytes_hash_mismatch",
+                result["problems"][0]["blocker_codes"],
+            )
+            for private_marker in (
+                fixture["zettel_id"],
+                fixture["title_marker"],
+                fixture["abstract_marker"],
+                fixture["body_marker"],
+            ):
+                self.assertNotIn(private_marker, output)
+
+    def test_zet_revision_write_never_overwrites_before_snapshot_collision(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            fixture = self.create_zet_revision_proposal(archive_root)
+            plan = fixture["plan"]
+            base = {
+                "zettel_id": fixture["zettel_id"],
+                "proposal_path": fixture["proposal_relative"],
+                "expected_canonical_sha256": plan["canonical"]["sha256"],
+                "expected_proposal_sha256": plan["proposal"]["sha256"],
+                "expected_proposal_semantic_sha256": plan["proposal"][
+                    "semantic_sha256"
+                ],
+                "expected_plan_digest": plan["plan_digest"],
+                "revision_at": "2026-07-14T14:15:00Z",
+            }
+            preview = archive_services.zet_revision_write(
+                archive_root, **base, dry_run=True
+            )
+            collision_path = (
+                archive_root / preview["before_snapshot"]["logical_key"]
+            )
+            collision_path.parent.mkdir(parents=True, exist_ok=True)
+            collision_bytes = b"Y" * len(fixture["original_bytes"])
+            collision_path.write_bytes(collision_bytes)
+
+            result = archive_services.zet_revision_write(
+                archive_root,
+                **base,
+                expected_write_plan_digest=preview["write_plan"]["actual_digest"],
+                approve=True,
+                reviewed_by="person:fake-reviewer",
+                affirm_revision_reviewed=True,
+                affirm_abstract_body_pair_reviewed=True,
+            )
+
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["status"], "failed_rolled_back")
+            self.assertFalse(result["before_snapshot"]["verified"])
+            self.assertIsNone(result["rollback"]["before_snapshot_retained"])
+            self.assertEqual(collision_path.read_bytes(), collision_bytes)
+            self.assertEqual(
+                fixture["canonical_path"].read_bytes(), fixture["original_bytes"]
+            )
+
+    def test_zet_revision_write_recovers_after_manifest_publish_interruption(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            fixture = self.create_zet_revision_proposal(archive_root)
+            plan = fixture["plan"]
+            base = {
+                "zettel_id": fixture["zettel_id"],
+                "proposal_path": fixture["proposal_relative"],
+                "expected_canonical_sha256": plan["canonical"]["sha256"],
+                "expected_proposal_sha256": plan["proposal"]["sha256"],
+                "expected_proposal_semantic_sha256": plan["proposal"][
+                    "semantic_sha256"
+                ],
+                "expected_plan_digest": plan["plan_digest"],
+                "revision_at": "2026-07-14T14:16:00Z",
+            }
+            preview = archive_services.zet_revision_write(
+                archive_root, **base, dry_run=True
+            )
+            approval = {
+                **base,
+                "expected_write_plan_digest": preview["write_plan"][
+                    "actual_digest"
+                ],
+                "approve": True,
+                "reviewed_by": "person:fake-reviewer",
+                "affirm_revision_reviewed": True,
+                "affirm_abstract_body_pair_reviewed": True,
+            }
+            manifest_path = archive_root / "objects" / "manifests" / "files.jsonl"
+            manifest_before = manifest_path.read_bytes()
+
+            with patch(
+                "wom_kit.archive_services.append_zet_revision_snapshot_manifest_record_atomic",
+                side_effect=KeyboardInterrupt(),
+            ):
+                with self.assertRaises(KeyboardInterrupt):
+                    archive_services.zet_revision_write(archive_root, **approval)
+
+            self.assertEqual(manifest_path.read_bytes(), manifest_before)
+            self.assertEqual(
+                fixture["canonical_path"].read_bytes(), fixture["original_bytes"]
+            )
+            snapshot_path = archive_root / preview["before_snapshot"]["logical_key"]
+            self.assertEqual(snapshot_path.read_bytes(), fixture["original_bytes"])
+            self.assertEqual(
+                list(manifest_path.parent.glob(".files.jsonl.*.revision-snapshot.tmp")),
+                [],
+            )
+            lock_root = archive_root / ".wom-scratch" / "revisions"
+            self.assertEqual(len(list(lock_root.glob("*.write.lock"))), 1)
+
+            recovered = archive_services.zet_revision_write(
+                archive_root, **approval
+            )
+            self.assertTrue(recovered["ok"], recovered)
+            self.assertEqual(recovered["status"], "applied")
+            self.assertEqual(
+                recovered["before_snapshot"]["bytes_written_this_run"], 0
+            )
+            self.assertEqual(
+                recovered["before_snapshot"][
+                    "manifest_records_appended_this_run"
+                ],
+                1,
+            )
+            self.assertEqual(list(lock_root.glob("*.write.lock")), [])
 
     def test_zet_revision_receipt_audit_blocks_current_drift_without_echoing_content(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -32106,6 +32340,7 @@ state:
                 receipts, key=lambda item: item[1]["revision_at"]
             )
             second_receipt["before"] = first_receipt["before"]
+            second_receipt["before_snapshot"] = first_receipt["before_snapshot"]
             second_path.write_text(
                 json.dumps(second_receipt, indent=2, ensure_ascii=False) + "\n",
                 encoding="utf-8",

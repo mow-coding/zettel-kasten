@@ -106,7 +106,7 @@ before approving any frontmatter rewrite.
 Current public baseline:
 
 ```text
-v0.3.247 pre-release
+v0.3.248 pre-release
 ```
 
 This baseline is for early review and prototyping. It is not yet a stable `v1.0.0` protocol.

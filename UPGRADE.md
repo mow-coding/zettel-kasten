@@ -24,6 +24,29 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.248 Canonical Revision Before Snapshot
+
+No archive migration is required. Existing v0.1 revision receipts remain
+valid hash-only history. They cannot gain historical bytes that were not
+preserved at the time.
+
+For every new approved ordinary revision, WOM-kit now preserves the exact
+prior canonical zet bytes under ignored `objects/sha256/`, registers the local
+object-manifest record, and binds that object in a v0.2 revision receipt before
+replacing the zet. Handled rollback retains the verified snapshot, and an
+interrupted post-write receipt recovery verifies it before completion.
+
+After upgrading, run:
+
+```powershell
+archive zet-revision-receipt-audit <archive-root> --dry-run --format json
+```
+
+New v0.2 receipts block if their before-snapshot bytes or manifest record are
+missing or changed. A green local audit does not prove remote backup: continue
+using the chosen object-storage upload and verification workflow for
+`objects/sha256/`. Do not add that ignored byte store to Git.
+
 ## v0.3.247 Runtime Artifact Primacy
 
 No archive migration is required. Stored zets, objets, edges, manifests,
