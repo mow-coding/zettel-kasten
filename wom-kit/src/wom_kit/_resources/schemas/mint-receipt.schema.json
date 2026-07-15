@@ -1,0 +1,137 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WOM-kit mint receipt",
+  "type": "object",
+  "required": [
+    "receipt_id",
+    "receipt_path",
+    "action",
+    "dry_run",
+    "archive_id",
+    "authority_mode",
+    "source",
+    "target",
+    "snapshot",
+    "zettel",
+    "checklist",
+    "near_duplicates",
+    "warnings"
+  ],
+  "properties": {
+    "receipt_id": {"type": "string"},
+    "receipt_path": {"type": "string"},
+    "action": {"type": "string", "enum": ["mint_zettel"]},
+    "dry_run": {"type": "boolean"},
+    "timestamp": {"type": "string"},
+    "archive_id": {"type": "string"},
+    "authority_mode": {"type": "string", "enum": ["basic"]},
+    "reviewed_by": {"type": "string"},
+    "reviewed_at": {"type": "string"},
+    "source": {"type": "object"},
+    "target": {"type": "object"},
+    "snapshot": {"type": "object"},
+    "zettel": {"type": "object"},
+    "source_refs": {
+      "type": "array",
+      "items": {"type": "object"}
+    },
+    "source_intake": {"type": "object"},
+    "prompt_boundary": {"type": "object"},
+    "edges": {
+      "type": "array",
+      "items": {"type": "object"}
+    },
+    "local_ai_sessions": {
+      "type": "array",
+      "items": {"type": "object"}
+    },
+    "first_read_check": {
+      "type": "object",
+      "required": [
+        "contract",
+        "status",
+        "ready_for_publication",
+        "source_field",
+        "abstract_char_count",
+        "abstract_sha256",
+        "max_chars",
+        "abstract_text_echoed",
+        "body_read_for_check"
+      ],
+      "properties": {
+        "contract": {"type": "string", "const": "wom-kit/explicit-abstract-publication/v0.1"},
+        "status": {
+          "type": "string",
+          "enum": [
+            "ready",
+            "missing",
+            "not_string",
+            "empty",
+            "not_normalized_single_line",
+            "too_long",
+            "private_locator_or_secret_like"
+          ]
+        },
+        "ready_for_publication": {"type": "boolean"},
+        "source_field": {"type": ["string", "null"], "enum": ["frontmatter.abstract", null]},
+        "abstract_char_count": {"type": "integer", "minimum": 0, "maximum": 360},
+        "abstract_sha256": {
+          "type": ["string", "null"],
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "max_chars": {"type": "integer", "const": 360},
+        "abstract_text_echoed": {"type": "boolean", "const": false},
+        "body_read_for_check": {"type": "boolean", "const": false}
+      },
+      "additionalProperties": false
+    },
+    "abstract_review_basis": {
+      "type": "object",
+      "required": [
+        "contract",
+        "review_status",
+        "evidence_kind",
+        "abstract_sha256",
+        "body_sha256",
+        "body_hash_basis",
+        "abstract_text_stored",
+        "body_text_stored"
+      ],
+      "properties": {
+        "contract": {"type": "string", "const": "wom-kit/abstract-review-basis/v0.1"},
+        "review_status": {
+          "type": "string",
+          "enum": ["pending_human_approval", "reviewed_at_publication"]
+        },
+        "evidence_kind": {"type": "string", "enum": ["mint_zettel", "promote_zettel"]},
+        "abstract_sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "body_sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "body_hash_basis": {
+          "type": "string",
+          "const": "decoded_canonical_body_utf8_universal_newlines"
+        },
+        "abstract_text_stored": {"type": "boolean", "const": false},
+        "body_text_stored": {"type": "boolean", "const": false}
+      },
+      "additionalProperties": false
+    },
+    "checklist": {
+      "type": "array",
+      "items": {"type": "object"}
+    },
+    "near_duplicates": {
+      "type": "array",
+      "items": {"type": "object"}
+    },
+    "blockers": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "warnings": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "result": {"type": "object"},
+    "reconcile": {"type": "object"}
+  }
+}

@@ -1,6 +1,6 @@
 # Archive Status Board
 
-Status: v0.3.241 archive state and selective freshness body-read checkpoint
+Status: v0.3.242 installed-wheel resource and archive-state checkpoint
 
 `archive status-board` gives a beginner-facing status summary for one WOM
 archive without making the operator inspect `inbox/`, `zettels/`, mint

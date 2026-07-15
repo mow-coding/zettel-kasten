@@ -338,6 +338,7 @@ from .paths import (
     is_path_within_root,
     resolve_archive_relative_path,
 )
+from .resource_paths import runtime_release_note_path, runtime_resource_root
 from .schema_validator import validate_schema
 
 try:
@@ -347,8 +348,8 @@ except ImportError:  # pragma: no cover - exercised only when dependency is abse
 
 
 KIT_ROOT = Path(__file__).resolve().parents[2]
-TEMPLATES_ROOT = KIT_ROOT / "templates"
-KIT_ZETTEL_KASTEN_ROOT = KIT_ROOT / "zettel-kasten"
+TEMPLATES_ROOT = runtime_resource_root("templates")
+KIT_ZETTEL_KASTEN_ROOT = runtime_resource_root("zettel-kasten")
 ZET_CATALOG_PASS_DEFAULT_MAX_OUTPUT_MIB = 256
 ZET_CATALOG_PASS_MAX_OUTPUT_MIB = 2048
 ZET_CATALOG_PASS_MIB_BYTES = 1024 * 1024
@@ -3993,7 +3994,7 @@ def semver_key_from_tag(tag: str) -> tuple[int, int, int, str] | None:
 
 def release_identity_probe() -> dict[str, Any]:
     current_tag = f"v{__version__}"
-    release_notes = KIT_ROOT / "docs" / "releases" / f"{current_tag}.md"
+    release_notes = runtime_release_note_path(__version__)
     tags = git_version_tags()
     tag_keys = [(tag, semver_key_from_tag(tag)) for tag in tags]
     valid_tags = [(tag, key) for tag, key in tag_keys if key is not None]

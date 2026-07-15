@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WOM-kit derived text record",
+  "type": "object",
+  "required": [
+    "schema",
+    "derived_text_id",
+    "source_object_id",
+    "derivation_kind",
+    "tool_name",
+    "tool_version",
+    "review_status",
+    "text_sha256",
+    "text_logical_key",
+    "provenance"
+  ],
+  "properties": {
+    "schema": {"type": "string"},
+    "derived_text_id": {"type": "string"},
+    "source_object_id": {"type": "string"},
+    "derivation_kind": {"type": "string", "enum": ["parser", "ocr", "asr", "llm_vision"]},
+    "tool_name": {"type": "string"},
+    "tool_version": {"type": "string"},
+    "model_name": {"type": "string"},
+    "model_version": {"type": "string"},
+    "confidence": {"type": "number"},
+    "language": {"type": "string"},
+    "review_status": {"type": "string", "enum": ["unreviewed", "human_corrected"]},
+    "born_digital": {"type": "boolean"},
+    "text_sha256": {"type": "string"},
+    "text_logical_key": {"type": "string"},
+    "mime": {"type": "string"},
+    "size_bytes": {"type": "integer"},
+    "provenance": {
+      "type": "object",
+      "properties": {
+        "source": {"type": "string"},
+        "created_in": {"type": "string"},
+        "captured_at": {"type": "string"},
+        "captured_by": {"type": ["string", "null"]},
+        "source_text_filename": {"type": "string"},
+        "source_text_encoding": {
+          "type": "string",
+          "description": "Optional (v0.3.159+): sniffed source encoding label (utf-8, utf-8-sig, utf-16-le, utf-16-be). text_sha256/derived_text_id are keyed to the STORED normalized UTF-8 bytes; this records what the raw input was."
+        },
+        "source_text_sha256": {
+          "type": "string",
+          "description": "Optional (v0.3.159+): sha256 hex of the RAW source file bytes before transcoding, so the raw input stays reconstructible/auditable."
+        }
+      }
+    }
+  }
+}

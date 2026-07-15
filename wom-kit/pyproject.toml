@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "wom-kit"
-version = "0.3.241"
+version = "0.3.242"
 description = "WOM-kit local-first, AI-native CLI and MCP tooling for zet-centered WOM nodes."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -20,3 +20,16 @@ wom-mcp = "wom_kit.mcp_server:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"wom_kit._resources" = [
+  "resource-manifest.json",
+  "schemas/*.json",
+  "zettel-kasten/*.yml",
+  "templates/*/*",
+  "templates/*/*/*",
+  "templates/*/*/*/*",
+  "templates/*/inbox/.gitkeep",
+  "templates/*/zettels/.gitkeep",
+  "release-notes/*.md",
+]

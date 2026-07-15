@@ -1,0 +1,512 @@
+{
+  "schema": "wom-kit/package-resource-manifest/v0.1",
+  "version": "0.3.242",
+  "source_of_truth": "wom-kit source resource directories",
+  "file_count": 84,
+  "files": [
+    {
+      "source": "schemas/anchor-metadata.schema.json",
+      "packaged": "schemas/anchor-metadata.schema.json",
+      "bytes": 1293,
+      "sha256": "1018b2ce4ab71837749552daacb23306cc53a0bff9dd702fd636e0248989f4d7"
+    },
+    {
+      "source": "schemas/archive-identity-reconcile-receipt.schema.json",
+      "packaged": "schemas/archive-identity-reconcile-receipt.schema.json",
+      "bytes": 2718,
+      "sha256": "1a1a6785371501fbf3d5086fc641bdfd988740b616a7a6ea37a788d740c16492"
+    },
+    {
+      "source": "schemas/archive-identity.schema.json",
+      "packaged": "schemas/archive-identity.schema.json",
+      "bytes": 3059,
+      "sha256": "4d0cbd293c8cf9688c9941423de1239599ef7d55c51287ee80b2079b5a912128"
+    },
+    {
+      "source": "schemas/archive.schema.json",
+      "packaged": "schemas/archive.schema.json",
+      "bytes": 1799,
+      "sha256": "7457ce8b6779ff5c352301c52d5c998dacd73e509728c7034972f8e9c1ee59d2"
+    },
+    {
+      "source": "schemas/attestation-receipt.schema.json",
+      "packaged": "schemas/attestation-receipt.schema.json",
+      "bytes": 1368,
+      "sha256": "2e1e22c5220540d92c2a5b3f1d22361e07134c59494b05ca7a4b7bbb61837021"
+    },
+    {
+      "source": "schemas/credential-adapter-manifest.schema.json",
+      "packaged": "schemas/credential-adapter-manifest.schema.json",
+      "bytes": 4806,
+      "sha256": "f1dd8db6dee428c86c0689ba5e5b76eb1091abbb9cd10dac182993b458995509"
+    },
+    {
+      "source": "schemas/delegate-receipt.schema.json",
+      "packaged": "schemas/delegate-receipt.schema.json",
+      "bytes": 1828,
+      "sha256": "085222d7d25ca2741ace7087256672d03d6ef84d948502bbfeb94fca707d5bc7"
+    },
+    {
+      "source": "schemas/derived-text-capture-manifest-item.schema.json",
+      "packaged": "schemas/derived-text-capture-manifest-item.schema.json",
+      "bytes": 935,
+      "sha256": "99e8a79b9d426b5fcebb75bd903358c633dae45852524a0a78d342b923851cb7"
+    },
+    {
+      "source": "schemas/derived-text-record.schema.json",
+      "packaged": "schemas/derived-text-record.schema.json",
+      "bytes": 1937,
+      "sha256": "ecca6ea1ed9b90fa981524007df0d43b4c7e69cd6d4585ac0d9b137961a84e72"
+    },
+    {
+      "source": "schemas/external-import-receipt.schema.json",
+      "packaged": "schemas/external-import-receipt.schema.json",
+      "bytes": 1227,
+      "sha256": "7859d09c68e1d5416a5e21bc478c5e050944c43474ed1fa7b6e97f0262c3fb04"
+    },
+    {
+      "source": "schemas/imap-mailbox-adapter-manifest.schema.json",
+      "packaged": "schemas/imap-mailbox-adapter-manifest.schema.json",
+      "bytes": 6806,
+      "sha256": "9f1de60c058ae624d4f402aaa9f4f41b9cd13f520488f3a4ed9f02870b30ad2c"
+    },
+    {
+      "source": "schemas/mint-receipt.schema.json",
+      "packaged": "schemas/mint-receipt.schema.json",
+      "bytes": 4083,
+      "sha256": "4dd9e2df19c398443ac37fa4d3ea73a74086871f35aa0fd34e776365fdc299b3"
+    },
+    {
+      "source": "schemas/mint-reconcile-receipt.schema.json",
+      "packaged": "schemas/mint-reconcile-receipt.schema.json",
+      "bytes": 1568,
+      "sha256": "b63f6688cc48ffca510bc09d1238850236ead7710c513172e2334cbc92eff930"
+    },
+    {
+      "source": "schemas/mint-retired-draft-receipt.schema.json",
+      "packaged": "schemas/mint-retired-draft-receipt.schema.json",
+      "bytes": 1786,
+      "sha256": "6794dd32406fe2d91cf0b3647e8e7e7e3792d70361239e24c1364c31c4747f20"
+    },
+    {
+      "source": "schemas/object-manifest-entry.schema.json",
+      "packaged": "schemas/object-manifest-entry.schema.json",
+      "bytes": 743,
+      "sha256": "d88ca89017ec8043a5a71f4a9bfad2e7805998158dbb91c30cd4a0524e9d567f"
+    },
+    {
+      "source": "schemas/object-storage-manifest-reconcile-receipt.schema.json",
+      "packaged": "schemas/object-storage-manifest-reconcile-receipt.schema.json",
+      "bytes": 1656,
+      "sha256": "78a676edb3a370575c85cadaacbe0310a2d4ef4d5ee3d4205ee273f264f297ed"
+    },
+    {
+      "source": "schemas/object-storage-upload-receipt.schema.json",
+      "packaged": "schemas/object-storage-upload-receipt.schema.json",
+      "bytes": 2074,
+      "sha256": "b2cd8e6c2da6df13b7db140c47d598b55faf4e4c8a57cbcddb8623cda7964d74"
+    },
+    {
+      "source": "schemas/operator-feedback-delivery-receipt.schema.json",
+      "packaged": "schemas/operator-feedback-delivery-receipt.schema.json",
+      "bytes": 1113,
+      "sha256": "5a1ff30bbd52526764131dce960edba8062d2c821d10c60de828f2c40bef5587"
+    },
+    {
+      "source": "schemas/operator-feedback-receipt.schema.json",
+      "packaged": "schemas/operator-feedback-receipt.schema.json",
+      "bytes": 827,
+      "sha256": "a27e30e3386d88053a226567419df98cd2cbc0b9d5bb912fad201fee90fd4151"
+    },
+    {
+      "source": "schemas/operator-feedback.schema.json",
+      "packaged": "schemas/operator-feedback.schema.json",
+      "bytes": 1183,
+      "sha256": "8f7e3ba48472a98b39bdb08433bf5ad49da3aff95b82706b1283225ba5cd9371"
+    },
+    {
+      "source": "schemas/ownership-transfer-receipt.schema.json",
+      "packaged": "schemas/ownership-transfer-receipt.schema.json",
+      "bytes": 2058,
+      "sha256": "d099584291588b8231ad22f59650d17ec26d071804c238f0e029db1f81d4c0b3"
+    },
+    {
+      "source": "schemas/project-version-update-receipt.schema.json",
+      "packaged": "schemas/project-version-update-receipt.schema.json",
+      "bytes": 3259,
+      "sha256": "4cdaa8214dfb21adfe4be5308ff8b7b0e302ea1079ad8ce0a716afa2a27608a2"
+    },
+    {
+      "source": "schemas/provider-bindings.schema.json",
+      "packaged": "schemas/provider-bindings.schema.json",
+      "bytes": 1093,
+      "sha256": "50775690d3644cd7983b900f297d3c07d1e6c9b26b424711034424ce04b49353"
+    },
+    {
+      "source": "schemas/restore-drill-receipt.schema.json",
+      "packaged": "schemas/restore-drill-receipt.schema.json",
+      "bytes": 940,
+      "sha256": "83b3616ed4e92d6dd1ae52e8efc5da56515ab6b6c8733107e5f3b046fbf55496"
+    },
+    {
+      "source": "schemas/retire-draft-reconcile-receipt.schema.json",
+      "packaged": "schemas/retire-draft-reconcile-receipt.schema.json",
+      "bytes": 1853,
+      "sha256": "742af1b88cd31b5835699cb479c01adf714192aaf93ef4ab83c6b955bbf61b04"
+    },
+    {
+      "source": "schemas/source-bindings.schema.json",
+      "packaged": "schemas/source-bindings.schema.json",
+      "bytes": 1025,
+      "sha256": "ddd3200653e34ab3e136de4bb144e2f17d7ca08c3a314a81b0729d86d5847621"
+    },
+    {
+      "source": "schemas/source-map-entry.schema.json",
+      "packaged": "schemas/source-map-entry.schema.json",
+      "bytes": 765,
+      "sha256": "04c81da5125f06e8b538064fd8c5e798768590fa2cb421b530a8c810f23a08cc"
+    },
+    {
+      "source": "schemas/source-scan-receipt.schema.json",
+      "packaged": "schemas/source-scan-receipt.schema.json",
+      "bytes": 1202,
+      "sha256": "cd0c029f607387fe40fb9f666d5543b556808983b79a8063628d162bd9185670"
+    },
+    {
+      "source": "schemas/view.schema.json",
+      "packaged": "schemas/view.schema.json",
+      "bytes": 530,
+      "sha256": "cc86702450d32e518e122c8d1f44dd40e963ee3fe747d97b3f14822cb60bd62c"
+    },
+    {
+      "source": "schemas/workpack.schema.json",
+      "packaged": "schemas/workpack.schema.json",
+      "bytes": 818,
+      "sha256": "eecaaabda1fe5803b798be9561aac7e7097b133fdc2fe2d97c0ff65b18f12084"
+    },
+    {
+      "source": "schemas/zet-abstract-backfill-proposal.schema.json",
+      "packaged": "schemas/zet-abstract-backfill-proposal.schema.json",
+      "bytes": 952,
+      "sha256": "b70adadc021a7c8203e6ce4a1c7b467309e1264be38b9bce6f3ff9524e9ad199"
+    },
+    {
+      "source": "schemas/zet-abstract-backfill-receipt.schema.json",
+      "packaged": "schemas/zet-abstract-backfill-receipt.schema.json",
+      "bytes": 3546,
+      "sha256": "9787690268cef571496fa97e6e434d4f612b0c74573ef98e0dfa71ea21908342"
+    },
+    {
+      "source": "schemas/zet-abstract-backfill-revert-receipt.schema.json",
+      "packaged": "schemas/zet-abstract-backfill-revert-receipt.schema.json",
+      "bytes": 4116,
+      "sha256": "d211395a4bc7d76359d0121aa1e83aae4c1b43a07634a61f02fb28c28d3fc8e1"
+    },
+    {
+      "source": "schemas/zet-revision-receipt.schema.json",
+      "packaged": "schemas/zet-revision-receipt.schema.json",
+      "bytes": 7540,
+      "sha256": "76ac159c4af1a4feba620e24acdfc942283397ed1ca998dfa8de0188348a589a"
+    },
+    {
+      "source": "schemas/zet-revision-restore-receipt.schema.json",
+      "packaged": "schemas/zet-revision-restore-receipt.schema.json",
+      "bytes": 7391,
+      "sha256": "569dfafe8d38df1ad369291e310c8e53ab8fe891c6cd33251935d79b32df033d"
+    },
+    {
+      "source": "schemas/zettel-frontmatter.schema.json",
+      "packaged": "schemas/zettel-frontmatter.schema.json",
+      "bytes": 4322,
+      "sha256": "d7bcd4f3a5c47197f025c13b92b14821b966c092d4e5ee3a5b54ca4648c1f273"
+    },
+    {
+      "source": "schemas/zettel-kasten-actions.schema.json",
+      "packaged": "schemas/zettel-kasten-actions.schema.json",
+      "bytes": 882,
+      "sha256": "181532bd48ff0340edbe60054c088b185c4ecc79129bfb0053a9f567e9cd6523"
+    },
+    {
+      "source": "schemas/zettel-kasten-policies.schema.json",
+      "packaged": "schemas/zettel-kasten-policies.schema.json",
+      "bytes": 952,
+      "sha256": "a88e542ba2e6fee6c0cb8e01688e4bc0e64450e420a1967d4fcab9652cf329a0"
+    },
+    {
+      "source": "schemas/zettel-kasten-types.schema.json",
+      "packaged": "schemas/zettel-kasten-types.schema.json",
+      "bytes": 582,
+      "sha256": "acfebea307e43b186e0879dd294bcd957bd9813c1cef74b70b5c96e019b1a84b"
+    },
+    {
+      "source": "schemas/zettel-rules.schema.json",
+      "packaged": "schemas/zettel-rules.schema.json",
+      "bytes": 859,
+      "sha256": "282866fdc4b5d727f8d0eec6da776a1116c4ae9c2ce6cc748f7202385e9c4641"
+    },
+    {
+      "source": "templates/ai-runtime/wom-archive/SKILL.md",
+      "packaged": "templates/ai-runtime/wom-archive/SKILL.md",
+      "bytes": 47377,
+      "sha256": "92767130794024be403a31428237c1f49b3bf4e736af33a2f0116849b1e2105e"
+    },
+    {
+      "source": "templates/company/AGENTS.md",
+      "packaged": "templates/company/AGENTS.md",
+      "bytes": 6312,
+      "sha256": "1c2780edf6648fdde56bc0015070fdc3331de1a90bf4ec5acefbbfa0c0270e5f"
+    },
+    {
+      "source": "templates/company/archive-identity.yml",
+      "packaged": "templates/company/archive-identity.yml",
+      "bytes": 843,
+      "sha256": "249aeaf059ae862a549846ca76842c8fdc4f6e17a9078aa9f160b073aefa614e"
+    },
+    {
+      "source": "templates/company/archive.yml",
+      "packaged": "templates/company/archive.yml",
+      "bytes": 606,
+      "sha256": "9a0d4a775c6fbbd92116ce52c756d0da915969e25e8f0f19f863a55eac1417f7"
+    },
+    {
+      "source": "templates/company/db/schema.sql",
+      "packaged": "templates/company/db/schema.sql",
+      "bytes": 2041,
+      "sha256": "0efd69399c493fa54249746c3932770da8e86e8acc3ffaf6bffef1be1e2ad110"
+    },
+    {
+      "source": "templates/company/inbox/.gitkeep",
+      "packaged": "templates/company/inbox/.gitkeep",
+      "bytes": 1,
+      "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "source": "templates/company/objects/manifests/derived-text.jsonl",
+      "packaged": "templates/company/objects/manifests/derived-text.jsonl",
+      "bytes": 1,
+      "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "source": "templates/company/objects/manifests/files.jsonl",
+      "packaged": "templates/company/objects/manifests/files.jsonl",
+      "bytes": 1,
+      "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "source": "templates/company/ownership-transfer-examples/business-unit-spinout-preview.yml",
+      "packaged": "templates/company/ownership-transfer-examples/business-unit-spinout-preview.yml",
+      "bytes": 1455,
+      "sha256": "96cb28bcb10e3ccc31ce42c520ef33d994ca97a953f7fa89baa60a24a2d6cf12"
+    },
+    {
+      "source": "templates/company/provider-bindings.yml",
+      "packaged": "templates/company/provider-bindings.yml",
+      "bytes": 2900,
+      "sha256": "4b3b736b694d1ab5fa6b6dbb6503c95f6c03a27795b42a704a9f77cd5936c96c"
+    },
+    {
+      "source": "templates/company/source-bindings.yml",
+      "packaged": "templates/company/source-bindings.yml",
+      "bytes": 975,
+      "sha256": "ee0ae80f7541357999f082a826868ce77cd31b342fa71839de1281cdb2a502f0"
+    },
+    {
+      "source": "templates/company/views/homebase.yml",
+      "packaged": "templates/company/views/homebase.yml",
+      "bytes": 626,
+      "sha256": "d751e92d9e2dcf08d64e5fd483f727774faeb33e171ff61a37d75e3ed42873ca"
+    },
+    {
+      "source": "templates/company/zettels/.gitkeep",
+      "packaged": "templates/company/zettels/.gitkeep",
+      "bytes": 1,
+      "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "source": "templates/family/AGENTS.md",
+      "packaged": "templates/family/AGENTS.md",
+      "bytes": 6452,
+      "sha256": "e28b32706850f4acf5a37da13c20337df6d8cc5b6f3bc4195106445d6a64e178"
+    },
+    {
+      "source": "templates/family/archive-identity.yml",
+      "packaged": "templates/family/archive-identity.yml",
+      "bytes": 1187,
+      "sha256": "6b7cff7d9006ba4b2ad1a1d04a474b4e4ae95e5dd40578b7e1fbb212318fe1f5"
+    },
+    {
+      "source": "templates/family/archive.yml",
+      "packaged": "templates/family/archive.yml",
+      "bytes": 808,
+      "sha256": "840864d7c1d4068146bf86620900ab3ed1cf15086f261d9cce393b328cb6d67a"
+    },
+    {
+      "source": "templates/family/db/schema.sql",
+      "packaged": "templates/family/db/schema.sql",
+      "bytes": 2041,
+      "sha256": "0efd69399c493fa54249746c3932770da8e86e8acc3ffaf6bffef1be1e2ad110"
+    },
+    {
+      "source": "templates/family/inbox/.gitkeep",
+      "packaged": "templates/family/inbox/.gitkeep",
+      "bytes": 1,
+      "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "source": "templates/family/objects/manifests/derived-text.jsonl",
+      "packaged": "templates/family/objects/manifests/derived-text.jsonl",
+      "bytes": 1,
+      "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "source": "templates/family/objects/manifests/files.jsonl",
+      "packaged": "templates/family/objects/manifests/files.jsonl",
+      "bytes": 1,
+      "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "source": "templates/family/ownership-transfer-examples/child-transfer-preview.yml",
+      "packaged": "templates/family/ownership-transfer-examples/child-transfer-preview.yml",
+      "bytes": 1194,
+      "sha256": "e55d38659ec1c6a91a7106985311cace2c41609f3cb20f2565d66c4d6a36ce24"
+    },
+    {
+      "source": "templates/family/provider-bindings.yml",
+      "packaged": "templates/family/provider-bindings.yml",
+      "bytes": 2891,
+      "sha256": "1889831705c4d6bfbbf36a9f712cf7dcbd134b62c1e22f12f5c54cb7ccef3317"
+    },
+    {
+      "source": "templates/family/source-bindings.yml",
+      "packaged": "templates/family/source-bindings.yml",
+      "bytes": 980,
+      "sha256": "00aa471c671e01922f1440b362f82c4bf25e1f7a636afc76e4eedc879475e857"
+    },
+    {
+      "source": "templates/family/views/homebase.yml",
+      "packaged": "templates/family/views/homebase.yml",
+      "bytes": 603,
+      "sha256": "37a735feb34e2115fe0812bcb2b2cc57e75b0843c1eb406118c184f092c19bca"
+    },
+    {
+      "source": "templates/family/zettels/.gitkeep",
+      "packaged": "templates/family/zettels/.gitkeep",
+      "bytes": 1,
+      "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "source": "templates/personal/AGENTS.md",
+      "packaged": "templates/personal/AGENTS.md",
+      "bytes": 6421,
+      "sha256": "86100608b9e455fa53cb0cd845d04971b8303985063576de7e3c60243a7f31b6"
+    },
+    {
+      "source": "templates/personal/archive-identity.yml",
+      "packaged": "templates/personal/archive-identity.yml",
+      "bytes": 839,
+      "sha256": "ed2bc2c374c526b5578999708968a8b2425e902105839f53c6cbc5ddb04a12be"
+    },
+    {
+      "source": "templates/personal/archive.yml",
+      "packaged": "templates/personal/archive.yml",
+      "bytes": 606,
+      "sha256": "eab189feb0f37738de7a38c5242821570142d1ac45593298d1296f44a85719d8"
+    },
+    {
+      "source": "templates/personal/db/schema.sql",
+      "packaged": "templates/personal/db/schema.sql",
+      "bytes": 2041,
+      "sha256": "0efd69399c493fa54249746c3932770da8e86e8acc3ffaf6bffef1be1e2ad110"
+    },
+    {
+      "source": "templates/personal/inbox/.gitkeep",
+      "packaged": "templates/personal/inbox/.gitkeep",
+      "bytes": 1,
+      "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "source": "templates/personal/objects/manifests/derived-text.jsonl",
+      "packaged": "templates/personal/objects/manifests/derived-text.jsonl",
+      "bytes": 1,
+      "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "source": "templates/personal/objects/manifests/files.jsonl",
+      "packaged": "templates/personal/objects/manifests/files.jsonl",
+      "bytes": 1,
+      "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "source": "templates/personal/provider-bindings.yml",
+      "packaged": "templates/personal/provider-bindings.yml",
+      "bytes": 2843,
+      "sha256": "895f5cf01a83f37c5b419e02e154703bcaa31ed9bb2f944e7de61f585e1af550"
+    },
+    {
+      "source": "templates/personal/source-bindings.yml",
+      "packaged": "templates/personal/source-bindings.yml",
+      "bytes": 995,
+      "sha256": "84581353c4799f719e7a36d269bc7d8f7a7e4aa80c63fe50ae09f151f5ae32c4"
+    },
+    {
+      "source": "templates/personal/views/homebase.yml",
+      "packaged": "templates/personal/views/homebase.yml",
+      "bytes": 595,
+      "sha256": "ee14326ae5357abe44045dbe59955ef8355594fa9d9b660c9f43f76f95fd904a"
+    },
+    {
+      "source": "templates/personal/zettels/.gitkeep",
+      "packaged": "templates/personal/zettels/.gitkeep",
+      "bytes": 1,
+      "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "source": "templates/pilot/personal-life-source-plan.yml",
+      "packaged": "templates/pilot/personal-life-source-plan.yml",
+      "bytes": 1327,
+      "sha256": "7169299f114b8a0efc9de7d970eb60e7e45c652a5341c762c9489105f44fd8f9"
+    },
+    {
+      "source": "templates/pilot/team-source-plan.yml",
+      "packaged": "templates/pilot/team-source-plan.yml",
+      "bytes": 1127,
+      "sha256": "327cf2b3d5aa03b88dc53ea9adc155a3a48b9f4ff1a0c703a5d35ea533c52f04"
+    },
+    {
+      "source": "templates/profiles/wom-profiles.example.yml",
+      "packaged": "templates/profiles/wom-profiles.example.yml",
+      "bytes": 1713,
+      "sha256": "3d982ac6a9c4256eb89e07b49ff11903657dafbeb508c82adc58041ae34d4f06"
+    },
+    {
+      "source": "zettel-kasten/actions.yml",
+      "packaged": "zettel-kasten/actions.yml",
+      "bytes": 14016,
+      "sha256": "0a2aded34342331c311103e6a398cb896b9ceb79db73ec8d9f6a86217cce1272"
+    },
+    {
+      "source": "zettel-kasten/policies.yml",
+      "packaged": "zettel-kasten/policies.yml",
+      "bytes": 10574,
+      "sha256": "f7214fef10605e72e01f349d72d6c4c19095407ddd9a74df4b86511be46ca49a"
+    },
+    {
+      "source": "zettel-kasten/types.yml",
+      "packaged": "zettel-kasten/types.yml",
+      "bytes": 15129,
+      "sha256": "2c6acb7b5eaa7c26c0811f7f019f578bcc502b30a36ad83a17022984eb2e49cf"
+    },
+    {
+      "source": "zettel-kasten/zettel-rules.yml",
+      "packaged": "zettel-kasten/zettel-rules.yml",
+      "bytes": 6429,
+      "sha256": "d619dc26af3216498c8392dfe838b0fe752d4bad9da998a58ca682d668fc510c"
+    },
+    {
+      "source": "docs/releases/v0.3.242.md",
+      "packaged": "release-notes/v0.3.242.md",
+      "bytes": 2510,
+      "sha256": "8163dbeba3b1c4806a1400f45d7a903841fee1ffb31c9b02b2004f105189f575"
+    }
+  ]
+}

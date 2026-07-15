@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WOM-kit view",
+  "type": "object",
+  "required": ["id", "name", "for", "filters", "include", "context_policy"],
+  "properties": {
+    "id": {"type": "string"},
+    "name": {"type": "string"},
+    "for": {"type": "string", "enum": ["ai_context", "export", "workpack"]},
+    "filters": {"type": "object"},
+    "include": {"type": "object"},
+    "sort": {"type": "array"},
+    "context_policy": {"type": "object"},
+    "saved_views": {"type": "array"}
+  }
+}

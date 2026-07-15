@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WOM-kit provider bindings",
+  "type": "object",
+  "required": ["version", "archive_id", "bindings"],
+  "properties": {
+    "version": {"type": "string", "enum": ["provider-bindings/v0.1"]},
+    "archive_id": {"type": "string"},
+    "bindings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["binding_id", "provider", "enabled", "purpose", "resource", "auth", "owner_mapping"],
+        "properties": {
+          "binding_id": {"type": "string"},
+          "provider": {
+            "type": "string",
+            "enum": ["github", "object_storage", "cloudflare_r2", "backblaze_b2", "neon", "external_ssd", "rclone", "restic", "keepassxc"]
+          },
+          "provider_kind": {"type": "string"},
+          "enabled": {"type": "boolean"},
+          "purpose": {"type": "string"},
+          "resource": {"type": "object"},
+          "auth": {"type": "object"},
+          "owner_mapping": {"type": "object"},
+          "notes": {"type": "string"}
+        }
+      }
+    }
+  }
+}

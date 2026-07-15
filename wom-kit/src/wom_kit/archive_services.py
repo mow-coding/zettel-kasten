@@ -41,6 +41,7 @@ from .paths import (
     normalize_archive_relative_path,
     resolve_archive_relative_path,
 )
+from .resource_paths import runtime_resource_root
 from .schema_validator import validate_schema
 
 try:
@@ -252,6 +253,7 @@ DERIVED_TEXT_TOOLCHAIN_DOCTOR_FAMILIES = (
     },
 )
 KIT_ROOT = Path(__file__).resolve().parents[2]
+KIT_ZETTEL_KASTEN_ROOT = runtime_resource_root("zettel-kasten")
 WORKPACK_MODES = {"reference", "copy", "mount", "derive", "handover", "return"}
 ARCHIVE_SCOPES = {"personal", "relationship", "family", "child", "project", "company", "business_unit"}
 OWNER_KINDS = {
@@ -22131,7 +22133,7 @@ def retire_draft_batch(
 def load_zettel_rules(archive_root: Path) -> dict[str, Any]:
     for path in [
         archive_internal_path(archive_root, "zettel-kasten/zettel-rules.yml"),
-        KIT_ROOT / "zettel-kasten" / "zettel-rules.yml",
+        KIT_ZETTEL_KASTEN_ROOT / "zettel-rules.yml",
     ]:
         if path.is_file():
             data = load_yaml(path.read_text(encoding="utf-8"))
@@ -22142,7 +22144,7 @@ def load_zettel_rules(archive_root: Path) -> dict[str, Any]:
 def load_allowed_link_types(archive_root: Path) -> set[str]:
     for path in [
         archive_internal_path(archive_root, "zettel-kasten/types.yml"),
-        KIT_ROOT / "zettel-kasten" / "types.yml",
+        KIT_ZETTEL_KASTEN_ROOT / "types.yml",
     ]:
         if not path.is_file():
             continue
@@ -76991,7 +76993,7 @@ def migrate_link_types_v03(
         raise ArchiveServiceError("zettel-kasten/types.yml is missing; initialize or restore archive type metadata first.")
 
     archive_types = load_yaml(types_path.read_text(encoding="utf-8"))
-    base_types = load_yaml((KIT_ROOT / "zettel-kasten" / "types.yml").read_text(encoding="utf-8"))
+    base_types = load_yaml((KIT_ZETTEL_KASTEN_ROOT / "types.yml").read_text(encoding="utf-8"))
     if not isinstance(archive_types, dict) or not isinstance(archive_types.get("link_types"), list):
         raise ArchiveServiceError("zettel-kasten/types.yml must be a YAML object with link_types.")
     if not isinstance(base_types, dict) or not isinstance(base_types.get("link_types"), list):
@@ -77194,7 +77196,7 @@ def sync_base_link_types(
 
     original_text = types_path.read_text(encoding="utf-8")
     archive_types = load_yaml(original_text)
-    base_types = load_yaml((KIT_ROOT / "zettel-kasten" / "types.yml").read_text(encoding="utf-8"))
+    base_types = load_yaml((KIT_ZETTEL_KASTEN_ROOT / "types.yml").read_text(encoding="utf-8"))
     if not isinstance(archive_types, dict) or not isinstance(archive_types.get("link_types"), list):
         raise ArchiveServiceError("zettel-kasten/types.yml must be a YAML object with link_types.")
     if not isinstance(base_types, dict) or not isinstance(base_types.get("link_types"), list):
@@ -77378,7 +77380,7 @@ def migrate_link_types_v03_revert(
         raise ArchiveServiceError("zettel-kasten/types.yml is missing; initialize or restore archive type metadata first.")
 
     archive_types = load_yaml(types_path.read_text(encoding="utf-8"))
-    base_types = load_yaml((KIT_ROOT / "zettel-kasten" / "types.yml").read_text(encoding="utf-8"))
+    base_types = load_yaml((KIT_ZETTEL_KASTEN_ROOT / "types.yml").read_text(encoding="utf-8"))
     if not isinstance(archive_types, dict) or not isinstance(archive_types.get("link_types"), list):
         raise ArchiveServiceError("zettel-kasten/types.yml must be a YAML object with link_types.")
     if not isinstance(base_types, dict) or not isinstance(base_types.get("link_types"), list):

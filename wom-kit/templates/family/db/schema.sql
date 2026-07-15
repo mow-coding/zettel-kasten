@@ -90,4 +90,3 @@ CREATE TABLE IF NOT EXISTS workpacks (
   expires_at TEXT,
   provenance_json TEXT
 );
-

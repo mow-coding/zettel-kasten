@@ -1,0 +1,55 @@
+# Example only. This is not an executed receipt.
+scenario: company_to_business_unit_spinout_ownership_transfer
+before:
+  archive_id: archive:business-unit:template-unit
+  owner_id: company:template
+  owner_kind: company
+  operators:
+    - role:business-unit-admin
+    - person:founder
+  subject: business_unit:template-unit
+after:
+  owner_id: company:template-spinout
+  owner_kind: company
+  operators:
+    - role:spinout-admin
+    - person:founder
+lineage:
+  event: exit
+  exited_from: archive:company:template
+  continuing_archive: archive:business-unit:template-unit
+required_gates:
+  scope_gate:
+    unit: archive_ownership
+    manifest: archive-identity.yml
+    record_transfer: false
+  trust_gate:
+    counterparty_id: company:template-spinout
+    counterparty_fingerprint: SHA256:template-spinout-primary
+  ownership_gate:
+    approval_actors:
+      - role:company-admin
+    receipt_required_for_transfer: true
+example_command:
+  - archive
+  - transfer-ownership
+  - <business-unit-archive>
+  - --new-owner
+  - company:template-spinout
+  - --new-owner-kind
+  - company
+  - --operator-after
+  - role:spinout-admin
+  - --operator-after
+  - person:founder
+  - --approved-by
+  - role:company-admin
+  - --counterparty-id
+  - company:template-spinout
+  - --counterparty-fingerprint
+  - SHA256:template-spinout-primary
+  - --reason
+  - business_unit_spinout
+  - --dry-run
+expected_receipt_action: transfer_archive_ownership
+real_transfer_available: false

@@ -1,0 +1,22 @@
+archive_id: archive:personal:template
+name: Personal Archive Template
+type: personal
+principal:
+  principal_id: person:template
+  display_name: Template Person
+  kind: person
+root_policy:
+  canonical_zettels: zettels/
+  ai_inbox: inbox/
+  views: views/
+  object_manifest: objects/manifests/files.jsonl
+  derived_text_manifest: objects/manifests/derived-text.jsonl
+  sqlite_schema: db/schema.sql
+ai_write_policy:
+  default: inbox_only
+  canonical_requires: human_minting
+storage_policy:
+  object_identity: sha256
+  provider_urls_in_zettels: forbidden
+  locations_live_in_manifest: true
+mounted_archives: []
