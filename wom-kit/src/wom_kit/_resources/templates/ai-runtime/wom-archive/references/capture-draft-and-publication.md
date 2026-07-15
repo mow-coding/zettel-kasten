@@ -24,6 +24,13 @@ Keep source text, OCR output, parser diagnostics, confidence, and human
 corrections distinguishable. Working metadata must not silently become
 canonical prose.
 
+Before drafting, revising, or linking records, preserve the artifact's time and
+provenance. A matching name or label is not permission to reuse an identity,
+merge two records, or erase a contradiction. A canonical zet is the current
+human-reviewed archive state, not an objective-truth certificate. Use the
+reviewed revision path when the current state changes so earlier evidence and
+the chronology remain auditable.
+
 ## Create A Draft Through The Command Surface
 
 Use the validated source and prompt-boundary reports:

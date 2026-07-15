@@ -58,6 +58,13 @@ token-budget contract.
 
 - Keep canonical zet text and objet bytes local. GitHub, object storage, and an
   external database are backup surfaces, not the live source of truth.
+- Treat durable, time-situated artifacts and their chronology as primary
+  evidence. `canonical` means the current human-reviewed archive state, not a
+  certificate of objective or timeless truth.
+- Matching names or labels never authorize a silent identity merge. Treat
+  nodes, ties, edges, indexes, embeddings, and graph projections as reviewable
+  claims, reading routes, or regenerable aids; preserve contradictions and
+  changed meanings with their provenance for human review.
 - Prefer read-only inspection and `--dry-run`. A successful preview is not
   approval to write.
 - Before a write, show the human what will change, where it will change, and

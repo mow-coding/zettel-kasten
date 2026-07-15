@@ -6,6 +6,29 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.247 - 2026-07-15
+
+Runtime artifact-primacy checkpoint. Operator guidance and regression coverage
+only; no archive migration or new write authority.
+
+- **The doctrine now reaches the AI that operates the archive.** The installed
+  Agent Skill, focused reading and capture references, complete operator
+  contract, and personal/company/family `AGENTS.md` templates all carry the
+  same artifact-first boundary.
+- **Canonical no longer implies truth in runtime instructions.** AI operators
+  are told that canonical means the current human-reviewed archive state, not
+  objective or timeless truth.
+- **Labels cannot silently collapse identity.** Repeated names are reading
+  clues rather than merge authority; identity and relationship interpretations
+  remain bounded inferences tied to artifact, time, scope, and provenance.
+- **Graphs stay subordinate while people remain allowed to change.** Ties,
+  edges, indexes, embeddings, and graph projections may order reading, but
+  contradictions, corrections, repetition, and changed meanings remain
+  reviewable chronology.
+- **Release checks enforce the runtime contract.** Focused tests and the
+  runtime-skill package validator now fail if the no-silent-merge or
+  canonical-is-not-objective-truth guidance disappears.
+
 ## v0.3.246 - 2026-07-15
 
 Artifact primacy and human drift checkpoint. Public philosophy, blueprint, and
