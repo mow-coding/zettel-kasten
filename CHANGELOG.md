@@ -6,6 +6,36 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.244 - 2026-07-15
+
+Approval-gated Agent Skill host lifecycle checkpoint. Additive local tool
+configuration behavior; no archive migration or automatic post-install write.
+
+- **Host activation has a real command surface.** `runtime-skill-status`,
+  `runtime-skill-install`, and `runtime-skill-uninstall` cover read-only status,
+  first install, managed update, and verified removal.
+- **Codex paths follow the current standard.** User scope resolves to
+  `$HOME/.agents/skills`; repository scope requires an explicit existing repo
+  and resolves to its `.agents/skills`. Other hosts require one explicit custom
+  root instead of a guessed path.
+- **Approval is exact and replay-resistant.** A dry-run binds the hashed target
+  location, packaged source, target state, package version, and prior ownership
+  manifest. Approval requires that digest plus a safe reviewer id and
+  revalidates under an exclusive lock.
+- **Human files win.** WOM-kit writes a path-free, self-checking file/hash
+  ownership manifest, then updates or removes only when every managed byte and
+  the manifest itself still match.
+  Unmanaged, invalid, symlinked, or edited targets fail closed.
+- **Transactions stay outside active discovery.** Installs use private staging;
+  managed updates move the old verified package outside the active skills
+  directory; uninstalls do the same before deletion; final state is rechecked.
+- **The wheel proves the whole lifecycle.** Clean-install verification now uses
+  the installed `archive` command to preview, install, verify, and remove the
+  skill in a disposable host directory before onboarding and strict Doctor.
+- **The boundary stays narrow.** Wheel installation alone still writes no host
+  configuration; no MCP write tool, archive read/write, provider/network/model/
+  database/credential call, generated graph, or index is added.
+
 ## v0.3.243 - 2026-07-15
 
 Progressive AI runtime skill checkpoint. Additive package and documentation

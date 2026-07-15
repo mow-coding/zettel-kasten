@@ -1,6 +1,6 @@
 # WOM Archive Agent Skill And Progressive Disclosure
 
-Status: v0.3.243 packaged and release-gated skill baseline
+Status: v0.3.244 packaged skill and approval-gated host lifecycle
 
 ## Purpose
 
@@ -41,6 +41,10 @@ The five focused references cover ordinary task families. The preserved
 `operator-contract.md` contains the complete previous runtime contract so an
 exact advanced command, historical boundary, or narrow trust-stage rule is not
 lost during the split.
+
+Since v0.3.244, a separate CLI lifecycle can preview, install, inspect, update,
+and uninstall this package in one explicitly selected AI-host skill directory.
+It does not run as a side effect of installing the Python wheel.
 
 ## AI Reading Contract
 
@@ -102,17 +106,26 @@ The skill is operational guidance, not archive memory authority.
   byte backup, and an external database remains a regenerable map backup or
   replica.
 - Installing the Python tool does not discover, read, create, or modify a user
-  archive.
-- v0.3.243 does not write Codex, Claude, or another host's skill/configuration
-  directory. Safe host installation needs its own preview, approval, manifest,
-  conflict, update, and uninstall contract.
+  archive, and it does not silently write an AI host's configuration.
+- The v0.3.244 host lifecycle is a separate local CLI action. Status and
+  `--dry-run` are read-only; a write requires the exact preview SHA-256 and a
+  safe reviewer identifier. A path-free ownership manifest binds every managed
+  file, and a conflicting, symlinked, invalid, or human-edited directory fails
+  closed rather than being adopted, overwritten, or removed.
+- The default Codex user target is `$HOME/.agents/skills/wom-archive`.
+  Repository scope requires an explicit repository and uses
+  `<repo>/.agents/skills/wom-archive`; other hosts use an explicit custom skill
+  root. Local paths remain redacted by default.
+- Host activation changes only AI instruction discovery. It does not authorize
+  an archive write, read source bodies, call a provider, or make a generated
+  graph or index canonical.
 
 ## Deliberately Not Claimed
 
 This checkpoint does not claim:
 
 - PyPI publication or availability of `pip install wom-kit`;
-- automatic host skill installation or updates;
+- silent or automatic host skill installation or updates;
 - generated graph authority;
 - automatic semantic truth checking;
 - permission for an MCP inspection tool to perform a CLI write;

@@ -33,10 +33,10 @@ wom-kit/docs/releases/ - do not re-grow baseline ladders or tag lists here.
 Current public baseline:
 
 ```text
-v0.3.243 pre-release
+v0.3.244 pre-release
 ```
 
-Previous public baseline: v0.3.242 pre-release.
+Previous public baseline: v0.3.243 pre-release.
 
 Full release history: see [CHANGELOG.md](CHANGELOG.md) and [wom-kit/docs/releases/](wom-kit/docs/releases/).
 
@@ -110,7 +110,8 @@ approval-gated write, or docs-only), see the
 
 ### AI-operator contracts & runtime handoff
 
-- a standards-compatible `wom-archive` Agent Skill package with a 97-line first-read `SKILL.md`, five focused task references, one preserved complete operator contract, and a release-gated validator for metadata, link/path safety, discovery, context budgets, and non-negotiable approval/privacy phrases; AI operators load only the reference needed for the current goal, while local reviewed WOM records remain canonical and automatic host installation remains a separate future boundary,
+- a CLI-only local Agent Skill host lifecycle: read-only `runtime-skill-status`, digest-bound `runtime-skill-install --dry-run|--approve`, and manifest-verified `runtime-skill-uninstall --dry-run|--approve` use current Codex user/repository `.agents/skills` locations or one explicit custom root, redact paths by default, require a reviewer plus the exact preview digest before writes, and never overwrite or remove unmanaged/human-edited skill directories; Python installation itself still writes no host configuration and no MCP write surface is added,
+- a standards-compatible `wom-archive` Agent Skill package with a 97-line first-read `SKILL.md`, five focused task references, one preserved complete operator contract, and a release-gated validator for metadata, link/path safety, discovery, context budgets, and non-negotiable approval/privacy phrases; AI operators load only the reference needed for the current goal, while local reviewed WOM records remain canonical and silent/automatic host installation remains forbidden,
 - read-only WOM-kit version truth-source checks through `archive --version`, `archive version --format json`, parent project installed-version pin discovery from archive roots, and runtime-context version metadata, plus approval-gated `project-version-update` for an atomic configured-origin fetch, verified exact-tag detached checkout, recognized pin alignment, rollback, receipt, and mandatory new-process verification without touching archive knowledge,
 - read-only `archive capabilities --machine` for AI operators that need a stable `ok/state/summary/data/blockers/warnings` envelope listing the executable local CLI commands, aliases, required positionals, options, nested subcommands, and local release identity without calling GitHub or providers,
 - read-only `archive operator-feedback-plan --dry-run` and approval-gated `archive operator-feedback-record --approve` for tracking operator-generated tool feedback under `ops/feedback/` with draft/delivered/acknowledged/resolved/archived lifecycle metadata, plus read-only `archive operator-feedback-ledger --dry-run` (aliases `feedback-ledger`, `feedback-board`) that aggregates delivery-status counts + a pending list and approval-gated `archive operator-feedback-mark-delivered --approve` that batches the draft->delivered boundary with a `delivered_at` stamp and a single receipt, all without reading feedback bodies, echoing feedback refs/titles, submitting externally (metadata only; `delivered` is the operator's own mark, not proof of external delivery), or mixing feedback lifecycle state into user knowledge `objets/`,
@@ -464,7 +465,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
-v0.3.243 (current checkpoint)
+v0.3.244 (current checkpoint)
 ```
 
 Public releases from `v0.2.5` onward are tagged as compatibility checkpoints.

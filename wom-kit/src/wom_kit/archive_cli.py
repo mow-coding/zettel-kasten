@@ -4,6 +4,12 @@
 Commands:
   version
           Print the running WOM-kit version and optional project pin status.
+  runtime-skill-status
+          Inspect the packaged WOM archive Agent Skill installation without writes.
+  runtime-skill-install
+          Preview or approve a manifest-bound Codex/custom Agent Skill install or update.
+  runtime-skill-uninstall
+          Preview or approve removal of an unchanged WOM-kit-managed Agent Skill.
   project-version-update
           Preview or approve one verified project source-mirror and version-pin update.
   zet-catalog-pass
@@ -330,7 +336,7 @@ from datetime import date, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterable
 
-from . import __version__, archive_services
+from . import __version__, archive_services, runtime_skill_install
 from .paths import (
     ArchivePathError,
     archive_relative_path,
@@ -3926,6 +3932,86 @@ def command_version(args: argparse.Namespace) -> int:
             for warning in result["warnings"]:
                 print(f"- {warning}")
     return 0 if result.get("ok", True) else 1
+
+
+def print_runtime_skill_result_text(result: dict[str, object]) -> None:
+    print(f"WOM archive Agent Skill: {result.get('status') or 'unknown'}")
+    target = result.get("target") if isinstance(result.get("target"), dict) else {}
+    installation = (
+        result.get("installation") if isinstance(result.get("installation"), dict) else {}
+    )
+    source = result.get("source_package") if isinstance(result.get("source_package"), dict) else {}
+    print(f"Host/scope: {target.get('host') or '-'} / {target.get('scope') or '-'}")
+    print(f"Target: {target.get('path') or target.get('path_hint') or 'redacted'}")
+    if installation:
+        print(f"Installation state: {installation.get('state') or '-'}")
+        print(f"Installed version: {installation.get('installed_version') or '-'}")
+    if source:
+        print(f"Packaged version: {source.get('package_version') or '-'}")
+        print(f"Packaged files: {source.get('file_count') or 0}")
+    if result.get("operation_plan_sha256"):
+        print(f"Plan SHA-256: {result['operation_plan_sha256']}")
+    print(f"Would write: {str(bool(result.get('would_write'))).lower()}")
+    if result.get("blockers"):
+        print("Blockers:")
+        for blocker in result["blockers"]:
+            print(f"- {blocker}")
+    if result.get("warnings"):
+        print("Warnings:")
+        for warning in result["warnings"]:
+            print(f"- {warning}")
+    print("Next safe actions:")
+    for action in result.get("next_safe_actions", []):
+        print(f"- {action}")
+
+
+def runtime_skill_target_kwargs(args: argparse.Namespace) -> dict[str, object]:
+    return {
+        "host": args.host,
+        "scope": args.scope,
+        "repo_root": Path(args.repo_root) if args.repo_root else None,
+        "skills_root": Path(args.skills_root) if args.skills_root else None,
+        "redact_local_paths": args.redact_local_paths,
+    }
+
+
+def command_runtime_skill_status(args: argparse.Namespace) -> int:
+    result = runtime_skill_install.runtime_skill_status(**runtime_skill_target_kwargs(args))
+    if args.format == "json":
+        print_json(result)
+    else:
+        print_runtime_skill_result_text(result)
+    return 0 if result.get("ok") else 1
+
+
+def command_runtime_skill_install(args: argparse.Namespace) -> int:
+    result = runtime_skill_install.runtime_skill_install(
+        dry_run=bool(args.dry_run),
+        approve=bool(args.approve),
+        reviewed_by=args.reviewed_by,
+        expected_plan_sha256=args.expected_plan_sha256,
+        **runtime_skill_target_kwargs(args),
+    )
+    if args.format == "json":
+        print_json(result)
+    else:
+        print_runtime_skill_result_text(result)
+    return 0 if result.get("ok") else 1
+
+
+def command_runtime_skill_uninstall(args: argparse.Namespace) -> int:
+    result = runtime_skill_install.runtime_skill_uninstall(
+        dry_run=bool(args.dry_run),
+        approve=bool(args.approve),
+        reviewed_by=args.reviewed_by,
+        expected_plan_sha256=args.expected_plan_sha256,
+        **runtime_skill_target_kwargs(args),
+    )
+    if args.format == "json":
+        print_json(result)
+    else:
+        print_runtime_skill_result_text(result)
+    return 0 if result.get("ok") else 1
 
 
 def command_project_version_update(args: argparse.Namespace) -> int:
@@ -16518,6 +16604,37 @@ def read_body_arg(args: argparse.Namespace) -> str:
     return args.body
 
 
+def add_runtime_skill_target_arguments(command: argparse.ArgumentParser) -> None:
+    command.add_argument(
+        "--host",
+        choices=["codex", "custom"],
+        default="codex",
+        help="AI host contract. Codex uses the current official .agents/skills locations.",
+    )
+    command.add_argument(
+        "--scope",
+        choices=["user", "repo", "custom"],
+        default="user",
+        help="Install scope. Defaults to the Codex user scope at HOME/.agents/skills.",
+    )
+    command.add_argument(
+        "--repo-root",
+        help="Existing repository root required only for --host codex --scope repo.",
+    )
+    command.add_argument(
+        "--skills-root",
+        help="Explicit skills root required only for --host custom --scope custom.",
+    )
+    command.add_argument(
+        "--no-redact-local-paths",
+        dest="redact_local_paths",
+        action="store_false",
+        default=True,
+        help="Include the resolved local skill target path in output.",
+    )
+    command.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="archive",
@@ -16541,6 +16658,68 @@ def build_parser() -> argparse.ArgumentParser:
     )
     version.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     version.set_defaults(func=command_version)
+
+    runtime_skill_status_parser = subcommands.add_parser(
+        "runtime-skill-status",
+        aliases=["skill-status", "agent-skill-status"],
+        help="Inspect the packaged WOM archive Agent Skill installation without writing files.",
+    )
+    add_runtime_skill_target_arguments(runtime_skill_status_parser)
+    runtime_skill_status_parser.set_defaults(func=command_runtime_skill_status)
+
+    runtime_skill_install_parser = subcommands.add_parser(
+        "runtime-skill-install",
+        aliases=["skill-install", "agent-skill-install"],
+        help="Preview or approve a manifest-bound Agent Skill install or managed update.",
+    )
+    add_runtime_skill_target_arguments(runtime_skill_install_parser)
+    runtime_skill_install_mode = runtime_skill_install_parser.add_mutually_exclusive_group(required=True)
+    runtime_skill_install_mode.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Inspect the target and return a digest-bound install/update plan without writes.",
+    )
+    runtime_skill_install_mode.add_argument(
+        "--approve",
+        action="store_true",
+        help="Write only the reviewed plan when target ownership and bytes still match.",
+    )
+    runtime_skill_install_parser.add_argument(
+        "--reviewed-by",
+        help="Safe non-secret reviewer actor id; required with --approve.",
+    )
+    runtime_skill_install_parser.add_argument(
+        "--expected-plan-sha256",
+        help="Exact operation_plan_sha256 from the reviewed dry-run; required with --approve.",
+    )
+    runtime_skill_install_parser.set_defaults(func=command_runtime_skill_install)
+
+    runtime_skill_uninstall_parser = subcommands.add_parser(
+        "runtime-skill-uninstall",
+        aliases=["skill-uninstall", "agent-skill-uninstall"],
+        help="Preview or approve removal of an unchanged WOM-kit-managed Agent Skill.",
+    )
+    add_runtime_skill_target_arguments(runtime_skill_uninstall_parser)
+    runtime_skill_uninstall_mode = runtime_skill_uninstall_parser.add_mutually_exclusive_group(required=True)
+    runtime_skill_uninstall_mode.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Verify ownership and return a digest-bound removal plan without writes.",
+    )
+    runtime_skill_uninstall_mode.add_argument(
+        "--approve",
+        action="store_true",
+        help="Remove only unchanged files owned by the reviewed WOM-kit install manifest.",
+    )
+    runtime_skill_uninstall_parser.add_argument(
+        "--reviewed-by",
+        help="Safe non-secret reviewer actor id; required with --approve.",
+    )
+    runtime_skill_uninstall_parser.add_argument(
+        "--expected-plan-sha256",
+        help="Exact operation_plan_sha256 from the reviewed dry-run; required with --approve.",
+    )
+    runtime_skill_uninstall_parser.set_defaults(func=command_runtime_skill_uninstall)
 
     project_version_update = subcommands.add_parser(
         "project-version-update",
