@@ -24,6 +24,37 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.254 Independent Audit Follow-Up And Hash-Bound Body Reading
+
+No archive migration is required. Existing zets, objets, manifests, derived
+text, handoff receipts, indexes, and default full-body `read-zettel` responses
+remain compatible.
+
+Large zet bodies may now be read in bounded JSON pages. Start at cursor zero
+with `--body-max-chars`; every nonzero `--body-cursor` must replay the complete
+body hash returned by the first page through `--expected-body-sha256`. A changed
+body stops the continuation instead of combining two versions. CLI paging
+requires `--format json`; omitting all paging options keeps the old full-body
+behavior.
+
+`derive-text coverage` and Doctor may now report that pre-normalization
+transcript or export bytes are missing from the object manifest when transcoding
+changed those bytes. This is a read-only preservation diagnostic, not an
+automatic migration. Capture the exact original file as an objet only when the
+real bytes are still available and reviewed. Never recreate them from normalized
+derived text. A manifest identity by itself is not proof that bytes are still
+available locally or remotely.
+
+AI artifact inventory and new session-handoff receipts now state that only the
+documented allowlisted roots were scanned. A clean handoff means that bounded
+scope and the human conversation review are ready; it does not prove that no AI
+artifact exists elsewhere in the archive. Existing valid handoff receipts remain
+recognized.
+
+Current public reading guidance uses `zet` for document traversal and reserves
+`node` for a subject/archive participant. No schema, command, output key,
+receipt, historical release note, or existing archive identifier is renamed.
+
 ## v0.3.253 Optional MOW Harness Compatibility Boundary
 
 No archive migration is required. This release adds public interoperability

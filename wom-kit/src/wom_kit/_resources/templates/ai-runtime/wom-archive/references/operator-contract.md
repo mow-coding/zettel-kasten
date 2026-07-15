@@ -325,8 +325,8 @@ When `complete` is false, call the same command with the returned `next_cursor`,
 If `catalog_snapshot_changed` blocks a later page, restart at cursor 0 instead
 of mixing pages from two archive states.
 
-Node coverage and first-read quality are separate. The coverage claim above
-means every selected file node was visited. Say that every required abstract
+zet coverage and first-read quality are separate. The coverage claim above
+means every selected zet file was visited. Say that every required abstract
 was available and read only when `archive_wide_abstract_reading_claim_ready` is
 also true. Otherwise report the `abstract_coverage` gaps and do not invent or
 auto-write replacement abstracts. Before id-only body follow-up, also require
@@ -340,7 +340,7 @@ a whole-result planning target, reserve envelope room with
 `--response-envelope-reserve-tokens <reserve>` (MCP uses the underscore names).
 The measurement excludes its own block, CLI pretty whitespace, and MCP/JSON-RPC
 framing. It is a four-characters-per-token heuristic, not provider-reported
-usage and not a reason to skip nodes.
+usage and not a reason to skip zets.
 Keep the cursor-zero `response_profile` full and retain its scope-wide gap,
 identity, order, and workload diagnostics. On later strict pages, add
 `--response-profile continuation` (MCP: `response_profile: "continuation"`)
@@ -363,7 +363,7 @@ Keep `projection=reading` when compact exhaustive coverage is enough. If the
 host or human needs to explain why each seeded item appears next, use
 `projection=routed_reading` with the same seeded order. It adds per-item
 seed/tie/component route evidence and therefore costs more tokens. It is an
-explanation layer, not a relevance score or permission to skip nodes.
+explanation layer, not a relevance score or permission to skip zets.
 
 Use returned abstracts, ties, and edges to choose body-reading order. Search and
 saved views may help, but a top-k search result or one truncated page is not
@@ -377,6 +377,12 @@ archive read-zettel <archive-root> --zettel-id <id> --section document --format 
 Through MCP, use `zet_catalog` for pages and pass `section: overview` to
 `read_zettel` before asking for `document` or `body`. The catalog reads local
 frontmatter only and does not require the generated SQLite index.
+
+For a large selected body, request a bounded page with `body_max_chars`. Follow
+`body_page.next_cursor` and pass the first page's complete `body_sha256` as
+`expected_body_sha256` on every continuation. Stop if the hash changes; never
+combine pages from different body snapshots. The default read remains the full
+body when no paging options are supplied.
 
 Before writing an AI-assisted inbox draft, preview it:
 

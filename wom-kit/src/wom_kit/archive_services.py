@@ -2806,6 +2806,7 @@ FRONTMATTER_V03_LEGACY_REF_TYPE = "legacy_provenance_source"
 FRONTMATTER_V03_LEGACY_REF_ROLE = "legacy_provenance_source"
 ZETTEL_READ_SECTIONS = {"overview", "body", "document", "details", "all"}
 ZETTEL_OVERVIEW_GIST_CHAR_LIMIT = 360
+ZETTEL_READ_BODY_MAX_CHARS = 100_000
 ZET_ABSTRACT_MAX_CHARS = ZETTEL_OVERVIEW_GIST_CHAR_LIMIT
 ABSTRACT_REVIEW_BASIS_CONTRACT = "wom-kit/abstract-review-basis/v0.1"
 ABSTRACT_REVIEW_BODY_HASH_BASIS = "decoded_canonical_body_utf8_universal_newlines"
@@ -5327,12 +5328,40 @@ def read_zettel(
     zettel_id: str | None = None,
     relative_path: str | None = None,
     section: str = "body",
+    body_cursor: int = 0,
+    body_max_chars: int | None = None,
+    expected_body_sha256: str | None = None,
 ) -> dict[str, Any]:
     root = require_existing_archive_root(archive_root)
     if not zettel_id and not relative_path:
         raise ArchiveServiceError("Provide zettel_id or path.")
     if section not in ZETTEL_READ_SECTIONS:
         raise ArchiveServiceError("section must be one of: overview, body, document, details, all")
+    if isinstance(body_cursor, bool) or not isinstance(body_cursor, int) or body_cursor < 0:
+        raise ArchiveServiceError("body_cursor must be a non-negative integer.")
+    if body_max_chars is not None:
+        if isinstance(body_max_chars, bool) or not isinstance(body_max_chars, int):
+            raise ArchiveServiceError("body_max_chars must be an integer.")
+        if body_max_chars < 1 or body_max_chars > ZETTEL_READ_BODY_MAX_CHARS:
+            raise ArchiveServiceError(
+                f"body_max_chars must be between 1 and {ZETTEL_READ_BODY_MAX_CHARS}."
+            )
+    if body_cursor and body_max_chars is None:
+        raise ArchiveServiceError("body_cursor requires body_max_chars.")
+    if body_cursor and expected_body_sha256 is None:
+        raise ArchiveServiceError(
+            "body_cursor greater than zero requires expected_body_sha256 from the first page."
+        )
+    if expected_body_sha256 is not None:
+        if not isinstance(expected_body_sha256, str) or not re.fullmatch(
+            r"sha256:[0-9a-f]{64}", expected_body_sha256
+        ):
+            raise ArchiveServiceError("expected_body_sha256 must use sha256:<64 lowercase hex> syntax.")
+        if body_max_chars is None:
+            raise ArchiveServiceError("expected_body_sha256 requires body_max_chars.")
+    page_requested = body_max_chars is not None
+    if page_requested and section not in {"body", "document", "all"}:
+        raise ArchiveServiceError("body paging requires section body, document, or all.")
 
     path = resolve_zettel_path(root, zettel_id=zettel_id, relative_path=relative_path)
     raw_bytes = path.read_bytes()
@@ -5363,10 +5392,34 @@ def read_zettel(
     overview, overview_warnings = zettel_first_read_summary(frontmatter, body)
     include_body = section in {"body", "document", "all"}
     include_full_frontmatter = section in {"body", "details", "all"}
-    return {
+    body_sha256 = "sha256:" + hashlib.sha256(body.encode("utf-8")).hexdigest()
+    if expected_body_sha256 is not None and expected_body_sha256 != body_sha256:
+        raise ArchiveServiceError(
+            "body snapshot changed: expected_body_sha256 does not match the current decoded body."
+        )
+    body_page: dict[str, Any] | None = None
+    returned_body = body if include_body else ""
+    if page_requested:
+        assert body_max_chars is not None
+        if body_cursor > len(body):
+            raise ArchiveServiceError("body_cursor must not exceed the current decoded body length.")
+        page_end = min(len(body), body_cursor + body_max_chars)
+        returned_body = body[body_cursor:page_end]
+        complete = page_end >= len(body)
+        body_page = {
+            "unit": "unicode_code_points",
+            "cursor": body_cursor,
+            "max_chars": body_max_chars,
+            "returned_chars": len(returned_body),
+            "total_chars": len(body),
+            "complete": complete,
+            "next_cursor": None if complete else page_end,
+            "body_sha256": body_sha256,
+        }
+    result = {
         "path": archive_relative_path(path, root),
         "frontmatter": frontmatter if include_full_frontmatter else zettel_overview_frontmatter(frontmatter),
-        "body": body if include_body else "",
+        "body": returned_body,
         "section": section,
         "overview": overview,
         "body_omitted": not include_body,
@@ -5378,13 +5431,16 @@ def read_zettel(
         "integrity": {
             "suppressed_for_redacted": False,
             "file_sha256": "sha256:" + hashlib.sha256(raw_bytes).hexdigest(),
-            "body_sha256": "sha256:" + hashlib.sha256(body.encode("utf-8")).hexdigest(),
+            "body_sha256": body_sha256,
             "exact_file_bytes_hashed": True,
             "body_hash_basis": "decoded_canonical_body_before_section_omission",
             "body_text_returned": include_body,
         },
         "warnings": unique_preserve_order(overview_warnings),
     }
+    if body_page is not None:
+        result["body_page"] = body_page
+    return result
 
 
 def zet_catalog_paths(root: Path, status: str) -> list[tuple[Path, str]]:
@@ -24249,6 +24305,12 @@ def ai_artifact_inventory(
             "roots": normalized_roots,
             "broad_archive_sweep": False,
             "root_recursion_outside_allowlist": False,
+            "archive_wide_scan_performed": False,
+            "archive_wide_coverage_claimed": False,
+            "unscanned_archive_locations_may_exist": True,
+            "scope_statement": (
+                "Only the listed roots were scanned. A clear result does not prove that no AI artifacts exist elsewhere in the archive."
+            ),
         },
         "item_count": len(items),
         "total_candidate_count": total_candidates,
@@ -68150,6 +68212,7 @@ def session_handoff_checkpoint(
                 "truncated": inventory_snapshot["truncated"],
                 "fate_counts": fate_counts,
                 "body_content_read": False,
+                "scan_policy": inventory.get("scan_policy"),
             },
             "confirmation": {
                 "conversation_review_completed": True,
@@ -68210,6 +68273,15 @@ def session_handoff_checkpoint(
         "state_digest": state_digest,
         "expected_state_digest": expected_state_digest,
         "ready_for_context_reset": ready_for_context_reset,
+        "readiness_scope": {
+            "bounded_ai_artifact_inventory": True,
+            "archive_wide_ai_artifact_absence_proven": False,
+            "human_conversation_review_required": True,
+            "meaning": (
+                "ready_for_context_reset covers the approved operational context, human conversation review, "
+                "and the allowlisted AI artifact inventory only; it is not an archive-wide absence claim."
+            ),
+        },
         "operational_context_evidence": context_evidence,
         "ai_artifact_inventory_evidence": {
             "digest": inventory_digest,
@@ -68220,6 +68292,7 @@ def session_handoff_checkpoint(
             "artifact_kind_counts": inventory_snapshot["artifact_kind_counts"],
             "unreviewed_count": unreviewed_count,
             "file_bodies_read": False,
+            "scan_policy": inventory.get("scan_policy"),
         },
         "conversation_review": {
             "confirmed_for_this_attempt": bool(confirm_chat_reviewed),
@@ -69895,8 +69968,8 @@ def ai_start_here(
                 "Read AGENTS.md when canonical_entrypoints marks it present.",
                 "Run first-read-readiness before the exhaustive catalog pass; treat a non-ready result as an explicit abstract or unique-id repair queue, not as permission to invent or auto-write missing memory.",
                 "Run abstract-freshness after first-read-readiness; treat stale or unverified rows as a human review queue and never auto-rewrite an abstract or body.",
-                "Run zet-catalog with projection=reading and coverage_mode=strict, keep the first response_profile full, inspect item and compact response-envelope estimates, set a host-appropriate max_estimated_tokens plus an explicit response_envelope_reserve_tokens when needed, then optionally use response_profile=continuation on later pages while following every continuation token before claiming archive-wide node coverage.",
-                "Treat archive_wide_coverage_claim_ready as node visitation only; require archive_wide_abstract_reading_claim_ready before saying every required abstract was available and read, and report abstract gaps without auto-writing replacements.",
+                "Run zet-catalog with projection=reading and coverage_mode=strict, keep the first response_profile full, inspect item and compact response-envelope estimates, set a host-appropriate max_estimated_tokens plus an explicit response_envelope_reserve_tokens when needed, then optionally use response_profile=continuation on later pages while following every continuation token before claiming archive-wide zet coverage.",
+                "Treat archive_wide_coverage_claim_ready as zet visitation only; require archive_wide_abstract_reading_claim_ready before saying every required abstract was available and read, and report abstract gaps without auto-writing replacements.",
                 "If the host goal already supplies verified zet ids, use seeded_connection_walk with those ids; never invent a seed or stop after the seeded component.",
                 "Keep projection=reading for the compact pass; use routed_reading with seeded_connection_walk only when the host or human needs a per-item explanation of the connection order and can afford the larger payload.",
                 "Use only read-only commands until the human approves a write operation.",
@@ -70335,7 +70408,7 @@ def runtime_context_ai_runtime_order() -> list[dict[str, Any]]:
             "mcp_alternative": "use zet_catalog pages with cursor, snapshot id, continuation token, full first response, compact continuation responses, and completion revalidation",
             "optional_seed_order": "when the host goal already provides verified zet ids, add --order seeded_connection_walk and repeated --start-zettel-id values; the walk still includes every disconnected component",
             "optional_route_evidence": "keep projection=reading for compact coverage; switch to routed_reading only with seeded_connection_walk when per-item seed, tie-passage, and disconnected-component reasons are needed",
-            "reason": "give the host every local zet node's available first-read text and connection clues before it chooses a broad body-reading order; never equate node visitation with complete abstract availability",
+            "reason": "give the host every local zet's available first-read text and connection clues before it chooses a broad body-reading order; never equate zet visitation with complete abstract availability",
         },
         {
             "step": 8,
@@ -71311,20 +71384,17 @@ def source_intake_next_safe_actions(result: dict[str, Any]) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# WOM #11 live object-storage upload adapter — Stage 1 (v0.3.163).
+# WOM #11 live object-storage upload adapter.
 #
-# NO-NETWORK BOUNDARY: this module ships NO transport that performs a socket
-# operation. The upload spine calls the provider only through an injected
-# ObjectStorageTransport. Stage 1 ships the abstract interface plus a
-# NullTransport whose every method raises, and object_storage_resolve_transport
-# returns None for every provider. There is no boto3/httpx/requests import on
-# this path and no branch that resolves a live client. A Stage-2 code change is
-# required to wire a real transport — it cannot land silently.
+# TRANSPORT BOUNDARY: the upload spine calls providers only through an
+# ObjectStorageTransport. Stage 2 adds a real S3-compatible SigV4 transport;
+# dry-runs remain network-free, and approved runs fail closed unless every
+# provider, endpoint, bucket, credential-reference, and policy gate resolves.
 # ---------------------------------------------------------------------------
 
 
 class ObjectStorageTransportNotImplemented(ArchiveServiceError):
-    """Raised when a live object-storage transport method is invoked in Stage 1."""
+    """Raised by a deliberately unavailable injected object-storage transport."""
 
 
 class ObjectStorageSecretLeak(ArchiveServiceError):
@@ -71492,7 +71562,7 @@ def _checksum_b64_to_sha256_hex(b64_value: str) -> str:
 
 
 class ObjectStorageTransport(Protocol):
-    """Abstract S3-compatible transport. No live implementation ships in Stage 1.
+    """Abstract transport implemented by the live S3-compatible adapter and test doubles.
 
     Every return value is a scalar-only dict: NO secret, NO url, NO bucket, and
     NO provider error body is ever returned to the caller (RC5).
@@ -71535,44 +71605,32 @@ class ObjectStorageTransport(Protocol):
 
 
 class NullTransport:
-    """Stage-1 transport whose every method raises. Ships in place of a live client."""
+    """Fail-closed compatibility test double; production resolution does not select it."""
+
+    _MESSAGE = "No live object-storage transport was configured for this operation."
 
     def head_object(self, *, key: str, presence_only: bool = False) -> dict[str, Any]:
-        raise ObjectStorageTransportNotImplemented(
-            "object-storage-upload has no live transport in this release (Stage 1)."
-        )
+        raise ObjectStorageTransportNotImplemented(self._MESSAGE)
 
     def put_object(self, *, key: str, data_path: Path, size: int, content_sha256: str) -> dict[str, Any]:
-        raise ObjectStorageTransportNotImplemented(
-            "object-storage-upload has no live transport in this release (Stage 1)."
-        )
+        raise ObjectStorageTransportNotImplemented(self._MESSAGE)
 
     def create_multipart(self, *, key: str) -> str:
-        raise ObjectStorageTransportNotImplemented(
-            "object-storage-upload has no live transport in this release (Stage 1)."
-        )
+        raise ObjectStorageTransportNotImplemented(self._MESSAGE)
 
     def put_part(self, *, key: str, upload_id: str, part_number: int, data: bytes) -> dict[str, Any]:
-        raise ObjectStorageTransportNotImplemented(
-            "object-storage-upload has no live transport in this release (Stage 1)."
-        )
+        raise ObjectStorageTransportNotImplemented(self._MESSAGE)
 
     def complete_multipart(
         self, *, key: str, upload_id: str, parts: list[dict[str, Any]], content_sha256: str
     ) -> dict[str, Any]:
-        raise ObjectStorageTransportNotImplemented(
-            "object-storage-upload has no live transport in this release (Stage 1)."
-        )
+        raise ObjectStorageTransportNotImplemented(self._MESSAGE)
 
     def abort_multipart(self, *, key: str, upload_id: str) -> None:
-        raise ObjectStorageTransportNotImplemented(
-            "object-storage-upload has no live transport in this release (Stage 1)."
-        )
+        raise ObjectStorageTransportNotImplemented(self._MESSAGE)
 
     def delete_object(self, *, key: str) -> None:
-        raise ObjectStorageTransportNotImplemented(
-            "object-storage-upload has no live transport in this release (Stage 1)."
-        )
+        raise ObjectStorageTransportNotImplemented(self._MESSAGE)
 
 
 # ---------------------------------------------------------------------------
@@ -80757,6 +80815,82 @@ def derived_text_manifest_quality(records: list[dict[str, Any]], *, max_items: i
     }
 
 
+def derived_text_required_source_object_id(record: dict[str, Any]) -> str | None:
+    provenance = record.get("provenance") if isinstance(record.get("provenance"), dict) else {}
+    source_text_sha256 = provenance.get("source_text_sha256")
+    text_sha256 = record.get("text_sha256")
+    if not isinstance(source_text_sha256, str) or not SHA256_RE.fullmatch(source_text_sha256):
+        return None
+    if not isinstance(text_sha256, str) or not SHA256_RE.fullmatch(text_sha256):
+        return None
+    if source_text_sha256 == text_sha256:
+        return None
+    return f"sha256:{source_text_sha256}"
+
+
+def derived_text_source_object_coverage(
+    manifest_records: list[dict[str, Any]],
+    derived_records: list[dict[str, Any]],
+    *,
+    max_items: int,
+) -> dict[str, Any]:
+    manifested_object_ids: set[str] = set()
+    for record in manifest_records:
+        object_id = str(record.get("object_id") or "").strip()
+        sha256 = str(record.get("sha256") or "").strip()
+        if (
+            OBJECT_ID_RE.fullmatch(object_id)
+            and SHA256_RE.fullmatch(sha256)
+            and object_id == f"sha256:{sha256}"
+        ):
+            manifested_object_ids.add(object_id)
+    required_by_object: dict[str, list[dict[str, Any]]] = {}
+    for record in derived_records:
+        required_object_id = derived_text_required_source_object_id(record)
+        if required_object_id is None:
+            continue
+        required_by_object.setdefault(required_object_id, []).append(record)
+
+    required_ids = sorted(required_by_object)
+    missing_ids = [object_id for object_id in required_ids if object_id not in manifested_object_ids]
+    missing_sample: list[dict[str, Any]] = []
+    for object_id in missing_ids[:max_items]:
+        records = required_by_object[object_id]
+        first_record = records[0]
+        missing_sample.append(
+            {
+                "required_object_id": object_id,
+                "derived_text_id": first_record.get("derived_text_id"),
+                "source_object_id": first_record.get("source_object_id"),
+                "affected_derived_text_record_count": len(records),
+                "body_text_echoed": False,
+                "local_path_echoed": False,
+            }
+        )
+
+    return {
+        "status": "passed" if not missing_ids else "needs_objet_capture",
+        "rule": "changed source text bytes must have a manifested objet identity before manifest-scoped source-byte coverage can pass",
+        "scope_statement": (
+            "This check proves manifest identity coverage only; it does not prove current local or remote byte availability."
+        ),
+        "byte_availability_checked": False,
+        "manifest_record_proves_current_byte_availability": False,
+        "exact_source_bytes_required_count": len(required_ids),
+        "exact_source_bytes_manifested_count": len(required_ids) - len(missing_ids),
+        "exact_source_bytes_missing_count": len(missing_ids),
+        "affected_derived_text_record_count": sum(len(records) for records in required_by_object.values()),
+        "missing_items_truncated": len(missing_ids) > len(missing_sample),
+        "missing_sample": missing_sample,
+        "closed_actions": {
+            "source_file_body_read": False,
+            "derived_text_body_read": False,
+            "original_bytes_recreated": False,
+            "files_written": False,
+        },
+    }
+
+
 def derived_text_coverage(
     archive_root: Path | str,
     *,
@@ -80844,14 +80978,22 @@ def derived_text_coverage(
     blocked_count = by_status.get("needs_password_or_encrypted", 0)
     manifest_quality = derived_text_manifest_quality(derived_records, max_items=max_items)
     manifest_quality_issue_count = int(manifest_quality.get("records_with_issues_count") or 0)
+    source_object_coverage = derived_text_source_object_coverage(
+        manifest_records,
+        derived_records,
+        max_items=max_items,
+    )
+    source_bytes_missing_count = int(source_object_coverage.get("exact_source_bytes_missing_count") or 0)
     coverage_ratio = None
     if textual_candidate_count:
         coverage_ratio = covered_textual_count / textual_candidate_count
-    gate_passed = missing_count == 0 and manifest_quality_issue_count == 0
+    gate_passed = missing_count == 0 and manifest_quality_issue_count == 0 and source_bytes_missing_count == 0
     if blocked_count:
         warnings.append("encrypted_or_password_required_textual_objets_need_human_resolution")
     if manifest_quality_issue_count:
         warnings.append("derived_text_manifest_quality_needs_review")
+    if source_bytes_missing_count:
+        warnings.append("derived_text_source_bytes_need_objet_capture")
     return {
         "ok": not blockers and gate_passed,
         "dry_run": True,
@@ -80865,6 +81007,7 @@ def derived_text_coverage(
             "missing_derived_text_count": missing_count,
             "needs_password_or_encrypted_count": blocked_count,
             "manifest_quality_issue_count": manifest_quality_issue_count,
+            "exact_source_bytes_missing_count": source_bytes_missing_count,
             "coverage_ratio": coverage_ratio,
             "missing_items_truncated": missing_count > len(missing_items),
             "blocked_items_truncated": blocked_count > len(blocked_items),
@@ -80876,6 +81019,7 @@ def derived_text_coverage(
             covered_textual_count=covered_textual_count,
             missing_derived_text_count=missing_count,
             needs_password_or_encrypted_count=blocked_count,
+            exact_source_bytes_missing_count=source_bytes_missing_count,
         ),
         "manifest_counts": {
             "object_manifest_record_count": len(manifest_records),
@@ -80885,6 +81029,7 @@ def derived_text_coverage(
             "by_toolchain_family": by_toolchain_family,
         },
         "manifest_quality": manifest_quality,
+        "source_text_original_object_coverage": source_object_coverage,
         "missing_items": missing_items,
         "blocked_items": blocked_items,
         "covered_sample": covered_items,
@@ -80896,12 +81041,20 @@ def derived_text_coverage(
             "Run derive-text toolchain for the missing families before extraction.",
             "Produce derived text outside this read-only gate, then capture it with derive-text capture --dry-run and --approve.",
             "Fix derived-text manifest quality issues such as missing tool_version before claiming extraction provenance is complete.",
+            *(
+                [
+                    "Capture changed pre-normalization transcript or export bytes as an objet; never recreate those bytes from normalized derived text."
+                ]
+                if source_bytes_missing_count
+                else []
+            ),
             "Re-run derive-text coverage until missing_derived_text_count is zero or every exception has a blocker.",
         ],
         "blockers": unique_preserve_order(
             blockers
             + (["missing_derived_text"] if missing_count else [])
             + (["derived_text_manifest_quality_issues"] if manifest_quality_issue_count else [])
+            + (["source_text_original_object_missing"] if source_bytes_missing_count else [])
         ),
         "warnings": unique_preserve_order(warnings),
     }
@@ -80915,11 +81068,14 @@ def derived_text_completeness_signal(
     covered_textual_count: int,
     missing_derived_text_count: int,
     needs_password_or_encrypted_count: int,
+    exact_source_bytes_missing_count: int,
 ) -> dict[str, Any]:
     if manifest_record_count == 0:
         state = "no_manifested_objets"
     elif missing_derived_text_count:
         state = "manifest_scoped_incomplete"
+    elif exact_source_bytes_missing_count:
+        state = "manifest_scoped_source_bytes_incomplete"
     elif needs_password_or_encrypted_count:
         state = "manifest_scoped_with_blocked_items"
     else:
@@ -80945,6 +81101,7 @@ def derived_text_completeness_signal(
             "covered_textual_count": covered_textual_count,
             "missing_derived_text_count": missing_derived_text_count,
             "needs_password_or_encrypted_count": needs_password_or_encrypted_count,
+            "exact_source_bytes_missing_count": exact_source_bytes_missing_count,
         },
         "cannot_prove": [
             "external_workspace_fully_exported",
@@ -81237,9 +81394,9 @@ def _derived_text_build_record(
                     "captured_at": captured_at,
                     "captured_by": reviewed_by,
                     "source_text_filename": text_filename,
-                    # Raw-byte provenance (D12): identity/store/verification key on the
-                    # STORED normalized UTF-8 bytes; these two fields keep the raw input
-                    # reconstructible for audit without changing the identity rule.
+                    # Raw-byte provenance (D12): identity/store/verification stay keyed
+                    # to normalized UTF-8. These fields identify the pre-normalization
+                    # bytes; exact recovery still requires their manifested objet.
                     "source_text_encoding": source_text_encoding,
                     "source_text_sha256": source_text_sha256,
                 }

@@ -114,7 +114,7 @@ Commands:
   object-storage-upload-verify
           Verify planned objects' local RAW bytes hash to their object id (no network, no secret).
   object-storage-upload
-          Stage-1 upload command; --approve fails closed (no live transport in this release).
+          Run an approval-gated live S3-compatible upload when all provider and credential gates resolve.
   connection-edge-intelligence-plan
           Classify sanitized connection fixture candidates into meaning/mechanism review signals.
   notion-nested-tree-plan
@@ -2225,6 +2225,16 @@ class Doctor:
             text_sha256 = record.get("text_sha256")
             if not isinstance(text_sha256, str) or not SHA256_RE.match(text_sha256):
                 self.error("derived_text_sha256_invalid", f"Invalid text_sha256 on line {line_number}: {text_sha256}", path)
+            required_source_object_id = archive_services.derived_text_required_source_object_id(record)
+            if required_source_object_id is not None and required_source_object_id not in self.manifest_objects:
+                self.warn(
+                    "derived_text_source_bytes_object_missing",
+                    (
+                        f"Derived text line {line_number} changed source bytes during normalization, but the exact "
+                        "source-byte object is absent from files.jsonl."
+                    ),
+                    path,
+                )
             text_logical_key = record.get("text_logical_key")
             if not isinstance(text_logical_key, str) or not text_logical_key:
                 self.error("derived_text_logical_key_missing", f"Derived text missing text_logical_key: {derived_text_id}", path)
@@ -9006,7 +9016,7 @@ def command_zet_catalog(args: argparse.Namespace) -> int:
             f"{coverage.get('total_count', 0)} total / "
             f"{coverage.get('remaining_count', 0)} remaining"
         )
-        print(f"Node coverage claim ready: {'yes' if coverage.get('archive_wide_coverage_claim_ready') else 'no'}")
+        print(f"zet coverage claim ready: {'yes' if coverage.get('archive_wide_coverage_claim_ready') else 'no'}")
         print(
             "All required abstracts ready: "
             f"{'yes' if coverage.get('archive_wide_abstract_reading_claim_ready') else 'no'}"
@@ -9981,12 +9991,18 @@ def command_derived_artifact_staleness(args: argparse.Namespace) -> int:
 
 
 def command_read_zettel(args: argparse.Namespace) -> int:
+    if args.body_max_chars is not None and args.format != "json":
+        print("body paging requires --format json so continuation evidence is retained.", file=sys.stderr)
+        return 1
     try:
         result = archive_services.read_zettel(
             Path(args.archive_root),
             zettel_id=args.zettel_id,
             relative_path=args.path,
             section=args.section,
+            body_cursor=args.body_cursor,
+            body_max_chars=args.body_max_chars,
+            expected_body_sha256=args.expected_body_sha256,
         )
     except archive_services.ArchiveServiceError as exc:
         print(str(exc), file=sys.stderr)
@@ -17827,7 +17843,10 @@ def build_parser() -> argparse.ArgumentParser:
     object_storage_upload = subcommands.add_parser(
         "object-storage-upload",
         aliases=["object-storage-upload-execute", "objet-storage-upload"],
-        help="Stage-1 object-storage upload command; --approve fails closed (no live transport in this release).",
+        help=(
+            "Run an approval-gated live S3-compatible upload when endpoint, bucket, "
+            "and credential references resolve; otherwise fail closed."
+        ),
     )
     object_storage_upload.add_argument("archive_root", help="Archive root to update.")
     object_storage_upload.add_argument(
@@ -17888,7 +17907,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     object_storage_upload.add_argument("--reviewed-by", help="Safe reviewer id required when --approve is used.")
     object_storage_upload.add_argument("--dry-run", action="store_true", help="Preview the plan and execution-receipt shape without provider calls, byte reads, or secret reads.")
-    object_storage_upload.add_argument("--approve", action="store_true", help="Attempt the live upload. Stage 1: fails closed (no live transport in this release).")
+    object_storage_upload.add_argument(
+        "--approve",
+        action="store_true",
+        help=(
+            "Attempt the approval-gated live upload. Requires reviewer, provider, "
+            "endpoint, bucket, and credential references; unresolved gates fail closed."
+        ),
+    )
     object_storage_upload.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     object_storage_upload.set_defaults(func=command_object_storage_upload)
 
@@ -19804,6 +19830,27 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["overview", "body", "document", "details", "all"],
         default="body",
         help="Read only the cheap first-read overview, the compatibility body read, a human document view, frontmatter details, or all sections.",
+    )
+    read_zettel.add_argument(
+        "--body-cursor",
+        type=int,
+        default=0,
+        help=(
+            "Unicode code-point offset for an opt-in bounded body page; a nonzero cursor requires "
+            "--body-max-chars and --expected-body-sha256."
+        ),
+    )
+    read_zettel.add_argument(
+        "--body-max-chars",
+        type=int,
+        help=(
+            f"Return at most this many body characters (1-{archive_services.ZETTEL_READ_BODY_MAX_CHARS}); "
+            "requires --format json."
+        ),
+    )
+    read_zettel.add_argument(
+        "--expected-body-sha256",
+        help="Full decoded-body sha256 from the first page; fail if the body changed before a continuation read.",
     )
     read_zettel.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     read_zettel.set_defaults(func=command_read_zettel)

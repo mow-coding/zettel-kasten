@@ -153,7 +153,7 @@ The catalog:
 - creates no WOM-owned goal or loop state.
 
 The generated index may become an optional accelerator later, but a missing or
-stale index must never make local zet nodes disappear from discovery.
+stale index must never make local zets disappear from discovery.
 
 ## MCP And Host Runtime
 
@@ -177,8 +177,13 @@ changed snapshot blocks continuation rather than combining two local states.
 
 MCP `read_zettel` accepts `section: overview`, `document`, `body`, `details`, or
 `all`. The compatibility default remains `body`; host reading instructions use
-`overview` first. MCP `create_draft_zettel` accepts the same optional bounded
-`abstract` as the CLI.
+`overview` first. Large selected bodies may use `body_max_chars` and
+`body_cursor`; every continuation must send the first page's full
+`integrity.body_sha256` as `expected_body_sha256`. A changed body blocks the
+continuation instead of combining text from two zet versions. Paging is opt-in,
+uses Unicode code-point offsets, and leaves the default full-body response
+unchanged. MCP `create_draft_zettel` accepts the same optional bounded `abstract`
+as the CLI.
 
 Runtime context, AI start-here, archive `AGENTS.md` templates, and the shipped
 runtime skill all state the same order:
@@ -189,7 +194,7 @@ runtime skill all state the same order:
 4. never call a search result or truncated page exhaustive coverage.
 
 Goal and loop remain host-application UI/UX. WOM supplies local memory,
-passages between zet nodes, and explicit completion evidence.
+passages between zets, and explicit completion evidence.
 
 ## Workload And Token Budget
 
@@ -255,7 +260,7 @@ Only `coverage.archive_wide_coverage_claim_ready: true` means a strict
 cursor-zero chain reached the end without a skipped cursor and passed snapshot
 validation.
 
-That field proves node visitation, not abstract completeness. v0.3.209 adds
+That field proves zet visitation, not abstract completeness. v0.3.209 adds
 `archive_wide_abstract_reading_claim_ready` for complete non-redacted
 first-read availability and `archive_wide_followup_resolution_ready` for safe
 unique id-based follow-up. See

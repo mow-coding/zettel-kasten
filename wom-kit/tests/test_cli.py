@@ -2352,6 +2352,24 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertTrue(ok_result["project_pin"]["matches_package_version"])
             self.assertEqual(ok_result["consistency_state"], "source_checkout_match")
 
+    def test_object_storage_upload_help_matches_shipped_live_transport(self) -> None:
+        parser = archive_cli.build_parser()
+        subcommands = archive_cli.subparser_action(parser)
+        self.assertIsNotNone(subcommands)
+        assert subcommands is not None
+        upload_parser = subcommands.choices["object-storage-upload"]
+        rendered_help = "\n".join(
+            (
+                archive_cli.__doc__ or "",
+                parser.format_help(),
+                upload_parser.format_help(),
+            )
+        )
+
+        self.assertIn("approval-gated live S3-compatible upload", rendered_help)
+        self.assertIn("endpoint, bucket, and credential references", rendered_help)
+        self.assertNotIn("no live transport in this release", rendered_help)
+
     def test_capabilities_machine_manifest_reports_real_parser_commands_without_paths(self) -> None:
         code, output = self.run_cli(["capabilities", "--machine"])
         self.assertEqual(code, 0, output)
@@ -5988,6 +6006,14 @@ state:
             self.assertEqual(plan_code, 0, plan_output)
             self.assertEqual(plan["status"], "would_write")
             self.assertRegex(plan["state_digest"], r"^sha256:[0-9a-f]{64}$")
+            self.assertTrue(plan["readiness_scope"]["bounded_ai_artifact_inventory"])
+            self.assertFalse(plan["readiness_scope"]["archive_wide_ai_artifact_absence_proven"])
+            self.assertTrue(plan["readiness_scope"]["human_conversation_review_required"])
+            scan_policy = plan["ai_artifact_inventory_evidence"]["scan_policy"]
+            self.assertTrue(scan_policy["allowlisted_roots_only"])
+            self.assertFalse(scan_policy["archive_wide_scan_performed"])
+            self.assertFalse(scan_policy["archive_wide_coverage_claimed"])
+            self.assertTrue(scan_policy["unscanned_archive_locations_may_exist"])
             self.assertEqual(self.snapshot_archive_files(archive_root), before)
 
             stale_plan_code, stale_plan_output = self.run_cli(
@@ -6029,9 +6055,22 @@ state:
             self.assertTrue(approved["ready_for_context_reset"])
             self.assertEqual(approved["checkpoint_evidence"]["matching_receipt_count"], 1)
             receipt_ref = approved["checkpoint_evidence"]["current_receipt_ref"]
-            receipt = json.loads((archive_root / receipt_ref).read_text(encoding="utf-8"))
+            receipt_path = archive_root / receipt_ref
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
             self.assertTrue(receipt["confirmation"]["conversation_review_completed"])
             self.assertFalse(receipt["closed_actions"]["chat_transcript_body_read_by_wom"])
+            self.assertFalse(
+                receipt["ai_artifact_inventory"]["scan_policy"]["archive_wide_coverage_claimed"]
+            )
+
+            legacy_receipt = dict(receipt)
+            legacy_inventory = dict(receipt["ai_artifact_inventory"])
+            legacy_inventory.pop("scan_policy")
+            legacy_receipt["ai_artifact_inventory"] = legacy_inventory
+            receipt_path.write_text(
+                json.dumps(legacy_receipt, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
 
             current_code, current_output = self.run_cli(
                 ["session-handoff-checkpoint", str(archive_root), "--dry-run", "--format", "json"]
@@ -6040,6 +6079,10 @@ state:
             self.assertEqual(current_code, 0, current_output)
             self.assertEqual(current["status"], "current_verified")
             self.assertTrue(current["ready_for_context_reset"])
+            self.assertFalse(current["readiness_scope"]["archive_wide_ai_artifact_absence_proven"])
+            self.assertFalse(
+                current["ai_artifact_inventory_evidence"]["scan_policy"]["archive_wide_coverage_claimed"]
+            )
             self.assertNotIn(str(archive_root), current_output)
             self.assertNotIn("Keep the Fake Life Archive usable", current_output)
 
@@ -6278,12 +6321,15 @@ state:
             chat_log = archive_root / ".wom-scratch" / "session" / "codex-chat-log.jsonl"
             plan_note = archive_root / "workbench" / "ai-scratch" / "draft-plan.md"
             report_note = archive_root / "staging" / "ai" / "inbox" / "client-report.txt"
+            unscanned_note = archive_root / "notes" / "outside-allowlist.md"
             chat_log.parent.mkdir(parents=True, exist_ok=True)
             plan_note.parent.mkdir(parents=True, exist_ok=True)
             report_note.parent.mkdir(parents=True, exist_ok=True)
+            unscanned_note.parent.mkdir(parents=True, exist_ok=True)
             chat_log.write_text('{"message":"PRIVATE CHAT BODY SHOULD NOT ECHO"}\n', encoding="utf-8")
             plan_note.write_text("PRIVATE PLAN BODY SHOULD NOT ECHO\n", encoding="utf-8")
             report_note.write_text("PRIVATE REPORT BODY SHOULD NOT ECHO\n", encoding="utf-8")
+            unscanned_note.write_text("PRIVATE OUTSIDE-ALLOWLIST BODY SHOULD NOT ECHO\n", encoding="utf-8")
 
             code, output = self.run_cli(
                 [
@@ -6302,6 +6348,10 @@ state:
             self.assertEqual(result["inventory_state"], "needs_review")
             self.assertEqual(result["total_candidate_count"], 3)
             self.assertEqual(result["fate_counts"]["unreviewed_ai_artifact"], 3)
+            self.assertTrue(result["scan_policy"]["allowlisted_roots_only"])
+            self.assertFalse(result["scan_policy"]["archive_wide_scan_performed"])
+            self.assertFalse(result["scan_policy"]["archive_wide_coverage_claimed"])
+            self.assertTrue(result["scan_policy"]["unscanned_archive_locations_may_exist"])
             self.assertFalse(result["closed_actions"]["file_bodies_read"])
             self.assertFalse(result["closed_actions"]["content_hashes_calculated"])
             self.assertFalse(result["privacy_guards"]["relative_paths_echoed"])
@@ -6311,7 +6361,9 @@ state:
             self.assertIn("raw log as an objet/source", "\n".join(result["next_safe_actions"]))
             self.assertNotIn("PRIVATE CHAT BODY SHOULD NOT ECHO", output)
             self.assertNotIn("PRIVATE PLAN BODY SHOULD NOT ECHO", output)
+            self.assertNotIn("PRIVATE OUTSIDE-ALLOWLIST BODY SHOULD NOT ECHO", output)
             self.assertNotIn("codex-chat-log.jsonl", output)
+            self.assertNotIn("outside-allowlist.md", output)
             self.assertNotIn(str(archive_root), output)
 
             no_dry_code, no_dry_output = self.run_cli(["ai-artifact-inventory", str(archive_root), "--format", "json"])
@@ -34010,6 +34062,103 @@ state:
             self.assertEqual(len(collected), len(canonical_paths))
             self.assertEqual(len(set(collected)), len(canonical_paths))
 
+    def test_zet_catalog_uses_live_files_when_generated_index_is_stale_and_partial(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            indexed_code, indexed_output = self.run_cli(
+                ["index", str(archive_root), "--format", "json"]
+            )
+            self.assertEqual(indexed_code, 0, indexed_output)
+            index_path = archive_root / "db" / "archive-index.sqlite"
+            index_bytes = index_path.read_bytes()
+
+            canonical_paths = sorted((archive_root / "zettels").glob("*.md"))
+            self.assertGreaterEqual(len(canonical_paths), 2)
+            removed_path = canonical_paths[0]
+            source_path = canonical_paths[1]
+            frontmatter, body = archive_services.split_zettel_text(
+                source_path.read_text(encoding="utf-8")
+            )
+            new_id = "zet_20260716_live_after_stale_index"
+            new_path = archive_root / "zettels" / f"{new_id}.md"
+            frontmatter["id"] = new_id
+            frontmatter["title"] = "Live zet added after stale index"
+            frontmatter["abstract"] = "A live-file fixture absent from the generated index."
+            removed_relative = removed_path.relative_to(archive_root).as_posix()
+            removed_path.unlink()
+            new_path.write_text(
+                "---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + body,
+                encoding="utf-8",
+            )
+
+            code, output = self.run_cli(
+                [
+                    "zet-catalog",
+                    str(archive_root),
+                    "--status",
+                    "canonical",
+                    "--page-size",
+                    "100",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            returned_paths = {item["path"] for item in result["items"]}
+            live_paths = {
+                path.relative_to(archive_root).as_posix()
+                for path in (archive_root / "zettels").glob("*.md")
+            }
+            self.assertEqual(returned_paths, live_paths)
+            self.assertIn(new_path.relative_to(archive_root).as_posix(), returned_paths)
+            self.assertNotIn(removed_relative, returned_paths)
+            self.assertEqual(result["coverage"]["total_count"], len(live_paths))
+            self.assertTrue(result["coverage"]["complete"])
+            self.assertEqual(index_path.read_bytes(), index_bytes)
+
+    def test_zet_catalog_keeps_matching_titles_as_distinct_human_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            source_path = sorted((archive_root / "zettels").glob("*.md"))[0]
+            source_frontmatter, body = archive_services.split_zettel_text(
+                source_path.read_text(encoding="utf-8")
+            )
+            shared_title = "Same human label, separate artifacts"
+            expected_ids = {
+                "zet_20260716_matching_label_alpha",
+                "zet_20260716_matching_label_beta",
+            }
+            for zettel_id in sorted(expected_ids):
+                frontmatter = dict(source_frontmatter)
+                frontmatter["id"] = zettel_id
+                frontmatter["title"] = shared_title
+                frontmatter["abstract"] = "Matching labels do not authorize an identity merge."
+                (archive_root / "zettels" / f"{zettel_id}.md").write_text(
+                    "---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + body,
+                    encoding="utf-8",
+                )
+
+            code, output = self.run_cli(
+                [
+                    "zet-catalog",
+                    str(archive_root),
+                    "--status",
+                    "canonical",
+                    "--page-size",
+                    "100",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            matching_items = [item for item in result["items"] if item["title"] == shared_title]
+            self.assertEqual({item["id"] for item in matching_items}, expected_ids)
+            self.assertEqual(len({item["path"] for item in matching_items}), 2)
+
     def test_zet_catalog_blocks_when_snapshot_changes_between_pages(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
@@ -34127,7 +34276,7 @@ state:
             ]
         )
         self.assertEqual(text_code, 0, text_output)
-        self.assertIn("Node coverage claim ready: yes", text_output)
+        self.assertIn("zet coverage claim ready: yes", text_output)
         self.assertIn("All required abstracts ready: no", text_output)
         self.assertIn("Unique id follow-up ready: yes", text_output)
         self.assertIn("Estimated compact service-result tokens:", text_output)
@@ -36630,6 +36779,144 @@ state:
         self.assertEqual(path_code, 0, path_output)
         path_result = json.loads(path_output)
         self.assertEqual(path_result["path"], result["path"])
+
+    def test_read_zettel_hash_bound_body_pages_recombine_and_detect_change(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            zettel_id = "zet_20240504_fake_lunch_thought"
+            source_path = archive_root / "zettels" / f"{zettel_id}.md"
+            frontmatter, _body = archive_services.split_zettel_text(
+                source_path.read_text(encoding="utf-8")
+            )
+            unicode_body = "# Paged zet\n\n한글🙂과 ASCII를 섞은 본문입니다.\n두 번째 줄도 이어집니다.\n"
+            source_path.write_text(
+                "---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + unicode_body,
+                encoding="utf-8",
+            )
+
+            default_code, default_output = self.run_cli(
+                ["read-zettel", str(archive_root), "--zettel-id", zettel_id, "--format", "json"]
+            )
+            default_result = json.loads(default_output)
+            self.assertEqual(default_code, 0, default_output)
+            self.assertNotIn("body_page", default_result)
+            expected_body = default_result["body"]
+
+            cursor = 0
+            chunks: list[str] = []
+            first_page: dict[str, Any] | None = None
+            while True:
+                args = [
+                    "read-zettel",
+                    str(archive_root),
+                    "--zettel-id",
+                    zettel_id,
+                    "--section",
+                    "document",
+                    "--body-cursor",
+                    str(cursor),
+                    "--body-max-chars",
+                    "7",
+                    "--format",
+                    "json",
+                ]
+                if first_page is not None:
+                    args.extend(["--expected-body-sha256", first_page["integrity"]["body_sha256"]])
+                page_code, page_output = self.run_cli(args)
+                page = json.loads(page_output)
+                self.assertEqual(page_code, 0, page_output)
+                if first_page is None:
+                    first_page = page
+                self.assertEqual(page["body_page"]["unit"], "unicode_code_points")
+                self.assertEqual(page["body_page"]["cursor"], cursor)
+                self.assertEqual(page["body_page"]["returned_chars"], len(page["body"]))
+                self.assertEqual(
+                    page["body_page"]["body_sha256"],
+                    first_page["integrity"]["body_sha256"],
+                )
+                chunks.append(page["body"])
+                if page["body_page"]["complete"]:
+                    self.assertIsNone(page["body_page"]["next_cursor"])
+                    break
+                cursor = page["body_page"]["next_cursor"]
+
+            self.assertEqual("".join(chunks), expected_body)
+            self.assertEqual(first_page["body_page"]["total_chars"], len(expected_body))
+
+            unbound_code, unbound_output = self.run_cli(
+                [
+                    "read-zettel",
+                    str(archive_root),
+                    "--zettel-id",
+                    zettel_id,
+                    "--section",
+                    "document",
+                    "--body-cursor",
+                    "7",
+                    "--body-max-chars",
+                    "7",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(unbound_code, 1, unbound_output)
+            self.assertIn("requires expected_body_sha256 from the first page", unbound_output)
+
+            text_page_code, text_page_output = self.run_cli(
+                [
+                    "read-zettel",
+                    str(archive_root),
+                    "--zettel-id",
+                    zettel_id,
+                    "--body-max-chars",
+                    "7",
+                ]
+            )
+            self.assertEqual(text_page_code, 1, text_page_output)
+            self.assertIn("body paging requires --format json", text_page_output)
+
+            zettel_path = archive_root / first_page["path"]
+            zettel_path.write_text(
+                zettel_path.read_text(encoding="utf-8") + "\nchanged after first page\n",
+                encoding="utf-8",
+            )
+            changed_code, changed_output = self.run_cli(
+                [
+                    "read-zettel",
+                    str(archive_root),
+                    "--zettel-id",
+                    zettel_id,
+                    "--section",
+                    "document",
+                    "--body-cursor",
+                    str(first_page["body_page"]["next_cursor"]),
+                    "--body-max-chars",
+                    "7",
+                    "--expected-body-sha256",
+                    first_page["integrity"]["body_sha256"],
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(changed_code, 1, changed_output)
+            self.assertIn("body snapshot changed", changed_output)
+
+            invalid_code, invalid_output = self.run_cli(
+                [
+                    "read-zettel",
+                    str(archive_root),
+                    "--zettel-id",
+                    zettel_id,
+                    "--section",
+                    "overview",
+                    "--body-max-chars",
+                    "7",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(invalid_code, 1, invalid_output)
+            self.assertIn("body paging requires section body, document, or all", invalid_output)
 
     def test_read_zettel_overview_section_returns_first_read_without_body(self) -> None:
         archive_root = KIT_ROOT / "examples" / "fake-life-archive"
@@ -50895,6 +51182,100 @@ class ObjetCaptureTests(unittest.TestCase):
                     self.assertEqual(
                         record["provenance"]["source_text_sha256"], hashlib.sha256(raw).hexdigest()
                     )
+
+    def test_paired_transcript_coverage_requires_changed_source_bytes_as_objet(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root, selection, _digest, source_text_digest, transcript_bytes = self._paired_capture_setup(tmp)
+            captured = archive_services.objet_capture_apply(
+                archive_root,
+                selection,
+                reviewed_by="person:test",
+            )
+            self.assertTrue(captured["ok"], captured)
+
+            coverage = archive_services.derived_text_coverage(archive_root, dry_run=True, max_items=10)
+            source_coverage = coverage["source_text_original_object_coverage"]
+            self.assertFalse(coverage["ok"])
+            self.assertEqual(source_coverage["status"], "needs_objet_capture")
+            self.assertEqual(source_coverage["exact_source_bytes_required_count"], 1)
+            self.assertEqual(source_coverage["exact_source_bytes_manifested_count"], 0)
+            self.assertEqual(source_coverage["exact_source_bytes_missing_count"], 1)
+            self.assertFalse(source_coverage["byte_availability_checked"])
+            self.assertFalse(source_coverage["manifest_record_proves_current_byte_availability"])
+            self.assertEqual(
+                source_coverage["missing_sample"][0]["required_object_id"],
+                f"sha256:{source_text_digest}",
+            )
+            self.assertIn("source_text_original_object_missing", coverage["blockers"])
+            self.assertIn("derived_text_source_bytes_need_objet_capture", coverage["warnings"])
+            self.assertEqual(
+                coverage["completeness_signal"]["state"],
+                "manifest_scoped_source_bytes_incomplete",
+            )
+            self.assertFalse(source_coverage["closed_actions"]["original_bytes_recreated"])
+
+            doctor = archive_cli.Doctor(archive_root)
+            doctor._check_object_manifest()
+            doctor._check_derived_text_manifest()
+            self.assertIn(
+                "derived_text_source_bytes_object_missing",
+                [diagnostic.code for diagnostic in doctor.diagnostics],
+            )
+
+            source_record = {
+                "object_id": f"sha256:{source_text_digest}",
+                "sha256": source_text_digest,
+                "logical_key": (
+                    "objects/external/prehashed/transcript-source/"
+                    f"{source_text_digest[:2]}/{source_text_digest}"
+                ),
+                "mime": "application/octet-stream",
+                "size_bytes": len(transcript_bytes),
+                "locations": [],
+                "provenance": {"source": "test-original-transcript-objet"},
+            }
+            manifest = archive_root / "objects" / "manifests" / "files.jsonl"
+            with manifest.open("a", encoding="utf-8", newline="\n") as handle:
+                handle.write(json.dumps(source_record, separators=(",", ":")) + "\n")
+
+            repaired = archive_services.derived_text_coverage(archive_root, dry_run=True, max_items=10)
+            repaired_source_coverage = repaired["source_text_original_object_coverage"]
+            self.assertTrue(repaired["ok"], repaired)
+            self.assertEqual(repaired_source_coverage["status"], "passed")
+            self.assertEqual(repaired_source_coverage["exact_source_bytes_manifested_count"], 1)
+            self.assertEqual(repaired_source_coverage["exact_source_bytes_missing_count"], 0)
+            self.assertFalse(repaired_source_coverage["byte_availability_checked"])
+            self.assertNotIn("source_text_original_object_missing", repaired["blockers"])
+
+            repaired_doctor = archive_cli.Doctor(archive_root)
+            repaired_doctor._check_object_manifest()
+            repaired_doctor._check_derived_text_manifest()
+            self.assertNotIn(
+                "derived_text_source_bytes_object_missing",
+                [diagnostic.code for diagnostic in repaired_doctor.diagnostics],
+            )
+
+    def test_derived_text_source_object_coverage_rejects_inconsistent_manifest_identity(self) -> None:
+        source_hash = "a" * 64
+        stored_hash = "b" * 64
+        record = {
+            "derived_text_id": "derived-text:sha256:" + stored_hash,
+            "source_object_id": "sha256:" + ("c" * 64),
+            "text_sha256": stored_hash,
+            "provenance": {"source_text_sha256": source_hash},
+        }
+        coverage = archive_services.derived_text_source_object_coverage(
+            [
+                {
+                    "object_id": f"sha256:{source_hash}",
+                    "sha256": "d" * 64,
+                }
+            ],
+            [record],
+            max_items=10,
+        )
+        self.assertEqual(coverage["status"], "needs_objet_capture")
+        self.assertEqual(coverage["exact_source_bytes_missing_count"], 1)
 
     def test_derive_text_capture_encoding_ladder_blocks_deterministically(self) -> None:
         cases = [

@@ -82,13 +82,16 @@ WOM still does not persist a canonical global traversal map, goal, or loop.
 Strict catalog sessions and the private pass artifact are bounded reading
 mechanisms. The host owns its task goal and continuation UX.
 
-## Open Terminology Question
+## 2026-07-16 Terminology Resolution
 
-The current public naming baseline defines `node` as a subject/archive
-participant, while the current local graph index stores edges between zet ids
-and therefore treats zets as graph vertices in implementation. The present
-node-first reading direction does not silently resolve that collision.
+The original decision text above is preserved because `node-first` was the
+wording accepted at v0.3.203. The current public naming baseline reserves
+`node` for a subject/archive participant. The local graph implementation may
+treat zet ids as `zet vertices`, but current public and runtime guidance calls
+them `zets`, `zet entries`, or an exhaustive zet reading scope. It does not call
+each document another node.
 
-Before a schema or command is named around `node`, the project must review
-whether to distinguish `archive node` from `zet node`, or adopt another explicit
-model. No existing identifier or public term is renamed by this decision.
+No schema, command, output key, historical release note, or decision-log title
+is renamed here. Existing identifiers that contain `node` remain compatibility
+surfaces. Any future identifier migration needs its own reviewed plan and must
+not silently change archive meaning.

@@ -767,6 +767,18 @@ class McpServerTests(unittest.TestCase):
                 "body",
             )
             self.assertEqual(
+                tools_by_name["read_zettel"]["inputSchema"]["properties"]["body_max_chars"]["maximum"],
+                archive_services.ZETTEL_READ_BODY_MAX_CHARS,
+            )
+            self.assertEqual(
+                tools_by_name["read_zettel"]["inputSchema"]["properties"]["body_cursor"]["default"],
+                0,
+            )
+            self.assertEqual(
+                tools_by_name["read_zettel"]["inputSchema"]["properties"]["expected_body_sha256"]["pattern"],
+                "^sha256:[0-9a-f]{64}$",
+            )
+            self.assertEqual(
                 tools_by_name["zet_catalog"]["inputSchema"]["properties"]["page_size"]["maximum"],
                 1000,
             )
@@ -7596,6 +7608,86 @@ class McpServerTests(unittest.TestCase):
                     "A compact MCP-created draft for first-pass reading.",
                 )
                 self.assertEqual(read_result["overview"]["gist_source"], "frontmatter.abstract")
+
+                paged_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 4,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "read_zettel",
+                            "arguments": {
+                                "archive_root": str(archive_root),
+                                "path": relative_path,
+                                "section": "document",
+                                "body_max_chars": 10,
+                            },
+                        },
+                    },
+                )
+                self.assertFalse(paged_response["result"]["isError"])
+                paged_result = paged_response["result"]["structuredContent"]
+                self.assertEqual(paged_result["section"], "document")
+                self.assertEqual(paged_result["body_page"]["cursor"], 0)
+                self.assertEqual(paged_result["body_page"]["max_chars"], 10)
+                self.assertEqual(paged_result["body_page"]["returned_chars"], 10)
+                self.assertFalse(paged_result["body_page"]["complete"])
+                self.assertEqual(paged_result["body_page"]["next_cursor"], 10)
+                self.assertEqual(
+                    paged_result["body_page"]["body_sha256"],
+                    paged_result["integrity"]["body_sha256"],
+                )
+
+                unbound_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 5,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "read_zettel",
+                            "arguments": {
+                                "archive_root": str(archive_root),
+                                "path": relative_path,
+                                "section": "document",
+                                "body_cursor": paged_result["body_page"]["next_cursor"],
+                                "body_max_chars": 10,
+                            },
+                        },
+                    },
+                )
+                self.assertTrue(unbound_response["result"]["isError"])
+                self.assertIn(
+                    "requires expected_body_sha256 from the first page",
+                    unbound_response["result"]["content"][0]["text"],
+                )
+
+                continued_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 6,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "read_zettel",
+                            "arguments": {
+                                "archive_root": str(archive_root),
+                                "path": relative_path,
+                                "section": "document",
+                                "body_cursor": paged_result["body_page"]["next_cursor"],
+                                "body_max_chars": 10,
+                                "expected_body_sha256": paged_result["integrity"]["body_sha256"],
+                            },
+                        },
+                    },
+                )
+                self.assertFalse(continued_response["result"]["isError"])
+                continued_result = continued_response["result"]["structuredContent"]
+                self.assertEqual(
+                    continued_result["body_page"]["cursor"],
+                    paged_result["body_page"]["next_cursor"],
+                )
         finally:
             self.stop_server(process)
 
