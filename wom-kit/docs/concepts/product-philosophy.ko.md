@@ -326,3 +326,7 @@ local archive
 가장 어려운 social-network layer부터 시작하면 안 됩니다.
 
 먼저 private memory를 신뢰할 수 있게 만들어야 합니다.
+
+이 철학의 각 원칙이 어떤 명령, AI 운영 규칙, 회귀 테스트로 구현되었고 어떤
+실사용 경계가 남았는지는
+[WOM 설계 철학 구현 근거](../philosophy-implementation-evidence.ko.md)를 보세요.

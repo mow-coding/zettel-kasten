@@ -1,7 +1,8 @@
 # Archive Infra Decision Log - Node-First Exhaustive Traversal
 
 Date: 2026-07-11
-Status: accepted design direction; not yet implemented
+Updated: 2026-07-16
+Status: accepted at v0.3.203; core traversal implemented in v0.3.204-v0.3.216; private pass artifact lifecycle implemented in v0.3.217
 
 ## Context
 
@@ -48,16 +49,38 @@ recoverable from the local nodes and their relationships.
   overhead.
 - A changing corpus requires stable identity and change evidence so host
   applications can establish their own snapshot or change boundary.
-- The existing one-zet overview and AI start-here commands are useful building
-  blocks, but an archive-wide abstract enumeration and ordering surface remains
-  future work.
+- The one-zet overview and AI start-here commands remain entry surfaces. The
+  archive-wide implementation now continues through `first-read-readiness`,
+  strict paged `zet-catalog`, MCP continuation, token and response-envelope
+  budgets, seeded reading order, routed reading evidence, and the one-process
+  `zet-catalog-pass`.
 
-## Non-Claim
+## Historical v0.3.203 Non-Claim
 
-This decision records product and architecture direction only. It does not claim
-that archive-wide abstract enumeration or host-driven exhaustive traversal is
-implemented in v0.3.203. Persisted traversal checkpoints are not accepted as a
-WOM responsibility by this decision and remain a separate future question.
+At the time this decision was accepted, it recorded product and architecture
+direction only. It did not claim that archive-wide abstract enumeration or
+host-driven exhaustive traversal was implemented in v0.3.203. That historical
+non-claim remains true for v0.3.203 and must not be rewritten as if the feature
+already existed in that release.
+
+## Implementation Follow-Through
+
+The direction was implemented incrementally after v0.3.203:
+
+- [zet Abstract And Live Catalog](zet-abstract-catalog.md) records the
+  v0.3.204-v0.3.216 path from deterministic enumeration through strict compact
+  continuation and one-process completion.
+- [zet Catalog Scale And Token Budget](zet-catalog-scale-and-token-budget.md)
+  records bounded host-context behavior.
+- [zet Catalog Pass Artifact Lifecycle](zet-catalog-pass-artifact-lifecycle.md)
+  records the v0.3.217 SHA-bound private read and cleanup boundary.
+- [WOM Philosophy Implementation Evidence](philosophy-implementation-evidence.md)
+  maps this mechanism to the larger Memento Problem and artifact-primacy
+  doctrine without treating structural coverage as semantic quality.
+
+WOM still does not persist a canonical global traversal map, goal, or loop.
+Strict catalog sessions and the private pass artifact are bounded reading
+mechanisms. The host owns its task goal and continuation UX.
 
 ## Open Terminology Question
 

@@ -24,6 +24,23 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.252 Philosophy Implementation Traceability
+
+No archive migration is required. This release changes documentation and
+regression checks only. Existing command behavior, schemas, zets, objets,
+receipts, manifests, indexes, and write authority are unchanged.
+
+Use the paired
+[English](wom-kit/docs/philosophy-implementation-evidence.md) and
+[Korean](wom-kit/docs/philosophy-implementation-evidence.ko.md) evidence maps
+when reviewing whether WOM's design philosophy is implemented. Read each row
+across all four columns: the philosophy claim, implemented surface, regression
+evidence, and honest boundary belong together.
+
+Do not interpret a structural catalog pass as semantic abstract approval, a
+receipt as objective truth, or local backup evidence as current remote proof.
+Those remain real-use or provider-specific validation boundaries.
+
 ## v0.3.251 Honest Local Backup Evidence Status
 
 No archive migration is required. The release adds one read-only JSON status

@@ -32,6 +32,8 @@
 - [Foundational Product Whitepaper](concepts/foundational-product-whitepaper.md)
 - [Product Philosophy](concepts/product-philosophy.md)
 - [한국어 Product Philosophy](concepts/product-philosophy.ko.md)
+- [WOM 설계 철학 구현 근거](philosophy-implementation-evidence.ko.md)
+- [영문 WOM Philosophy Implementation Evidence](philosophy-implementation-evidence.md)
 - [WOM Safe HTML Profile](concepts/wom-safe-html-profile.md)
 - [한국어 WOM Safe HTML Profile](concepts/wom-safe-html-profile.ko.md)
 - [ZET Sharing Lifecycle Terminology](concepts/zet-sharing-lifecycle.md)

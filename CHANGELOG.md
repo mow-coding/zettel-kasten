@@ -6,6 +6,26 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.252 - 2026-07-16
+
+Philosophy implementation traceability checkpoint. Documentation and
+regression coverage only; no archive migration, command behavior, or write
+authority change.
+
+- **Core philosophy now has a public evidence map.** Paired English/Korean
+  documents connect each doctrine to shipped runtime surfaces and tests.
+- **Proof layers stay separate.** Engineering implementation, semantic
+  real-use validation, and provider-specific future work can no longer collapse
+  into one vague completion claim.
+- **Node-first history is accurate again.** The original v0.3.203 non-claim is
+  preserved while the v0.3.204-v0.3.217 implementation path is linked.
+- **Completion boundaries remain honest.** Structural coverage is not abstract
+  quality, receipts are not timeless truth, and local evidence is not current
+  remote proof.
+- **Runtime stays compact.** No new philosophy command or mandatory startup
+  document is added; progressive disclosure and existing Agent Skill behavior
+  remain unchanged.
+
 ## v0.3.251 - 2026-07-15
 
 Honest local backup-evidence status checkpoint. Compatible additive read-only
