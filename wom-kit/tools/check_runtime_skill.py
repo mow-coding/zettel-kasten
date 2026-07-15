@@ -27,6 +27,8 @@ REQUIRED_PACKAGE_PHRASES = (
     "foreign-block",
     "zet-revision-receipt-audit",
     "Never expose secret values",
+    "Matching names or labels never authorize a silent identity merge",
+    "`canonical` means the current human-reviewed archive state",
     "Use `zettel` for the general zettel-kasten concept",
 )
 

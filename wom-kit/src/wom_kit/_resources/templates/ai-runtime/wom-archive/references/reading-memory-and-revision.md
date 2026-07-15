@@ -39,6 +39,22 @@ A structural pass cannot prove semantic quality.
    evidence.
 5. Record unresolved contradictions instead of silently choosing one version.
 
+## Preserve Human Change Without Inventing Entity Certainty
+
+- Compare time-situated artifacts and their provenance before explaining how a
+  person's meaning, belief, or judgment changed.
+- Treat a repeated name or label as a reading clue, never as proof of one
+  identity or one stable meaning.
+- Treat `canonical` as the current human-reviewed archive state, not objective
+  or timeless truth.
+- State identity and relationship interpretations as bounded inferences with
+  their artifact, time, and scope. Never silently merge records or rewrite old
+  artifacts to make the graph look cleaner.
+- Use ties, edges, indexes, embeddings, and graph projections to order or
+  explain reading. They remain replaceable aids beneath the artifacts.
+- Preserve contradictions, corrections, repeated states, and supersession as
+  chronology when they help the human see change.
+
 ## Prepare Abstract Backfill Carefully
 
 Backfill and repair commands are write workflows. Preview proposals, inspect

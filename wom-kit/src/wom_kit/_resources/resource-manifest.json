@@ -1,6 +1,6 @@
 {
   "schema": "wom-kit/package-resource-manifest/v0.1",
-  "version": "0.3.246",
+  "version": "0.3.247",
   "source_of_truth": "wom-kit source resource directories",
   "file_count": 90,
   "files": [
@@ -247,8 +247,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/references/capture-draft-and-publication.md",
       "packaged": "templates/ai-runtime/wom-archive/references/capture-draft-and-publication.md",
-      "bytes": 2876,
-      "sha256": "10702feda6b56219b0d3b1548358ad591fdf35f86d40030761f755bb77f46d8c"
+      "bytes": 3295,
+      "sha256": "54208476d7197cbeec76b69706d57c7c7ad2b41f5f0d35fbb1b8980829e8df1c"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/foreign-sharing-and-trust.md",
@@ -259,14 +259,14 @@
     {
       "source": "templates/ai-runtime/wom-archive/references/operator-contract.md",
       "packaged": "templates/ai-runtime/wom-archive/references/operator-contract.md",
-      "bytes": 47377,
-      "sha256": "92767130794024be403a31428237c1f49b3bf4e736af33a2f0116849b1e2105e"
+      "bytes": 47917,
+      "sha256": "fa4abf4e1b61276056d28ee224b5212fb46828ab3b6fe3bac901f33919345b2b"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/reading-memory-and-revision.md",
       "packaged": "templates/ai-runtime/wom-archive/references/reading-memory-and-revision.md",
-      "bytes": 2540,
-      "sha256": "776ede94156cd87d56c5950b4bc437c00d2ce5508153667a89e05f73e7afcf72"
+      "bytes": 3410,
+      "sha256": "e9e8d5437539889d5200f66a6775ae1d026abcb89463bf65bf4d62422b832ea4"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/safety-results-and-human-language.md",
@@ -283,14 +283,14 @@
     {
       "source": "templates/ai-runtime/wom-archive/SKILL.md",
       "packaged": "templates/ai-runtime/wom-archive/SKILL.md",
-      "bytes": 4408,
-      "sha256": "db43afd41a55e3cb38fae582ccd1e76e051bb248afae66b4304f0f90aa0ea9a7"
+      "bytes": 4892,
+      "sha256": "b4ad2fb7b9392b338706aa5797d800aa09cca300f4e6abdaec0e6aec2d10fad0"
     },
     {
       "source": "templates/company/AGENTS.md",
       "packaged": "templates/company/AGENTS.md",
-      "bytes": 6312,
-      "sha256": "1c2780edf6648fdde56bc0015070fdc3331de1a90bf4ec5acefbbfa0c0270e5f"
+      "bytes": 6684,
+      "sha256": "3597cdc3c54fe9cbb425b186770b39be0bd91304fa6c0d7dbecd9019ccfb8668"
     },
     {
       "source": "templates/company/archive-identity.yml",
@@ -361,8 +361,8 @@
     {
       "source": "templates/family/AGENTS.md",
       "packaged": "templates/family/AGENTS.md",
-      "bytes": 6452,
-      "sha256": "e28b32706850f4acf5a37da13c20337df6d8cc5b6f3bc4195106445d6a64e178"
+      "bytes": 6824,
+      "sha256": "f521490ee12a18b7267adb085f7a66675aaaac0570d7c0586f2ed97cb805dee2"
     },
     {
       "source": "templates/family/archive-identity.yml",
@@ -433,8 +433,8 @@
     {
       "source": "templates/personal/AGENTS.md",
       "packaged": "templates/personal/AGENTS.md",
-      "bytes": 6421,
-      "sha256": "86100608b9e455fa53cb0cd845d04971b8303985063576de7e3c60243a7f31b6"
+      "bytes": 6793,
+      "sha256": "4ca02f754448f51815a19c19a9e5cf792ac3eaf07d9ce11d56f289948fa5e89c"
     },
     {
       "source": "templates/personal/archive-identity.yml",
@@ -539,10 +539,10 @@
       "sha256": "d619dc26af3216498c8392dfe838b0fe752d4bad9da998a58ca682d668fc510c"
     },
     {
-      "source": "docs/releases/v0.3.246.md",
-      "packaged": "release-notes/v0.3.246.md",
-      "bytes": 2423,
-      "sha256": "7f307e273bc5986fc577791425f5864be3b22cc881789b7aff8ea48784dd6e65"
+      "source": "docs/releases/v0.3.247.md",
+      "packaged": "release-notes/v0.3.247.md",
+      "bytes": 2237,
+      "sha256": "9a40de71e91bfee57d92bce8c0e60615ba76cd227975476c69890bb1cb218ce5"
     }
   ]
 }

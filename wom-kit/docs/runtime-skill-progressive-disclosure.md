@@ -35,9 +35,11 @@ templates/ai-runtime/wom-archive/
 
 `SKILL.md` contains the required YAML `name` and `description`, the bounded
 first action, a goal-to-reference routing table, universal safety rules, and
-the human-facing completion contract. At v0.3.243 it is 97 lines and 555 words.
+the human-facing completion contract. At v0.3.243 it was 97 lines and 555
+words. The v0.3.247 artifact-primacy runtime contract is 104 lines and 620
+words, still below the enforced first-read budget.
 
-The five focused references cover ordinary task families. The preserved
+The six focused references cover ordinary task families. The preserved
 `operator-contract.md` contains the complete previous runtime contract so an
 exact advanced command, historical boundary, or narrow trust-stage rule is not
 lost during the split.

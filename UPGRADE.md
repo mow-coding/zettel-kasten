@@ -24,6 +24,22 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.247 Runtime Artifact Primacy
+
+No archive migration is required. Stored zets, objets, edges, manifests,
+receipts, schemas, and command authority are unchanged.
+
+Upgrade when the AI operator should receive the artifact-primacy and human-drift
+rules directly from the installed `wom-archive` Agent Skill and generated
+archive `AGENTS.md`. The runtime now states that canonical means the current
+human-reviewed archive state, matching labels never authorize an identity
+merge, generated relationship structures remain reading aids, and
+contradictions or changed meanings should remain visible with provenance.
+
+If a managed runtime skill is already installed, use the existing
+`runtime-skill-install --dry-run` then exact approved update path. Wheel
+installation alone still does not modify AI-host configuration or an archive.
+
 ## v0.3.246 Artifact Primacy And Human Drift
 
 No archive migration is required. Runtime commands, schemas, stored zets,

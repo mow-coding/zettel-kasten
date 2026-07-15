@@ -72,6 +72,64 @@ class ArtifactPrimacyDocumentationTests(unittest.TestCase):
         self.assertIn("an artifact-first human-memory doctrine", readme)
         self.assertIn("아티팩트 우선 인간 기억 원칙", readme_ko)
 
+    def test_runtime_operator_surfaces_apply_the_doctrine(self) -> None:
+        skill_root = KIT_ROOT / "templates" / "ai-runtime" / "wom-archive"
+        skill = (skill_root / "SKILL.md").read_text(encoding="utf-8")
+        reading = (skill_root / "references" / "reading-memory-and-revision.md").read_text(
+            encoding="utf-8"
+        )
+        capture = (skill_root / "references" / "capture-draft-and-publication.md").read_text(
+            encoding="utf-8"
+        )
+        operator = (skill_root / "references" / "operator-contract.md").read_text(
+            encoding="utf-8"
+        )
+        skill_prose = " ".join(skill.split())
+        reading_prose = " ".join(reading.split())
+        capture_prose = " ".join(capture.split())
+
+        for phrase in (
+            "time-situated artifacts and their chronology as primary evidence",
+            "`canonical` means the current human-reviewed archive state",
+            "Matching names or labels never authorize a silent identity merge",
+        ):
+            with self.subTest(surface="runtime-skill", phrase=phrase):
+                self.assertIn(phrase, skill_prose)
+
+        self.assertIn("Preserve Human Change Without Inventing Entity Certainty", reading)
+        self.assertIn("never as proof of one identity or one stable meaning", reading_prose)
+        self.assertIn("A matching name or label is not permission", capture_prose)
+        self.assertIn("ARTIFACT PRIMACY AND HUMAN DRIFT", operator)
+
+        for profile in ("personal", "company", "family"):
+            agents = (KIT_ROOT / "templates" / profile / "AGENTS.md").read_text(
+                encoding="utf-8"
+            )
+            with self.subTest(profile=profile):
+                self.assertIn("ARTIFACT PRIMACY AND HUMAN DRIFT", agents)
+                self.assertIn("Matching names or labels never authorize", agents)
+
+    def test_v03247_release_surfaces_publish_runtime_enforcement_boundary(self) -> None:
+        release = (KIT_ROOT / "docs" / "releases" / "v0.3.247.md").read_text(
+            encoding="utf-8"
+        )
+        decision = (
+            KIT_ROOT
+            / "docs"
+            / "archive-infra-decision-log-2026-07-15-v03247-runtime-artifact-primacy.md"
+        ).read_text(encoding="utf-8")
+        matrix = (KIT_ROOT / "docs" / "capability-matrix.md").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("# v0.3.247 - Runtime Artifact Primacy", release)
+        self.assertIn("Status: Accepted for v0.3.247", decision)
+        self.assertIn("implemented runtime operator contract", matrix)
+        for text in (release, decision):
+            with self.subTest(document=text[:40]):
+                self.assertIn("matching names or labels", text.lower())
+                self.assertIn("no entity resolver", text.lower())
+
 
 if __name__ == "__main__":
     unittest.main()
