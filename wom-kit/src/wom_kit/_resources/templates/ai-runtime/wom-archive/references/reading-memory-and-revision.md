@@ -69,9 +69,12 @@ After approved revision work, run:
 archive zet-revision-receipt-audit <archive-root> --dry-run --max-receipts 5000 --max-locks 5000 --max-problems 100 --progress --format json
 ```
 
-If a canonical revision needs to be restored, use a trusted private byte source
-and the dedicated restore plan/write workflow. Do not delete revision locks,
-rewrite receipts, or reconstruct old bytes from a displayed diff.
+If a v0.2 canonical revision needs to be restored, use
+`zet-revision-restore-proposal-from-snapshot` to make an independent private
+review copy, then use the dedicated restore plan/write workflow. Legacy v0.1
+receipts still need a trusted private byte source. Do not delete revision
+locks, rewrite receipts, hard-link a mutable proposal to immutable history, or
+reconstruct old bytes from a displayed diff.
 
 Search [operator-contract.md](operator-contract.md) for these exact advanced
 workflows before using them:
@@ -80,6 +83,7 @@ workflows before using them:
 - `zet-abstract-backfill-revert`
 - `zet-revision-plan`
 - `zet-revision-write`
+- `zet-revision-restore-proposal-from-snapshot`
 - `zet-revision-restore-plan`
 - `zet-revision-restore-write`
 

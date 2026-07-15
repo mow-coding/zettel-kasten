@@ -250,12 +250,21 @@ every adjacent full before/after state connects and event timestamps remain
 unique and increasing.
 Treat missing-receipt, prewrite, ambiguous, invalid, or unsupported locks as
 human-review stops. A completed leftover lock is only a warning, but still must
-not be auto-deleted. Hash receipts cannot recreate old zet content, so never
-claim or attempt an automatic canonical revert from this audit.
+not be auto-deleted. Legacy hash-only receipts cannot recreate old zet content,
+so never claim or attempt an automatic canonical revert from this audit.
 
-If the human separately recovers a complete old zet from a trusted private
-backup, place it only under `.wom-scratch/revisions/restores/` and run the
-CLI-only read plan:
+For an ordinary v0.2 revision receipt, first preview and then explicitly approve
+an independent private copy of its verified before-snapshot:
+
+```bash
+archive zet-revision-restore-proposal-from-snapshot <archive-root> --receipt receipts/revisions/canonical/<digest>.zet-revision.json --expected-receipt-sha256 <sha256> --dry-run --format json
+archive zet-revision-restore-proposal-from-snapshot <archive-root> --receipt receipts/revisions/canonical/<digest>.zet-revision.json --expected-receipt-sha256 <sha256> --expected-plan-digest <sha256> --approve --format json
+```
+
+Materialization is not restore approval. Inspect the returned private proposal
+beside the current canonical zet. For a legacy v0.1 receipt, the human must
+still recover a complete old zet from a trusted private backup and place it
+only under `.wom-scratch/revisions/restores/`. Then run the CLI-only read plan:
 
 ```bash
 archive zet-revision-restore-plan <archive-root> --receipt receipts/revisions/canonical/<digest>.zet-revision.json --expected-receipt-sha256 <sha256> --restore-proposal .wom-scratch/revisions/restores/<private>.md --dry-run --format json

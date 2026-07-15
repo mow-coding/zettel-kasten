@@ -1,6 +1,6 @@
 # Runtime Canonical Entry Points
 
-Status: v0.3.248 installed-wheel resource, quick handoff, revision-audit, and exact-restore checkpoint
+Status: v0.3.249 installed-wheel resource, quick handoff, revision-audit, and exact-restore checkpoint
 
 When an AI runtime enters a WOM archive, it needs a small, explicit "start
 here" map. The archive may contain zets, source bindings, provider metadata,
@@ -75,8 +75,13 @@ After any approved `zet-revision-write`, run the separate CLI-only
 transaction-lock check, not another archive startup scan and not permission to
 delete a leftover lock.
 
-When a human separately recovers complete old zet bytes from a trusted private
-backup, use CLI-only `archive zet-revision-restore-plan <archive-root>
+For a v0.2 ordinary revision receipt, first use CLI-only `archive
+zet-revision-restore-proposal-from-snapshot <archive-root> --receipt
+<canonical-revision-receipt> --expected-receipt-sha256 <sha256> --dry-run
+--format json`, then approve only its unchanged plan digest. This creates an
+independent private review copy and does not approve a restore. For a legacy
+v0.1 receipt, a human must still recover complete old zet bytes from a trusted
+private backup. Then use CLI-only `archive zet-revision-restore-plan <archive-root>
 --receipt <canonical-revision-receipt> --expected-receipt-sha256 <sha256>
 --restore-proposal .wom-scratch/revisions/restores/<private>.md --dry-run
 --format json`. A green plan only prepares private human review and grants no

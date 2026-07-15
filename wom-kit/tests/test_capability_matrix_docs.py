@@ -939,7 +939,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "latest-event-bound recovered-full-zet restore planning in v0.3.239",
+            "latest-event-bound recovered-full-zet restore planning in v0.3.249",
             "never tries to reconstruct text from a hash",
             "archive-wide `zet-revision-receipt-audit` to be healthy",
             "current publication policy",
@@ -964,6 +964,76 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         self.assertIn("Add CLI-only, read-only `zet-revision-restore-plan`", decision_text)
         self.assertIn("zet-revision-restore-plan.md", public_map_text)
         self.assertIn("zet-revision-restore-plan.md", public_map_ko_text)
+
+    def test_before_snapshot_restore_proposal_bridge_is_documented(self) -> None:
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        guide_text = (
+            KIT_ROOT
+            / "docs"
+            / "zet-revision-restore-proposal-from-snapshot.md"
+        ).read_text(encoding="utf-8")
+        release_text = (
+            KIT_ROOT / "docs" / "releases" / "v0.3.249.md"
+        ).read_text(encoding="utf-8")
+        decision_text = (
+            KIT_ROOT
+            / "docs"
+            / "archive-infra-decision-log-2026-07-15-v03249-before-snapshot-restore-proposal.md"
+        ).read_text(encoding="utf-8")
+        changelog_text = (REPO_ROOT / "CHANGELOG.md").read_text(
+            encoding="utf-8"
+        )
+        upgrade_text = (REPO_ROOT / "UPGRADE.md").read_text(encoding="utf-8")
+        upgrade_ko_text = (REPO_ROOT / "UPGRADE.ko.md").read_text(
+            encoding="utf-8"
+        )
+        readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        readme_ko_text = (REPO_ROOT / "README.ko.md").read_text(
+            encoding="utf-8"
+        )
+        runtime_skill_text = read_runtime_skill_package()
+        entrypoint_text = (
+            KIT_ROOT / "docs" / "runtime-canonical-entrypoints.md"
+        ).read_text(encoding="utf-8")
+        public_map_text = (
+            KIT_ROOT / "docs" / "public-documentation-map.md"
+        ).read_text(encoding="utf-8")
+        public_map_ko_text = (
+            KIT_ROOT / "docs" / "public-documentation-map.ko.md"
+        ).read_text(encoding="utf-8")
+        combined = "\n".join(
+            (
+                matrix_text,
+                guide_text,
+                release_text,
+                decision_text,
+                changelog_text,
+                upgrade_text,
+                upgrade_ko_text,
+                readme_text,
+                readme_ko_text,
+                runtime_skill_text,
+                entrypoint_text,
+            )
+        )
+
+        for phrase in (
+            "Status: v0.3.249 before-snapshot restore-proposal bridge checkpoint",
+            f"Version: {CURRENT_VERSION}, release candidate",
+            "zet-revision-restore-proposal-from-snapshot",
+            "independent",
+            "never a hard link",
+            "Materialization is not restore approval.",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, combined)
+        self.assertIn(
+            "zet-revision-restore-proposal-from-snapshot.md", public_map_text
+        )
+        self.assertIn(
+            "zet-revision-restore-proposal-from-snapshot.md",
+            public_map_ko_text,
+        )
 
     def test_canonical_zet_exact_byte_restore_write_is_documented(self) -> None:
         matrix_text = MATRIX_PATH.read_text(encoding="utf-8")

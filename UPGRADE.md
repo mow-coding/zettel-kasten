@@ -24,6 +24,29 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.249 Before-Snapshot Restore Proposal Bridge
+
+No archive migration is required. This release adds an optional CLI bridge for
+ordinary v0.2 revision receipts created by v0.3.248 or later.
+
+Preview the verified source and private destination first:
+
+```powershell
+archive zet-revision-restore-proposal-from-snapshot <archive-root> `
+  --receipt receipts/revisions/canonical/<digest>.zet-revision.json `
+  --expected-receipt-sha256 <sha256> `
+  --dry-run --format json
+```
+
+Approval must reuse the returned `plan_digest`. It creates an independent exact
+copy under `.wom-scratch/revisions/restores/` and changes no canonical zet.
+Inspect that copy, then continue through `zet-revision-restore-plan` and the
+separate reviewed restore writer. Do not hard-link a mutable proposal to the
+immutable snapshot or treat materialization as restore approval.
+
+Legacy v0.1 receipts are unchanged and still require complete old bytes from a
+separate trusted private backup.
+
 ## v0.3.248 Canonical Revision Before Snapshot
 
 No archive migration is required. Existing v0.1 revision receipts remain

@@ -1,6 +1,6 @@
 # Canonical zet Revision Restore Plan
 
-Status: latest-event-bound recovered-full-zet restore planning in v0.3.239
+Status: latest-event-bound recovered-full-zet restore planning in v0.3.249
 
 `zet-revision-restore-plan` answers a narrow recovery question: does one
 complete old zet recovered from a private backup exactly match the `before`
@@ -14,10 +14,12 @@ already exist in private scratch:
 ```
 
 Since v0.3.248, new ordinary v0.2 revision receipts point to an exact local
-before-snapshot under `objects/sha256/`. That removes the prior-byte loss for
-new corrections, but this release's restore command still requires the human
-to place the complete reviewed bytes in private restore scratch before
-planning. Legacy v0.1 receipts still depend on a separate private backup.
+before-snapshot under `objects/sha256/`. Since v0.3.249, first run
+`zet-revision-restore-proposal-from-snapshot --dry-run|--approve` to create an
+independent content-addressed private proposal from those verified bytes. That
+copy step grants no restore authority; inspect the copy before passing it to
+this planner. Legacy v0.1 receipts still depend on a separate private backup
+and manual placement under private restore scratch.
 
 Run:
 
@@ -76,6 +78,11 @@ frontmatter value, provider URL, absolute local path, or secret.
 must still compare the current canonical zet, recovered old zet, and selected
 receipt privately. Do not copy the recovered file over the canonical zet by
 hand.
+
+For a v0.2 ordinary revision receipt, the recommended predecessor is
+[Restore Proposal From A Preserved Before-Snapshot](zet-revision-restore-proposal-from-snapshot.md).
+Its materialized proposal is independently editable and cannot mutate the
+immutable snapshot through a shared hard link.
 
 Since v0.3.239, pass the exact plan evidence to the separate CLI-only
 `zet-revision-restore-write --dry-run`. Its approval path repeats the

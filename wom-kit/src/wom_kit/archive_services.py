@@ -2818,6 +2818,9 @@ ZET_REVISION_RECEIPT_SCHEMAS = {
 }
 ZET_REVISION_WRITE_LOCK_SCHEMA = "wom-kit/zet-revision-write-lock/v0.1"
 ZET_REVISION_RECEIPT_AUDIT_SCHEMA = "wom-kit/zet-revision-receipt-audit/v0.1"
+ZET_REVISION_RESTORE_PROPOSAL_FROM_SNAPSHOT_SCHEMA = (
+    "wom-kit/zet-revision-restore-proposal-from-snapshot/v0.1"
+)
 ZET_REVISION_RESTORE_PLAN_SCHEMA = "wom-kit/zet-revision-restore-plan/v0.1"
 ZET_REVISION_RESTORE_WRITE_SCHEMA = "wom-kit/zet-revision-restore-write/v0.1"
 ZET_REVISION_RESTORE_RECEIPT_SCHEMA = (
@@ -11087,6 +11090,413 @@ def latest_zet_revision_event_for_target(
             "Canonical revision chain tip could not be resolved safely."
         )
     return ordered[-1]
+
+
+def write_zet_revision_restore_proposal_copy_new(
+    destination: Path, source_bytes: bytes
+) -> None:
+    """Publish an independent private proposal without replacing any file."""
+    temporary_path: Path | None = None
+    descriptor: int | None = None
+    published = False
+    try:
+        for _ in range(8):
+            candidate = destination.parent / (
+                f".{destination.name}.{secrets.token_hex(8)}.restore-proposal.tmp"
+            )
+            try:
+                descriptor = os.open(
+                    candidate,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    0o600,
+                )
+                temporary_path = candidate
+                break
+            except FileExistsError:
+                continue
+        if temporary_path is None or descriptor is None:
+            raise OSError("restore_proposal_temp_reservation_failed")
+        with os.fdopen(descriptor, "wb") as handle:
+            descriptor = None
+            handle.write(source_bytes)
+            handle.flush()
+            os.fsync(handle.fileno())
+
+        try:
+            # The link is made from a fresh copy, never from the immutable
+            # before-snapshot, so later proposal edits cannot alter history.
+            os.link(temporary_path, destination)
+            published = True
+        except FileExistsError:
+            raise
+        except OSError:
+            if destination.exists():
+                raise FileExistsError(str(destination))
+            final_descriptor: int | None = None
+            final_created = False
+            final_complete = False
+            try:
+                final_descriptor = os.open(
+                    destination,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    0o600,
+                )
+                final_created = True
+                with os.fdopen(final_descriptor, "wb") as final_handle:
+                    final_descriptor = None
+                    final_handle.write(source_bytes)
+                    final_handle.flush()
+                    os.fsync(final_handle.fileno())
+                final_complete = True
+                published = True
+            finally:
+                if final_descriptor is not None:
+                    os.close(final_descriptor)
+                if final_created and not final_complete and destination.exists():
+                    destination.unlink(missing_ok=True)
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        if temporary_path is not None and temporary_path.exists():
+            temporary_path.unlink(missing_ok=True)
+        if published:
+            _objet_capture_fsync_dir(destination.parent)
+
+
+def zet_revision_restore_proposal_from_snapshot(
+    archive_root: Path | str,
+    *,
+    receipt_path: str,
+    expected_receipt_sha256: str,
+    expected_plan_digest: str | None = None,
+    dry_run: bool = False,
+    approve: bool = False,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if bool(dry_run) == bool(approve):
+        blockers.append("exactly_one_of_dry_run_or_approve_required")
+
+    history_audit = _zet_revision_receipt_audit(root, dry_run=True)
+    if not history_audit.get("ok"):
+        blockers.append("revision_history_audit_not_healthy")
+    if history_audit.get("warnings"):
+        warnings.append("revision_history_audit_has_warnings")
+
+    receipt_file = resolve_zet_revision_restore_receipt_path(root, receipt_path)
+    receipt_bytes = read_zet_revision_file_bytes(
+        receipt_file, "Zet revision restore source receipt"
+    )
+    receipt_sha256 = "sha256:" + hashlib.sha256(receipt_bytes).hexdigest()
+    expected_receipt_valid = bool(
+        isinstance(expected_receipt_sha256, str)
+        and re.fullmatch(r"sha256:[0-9a-f]{64}", expected_receipt_sha256)
+    )
+    if not expected_receipt_valid:
+        blockers.append("expected_receipt_sha256_invalid")
+    elif expected_receipt_sha256 != receipt_sha256:
+        blockers.append("expected_receipt_sha256_mismatch")
+
+    try:
+        parsed_receipt = json.loads(receipt_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        parsed_receipt = {}
+        blockers.append("revision_receipt_unreadable_or_invalid")
+    receipt = parsed_receipt if isinstance(parsed_receipt, dict) else {}
+    if not isinstance(parsed_receipt, dict):
+        blockers.append("revision_receipt_not_object")
+    if receipt.get("schema") != ZET_REVISION_RECEIPT_SCHEMA:
+        blockers.append("v02_revision_receipt_with_before_snapshot_required")
+    elif validate_schema(receipt, "zet-revision-receipt-v0.2.schema.json"):
+        blockers.append("revision_receipt_schema_invalid")
+    if receipt.get("archive_id") != archive_id:
+        blockers.append("revision_receipt_archive_identity_mismatch")
+
+    source_write_plan_digest = receipt.get("write_plan_digest")
+    if (
+        not isinstance(source_write_plan_digest, str)
+        or not re.fullmatch(r"sha256:[0-9a-f]{64}", source_write_plan_digest)
+        or receipt_file.name
+        != source_write_plan_digest.removeprefix("sha256:")
+        + ".zet-revision.json"
+    ):
+        blockers.append("revision_receipt_filename_digest_mismatch")
+
+    before = receipt.get("before") if isinstance(receipt.get("before"), dict) else {}
+    before_file_sha256 = before.get("file_sha256")
+    if not isinstance(before_file_sha256, str) or not re.fullmatch(
+        r"sha256:[0-9a-f]{64}", before_file_sha256
+    ):
+        before_file_sha256 = ""
+        blockers.append("revision_receipt_before_state_invalid")
+    snapshot = (
+        receipt.get("before_snapshot")
+        if isinstance(receipt.get("before_snapshot"), dict)
+        else {}
+    )
+    snapshot_blockers: list[str] = []
+    if before_file_sha256:
+        snapshot_blockers = verify_zet_revision_before_snapshot(
+            root,
+            snapshot,
+            expected_before_sha256=before_file_sha256,
+        )
+        blockers.extend(snapshot_blockers)
+    else:
+        blockers.append("before_snapshot_evidence_missing_or_invalid")
+
+    object_id = snapshot.get("object_id")
+    logical_key = snapshot.get("logical_key")
+    size_bytes = snapshot.get("size_bytes")
+    safe_snapshot_descriptor = bool(
+        isinstance(object_id, str)
+        and re.fullmatch(r"sha256:[0-9a-f]{64}", object_id)
+        and isinstance(logical_key, str)
+        and logical_key
+        == f"objects/sha256/{object_id[-64:-62]}/{object_id[-64:]}"
+        and isinstance(size_bytes, int)
+        and not isinstance(size_bytes, bool)
+        and 0 < size_bytes <= ZET_REVISION_MAX_FILE_BYTES
+    )
+    destination_relative: str | None = None
+    destination: Path | None = None
+    snapshot_path: Path | None = None
+    if safe_snapshot_descriptor:
+        digest = object_id.removeprefix("sha256:")
+        destination_relative = (
+            f"{ZET_REVISION_RESTORE_PROPOSAL_PREFIX}"
+            f"{digest}.before-snapshot.md"
+        )
+        destination = root.joinpath(*PurePosixPath(destination_relative).parts)
+        snapshot_path = root.joinpath(*PurePosixPath(logical_key).parts)
+        if zet_revision_path_has_symlink_component(root, destination):
+            blockers.append("restore_proposal_destination_path_unsafe")
+    else:
+        blockers.append("before_snapshot_evidence_missing_or_invalid")
+
+    destination_exists = False
+    destination_exact = False
+    destination_independent = False
+    if destination is not None and destination.exists():
+        destination_exists = True
+        try:
+            if (
+                destination.is_symlink()
+                or zet_revision_path_has_symlink_component(root, destination)
+            ):
+                raise OSError("unsafe_destination")
+            destination_stat = os.lstat(destination)
+            if not stat.S_ISREG(destination_stat.st_mode):
+                raise OSError("destination_not_regular")
+            destination_exact = bool(
+                destination_stat.st_size == size_bytes
+                and sha256_path(destination) == object_id.removeprefix("sha256:")
+            )
+            destination_independent = bool(
+                snapshot_path is not None
+                and not os.path.samefile(snapshot_path, destination)
+            )
+        except (OSError, ArchiveServiceError):
+            destination_exact = False
+            destination_independent = False
+        if not destination_exact:
+            blockers.append("restore_proposal_destination_collision")
+        elif not destination_independent:
+            blockers.append(
+                "restore_proposal_must_not_share_storage_identity_with_snapshot"
+            )
+
+    plan_digest = sha256_json_value(
+        {
+            "schema": ZET_REVISION_RESTORE_PROPOSAL_FROM_SNAPSHOT_SCHEMA,
+            "runtime_version": WOM_KIT_VERSION,
+            "archive_id": archive_id,
+            "receipt_sha256": receipt_sha256,
+            "source_write_plan_digest": source_write_plan_digest,
+            "before_file_sha256": before_file_sha256 or None,
+            "before_snapshot": {
+                "object_id": object_id if safe_snapshot_descriptor else None,
+                "logical_key": logical_key if safe_snapshot_descriptor else None,
+                "size_bytes": size_bytes if safe_snapshot_descriptor else None,
+            },
+            "destination_relative": destination_relative,
+            "copy_contract": "independent_exact_bytes_no_overwrite",
+        }
+    )
+    expected_plan_valid = bool(
+        isinstance(expected_plan_digest, str)
+        and re.fullmatch(r"sha256:[0-9a-f]{64}", expected_plan_digest)
+    )
+    if approve:
+        if not expected_plan_valid:
+            blockers.append("expected_plan_digest_required_for_approval")
+        elif expected_plan_digest != plan_digest:
+            blockers.append("expected_plan_digest_mismatch")
+
+    blockers = unique_preserve_order(blockers)
+    warnings = unique_preserve_order(warnings)
+    proposal_written = False
+    restore_directory_created = False
+    if approve and not blockers and destination is not None and not destination_exists:
+        parent_existed = destination.parent.exists()
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        restore_directory_created = not parent_existed
+        if zet_revision_path_has_symlink_component(root, destination):
+            blockers.append("restore_proposal_destination_path_unsafe")
+        else:
+            assert snapshot_path is not None
+            source_bytes = read_zet_revision_file_bytes(
+                snapshot_path, "Zet revision before snapshot"
+            )
+            if (
+                len(source_bytes) != size_bytes
+                or hashlib.sha256(source_bytes).hexdigest()
+                != object_id.removeprefix("sha256:")
+            ):
+                blockers.append("before_snapshot_bytes_changed_before_copy")
+            else:
+                try:
+                    write_zet_revision_restore_proposal_copy_new(
+                        destination, source_bytes
+                    )
+                    proposal_written = True
+                except FileExistsError:
+                    pass
+                except OSError:
+                    blockers.append("restore_proposal_write_failed")
+
+        if destination.exists() and not blockers:
+            try:
+                destination_stat = os.lstat(destination)
+                destination_exists = True
+                destination_exact = bool(
+                    stat.S_ISREG(destination_stat.st_mode)
+                    and not destination.is_symlink()
+                    and destination_stat.st_size == size_bytes
+                    and sha256_path(destination)
+                    == object_id.removeprefix("sha256:")
+                )
+                destination_independent = bool(
+                    not os.path.samefile(snapshot_path, destination)
+                )
+            except (OSError, ArchiveServiceError):
+                destination_exact = False
+                destination_independent = False
+            if not destination_exact:
+                blockers.append("restore_proposal_write_verification_failed")
+            elif not destination_independent:
+                blockers.append(
+                    "restore_proposal_must_not_share_storage_identity_with_snapshot"
+                )
+
+    blockers = unique_preserve_order(blockers)
+    ok = not blockers
+    if not ok:
+        status = "blocked"
+    elif destination_exists and destination_exact and destination_independent:
+        status = "materialized" if proposal_written else "already_materialized"
+    else:
+        status = "ready_to_materialize"
+    history_summary = history_audit.get("summary")
+    if not isinstance(history_summary, dict):
+        history_summary = {}
+    return {
+        "ok": ok,
+        "dry_run": bool(dry_run),
+        "approved": bool(approve),
+        "schema": ZET_REVISION_RESTORE_PROPOSAL_FROM_SNAPSHOT_SCHEMA,
+        "runtime_version": WOM_KIT_VERSION,
+        "lifecycle_action": "zet_revision_restore_proposal_from_snapshot",
+        "status": status,
+        "history_audit": {
+            "ok": bool(history_audit.get("ok")),
+            "status": history_audit.get("status"),
+            "audit_digest": history_audit.get("audit_digest"),
+            "problem_count": history_summary.get("problem_count", 0),
+            "details_echoed": False,
+        },
+        "receipt": {
+            "sha256": receipt_sha256,
+            "expected_sha256_valid": expected_receipt_valid,
+            "expected_sha256_matches": bool(
+                expected_receipt_valid
+                and expected_receipt_sha256 == receipt_sha256
+            ),
+            "v02_before_snapshot_bound": bool(
+                receipt.get("schema") == ZET_REVISION_RECEIPT_SCHEMA
+            ),
+            "path_echoed": False,
+            "private_metadata_echoed": False,
+        },
+        "before_snapshot": {
+            "object_id": object_id if safe_snapshot_descriptor else None,
+            "logical_key": logical_key if safe_snapshot_descriptor else None,
+            "size_bytes": size_bytes if safe_snapshot_descriptor else None,
+            "verified": not snapshot_blockers and safe_snapshot_descriptor,
+            "text_echoed": False,
+        },
+        "restore_proposal": {
+            "relative_path": destination_relative,
+            "path_is_content_addressed": bool(destination_relative),
+            "exists": destination_exists,
+            "exact_bytes": destination_exact,
+            "storage_identity_independent_from_snapshot": destination_independent,
+            "written_this_run": proposal_written,
+            "tracking_policy": "private_ai_working_file_do_not_commit",
+        },
+        "plan_digest": plan_digest,
+        "approval_contract": {
+            "expected_plan_digest_required": True,
+            "canonical_write_authorized": False,
+            "human_restore_review_completed": False,
+            "next_restore_plan_required": True,
+            "next_restore_write_approval_required": True,
+        },
+        "write_boundary": {
+            "files_written_this_run": 1 if proposal_written else 0,
+            "restore_directory_created_this_run": restore_directory_created,
+            "canonical_zets_changed": False,
+            "receipts_written": False,
+            "object_store_files_changed": False,
+            "provider_state_written": False,
+        },
+        "privacy_guards": {
+            "receipt_path_echoed": False,
+            "content_addressed_restore_path_echoed": bool(destination_relative),
+            "canonical_path_echoed": False,
+            "zettel_id_echoed": False,
+            "title_text_echoed": False,
+            "abstract_text_echoed": False,
+            "body_text_echoed": False,
+            "reviewer_id_echoed": False,
+            "absolute_local_paths_echoed": False,
+            "provider_urls_echoed": False,
+            "provider_api_called": False,
+            "model_called": False,
+            "secret_store_or_environment_read": False,
+        },
+        "blockers": blockers,
+        "warnings": warnings,
+        "next_safe_actions": (
+            [
+                "Open the private content-addressed restore proposal and review it beside the current canonical zet.",
+                "Run zet-revision-restore-plan --dry-run with this restore proposal path and the same source receipt hash.",
+                "Do not treat materialization as approval to change canonical memory.",
+            ]
+            if ok and destination_exists
+            else [
+                "Approve only the unchanged plan_digest to create one independent private restore proposal copy.",
+                "Materialization does not approve or perform a canonical restore.",
+            ]
+            if ok
+            else [
+                "Resolve every revision-history, receipt, snapshot, or destination blocker without editing immutable evidence.",
+                "Do not copy bytes by hand to bypass this result.",
+            ]
+        ),
+    }
 
 
 def _zet_revision_restore_plan(
@@ -23656,6 +24066,18 @@ def ai_artifact_kind_for_relative_path(relative: str) -> str:
     path = PurePosixPath(relative.replace("\\", "/"))
     name = path.name.lower()
     suffix = path.suffix.lower()
+    if (
+        len(path.parts) >= 4
+        and path.parts[:3] == (".wom-scratch", "revisions", "restores")
+        and suffix in {".md", ".markdown"}
+    ):
+        return "zet_revision_restore_proposal"
+    if (
+        len(path.parts) >= 3
+        and path.parts[:2] == (".wom-scratch", "revisions")
+        and suffix in {".md", ".markdown"}
+    ):
+        return "zet_revision_proposal"
     if suffix == ".jsonl":
         return "ai_chat_log_jsonl" if re.search(r"(chat|conversation|session|transcript|log)", name) else "ai_artifact_jsonl"
     if suffix == ".json":
