@@ -1,6 +1,6 @@
 # Install WOM-kit As A Python Tool
 
-Status: v0.3.243 GitHub wheel and packaged Agent Skill baseline
+Status: v0.3.244 GitHub wheel and approval-gated Agent Skill host lifecycle
 
 WOM-kit is a command-line tool. It should live in its own Python environment
 instead of being mixed into an application project's dependencies.
@@ -10,7 +10,7 @@ instead of being mixed into an application project's dependencies.
 Install the verified wheel attached to the exact WOM release with `uv`:
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.243/wom_kit-0.3.243-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.244/wom_kit-0.3.244-py3-none-any.whl"
 archive --version
 ```
 
@@ -28,7 +28,7 @@ Plain `pip` works when it is placed inside a dedicated virtual environment:
 
 ```powershell
 py -m venv "$HOME\.wom-tools\wom-kit"
-& "$HOME\.wom-tools\wom-kit\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.243/wom_kit-0.3.243-py3-none-any.whl"
+& "$HOME\.wom-tools\wom-kit\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.244/wom_kit-0.3.244-py3-none-any.whl"
 & "$HOME\.wom-tools\wom-kit\Scripts\archive.exe" --version
 ```
 
@@ -42,6 +42,7 @@ those commands:
 
 - JSON schemas used by validation and Doctor,
 - personal, family, company, and runtime templates,
+- the progressively disclosed `wom-archive` Agent Skill package,
 - base zettel-kasten rules and link types,
 - the current release identity note.
 
@@ -67,6 +68,19 @@ archive onboard --target-root <new-archive-folder> --type personal --archive-id 
 
 Review the preview before replacing `--dry-run` with `--approve`.
 
+## Optional Agent Skill Activation
+
+Python installation only makes the activation commands available. It does not
+run them. Preview the current Codex user-scope target separately:
+
+```powershell
+archive runtime-skill-install --dry-run --format json
+```
+
+Approve only the exact returned plan. See
+[Install The WOM Archive Agent Skill](runtime-skill-install.md) for user,
+repository, custom-host, update, status, and safe uninstall workflows.
+
 ## Release Verification
 
 Maintainers run:
@@ -78,5 +92,7 @@ python wom-kit/tools/check_wheel_install.py --format json
 
 The second command builds a wheel from a clean source copy, inspects every
 manifested resource, installs it in a fresh virtual environment, checks all
-four entrypoints, previews and creates a disposable archive, and runs strict
-Doctor. A release wheel may be preserved only after that entire check passes.
+four entrypoints, previews/installs/verifies/uninstalls the Agent Skill in a
+disposable host directory, previews and creates a disposable archive, and runs
+strict Doctor. A release wheel may be preserved only after that entire check
+passes.

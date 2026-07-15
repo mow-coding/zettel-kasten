@@ -24,6 +24,34 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.244 Approval-Gated Agent Skill Host Lifecycle
+
+No archive migration is required. Update WOM-kit, then preview the local Codex
+user-scope skill install:
+
+```powershell
+archive runtime-skill-install --dry-run --format json
+```
+
+Review the returned target state and `operation_plan_sha256`. Approve only the
+same plan with a safe `--reviewed-by` id and
+`--expected-plan-sha256 <digest>`. Confirm `managed_current` through
+`archive runtime-skill-status --format json`. Restart Codex only if the skill
+does not appear automatically.
+
+Codex user scope follows the current `$HOME/.agents/skills` convention.
+Repository scope requires `--scope repo --repo-root <existing-repo>`. Other
+hosts require `--host custom --scope custom --skills-root <explicit-root>`;
+WOM-kit does not guess their configuration paths.
+
+An ownership manifest lets future installs perform a verified managed update
+and lets `runtime-skill-uninstall` remove only unchanged WOM-owned files.
+Unmanaged, malformed, symlinked, or human-edited targets block. Installing the
+Python wheel still does not write any host configuration by itself.
+
+See `wom-kit/docs/runtime-skill-install.md` for the beginner workflow, states,
+privacy boundary, and uninstall commands.
+
 ## v0.3.243 Progressive AI Runtime Skill
 
 No archive migration is required. Restart the AI operator process after

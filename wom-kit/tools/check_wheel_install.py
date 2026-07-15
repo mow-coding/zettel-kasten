@@ -95,6 +95,8 @@ def assert_wheel_resources(wheel: Path) -> dict[str, int]:
             raise WheelCheckError(f"Wheel is missing {len(missing)} manifested resources.")
         required = {
             "wom_kit/_resources/templates/personal/archive.yml",
+            "wom_kit/_resources/templates/ai-runtime/wom-archive/SKILL.md",
+            "wom_kit/_resources/templates/ai-runtime/wom-archive/references/operator-contract.md",
             "wom_kit/_resources/schemas/archive.schema.json",
             "wom_kit/_resources/zettel-kasten/types.yml",
         }
@@ -164,6 +166,106 @@ def check_wheel(output_dir: Path | None = None) -> dict[str, Any]:
         )
         if version.get("consistency_state") != "package_version_only":
             raise WheelCheckError("Installed version probe did not use package-only mode.")
+
+        skills_root = temp_root / "host-skills"
+        skill_target = skills_root / "wom-archive"
+        common_skill_target = [
+            str(archive),
+            "--host",
+            "custom",
+            "--scope",
+            "custom",
+            "--skills-root",
+            str(skills_root),
+            "--format",
+            "json",
+        ]
+        skill_preview = run(
+            [
+                str(archive),
+                "runtime-skill-install",
+                *common_skill_target[1:],
+                "--dry-run",
+            ],
+            cwd=temp_root,
+            label="installed runtime skill preview",
+            parse_json=True,
+        )
+        skill_plan_sha256 = skill_preview.get("operation_plan_sha256")
+        skill_preview_target = (
+            skill_preview.get("target") if isinstance(skill_preview.get("target"), dict) else {}
+        )
+        if (
+            not skill_preview.get("ok")
+            or skill_preview.get("status") != "ready_to_install"
+            or not isinstance(skill_plan_sha256, str)
+            or skills_root.exists()
+            or skill_preview_target.get("path") is not None
+            or skill_preview_target.get("path_redacted") is not True
+            or str(temp_root) in json.dumps(skill_preview)
+        ):
+            raise WheelCheckError("Installed runtime skill preview was not safely ready.")
+        skill_applied = run(
+            [
+                str(archive),
+                "runtime-skill-install",
+                *common_skill_target[1:],
+                "--approve",
+                "--reviewed-by",
+                "person:wheel-smoke",
+                "--expected-plan-sha256",
+                skill_plan_sha256,
+            ],
+            cwd=temp_root,
+            label="installed runtime skill write",
+            parse_json=True,
+        )
+        if not skill_applied.get("ok") or skill_applied.get("status") != "installed":
+            raise WheelCheckError("Installed runtime skill write was not successful.")
+        skill_status = run(
+            [str(archive), "runtime-skill-status", *common_skill_target[1:]],
+            cwd=temp_root,
+            label="installed runtime skill status",
+            parse_json=True,
+        )
+        if skill_status.get("status") != "managed_current":
+            raise WheelCheckError("Installed runtime skill did not verify as managed_current.")
+        uninstall_preview = run(
+            [
+                str(archive),
+                "runtime-skill-uninstall",
+                *common_skill_target[1:],
+                "--dry-run",
+            ],
+            cwd=temp_root,
+            label="installed runtime skill uninstall preview",
+            parse_json=True,
+        )
+        uninstall_plan_sha256 = uninstall_preview.get("operation_plan_sha256")
+        if (
+            uninstall_preview.get("status") != "ready_to_uninstall"
+            or not isinstance(uninstall_plan_sha256, str)
+        ):
+            raise WheelCheckError("Installed runtime skill uninstall preview was not ready.")
+        uninstalled = run(
+            [
+                str(archive),
+                "runtime-skill-uninstall",
+                *common_skill_target[1:],
+                "--approve",
+                "--reviewed-by",
+                "person:wheel-smoke",
+                "--expected-plan-sha256",
+                uninstall_plan_sha256,
+            ],
+            cwd=temp_root,
+            label="installed runtime skill uninstall",
+            parse_json=True,
+        )
+        if not uninstalled.get("ok") or uninstalled.get("status") != "uninstalled":
+            raise WheelCheckError("Installed runtime skill uninstall was not successful.")
+        if skill_target.exists():
+            raise WheelCheckError("Installed runtime skill target remained after uninstall.")
 
         target = temp_root / "archive"
         common_onboard = [
@@ -249,6 +351,7 @@ def check_wheel(output_dir: Path | None = None) -> dict[str, Any]:
             "package_version": version.get("version"),
             **wheel_counts,
             "entrypoints_checked": entrypoint_names,
+            "runtime_skill_lifecycle": "passed",
             "onboarding_preview": "passed",
             "onboarding_write": "passed",
             "strict_doctor": "passed",
@@ -295,7 +398,8 @@ def main() -> int:
         print(
             "WOM-kit wheel install check passed: "
             f"v{result['package_version']}, {result['manifested_resource_count']} resources, "
-            f"onboarding and strict Doctor green, sha256={result['wheel_sha256']}."
+            f"runtime skill lifecycle, onboarding, and strict Doctor green, "
+            f"sha256={result['wheel_sha256']}."
         )
     return 0
 

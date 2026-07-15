@@ -2,6 +2,34 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.3.244 사람 승인형 Agent Skill 호스트 수명주기
+
+아카이브 마이그레이션은 필요하지 않습니다. WOM-kit을 업데이트한 뒤 Codex
+사용자 범위 스킬 설치를 먼저 미리 봅니다.
+
+```powershell
+archive runtime-skill-install --dry-run --format json
+```
+
+반환된 대상 상태와 `operation_plan_sha256`을 검토합니다. 같은 계획에만
+안전한 `--reviewed-by` 아이디와 `--expected-plan-sha256 <digest>`를 넣어
+승인 후 쓰기를 실행합니다. `archive runtime-skill-status --format json`에서
+`managed_current`인지 확인하고, Codex가 스킬을 자동으로 찾지 못할 때만
+다시 시작합니다.
+
+Codex 사용자 범위는 현재 표준인 `$HOME/.agents/skills`를 사용합니다.
+저장소 범위는 `--scope repo --repo-root <existing-repo>`가 필요합니다.
+다른 호스트는 `--host custom --scope custom --skills-root <explicit-root>`로
+직접 지정해야 하며 WOM-kit이 설정 경로를 추측하지 않습니다.
+
+설치 목록 덕분에 다음 설치는 검증된 관리본만 업데이트하고,
+`runtime-skill-uninstall`은 손대지 않은 WOM 소유 파일만 제거합니다.
+소유권을 모르는 대상, 깨진 목록, 심볼릭 링크, 사람이 고친 파일은 모두
+차단합니다. Python wheel 설치 자체는 여전히 호스트 설정을 쓰지 않습니다.
+
+초보자 절차, 상태 뜻, 비공개 경계, 제거 명령은
+`wom-kit/docs/runtime-skill-install.ko.md`를 보세요.
+
 ## v0.3.243 단계별 AI 런타임 스킬
 
 아카이브 마이그레이션은 필요하지 않습니다. WOM-kit을 업데이트한 뒤 새로

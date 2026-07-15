@@ -1,6 +1,6 @@
 # WOM AI Runtime Skill And Plugin Layer
 
-Status: v0.3.170 planning baseline with import material-clue routing and AI-operator discipline norms
+Status: v0.3.244 runtime skill package and approval-gated host lifecycle baseline
 
 ## Purpose
 
@@ -802,6 +802,15 @@ The operator reads only the focused reference needed for the current goal.
 `check_runtime_skill.py` enforces package identity, context budgets, reference
 discovery, local-link confinement, and critical safety language at release
 time. Packaging the skill does not install it into an AI host.
+
+Since v0.3.244, the separate CLI-only `runtime-skill-status`,
+`runtime-skill-install`, and `runtime-skill-uninstall` lifecycle can manage one
+explicitly selected local host directory. Status and dry-run write nothing.
+Install or uninstall requires a digest-bound preview, exact approval, a safe
+reviewer, an exclusive lock, and a verified ownership manifest. It refuses to
+adopt, overwrite, or remove an unmanaged, invalid, symlinked, unexpected, or
+human-edited target. This host-configuration write is not an archive write and
+is not exposed as an MCP write tool.
 
 The skill tells the AI to:
 

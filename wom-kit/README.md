@@ -10,10 +10,10 @@ It is not a website, SaaS app, dashboard, or visual note-taking product. The int
 
 ## Install The Command-Line Tool
 
-v0.3.243 provides a self-contained wheel on the exact GitHub release:
+v0.3.244 provides a self-contained wheel on the exact GitHub release:
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.243/wom_kit-0.3.243-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.244/wom_kit-0.3.244-py3-none-any.whl"
 archive --version
 ```
 
@@ -27,6 +27,17 @@ The wheel also carries the standards-compatible `wom-archive` Agent Skill
 package. Its short root routes an AI to focused references without changing
 local WOM authority or writing any AI-host configuration. See
 [`docs/runtime-skill-progressive-disclosure.md`](docs/runtime-skill-progressive-disclosure.md).
+
+Python installation does not edit AI-host settings. To activate the packaged
+skill for the current Codex user, preview first:
+
+```powershell
+archive runtime-skill-install --dry-run --format json
+```
+
+Approve only the exact returned plan. See
+[`docs/runtime-skill-install.md`](docs/runtime-skill-install.md) or the
+[Korean guide](docs/runtime-skill-install.ko.md).
 
 ## Core Idea
 
@@ -108,6 +119,8 @@ docs/security-audit-2026-05-21.md
 docs/new-user-flow.md
 docs/python-tool-install.md
 docs/runtime-skill-progressive-disclosure.md
+docs/runtime-skill-install.md
+docs/runtime-skill-install.ko.md
 docs/ai-response-concept-guide.md
 docs/connection-import-plan.md
 docs/connection-evidence-parser-contract.md
