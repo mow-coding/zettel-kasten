@@ -112,6 +112,13 @@ SOURCE_OBJECT_STORAGE_POLICY_PATH = KIT_ROOT / "docs" / "source-object-storage-p
 TEXT_PROVENANCE_HIERARCHY_PATH = KIT_ROOT / "docs" / "text-provenance-hierarchy.md"
 AI_RESPONSE_CONCEPT_GUIDE_PATH = KIT_ROOT / "docs" / "ai-response-concept-guide.md"
 NOTION_THREE_STORE_EXAMPLE_PATH = KIT_ROOT / "docs" / "notion-source-export-three-store-example.md"
+RUNTIME_SKILL_ROOT = KIT_ROOT / "templates" / "ai-runtime" / "wom-archive"
+
+
+def read_runtime_skill_package() -> str:
+    paths = [RUNTIME_SKILL_ROOT / "SKILL.md"]
+    paths.extend(sorted((RUNTIME_SKILL_ROOT / "references").glob("*.md")))
+    return "\n".join(path.read_text(encoding="utf-8") for path in paths)
 
 
 class CapabilityMatrixDocsTests(unittest.TestCase):
@@ -422,9 +429,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             / "archive-infra-decision-log-2026-07-14-v03231-first-read-readiness.md"
         ).read_text(encoding="utf-8")
         upgrade_text = (REPO_ROOT / "UPGRADE.md").read_text(encoding="utf-8")
-        runtime_skill_text = (
-            KIT_ROOT / "templates" / "ai-runtime" / "wom-archive" / "SKILL.md"
-        ).read_text(encoding="utf-8")
+        runtime_skill_text = read_runtime_skill_package()
         public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(
             encoding="utf-8"
         )
@@ -459,9 +464,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         upgrade_text = (REPO_ROOT / "UPGRADE.md").read_text(encoding="utf-8")
         upgrade_ko_text = (REPO_ROOT / "UPGRADE.ko.md").read_text(encoding="utf-8")
-        runtime_skill_text = (
-            KIT_ROOT / "templates" / "ai-runtime" / "wom-archive" / "SKILL.md"
-        ).read_text(encoding="utf-8")
+        runtime_skill_text = read_runtime_skill_package()
         public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(
             encoding="utf-8"
         )
@@ -505,9 +508,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         runtime_text = (KIT_ROOT / "docs" / "runtime-canonical-entrypoints.md").read_text(
             encoding="utf-8"
         )
-        runtime_skill_text = (
-            KIT_ROOT / "templates" / "ai-runtime" / "wom-archive" / "SKILL.md"
-        ).read_text(encoding="utf-8")
+        runtime_skill_text = read_runtime_skill_package()
         agent_template_texts = [
             (KIT_ROOT / "templates" / archive_type / "AGENTS.md").read_text(
                 encoding="utf-8"
@@ -795,9 +796,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
         readme_ko_text = (REPO_ROOT / "README.ko.md").read_text(encoding="utf-8")
         kit_readme_text = (KIT_ROOT / "README.md").read_text(encoding="utf-8")
-        runtime_skill_text = (
-            KIT_ROOT / "templates" / "ai-runtime" / "wom-archive" / "SKILL.md"
-        ).read_text(encoding="utf-8")
+        runtime_skill_text = read_runtime_skill_package()
         entrypoint_text = (
             KIT_ROOT / "docs" / "runtime-canonical-entrypoints.md"
         ).read_text(encoding="utf-8")
@@ -869,9 +868,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
         readme_ko_text = (REPO_ROOT / "README.ko.md").read_text(encoding="utf-8")
         kit_readme_text = (KIT_ROOT / "README.md").read_text(encoding="utf-8")
-        runtime_skill_text = (
-            KIT_ROOT / "templates" / "ai-runtime" / "wom-archive" / "SKILL.md"
-        ).read_text(encoding="utf-8")
+        runtime_skill_text = read_runtime_skill_package()
         entrypoint_text = (
             KIT_ROOT / "docs" / "runtime-canonical-entrypoints.md"
         ).read_text(encoding="utf-8")
@@ -944,9 +941,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             encoding="utf-8"
         )
         kit_readme_text = (KIT_ROOT / "README.md").read_text(encoding="utf-8")
-        runtime_skill_text = (
-            KIT_ROOT / "templates" / "ai-runtime" / "wom-archive" / "SKILL.md"
-        ).read_text(encoding="utf-8")
+        runtime_skill_text = read_runtime_skill_package()
         entrypoint_text = (
             KIT_ROOT / "docs" / "runtime-canonical-entrypoints.md"
         ).read_text(encoding="utf-8")
@@ -1018,9 +1013,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         readme_ko_text = (REPO_ROOT / "README.ko.md").read_text(
             encoding="utf-8"
         )
-        runtime_skill_text = (
-            KIT_ROOT / "templates" / "ai-runtime" / "wom-archive" / "SKILL.md"
-        ).read_text(encoding="utf-8")
+        runtime_skill_text = read_runtime_skill_package()
         audit_compact = " ".join(audit_text.split())
         restore_compact = " ".join(restore_text.split())
 
@@ -1450,7 +1443,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.216.md").read_text(encoding="utf-8")
         public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
         public_map_ko_text = (KIT_ROOT / "docs" / "public-documentation-map.ko.md").read_text(encoding="utf-8")
-        runtime_skill_text = (KIT_ROOT / "templates" / "ai-runtime" / "wom-archive" / "SKILL.md").read_text(encoding="utf-8")
+        runtime_skill_text = read_runtime_skill_package()
         for phrase in (
             "Status: implemented in v0.3.216",
             "archive zet-catalog-pass <archive-root>",
@@ -1510,7 +1503,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.217.md").read_text(encoding="utf-8")
         public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
         public_map_ko_text = (KIT_ROOT / "docs" / "public-documentation-map.ko.md").read_text(encoding="utf-8")
-        runtime_skill_text = (KIT_ROOT / "templates" / "ai-runtime" / "wom-archive" / "SKILL.md").read_text(encoding="utf-8")
+        runtime_skill_text = read_runtime_skill_package()
         for phrase in (
             "Status: implemented in v0.3.217",
             "create -> pin SHA-256 -> validate -> read one page",
@@ -1563,7 +1556,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.218.md").read_text(encoding="utf-8")
         public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
         public_map_ko_text = (KIT_ROOT / "docs" / "public-documentation-map.ko.md").read_text(encoding="utf-8")
-        runtime_skill_text = (KIT_ROOT / "templates" / "ai-runtime" / "wom-archive" / "SKILL.md").read_text(encoding="utf-8")
+        runtime_skill_text = read_runtime_skill_package()
         for phrase in (
             "Status: implemented as read-only planning in v0.3.218",
             "find gap -> read one canonical body -> pin exact file bytes",
@@ -1629,7 +1622,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         upgrade_ko_text = (REPO_ROOT / "UPGRADE.ko.md").read_text(encoding="utf-8")
         public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
         public_map_ko_text = (KIT_ROOT / "docs" / "public-documentation-map.ko.md").read_text(encoding="utf-8")
-        runtime_skill_text = (KIT_ROOT / "templates" / "ai-runtime" / "wom-archive" / "SKILL.md").read_text(encoding="utf-8")
+        runtime_skill_text = read_runtime_skill_package()
         for phrase in (
             "Status: implemented as an approval-gated transactional write in v0.3.219",
             "--expected-proposal-sha256 <proposal.sha256>",
@@ -1704,7 +1697,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         kit_readme_text = (KIT_ROOT / "README.md").read_text(encoding="utf-8")
         upgrade_text = (REPO_ROOT / "UPGRADE.md").read_text(encoding="utf-8")
         upgrade_ko_text = (REPO_ROOT / "UPGRADE.ko.md").read_text(encoding="utf-8")
-        runtime_skill_text = (KIT_ROOT / "templates" / "ai-runtime" / "wom-archive" / "SKILL.md").read_text(encoding="utf-8")
+        runtime_skill_text = read_runtime_skill_package()
         public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
         public_map_ko_text = (KIT_ROOT / "docs" / "public-documentation-map.ko.md").read_text(encoding="utf-8")
         for phrase in (
@@ -1780,7 +1773,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         kit_readme_text = (KIT_ROOT / "README.md").read_text(encoding="utf-8")
         upgrade_text = (REPO_ROOT / "UPGRADE.md").read_text(encoding="utf-8")
         upgrade_ko_text = (REPO_ROOT / "UPGRADE.ko.md").read_text(encoding="utf-8")
-        runtime_skill_text = (KIT_ROOT / "templates" / "ai-runtime" / "wom-archive" / "SKILL.md").read_text(encoding="utf-8")
+        runtime_skill_text = read_runtime_skill_package()
         public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
         public_map_ko_text = (KIT_ROOT / "docs" / "public-documentation-map.ko.md").read_text(encoding="utf-8")
         for phrase in (
@@ -6770,9 +6763,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.222.md").read_text(encoding="utf-8")
         public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
         public_map_ko_text = (KIT_ROOT / "docs" / "public-documentation-map.ko.md").read_text(encoding="utf-8")
-        runtime_skill_text = (
-            KIT_ROOT / "templates" / "ai-runtime" / "wom-archive" / "SKILL.md"
-        ).read_text(encoding="utf-8")
+        runtime_skill_text = read_runtime_skill_package()
 
         for phrase in (
             "Status: quick/default and explicit full-Doctor contract implemented in v0.3.222",
@@ -6827,9 +6818,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         upgrade_ko_text = (REPO_ROOT / "UPGRADE.ko.md").read_text(encoding="utf-8")
         changelog_text = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
         release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.223.md").read_text(encoding="utf-8")
-        runtime_skill_text = (
-            KIT_ROOT / "templates" / "ai-runtime" / "wom-archive" / "SKILL.md"
-        ).read_text(encoding="utf-8")
+        runtime_skill_text = read_runtime_skill_package()
 
         for phrase in (
             "safe full-Doctor receipt phase and callback coalescing added in v0.3.223",
@@ -6886,9 +6875,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         upgrade_ko_text = (REPO_ROOT / "UPGRADE.ko.md").read_text(encoding="utf-8")
         changelog_text = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
         release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.224.md").read_text(encoding="utf-8")
-        runtime_skill_text = (
-            KIT_ROOT / "templates" / "ai-runtime" / "wom-archive" / "SKILL.md"
-        ).read_text(encoding="utf-8")
+        runtime_skill_text = read_runtime_skill_package()
         public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
         public_map_ko_text = (KIT_ROOT / "docs" / "public-documentation-map.ko.md").read_text(
             encoding="utf-8"

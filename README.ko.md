@@ -31,10 +31,10 @@ tag 목록을 여기서 다시 키우지 않습니다.
 현재 공개 기준:
 
 ```text
-v0.3.242 pre-release
+v0.3.243 pre-release
 ```
 
-이전 공개 기준: v0.3.241 pre-release.
+이전 공개 기준: v0.3.242 pre-release.
 
 전체 릴리스 이력은 [CHANGELOG.md](CHANGELOG.md)와 [wom-kit/docs/releases/](wom-kit/docs/releases/)를 보세요.
 
@@ -95,6 +95,7 @@ Roadmap 요약: `v0.1.x`는 아이디어/프로토콜 언어 라인, `v0.2.x`는
 
 ### AI operator 계약과 runtime handoff
 
+- 표준 형식과 호환되는 `wom-archive` Agent Skill 묶음. 처음 읽는 `SKILL.md`는 97줄로 제한하고, 자주 쓰는 일을 다섯 개의 집중 참고문서로 나누며, 정확한 고급 명령이 필요할 때만 기존 전체 운영 계약을 읽습니다. 릴리스 검사는 메타데이터, 링크와 경로 안전, 모든 참고문서의 발견 가능성, 문맥 길이, 승인·비밀정보 경계를 함께 지킵니다. 이 구조는 AI가 필요한 설명을 더 잘 찾게 할 뿐이며, 사람이 검토한 로컬 WOM 기록이 정본이라는 원칙과 AI 호스트 자동 설치를 아직 하지 않는 경계는 그대로입니다.
 - read-only `archive version`으로 현재 실행 버전·프로젝트 핀·소스 미러를 확인하고, 승인형 `archive project-version-update`로 설정된 원격의 `main`과 정확한 릴리스 태그를 한 번에 받아 검증한 뒤 소스 미러와 알려진 버전 핀을 함께 갱신합니다. 더러운 작업 폴더, 버전 불일치, downgrade, 알 수 없는 파일은 차단하고 중간 실패 시 checkout과 핀을 복구하며 영수증을 남깁니다. 성공 직후에도 현재 Python 프로세스는 이전 버전이므로 새 프로세스에서 `archive version`을 다시 확인해야 하며, 이 명령이 처음 들어가는 v0.3.215 이전 설치는 이번 한 번만 기존 안전 절차로 v0.3.215까지 올라와야 합니다.
 - read-only `archive capabilities --machine`으로 AI 운영자가 현재 설치본의 실행 가능한 CLI 명령, alias, 필수 인자, option, nested subcommand, local release identity를 안정된 `ok/state/summary/data/blockers/warnings` 봉투로 확인할 수 있습니다. GitHub나 provider는 호출하지 않습니다.
 - read-only `archive operator-feedback-plan --dry-run`과 승인형 `archive operator-feedback-record --approve`로 AI 운영자가 만든 도구 피드백을 `ops/feedback/` 아래 draft/delivered/acknowledged/resolved/archived 상태 메타데이터로 추적합니다. 여기에 더해 read-only `archive operator-feedback-ledger --dry-run`(별칭 `feedback-ledger`, `feedback-board`)은 전달 상태를 상태별 카운트와 대기(draft) 목록으로 집계하고, 승인형 `archive operator-feedback-mark-delivered --approve`는 draft→delivered 전달 경계를 한 번에 처리하며 `delivered_at`를 찍고 receipt 하나를 씁니다. 피드백 본문은 읽지 않고, 피드백 ref/제목을 노출하지 않으며, 외부 제출도 하지 않고(메타데이터일 뿐이며 `delivered`는 운영자가 직접 찍은 표시일 뿐 외부 전달의 증거가 아닙니다), 사용자 지식 `objets/`를 피드백 수명주기 표면으로 쓰지 않게 합니다.
@@ -356,7 +357,7 @@ WOM, `zettel-kasten`, `zet`, `ZET`는 버전이 있는 protocol family로 관리
 Release tag는 compatibility checkpoint입니다.
 
 ```text
-v0.3.242 (현재 checkpoint)
+v0.3.243 (현재 checkpoint)
 ```
 
 `v0.2.5` 이후의 공개 릴리스에는 compatibility checkpoint tag가 붙습니다. 전체

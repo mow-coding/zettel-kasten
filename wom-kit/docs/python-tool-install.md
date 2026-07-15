@@ -1,6 +1,6 @@
 # Install WOM-kit As A Python Tool
 
-Status: v0.3.242 GitHub wheel baseline
+Status: v0.3.243 GitHub wheel and packaged Agent Skill baseline
 
 WOM-kit is a command-line tool. It should live in its own Python environment
 instead of being mixed into an application project's dependencies.
@@ -10,7 +10,7 @@ instead of being mixed into an application project's dependencies.
 Install the verified wheel attached to the exact WOM release with `uv`:
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.242/wom_kit-0.3.242-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.243/wom_kit-0.3.243-py3-none-any.whl"
 archive --version
 ```
 
@@ -28,7 +28,7 @@ Plain `pip` works when it is placed inside a dedicated virtual environment:
 
 ```powershell
 py -m venv "$HOME\.wom-tools\wom-kit"
-& "$HOME\.wom-tools\wom-kit\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.242/wom_kit-0.3.242-py3-none-any.whl"
+& "$HOME\.wom-tools\wom-kit\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.243/wom_kit-0.3.243-py3-none-any.whl"
 & "$HOME\.wom-tools\wom-kit\Scripts\archive.exe" --version
 ```
 
@@ -56,7 +56,7 @@ Installation does not:
 - read zet bodies or objet bytes,
 - contact a provider, object store, or external database,
 - read credentials,
-- install an AI host skill,
+- install the packaged Agent Skill into an AI host's configuration directory,
 - make a generated graph canonical.
 
 Archive creation remains a separate dry-run-first operation:

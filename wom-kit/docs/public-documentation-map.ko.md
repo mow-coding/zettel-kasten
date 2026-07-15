@@ -159,6 +159,7 @@
 
 - [WOM-kit Python 도구 설치](python-tool-install.ko.md)
 - [영문 Python 도구 설치](python-tool-install.md)
+- [WOM 아카이브 Agent Skill과 단계별 읽기](runtime-skill-progressive-disclosure.md)
 - [AI-Assisted Onboarding And Provider Setup](ai-assisted-onboarding-and-provider-setup.md)
 - [Project Intake Session](project-intake-session.md)
 - [Project Intake Cookbook](project-intake-cookbook.md)

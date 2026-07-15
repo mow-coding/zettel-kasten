@@ -793,7 +793,15 @@ This keeps the AI helpful without giving it a broad mutation surface.
 
 ## Skill Template
 
-The `templates/ai-runtime/wom-archive/SKILL.md` file is a reusable prompt-side policy for AI runtimes that support local skills.
+The `templates/ai-runtime/wom-archive/` directory is a reusable Agent Skill
+package for AI runtimes that support local skills. Since v0.3.243 its
+frontmatter-bearing `SKILL.md` is a bounded first-read router, five focused
+files under `references/` carry task-specific instructions, and
+`references/operator-contract.md` preserves the complete advanced contract.
+The operator reads only the focused reference needed for the current goal.
+`check_runtime_skill.py` enforces package identity, context budgets, reference
+discovery, local-link confinement, and critical safety language at release
+time. Packaging the skill does not install it into an AI host.
 
 The skill tells the AI to:
 

@@ -10,10 +10,10 @@ It is not a website, SaaS app, dashboard, or visual note-taking product. The int
 
 ## Install The Command-Line Tool
 
-v0.3.242 provides a self-contained wheel on the exact GitHub release:
+v0.3.243 provides a self-contained wheel on the exact GitHub release:
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.242/wom_kit-0.3.242-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.243/wom_kit-0.3.243-py3-none-any.whl"
 archive --version
 ```
 
@@ -22,6 +22,11 @@ is not published to PyPI yet, so `pip install wom-kit` is not an official
 command. Installation changes no archive by itself. See
 [`docs/python-tool-install.md`](docs/python-tool-install.md) or the
 [Korean guide](docs/python-tool-install.ko.md).
+
+The wheel also carries the standards-compatible `wom-archive` Agent Skill
+package. Its short root routes an AI to focused references without changing
+local WOM authority or writing any AI-host configuration. See
+[`docs/runtime-skill-progressive-disclosure.md`](docs/runtime-skill-progressive-disclosure.md).
 
 ## Core Idea
 
@@ -102,6 +107,7 @@ docs/security-hardening.md
 docs/security-audit-2026-05-21.md
 docs/new-user-flow.md
 docs/python-tool-install.md
+docs/runtime-skill-progressive-disclosure.md
 docs/ai-response-concept-guide.md
 docs/connection-import-plan.md
 docs/connection-evidence-parser-contract.md

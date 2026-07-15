@@ -169,6 +169,7 @@ Onboarding and setup plans:
 
 - [Install WOM-kit As A Python Tool](python-tool-install.md)
 - [Korean Python Tool Install Guide](python-tool-install.ko.md)
+- [WOM Archive Agent Skill And Progressive Disclosure](runtime-skill-progressive-disclosure.md)
 - [AI-Assisted Onboarding And Provider Setup](ai-assisted-onboarding-and-provider-setup.md)
 - [Project Intake Session](project-intake-session.md)
 - [Project Intake Cookbook](project-intake-cookbook.md)

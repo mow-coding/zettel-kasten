@@ -6,6 +6,33 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.243 - 2026-07-15
+
+Progressive AI runtime skill checkpoint. Additive package and documentation
+behavior; no archive migration, host configuration write, or user-data read.
+
+- **The first read is now small.** `wom-archive/SKILL.md` is a 97-line,
+  555-word Agent Skills-compatible entry document instead of a 731-line
+  monolith.
+- **Instructions load by goal.** Startup, memory/revision,
+  capture/publication, foreign sharing/trust, and result/human-language work
+  have focused references; the complete previous contract remains available
+  for exact advanced commands.
+- **The split is release-gated.** A new checker validates frontmatter,
+  directory identity, root context budgets, direct reference discovery, local
+  Markdown path confinement, broken links, symlink absence, and critical
+  approval/privacy/trust phrases.
+- **The installed wheel carries the same skill.** The deterministic package
+  resource manifest and clean-wheel verification include every focused
+  reference, so source checkout and installed-tool behavior cannot silently
+  diverge.
+- **Authority remains local.** Progressive disclosure changes how an AI finds
+  instructions; it does not make an AI host, generated graph, index, or skill
+  file canonical WOM memory.
+- **Host installation remains explicit future work.** This release packages
+  and validates the skill but does not write Codex, Claude, or other user-level
+  configuration directories.
+
 ## v0.3.242 - 2026-07-15
 
 Self-contained Python tool wheel checkpoint. Additive packaging and release
