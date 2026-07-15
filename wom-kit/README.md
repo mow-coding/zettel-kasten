@@ -8,6 +8,21 @@ WOM-kit is the current implementation toolkit for WOM.
 
 It is not a website, SaaS app, dashboard, or visual note-taking product. The interface is an AI runtime such as Codex, Claude Code, or a future local agent. The durable unit of human-readable memory is the `zet`.
 
+## Install The Command-Line Tool
+
+v0.3.242 provides a self-contained wheel on the exact GitHub release:
+
+```powershell
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.242/wom_kit-0.3.242-py3-none-any.whl"
+archive --version
+```
+
+Use a dedicated virtual environment when installing with plain `pip`. WOM-kit
+is not published to PyPI yet, so `pip install wom-kit` is not an official
+command. Installation changes no archive by itself. See
+[`docs/python-tool-install.md`](docs/python-tool-install.md) or the
+[Korean guide](docs/python-tool-install.ko.md).
+
 ## Core Idea
 
 ```text
@@ -86,6 +101,7 @@ docs/phase-2-quickstart.md
 docs/security-hardening.md
 docs/security-audit-2026-05-21.md
 docs/new-user-flow.md
+docs/python-tool-install.md
 docs/ai-response-concept-guide.md
 docs/connection-import-plan.md
 docs/connection-evidence-parser-contract.md

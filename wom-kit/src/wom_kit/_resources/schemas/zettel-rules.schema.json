@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WOM-kit zettel rules",
+  "type": "object",
+  "required": ["schema_version", "zettel_kasten_id", "status", "description", "paths", "note_kinds", "lifecycle_stages", "draft_rules", "promotion_rules"],
+  "properties": {
+    "schema_version": {"type": "string"},
+    "zettel_kasten_id": {"type": "string"},
+    "status": {"type": "string"},
+    "description": {"type": "string"},
+    "paths": {"type": "object"},
+    "note_kinds": {"type": "array"},
+    "lifecycle_stages": {"type": "array"},
+    "draft_rules": {"type": "object"},
+    "minting_rules": {"type": "object"},
+    "promotion_rules": {"type": "object"},
+    "split_rules": {"type": "object"},
+    "canonical_body_rules": {"type": "object"},
+    "revision_rules": {"type": "object"},
+    "ai_behavior": {"type": "array"}
+  }
+}

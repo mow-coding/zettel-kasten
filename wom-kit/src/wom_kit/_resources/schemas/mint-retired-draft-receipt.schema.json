@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WOM-kit mint retired draft receipt",
+  "type": "object",
+  "required": [
+    "receipt_id",
+    "receipt_path",
+    "action",
+    "dry_run",
+    "archive_id",
+    "authority_mode",
+    "source",
+    "target",
+    "mint_receipt",
+    "snapshot",
+    "zettel",
+    "result"
+  ],
+  "properties": {
+    "receipt_id": {"type": "string"},
+    "receipt_path": {"type": "string"},
+    "action": {"type": "string", "enum": ["retire_minted_draft"]},
+    "dry_run": {"type": "boolean"},
+    "timestamp": {"type": "string"},
+    "archive_id": {"type": "string"},
+    "authority_mode": {"type": "string", "enum": ["basic"]},
+    "reviewed_by": {"type": "string"},
+    "reviewed_at": {"type": "string"},
+    "source": {"type": "object"},
+    "target": {"type": "object"},
+    "mint_receipt": {"type": "object"},
+    "snapshot": {"type": "object"},
+    "zettel": {"type": "object"},
+    "result": {"type": "object"},
+    "reconcile": {
+      "type": "object",
+      "description": "Append-only history of retire-draft-reconcile events (v0.3.167 Item 2). Latest event mirrored at the top level.",
+      "properties": {
+        "history": {"type": "array", "items": {"type": "object"}},
+        "reconciled_at": {"type": "string"},
+        "reconciled_by": {"type": "string"},
+        "drift_class": {"type": "string", "enum": ["clean", "format_drift", "content_change"]},
+        "content_change_ack": {"type": "boolean"},
+        "reviewed_plan_sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "bom_stripped": {"type": "boolean"},
+        "ref_reports": {"type": "array", "items": {"type": "object"}}
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {"type": "string"}
+    }
+  }
+}

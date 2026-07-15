@@ -2,6 +2,31 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.3.242 자체 완결 Python 도구 wheel
+
+아카이브 마이그레이션은 필요하지 않습니다. 설치된 WOM-kit 도구를 바꾼 뒤에는
+AI 운영자 프로세스를 다시 시작합니다.
+
+태그가 붙은 GitHub 릴리스는 이제 설치된 패키지가 실행될 때 필요한 runtime
+스키마, 템플릿, 기본 zettel-kasten 규칙, 릴리스 신원 문서를 담은 검증된 wheel을
+제공합니다. 기존 저장소 checkout과 프로젝트 소스 미러도 계속 작동하며, 편집
+가능한 원본 배치로 유지됩니다.
+
+격리된 명령줄 도구로 설치할 때는 정확한 릴리스 wheel을 사용합니다.
+
+```powershell
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.242/wom_kit-0.3.242-py3-none-any.whl"
+archive --version
+```
+
+일반 `pip` 사용자는 같은 wheel을 전용 가상환경에 설치해야 합니다.
+`pip install wom-kit`은 아직 실행하지 마세요. WOM-kit은 아직 PyPI에 공개되지
+않았습니다. 초보자용 전체 절차와 안전 경계는
+`wom-kit/docs/python-tool-install.ko.md`를 보세요.
+
+패키지 설치만으로 아카이브가 생기거나 사용자 데이터를 읽지 않습니다.
+아카이브 온보딩은 별도의 `--dry-run` 뒤 `--approve` 작업으로 남습니다.
+
 ## v0.3.241 선택적 최신성 본문 읽기
 
 보관함 마이그레이션은 필요하지 않습니다. AI 운영자 프로세스를 다시

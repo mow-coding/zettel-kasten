@@ -54,9 +54,13 @@ data, so tools must not read or clean it by default.
 
 For installation today:
 
-- Docker-first setup scripts are the beginner-friendly route.
-- Python CLI usage is the developer route.
-- `npx`, `pipx`, and one-shot installer wrappers remain future packaging work.
+- The exact tagged GitHub release provides a verified self-contained Python
+  wheel from v0.3.242.
+- `uv tool install` is the recommended isolated CLI route; plain `pip` belongs
+  in a dedicated virtual environment.
+- Docker-first setup remains available for the containerized runtime path.
+- PyPI publication, `pip install wom-kit`, and one-shot AI-host skill installers
+  remain future packaging work.
 
 ## 2. Artifact Classes
 

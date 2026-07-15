@@ -1,0 +1,47 @@
+# Example only. This is not an executed receipt.
+scenario: family_to_child_ownership_transfer
+before:
+  archive_id: archive:family:template
+  owner_id: family:template
+  owner_kind: family
+  operators:
+    - person:member-a
+    - person:member-b
+  subject: person:child-template
+after:
+  owner_id: person:child-template
+  owner_kind: person
+  operators:
+    - person:child-template
+required_gates:
+  scope_gate:
+    unit: archive_ownership
+    manifest: archive-identity.yml
+    record_transfer: false
+  trust_gate:
+    counterparty_id: person:child-template
+    counterparty_fingerprint: SHA256:child-template-primary
+  ownership_gate:
+    approval_actors:
+      - person:member-a
+      - person:member-b
+    receipt_required_for_transfer: true
+example_command:
+  - archive
+  - transfer-ownership
+  - <family-archive>
+  - --new-owner
+  - person:child-template
+  - --operator-after
+  - person:child-template
+  - --approved-by
+  - person:member-a
+  - --approved-by
+  - person:member-b
+  - --counterparty-id
+  - person:child-template
+  - --counterparty-fingerprint
+  - SHA256:child-template-primary
+  - --dry-run
+expected_receipt_action: transfer_archive_ownership
+real_transfer_available: false

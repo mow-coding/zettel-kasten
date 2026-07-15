@@ -14,8 +14,10 @@ import json
 from pathlib import Path
 from typing import Any
 
+from .resource_paths import runtime_resource_root
 
-SCHEMAS_ROOT = Path(__file__).resolve().parents[2] / "schemas"
+
+SCHEMAS_ROOT = runtime_resource_root("schemas")
 
 
 @dataclass

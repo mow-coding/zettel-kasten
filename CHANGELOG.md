@@ -6,6 +6,31 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.242 - 2026-07-15
+
+Self-contained Python tool wheel checkpoint. Additive packaging and release
+tooling; no archive migration or user-archive write occurs during installation.
+
+- **The wheel is now operational.** Schemas, archive/runtime templates, base
+  zettel-kasten rules, and the current release identity ship inside the Python
+  package instead of requiring a neighboring source checkout.
+- **One source of truth remains.** Repository resources are synchronized into a
+  package mirror through an exact byte-length and SHA-256 manifest; drift blocks
+  verification.
+- **A clean install must prove itself.** The release check builds from a clean
+  copy, inspects every manifested wheel resource, installs into a fresh virtual
+  environment, verifies four entrypoints, previews and creates a disposable
+  archive, and finishes with strict Doctor.
+- **Standard isolation is documented.** `uv tool install` is the recommended
+  command surface, with a dedicated `pip` virtual environment as the fallback.
+  Installing the tool does not create or inspect an archive.
+- **The registry boundary stays honest.** The verified wheel may be attached to
+  the exact GitHub release, but WOM-kit is not yet published to PyPI and
+  `pip install wom-kit` is not claimed as available.
+- **Graph authority does not move.** Distribution ergonomics are adopted
+  without making a generated graph, index, or host skill canonical; reviewed
+  local zet, objet, relation, and receipt records remain authoritative.
+
 ## v0.3.241 - 2026-07-15
 
 Selective freshness body-read checkpoint. Additive and read-only; no archive

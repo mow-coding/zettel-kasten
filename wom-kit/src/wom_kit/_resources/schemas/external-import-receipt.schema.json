@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WOM-kit external import receipt",
+  "type": "object",
+  "required": [
+    "receipt_id",
+    "action",
+    "dry_run",
+    "source_system",
+    "source_export",
+    "target_archive",
+    "items",
+    "scope_gate",
+    "trust_gate",
+    "lineage",
+    "blockers",
+    "warnings"
+  ],
+  "properties": {
+    "receipt_id": {"type": "string"},
+    "receipt_path": {"type": "string"},
+    "action": {"type": "string", "enum": ["import_external_archive"]},
+    "dry_run": {"type": "boolean"},
+    "timestamp": {"type": "string"},
+    "source_system": {"type": "string", "enum": ["notion", "google_drive"]},
+    "source_export": {"type": "object"},
+    "target_archive": {"type": "string"},
+    "items": {
+      "type": "array",
+      "items": {"type": "object"}
+    },
+    "scope_gate": {"type": "object"},
+    "trust_gate": {"type": "object"},
+    "lineage": {"type": "object"},
+    "blockers": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "warnings": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "reviewed_by": {"type": "string"},
+    "reviewed_at": {"type": "string"},
+    "result": {"type": "object"}
+  }
+}

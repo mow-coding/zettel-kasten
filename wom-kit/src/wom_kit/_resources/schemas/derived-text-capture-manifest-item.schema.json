@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WOM-kit derived text capture manifest item",
+  "type": "object",
+  "required": [
+    "source_object_id",
+    "text_file",
+    "derivation_kind",
+    "tool_name",
+    "tool_version",
+    "review_status"
+  ],
+  "properties": {
+    "item_id": {"type": "string"},
+    "source_object_id": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "text_file": {"type": "string"},
+    "derivation_kind": {"type": "string", "enum": ["parser", "ocr", "asr", "llm_vision"]},
+    "tool_name": {"type": "string"},
+    "tool_version": {"type": "string"},
+    "model_name": {"type": "string"},
+    "model_version": {"type": "string"},
+    "confidence": {"type": "number"},
+    "language": {"type": "string"},
+    "born_digital": {"type": "boolean"},
+    "review_status": {"type": "string", "enum": ["unreviewed", "human_corrected"]}
+  },
+  "additionalProperties": true
+}

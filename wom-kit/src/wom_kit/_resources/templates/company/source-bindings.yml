@@ -1,0 +1,37 @@
+version: source-bindings/v0.1
+archive_id: archive:company:template
+sources:
+  - source_id: local:team-workspace
+    source_type: local_folder
+    enabled: true
+    description: Team workspace folder selected for metadata-only mapping.
+    root_ref: ARCHIVE_TEAM_WORKSPACE_ROOT
+    scope_policy:
+      mode: metadata_only
+      include:
+        - "**/*"
+      exclude:
+        - ".git/**"
+        - "__pycache__/**"
+      max_items: 5000
+    visibility:
+      scope: team
+      source_visibility: shared
+    provenance:
+      registered_by: template
+  - source_id: object:manifest
+    source_type: object_manifest
+    enabled: true
+    description: Archive object manifest as a source map input.
+    root_ref: archive:objects/manifests/files.jsonl
+    scope_policy:
+      mode: metadata_only
+      include:
+        - "**/*"
+      exclude: []
+      max_items: 5000
+    visibility:
+      scope: team
+      source_visibility: shared
+    provenance:
+      registered_by: template

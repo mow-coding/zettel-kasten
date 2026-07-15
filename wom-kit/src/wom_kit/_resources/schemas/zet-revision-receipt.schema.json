@@ -1,0 +1,233 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wom-kit/zet-revision-receipt/v0.1",
+  "title": "WOM-kit canonical zet revision receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "action",
+    "status",
+    "applied_at",
+    "revision_at",
+    "archive_id",
+    "zettel_id",
+    "canonical_path",
+    "proposal_sha256",
+    "proposal_semantic_sha256",
+    "plan_digest",
+    "write_plan_digest",
+    "reviewed_by",
+    "human_review",
+    "change_summary",
+    "before",
+    "after",
+    "abstract_review_basis",
+    "mutation_contract",
+    "recovery",
+    "privacy_guards"
+  ],
+  "properties": {
+    "schema": {"const": "wom-kit/zet-revision-receipt/v0.1"},
+    "action": {"const": "zet_revision_write"},
+    "status": {"const": "applied"},
+    "applied_at": {"type": "string", "minLength": 1},
+    "revision_at": {"type": "string", "minLength": 1},
+    "archive_id": {"type": "string", "minLength": 1},
+    "zettel_id": {
+      "type": "string",
+      "pattern": "^zet_[A-Za-z0-9][A-Za-z0-9_-]{0,159}$"
+    },
+    "canonical_path": {"type": "string", "pattern": "^zettels/.+\\.md$"},
+    "proposal_sha256": {"$ref": "#/$defs/sha256"},
+    "proposal_semantic_sha256": {"$ref": "#/$defs/sha256"},
+    "plan_digest": {"$ref": "#/$defs/sha256"},
+    "write_plan_digest": {"$ref": "#/$defs/sha256"},
+    "reviewed_by": {"type": "string", "minLength": 1},
+    "human_review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "revision_reviewed",
+        "abstract_body_pair_reviewed",
+        "edge_review_required",
+        "edge_changes_reviewed"
+      ],
+      "properties": {
+        "revision_reviewed": {"const": true},
+        "abstract_body_pair_reviewed": {"const": true},
+        "edge_review_required": {"type": "boolean"},
+        "edge_changes_reviewed": {"type": "boolean"}
+      }
+    },
+    "change_summary": {"$ref": "#/$defs/changeSummary"},
+    "before": {"$ref": "#/$defs/revisionStateBefore"},
+    "after": {"$ref": "#/$defs/revisionStateAfter"},
+    "abstract_review_basis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract",
+        "review_status",
+        "evidence_kind",
+        "abstract_sha256",
+        "body_sha256",
+        "body_hash_basis",
+        "abstract_text_stored",
+        "body_text_stored"
+      ],
+      "properties": {
+        "contract": {"const": "wom-kit/abstract-review-basis/v0.1"},
+        "review_status": {"const": "reviewed_at_revision"},
+        "evidence_kind": {"const": "zet_revision_write"},
+        "abstract_sha256": {"$ref": "#/$defs/sha256"},
+        "body_sha256": {"$ref": "#/$defs/sha256"},
+        "body_hash_basis": {
+          "const": "decoded_canonical_body_utf8_universal_newlines"
+        },
+        "abstract_text_stored": {"const": false},
+        "body_text_stored": {"const": false}
+      }
+    },
+    "mutation_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "canonical_replaced_atomically",
+        "candidate_content_derived_from_reviewed_proposal",
+        "updated_at_set_by_writer",
+        "runtime_failure_rollback",
+        "write_ahead_recovery_lock",
+        "receipt_created_as_new_file"
+      ],
+      "properties": {
+        "canonical_replaced_atomically": {"const": true},
+        "candidate_content_derived_from_reviewed_proposal": {"const": true},
+        "updated_at_set_by_writer": {"const": true},
+        "runtime_failure_rollback": {"const": true},
+        "write_ahead_recovery_lock": {"const": true},
+        "receipt_created_as_new_file": {"const": true}
+      }
+    },
+    "recovery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "resumed_from_existing_lock",
+        "finalized_from_already_written_candidate"
+      ],
+      "properties": {
+        "resumed_from_existing_lock": {"type": "boolean"},
+        "finalized_from_already_written_candidate": {"type": "boolean"}
+      }
+    },
+    "privacy_guards": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "title_text_stored_in_receipt",
+        "abstract_text_stored_in_receipt",
+        "body_text_stored_in_receipt",
+        "custom_frontmatter_values_stored_in_receipt",
+        "provider_api_called",
+        "model_called",
+        "secret_store_or_environment_read"
+      ],
+      "properties": {
+        "title_text_stored_in_receipt": {"const": false},
+        "abstract_text_stored_in_receipt": {"const": false},
+        "body_text_stored_in_receipt": {"const": false},
+        "custom_frontmatter_values_stored_in_receipt": {"const": false},
+        "provider_api_called": {"const": false},
+        "model_called": {"const": false},
+        "secret_store_or_environment_read": {"const": false}
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "changeSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "semantic_change_present",
+        "body_changed",
+        "abstract_changed",
+        "title_changed",
+        "kind_changed",
+        "facets_changed",
+        "assets_changed",
+        "edges_changed",
+        "provenance_changed",
+        "visibility_changed",
+        "source_refs_changed",
+        "corrections_changed",
+        "derived_artifacts_changed",
+        "content_frontmatter_field_change_count",
+        "other_content_frontmatter_changed",
+        "changed_field_names_echoed"
+      ],
+      "properties": {
+        "semantic_change_present": {"const": true},
+        "body_changed": {"type": "boolean"},
+        "abstract_changed": {"type": "boolean"},
+        "title_changed": {"type": "boolean"},
+        "kind_changed": {"type": "boolean"},
+        "facets_changed": {"type": "boolean"},
+        "assets_changed": {"type": "boolean"},
+        "edges_changed": {"type": "boolean"},
+        "provenance_changed": {"type": "boolean"},
+        "visibility_changed": {"type": "boolean"},
+        "source_refs_changed": {"type": "boolean"},
+        "corrections_changed": {"type": "boolean"},
+        "derived_artifacts_changed": {"type": "boolean"},
+        "content_frontmatter_field_change_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "other_content_frontmatter_changed": {"type": "boolean"},
+        "changed_field_names_echoed": {"const": false}
+      }
+    },
+    "revisionStateBefore": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "file_sha256",
+        "semantic_sha256",
+        "abstract_sha256",
+        "body_sha256"
+      ],
+      "properties": {
+        "file_sha256": {"$ref": "#/$defs/sha256"},
+        "semantic_sha256": {"$ref": "#/$defs/sha256"},
+        "abstract_sha256": {
+          "oneOf": [
+            {"$ref": "#/$defs/sha256"},
+            {"type": "null"}
+          ]
+        },
+        "body_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "revisionStateAfter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "file_sha256",
+        "semantic_sha256",
+        "abstract_sha256",
+        "body_sha256"
+      ],
+      "properties": {
+        "file_sha256": {"$ref": "#/$defs/sha256"},
+        "semantic_sha256": {"$ref": "#/$defs/sha256"},
+        "abstract_sha256": {"$ref": "#/$defs/sha256"},
+        "body_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    }
+  }
+}

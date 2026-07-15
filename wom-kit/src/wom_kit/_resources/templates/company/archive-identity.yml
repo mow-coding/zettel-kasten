@@ -1,0 +1,34 @@
+identity:
+  archive_id: archive:company:template
+  identity_id: identity:archive:company:template
+  scope: company
+  principal_id: company:template
+  display_name: Template Company
+  public_keys: []
+ownership:
+  owner_id: company:template
+  owner_kind: company
+  owner_display_name: Template Company
+  owner_archive_id: archive:company:template
+  operators:
+    - operator_id: role:company-admin
+      role: admin_operator
+      permissions:
+        - capture
+        - curate
+        - approve
+        - transfer_request
+  subjects: []
+  transfer_policy:
+    ownership_transfer_allowed: true
+    requires_human_approval: true
+    requires_receipt: true
+    receipt_action: transfer_archive_ownership
+    default_transfer_target:
+trusted_counterparties: []
+lineage:
+  parents: []
+  children: []
+  forked_from:
+  merged_from: []
+  exited_from:

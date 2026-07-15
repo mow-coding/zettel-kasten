@@ -1,3 +1,10 @@
 # Keep manifest-hashed fake object fixtures byte-stable across platforms.
 wom-kit/examples/fake-life-archive/objects/sample/*.txt text eol=lf
 wom-kit/examples/fake-life-archive/objects/manifests/*.jsonl text eol=lf
+
+# Keep source-bound Python package resources byte-stable across platforms.
+wom-kit/schemas/** text eol=lf
+wom-kit/templates/** text eol=lf
+wom-kit/zettel-kasten/** text eol=lf
+wom-kit/docs/releases/*.md text eol=lf
+wom-kit/src/wom_kit/_resources/** text eol=lf

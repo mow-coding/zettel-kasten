@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WOM-kit operator feedback record",
+  "type": "object",
+  "required": [
+    "schema",
+    "feedback_id",
+    "feedback_ref",
+    "status",
+    "title",
+    "related_releases",
+    "resolved_in",
+    "updated_at",
+    "reviewed_by",
+    "body_managed_by_this_record",
+    "external_submission_performed"
+  ],
+  "properties": {
+    "schema": {"type": "string", "const": "wom-kit/operator-feedback/v0.1"},
+    "feedback_id": {"type": "string"},
+    "feedback_ref": {"type": "string"},
+    "status": {
+      "type": "string",
+      "enum": ["draft", "delivered", "acknowledged", "resolved", "archived"]
+    },
+    "title": {"type": ["string", "null"]},
+    "related_releases": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "resolved_in": {"type": ["string", "null"]},
+    "updated_at": {"type": "string"},
+    "reviewed_by": {"type": ["string", "null"]},
+    "body_managed_by_this_record": {"type": "boolean", "const": false},
+    "external_submission_performed": {"type": "boolean", "const": false},
+    "delivered_at": {"type": "string"},
+    "acknowledged_at": {"type": "string"}
+  }
+}

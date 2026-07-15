@@ -1,0 +1,29 @@
+version: pilot-source-plan/v0.1
+role: personal_life
+description: First real personal life archive source plan. Use metadata-only dry-runs before approving scans.
+sources:
+  - source_id: local:personal-documents
+    source_type: local_folder
+    root_ref: ARCHIVE_SOURCE_PERSONAL_DOCUMENTS_ROOT
+    first_scan: metadata_only
+    note: Pick a narrow folder first, not the whole home folder or drive root.
+  - source_id: ssd:personal-originals
+    source_type: external_ssd
+    root_ref: ARCHIVE_SOURCE_PERSONAL_SSD_ROOT
+    first_scan: metadata_only
+    note: Mount the SSD read-only in Docker when possible.
+  - source_id: notion:personal-export
+    source_type: notion_export
+    root_ref: ARCHIVE_SOURCE_NOTION_PERSONAL_EXPORT_ROOT
+    first_scan: metadata_only
+    note: Start with an export folder, not live Notion API sync.
+  - source_id: google_drive:personal-export
+    source_type: google_drive_export
+    root_ref: ARCHIVE_SOURCE_GOOGLE_DRIVE_PERSONAL_EXPORT_ROOT
+    first_scan: metadata_only
+    note: Start with an export or manifest containing links and metadata.
+  - source_id: object:personal-media-manifest
+    source_type: object_manifest
+    root_ref: archive:objects/manifests/files.jsonl
+    first_scan: metadata_only
+    note: Large media originals stay in SSD/object storage; the archive versions the map.

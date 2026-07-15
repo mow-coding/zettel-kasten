@@ -1,0 +1,44 @@
+identity:
+  archive_id: archive:family:template
+  identity_id: identity:archive:family:template
+  scope: family
+  principal_id: family:template
+  display_name: Template Family
+  public_keys: []
+ownership:
+  owner_id: family:template
+  owner_kind: family
+  owner_display_name: Template Family
+  owner_archive_id: archive:family:template
+  operators:
+    - operator_id: person:member-a
+      role: parent_operator
+      permissions:
+        - capture
+        - curate
+        - approve
+        - transfer_request
+    - operator_id: person:member-b
+      role: parent_operator
+      permissions:
+        - capture
+        - curate
+        - approve
+        - transfer_request
+  subjects:
+    - subject_id: person:child-template
+      relationship: child_subject
+      notes: Child-related records can later be forked or transferred into the child's own archive.
+  transfer_policy:
+    ownership_transfer_allowed: true
+    requires_human_approval: true
+    requires_receipt: true
+    receipt_action: transfer_archive_ownership
+    default_transfer_target: person:child-template
+trusted_counterparties: []
+lineage:
+  parents: []
+  children: []
+  forked_from:
+  merged_from: []
+  exited_from:

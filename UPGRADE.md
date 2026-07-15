@@ -24,6 +24,31 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.242 Self-Contained Python Tool Wheel
+
+No archive migration is required. Restart the AI operator process after
+changing the installed WOM-kit tool.
+
+The tagged GitHub release now carries a verified wheel with the runtime
+schemas, templates, base zettel-kasten rules, and release identity needed by an
+installed package. Existing repository checkouts and project source mirrors
+continue to work; they remain the preferred editable source layout.
+
+For an isolated command-line installation, use the exact release wheel:
+
+```powershell
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.242/wom_kit-0.3.242-py3-none-any.whl"
+archive --version
+```
+
+Plain `pip` users should install the same wheel in a dedicated virtual
+environment. Do not run `pip install wom-kit`: WOM-kit has not been published
+to PyPI yet. See `wom-kit/docs/python-tool-install.md` for the full beginner
+path and safety boundary.
+
+Package installation alone creates no archive and reads no user data. Archive
+onboarding remains a separate `--dry-run` then `--approve` workflow.
+
 ## v0.3.241 Selective Freshness Body Reads
 
 No archive migration is required. Restart the AI operator process.

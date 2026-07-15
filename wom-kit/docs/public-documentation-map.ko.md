@@ -157,6 +157,8 @@
 
 온보딩/설치 계획:
 
+- [WOM-kit Python 도구 설치](python-tool-install.ko.md)
+- [영문 Python 도구 설치](python-tool-install.md)
 - [AI-Assisted Onboarding And Provider Setup](ai-assisted-onboarding-and-provider-setup.md)
 - [Project Intake Session](project-intake-session.md)
 - [Project Intake Cookbook](project-intake-cookbook.md)
