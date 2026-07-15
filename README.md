@@ -23,20 +23,21 @@ Inside WOM:
 ## Status
 
 <!--
-Maintenance contract (decision log 2026-07-03, v0.3.161): per release, update
+Maintenance contract (decision logs v0.3.161 and v0.3.245): per release, update
 ONLY (1) the current-baseline line in the code block below, (2) the single
-previous-baseline line, and (3) for feature releases, at most ONE thematic
-bullet under "What Exists Today". Release history lives in CHANGELOG.md and
-wom-kit/docs/releases/ - do not re-grow baseline ladders or tag lists here.
+previous-baseline line, (3) the exact wheel version in the stable Quick Start,
+and (4) for feature releases, at most ONE thematic bullet under "What Exists
+Today". Release history lives in CHANGELOG.md and wom-kit/docs/releases/ - do
+not re-grow baseline ladders or tag lists here.
 -->
 
 Current public baseline:
 
 ```text
-v0.3.244 pre-release
+v0.3.245 pre-release
 ```
 
-Previous public baseline: v0.3.243 pre-release.
+Previous public baseline: v0.3.244 pre-release.
 
 Full release history: see [CHANGELOG.md](CHANGELOG.md) and [wom-kit/docs/releases/](wom-kit/docs/releases/).
 
@@ -48,6 +49,31 @@ feedback and safety-hardening line, `v0.4.x` is planned for the custom UI
 control layer, and `v0.5.x` is planned for ZET real-use feedback. See the
 [WOM Product Roadmap](wom-kit/docs/product-roadmap.md) for the phase gates and
 future-only boundaries.
+
+## Quick Start
+
+Install the exact release wheel as an isolated command-line tool:
+
+```powershell
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.245/wom_kit-0.3.245-py3-none-any.whl"
+archive --version
+```
+
+WOM-kit is not published to PyPI yet, so bare `pip install wom-kit` is not an
+official install path. Plain `pip` is supported only in a dedicated virtual
+environment using the exact release wheel. Installing the Python tool does not
+open or change an archive and does not silently edit AI-host settings.
+
+The wheel includes the `wom-archive` Agent Skill. Preview activation for the
+current Codex user before approving any host-configuration write:
+
+```powershell
+archive runtime-skill-install --dry-run --format json
+```
+
+Continue with the [Python tool install guide](wom-kit/docs/python-tool-install.md),
+the [Korean install guide](wom-kit/docs/python-tool-install.ko.md), or the
+[Agent Skill activation and removal guide](wom-kit/docs/runtime-skill-install.md).
 
 ## What Exists Today
 
@@ -465,7 +491,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
-v0.3.244 (current checkpoint)
+v0.3.245 (current checkpoint)
 ```
 
 Public releases from `v0.2.5` onward are tagged as compatibility checkpoints.

@@ -6,6 +6,24 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.245 - 2026-07-15
+
+Top-level installation on-ramp checkpoint. Documentation and release packaging
+only; no archive migration or new runtime authority.
+
+- **The first README screen now leads to a working install.** English and
+  Korean root READMEs show the exact release wheel, isolated `uv` command, and
+  immediate `archive --version` check before the long capability inventory.
+- **Python install and AI activation stay visibly separate.** The quick start
+  states that wheel installation does not touch an archive or AI-host settings,
+  then offers only a read-only Agent Skill activation preview.
+- **The PyPI boundary is explicit.** Bare `pip install wom-kit` is not claimed;
+  plain `pip` remains limited to a dedicated virtual environment and the exact
+  release wheel.
+- **Detailed guidance stays authoritative.** The short path links directly to
+  the English/Korean Python install and Agent Skill lifecycle guides rather
+  than duplicating their approval, update, and removal contracts.
+
 ## v0.3.244 - 2026-07-15
 
 Approval-gated Agent Skill host lifecycle checkpoint. Additive local tool

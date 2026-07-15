@@ -24,6 +24,18 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.245 Top-Level Installation On-Ramp
+
+No archive migration is required. The root English and Korean READMEs now show
+the exact current wheel, an isolated `uv tool install`, `archive --version`,
+and the separate read-only Agent Skill activation preview before the long
+capability inventory.
+
+Existing v0.3.244 installations do not need a host-skill reinstall for runtime
+behavior. Upgrade to v0.3.245 when you want package/release identity aligned
+with the improved public installation path. Wheel installation still changes
+no archive or AI-host configuration by itself.
+
 ## v0.3.244 Approval-Gated Agent Skill Host Lifecycle
 
 No archive migration is required. Update WOM-kit, then preview the local Codex

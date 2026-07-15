@@ -21,20 +21,21 @@ WOM 안에서:
 ## 현재 상태
 
 <!--
-유지보수 계약 (decision log 2026-07-03, v0.3.161): 릴리스마다 (1) 아래 code
-block의 현재 공개 기준 한 줄, (2) 단 하나의 이전 공개 기준 줄, (3) feature
-릴리스라면 "현재 포함된 것"의 주제별 bullet 최대 한 개만 수정합니다. 릴리스
-이력은 CHANGELOG.md와 wom-kit/docs/releases/에만 쌓고, baseline 사다리와
-tag 목록을 여기서 다시 키우지 않습니다.
+유지보수 계약 (decision log v0.3.161, v0.3.245): 릴리스마다 (1) 아래 code
+block의 현재 공개 기준 한 줄, (2) 단 하나의 이전 공개 기준 줄, (3) 안정된
+빠른 시작의 정확한 wheel 버전, (4) feature 릴리스라면 "현재 포함된 것"의
+주제별 bullet 최대 한 개만 수정합니다. 릴리스 이력은 CHANGELOG.md와
+wom-kit/docs/releases/에만 쌓고, baseline 사다리와 tag 목록을 여기서 다시
+키우지 않습니다.
 -->
 
 현재 공개 기준:
 
 ```text
-v0.3.244 pre-release
+v0.3.245 pre-release
 ```
 
-이전 공개 기준: v0.3.243 pre-release.
+이전 공개 기준: v0.3.244 pre-release.
 
 전체 릴리스 이력은 [CHANGELOG.md](CHANGELOG.md)와 [wom-kit/docs/releases/](wom-kit/docs/releases/)를 보세요.
 
@@ -45,6 +46,32 @@ Roadmap 요약: `v0.1.x`는 아이디어/프로토콜 언어 라인, `v0.2.x`는
 `v0.4.x`는 custom UI control layer 라인, `v0.5.x`는 ZET 실사용 피드백
 라인으로 계획되어 있습니다. phase gate와 future-only 경계는
 [WOM Product Roadmap](wom-kit/docs/product-roadmap.md)을 보세요.
+
+## 빠른 시작
+
+정확한 릴리스 파일을 격리된 명령줄 도구로 설치합니다.
+
+```powershell
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.245/wom_kit-0.3.245-py3-none-any.whl"
+archive --version
+```
+
+WOM-kit은 아직 PyPI에 공개하지 않았으므로 `pip install wom-kit`은 공식 설치
+명령이 아닙니다. 일반 `pip`는 전용 가상환경에서 정확한 릴리스 파일을 지정할
+때만 지원합니다. Python 도구 설치만으로 보관함을 열거나 바꾸지 않으며, AI
+호스트 설정도 조용히 수정하지 않습니다.
+
+릴리스 파일에는 `wom-archive` Agent Skill도 들어 있습니다. 현재 Codex
+사용자에게 활성화하기 전, 먼저 쓰기 없는 미리보기를 확인합니다.
+
+```powershell
+archive runtime-skill-install --dry-run --format json
+```
+
+이어서 [한글 Python 도구 설치 안내](wom-kit/docs/python-tool-install.ko.md),
+[영문 설치 안내](wom-kit/docs/python-tool-install.md), 또는
+[한글 Agent Skill 활성화·제거 안내](wom-kit/docs/runtime-skill-install.ko.md)를
+보면 됩니다.
 
 ## 현재 포함된 것
 
@@ -358,7 +385,7 @@ WOM, `zettel-kasten`, `zet`, `ZET`는 버전이 있는 protocol family로 관리
 Release tag는 compatibility checkpoint입니다.
 
 ```text
-v0.3.244 (현재 checkpoint)
+v0.3.245 (현재 checkpoint)
 ```
 
 `v0.2.5` 이후의 공개 릴리스에는 compatibility checkpoint tag가 붙습니다. 전체
