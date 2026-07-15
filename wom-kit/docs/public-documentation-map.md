@@ -53,6 +53,7 @@ Supporting philosophy and model docs:
 - [Input Provenance Taxonomy](input-provenance-taxonomy.md)
 - [Secret Signal Taxonomy](secret-signal-taxonomy.md)
 - [Local Sovereignty And Backup Authority](local-sovereignty-and-backup-authority.md)
+- [Backup Evidence Status](backup-evidence-status.md)
 - [AI Start-Here Quick And Full Inspection](ai-start-here.md)
 - [Archive Identity Reconcile](archive-identity-reconcile.md)
 - [Runtime Context Quick And Full Inspection](runtime-context-quick-and-full-inspection.md)
