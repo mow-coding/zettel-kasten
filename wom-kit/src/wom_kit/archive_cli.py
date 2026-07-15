@@ -9321,6 +9321,93 @@ def command_zet_revision_receipt_audit(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 1
 
 
+def command_zet_revision_restore_proposal_from_snapshot(
+    args: argparse.Namespace,
+) -> int:
+    if bool(args.dry_run) == bool(args.approve):
+        print(
+            "zet-revision-restore-proposal-from-snapshot requires exactly one of --dry-run or --approve.",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        result = archive_services.zet_revision_restore_proposal_from_snapshot(
+            Path(args.archive_root),
+            receipt_path=str(args.receipt),
+            expected_receipt_sha256=str(args.expected_receipt_sha256),
+            expected_plan_digest=(
+                str(args.expected_plan_digest or "").strip() or None
+            ),
+            dry_run=bool(args.dry_run),
+            approve=bool(args.approve),
+        )
+    except (
+        archive_services.ArchiveServiceError,
+        ArchivePathError,
+        OSError,
+        UnicodeError,
+        ValueError,
+    ):
+        print(
+            "zet-revision-restore-proposal-from-snapshot could not produce a privacy-safe result from the selected local evidence.",
+            file=sys.stderr,
+        )
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        print(
+            "WOM restore proposal from snapshot: "
+            + str(result.get("status") or "unknown")
+        )
+        print(
+            "Before-snapshot verified: "
+            + (
+                "yes"
+                if result.get("before_snapshot", {}).get("verified")
+                else "no"
+            )
+        )
+        print(
+            "Private restore proposal present: "
+            + (
+                "yes"
+                if result.get("restore_proposal", {}).get("exists")
+                else "no"
+            )
+        )
+        print(
+            "Independent from immutable snapshot: "
+            + (
+                "yes"
+                if result.get("restore_proposal", {}).get(
+                    "storage_identity_independent_from_snapshot"
+                )
+                else "no"
+            )
+        )
+        print(f"Plan digest: {result.get('plan_digest') or 'unavailable'}")
+        if result.get("restore_proposal", {}).get("relative_path"):
+            print(
+                "Private restore proposal: "
+                + str(result["restore_proposal"]["relative_path"])
+            )
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+        if result.get("next_safe_actions"):
+            print("Next safe actions:")
+            for action in result["next_safe_actions"]:
+                print(f"- {action}")
+    return 0 if result.get("ok") else 1
+
+
 def command_zet_revision_restore_plan(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print(
@@ -19125,6 +19212,49 @@ def build_parser() -> argparse.ArgumentParser:
     )
     zet_revision_receipt_audit.set_defaults(
         func=command_zet_revision_receipt_audit
+    )
+
+    zet_revision_restore_proposal_from_snapshot = subcommands.add_parser(
+        "zet-revision-restore-proposal-from-snapshot",
+        aliases=["zet-restore-proposal-from-snapshot"],
+        help="Copy a verified v0.2 before-snapshot into one independent private restore proposal without changing canonical memory.",
+    )
+    zet_revision_restore_proposal_from_snapshot.add_argument(
+        "archive_root",
+        help="Archive root containing the immutable revision receipt and local before-snapshot.",
+    )
+    zet_revision_restore_proposal_from_snapshot.add_argument(
+        "--receipt",
+        required=True,
+        help="Archive-relative v0.2 canonical revision receipt path; the value is read privately and not echoed.",
+    )
+    zet_revision_restore_proposal_from_snapshot.add_argument(
+        "--expected-receipt-sha256",
+        required=True,
+        help="Exact SHA-256 of the selected immutable v0.2 revision receipt.",
+    )
+    zet_revision_restore_proposal_from_snapshot.add_argument(
+        "--expected-plan-digest",
+        help="Required for approval: exact plan_digest returned by the no-write preview.",
+    )
+    zet_revision_restore_proposal_from_snapshot.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Verify the source evidence and derive the private destination without writing.",
+    )
+    zet_revision_restore_proposal_from_snapshot.add_argument(
+        "--approve",
+        action="store_true",
+        help="Create one exact independent private proposal; does not approve or perform a canonical restore.",
+    )
+    zet_revision_restore_proposal_from_snapshot.add_argument(
+        "--format",
+        choices=["text", "json"],
+        default="json",
+        help="Output format.",
+    )
+    zet_revision_restore_proposal_from_snapshot.set_defaults(
+        func=command_zet_revision_restore_proposal_from_snapshot
     )
 
     zet_revision_restore_plan = subcommands.add_parser(

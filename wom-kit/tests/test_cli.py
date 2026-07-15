@@ -2369,6 +2369,9 @@ class ArchiveCliTests(unittest.TestCase):
         self.assertIn("abstract-freshness", command_names)
         self.assertIn("zet-revision-plan", command_names)
         self.assertIn("zet-revision-receipt-audit", command_names)
+        self.assertIn(
+            "zet-revision-restore-proposal-from-snapshot", command_names
+        )
         self.assertIn("zet-revision-restore-plan", command_names)
         self.assertIn("zet-revision-restore-write", command_names)
         self.assertIn("derived-artifact-staleness", command_names)
@@ -2456,6 +2459,24 @@ class ArchiveCliTests(unittest.TestCase):
             "--progress",
         ):
             self.assertIn(option, revision_audit["options"])
+        revision_restore_proposal = next(
+            item
+            for item in commands
+            if item["name"]
+            == "zet-revision-restore-proposal-from-snapshot"
+        )
+        self.assertEqual(
+            revision_restore_proposal["aliases"],
+            ["zet-restore-proposal-from-snapshot"],
+        )
+        for option in (
+            "--receipt",
+            "--expected-receipt-sha256",
+            "--expected-plan-digest",
+            "--dry-run",
+            "--approve",
+        ):
+            self.assertIn(option, revision_restore_proposal["options"])
         revision_restore_plan = next(
             item for item in commands if item["name"] == "zet-revision-restore-plan"
         )
@@ -32452,6 +32473,276 @@ state:
                             if "write_plan_digest" in problem
                         )
                     )
+
+    def test_zet_revision_restore_proposal_from_snapshot_materializes_independent_copy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            fixture = self.create_zet_revision_proposal(archive_root)
+            applied = self.approve_zet_revision_fixture(
+                archive_root,
+                fixture,
+                revision_at="2026-07-14T15:40:00Z",
+            )["applied"]
+            receipt_relative = applied["receipt"]["path"]
+            receipt_path = archive_root / receipt_relative
+            receipt_sha256 = "sha256:" + hashlib.sha256(
+                receipt_path.read_bytes()
+            ).hexdigest()
+            canonical_after_revision = fixture["canonical_path"].read_bytes()
+
+            preview_code, preview_output = self.run_cli(
+                [
+                    "zet-revision-restore-proposal-from-snapshot",
+                    str(archive_root),
+                    "--receipt",
+                    receipt_relative,
+                    "--expected-receipt-sha256",
+                    receipt_sha256,
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(preview_code, 0, preview_output)
+            preview = json.loads(preview_output)
+            self.assertTrue(preview["ok"], preview)
+            self.assertEqual(preview["status"], "ready_to_materialize")
+            self.assertTrue(preview["before_snapshot"]["verified"])
+            proposal_relative = preview["restore_proposal"]["relative_path"]
+            proposal_path = archive_root / proposal_relative
+            self.assertFalse(proposal_path.exists())
+            self.assertEqual(
+                preview["write_boundary"]["files_written_this_run"], 0
+            )
+
+            stale_approval = (
+                archive_services.zet_revision_restore_proposal_from_snapshot(
+                    archive_root,
+                    receipt_path=receipt_relative,
+                    expected_receipt_sha256=receipt_sha256,
+                    expected_plan_digest="sha256:" + "0" * 64,
+                    approve=True,
+                )
+            )
+            self.assertFalse(stale_approval["ok"])
+            self.assertIn(
+                "expected_plan_digest_mismatch", stale_approval["blockers"]
+            )
+            self.assertFalse(proposal_path.exists())
+
+            approve_code, approve_output = self.run_cli(
+                [
+                    "zet-revision-restore-proposal-from-snapshot",
+                    str(archive_root),
+                    "--receipt",
+                    receipt_relative,
+                    "--expected-receipt-sha256",
+                    receipt_sha256,
+                    "--expected-plan-digest",
+                    preview["plan_digest"],
+                    "--approve",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(approve_code, 0, approve_output)
+            applied_copy = json.loads(approve_output)
+            self.assertEqual(applied_copy["status"], "materialized")
+            self.assertTrue(applied_copy["restore_proposal"]["written_this_run"])
+            self.assertEqual(proposal_path.read_bytes(), fixture["original_bytes"])
+            snapshot_path = archive_root / applied["before_snapshot"]["logical_key"]
+            self.assertEqual(snapshot_path.read_bytes(), fixture["original_bytes"])
+            self.assertFalse(os.path.samefile(snapshot_path, proposal_path))
+            self.assertEqual(
+                fixture["canonical_path"].read_bytes(), canonical_after_revision
+            )
+
+            inventory = archive_services.ai_artifact_inventory(
+                archive_root, dry_run=True
+            )
+            self.assertTrue(inventory["ok"], inventory)
+            self.assertEqual(
+                inventory["artifact_kind_counts"][
+                    "zet_revision_restore_proposal"
+                ],
+                1,
+            )
+            self.assertTrue(
+                all("relative_path" not in item for item in inventory["items"])
+            )
+
+            repeated = archive_services.zet_revision_restore_proposal_from_snapshot(
+                archive_root,
+                receipt_path=receipt_relative,
+                expected_receipt_sha256=receipt_sha256,
+                expected_plan_digest=preview["plan_digest"],
+                approve=True,
+            )
+            self.assertTrue(repeated["ok"], repeated)
+            self.assertEqual(repeated["status"], "already_materialized")
+            self.assertEqual(repeated["write_boundary"]["files_written_this_run"], 0)
+
+            restore_plan = archive_services.zet_revision_restore_plan(
+                archive_root,
+                receipt_path=receipt_relative,
+                expected_receipt_sha256=receipt_sha256,
+                restore_proposal_path=proposal_relative,
+                dry_run=True,
+            )
+            self.assertTrue(restore_plan["ok"], restore_plan)
+            self.assertTrue(
+                restore_plan["restore_proposal"]["matches_receipt_before"]
+            )
+
+            proposal_path.write_bytes(b"private mutable proposal copy\n")
+            self.assertEqual(snapshot_path.read_bytes(), fixture["original_bytes"])
+            for private_marker in (
+                fixture["zettel_id"],
+                fixture["title_marker"],
+                fixture["abstract_marker"],
+                fixture["body_marker"],
+                "person:fake-reviewer",
+                Path(receipt_relative).name,
+            ):
+                self.assertNotIn(private_marker, preview_output)
+                self.assertNotIn(private_marker, approve_output)
+
+    def test_zet_revision_restore_proposal_from_snapshot_never_overwrites_collision(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            fixture = self.create_zet_revision_proposal(archive_root)
+            applied = self.approve_zet_revision_fixture(
+                archive_root,
+                fixture,
+                revision_at="2026-07-14T15:45:00Z",
+            )["applied"]
+            receipt_relative = applied["receipt"]["path"]
+            receipt_path = archive_root / receipt_relative
+            receipt_sha256 = "sha256:" + hashlib.sha256(
+                receipt_path.read_bytes()
+            ).hexdigest()
+            preview = archive_services.zet_revision_restore_proposal_from_snapshot(
+                archive_root,
+                receipt_path=receipt_relative,
+                expected_receipt_sha256=receipt_sha256,
+                dry_run=True,
+            )
+            self.assertTrue(preview["ok"], preview)
+            proposal_path = (
+                archive_root / preview["restore_proposal"]["relative_path"]
+            )
+            proposal_path.parent.mkdir(parents=True, exist_ok=True)
+            collision_bytes = b"do not overwrite this private collision\n"
+            proposal_path.write_bytes(collision_bytes)
+
+            result = archive_services.zet_revision_restore_proposal_from_snapshot(
+                archive_root,
+                receipt_path=receipt_relative,
+                expected_receipt_sha256=receipt_sha256,
+                expected_plan_digest=preview["plan_digest"],
+                approve=True,
+            )
+
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["status"], "blocked")
+            self.assertIn(
+                "restore_proposal_destination_collision", result["blockers"]
+            )
+            self.assertEqual(proposal_path.read_bytes(), collision_bytes)
+
+    def test_zet_revision_restore_proposal_from_snapshot_rejects_snapshot_hardlink(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            fixture = self.create_zet_revision_proposal(archive_root)
+            applied = self.approve_zet_revision_fixture(
+                archive_root,
+                fixture,
+                revision_at="2026-07-14T15:47:00Z",
+            )["applied"]
+            receipt_relative = applied["receipt"]["path"]
+            receipt_path = archive_root / receipt_relative
+            receipt_sha256 = "sha256:" + hashlib.sha256(
+                receipt_path.read_bytes()
+            ).hexdigest()
+            preview = archive_services.zet_revision_restore_proposal_from_snapshot(
+                archive_root,
+                receipt_path=receipt_relative,
+                expected_receipt_sha256=receipt_sha256,
+                dry_run=True,
+            )
+            self.assertTrue(preview["ok"], preview)
+            proposal_path = (
+                archive_root / preview["restore_proposal"]["relative_path"]
+            )
+            proposal_path.parent.mkdir(parents=True, exist_ok=True)
+            snapshot_path = archive_root / applied["before_snapshot"]["logical_key"]
+            try:
+                os.link(snapshot_path, proposal_path)
+            except OSError as exc:
+                self.skipTest(f"hard links unavailable on this test filesystem: {exc}")
+
+            result = archive_services.zet_revision_restore_proposal_from_snapshot(
+                archive_root,
+                receipt_path=receipt_relative,
+                expected_receipt_sha256=receipt_sha256,
+                dry_run=True,
+            )
+
+            self.assertFalse(result["ok"])
+            self.assertTrue(result["restore_proposal"]["exact_bytes"])
+            self.assertFalse(
+                result["restore_proposal"][
+                    "storage_identity_independent_from_snapshot"
+                ]
+            )
+            self.assertIn(
+                "restore_proposal_must_not_share_storage_identity_with_snapshot",
+                result["blockers"],
+            )
+
+    def test_zet_revision_restore_proposal_from_snapshot_requires_v02_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            fixture = self.create_zet_revision_proposal(archive_root)
+            applied = self.approve_zet_revision_fixture(
+                archive_root,
+                fixture,
+                revision_at="2026-07-14T15:50:00Z",
+            )["applied"]
+            receipt_path = archive_root / applied["receipt"]["path"]
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            receipt["schema"] = "wom-kit/zet-revision-receipt/v0.1"
+            receipt.pop("before_snapshot")
+            receipt["mutation_contract"].pop(
+                "before_bytes_preserved_as_objet"
+            )
+            receipt["mutation_contract"].pop(
+                "before_snapshot_manifest_registered"
+            )
+            receipt["privacy_guards"].pop(
+                "before_snapshot_text_stored_in_receipt"
+            )
+            receipt_path.write_text(
+                json.dumps(receipt, indent=2, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            receipt_sha256 = "sha256:" + hashlib.sha256(
+                receipt_path.read_bytes()
+            ).hexdigest()
+
+            result = archive_services.zet_revision_restore_proposal_from_snapshot(
+                archive_root,
+                receipt_path=applied["receipt"]["path"],
+                expected_receipt_sha256=receipt_sha256,
+                dry_run=True,
+            )
+
+            self.assertFalse(result["ok"])
+            self.assertIn(
+                "v02_revision_receipt_with_before_snapshot_required",
+                result["blockers"],
+            )
+            self.assertFalse(result["restore_proposal"]["exists"])
 
     def test_zet_revision_restore_plan_accepts_exact_recovered_bytes_without_writing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

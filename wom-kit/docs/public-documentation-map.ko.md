@@ -81,6 +81,7 @@
 - [정본 zet 수정 계획](zet-revision-plan.md)
 - [정본 zet 수정 쓰기](zet-revision-write.md)
 - [정본 zet 수정 이력 검진](zet-revision-receipt-audit.md)
+- [이전-상태 보존본에서 복원안 만들기](zet-revision-restore-proposal-from-snapshot.md)
 - [정본 zet 복구 계획](zet-revision-restore-plan.md)
 - [정본 zet 정확 바이트 복원 쓰기](zet-revision-restore-write.md)
 - [Derived Artifact Staleness](derived-artifact-staleness.md)

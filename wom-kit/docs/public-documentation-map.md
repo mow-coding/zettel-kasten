@@ -83,6 +83,7 @@ Supporting philosophy and model docs:
 - [Canonical zet Revision Plan](zet-revision-plan.md)
 - [Canonical zet Revision Write](zet-revision-write.md)
 - [Canonical zet Revision Receipt Audit](zet-revision-receipt-audit.md)
+- [Restore Proposal From A Preserved Before-Snapshot](zet-revision-restore-proposal-from-snapshot.md)
 - [Canonical zet Revision Restore Plan](zet-revision-restore-plan.md)
 - [Canonical zet Exact-Byte Restore Write](zet-revision-restore-write.md)
 - [Derived Artifact Staleness](derived-artifact-staleness.md)

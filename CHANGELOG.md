@@ -6,6 +6,29 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.249 - 2026-07-15
+
+Before-snapshot restore-proposal bridge checkpoint. Compatible additive CLI
+behavior; no archive migration or canonical write.
+
+- **Preserved history can now enter the review workflow without hand copying.**
+  `zet-revision-restore-proposal-from-snapshot` verifies one v0.2 revision
+  receipt, its exact local before-snapshot, and its object-manifest record.
+- **Preview and approval remain separate.** Dry-run derives a content-addressed
+  private destination and plan digest. Approval must reuse the digest and only
+  creates the private proposal; it never changes a canonical zet.
+- **The working copy cannot mutate immutable history.** The proposal is an
+  independent byte-for-byte copy, never a hard link to the snapshot. Existing
+  exact copies are idempotent only when their storage identity is independent.
+- **Collisions fail closed.** A different, unsafe, partial, or hard-linked
+  destination is never overwritten.
+- **The proposal remains visible to later AI sessions.**
+  `ai-artifact-inventory` classifies it as `zet_revision_restore_proposal`
+  instead of an ordinary working note.
+- **Existing restore safety gates remain mandatory.** The materialized file must
+  still pass `zet-revision-restore-plan`, private human review, and the separate
+  approval-gated exact-byte restore writer.
+
 ## v0.3.248 - 2026-07-15
 
 Canonical revision before-snapshot checkpoint. Compatible additive receipt

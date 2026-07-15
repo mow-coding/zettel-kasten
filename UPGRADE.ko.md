@@ -2,6 +2,29 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.3.249 이전-상태 보존본 복원안 연결
+
+보관함 마이그레이션은 필요하지 않습니다. 이 릴리스는 v0.3.248 이후 만들어진
+일반 v0.2 수정 영수증에 선택형 CLI 연결 단계를 추가합니다.
+
+먼저 검증된 원본과 비공개 목적지를 미리 봅니다.
+
+```powershell
+archive zet-revision-restore-proposal-from-snapshot <archive-root> `
+  --receipt receipts/revisions/canonical/<digest>.zet-revision.json `
+  --expected-receipt-sha256 <sha256> `
+  --dry-run --format json
+```
+
+승인은 반환된 `plan_digest`를 그대로 다시 요구합니다. 승인이 만드는 것은
+`.wom-scratch/revisions/restores/` 아래의 독립된 정확한 복사본뿐이며 정본 zet는
+바꾸지 않습니다. 복사본을 검토한 다음 `zet-revision-restore-plan`과 별도의 사람
+검토형 복원 쓰기 절차를 계속 사용하세요. 수정 가능한 복원안을 불변 보존본에
+하드링크하거나, 복사본 생성을 복원 승인으로 해석하면 안 됩니다.
+
+기존 v0.1 영수증은 그대로 유효하지만, 신뢰할 수 있는 별도 비공개 백업에서
+완전한 과거 바이트를 복구해야 합니다.
+
 ## v0.3.248 정본 수정 전 이전 바이트 보존
 
 보관함 마이그레이션은 필요하지 않습니다. 기존 v0.1 수정 영수증은 이전
