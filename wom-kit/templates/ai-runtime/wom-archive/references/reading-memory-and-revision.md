@@ -76,6 +76,27 @@ receipts still need a trusted private byte source. Do not delete revision
 locks, rewrite receipts, hard-link a mutable proposal to immutable history, or
 reconstruct old bytes from a displayed diff.
 
+## Close A Session Without Trusting Chat Memory
+
+Before a context reset or handoff, update and approve
+`ops/operational-context.yml` when the mission, completed work, next work,
+blockers, gotchas, or reviewed decisions changed. Then inspect:
+
+```text
+archive session-handoff-checkpoint <archive-root> --dry-run --format json
+```
+
+Resolve `needs_durable_capture` before continuing. Review the current
+conversation for important decisions, corrections, unfinished work, and AI
+artifacts that still exist only in chat. Move those into durable WOM artifacts,
+then rerun with `--confirm-chat-reviewed`. Approval requires the exact returned
+`state_digest`, `--reviewed-by`, and the same confirmation.
+
+The command does not read the host chat or AI artifact bodies. A green receipt
+proves only the bounded archive evidence and explicit review at checkpoint
+time. Any important later chat decision requires another checkpoint. It is not
+remote backup proof.
+
 Search [operator-contract.md](operator-contract.md) for these exact advanced
 workflows before using them:
 
@@ -86,6 +107,7 @@ workflows before using them:
 - `zet-revision-restore-proposal-from-snapshot`
 - `zet-revision-restore-plan`
 - `zet-revision-restore-write`
+- `session-handoff-checkpoint`
 
 The complete operator contract contains the required hashes, event timestamps,
 human affirmations, and rollback boundaries.

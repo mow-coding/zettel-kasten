@@ -1000,6 +1000,8 @@ OPERATIONAL_CONTEXT_RELATIVE_PATH = "ops/operational-context.yml"
 OPERATIONAL_CONTEXT_RECEIPTS_DIR = "receipts/operational-context"
 OPERATIONAL_CONTEXT_MAX_TEXT_LENGTH = 600
 OPERATIONAL_CONTEXT_MAX_LIST_ITEMS = 24
+SESSION_HANDOFF_CHECKPOINT_SCHEMA = "wom-kit/session-handoff-checkpoint/v0.1"
+SESSION_HANDOFF_CHECKPOINT_RECEIPTS_DIR = "receipts/session-handoffs"
 OPERATOR_FEEDBACK_SCHEMA = "wom-kit/operator-feedback/v0.1"
 OPERATOR_FEEDBACK_RECEIPT_SCHEMA = "wom-kit/operator-feedback-receipt/v0.1"
 OPERATOR_FEEDBACK_DELIVERY_RECEIPT_SCHEMA = "wom-kit/operator-feedback-delivery-receipt/v0.1"
@@ -67096,8 +67098,9 @@ def operational_context(
             "reviewed_by": reviewer,
         }
         written_text = dump_yaml(written_record)
-        written_hash = "sha256:" + hashlib.sha256(written_text.encode("utf-8")).hexdigest()
-        previous_text = target_path.read_text(encoding="utf-8") if target_path.is_file() else None
+        written_bytes = written_text.encode("utf-8")
+        written_hash = "sha256:" + hashlib.sha256(written_bytes).hexdigest()
+        previous_bytes = target_path.read_bytes() if target_path.is_file() else None
         receipt_path = archive_internal_path(root, proposed_receipt_path)
         receipt = {
             "schema": "wom-kit/operational-context-receipt/v0.1",
@@ -67110,8 +67113,8 @@ def operational_context(
             "reviewed_at": reviewed_at,
             "base_record_sha256": base_record_hash,
             "written_record_sha256": written_hash,
-            "previous_record_sha256": "sha256:" + hashlib.sha256(previous_text.encode("utf-8")).hexdigest()
-            if previous_text is not None
+            "previous_record_sha256": "sha256:" + hashlib.sha256(previous_bytes).hexdigest()
+            if previous_bytes is not None
             else None,
             "session_start_injection": operational_context_session_start_injection(written_record),
             "closed_actions": {
@@ -67123,16 +67126,16 @@ def operational_context(
         try:
             target_path.parent.mkdir(parents=True, exist_ok=True)
             receipt_path.parent.mkdir(parents=True, exist_ok=True)
-            target_path.write_text(written_text, encoding="utf-8")
+            target_path.write_bytes(written_bytes)
             write_json_new_file(receipt_path, receipt)
         except Exception:
-            if previous_text is None:
+            if previous_bytes is None:
                 try:
                     target_path.unlink()
                 except OSError:
                     pass
             else:
-                target_path.write_text(previous_text, encoding="utf-8")
+                target_path.write_bytes(previous_bytes)
             raise
 
         result.update(
@@ -67431,6 +67434,374 @@ def operational_context_recommended_commands() -> list[dict[str, str]]:
 def operational_context_receipt_relative_path(record_hash: str) -> str:
     digest = record_hash.removeprefix("sha256:")
     return f"{OPERATIONAL_CONTEXT_RECEIPTS_DIR}/{digest[:16]}.operational-context.json"
+
+
+def session_handoff_operational_context_evidence(root: Path) -> dict[str, Any]:
+    target_path = archive_internal_path(root, OPERATIONAL_CONTEXT_RELATIVE_PATH)
+    if not target_path.is_file():
+        return {
+            "status": "missing",
+            "record_path": OPERATIONAL_CONTEXT_RELATIVE_PATH,
+            "record_sha256": None,
+            "receipt_hash_basis": None,
+            "matching_receipt_ref": None,
+            "matching_receipt_count": 0,
+            "candidate_receipt_count": 0,
+            "invalid_receipt_count": 0,
+            "record_body_read": False,
+        }
+
+    record_bytes = target_path.read_bytes()
+    record_sha256 = "sha256:" + hashlib.sha256(record_bytes).hexdigest()
+    try:
+        normalized_text_sha256 = "sha256:" + hashlib.sha256(
+            target_path.read_text(encoding="utf-8").encode("utf-8")
+        ).hexdigest()
+    except UnicodeDecodeError:
+        normalized_text_sha256 = None
+    archive_id = read_archive_id(root)
+    receipt_root = archive_internal_path(root, OPERATIONAL_CONTEXT_RECEIPTS_DIR)
+    exact_matching_refs: list[str] = []
+    legacy_matching_refs: list[str] = []
+    candidate_count = 0
+    invalid_count = 0
+    if receipt_root.is_dir():
+        for receipt_path in safe_archive_glob(
+            receipt_root,
+            "*.operational-context.json",
+            root,
+            recursive=False,
+        ):
+            candidate_count += 1
+            try:
+                receipt = read_json_object(receipt_path, "operational context receipt")
+            except ArchiveServiceError:
+                invalid_count += 1
+                continue
+            if receipt.get("schema") != "wom-kit/operational-context-receipt/v0.1":
+                invalid_count += 1
+                continue
+            if receipt.get("archive_id") != archive_id:
+                invalid_count += 1
+                continue
+            if receipt.get("record_path") != OPERATIONAL_CONTEXT_RELATIVE_PATH:
+                invalid_count += 1
+                continue
+            receipt_hash = receipt.get("written_record_sha256")
+            receipt_ref = archive_relative_path(receipt_path, root).replace("\\", "/")
+            if receipt_hash == record_sha256:
+                exact_matching_refs.append(receipt_ref)
+            elif normalized_text_sha256 and receipt_hash == normalized_text_sha256:
+                legacy_matching_refs.append(receipt_ref)
+
+    exact_matching_refs.sort()
+    legacy_matching_refs.sort()
+    matching_refs = exact_matching_refs or legacy_matching_refs
+    hash_basis = "exact_utf8_bytes" if exact_matching_refs else (
+        "legacy_newline_normalized_utf8_text" if legacy_matching_refs else None
+    )
+    return {
+        "status": "receipt_verified" if matching_refs else "present_without_matching_receipt",
+        "record_path": OPERATIONAL_CONTEXT_RELATIVE_PATH,
+        "record_sha256": record_sha256,
+        "receipt_hash_basis": hash_basis,
+        "matching_receipt_ref": matching_refs[-1] if matching_refs else None,
+        "matching_receipt_count": len(matching_refs),
+        "candidate_receipt_count": candidate_count,
+        "invalid_receipt_count": invalid_count,
+        "record_body_read": True,
+    }
+
+
+def session_handoff_inventory_snapshot(inventory: dict[str, Any]) -> dict[str, Any]:
+    items: list[dict[str, Any]] = []
+    for item in inventory.get("items") or []:
+        if not isinstance(item, dict):
+            continue
+        items.append(
+            {
+                "artifact_ref": item.get("artifact_ref"),
+                "artifact_kind": item.get("artifact_kind"),
+                "fate_state": item.get("fate_state"),
+                "bytes": item.get("bytes"),
+                "modified_at": item.get("modified_at"),
+            }
+        )
+    return {
+        "total_candidate_count": inventory.get("total_candidate_count", 0),
+        "item_count": inventory.get("item_count", 0),
+        "truncated": bool(inventory.get("truncated")),
+        "skipped_non_plain_file_count": inventory.get("skipped_non_plain_file_count", 0),
+        "fate_counts": inventory.get("fate_counts") if isinstance(inventory.get("fate_counts"), dict) else {},
+        "artifact_kind_counts": (
+            inventory.get("artifact_kind_counts")
+            if isinstance(inventory.get("artifact_kind_counts"), dict)
+            else {}
+        ),
+        "items": items,
+    }
+
+
+def session_handoff_checkpoint_receipt_relative_path(state_digest: str) -> str:
+    digest = state_digest.removeprefix("sha256:")
+    return f"{SESSION_HANDOFF_CHECKPOINT_RECEIPTS_DIR}/{digest[:24]}.session-handoff.json"
+
+
+def session_handoff_checkpoint_receipt_matches(
+    receipt: dict[str, Any],
+    *,
+    archive_id: str,
+    state_digest: str,
+    operational_context_sha256: str | None,
+    operational_context_receipt_ref: str | None,
+    inventory_digest: str,
+) -> bool:
+    reviewer = safe_foreign_quarantine_actor_id(receipt.get("reviewed_by"))
+    confirmation = receipt.get("confirmation") if isinstance(receipt.get("confirmation"), dict) else {}
+    return bool(
+        receipt.get("schema") == SESSION_HANDOFF_CHECKPOINT_SCHEMA
+        and receipt.get("lifecycle_action") == "session_handoff_checkpoint_write"
+        and receipt.get("archive_id") == archive_id
+        and receipt.get("state_digest") == state_digest
+        and receipt.get("operational_context_sha256") == operational_context_sha256
+        and receipt.get("operational_context_receipt_ref") == operational_context_receipt_ref
+        and receipt.get("ai_artifact_inventory_digest") == inventory_digest
+        and confirmation.get("conversation_review_completed") is True
+        and confirmation.get("important_context_has_durable_home") is True
+        and reviewer
+        and receipt.get("ready_for_context_reset") is True
+    )
+
+
+def session_handoff_checkpoint(
+    archive_root: Path | str,
+    *,
+    dry_run: bool = False,
+    approve: bool = False,
+    reviewed_by: str | None = None,
+    confirm_chat_reviewed: bool = False,
+    expected_state_digest: str | None = None,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    reviewer = safe_foreign_quarantine_actor_id(reviewed_by)
+
+    if dry_run is approve:
+        blockers.append("Choose exactly one mode: --dry-run or --approve.")
+    if approve and not reviewer:
+        blockers.append("session-handoff-checkpoint approve requires a safe --reviewed-by actor id.")
+    if reviewed_by and reviewer is None:
+        blockers.append("reviewed_by must be a safe non-secret actor id.")
+    if approve and not confirm_chat_reviewed:
+        blockers.append("session-handoff-checkpoint approve requires --confirm-chat-reviewed.")
+    if approve and not expected_state_digest:
+        blockers.append("session-handoff-checkpoint approve requires --expected-state-digest from a fresh dry-run.")
+    if expected_state_digest and not re.fullmatch(r"sha256:[0-9a-f]{64}", expected_state_digest):
+        blockers.append("expected_state_digest must use sha256:<64 lowercase hex> syntax.")
+
+    operational_context = runtime_context_operational_context(root)
+    context_evidence = session_handoff_operational_context_evidence(root)
+    if context_evidence.get("receipt_hash_basis") == "legacy_newline_normalized_utf8_text":
+        warnings.append(
+            "The operational context matches a legacy newline-normalized receipt; the session checkpoint still binds the current exact file bytes."
+        )
+    inventory = ai_artifact_inventory(root, max_items=1000, show_relative_paths=False, dry_run=True)
+    inventory_snapshot = session_handoff_inventory_snapshot(inventory)
+    inventory_digest = sha256_json_value(inventory_snapshot)
+    fate_counts = inventory_snapshot["fate_counts"]
+    unreviewed_count = int(fate_counts.get("unreviewed_ai_artifact") or 0)
+
+    durable_gaps: list[str] = []
+    if operational_context.get("status") != "present" or not operational_context.get("ok"):
+        durable_gaps.append("approved operational context is missing or invalid.")
+    if context_evidence.get("status") != "receipt_verified":
+        durable_gaps.append("the current operational context bytes do not match an approval receipt.")
+    if inventory_snapshot["truncated"]:
+        durable_gaps.append("AI artifact inventory is truncated; a full fate review is not proven.")
+    if unreviewed_count:
+        durable_gaps.append(f"{unreviewed_count} AI artifact candidate(s) still need a reviewed fate.")
+
+    state_evidence = {
+        "operational_context_sha256": context_evidence.get("record_sha256"),
+        "operational_context_receipt_ref": context_evidence.get("matching_receipt_ref"),
+        "ai_artifact_inventory_digest": inventory_digest,
+        "ai_artifact_total_candidate_count": inventory_snapshot["total_candidate_count"],
+        "ai_artifact_fate_counts": fate_counts,
+        "ai_artifact_inventory_truncated": inventory_snapshot["truncated"],
+    }
+    state_digest = sha256_json_value(state_evidence)
+    proposed_receipt_path = session_handoff_checkpoint_receipt_relative_path(state_digest)
+    checkpoint_root = archive_internal_path(root, SESSION_HANDOFF_CHECKPOINT_RECEIPTS_DIR)
+    matching_checkpoint_refs: list[str] = []
+    stale_checkpoint_count = 0
+    invalid_checkpoint_count = 0
+    if checkpoint_root.is_dir():
+        for receipt_path in safe_archive_glob(checkpoint_root, "*.session-handoff.json", root, recursive=False):
+            try:
+                receipt = read_json_object(receipt_path, "session handoff checkpoint receipt")
+            except ArchiveServiceError:
+                invalid_checkpoint_count += 1
+                continue
+            if receipt.get("schema") != SESSION_HANDOFF_CHECKPOINT_SCHEMA or receipt.get("archive_id") != archive_id:
+                invalid_checkpoint_count += 1
+                continue
+            if session_handoff_checkpoint_receipt_matches(
+                receipt,
+                archive_id=archive_id,
+                state_digest=state_digest,
+                operational_context_sha256=context_evidence.get("record_sha256"),
+                operational_context_receipt_ref=context_evidence.get("matching_receipt_ref"),
+                inventory_digest=inventory_digest,
+            ):
+                matching_checkpoint_refs.append(archive_relative_path(receipt_path, root).replace("\\", "/"))
+            else:
+                stale_checkpoint_count += 1
+
+    matching_checkpoint_refs.sort()
+    current_checkpoint_ref = matching_checkpoint_refs[-1] if matching_checkpoint_refs else None
+    current_checkpoint_verified = bool(current_checkpoint_ref and not durable_gaps)
+
+    if approve and expected_state_digest and expected_state_digest != state_digest:
+        blockers.append("stale session handoff plan: expected_state_digest does not match the current archive evidence.")
+    if approve and durable_gaps:
+        blockers.extend(f"session handoff gap: {gap}" for gap in durable_gaps)
+
+    existing_proposed_path = archive_internal_path(root, proposed_receipt_path)
+    if approve and existing_proposed_path.exists() and not current_checkpoint_verified:
+        blockers.append("session handoff receipt path already exists but does not verify the current evidence.")
+
+    if current_checkpoint_verified:
+        status = "current_verified"
+    elif durable_gaps:
+        status = "needs_durable_capture"
+    elif not confirm_chat_reviewed:
+        status = "needs_conversation_review"
+    elif dry_run:
+        status = "would_write"
+    elif blockers:
+        status = "blocked"
+    else:
+        status = "ready_to_write"
+
+    files_written: list[str] = []
+    receipt_path: str | None = current_checkpoint_ref
+    if approve and not blockers and not current_checkpoint_verified:
+        assert reviewer is not None
+        reviewed_at = datetime.now().astimezone().replace(microsecond=0).isoformat()
+        receipt = {
+            "schema": SESSION_HANDOFF_CHECKPOINT_SCHEMA,
+            "lifecycle_action": "session_handoff_checkpoint_write",
+            "archive_id": archive_id,
+            "state_digest": state_digest,
+            "operational_context_sha256": context_evidence.get("record_sha256"),
+            "operational_context_receipt_ref": context_evidence.get("matching_receipt_ref"),
+            "ai_artifact_inventory_digest": inventory_digest,
+            "ai_artifact_inventory": {
+                "total_candidate_count": inventory_snapshot["total_candidate_count"],
+                "truncated": inventory_snapshot["truncated"],
+                "fate_counts": fate_counts,
+                "body_content_read": False,
+            },
+            "confirmation": {
+                "conversation_review_completed": True,
+                "important_context_has_durable_home": True,
+                "raw_chat_transcript_required": False,
+            },
+            "reviewed_by": reviewer,
+            "reviewed_at": reviewed_at,
+            "ready_for_context_reset": True,
+            "closed_actions": {
+                "chat_transcript_body_read_by_wom": False,
+                "ai_artifact_bodies_read": False,
+                "provider_api_called": False,
+                "network_checked": False,
+                "secrets_read": False,
+            },
+        }
+        existing_proposed_path.parent.mkdir(parents=True, exist_ok=True)
+        write_json_new_file(existing_proposed_path, receipt)
+        files_written = [proposed_receipt_path]
+        receipt_path = proposed_receipt_path
+        matching_checkpoint_refs.append(proposed_receipt_path)
+        current_checkpoint_verified = True
+        status = "written"
+    elif approve and not blockers and current_checkpoint_verified:
+        status = "no_change"
+
+    if status == "needs_durable_capture":
+        next_safe_actions = [
+            "Update and approve ops/operational-context.yml so current mission, completed work, next work, blockers, gotchas, and decisions have receipt-backed bytes.",
+            "Run ai-artifact-inventory and give each unreviewed AI artifact a durable or reviewed-discard fate.",
+            "Rerun session-handoff-checkpoint after those archive artifacts are current.",
+        ]
+    elif status == "needs_conversation_review":
+        next_safe_actions = [
+            "Review the current conversation for decisions, corrections, unfinished work, and generated artifacts that still exist only in chat.",
+            "Move important context into zets, receipts, meeting records, objets, or the approved operational context before confirming the checkpoint.",
+            "Rerun with --confirm-chat-reviewed, then approve the exact returned state_digest.",
+        ]
+    elif status == "would_write":
+        next_safe_actions = [
+            "Approve only the exact state_digest returned by this dry-run.",
+        ]
+    elif status in {"current_verified", "no_change", "written"}:
+        next_safe_actions = [
+            "A new AI session may rehydrate from runtime-context and operational-context; any later chat-only decision still needs a new checkpoint.",
+        ]
+    else:
+        next_safe_actions = ["Resolve blockers and rerun the dry-run before approval."]
+
+    ready_for_context_reset = bool(current_checkpoint_verified and not durable_gaps and not blockers)
+    return {
+        "ok": not blockers,
+        "dry_run": bool(dry_run),
+        "lifecycle_action": "session_handoff_checkpoint",
+        "archive_id": archive_id,
+        "status": status,
+        "state_digest": state_digest,
+        "expected_state_digest": expected_state_digest,
+        "ready_for_context_reset": ready_for_context_reset,
+        "operational_context_evidence": context_evidence,
+        "ai_artifact_inventory_evidence": {
+            "digest": inventory_digest,
+            "total_candidate_count": inventory_snapshot["total_candidate_count"],
+            "truncated": inventory_snapshot["truncated"],
+            "skipped_non_plain_file_count": inventory_snapshot["skipped_non_plain_file_count"],
+            "fate_counts": fate_counts,
+            "artifact_kind_counts": inventory_snapshot["artifact_kind_counts"],
+            "unreviewed_count": unreviewed_count,
+            "file_bodies_read": False,
+        },
+        "conversation_review": {
+            "confirmed_for_this_attempt": bool(confirm_chat_reviewed),
+            "chat_transcript_read_by_wom": False,
+            "important_context_semantics_automatically_verified": False,
+            "confirmation_means": "the current AI or human reviewed the conversation and moved important context to durable archive artifacts",
+        },
+        "checkpoint_evidence": {
+            "current_verified": current_checkpoint_verified,
+            "current_receipt_ref": receipt_path,
+            "matching_receipt_count": len(matching_checkpoint_refs),
+            "stale_receipt_count": stale_checkpoint_count,
+            "invalid_receipt_count": invalid_checkpoint_count,
+            "proposed_receipt_path": proposed_receipt_path,
+        },
+        "durable_gaps": durable_gaps,
+        "next_safe_actions": next_safe_actions,
+        "files_written": files_written,
+        "closed_actions": {
+            "operational_context_body_read": bool(context_evidence.get("record_body_read")),
+            "chat_transcript_body_read": False,
+            "ai_artifact_bodies_read": False,
+            "provider_api_called": False,
+            "network_checked": False,
+            "secrets_read": False,
+        },
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+    }
 
 
 def ai_usage_estimated_tokens(text: str) -> int:

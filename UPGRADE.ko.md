@@ -2,6 +2,30 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.3.250 영수증 기반 AI 세션 인수인계 점검
+
+아카이브 마이그레이션은 필요하지 않습니다. 기존 작업기록과 영수증은 계속
+유효합니다. 새 작업기록 쓰기는 실제 UTF-8 바이트와 같은 해시를 남기며,
+과거 Windows 줄바꿈 정규화 방식 영수증도 레거시 증거로 인식합니다.
+
+AI 작업 세션을 끝내기 전에 `ops/operational-context.yml`에 현재 임무, 완료한
+일, 진행 중인 일, 다음 일, 막힌 조건, 주의점, 검토된 결정이 들어 있는지
+확인하고 기존 미리보기와 승인 절차로 갱신하세요. 그다음 실행합니다.
+
+```powershell
+archive session-handoff-checkpoint <archive-root> --dry-run --format json
+```
+
+`needs_durable_capture`가 나오면 먼저 기록되지 않은 작업을 해결합니다. 현재
+대화를 검토하여 중요한 결정·수정·남은 일·AI 산출물을 WOM 아티팩트에 옮긴
+뒤 `--confirm-chat-reviewed`를 붙여 다시 미리 봅니다. 반환된
+`state_digest`를 `--expected-state-digest`에 그대로 넣고 `--approve`와
+`--reviewed-by`로 승인합니다.
+
+이 영수증은 로컬 세션 인수인계 증거입니다. WOM이 호스트 채팅을 직접 읽었다는
+증거, 모든 문장을 보존했다는 증거, GitHub·오브제 저장소·외부 DB 백업 완료
+증거는 아닙니다.
+
 ## v0.3.249 이전-상태 보존본 복원안 연결
 
 보관함 마이그레이션은 필요하지 않습니다. 이 릴리스는 v0.3.248 이후 만들어진

@@ -34,10 +34,10 @@ not re-grow baseline ladders or tag lists here.
 Current public baseline:
 
 ```text
-v0.3.249 pre-release
+v0.3.250 pre-release
 ```
 
-Previous public baseline: v0.3.248 pre-release.
+Previous public baseline: v0.3.249 pre-release.
 
 Full release history: see [CHANGELOG.md](CHANGELOG.md) and [wom-kit/docs/releases/](wom-kit/docs/releases/).
 
@@ -55,7 +55,7 @@ future-only boundaries.
 Install the exact release wheel as an isolated command-line tool:
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.249/wom_kit-0.3.249-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.250/wom_kit-0.3.250-py3-none-any.whl"
 archive --version
 ```
 
@@ -151,6 +151,7 @@ approval-gated write, or docs-only), see the
 - runtime-context canonical entrypoint metadata so AI runtimes can see which archive-relative files/directories to treat as start-here and authoritative sources, plus machine-readable `ai_runtime_order`, `recommended_first_commands`, and `material_link_routes` that hand off from `runtime-context` to `AGENTS.md` and `ai-response-concept-guide`,
 - read-only `archive ai-start-here <archive-root> --dry-run --format markdown|json` and quick-default CLI/MCP `runtime-context` project identity, canonical entrypoints, authority, operational context, and cross-file identity consistency without walking every zet or receipt; complete Doctor work is explicit through `--full-doctor`, its edge-receipt evolution check builds one filename-only index and opens only receipts belonging to the mismatched zet while reporting separate content-free index/load counts, start-here marks runtime-context as already included while exposing separate `completed_commands` and `next_commands`, new archives replace template identity metadata during initialization, and existing same-principal template/display mismatches route to the value-free `identity-reconcile --dry-run` plus an explicit three-digest-bound approval instead of a silent metadata rewrite,
 - AI operational context rehydration through `ops/operational-context.yml`, runtime-context field `operational_context`, and approval-gated `archive operational-context` updates with receipts, so an AI runtime can recover mission, scope, state, gotchas, reviewed decisions, and next actions after context compression without reading broad archive bodies first,
+- receipt-backed `archive session-handoff-checkpoint` for closing an AI session without trusting chat memory: it binds the exact approved operational-context bytes and a content-free AI artifact inventory into a stale-safe digest, requires explicit conversation review before approval, and becomes stale when either archive surface changes; it never reads the host chat or AI artifact bodies and is not remote backup proof,
 - AI token usage observability through read-only `archive ai-usage-plan --dry-run`, approval-gated `archive ai-usage-record --approve`, and read-only `archive ai-usage-report --dry-run`, so WOM can estimate explicit context packs, record non-secret runtime token counters, and aggregate bottlenecks without storing prompts or responses,
 - read-only `archive ai-response-concept-guide --dry-run` for beginner-facing AI explanation cards about sha256 object identity vs location, manifests vs zets, the objet -> derived text -> zet layer split, operational term translations for edge types, lifecycle states, and connection kinds including `contains` for structural child page/database containment, plus safe routing to Notion import material-clue audits, source-map material-link planning, connection import planning, nested tree recovery planning, and ancestor crawl request planning when provider locators were omitted from imported zettel bodies or structural relations need model review, without overclaiming upload, availability, stronger tie meaning, or forced edge-type mappings,
 - `ai-response-concept-guide --topic operator_vocabulary --locale ko-KR`, a read-only vocabulary layer for AI operators that uses user-confirmed product terms (`WOM`, `zet`, `ZET`, `objet`, `receipt` as `영수증`, `mint` as `발행하다`, `canonical` as `정본`, `node` as `노드`, `edge` as `엣지`, `tie` as `타이`, `archive` as `아카이브 폴더`, `ai_start_here` as `AI 스타팅 메뉴얼`, `frontmatter` as `초록 데이터`) and confirmed operator terms such as `object_id` as `오브제 아이디`, `doctor` as `검진`, `provider` as `외부 서비스`, `containment` as `포함 관계`, `safe_preview` as `미리보기`, `approved_write` as `승인 후 쓰기`, `external_report` as `공개용 문서`, and `private_working_note` as `비공개 문서`,
@@ -492,7 +493,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
-v0.3.249 (current checkpoint)
+v0.3.250 (current checkpoint)
 ```
 
 Public releases from `v0.2.5` onward are tagged as compatibility checkpoints.

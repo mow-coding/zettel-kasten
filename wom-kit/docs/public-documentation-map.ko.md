@@ -259,6 +259,7 @@
 - [한 프로세스 zet 카탈로그 완주](zet-catalog-one-process-pass.md)
 - [Runtime Canonical Entry Points](runtime-canonical-entrypoints.md)
 - [Operational Context](operational-context.md)
+- [Session Handoff Checkpoint](session-handoff-checkpoint.md)
 - [한국어 제품 언어 기준선](concepts/korean-product-language-baseline.ko.md)
 - [한국어 제품 언어 Hygiene](korean-product-language-hygiene.md)
 - [ZET Publication Surface Baseline](zet-publication-surface-baseline.md)

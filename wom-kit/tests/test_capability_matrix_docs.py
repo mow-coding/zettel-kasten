@@ -10,8 +10,8 @@ KIT_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = KIT_ROOT.parent
 CURRENT_VERSION = f"v{__version__}"
 CURRENT_RUNTIME_STATUS = (
-    f"Status: {CURRENT_VERSION} installed-wheel resource, quick handoff, "
-    "revision-audit, and exact-restore checkpoint"
+    f"Status: {CURRENT_VERSION} installed-wheel resource, quick start, "
+    "and receipt-backed session handoff checkpoint"
 )
 MATRIX_PATH = KIT_ROOT / "docs" / "capability-matrix.md"
 PRODUCT_ROADMAP_PATH = KIT_ROOT / "docs" / "product-roadmap.md"
@@ -1034,6 +1034,54 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "zet-revision-restore-proposal-from-snapshot.md",
             public_map_ko_text,
         )
+
+    def test_session_handoff_checkpoint_is_documented_for_runtime_operators(self) -> None:
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        guide_text = (
+            KIT_ROOT / "docs" / "session-handoff-checkpoint.md"
+        ).read_text(encoding="utf-8")
+        release_text = (
+            KIT_ROOT / "docs" / "releases" / "v0.3.250.md"
+        ).read_text(encoding="utf-8")
+        decision_text = (
+            KIT_ROOT
+            / "docs"
+            / "archive-infra-decision-log-2026-07-15-v03250-session-handoff-checkpoint.md"
+        ).read_text(encoding="utf-8")
+        combined = "\n".join(
+            (
+                matrix_text,
+                guide_text,
+                release_text,
+                decision_text,
+                (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8"),
+                (REPO_ROOT / "UPGRADE.md").read_text(encoding="utf-8"),
+                (REPO_ROOT / "UPGRADE.ko.md").read_text(encoding="utf-8"),
+                (REPO_ROOT / "README.md").read_text(encoding="utf-8"),
+                (REPO_ROOT / "README.ko.md").read_text(encoding="utf-8"),
+                read_runtime_skill_package(),
+            )
+        )
+        for phrase in (
+            "Status: v0.3.250 receipt-backed session handoff checkpoint",
+            f"Version: {CURRENT_VERSION}, release candidate",
+            "session-handoff-checkpoint",
+            "--confirm-chat-reviewed",
+            "--expected-state-digest",
+            "does not read the host chat",
+            "not remote backup proof",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, combined)
+
+        public_map_text = (
+            KIT_ROOT / "docs" / "public-documentation-map.md"
+        ).read_text(encoding="utf-8")
+        public_map_ko_text = (
+            KIT_ROOT / "docs" / "public-documentation-map.ko.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn("session-handoff-checkpoint.md", public_map_text)
+        self.assertIn("session-handoff-checkpoint.md", public_map_ko_text)
 
     def test_canonical_zet_exact_byte_restore_write_is_documented(self) -> None:
         matrix_text = MATRIX_PATH.read_text(encoding="utf-8")

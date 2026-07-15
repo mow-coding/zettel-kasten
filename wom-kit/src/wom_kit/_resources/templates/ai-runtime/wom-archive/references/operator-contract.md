@@ -101,6 +101,21 @@ backup or replica regenerated from local relation-bearing records. External
 state never silently overwrites local state. Do not claim a backup from a local
 commit, `declared_uploaded`, or an unreceipted DB row.
 
+Before a context reset or AI session handoff, do not rely on host chat memory.
+Update the approved operational context when current mission/state changed,
+resolve unreviewed AI artifacts, then run:
+
+```bash
+archive session-handoff-checkpoint <archive-root> --dry-run --format json
+```
+
+Only after reviewing the current conversation and moving important chat-only
+context into durable WOM artifacts may an operator add
+`--confirm-chat-reviewed`. Approval also requires `--reviewed-by` and the exact
+returned `--expected-state-digest`. The command does not read the host chat or
+artifact bodies, and its receipt is not remote backup proof. Any later archive
+or important chat change requires a new checkpoint.
+
 ## Update WOM-kit Without Hand Editing
 
 When `project-version-update` is available, do not manually fetch, checkout, or
