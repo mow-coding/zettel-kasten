@@ -2,6 +2,18 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.3.245 최상위 설치 진입로
+
+아카이브 마이그레이션은 필요하지 않습니다. 이제 최상위 영문·한글 README가
+긴 기능 목록보다 먼저 정확한 최신 wheel, 격리된 `uv tool install`,
+`archive --version`, 별도의 읽기 전용 Agent Skill 활성화 미리보기를
+보여줍니다.
+
+기존 v0.3.244 설치는 runtime 동작만을 위해 호스트 스킬을 다시 설치할 필요가
+없습니다. 공개 설치 안내와 package/release 신원을 맞추려면 v0.3.245로
+올리면 됩니다. wheel 설치만으로 아카이브나 AI 호스트 설정을 바꾸지 않는
+경계는 그대로입니다.
+
 ## v0.3.244 사람 승인형 Agent Skill 호스트 수명주기
 
 아카이브 마이그레이션은 필요하지 않습니다. WOM-kit을 업데이트한 뒤 Codex

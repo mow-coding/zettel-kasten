@@ -6940,5 +6940,50 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         )
 
 
+    def test_top_level_readmes_expose_current_installation_on_ramp(self) -> None:
+        readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        readme_ko_text = (REPO_ROOT / "README.ko.md").read_text(encoding="utf-8")
+        kit_readme_text = (KIT_ROOT / "README.md").read_text(encoding="utf-8")
+        install_text = (KIT_ROOT / "docs" / "python-tool-install.md").read_text(
+            encoding="utf-8"
+        )
+        install_ko_text = (KIT_ROOT / "docs" / "python-tool-install.ko.md").read_text(
+            encoding="utf-8"
+        )
+        wheel_url = (
+            "https://github.com/mow-coding/zettel-kasten/releases/download/"
+            f"{CURRENT_VERSION}/wom_kit-{__version__}-py3-none-any.whl"
+        )
+
+        for text in (
+            readme_text,
+            readme_ko_text,
+            kit_readme_text,
+            install_text,
+            install_ko_text,
+        ):
+            with self.subTest(document="current-wheel-entry"):
+                self.assertIn(wheel_url, text)
+
+        self.assertLess(
+            readme_text.index("## Quick Start"),
+            readme_text.index("## What Exists Today"),
+        )
+        self.assertLess(
+            readme_ko_text.index("## 빠른 시작"),
+            readme_ko_text.index("## 현재 포함된 것"),
+        )
+        for text in (readme_text, readme_ko_text):
+            with self.subTest(document="root-readme-on-ramp"):
+                self.assertIn("archive --version", text)
+                self.assertIn(
+                    "archive runtime-skill-install --dry-run --format json",
+                    text,
+                )
+                self.assertIn("pip install wom-kit", text)
+                self.assertIn("wom-kit/docs/python-tool-install", text)
+                self.assertIn("wom-kit/docs/runtime-skill-install", text)
+
+
 if __name__ == "__main__":
     unittest.main()
