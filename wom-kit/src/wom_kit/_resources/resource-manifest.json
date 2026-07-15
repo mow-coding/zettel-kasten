@@ -1,8 +1,8 @@
 {
   "schema": "wom-kit/package-resource-manifest/v0.1",
-  "version": "0.3.247",
+  "version": "0.3.248",
   "source_of_truth": "wom-kit source resource directories",
-  "file_count": 90,
+  "file_count": 91,
   "files": [
     {
       "source": "schemas/anchor-metadata.schema.json",
@@ -201,6 +201,12 @@
       "packaged": "schemas/zet-abstract-backfill-revert-receipt.schema.json",
       "bytes": 4116,
       "sha256": "d211395a4bc7d76359d0121aa1e83aae4c1b43a07634a61f02fb28c28d3fc8e1"
+    },
+    {
+      "source": "schemas/zet-revision-receipt-v0.2.schema.json",
+      "packaged": "schemas/zet-revision-receipt-v0.2.schema.json",
+      "bytes": 8619,
+      "sha256": "781b5d727f47390ed246fdf95a00fd417ee17002c8ef882a42799fced79544c6"
     },
     {
       "source": "schemas/zet-revision-receipt.schema.json",
@@ -539,10 +545,10 @@
       "sha256": "d619dc26af3216498c8392dfe838b0fe752d4bad9da998a58ca682d668fc510c"
     },
     {
-      "source": "docs/releases/v0.3.247.md",
-      "packaged": "release-notes/v0.3.247.md",
-      "bytes": 2237,
-      "sha256": "9a40de71e91bfee57d92bce8c0e60615ba76cd227975476c69890bb1cb218ce5"
+      "source": "docs/releases/v0.3.248.md",
+      "packaged": "release-notes/v0.3.248.md",
+      "bytes": 2671,
+      "sha256": "acf898374f41959c7c89fd17afd267fe7ac961d4086e5ab6b9f37ae0c7bb6958"
     }
   ]
 }

@@ -1,11 +1,16 @@
 # Canonical zet Revision Receipt Audit
 
-Status: ordinary-and-restore chronological revision event-chain audit in v0.3.239
+Status: chronological revision event-chain and prior-byte audit in v0.3.248
 
 `zet-revision-receipt-audit` answers a narrow question after ordinary
 canonical corrections or exact restores: do the retained receipts form one continuous history
 to each current zet, and does any private transaction lock still need human
 attention?
+
+For each new v0.2 ordinary revision receipt, it also asks whether the exact
+prior canonical bytes still exist in the local content-addressed object store
+and have one matching manifest record. Legacy v0.1 receipts remain valid
+hash-only history and are counted separately.
 
 Run:
 
@@ -37,6 +42,12 @@ A healthy group has:
 - unique, strictly increasing revision event timestamps;
 - no branch/replay transition or partial state-evidence gap;
 - one stable zet id and canonical path inside the private evidence.
+
+Every v0.2 ordinary revision event additionally has:
+
+- a `before_snapshot.object_id` equal to its `before.file_sha256`;
+- an exact regular file under `objects/sha256/` with that digest and byte size;
+- one matching local record in `objects/manifests/files.jsonl`.
 
 Historical receipts are not required to match today's file directly. File and
 semantic hashes may repeat when the chronological transitions remain exact.
@@ -70,30 +81,32 @@ temporary clutter until its state is understood.
 ## Scale And Privacy
 
 The algorithm is
-`O(receipt_files log receipt_files + revision_chains + lock_files)` because
-each private identity's events must be ordered by time. It opens each receipt
-and lock once and each current canonical target at most once per private
-identity. It does not rescan all zets for every receipt, and it remains far
-from a per-receipt whole-archive or quadratic pass.
+`O(manifest_records + receipt_files log receipt_files + revision_chains + lock_files + unique_before_snapshot_bytes)`.
+Each private identity's events must be ordered by time. It opens the object
+manifest at most once, hashes each unique snapshot/state at most once, opens
+each receipt and lock once, and reads each current canonical target at most
+once per private identity. It does not rescan all zets for every receipt, and
+it remains far from a per-receipt whole-archive or quadratic pass.
 
 Output may include fixed status codes, counts, SHA-only receipt/write/lock
 handles, and `audit_digest`. It does not echo zet ids or paths, proposal
 filenames, reviewer ids, titles, abstract or body text, custom frontmatter
-values, provider URLs, absolute paths, or secrets. It calls no model, provider,
-object store, database, credential store, or network.
+values, provider URLs, absolute paths, or secrets. Snapshot bytes are read only
+for local hash verification and never echoed. It calls no model, provider,
+remote object store, database, credential store, or network.
 
 ## Honest Stop
 
-A green audit proves bounded local consistency for the receipt files, current
-canonical hashes, and recognized locks that were scanned. It does not prove
-that a correction is factually true, that no external editor can race WOM,
-that backups exist, or that old content can be recreated from hashes.
+A green audit proves bounded local consistency for receipt files, current
+canonical hashes, recognized locks, and the local prior-byte snapshots required
+by v0.2 ordinary receipts. It does not prove that a correction is factually
+true, that no external editor can race WOM, or that a remote backup exists.
 
-Canonical restore is not performed by this read-only command. The v0.3.235 receipt
-deliberately stores no old body text. `zet-revision-restore-plan` therefore
-requires separately recovered, privately reviewed full-zet bytes that match
-the selected receipt's before hashes, and v0.3.238 additionally requires that
-receipt to be the actual newest event. Since v0.3.239, the separately approved
-CLI-only `zet-revision-restore-write` can install those exact bytes and append
-one restore event. MCP exposes no duplicate receipt-audit or revision/restore
-write tool.
+Canonical restore is not performed by this read-only command. v0.1 receipts
+still require separately recovered bytes. New v0.2 receipts preserve those
+bytes as local objets, but the v0.3.248 restore planner still accepts a complete
+privately reviewed scratch proposal and binds it to the selected receipt's
+before hashes. The selected receipt must be the actual newest event. The
+separately approved CLI-only `zet-revision-restore-write` can install the exact
+reviewed bytes and append one restore event. MCP exposes no duplicate
+receipt-audit or revision/restore write tool.

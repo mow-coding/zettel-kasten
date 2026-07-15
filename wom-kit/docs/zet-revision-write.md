@@ -1,6 +1,6 @@
 # Canonical zet Revision Write
 
-Status: approval-gated single-zet write in v0.3.235
+Status: approval-gated single-zet write with prior-byte preservation in v0.3.248
 
 `zet-revision-write` is the second half of WOM's ordinary canonical correction
 workflow. It accepts only a private proposal that already passed
@@ -62,8 +62,9 @@ write_plan.actual_digest
 The writer candidate is deterministic for those inputs. It uses the reviewed
 proposal content, serializes frontmatter in WOM's standard YAML form, sets
 `updated_at` to `revision_at`, and normalizes the body to one final newline.
-Dry-run returns only hashes and change categories. It writes no candidate,
-canonical file, receipt, lock, provider state, objet, or database row.
+Dry-run returns only hashes, change categories, and the content-addressed
+before-snapshot descriptor. It writes no candidate, canonical file, receipt,
+lock, provider state, objet, manifest record, or database row.
 
 ## Step 3: Approve The Bound Write
 
@@ -103,17 +104,24 @@ Approval:
 
 - uses one private lock shared by every revision plan for the same canonical
   zet, so distinct plans cannot race through the write section;
+- binds the exact prior file hash to a text-free `before_snapshot` descriptor
+  in that lock;
+- writes or verifies the exact prior bytes under ignored
+  `objects/sha256/<prefix>/<sha256>` without overwriting an existing object;
+- registers or verifies the matching local record in
+  `objects/manifests/files.jsonl` before canonical replacement;
 - writes one canonical zet through atomic replacement;
 - verifies the replacement bytes immediately;
 - creates one new immutable receipt under
   `receipts/revisions/canonical/<write-plan-digest>.zet-revision.json`;
 - stores reviewer id, canonical identity/path, timestamps, fixed change
-  categories, and before/after hashes in the private receipt;
+  categories, before/after hashes, and the text-free before-snapshot descriptor
+  in a v0.2 private receipt;
 - stores no title, abstract text, body text, or custom frontmatter value in the
   receipt;
 - records the reviewed abstract/body hash pair so `abstract-freshness` can
   recognize the revised zet as fresh;
-- calls no model, provider, object store, database, credential store, or
+- calls no model, provider, remote object store, database, credential store, or
   network.
 
 CLI output does not echo the zet id, canonical path, proposal filename,
@@ -124,11 +132,12 @@ absolute path, or secret. The digest-only receipt path is safe to return.
 
 An ordinary runtime failure after canonical replacement restores the exact
 previous canonical bytes, removes a partial receipt, and removes the temporary
-private write lock. If the process is interrupted after the atomic replacement
+private write lock. The verified content-addressed snapshot remains for safe
+idempotent reuse. If the process is interrupted after the atomic replacement
 but before receipt creation, the private lock retains text-free before/after
-hashes and review bindings. Rerunning the exact approved command recognizes the
-already-written candidate and finishes the receipt without writing the
-canonical zet again.
+hashes, the before-snapshot descriptor, and review bindings. Rerunning the exact
+approved command verifies the preserved bytes, recognizes the already-written
+candidate, and finishes the receipt without writing the canonical zet again.
 
 The write lock is keyed to canonical identity rather than one proposal. A
 second plan for the same zet therefore stops while the first transaction is in
@@ -139,8 +148,9 @@ blocks and stays available for human inspection.
 
 ## Honest Stop
 
-`applied` proves that the reviewed, SHA-bound local proposal was installed and
-receipted. It does not prove factual truth, completeness, usefulness, legal or
-copyright clearance, external synchronization, backup completion, or model
-understanding. MCP exposes the read-only `zet_revision_plan` tool but no
-revision write tool; canonical mutation remains an explicit local CLI approval.
+`applied` proves that the reviewed, SHA-bound local proposal was installed,
+receipted, and preceded by a verified local prior-byte snapshot. It does not
+prove factual truth, completeness, usefulness, legal or copyright clearance,
+external synchronization, remote backup completion, or model understanding.
+MCP exposes the read-only `zet_revision_plan` tool but no revision write tool;
+canonical mutation remains an explicit local CLI approval.

@@ -2810,7 +2810,12 @@ ABSTRACT_FRESHNESS_MAX_ZET_BYTES = 16 * 1024 * 1024
 ABSTRACT_FRESHNESS_MAX_ATTENTION_ITEMS = 500
 ZET_REVISION_PLAN_SCHEMA = "wom-kit/zet-revision-plan/v0.1"
 ZET_REVISION_WRITE_SCHEMA = "wom-kit/zet-revision-write/v0.1"
-ZET_REVISION_RECEIPT_SCHEMA = "wom-kit/zet-revision-receipt/v0.1"
+ZET_REVISION_RECEIPT_SCHEMA_V1 = "wom-kit/zet-revision-receipt/v0.1"
+ZET_REVISION_RECEIPT_SCHEMA = "wom-kit/zet-revision-receipt/v0.2"
+ZET_REVISION_RECEIPT_SCHEMAS = {
+    ZET_REVISION_RECEIPT_SCHEMA_V1,
+    ZET_REVISION_RECEIPT_SCHEMA,
+}
 ZET_REVISION_WRITE_LOCK_SCHEMA = "wom-kit/zet-revision-write-lock/v0.1"
 ZET_REVISION_RECEIPT_AUDIT_SCHEMA = "wom-kit/zet-revision-receipt-audit/v0.1"
 ZET_REVISION_RESTORE_PLAN_SCHEMA = "wom-kit/zet-revision-restore-plan/v0.1"
@@ -6417,7 +6422,7 @@ def index_abstract_review_evidence(
 
         receipt_relative = archive_relative_path(receipt_path, root)
         added_from_receipt = 0
-        if receipt.get("schema") == ZET_REVISION_RECEIPT_SCHEMA:
+        if receipt.get("schema") in ZET_REVISION_RECEIPT_SCHEMAS:
             basis = (
                 receipt.get("abstract_review_basis")
                 if isinstance(receipt.get("abstract_review_basis"), dict)
@@ -6458,7 +6463,11 @@ def index_abstract_review_evidence(
                 and canonical_path
                 and abstract_sha256
                 and body_sha256
-                and not validate_schema(receipt, "zet-revision-receipt.schema.json")
+                and (
+                    (revision_schema_file := zet_revision_event_receipt_schema_file(receipt))
+                    is not None
+                )
+                and not validate_schema(receipt, revision_schema_file)
             ):
                 if add_abstract_review_evidence(
                     evidence_by_path,
@@ -8330,8 +8339,10 @@ def zet_revision_write_lock_path(
 
 def zet_revision_event_receipt_schema_file(receipt: dict[str, Any]) -> str | None:
     schema = receipt.get("schema")
-    if schema == ZET_REVISION_RECEIPT_SCHEMA:
+    if schema == ZET_REVISION_RECEIPT_SCHEMA_V1:
         return "zet-revision-receipt.schema.json"
+    if schema == ZET_REVISION_RECEIPT_SCHEMA:
+        return "zet-revision-receipt-v0.2.schema.json"
     if schema == ZET_REVISION_RESTORE_RECEIPT_SCHEMA:
         return "zet-revision-restore-receipt.schema.json"
     return None
@@ -8346,7 +8357,7 @@ def zet_revision_event_review_verified(receipt: dict[str, Any]) -> bool:
     schema = receipt.get("schema")
     action_reviewed = bool(
         human_review.get("revision_reviewed") is True
-        if schema == ZET_REVISION_RECEIPT_SCHEMA
+        if schema in ZET_REVISION_RECEIPT_SCHEMAS
         else human_review.get("restore_reviewed") is True
         if schema == ZET_REVISION_RESTORE_RECEIPT_SCHEMA
         else False
@@ -8359,6 +8370,372 @@ def zet_revision_event_review_verified(receipt: dict[str, Any]) -> bool:
             or human_review.get("edge_changes_reviewed") is True
         )
     )
+
+
+def zet_revision_before_snapshot_descriptor(canonical_bytes: bytes) -> dict[str, Any]:
+    digest = hashlib.sha256(canonical_bytes).hexdigest()
+    return {
+        "object_id": f"sha256:{digest}",
+        "logical_key": f"objects/sha256/{digest[:2]}/{digest}",
+        "size_bytes": len(canonical_bytes),
+        "mime": "text/markdown",
+        "stored_sha256_verified": True,
+        "manifest_registered": True,
+    }
+
+
+def zet_revision_snapshot_manifest_index(
+    root: Path,
+) -> tuple[dict[str, list[dict[str, Any]]], list[str]]:
+    manifest_path = archive_internal_path(root, "objects/manifests/files.jsonl")
+    if (
+        manifest_path.is_symlink()
+        or zet_revision_path_has_symlink_component(root, manifest_path)
+    ):
+        return {}, ["before_snapshot_manifest_path_unsafe"]
+    if not manifest_path.exists():
+        return {}, []
+    index: dict[str, list[dict[str, Any]]] = {}
+    try:
+        with manifest_path.open("r", encoding="utf-8") as handle:
+            for raw_line in handle:
+                if not raw_line.strip():
+                    continue
+                try:
+                    record = json.loads(raw_line)
+                except json.JSONDecodeError:
+                    return {}, ["before_snapshot_manifest_unreadable_or_invalid"]
+                if not isinstance(record, dict):
+                    return {}, ["before_snapshot_manifest_unreadable_or_invalid"]
+                object_id = record.get("object_id")
+                if isinstance(object_id, str):
+                    index.setdefault(object_id, []).append(record)
+    except (OSError, UnicodeError):
+        return {}, ["before_snapshot_manifest_unreadable_or_invalid"]
+    return index, []
+
+
+def verify_zet_revision_before_snapshot(
+    root: Path,
+    snapshot: Any,
+    *,
+    expected_before_sha256: str,
+    manifest_index: dict[str, list[dict[str, Any]]] | None = None,
+) -> list[str]:
+    if not isinstance(snapshot, dict):
+        return ["before_snapshot_evidence_missing_or_invalid"]
+    object_id = snapshot.get("object_id")
+    logical_key = snapshot.get("logical_key")
+    size_bytes = snapshot.get("size_bytes")
+    if (
+        object_id != expected_before_sha256
+        or not isinstance(object_id, str)
+        or not re.fullmatch(r"sha256:[0-9a-f]{64}", object_id)
+    ):
+        return ["before_snapshot_object_id_mismatch"]
+    digest = object_id.removeprefix("sha256:")
+    expected_key = f"objects/sha256/{digest[:2]}/{digest}"
+    if logical_key != expected_key:
+        return ["before_snapshot_logical_key_mismatch"]
+    if (
+        isinstance(size_bytes, bool)
+        or not isinstance(size_bytes, int)
+        or size_bytes < 1
+        or size_bytes > ZET_REVISION_MAX_FILE_BYTES
+        or snapshot.get("mime") != "text/markdown"
+        or snapshot.get("stored_sha256_verified") is not True
+        or snapshot.get("manifest_registered") is not True
+    ):
+        return ["before_snapshot_evidence_missing_or_invalid"]
+    snapshot_path = root.joinpath(*PurePosixPath(expected_key).parts)
+    try:
+        if (
+            snapshot_path.is_symlink()
+            or zet_revision_path_has_symlink_component(root, snapshot_path)
+            or not snapshot_path.is_file()
+        ):
+            return ["before_snapshot_bytes_missing_or_unsafe"]
+        entry_stat = os.lstat(snapshot_path)
+        if not stat.S_ISREG(entry_stat.st_mode) or entry_stat.st_size != size_bytes:
+            return ["before_snapshot_bytes_missing_or_unsafe"]
+        if sha256_path(snapshot_path) != digest:
+            return ["before_snapshot_bytes_hash_mismatch"]
+    except (OSError, ArchiveServiceError):
+        return ["before_snapshot_bytes_missing_or_unsafe"]
+
+    if manifest_index is None:
+        manifest_index, manifest_blockers = zet_revision_snapshot_manifest_index(root)
+        if manifest_blockers:
+            return manifest_blockers
+    matching_records = manifest_index.get(object_id, [])
+
+    def manifest_record_matches(record: Any) -> bool:
+        if not isinstance(record, dict):
+            return False
+        locations = record.get("locations")
+        return bool(
+            record.get("sha256") == digest
+            and record.get("logical_key") == expected_key
+            and record.get("mime") == "text/markdown"
+            and record.get("size_bytes") == size_bytes
+            and isinstance(locations, list)
+            and any(
+                isinstance(location, dict)
+                and location.get("provider") == "local"
+                and location.get("path") == expected_key
+                and location.get("availability") == "available"
+                for location in locations
+            )
+        )
+
+    manifest_match = any(
+        manifest_record_matches(record) for record in matching_records
+    )
+    return [] if manifest_match else ["before_snapshot_manifest_record_missing_or_invalid"]
+
+
+def append_zet_revision_snapshot_manifest_record_atomic(
+    manifest_path: Path, record: dict[str, Any]
+) -> None:
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path: Path | None = None
+    descriptor: int | None = None
+    try:
+        for _ in range(8):
+            candidate = manifest_path.parent / (
+                f".{manifest_path.name}.{secrets.token_hex(8)}.revision-snapshot.tmp"
+            )
+            try:
+                descriptor = os.open(
+                    candidate,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    0o600,
+                )
+                temporary_path = candidate
+                break
+            except FileExistsError:
+                continue
+        if temporary_path is None or descriptor is None:
+            raise OSError("before_snapshot_manifest_temp_reservation_failed")
+        last_byte = b""
+        with os.fdopen(descriptor, "wb") as output:
+            descriptor = None
+            if manifest_path.is_file():
+                with manifest_path.open("rb") as source:
+                    while True:
+                        chunk = source.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        output.write(chunk)
+                        last_byte = chunk[-1:]
+            if last_byte and last_byte != b"\n":
+                output.write(b"\n")
+            output.write(
+                (
+                    json.dumps(
+                        record,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
+                    + "\n"
+                ).encode("utf-8")
+            )
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary_path, manifest_path)
+        temporary_path = None
+        _objet_capture_fsync_dir(manifest_path.parent)
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        if temporary_path is not None and temporary_path.exists():
+            temporary_path.unlink(missing_ok=True)
+
+
+def preserve_zet_revision_before_snapshot(
+    root: Path,
+    *,
+    canonical_bytes: bytes,
+    snapshot: dict[str, Any],
+    archive_id: str,
+    captured_at: str,
+    reviewed_by: str,
+    write_plan_digest: str,
+) -> dict[str, Any]:
+    expected = zet_revision_before_snapshot_descriptor(canonical_bytes)
+    if snapshot != expected:
+        raise ArchiveServiceError("before_snapshot_lock_binding_mismatch")
+    digest = expected["object_id"].removeprefix("sha256:")
+    logical_key = expected["logical_key"]
+    snapshot_path = root.joinpath(*PurePosixPath(logical_key).parts)
+    bytes_written = False
+    manifest_appended = False
+    with _ObjetCaptureManifestLock(root):
+        manifest_index, manifest_blockers = zet_revision_snapshot_manifest_index(root)
+        if manifest_blockers:
+            raise ArchiveServiceError(manifest_blockers[0])
+        if snapshot_path.exists():
+            existing_blockers = verify_zet_revision_before_snapshot(
+                root,
+                expected,
+                expected_before_sha256=expected["object_id"],
+                manifest_index=(
+                    manifest_index
+                    if manifest_index.get(expected["object_id"])
+                    else {expected["object_id"]: [{
+                        "object_id": expected["object_id"],
+                        "sha256": digest,
+                        "logical_key": logical_key,
+                        "mime": "text/markdown",
+                        "size_bytes": len(canonical_bytes),
+                        "locations": [{
+                            "provider": "local",
+                            "path": logical_key,
+                            "availability": "available",
+                        }],
+                    }]}
+                ),
+            )
+            byte_blockers = [
+                code for code in existing_blockers
+                if code != "before_snapshot_manifest_record_missing_or_invalid"
+            ]
+            if byte_blockers:
+                raise ArchiveServiceError(byte_blockers[0])
+        else:
+            if zet_revision_path_has_symlink_component(root, snapshot_path):
+                raise ArchiveServiceError("before_snapshot_bytes_missing_or_unsafe")
+            snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+            temporary_path = snapshot_path.parent / (
+                f".{snapshot_path.name}.{secrets.token_hex(8)}.revision-snapshot.tmp"
+            )
+            try:
+                descriptor = os.open(
+                    temporary_path,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    0o600,
+                )
+                with os.fdopen(descriptor, "wb") as handle:
+                    handle.write(canonical_bytes)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                if sha256_path(temporary_path) != digest:
+                    raise ArchiveServiceError("before_snapshot_write_verification_failed")
+                try:
+                    os.link(temporary_path, snapshot_path)
+                    bytes_written = True
+                except FileExistsError:
+                    pass
+                except OSError:
+                    # Some removable/exFAT stores do not support hard links. The
+                    # exclusive-create fallback still never overwrites an existing
+                    # object; an interrupted partial file is removed by this process.
+                    final_descriptor: int | None = None
+                    final_complete = False
+                    final_created = False
+                    try:
+                        final_descriptor = os.open(
+                            snapshot_path,
+                            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                            0o600,
+                        )
+                        final_created = True
+                        with os.fdopen(final_descriptor, "wb") as final_handle:
+                            final_descriptor = None
+                            final_handle.write(canonical_bytes)
+                            final_handle.flush()
+                            os.fsync(final_handle.fileno())
+                        final_complete = True
+                        bytes_written = True
+                    except FileExistsError:
+                        final_complete = True
+                    finally:
+                        if final_descriptor is not None:
+                            os.close(final_descriptor)
+                        if (
+                            final_created
+                            and not final_complete
+                            and snapshot_path.exists()
+                        ):
+                            snapshot_path.unlink(missing_ok=True)
+                _objet_capture_fsync_dir(snapshot_path.parent)
+            finally:
+                temporary_path.unlink(missing_ok=True)
+            if (
+                not snapshot_path.is_file()
+                or snapshot_path.is_symlink()
+                or sha256_path(snapshot_path) != digest
+            ):
+                raise ArchiveServiceError("before_snapshot_write_verification_failed")
+
+        def existing_manifest_record_is_complete(record: Any) -> bool:
+            if not isinstance(record, dict):
+                return False
+            locations = record.get("locations")
+            return bool(
+                record.get("logical_key") == logical_key
+                and record.get("sha256") == digest
+                and record.get("mime") == "text/markdown"
+                and record.get("size_bytes") == len(canonical_bytes)
+                and isinstance(locations, list)
+                and any(
+                    isinstance(location, dict)
+                    and location.get("provider") == "local"
+                    and location.get("path") == logical_key
+                    and location.get("availability") == "available"
+                    for location in locations
+                )
+            )
+
+        if not any(
+            existing_manifest_record_is_complete(record)
+            for record in manifest_index.get(expected["object_id"], [])
+        ):
+            record = {
+                "object_id": expected["object_id"],
+                "sha256": digest,
+                "logical_key": logical_key,
+                "mime": "text/markdown",
+                "size_bytes": len(canonical_bytes),
+                "locations": [
+                    {
+                        "provider": "local",
+                        "path": logical_key,
+                        "availability": "available",
+                    }
+                ],
+                "provenance": {
+                    "created_in": f"archive:{archive_id}",
+                    "source": "canonical_zet_before_revision",
+                    "captured_at": captured_at,
+                    "captured_by": reviewed_by,
+                    "revision_write_plan_digest": write_plan_digest,
+                },
+            }
+            if validate_schema(record, "object-manifest-entry.schema.json"):
+                raise ArchiveServiceError("before_snapshot_manifest_record_invalid")
+            manifest_path = archive_internal_path(root, "objects/manifests/files.jsonl")
+            append_zet_revision_snapshot_manifest_record_atomic(
+                manifest_path, record
+            )
+            manifest_appended = True
+
+        final_index, final_manifest_blockers = zet_revision_snapshot_manifest_index(root)
+        final_blockers = list(final_manifest_blockers)
+        if not final_blockers:
+            final_blockers = verify_zet_revision_before_snapshot(
+                root,
+                expected,
+                expected_before_sha256=expected["object_id"],
+                manifest_index=final_index,
+            )
+        if final_blockers:
+            raise ArchiveServiceError(final_blockers[0])
+    return {
+        "verified": True,
+        "bytes_written_this_run": bytes_written,
+        "manifest_record_appended_this_run": manifest_appended,
+    }
 
 
 def verify_zet_revision_receipt(
@@ -8392,11 +8769,17 @@ def verify_zet_revision_receipt(
     if not isinstance(receipt, dict):
         receipt = {}
         blockers.append("existing_revision_receipt_not_object")
-    elif validate_schema(receipt, "zet-revision-receipt.schema.json"):
-        blockers.append("existing_revision_receipt_schema_invalid")
+    else:
+        receipt_schema_file = zet_revision_event_receipt_schema_file(receipt)
+        if (
+            receipt_schema_file is None
+            or receipt.get("schema") not in ZET_REVISION_RECEIPT_SCHEMAS
+            or validate_schema(receipt, receipt_schema_file)
+        ):
+            blockers.append("existing_revision_receipt_schema_invalid")
 
     expected_values = {
-        "schema": ZET_REVISION_RECEIPT_SCHEMA,
+        "schema": receipt.get("schema"),
         "action": "zet_revision_write",
         "status": "applied",
         "archive_id": archive_id,
@@ -8413,6 +8796,14 @@ def verify_zet_revision_receipt(
     after = receipt.get("after") if isinstance(receipt.get("after"), dict) else {}
     if before.get("file_sha256") != expected_canonical_sha256:
         blockers.append("existing_revision_receipt_before_hash_mismatch")
+    snapshot_blockers: list[str] = []
+    if receipt.get("schema") == ZET_REVISION_RECEIPT_SCHEMA:
+        snapshot_blockers = verify_zet_revision_before_snapshot(
+            root,
+            receipt.get("before_snapshot"),
+            expected_before_sha256=expected_canonical_sha256,
+        )
+        blockers.extend(snapshot_blockers)
 
     current_matches = False
     try:
@@ -8472,6 +8863,15 @@ def verify_zet_revision_receipt(
         "revision_at": receipt.get("revision_at"),
         "candidate_file_sha256": after.get("file_sha256"),
         "candidate_semantic_sha256": after.get("semantic_sha256"),
+        "before_snapshot": (
+            receipt.get("before_snapshot")
+            if isinstance(receipt.get("before_snapshot"), dict)
+            else None
+        ),
+        "before_snapshot_verified": bool(
+            receipt.get("schema") == ZET_REVISION_RECEIPT_SCHEMA
+            and not snapshot_blockers
+        ),
         "change_summary": (
             receipt.get("change_summary")
             if isinstance(receipt.get("change_summary"), dict)
@@ -8489,8 +8889,18 @@ def zet_revision_receipt_from_lock(
     resumed_from_existing_lock: bool,
     finalized_from_already_written_candidate: bool,
 ) -> dict[str, Any]:
-    return {
-        "schema": ZET_REVISION_RECEIPT_SCHEMA,
+    before_snapshot = (
+        lock_basis.get("before_snapshot")
+        if isinstance(lock_basis.get("before_snapshot"), dict)
+        else None
+    )
+    receipt_schema = (
+        ZET_REVISION_RECEIPT_SCHEMA
+        if before_snapshot is not None
+        else ZET_REVISION_RECEIPT_SCHEMA_V1
+    )
+    receipt = {
+        "schema": receipt_schema,
         "action": "zet_revision_write",
         "status": "applied",
         "applied_at": transaction_started_at,
@@ -8551,6 +8961,12 @@ def zet_revision_receipt_from_lock(
             "secret_store_or_environment_read": False,
         },
     }
+    if before_snapshot is not None:
+        receipt["before_snapshot"] = before_snapshot
+        receipt["mutation_contract"]["before_bytes_preserved_as_objet"] = True
+        receipt["mutation_contract"]["before_snapshot_manifest_registered"] = True
+        receipt["privacy_guards"]["before_snapshot_text_stored_in_receipt"] = False
+    return receipt
 
 
 def zet_revision_write(
@@ -8596,6 +9012,10 @@ def zet_revision_write(
     receipt_sha256: str | None = None
     receipt_exists = False
     receipt_written_this_run = False
+    before_snapshot: dict[str, Any] | None = None
+    before_snapshot_verified = False
+    before_snapshot_bytes_written = 0
+    before_snapshot_manifest_records_appended = 0
     canonical_files_written = 0
     canonical_write_attempt_count = 0
     write_lock_removed: bool | None = None
@@ -8610,6 +9030,7 @@ def zet_revision_write(
         "canonical_restored": False,
         "receipt_removed": None,
         "write_lock_removed": None,
+        "before_snapshot_retained": None,
     }
 
     def result_payload(status: str) -> dict[str, Any]:
@@ -8679,6 +9100,24 @@ def zet_revision_write(
                 ),
                 "immutable_new_file_write": True,
             },
+            "before_snapshot": {
+                "object_id": (
+                    before_snapshot.get("object_id") if before_snapshot else None
+                ),
+                "logical_key": (
+                    before_snapshot.get("logical_key") if before_snapshot else None
+                ),
+                "size_bytes": (
+                    before_snapshot.get("size_bytes") if before_snapshot else None
+                ),
+                "planned_before_canonical_replacement": bool(before_snapshot),
+                "verified": before_snapshot_verified,
+                "bytes_written_this_run": before_snapshot_bytes_written,
+                "manifest_records_appended_this_run": (
+                    before_snapshot_manifest_records_appended
+                ),
+                "content_text_echoed": False,
+            },
             "human_review": {
                 "required_for_new_write": True,
                 "reviewed_by_supplied": bool(reviewer),
@@ -8703,7 +9142,10 @@ def zet_revision_write(
                 ),
                 "temporary_write_lock_removed": write_lock_removed,
                 "provider_state_written": False,
-                "objet_bytes_written": False,
+                "objet_bytes_written": before_snapshot_bytes_written,
+                "object_manifest_records_appended": (
+                    before_snapshot_manifest_records_appended
+                ),
                 "database_rows_written": False,
             },
             "recovery": recovery,
@@ -8818,6 +9260,10 @@ def zet_revision_write(
             candidate_file_sha256 = verification.get("candidate_file_sha256")
             candidate_semantic_sha256 = verification.get(
                 "candidate_semantic_sha256"
+            )
+            before_snapshot = verification.get("before_snapshot")
+            before_snapshot_verified = bool(
+                verification.get("before_snapshot_verified")
             )
             change_summary = verification.get("change_summary", {})
             if verification.get("revision_at") != normalized_revision_at:
@@ -8962,14 +9408,32 @@ def zet_revision_write(
                     if isinstance(early_lock.get("change_summary"), dict)
                     else {}
                 )
+                if isinstance(early_lock.get("before_snapshot"), dict):
+                    before_snapshot = early_lock["before_snapshot"]
+                    snapshot_blockers = verify_zet_revision_before_snapshot(
+                        root,
+                        before_snapshot,
+                        expected_before_sha256=expected_canonical,
+                    )
+                    if snapshot_blockers:
+                        blockers.extend(snapshot_blockers)
+                        warnings.append(
+                            "matching_revision_write_lock_retained_for_human_inspection"
+                        )
+                        return result_payload("blocked")
+                    before_snapshot_verified = True
                 recovery_receipt = zet_revision_receipt_from_lock(
                     early_lock,
                     transaction_started_at=transaction_started_at,
                     resumed_from_existing_lock=True,
                     finalized_from_already_written_candidate=True,
                 )
-                if validate_schema(
-                    recovery_receipt, "zet-revision-receipt.schema.json"
+                recovery_schema_file = zet_revision_event_receipt_schema_file(
+                    recovery_receipt
+                )
+                if (
+                    recovery_schema_file is None
+                    or validate_schema(recovery_receipt, recovery_schema_file)
                 ):
                     blockers.append("revision_recovery_receipt_schema_invalid")
                     return result_payload("blocked")
@@ -9007,9 +9471,20 @@ def zet_revision_write(
                     receipt_bytes = read_zet_revision_file_bytes(
                         receipt_path, "Zet revision receipt"
                     )
-                    if validate_schema(
-                        json.loads(receipt_bytes.decode("utf-8")),
-                        "zet-revision-receipt.schema.json",
+                    written_recovery_receipt = json.loads(
+                        receipt_bytes.decode("utf-8")
+                    )
+                    written_recovery_schema_file = (
+                        zet_revision_event_receipt_schema_file(
+                            written_recovery_receipt
+                        )
+                    )
+                    if (
+                        written_recovery_schema_file is None
+                        or validate_schema(
+                            written_recovery_receipt,
+                            written_recovery_schema_file,
+                        )
                     ):
                         raise RuntimeError("written_recovery_receipt_schema_invalid")
                     receipt_sha256 = (
@@ -9138,6 +9613,9 @@ def zet_revision_write(
         blockers.append("revision_candidate_frontmatter_schema_invalid")
     if not candidate["first_read_check"].get("ready_for_publication"):
         blockers.append("revision_candidate_explicit_abstract_not_ready")
+    before_snapshot = zet_revision_before_snapshot_descriptor(canonical_bytes)
+    if before_snapshot["object_id"] != expected_canonical:
+        blockers.append("before_snapshot_object_id_mismatch")
 
     actual_write_plan = zet_revision_write_plan_digest(
         archive_id=archive_id,
@@ -9200,6 +9678,7 @@ def zet_revision_write(
             "edge_changes_reviewed": bool(affirm_edge_changes_reviewed),
         },
         "change_summary": change_summary,
+        "before_snapshot": before_snapshot,
     }
     transaction_started_at: str
     lock_created_this_run = False
@@ -9213,11 +9692,24 @@ def zet_revision_write(
         except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
             blockers.append("existing_revision_write_lock_unreadable")
             return result_payload("blocked")
+        matching_lock_basis = lock_basis
+        if isinstance(existing_lock, dict) and not isinstance(
+            existing_lock.get("before_snapshot"), dict
+        ):
+            matching_lock_basis = dict(lock_basis)
+            matching_lock_basis.pop("before_snapshot", None)
         if not isinstance(existing_lock, dict) or any(
-            existing_lock.get(key) != value for key, value in lock_basis.items()
+            existing_lock.get(key) != value
+            for key, value in matching_lock_basis.items()
         ):
             blockers.append("existing_revision_write_lock_mismatch")
             return result_payload("blocked")
+        if "before_snapshot" not in matching_lock_basis:
+            # A v0.3.247-or-earlier prewrite lock remains recoverable. It completes
+            # under the legacy hash-only receipt contract; new transactions always
+            # bind and preserve full before bytes.
+            lock_basis = matching_lock_basis
+            before_snapshot = None
         transaction_started_at = str(existing_lock.get("transaction_started_at") or "")
         if normalize_zet_revision_timestamp(transaction_started_at, default_now=False) != transaction_started_at:
             blockers.append("existing_revision_write_lock_timestamp_invalid")
@@ -9301,7 +9793,8 @@ def zet_revision_write(
             recovery["finalized_from_already_written_candidate"]
         ),
     )
-    if validate_schema(receipt, "zet-revision-receipt.schema.json"):
+    receipt_schema_file = zet_revision_event_receipt_schema_file(receipt)
+    if receipt_schema_file is None or validate_schema(receipt, receipt_schema_file):
         blockers.append("revision_receipt_schema_validation_failed")
         if lock_created_this_run:
             try:
@@ -9315,6 +9808,23 @@ def zet_revision_write(
     receipt_owned_this_run = False
     receipt_parent_existed = receipt_path.parent.exists()
     try:
+        if before_snapshot is not None:
+            snapshot_result = preserve_zet_revision_before_snapshot(
+                root,
+                canonical_bytes=canonical_bytes,
+                snapshot=before_snapshot,
+                archive_id=archive_id,
+                captured_at=transaction_started_at,
+                reviewed_by=reviewer,
+                write_plan_digest=actual_write_plan,
+            )
+            before_snapshot_verified = bool(snapshot_result.get("verified"))
+            before_snapshot_bytes_written = int(
+                bool(snapshot_result.get("bytes_written_this_run"))
+            )
+            before_snapshot_manifest_records_appended = int(
+                bool(snapshot_result.get("manifest_record_appended_this_run"))
+            )
         if not recovery_finalize_only:
             if read_zet_revision_file_bytes(canonical, "Canonical zet") != canonical_bytes:
                 raise RuntimeError("canonical_changed_immediately_before_revision_write")
@@ -9349,7 +9859,13 @@ def zet_revision_write(
             receipt_path, "Zet revision receipt"
         )
         written_receipt = json.loads(receipt_bytes.decode("utf-8"))
-        if validate_schema(written_receipt, "zet-revision-receipt.schema.json"):
+        written_receipt_schema_file = zet_revision_event_receipt_schema_file(
+            written_receipt
+        )
+        if (
+            written_receipt_schema_file is None
+            or validate_schema(written_receipt, written_receipt_schema_file)
+        ):
             raise RuntimeError("written_revision_receipt_schema_invalid")
         receipt_sha256 = "sha256:" + hashlib.sha256(receipt_bytes).hexdigest()
         receipt_exists = True
@@ -9396,12 +9912,19 @@ def zet_revision_write(
         rollback["canonical_restored"] = canonical_restored
         rollback["receipt_removed"] = receipt_removed
         rollback["write_lock_removed"] = write_lock_removed
+        rollback["before_snapshot_retained"] = (
+            True if before_snapshot_verified else None
+        )
         rollback["succeeded"] = bool(
             canonical_restored and receipt_removed and write_lock_removed
         )
         canonical_files_written = 0 if rollback["succeeded"] else canonical_files_written
         receipt_exists = receipt_path.exists()
         receipt_written_this_run = False
+        if before_snapshot_verified:
+            warnings.append(
+                "verified_before_snapshot_retained_for_idempotent_reuse"
+            )
         blockers.append(
             "revision_transaction_failed_and_rolled_back"
             if rollback["succeeded"]
@@ -9461,6 +9984,9 @@ def _zet_revision_receipt_audit(
         "ambiguous_lock": 0,
         "invalid_lock": 0,
         "unsupported_lock": 0,
+        "before_snapshot_verified": 0,
+        "before_snapshot_invalid": 0,
+        "legacy_receipt_without_before_snapshot": 0,
     }
 
     if not dry_run:
@@ -9508,6 +10034,39 @@ def _zet_revision_receipt_audit(
     current_state_cache: dict[tuple[str, str], tuple[dict[str, Any] | None, str | None]] = {}
     canonical_files_read = 0
     canonical_bytes_read = 0
+    snapshot_manifest_index: dict[str, list[dict[str, Any]]] | None = None
+    snapshot_manifest_blockers: list[str] = []
+    snapshot_verification_cache: dict[tuple[str, str, int], list[str]] = {}
+
+    def audit_before_snapshot(
+        snapshot: Any, expected_before_sha256: str
+    ) -> list[str]:
+        nonlocal snapshot_manifest_index, snapshot_manifest_blockers
+        if not isinstance(snapshot, dict):
+            return ["before_snapshot_evidence_missing_or_invalid"]
+        object_id = snapshot.get("object_id")
+        size_bytes = snapshot.get("size_bytes")
+        cache_key = (
+            str(object_id or ""),
+            expected_before_sha256,
+            size_bytes if isinstance(size_bytes, int) and not isinstance(size_bytes, bool) else -1,
+        )
+        if cache_key in snapshot_verification_cache:
+            return list(snapshot_verification_cache[cache_key])
+        if snapshot_manifest_index is None:
+            snapshot_manifest_index, snapshot_manifest_blockers = (
+                zet_revision_snapshot_manifest_index(root)
+            )
+        result = list(snapshot_manifest_blockers)
+        if not result:
+            result = verify_zet_revision_before_snapshot(
+                root,
+                snapshot,
+                expected_before_sha256=expected_before_sha256,
+                manifest_index=snapshot_manifest_index,
+            )
+        snapshot_verification_cache[cache_key] = list(result)
+        return result
 
     def current_state(
         canonical_relative: str, zettel_id_value: str
@@ -9694,6 +10253,18 @@ def _zet_revision_receipt_audit(
                         issue_codes.append("receipt_edge_review_missing")
                     if not zet_revision_event_review_verified(receipt):
                         issue_codes.append("receipt_human_review_invalid")
+                    if receipt.get("schema") == ZET_REVISION_RECEIPT_SCHEMA:
+                        snapshot_issues = audit_before_snapshot(
+                            receipt.get("before_snapshot"),
+                            str(before.get("file_sha256") or ""),
+                        )
+                        if snapshot_issues:
+                            counters["before_snapshot_invalid"] += 1
+                            issue_codes.extend(snapshot_issues)
+                        else:
+                            counters["before_snapshot_verified"] += 1
+                    elif receipt.get("schema") == ZET_REVISION_RECEIPT_SCHEMA_V1:
+                        counters["legacy_receipt_without_before_snapshot"] += 1
             except (
                 ArchiveServiceError,
                 OSError,
@@ -10050,8 +10621,13 @@ def _zet_revision_receipt_audit(
                             resumed_from_existing_lock=True,
                             finalized_from_already_written_candidate=True,
                         )
-                        synthetic_schema_file = "zet-revision-receipt.schema.json"
-                    if validate_schema(synthetic_receipt, synthetic_schema_file):
+                        synthetic_schema_file = zet_revision_event_receipt_schema_file(
+                            synthetic_receipt
+                        )
+                    if (
+                        synthetic_schema_file is None
+                        or validate_schema(synthetic_receipt, synthetic_schema_file)
+                    ):
                         lock_issue_codes.append("revision_lock_evidence_invalid")
                 except (
                     ArchiveServiceError,
@@ -10125,7 +10701,7 @@ def _zet_revision_receipt_audit(
                             lock_matches_receipt = bool(
                                 lock_matches_receipt
                                 and receipt_document.get("schema")
-                                == ZET_REVISION_RECEIPT_SCHEMA
+                                == synthetic_receipt.get("schema")
                                 and all(
                                     lock_document.get(field)
                                     == receipt_document.get(field)
@@ -10135,6 +10711,8 @@ def _zet_revision_receipt_audit(
                                         "plan_digest",
                                     )
                                 )
+                                and lock_document.get("before_snapshot")
+                                == receipt_document.get("before_snapshot")
                             )
                         lock_matches_receipt = bool(
                             lock_matches_receipt
@@ -10214,14 +10792,31 @@ def _zet_revision_receipt_audit(
                             state["file_sha256"]
                             == lock_document["candidate_file_sha256"]
                         ):
-                            counters["recoverable_missing_receipt_lock"] += 1
-                            blockers.append(
-                                "one_or_more_revision_receipts_need_recovery"
-                            )
-                            lock_status = "recoverable_missing_receipt"
-                            lock_issue_codes.append(
-                                "canonical_candidate_present_receipt_missing"
-                            )
+                            lock_snapshot_issues: list[str] = []
+                            if isinstance(
+                                lock_document.get("before_snapshot"), dict
+                            ):
+                                lock_snapshot_issues = audit_before_snapshot(
+                                    lock_document.get("before_snapshot"),
+                                    str(lock_document.get("canonical_sha256") or ""),
+                                )
+                            if lock_snapshot_issues:
+                                counters["before_snapshot_invalid"] += 1
+                                counters["ambiguous_lock"] += 1
+                                blockers.append(
+                                    "one_or_more_revision_locks_ambiguous"
+                                )
+                                lock_status = "ambiguous_lock"
+                                lock_issue_codes.extend(lock_snapshot_issues)
+                            else:
+                                counters["recoverable_missing_receipt_lock"] += 1
+                                blockers.append(
+                                    "one_or_more_revision_receipts_need_recovery"
+                                )
+                                lock_status = "recoverable_missing_receipt"
+                                lock_issue_codes.append(
+                                    "canonical_candidate_present_receipt_missing"
+                                )
                         elif (
                             state["file_sha256"]
                             == lock_document["canonical_sha256"]
@@ -10323,10 +10918,15 @@ def _zet_revision_receipt_audit(
             "max_problems": effective_max_problems,
         },
         "complexity": {
-            "class": "O(receipt_files log receipt_files + revision_chains + lock_files)",
+            "class": (
+                "O(manifest_records + receipt_files log receipt_files + "
+                "revision_chains + lock_files + unique_before_snapshot_bytes)"
+            ),
             "receipt_files_opened_once": complete,
             "canonical_files_opened_once_per_identity": complete,
             "lock_files_opened_once": complete,
+            "object_manifest_opened_at_most_once": True,
+            "before_snapshot_objects_hashed_at_most_once_per_object_and_state": True,
             "full_zettel_tree_rescanned_per_receipt": False,
         },
         "problems": problems,
@@ -10341,6 +10941,11 @@ def _zet_revision_receipt_audit(
             "canonical_body_text_read_for_hash_validation": bool(
                 canonical_files_read
             ),
+            "before_snapshot_bytes_read_for_hash_validation": bool(
+                snapshot_verification_cache
+            ),
+            "before_snapshot_text_echoed": False,
+            "object_manifest_read": snapshot_manifest_index is not None,
             "canonical_body_text_echoed": False,
             "receipt_private_metadata_read": bool(receipt_paths),
             "receipt_paths_echoed": False,

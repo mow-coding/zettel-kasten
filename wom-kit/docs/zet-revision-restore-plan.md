@@ -13,6 +13,12 @@ already exist in private scratch:
 .wom-scratch/revisions/restores/<private>.md
 ```
 
+Since v0.3.248, new ordinary v0.2 revision receipts point to an exact local
+before-snapshot under `objects/sha256/`. That removes the prior-byte loss for
+new corrections, but this release's restore command still requires the human
+to place the complete reviewed bytes in private restore scratch before
+planning. Legacy v0.1 receipts still depend on a separate private backup.
+
 Run:
 
 ```powershell
