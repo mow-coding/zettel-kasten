@@ -2,6 +2,7 @@
 
 상태: 공개 제품 기획 기준선
 날짜: 2026-05-23
+갱신: 2026-07-15
 버전 맥락: v0.2.7 planning document
 
 이 문서는 WOM, `zettel-kasten`, `zet`, `ZET`의 상세한 공개 제품 철학 문서입니다.
@@ -41,6 +42,25 @@ AI에게는 오래 남고, 검증 가능하며, 출처를 확인할 수 있고, 
 이것은 단순한 메모 앱 아이디어가 아닙니다.
 
 이것은 memory infrastructure 아이디어입니다.
+
+### 1.1 엔티티 확정이 아니라 아티팩트 우선
+
+WOM은 온톨로지 시스템의 감사 가능한 운영 규율을 받아들이지만, 엔티티
+해결을 인간 기억의 목적으로 삼지 않습니다. 인간은 안정된 기준정보 표가
+아닙니다. 의미, 믿음, 이름, 분류, 중요도는 시간과 맥락에 따라 달라질 수
+있습니다. 어제와 오늘 같은 단어를 썼더라도 두 시점의 의미는 따로 남겨야
+할 수 있습니다.
+
+일차 근거는 특정 시점에 남은 오래가는 아티팩트입니다. 수정과 모순은
+추적 가능한 상태로 보존합니다. `정본(canonical)` zet는 사용자가 현재 자기
+아카이브의 기준으로 선택한 기록이지, 객관적 진실 인증서가 아닙니다. 노드,
+타이, 엣지, 검색 색인, 임베딩, 그래프는 읽기와 경로 선택을 돕는 다시 만들
+수 있는 보조물입니다. 같은 라벨을 조용히 합치거나, 모호함을 지우거나,
+아티팩트 위의 숨은 권위가 되어서는 안 됩니다.
+
+AI는 읽는 시점에 토큰과 현재 모델 성능을 사용해 여러 아티팩트의 맥락을
+추론할 수 있습니다. 그 추론은 교체 가능합니다. 오래 남는 층은 아티팩트,
+출처, 시간순 변화 이력입니다.
 
 ## 2. 문제의식
 
@@ -390,6 +410,11 @@ Provider bindings
 
 확장자보다 역할이 중요합니다.
 
+검색/색인 계층은 다시 만들 수 있는 가속 계층이지 정본 온톨로지가
+아닙니다. 엔티티 후보, 임베딩, 그래프 투영은 AI가 무엇부터 읽을지 정하는
+데 도움을 줄 수 있지만, 자동 동일성 병합을 승인하거나 시간순 아티팩트
+근거를 대신하지 않습니다.
+
 ## 11. Provider-Aware Archive
 
 사용자는 자연스럽게 말할 수 있어야 합니다.
@@ -684,6 +709,8 @@ blueprint, schemas, reference implementation, research notes, implementation pla
 - token project,
 - public SNS clone,
 - 모든 collaboration tool을 즉시 대체하는 제품,
+- 엔티티 해결을 객관적 진실로 취급하는 결정론적 전역 지식 그래프,
+- 시간에 따른 모호함을 지우는 자동 동일성 병합 시스템,
 - `zet`를 쓰기 위해 모두에게 zettel-kasten 사용을 강제하는 시스템.
 
 `ZET`는 나중에 full archive system을 원하지 않는 사람도 쓸 수 있는 standalone messenger/collaboration/SNS layer가 되어야 합니다.
@@ -727,6 +754,8 @@ trustworthy private memory가 먼저 와야 합니다.
 - source references와 provenance 확인하기,
 - `zet`를 private archive에 mint하기,
 - 이력을 남기며 revision하기,
+- 모순되거나 달라진 의미를 조용히 합치지 않고 보존하기,
+- 지도와 그래프를 진실이 아니라 읽기 보조물로 사용하기,
 - 나중에 search하기,
 - 의도적으로 share하기,
 - agent에게 bounded authority 위임하기,
@@ -738,5 +767,7 @@ trustworthy private memory가 먼저 와야 합니다.
 important context should not evaporate
 private memory should become durable
 AI should operate over accountable memory
+artifacts should outlive replaceable inference
+human change should remain visible instead of being normalized away
 sharing should be chosen, scoped, and verifiable
 ```

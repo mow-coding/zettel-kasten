@@ -6,6 +6,27 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.246 - 2026-07-15
+
+Artifact primacy and human drift checkpoint. Public philosophy, blueprint, and
+regression contract only; no archive migration or new runtime authority.
+
+- **WOM now states what it borrows from enterprise ontology systems.** Typed
+  records, provenance, controlled writes, receipts, and reproducible indexes
+  remain useful operating discipline.
+- **Entity mapping is not the truth layer for human memory.** Matching labels
+  do not authorize silent identity merges, and contradictions or changing
+  meanings may remain visible across time-situated artifacts.
+- **`canonical` no longer carries an accidental truth claim.** It names the
+  subject-approved current archive lifecycle state, not objective or timeless
+  truth.
+- **Maps remain subordinate to artifacts.** Nodes, ties, edges, embeddings,
+  indexes, and graph projections are reading aids or reviewable claims that can
+  be regenerated; local artifacts, provenance, and chronology remain durable.
+- **The doctrine is regression-tested.** English/Korean product philosophy,
+  whitepaper, product blueprint, README, capability matrix, and an accepted
+  decision log now share the same boundary.
+
 ## v0.3.245 - 2026-07-15
 
 Top-level installation on-ramp checkpoint. Documentation and release packaging

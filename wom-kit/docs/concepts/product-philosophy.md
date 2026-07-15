@@ -2,6 +2,7 @@
 
 Status: public philosophy baseline
 Date: 2026-05-23
+Updated: 2026-07-15
 
 This document explains the design philosophy behind WOM, `zettel-kasten`, `zet`, and `ZET`.
 
@@ -30,6 +31,45 @@ WOM uses a local-first archive node for that memory.
 `zet` is the text unit that lets a person or organization turn source material, AI conversations, and human judgment into durable archive memory.
 
 The future `ZET` communication layer then lets selected zets move between people, teams, and archives without making a central platform the source of truth.
+
+## 1.1 Artifact Primacy And Human Drift
+
+WOM borrows operational discipline from enterprise ontology systems: provenance,
+typed records, controlled writes, receipts, and reproducible indexes. It does
+not adopt global entity mapping as the final authority over human knowledge.
+
+An enterprise can often require stable master data for a customer, asset, or
+transaction. WOM's primary subject is a human. Humans can be inconsistent,
+emotional, non-rational, and dependent on context. The meaning a person gives
+the same word, person, place, project, or belief can change between yesterday
+and today. That change is part of the memory, not dirty data to erase.
+
+If a system silently resolves every repeated label into one supposedly stable
+entity, it can produce a graph that looks coherent while misrepresenting the
+person. A neat graph can be a false graph.
+
+WOM therefore follows these rules:
+
+1. Durable artifacts are primary evidence. A source object, conversation
+   record, draft, zet, correction, and receipt preserve what existed at a
+   particular time.
+2. Contradiction, ambiguity, repetition, and revision may be meaningful
+   history. They are not automatically normalized away.
+3. `canonical` is an archive lifecycle status selected by the subject. It does
+   not certify objective or timeless truth.
+4. Nodes, ties, edges, indexes, and generated graphs are reading routes,
+   relationship claims, or hypotheses. They do not outrank the artifacts they
+   point to.
+5. Matching names or labels must not silently merge artifacts into one entity.
+   Any proposed identity or relationship needs provenance, scope, and review.
+6. AI interpretation is computed at reading time and may be regenerated with
+   more tokens or a stronger model. The local artifacts and their history stay
+   durable even when an inference changes.
+
+The goal is not deterministic knowledge. The goal is to help a person, with AI
+assistance, notice how their own memory, language, judgments, contradictions,
+and commitments change over time. This is the human-centered form of the
+Memento Problem that WOM exists to address.
 
 ## 2. Human Data Primitives
 

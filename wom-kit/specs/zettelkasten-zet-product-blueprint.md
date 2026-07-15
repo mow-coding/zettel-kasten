@@ -2,6 +2,7 @@
 
 Status: planning baseline
 Date: 2026-05-22
+Updated: 2026-07-15
 
 This document consolidates the product philosophy and concept model for `zettel-kasten`, `zet`, and the future `ZET` communication layer.
 
@@ -60,6 +61,26 @@ Instead, it must keep these concepts separate:
 - operator identity,
 - device/install identity,
 - AI/runtime identity.
+
+### 2.1 Artifact Primacy And Human Drift
+
+WOM may use ontology techniques for provenance, validation, typed relations,
+and auditability. It must not treat a globally resolved entity graph as the
+truth layer for a human archive.
+
+The primary subject is a person whose language, beliefs, categories, and
+salience can change. Therefore:
+
+- artifacts remain time-situated and independently addressable;
+- matching labels do not authorize automatic identity merges;
+- contradictions and ambiguity may remain visible;
+- revisions append history instead of rewriting the past invisibly;
+- `canonical` means current subject-approved archive state, not objective truth;
+- graph and entity projections remain regenerable, reviewable aids.
+
+AI is expected to reconstruct context from artifacts, abstracts, chronology,
+ties, edges, and receipts. The inference may change with token budget and model
+capability. The durable evidence must not.
 
 ## 3. Core Composition
 
@@ -129,6 +150,10 @@ Examples:
 - local runtime session references.
 
 Metadata is the map around the archive's materials.
+
+That map is not the territory and is not a truth authority. It may contain
+claims, routes, and generated projections that are revised or rebuilt without
+silently changing the artifacts they describe.
 
 ### 3.3 zets
 
@@ -712,6 +737,11 @@ Keyring/local profiles
   secrets and local-only paths.
 ```
 
+The reviewed local archive is the primary authority. A SQLite graph, embedding
+store, or external database is a rebuildable map backup or acceleration layer.
+It must not become an entity registry that silently collapses time-separated
+human meanings into one identity.
+
 Important:
 
 ```text
@@ -789,6 +819,9 @@ Avoid in the first slice:
 - group encryption,
 - real-time collaboration,
 - global search,
+- global entity resolution as a source of truth,
+- automatic same-label identity merging,
+- a generated graph that outranks artifact chronology,
 - blockchain consensus,
 - automatic external AI import.
 
@@ -864,7 +897,8 @@ These are implementation-scope questions, not product-philosophy questions.
 : A working text object that may be AI-assisted and freely edited before minting.
 
 `minted zet`
-: A user-approved canonical private zet inside the zettel-kasten.
+: A user-approved canonical private zet inside the zettel-kasten. Here
+  `canonical` names the current archive lifecycle state, not objective truth.
 
 `minting`
 : Private archive issuance: the act of making a draft zet into durable archive memory.
@@ -873,7 +907,9 @@ These are implementation-scope questions, not product-philosophy questions.
 : A reference from a zet to source/original material.
 
 `edge`
-: A typed arrow between zets, objects, archives, or other entities.
+: A typed, reviewable relationship claim or reading route between zets,
+  objects, archives, or other records. It does not prove identity or truth by
+  itself.
 
 `receipt`
 : A durable audit record of a meaningful archive action.

@@ -34,10 +34,10 @@ not re-grow baseline ladders or tag lists here.
 Current public baseline:
 
 ```text
-v0.3.245 pre-release
+v0.3.246 pre-release
 ```
 
-Previous public baseline: v0.3.244 pre-release.
+Previous public baseline: v0.3.245 pre-release.
 
 Full release history: see [CHANGELOG.md](CHANGELOG.md) and [wom-kit/docs/releases/](wom-kit/docs/releases/).
 
@@ -55,7 +55,7 @@ future-only boundaries.
 Install the exact release wheel as an isolated command-line tool:
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.245/wom_kit-0.3.245-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.246/wom_kit-0.3.246-py3-none-any.whl"
 archive --version
 ```
 
@@ -85,6 +85,7 @@ approval-gated write, or docs-only), see the
 ### Archive core & lifecycle
 
 - a public WOM/zet/ZET design baseline with specs, schemas, fake archives, release notes, and work logs,
+- an artifact-first human-memory doctrine: time-situated local artifacts and their chronology outrank regenerable entity/graph projections; matching labels never authorize silent identity merges, `canonical` names the subject-approved current archive state rather than objective truth, and AI may re-infer context while human change remains visible; see [Product Philosophy](wom-kit/docs/concepts/product-philosophy.md),
 - a public version-line roadmap that explains how the pre-1.0 minor lines map to idea, implementation, WOM feedback, UI/control-layer, and ZET feedback phases,
 - a machine-readable local-sovereignty contract: local reviewed WOM state is canonical, GitHub backs up metadata/version history, object storage backs up objet bytes, and external databases hold regenerable map backups or replicas; runtime/start-here/recovery surfaces share the same offline, conflict, recovery, and receipt boundaries,
 - WOM-kit local CLI and MCP tooling under `wom-kit/`, importing as `wom_kit`,
@@ -491,7 +492,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
-v0.3.245 (current checkpoint)
+v0.3.246 (current checkpoint)
 ```
 
 Public releases from `v0.2.5` onward are tagged as compatibility checkpoints.
