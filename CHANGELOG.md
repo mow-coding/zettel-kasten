@@ -6,6 +6,37 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.254 - 2026-07-16
+
+- **Independent v0.3.253 audit follow-up.** Current object-storage upload help
+  now matches the shipped approval-gated live S3-compatible transport; the
+  philosophy evidence map identifies documentation checks separately from
+  behavioral regressions and carries the current-version review status; and an
+  end-to-end CLI regression protects MOW Harness namespace isolation. New
+  catalog regressions also prove that live files outrank a stale generated
+  index and that matching titles remain distinct human artifacts.
+- **Bounded handoff claims stay honest.** AI artifact inventory and session
+  handoff results now state that only allowlisted roots were scanned, preserve
+  that scope in new receipts, and never turn context-reset readiness into an
+  archive-wide absence claim.
+- **Changed transcript source bytes remain first-class objets.** Derived-text
+  coverage and Doctor now surface a missing pre-normalization transcript/export
+  object when transcoding changed the bytes. The diagnostic is read-only and
+  never recreates an original from normalized text.
+- **Large zet reads can continue without mixing versions.** CLI and MCP
+  `read-zettel` add opt-in Unicode character pages bound to the complete decoded
+  body SHA-256; default full-body reads remain compatible, and a changed body
+  blocks continuation.
+- **Public terminology follows the user model.** `node` remains the
+  subject/archive participant, while current reading guidance says `zet` and
+  internal graph prose may say `zet vertex`. Existing schema and output keys
+  remain compatibility surfaces. Rendered CLI and MCP copy is regression-tested
+  against equating `canonical` with objective or timeless truth.
+- These corrections were prompted by an independent read-only v0.3.253 audit
+  from Claude Opus 4.8, then filtered against the owner's WOM design principles,
+  re-verified against source, and regression-tested by Codex before
+  implementation.
+
 ## v0.3.253 - 2026-07-16
 
 Optional MOW Harness compatibility-boundary checkpoint. Documentation and

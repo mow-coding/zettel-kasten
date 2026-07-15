@@ -1,6 +1,6 @@
 # Runtime Canonical Entry Points
 
-Status: v0.3.253 installed-wheel resource, quick start, session handoff, local backup evidence, and philosophy implementation traceability checkpoint
+Status: v0.3.254 installed-wheel resource, quick start, session handoff, local backup evidence, and philosophy implementation traceability checkpoint
 
 When an AI runtime enters a WOM archive, it needs a small, explicit "start
 here" map. The archive may contain zets, source bindings, provider metadata,
@@ -53,7 +53,7 @@ anything:
    never auto-rewrite an abstract or body. Its progress is two stages;
    `stage=1/2` ending is not whole-command completion.
 7. Run the complete private `zet-catalog-pass`, validate and read it from page
-   zero, and distinguish generated node coverage from actual host consumption.
+   zero, and distinguish generated zet coverage from actual host consumption.
 8. Run `archive ai-response-concept-guide <archive-root> --topic all --dry-run`
    when the human is asking what to do next.
 9. For Notion material links, choose the route from that guide:

@@ -53,6 +53,25 @@ JSON output keeps a small machine-readable envelope:
 This lets a future viewer/editor show metadata in a folded side panel while the
 main reading pane stays body-first.
 
+## Bounded Body Reading
+
+Large zet bodies can be read in bounded JSON pages without changing the default
+full-body behavior:
+
+```powershell
+archive read-zettel <archive-root> --zettel-id <id> --section document --body-max-chars 20000 --format json
+```
+
+The result includes `body_page.next_cursor` and a SHA-256 for the complete
+decoded body. Every continuation must retain that hash:
+
+```powershell
+archive read-zettel <archive-root> --zettel-id <id> --section document --body-cursor <next> --body-max-chars 20000 --expected-body-sha256 <sha256:...> --format json
+```
+
+Offsets count Unicode code points. If the body changes between pages, the read
+fails instead of joining two versions. Paging never changes canonical files.
+
 ## Raw Markdown View
 
 Opening the `.md` file directly may show `---` and YAML. That is the raw storage
@@ -69,6 +88,8 @@ When an AI assistant presents a zet to a human:
 - do not say the file is broken only because `---` is visible in a raw Markdown
   environment;
 - use `--section document` for a body-first document read;
+- for a large body, use bounded JSON pages and bind every continuation to the
+  first page's complete body hash;
 - use `--section details` only when the user asks to inspect metadata.
 
 ## Boundary

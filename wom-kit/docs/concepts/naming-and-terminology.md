@@ -35,6 +35,14 @@ node             -> subject/archive participant
 tie              -> candidate relationship/capability term between nodes
 ```
 
+Public language reserves `node` for the subject or archive participant. A `zet`
+is a document held by that node, not another participant. When implementation
+code models zet relationships as a graph, `zet vertex` is an acceptable internal
+engineering phrase. Current public reading guidance should say `zet`, `zet
+entry`, or `exhaustive zet reading`; it should not call each zet a node. Existing
+schema fields, command output keys, and historical decision titles that contain
+`node` remain compatibility surfaces until a separately reviewed migration.
+
 `zettel-kasten` remains important because the project began from the note-box tradition associated with Niklas Luhmann.
 
 But the active product unit is `zet`, not `zettel`.

@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import argparse
+import json
 import unittest
 from pathlib import Path
+
+from wom_kit import __version__, archive_cli, mcp_server
 
 
 KIT_ROOT = Path(__file__).resolve().parents[1]
@@ -9,6 +13,22 @@ REPO_ROOT = KIT_ROOT.parent
 
 
 class ArtifactPrimacyDocumentationTests(unittest.TestCase):
+    @staticmethod
+    def _all_cli_help() -> str:
+        pending = [archive_cli.build_parser()]
+        seen: set[int] = set()
+        rendered: list[str] = []
+        while pending:
+            parser = pending.pop()
+            if id(parser) in seen:
+                continue
+            seen.add(id(parser))
+            rendered.append(parser.format_help())
+            for action in parser._actions:
+                if isinstance(action, argparse._SubParsersAction):
+                    pending.extend(action.choices.values())
+        return "\n".join(rendered)
+
     def test_public_philosophy_preserves_human_drift_boundary(self) -> None:
         english = (KIT_ROOT / "docs" / "concepts" / "product-philosophy.md").read_text(
             encoding="utf-8"
@@ -138,6 +158,9 @@ class ArtifactPrimacyDocumentationTests(unittest.TestCase):
             KIT_ROOT / "docs" / "philosophy-implementation-evidence.ko.md"
         ).read_text(encoding="utf-8")
 
+        self.assertIn(f"Status: v{__version__}", english)
+        self.assertIn(f"상태: v{__version__}", korean)
+
         for phrase in (
             "Engineering implementation",
             "Real-use validation",
@@ -148,6 +171,9 @@ class ArtifactPrimacyDocumentationTests(unittest.TestCase):
             "Goal and loop belong to the host AI application's task UX",
             "There is no generic GitHub or external-database completion receipt",
             "Structural coverage does not prove abstract quality",
+            "Documentation phrase checks",
+            "behavioral revision/snapshot/restore cases",
+            "behavioral catalog pass/read/cleanup tests",
         ):
             with self.subTest(language="en", phrase=phrase):
                 self.assertIn(phrase, english)
@@ -160,6 +186,9 @@ class ArtifactPrimacyDocumentationTests(unittest.TestCase):
             "goal과 loop는 WOM 아카이브의 온톨로지가 아니라 호스트 AI 앱의 작업 UX",
             "구조적 완전성이 초록의 의미 품질을 증명하지는 않습니다",
             "WOM은 호스트 채팅을 직접 읽거나 의미의 완전성을 증명할 수 없습니다",
+            "문서 문구 검사",
+            "실제 수정·보존본·복원 동작 검사",
+            "실제 카탈로그 통과·읽기·정리 동작 검사",
         ):
             with self.subTest(language="ko", phrase=phrase):
                 self.assertIn(phrase, korean)
@@ -176,6 +205,50 @@ class ArtifactPrimacyDocumentationTests(unittest.TestCase):
         self.assertIn("## Historical v0.3.203 Non-Claim", decision)
         self.assertIn("## Implementation Follow-Through", decision)
         self.assertIn("WOM still does not persist a canonical global traversal map", decision)
+
+    def test_public_node_language_distinguishes_participant_from_zet_traversal(self) -> None:
+        naming = (KIT_ROOT / "docs" / "concepts" / "naming-and-terminology.md").read_text(
+            encoding="utf-8"
+        )
+        naming_ko = (
+            KIT_ROOT / "docs" / "concepts" / "naming-and-terminology.ko.md"
+        ).read_text(encoding="utf-8")
+        decision = (
+            KIT_ROOT
+            / "docs"
+            / "archive-infra-decision-log-2026-07-11-node-first-exhaustive-traversal.md"
+        ).read_text(encoding="utf-8")
+        zet_catalog_description = next(
+            tool["description"]
+            for tool in mcp_server.TOOL_DEFINITIONS
+            if tool["name"] == "zet_catalog"
+        )
+
+        self.assertIn("Public language reserves `node` for the subject or archive participant", naming)
+        self.assertIn("공개 언어에서 `node`는 사람이나 조직 같은 주체", naming_ko)
+        self.assertIn("## 2026-07-16 Terminology Resolution", decision)
+        self.assertIn("The original decision text above is preserved", decision)
+        self.assertIn("zet vertices", decision)
+        self.assertNotIn("local zet node", zet_catalog_description)
+        self.assertIn("contiguous zet coverage", zet_catalog_description)
+
+    def test_rendered_cli_and_mcp_copy_never_equate_canonical_with_objective_truth(self) -> None:
+        rendered_surfaces = "\n".join(
+            [
+                self._all_cli_help(),
+                json.dumps(mcp_server.TOOL_DEFINITIONS, ensure_ascii=False, sort_keys=True),
+            ]
+        ).lower()
+        for forbidden in (
+            "canonical is objective truth",
+            "canonical means objective truth",
+            "canonical is timeless truth",
+            "canonical means timeless truth",
+            "canonical is the source of truth",
+            "canonical means the source of truth",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, rendered_surfaces)
 
     def test_v03252_release_surfaces_publish_traceability_without_new_authority(self) -> None:
         release = (KIT_ROOT / "docs" / "releases" / "v0.3.252.md").read_text(

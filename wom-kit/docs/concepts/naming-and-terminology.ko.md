@@ -35,6 +35,14 @@ node             -> subject/archive participant
 tie              -> node 사이의 relationship/capability 후보 용어
 ```
 
+공개 언어에서 `node`는 사람이나 조직 같은 주체, 또는 archive 참여자를
+가리킵니다. `zet`는 그 node가 가진 문서이지 또 하나의 참여자가 아닙니다.
+구현 코드가 zet 사이의 관계를 그래프로 다룰 때는 내부 개발 용어로 `zet
+vertex`를 쓸 수 있습니다. 현재 공개 읽기 안내에서는 각 문서를 `node`라고
+부르지 않고 `zet`, `zet 항목`, `누락 없는 zet 읽기`라고 표현합니다. 기존
+schema field, command output key, 과거 decision title에 남은 `node`는 별도
+검토를 거친 migration 전까지 호환성 표면으로 유지합니다.
+
 `zettel-kasten`은 중요합니다. 이 프로젝트가 Niklas Luhmann의 note-box 전통에서 출발했기 때문입니다.
 
 하지만 active product unit은 `zettel`이 아니라 `zet`입니다.

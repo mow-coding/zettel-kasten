@@ -10,7 +10,7 @@ repeating the same frontmatter scan.
 
 `zet-catalog-pass` completes the existing strict page chain inside one process.
 It does not invent a new map or make local files secondary. It gives the same
-local zet nodes one temporary reading session, then destroys that memory when
+local zets one temporary reading session, then destroys that memory when
 the command exits.
 
 ## One Command

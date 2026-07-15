@@ -230,7 +230,13 @@ transcript is evidence). `text_sha256`, `text_logical_key`,
 `derived_text_id`, `size_bytes`, and lossless verification are all computed
 over the STORED normalized UTF-8 bytes; `source_text_encoding` and
 `source_text_sha256` (raw input bytes) are recorded in the record's
-`provenance` and in receipts so the raw input stays reconstructible.
+`provenance` and in receipts so the exact input can be identified. A hash does
+not reconstruct a file by itself. When transcoding changes the bytes,
+`derive-text coverage` and Doctor require the matching raw-byte hash to exist as
+a manifested objet before manifest-scoped source-byte coverage passes. They
+report the gap but never recreate an original from normalized text. This check
+does not prove that the manifested bytes are currently available at a local or
+remote location; availability remains a separate object-storage/recovery check.
 
 Dedupe collapse: two encodings of identical text collapse to one
 `derived_text_id`. The second registration is `skip_already_present` and the

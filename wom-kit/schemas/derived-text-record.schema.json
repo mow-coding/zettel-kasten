@@ -45,7 +45,7 @@
         },
         "source_text_sha256": {
           "type": "string",
-          "description": "Optional (v0.3.159+): sha256 hex of the RAW source file bytes before transcoding, so the raw input stays reconstructible/auditable."
+          "description": "Optional (v0.3.159+): sha256 hex of the RAW source file bytes before transcoding. This identifies the exact input for audit; reconstructibility additionally requires a manifested objet with that hash when transcoding changed the bytes, and a manifest record alone does not prove current byte availability."
         }
       }
     }

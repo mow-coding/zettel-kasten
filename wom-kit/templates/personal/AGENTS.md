@@ -18,7 +18,7 @@ Local reviewed WOM state is canonical. GitHub backs up metadata/version history,
 11. If the host goal already provides verified zet ids, use `--order seeded_connection_walk` with repeated `--start-zettel-id`; never invent a seed, and still read every disconnected component.
 12. Keep `projection=reading` for compact coverage. Use `routed_reading` with seeded order only when the human or host needs each item's seed/tie/component reason and can afford the larger payload.
 13. Use the returned abstracts, ties, and edges to choose a useful body-reading order. A search result or one truncated page is never full coverage.
-14. Read selected zet bodies with `read-zettel --section overview` first, then `--section document|body` when the host task needs the body.
+14. Read selected zet bodies with `read-zettel --section overview` first, then `--section document|body` when the host task needs the body. For a large body, use bounded pages and bind every continuation to the first page's complete body SHA-256.
 15. Read `objects/manifests/files.jsonl` only when original file metadata is needed.
 
 ## Write Policy

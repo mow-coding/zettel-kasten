@@ -1908,7 +1908,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
     },
     {
         "name": "zet_catalog",
-        "description": "Enumerate every selected local zet node's available abstract state and frontmatter connections in deterministic pages. Use projection=reading and coverage_mode=strict for compact contiguous node coverage; after the required full first page, response_profile=continuation may omit repeated diagnostics while retaining items, coverage, snapshot, and continuation proof. Use routed_reading only with seeded_connection_walk when per-item connection-order reasons are worth the extra tokens. Inspect item and compact service-result envelope estimates, with an optional explicit envelope reserve, plus separate abstract-reading and id-followup readiness. Read-only; never reads zet bodies or requires a generated index.",
+        "description": "Enumerate every selected local zet's available abstract state and frontmatter connections in deterministic pages. Use projection=reading and coverage_mode=strict for compact contiguous zet coverage; after the required full first page, response_profile=continuation may omit repeated diagnostics while retaining items, coverage, snapshot, and continuation proof. Use routed_reading only with seeded_connection_walk when per-item connection-order reasons are worth the extra tokens. Inspect item and compact service-result envelope estimates, with an optional explicit envelope reserve, plus separate abstract-reading and id-followup readiness. Read-only; never reads zet bodies or requires a generated index.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -2003,7 +2003,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
     },
     {
         "name": "read_zettel",
-        "description": "Read one zettel by zettel id or archive-relative path. Use section=overview for the compact first read before requesting a body.",
+        "description": "Read one zettel by zettel id or archive-relative path. Use section=overview for the compact first read; large bodies can be read in hash-bound bounded pages without changing the default full-body response.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -2014,6 +2014,23 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                     "type": "string",
                     "enum": sorted(archive_services.ZETTEL_READ_SECTIONS),
                     "default": "body",
+                },
+                "body_cursor": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "default": 0,
+                    "description": "Unicode code-point offset. A nonzero cursor requires expected_body_sha256 from the first page.",
+                },
+                "body_max_chars": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": archive_services.ZETTEL_READ_BODY_MAX_CHARS,
+                    "description": "Maximum body code points returned in this bounded page.",
+                },
+                "expected_body_sha256": {
+                    "type": "string",
+                    "pattern": "^sha256:[0-9a-f]{64}$",
+                    "description": "Complete decoded-body hash from the first page; required for every nonzero continuation cursor.",
                 },
             },
             "required": ["archive_root"],
@@ -4838,12 +4855,21 @@ def tool_read_zettel(arguments: dict[str, Any]) -> dict[str, Any]:
     archive_root = require_path_arg(arguments, "archive_root")
     zettel_id = optional_string_arg(arguments, "zettel_id")
     relative_path = optional_string_arg(arguments, "path")
+    body_cursor = arguments.get("body_cursor", 0)
+    if isinstance(body_cursor, bool) or not isinstance(body_cursor, int):
+        raise ToolError("body_cursor must be a non-negative integer.")
+    body_max_chars = arguments.get("body_max_chars")
+    if body_max_chars is not None and (isinstance(body_max_chars, bool) or not isinstance(body_max_chars, int)):
+        raise ToolError("body_max_chars must be an integer.")
     result = call_service(
         archive_services.read_zettel,
         archive_root,
         zettel_id=zettel_id,
         relative_path=relative_path,
         section=optional_string_arg(arguments, "section") or "body",
+        body_cursor=body_cursor,
+        body_max_chars=body_max_chars,
+        expected_body_sha256=optional_string_arg(arguments, "expected_body_sha256"),
     )
     frontmatter = result["frontmatter"]
     return tool_success_result(

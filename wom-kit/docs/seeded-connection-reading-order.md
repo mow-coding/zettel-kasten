@@ -45,7 +45,7 @@ similarity. If there is no verified seed, use normal path order.
 5. For every still-unvisited path in archive-relative order, breadth-first walk
    that disconnected component.
 
-The algorithm keys file nodes by their catalog entry, not only by zet id, so a
+The algorithm keys zet file entries by their catalog entry, not only by zet id, so a
 malformed archive with duplicate ids does not silently lose files.
 
 ## Evidence
