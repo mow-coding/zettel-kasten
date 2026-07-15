@@ -24,6 +24,25 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.253 Optional MOW Harness Compatibility Boundary
+
+No archive migration is required. This release adds public interoperability
+guidance and focused regression checks only. Existing WOM commands, schemas,
+zets, objets, receipts, manifests, indexes, and write authority are unchanged.
+
+WOM remains usable without MOW Harness. If you use the separate Harness, read
+[Optional MOW Harness Compatibility](wom-kit/docs/mow-harness-compatibility.md)
+before changing it. WOM already keeps `collab/` and `.mow-harness/` local-only,
+but it does not install, update, activate, remove, or invoke the external tool.
+
+Treat external `status`, `doctor`, and `--dry-run` as inspection. `--yes` is a
+separate Harness write approval, and successful file installation or update is
+not activation. Keep an existing `OFF` room off until the human explicitly
+requests activation and the Harness records its own evidence.
+
+The stable file-based Harness remains `v0.1.23`; the external CLI is still a
+source alpha and is not an npm dependency of WOM at this checkpoint.
+
 ## v0.3.252 Philosophy Implementation Traceability
 
 No archive migration is required. This release changes documentation and

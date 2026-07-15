@@ -242,6 +242,10 @@ discipline. Do not treat local harness folders such as `collab/` or
 durable insight, summarize or mint that insight deliberately through normal WOM
 records.
 
+Read [Optional MOW Harness Compatibility](mow-harness-compatibility.md) before
+installing or updating it. WOM reserves the two local namespaces but does not
+grant MOW write approval, activate the room, or duplicate the external CLI.
+
 ### Stage 1: Local Environment Check
 
 Check:
