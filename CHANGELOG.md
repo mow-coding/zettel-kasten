@@ -6,6 +6,30 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.250 - 2026-07-15
+
+Receipt-backed AI session handoff checkpoint. Compatible additive CLI and
+receipt behavior; no archive migration or canonical zet write.
+
+- **The next AI no longer has to trust the previous chat's memory.**
+  `session-handoff-checkpoint` audits the approved operational context and AI
+  artifact inventory together before context reset.
+- **Approval binds one exact observed state.** A fresh dry-run returns a
+  `state_digest`; approval requires that digest, a reviewer, and explicit
+  confirmation that important chat-only context received a durable home.
+- **Unfinished capture fails closed.** Missing/unreceipted operational context,
+  unreviewed AI artifacts, a truncated inventory, stale digest, or receipt
+  collision prevents the checkpoint write.
+- **The proof expires when the evidence changes.** A later operational-context
+  or AI artifact inventory change makes an existing checkpoint stale.
+- **Chat privacy remains outside the tool boundary.** WOM reads no host chat or
+  AI artifact body and does not claim automatic semantic completeness.
+- **Operational-context byte evidence is now exact.** New writes hash and write
+  identical UTF-8 bytes; legacy Windows newline-normalized receipts remain
+  readable and explicitly labeled.
+- **Runtime guidance now closes the loop.** The packaged Agent Skill tells AI
+  operators to use the checkpoint before a session handoff.
+
 ## v0.3.249 - 2026-07-15
 
 Before-snapshot restore-proposal bridge checkpoint. Compatible additive CLI

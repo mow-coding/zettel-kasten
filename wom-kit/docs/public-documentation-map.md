@@ -274,6 +274,7 @@ Onboarding and setup plans:
 - [zet Catalog One-Process Pass](zet-catalog-one-process-pass.md)
 - [Runtime Canonical Entry Points](runtime-canonical-entrypoints.md)
 - [Operational Context](operational-context.md)
+- [Session Handoff Checkpoint](session-handoff-checkpoint.md)
 - [ZET Publication Surface Baseline](zet-publication-surface-baseline.md)
 - [ZET Projection Plan Preview](zet-projection-plan-preview.md)
 - [ZET Surface Prototypes](zet-surface-prototypes.md)

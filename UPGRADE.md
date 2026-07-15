@@ -24,6 +24,30 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.250 Receipt-Backed Session Handoff
+
+No archive migration is required. Existing operational-context records and
+receipts remain valid. New writes use exact UTF-8 bytes; older Windows receipts
+that hashed newline-normalized text are recognized as legacy evidence.
+
+Before ending an AI session, first make sure `ops/operational-context.yml`
+contains the current mission, completed work, in-progress work, next actions,
+blockers, gotchas, and reviewed decisions. Update it only through the existing
+preview and approval flow. Then run:
+
+```powershell
+archive session-handoff-checkpoint <archive-root> --dry-run --format json
+```
+
+Resolve `needs_durable_capture` before continuing. After reviewing the current
+conversation and moving important chat-only context into durable WOM artifacts,
+preview again with `--confirm-chat-reviewed`. Approve only the exact returned
+`state_digest` with `--expected-state-digest`, `--approve`, and `--reviewed-by`.
+
+The receipt is local session-handoff evidence. It is not proof that the host
+chat was read by WOM, that every sentence was preserved, or that GitHub, object
+storage, or an external database is backed up.
+
 ## v0.3.249 Before-Snapshot Restore Proposal Bridge
 
 No archive migration is required. This release adds an optional CLI bridge for

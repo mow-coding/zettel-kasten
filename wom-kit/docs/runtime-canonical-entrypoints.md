@@ -1,6 +1,6 @@
 # Runtime Canonical Entry Points
 
-Status: v0.3.249 installed-wheel resource, quick handoff, revision-audit, and exact-restore checkpoint
+Status: v0.3.250 installed-wheel resource, quick start, and receipt-backed session handoff checkpoint
 
 When an AI runtime enters a WOM archive, it needs a small, explicit "start
 here" map. The archive may contain zets, source bindings, provider metadata,
@@ -108,6 +108,18 @@ To inspect only the operational handoff, run:
 ```powershell
 archive operational-context <archive-root> --dry-run --format json
 ```
+
+Before ending or resetting the AI session, verify that current work has a
+durable handoff rather than trusting chat memory:
+
+```powershell
+archive session-handoff-checkpoint <archive-root> --dry-run --format json
+```
+
+The checkpoint requires receipt-backed operational-context bytes and a complete
+reviewed AI artifact inventory. Its separate confirmation and approval flow is
+described in [Session Handoff Checkpoint](session-handoff-checkpoint.md). It
+does not read the host chat and does not prove remote backup.
 
 The same order is returned in JSON:
 

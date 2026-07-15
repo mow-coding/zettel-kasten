@@ -2383,6 +2383,7 @@ class ArchiveCliTests(unittest.TestCase):
         self.assertIn("secret-signal-taxonomy", command_names)
         self.assertIn("ai-response-contract", command_names)
         self.assertIn("ai-start-here", command_names)
+        self.assertIn("session-handoff-checkpoint", command_names)
         self.assertIn("project-version-update", command_names)
         self.assertIn("zet-catalog-pass", command_names)
         self.assertIn("zet-catalog-pass-read", command_names)
@@ -5713,6 +5714,180 @@ state:
             self.assertFalse(result["ok"])
             self.assertTrue(any("unsafe operational context value" in item for item in result["blockers"]))
             self.assertFalse((archive_root / "receipts" / "operational-context").exists())
+
+    def test_session_handoff_checkpoint_binds_context_receipt_inventory_and_chat_review(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+
+            initial_code, initial_output = self.run_cli(
+                ["session-handoff-checkpoint", str(archive_root), "--dry-run", "--format", "json"]
+            )
+            initial = json.loads(initial_output)
+            self.assertEqual(initial_code, 0, initial_output)
+            self.assertEqual(initial["status"], "needs_durable_capture")
+            self.assertFalse(initial["ready_for_context_reset"])
+            self.assertEqual(
+                initial["operational_context_evidence"]["status"],
+                "present_without_matching_receipt",
+            )
+
+            candidate = archive_root / "workbench" / "operational-context.session-handoff.yml"
+            candidate.write_text(
+                (archive_root / "ops" / "operational-context.yml").read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            context_write = archive_services.operational_context(
+                archive_root,
+                record_path="workbench/operational-context.session-handoff.yml",
+                approve=True,
+                reviewed_by="person:test-reviewer",
+            )
+            self.assertTrue(context_write["ok"])
+
+            review_code, review_output = self.run_cli(
+                ["session-memory-checkpoint", str(archive_root), "--dry-run", "--format", "json"]
+            )
+            review = json.loads(review_output)
+            self.assertEqual(review_code, 0, review_output)
+            self.assertEqual(review["status"], "needs_conversation_review")
+            self.assertFalse(review["ready_for_context_reset"])
+            self.assertEqual(review["operational_context_evidence"]["status"], "receipt_verified")
+
+            before = self.snapshot_archive_files(archive_root)
+            plan_code, plan_output = self.run_cli(
+                [
+                    "context-reset-checkpoint",
+                    str(archive_root),
+                    "--confirm-chat-reviewed",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            plan = json.loads(plan_output)
+            self.assertEqual(plan_code, 0, plan_output)
+            self.assertEqual(plan["status"], "would_write")
+            self.assertRegex(plan["state_digest"], r"^sha256:[0-9a-f]{64}$")
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+
+            stale_plan_code, stale_plan_output = self.run_cli(
+                [
+                    "session-handoff-checkpoint",
+                    str(archive_root),
+                    "--confirm-chat-reviewed",
+                    "--expected-state-digest",
+                    "sha256:" + ("0" * 64),
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test-reviewer",
+                    "--format",
+                    "json",
+                ]
+            )
+            stale_plan = json.loads(stale_plan_output)
+            self.assertEqual(stale_plan_code, 1, stale_plan_output)
+            self.assertTrue(any("stale session handoff plan" in item for item in stale_plan["blockers"]))
+            self.assertFalse((archive_root / "receipts" / "session-handoffs").exists())
+
+            approve_code, approve_output = self.run_cli(
+                [
+                    "session-handoff-checkpoint",
+                    str(archive_root),
+                    "--confirm-chat-reviewed",
+                    "--expected-state-digest",
+                    plan["state_digest"],
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test-reviewer",
+                    "--format",
+                    "json",
+                ]
+            )
+            approved = json.loads(approve_output)
+            self.assertEqual(approve_code, 0, approve_output)
+            self.assertEqual(approved["status"], "written")
+            self.assertTrue(approved["ready_for_context_reset"])
+            self.assertEqual(approved["checkpoint_evidence"]["matching_receipt_count"], 1)
+            receipt_ref = approved["checkpoint_evidence"]["current_receipt_ref"]
+            receipt = json.loads((archive_root / receipt_ref).read_text(encoding="utf-8"))
+            self.assertTrue(receipt["confirmation"]["conversation_review_completed"])
+            self.assertFalse(receipt["closed_actions"]["chat_transcript_body_read_by_wom"])
+
+            current_code, current_output = self.run_cli(
+                ["session-handoff-checkpoint", str(archive_root), "--dry-run", "--format", "json"]
+            )
+            current = json.loads(current_output)
+            self.assertEqual(current_code, 0, current_output)
+            self.assertEqual(current["status"], "current_verified")
+            self.assertTrue(current["ready_for_context_reset"])
+            self.assertNotIn(str(archive_root), current_output)
+            self.assertNotIn("Keep the Fake Life Archive usable", current_output)
+
+            context_path = archive_root / "ops" / "operational-context.yml"
+            context_path.write_text(context_path.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+            stale_code, stale_output = self.run_cli(
+                ["session-handoff-checkpoint", str(archive_root), "--dry-run", "--format", "json"]
+            )
+            stale = json.loads(stale_output)
+            self.assertEqual(stale_code, 0, stale_output)
+            self.assertEqual(stale["status"], "needs_durable_capture")
+            self.assertFalse(stale["ready_for_context_reset"])
+            self.assertEqual(stale["checkpoint_evidence"]["stale_receipt_count"], 1)
+
+    def test_session_handoff_checkpoint_refuses_unreviewed_ai_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            candidate = archive_root / "workbench" / "operational-context.session-handoff.yml"
+            candidate.write_text(
+                (archive_root / "ops" / "operational-context.yml").read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            context_write = archive_services.operational_context(
+                archive_root,
+                record_path="workbench/operational-context.session-handoff.yml",
+                approve=True,
+                reviewed_by="person:test-reviewer",
+            )
+            self.assertTrue(context_write["ok"])
+            scratch = archive_root / ".wom-scratch" / "notes" / "unreviewed-session-note.md"
+            scratch.parent.mkdir(parents=True, exist_ok=True)
+            scratch.write_text("private body that must not be echoed", encoding="utf-8")
+
+            plan_code, plan_output = self.run_cli(
+                [
+                    "session-handoff-checkpoint",
+                    str(archive_root),
+                    "--confirm-chat-reviewed",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            plan = json.loads(plan_output)
+            self.assertEqual(plan_code, 0, plan_output)
+            self.assertEqual(plan["status"], "needs_durable_capture")
+            self.assertEqual(plan["ai_artifact_inventory_evidence"]["unreviewed_count"], 1)
+            self.assertNotIn("private body that must not be echoed", plan_output)
+
+            approve_code, approve_output = self.run_cli(
+                [
+                    "session-handoff-checkpoint",
+                    str(archive_root),
+                    "--confirm-chat-reviewed",
+                    "--expected-state-digest",
+                    plan["state_digest"],
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test-reviewer",
+                    "--format",
+                    "json",
+                ]
+            )
+            approved = json.loads(approve_output)
+            self.assertEqual(approve_code, 1, approve_output)
+            self.assertFalse(approved["ok"])
+            self.assertTrue(any("AI artifact candidate" in item for item in approved["blockers"]))
+            self.assertFalse((archive_root / "receipts" / "session-handoffs").exists())
 
     def test_ai_usage_plan_estimates_explicit_context_without_echoing_body(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

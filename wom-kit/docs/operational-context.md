@@ -59,6 +59,15 @@ archive operational-context <archive-root> --record workbench/operational-contex
 Approved writes replace `ops/operational-context.yml` and create a receipt under
 `receipts/operational-context/`.
 
+New writes use exact UTF-8 bytes, so `written_record_sha256` matches the actual
+on-disk record. Session handoff verification also recognizes older Windows
+receipts that hashed newline-normalized text, labels that legacy hash basis,
+and separately binds the current exact bytes.
+
+Before ending an AI session, use the
+[Session Handoff Checkpoint](session-handoff-checkpoint.md) to verify that this
+record, its receipt, and the AI artifact inventory still agree.
+
 ## Record Shape
 
 ```yaml

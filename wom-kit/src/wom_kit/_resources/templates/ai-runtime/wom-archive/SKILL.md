@@ -92,6 +92,11 @@ Do not stop after gathering context. After the relevant checks:
    real-use validation;
 5. leave a durable WOM record when the conversation contains a substantial
    decision, correction, implementation, or design change.
+6. before a context reset or session handoff, follow the receipt-backed close
+   procedure in
+   [reading-memory-and-revision.md](references/reading-memory-and-revision.md);
+   never claim that chat-only context was saved merely because the archive is
+   structurally healthy.
 
 ## Human-Facing Language
 

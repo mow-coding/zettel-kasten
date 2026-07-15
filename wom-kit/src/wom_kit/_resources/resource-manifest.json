@@ -1,6 +1,6 @@
 {
   "schema": "wom-kit/package-resource-manifest/v0.1",
-  "version": "0.3.249",
+  "version": "0.3.250",
   "source_of_truth": "wom-kit source resource directories",
   "file_count": 91,
   "files": [
@@ -265,14 +265,14 @@
     {
       "source": "templates/ai-runtime/wom-archive/references/operator-contract.md",
       "packaged": "templates/ai-runtime/wom-archive/references/operator-contract.md",
-      "bytes": 48642,
-      "sha256": "321bfb3545fd8c0b822245537fdb9168bac4563f4200714a4fe07b0ab98a2e2e"
+      "bytes": 49351,
+      "sha256": "feff1fc797ccd8a3993684ce1605a0f5122742df688f3b49bdd37acecaebc03b"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/reading-memory-and-revision.md",
       "packaged": "templates/ai-runtime/wom-archive/references/reading-memory-and-revision.md",
-      "bytes": 3642,
-      "sha256": "1c7157e494d41f91af4c8453ecc20195e3c254479a32dd5ccfdeba9cb89e9244"
+      "bytes": 4624,
+      "sha256": "6cd34bbad1fe8abeb6130a5d0bff73afd0ac14dad5421f18c171d247f21b9827"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/safety-results-and-human-language.md",
@@ -289,8 +289,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/SKILL.md",
       "packaged": "templates/ai-runtime/wom-archive/SKILL.md",
-      "bytes": 4892,
-      "sha256": "b4ad2fb7b9392b338706aa5797d800aa09cca300f4e6abdaec0e6aec2d10fad0"
+      "bytes": 5169,
+      "sha256": "ad1f6b4a8256b71e62825a3ac2679c8d2e990a0e83138859deadad2a459ff9fd"
     },
     {
       "source": "templates/company/AGENTS.md",
@@ -545,10 +545,10 @@
       "sha256": "d619dc26af3216498c8392dfe838b0fe752d4bad9da998a58ca682d668fc510c"
     },
     {
-      "source": "docs/releases/v0.3.249.md",
-      "packaged": "release-notes/v0.3.249.md",
-      "bytes": 2822,
-      "sha256": "0bc47ab251166fa860d59b51c7355d1f09af61e1b72670361fa8160188855086"
+      "source": "docs/releases/v0.3.250.md",
+      "packaged": "release-notes/v0.3.250.md",
+      "bytes": 2931,
+      "sha256": "6d278562a7872699f8aed51974208a12ed3b92ecaad3946ec1a476a10a2db996"
     }
   ]
 }

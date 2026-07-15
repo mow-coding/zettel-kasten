@@ -55,6 +55,8 @@ Commands:
           Print the compact first-read map for an AI operator entering an archive.
   operational-context
           Read or approve-update the AI-facing mission/state rehydration record.
+  session-handoff-checkpoint
+          Audit or record a bounded, receipt-backed AI session handoff checkpoint.
   prompt-boundary
           Preview prompt-injection boundary risk for untrusted text.
   github-repo
@@ -5011,6 +5013,33 @@ def command_operational_context(args: argparse.Namespace) -> int:
             reviewed_by=args.reviewed_by,
         )
     except archive_services.ArchiveServiceError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    print_json(result)
+    return 0 if result["ok"] else 1
+
+
+def command_session_handoff_checkpoint(args: argparse.Namespace) -> int:
+    if args.dry_run and args.approve:
+        print("Use either --dry-run or --approve, not both.", file=sys.stderr)
+        return 1
+    if not args.dry_run and not args.approve:
+        print("session-handoff-checkpoint requires --dry-run or --approve.", file=sys.stderr)
+        return 1
+    if args.approve and not args.reviewed_by:
+        print("session-handoff-checkpoint requires --reviewed-by when --approve is used.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.session_handoff_checkpoint(
+            Path(args.archive_root),
+            dry_run=args.dry_run,
+            approve=args.approve,
+            reviewed_by=args.reviewed_by,
+            confirm_chat_reviewed=args.confirm_chat_reviewed,
+            expected_state_digest=args.expected_state_digest,
+        )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
         print(str(exc), file=sys.stderr)
         return 1
 
@@ -17289,6 +17318,27 @@ def build_parser() -> argparse.ArgumentParser:
     operational_context.add_argument("--reviewed-by", help="Safe non-secret actor id required when --approve is used.")
     operational_context.add_argument("--format", choices=["json"], default="json", help="Output format.")
     operational_context.set_defaults(func=command_operational_context)
+
+    session_handoff_checkpoint = subcommands.add_parser(
+        "session-handoff-checkpoint",
+        aliases=["session-memory-checkpoint", "context-reset-checkpoint"],
+        help="Audit or record a receipt-backed AI session handoff checkpoint.",
+    )
+    session_handoff_checkpoint.add_argument("archive_root", help="Archive root to inspect or checkpoint.")
+    session_handoff_checkpoint.add_argument("--dry-run", action="store_true", help="Inspect current handoff evidence without writing.")
+    session_handoff_checkpoint.add_argument("--approve", action="store_true", help="Write one current-state handoff receipt after review.")
+    session_handoff_checkpoint.add_argument("--reviewed-by", help="Safe non-secret reviewer id required for approval.")
+    session_handoff_checkpoint.add_argument(
+        "--confirm-chat-reviewed",
+        action="store_true",
+        help="Confirm that important chat-only context was reviewed and moved to durable archive artifacts.",
+    )
+    session_handoff_checkpoint.add_argument(
+        "--expected-state-digest",
+        help="Exact state_digest from a fresh dry-run; required for approval.",
+    )
+    session_handoff_checkpoint.add_argument("--format", choices=["json"], default="json", help="Output format.")
+    session_handoff_checkpoint.set_defaults(func=command_session_handoff_checkpoint)
 
     ai_usage_plan = subcommands.add_parser(
         "ai-usage-plan",
