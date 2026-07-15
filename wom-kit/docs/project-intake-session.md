@@ -257,9 +257,11 @@ The public MOW Harness project lives at:
 https://github.com/mow-coding/mow-harness
 ```
 
-WOM-kit does not currently install or bundle MOW Harness. A user who wants it
-should follow the separate MOW Harness project. A later companion batch may add
-WOM-specific discovery docs or a helper, but that must remain opt-in.
+WOM-kit does not install or bundle MOW Harness. A user who wants it should
+follow the separate MOW Harness project and the local
+[compatibility boundary](mow-harness-compatibility.md). The integration remains
+opt-in; WOM reserves its local namespaces but does not duplicate its installer,
+grant write approval, or activate it.
 
 Use it as an operating room, not as the archive itself.
 
@@ -283,6 +285,6 @@ The agreed safe spine is:
 
 The parked onboarding guidance cleanup can resume after this spine is stable.
 
-An optional MOW Harness companion batch can also happen after the spine is
-stable. That future batch should improve discoverability or helper setup without
-making MOW depend on MOW Harness.
+The optional MOW Harness compatibility boundary improves discovery without
+making WOM depend on MOW Harness. Any future helper must continue to delegate
+installation and activation authority to the separate MOW project.

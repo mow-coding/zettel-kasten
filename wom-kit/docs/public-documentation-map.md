@@ -4,6 +4,7 @@ Status: public navigation baseline
 Date: 2026-06-02
 Updated: 2026-06-03
 Philosophy clarified: 2026-07-15
+Harness compatibility clarified: 2026-07-16
 
 This repository intentionally separates four kinds of public project records:
 
@@ -183,6 +184,7 @@ Onboarding and setup plans:
 - [Korean Agent Skill Host Install Guide](runtime-skill-install.ko.md)
 - [AI-Assisted Onboarding And Provider Setup](ai-assisted-onboarding-and-provider-setup.md)
 - [Project Intake Session](project-intake-session.md)
+- [Optional MOW Harness Compatibility](mow-harness-compatibility.md)
 - [Project Intake Cookbook](project-intake-cookbook.md)
 - [Credential Store Contract](credential-store-contract.md)
 - [Credential Ref Inventory And Onboarding](credential-ref-inventory-and-onboarding.md)

@@ -6,6 +6,25 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.253 - 2026-07-16
+
+Optional MOW Harness compatibility-boundary checkpoint. Documentation and
+regression coverage only; no archive migration, Harness write, or activation.
+
+- **WOM and MOW authority are explicit.** WOM owns archive records; the
+  optional MOW Harness owns only its local coordination and installer state.
+- **Local namespaces remain isolated.** Existing `/collab/` and
+  `/.mow-harness/` ignore and artifact-hygiene behavior is now linked from one
+  public compatibility guide and protected by focused regression checks.
+- **Preview and write stay separate.** External `status`, `doctor`, and
+  `--dry-run` are documented as read-only; `--yes` and activation remain
+  separate MOW approvals that WOM never grants implicitly.
+- **Availability claims stay honest.** Stable file-based Harness `v0.1.23` is
+  distinguished from the external CLI source alpha, which is not advertised as
+  an npm release or bundled by WOM.
+- **No duplicate installer is added.** WOM does not call the MOW CLI, parse its
+  receipts as archive knowledge, render Cockpit UI, or alter a local room.
+
 ## v0.3.252 - 2026-07-16
 
 Philosophy implementation traceability checkpoint. Documentation and
