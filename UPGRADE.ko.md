@@ -2,6 +2,67 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.3.256 Fail-Closed zet 무결성과 정직한 인덱스 상태 확인
+
+아카이브 스키마 마이그레이션은 필요하지 않습니다. 올바른 draft,
+canonical, archived, redacted zet은 계속 호환됩니다. 재생성 가능한 인덱스
+metadata 형식은 v0.2로 올라가므로, v0.3.255 인덱스는 다시 만들기 전까지
+현재 metadata fast path의 근거로 신뢰하지 않습니다.
+
+이번 릴리스는 외부 입력용 관대한 파서와 기존 아카이브 zet용
+엄격한 내용 경계를 분리합니다. 지원하는 frontmatter 구분자, YAML
+object, 인식 가능한 lifecycle status가 모두 있어야 아카이브 zet을
+읽을 수 있습니다. YAML, 구분자, 인코딩, 파일 접근, status가 잘못되면
+애매한 바이트를 본문으로 취급하지 않고 고정된 문제 코드만 반환합니다.
+검색, view, facet, related-zets도 읽을 수 있는 status만 허용하므로,
+재생성 전이라도 status가 없거나 알 수 없는 기존 DB 행은 조회에서
+제외됩니다.
+
+`archive index`는 읽을 수 없는 원본 zet가 있어도 안전한 인덱스를
+커밋할 수 있습니다. 해당 파일은 상대 경로와 stat 정보만 가진
+`unreadable` 검역 행이 되고 title, id, kind, body, frontmatter, hash,
+edge, facet은 조회 가능한 논리 내용으로 남지 않습니다. 명령은
+exit code 1, `state: completed_with_quarantined_zettels`,
+`index_rebuilt: true`, `index_complete: false`로 끝납니다. 이는
+안전하지만 미완성인 새 인덱스가 설치됐고 원본 수정이 남았다는
+뜻입니다. 완전한 성공도, 인덱스 rollback도 아닙니다.
+
+v0.2 인덱스 metadata는 같은 transaction 안에 `index_complete`와 검역
+개수를 저장합니다. mint/promotion 중복 승인 판단과 `validate --scope`는
+미완성 인덱스를 거부합니다. 이 두 흐름을 다시 쓰기 전에 보고된 원본을
+수정하고 완전한 재생성을 마쳐야 합니다. live 중복 fallback도 읽을 수
+없는 canonical 후보를 조용히 건너뛰지 않고 blocker로 처리합니다.
+
+`index_complete: true`여도 이 소비자들이 인덱스 행을 믿기 전에는 live
+path/stat snapshot을 함께 확인합니다. WOM-kit은 물리적 zet 전체를 열거하고
+저장된 file-size/mtime tuple을 비교합니다. zet이 추가·삭제·변경되면 mint는
+live 내용 검증으로 fallback합니다. 열거/stat이 불가능하거나 안전하지 않은
+symlink/junction/reparse 경계가 보이면, 같은 누락을 만들 수 있는 두 번째
+scan을 시도하지 않고 mint를 막습니다. facet scope validation은 어느 경우든
+재생성을 요구합니다.
+
+업그레이드 후에는:
+
+1. `archive index-health <archive-root> --dry-run --progress --format json`을
+   실행합니다.
+2. `live_zettel_frontmatter_unreadable_or_invalid`가 보이면 보고된
+   아카이브 상대 경로의 원본을 먼저 수정합니다. 재생성으로 원본
+   zet의 형식 문제를 고칠 수는 없습니다.
+3. health가 여전히 missing 또는 stale을 보고할 때만 `archive index`를
+   명시적으로 실행하고 `ok`, `index_complete`, process exit code를 함께
+   확인합니다.
+4. 새 `index-health`를 실행해 `index_state: current`이고 live 검사
+   문제가 없을 때만 인덱스가 완전하다고 판단합니다.
+
+검역은 논리/API 내용을 안전하게 만드는 것이지 SQLite free page, WAL,
+백업, snapshot, 파일시스템, 원본 zet에서 바이트를 복구 불가능하게
+삭제했다는 뜻은 아닙니다.
+
+이번 릴리스는 모든 승인 기반 이력 작업의 검증 순서까지 수정했다고
+주장하지 않습니다. revision/restore, retire-reconcile, abstract-backfill,
+target-workpack은 v0.3.257에서 이어서 다룹니다. 기본 S3-compatible
+전송의 bounded-memory 개선은 별도 v0.3.258 범위입니다.
+
 ## v0.3.255 충돌 안전 인덱스 재생성과 지속 가능한 결과 저장
 
 아카이브 마이그레이션은 필요하지 않습니다. 기존 zet, objet, manifest,

@@ -1,8 +1,9 @@
 # Index Health
 
 Status: v0.3.91 read-only generated index drift check; v0.3.255 adds opt-in
-progress/result capture and a crash-safe rebuild procedure
-Date: 2026-06-17; updated 2026-07-16
+progress/result capture and a crash-safe rebuild procedure; v0.3.256 adds
+fail-closed frontmatter inspection and physical-path accounting
+Date: 2026-06-17; updated 2026-07-17
 
 `index-health` checks whether the generated local SQLite index still matches
 the live zettel files.
@@ -90,7 +91,9 @@ every attempt.
 
 The command compares:
 
-- live zettel archive-relative paths,
+- every safely enumerated live zettel archive-relative path, including a path
+  whose frontmatter is unreadable or invalid,
+- live paths with safely readable lifecycle metadata,
 - indexed zettel paths,
 - live and indexed `zettel_id`, `status`, and `kind`,
 - zettel files modified after `db/archive-index.sqlite`.
@@ -101,8 +104,17 @@ It can report:
 - `index_has_paths_missing_from_live_zettels`,
 - `indexed_zettel_metadata_differs_from_live_frontmatter`,
 - `live_zettel_modified_after_index`,
+- `live_zettel_frontmatter_unreadable_or_invalid`,
 - `archive_index_schema_incomplete`,
 - `archive_index_missing`.
+
+Since v0.3.256, `summary.live_zettel_count` is the physical-path count rather
+than only the number of paths whose YAML happened to parse. Separate
+readable-metadata and issue counters plus bounded archive-relative samples make
+an invalid delimiter, YAML object, lifecycle status, UTF-8 stream, or file read
+visible. Fixed issue codes are used instead of raw parser/I/O messages. A new
+unreadable file therefore makes health stale/incomplete; it can no longer be
+silently absent from both sides of a false `current` comparison.
 
 `summary.index_schema_complete` distinguishes a usable `zettels` table from a
 SQLite file left behind when the very first index build stopped before schema
@@ -136,20 +148,27 @@ It does not:
 
 It returns only archive-relative sample paths and basic drift counters.
 
-For a well-formed zet, live inspection stops at the closing frontmatter
-delimiter and does not read the body. A malformed file with no opening or
-closing delimiter can require body bytes to determine that the boundary is
-invalid; in that case `privacy_guards.zettel_body_text_read` is `true`. Those
-bytes are never echoed. Invalid YAML becomes a fixed handled error rather than
-publishing the parser's raw path or content excerpt.
+For a well-formed zet, live inspection accepts only the exact supported opening
+and closing frontmatter delimiter grammar, a YAML object, and lifecycle status
+`draft`, `canonical`, `archived`, or `redacted`. It stops at the closing
+delimiter and does not read the body. Invalid delimiter/YAML/object/status,
+UTF-8, or I/O states expose no parsed frontmatter values or body. A malformed
+file with no valid closing delimiter can require body bytes to prove that the
+boundary is invalid; in that case `privacy_guards.zettel_body_text_read` is
+honestly `true`. Those bytes and raw exception details are never echoed.
 
 ## Official Recovery Procedure
 
 Use a new diagnostic filename at each step:
 
 1. Run `index-health --dry-run --progress --output ... --format json`.
-2. If the completed result has exit code 0 and `index_state: current`, stop.
-3. Only if health reports a missing or stale index, run:
+2. If the completed result has exit code 0, `index_state: current`, and zero
+   live frontmatter inspection issues, stop.
+3. If health reports `live_zettel_frontmatter_unreadable_or_invalid`, repair
+   the bounded archive-relative source paths first. Rebuilding cannot repair a
+   malformed source zet.
+4. Only after source repair, if health still reports a missing or stale index,
+   run:
 
    ```powershell
    archive index <archive-root> `
@@ -158,8 +177,10 @@ Use a new diagnostic filename at each step:
      --format json
    ```
 
-4. Judge the rebuild from its result and `cli_execution.exit_code`.
-5. Run `index-health` again with another new output filename. Only that final
+5. Judge the rebuild from `ok`, `state`, `index_rebuilt`, `index_complete`, and
+   `cli_execution.exit_code` together. A completed quarantining rebuild is
+   deliberately nonzero, safe, and incomplete.
+6. Run `index-health` again with another new output filename. Only that final
    health result confirms currentness within this command's scope.
 
 If an index output file is absent after interruption, do not immediately assume
@@ -184,6 +205,32 @@ inserts, and metadata updates in one explicit SQLite transaction beginning with
 `BEGIN IMMEDIATE`. Failure before the final commit rolls back the whole rebuild
 and preserves the previously committed index. This prevents a delete-only
 intermediate state from becoming the current generated index.
+
+Since v0.3.256, one unreadable or invalid zettel does not roll back and preserve
+an older logically unsafe row. The rebuild commits a path/stat-only row with
+status `unreadable`, clears id/title/kind/body/frontmatter/hash content, and
+creates no edge or facet rows for that file. The result is
+`state: completed_with_quarantined_zettels`, `index_rebuilt: true`,
+`index_complete: false`, `ok: false`, with process exit code 1 and fixed
+path/code samples. This is a safely installed but incomplete generated index;
+source repair is still required. It is not a complete success and not a
+transaction rollback.
+
+The same rebuild transaction writes generated-index metadata v0.2 with
+`index_complete` and `quarantined_zettel_count`. Mint/promotion duplicate
+approval checks and facet-scoped validation reject `index_complete: false`;
+only source repair followed by a complete rebuild can restore that approval
+boundary. A pre-v0.3.256 index has no current completeness evidence and should
+be rebuilt after health is clean.
+
+The quarantine boundary sanitizes WOM logical/API query results. It does not
+claim forensic secure deletion from SQLite free pages, WAL files, filesystem
+snapshots, backups, storage media, or the still-present source zettel.
+
+This v0.3.256 document describes the core read/index/query/health boundary.
+Revision/restore, retire-reconcile, abstract-backfill, and target-workpack
+fingerprint ordering remain the explicit v0.3.257 follow-up. Bounded-memory
+default S3-compatible transport remains the separate v0.3.258 release scope.
 
 The basoon v0.3.254 incident demonstrated why both boundaries matter. The first
 post-mint commands lost operator-visible output. A later official read-only

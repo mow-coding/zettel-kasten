@@ -52,8 +52,11 @@ except ImportError:  # pragma: no cover - exercised only when dependency is abse
 
 FRONTMATTER_RE = re.compile(r"\A---[ \t]*\r?\n(.*?)\r?\n---[ \t]*\r?\n", re.DOTALL)
 VALID_ZETTEL_FOLDERS = ("zettels/", "inbox/")
+ZETTEL_CONTENT_STATUSES = frozenset({"draft", "canonical", "archived", "redacted"})
+ZETTEL_QUERYABLE_STATUSES = ("draft", "canonical", "archived")
+ZETTEL_QUARANTINED_STATUS = "unreadable"
 INDEX_RELATIVE_PATH = "db/archive-index.sqlite"
-INDEX_METADATA_SCHEMA = "wom-kit/archive-index-metadata/v0.1"
+INDEX_METADATA_SCHEMA = "wom-kit/archive-index-metadata/v0.2"
 ARCHIVE_INDEX_BUSY_TIMEOUT_MS = 30_000
 DERIVED_TEXT_MANIFEST_RELATIVE_PATH = "objects/manifests/derived-text.jsonl"
 DERIVED_TEXT_STORE_PREFIX = "objects/derived-text/sha256"
@@ -3056,6 +3059,108 @@ def split_zettel_text(text: str) -> tuple[dict[str, Any], str]:
     return frontmatter, body
 
 
+def blocked_zettel_content_boundary(reason: str) -> dict[str, Any]:
+    """Return a content-free result for an untrusted zettel boundary.
+
+    This is deliberately separate from ``split_zettel_text``.  The tolerant
+    parser remains useful for import/capture workflows, while any surface that
+    may expose an existing archive zettel must fail closed when its frontmatter
+    boundary, YAML, shape, or lifecycle status cannot be trusted.
+    """
+    return {
+        "state": "blocked",
+        "reason": reason,
+        "frontmatter": {},
+        "body": "",
+    }
+
+
+def redacted_zettel_safe_frontmatter(frontmatter: dict[str, Any]) -> dict[str, str]:
+    """Return only validated scalar fields from the public redaction envelope."""
+    safe_frontmatter: dict[str, str] = {"status": "redacted"}
+    zettel_id = frontmatter.get("id")
+    if isinstance(zettel_id, str) and ZETTEL_EDGE_ZETTEL_ID_RE.fullmatch(zettel_id):
+        safe_frontmatter["id"] = zettel_id
+    kind = frontmatter.get("kind")
+    if isinstance(kind, str) and SOURCE_INTAKE_ARTIFACT_KIND_RE.fullmatch(kind):
+        safe_frontmatter["kind"] = kind
+    for key in ("created_at", "updated_at"):
+        value = frontmatter.get(key)
+        if isinstance(value, str) and len(value) <= 64 and valid_iso_timestamp(value):
+            safe_frontmatter[key] = value
+    return safe_frontmatter
+
+
+def parse_zettel_content_boundary(text: str) -> dict[str, Any]:
+    """Parse a zettel for a body-exposing boundary without fail-open fallback."""
+    if text.startswith("\ufeff"):
+        text = text[1:]
+    match = FRONTMATTER_RE.match(text)
+    if match is None:
+        return blocked_zettel_content_boundary("frontmatter_boundary_invalid")
+    try:
+        loaded = load_yaml(match.group(1))
+    except Exception:
+        return blocked_zettel_content_boundary("frontmatter_yaml_invalid")
+    if not isinstance(loaded, dict):
+        return blocked_zettel_content_boundary("frontmatter_not_object")
+    frontmatter = json_safe(loaded)
+    status = frontmatter.get("status")
+    if not isinstance(status, str) or status not in ZETTEL_CONTENT_STATUSES:
+        return blocked_zettel_content_boundary("frontmatter_status_invalid")
+    body = text[match.end() :].lstrip()
+    if status == "redacted":
+        # Only the pre-existing, explicitly public redaction envelope crosses
+        # this boundary.  The source body and all other frontmatter stay out.
+        safe_frontmatter = redacted_zettel_safe_frontmatter(frontmatter)
+        return {
+            "state": "redacted",
+            "reason": None,
+            "frontmatter": safe_frontmatter,
+            "body": "",
+        }
+    return {
+        "state": "readable",
+        "reason": None,
+        "frontmatter": frontmatter,
+        "body": body,
+    }
+
+
+def read_zettel_content_boundary(path: Path) -> dict[str, Any]:
+    """Read a zettel into the fail-closed content boundary without raw errors."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except UnicodeError:
+        return blocked_zettel_content_boundary("frontmatter_unicode_error")
+    except OSError:
+        return blocked_zettel_content_boundary("frontmatter_io_error")
+    return parse_zettel_content_boundary(text)
+
+
+def require_readable_zettel_text(text: str) -> tuple[dict[str, Any], str]:
+    """Unwrap a validated non-redacted zettel text or raise a static error."""
+    boundary = parse_zettel_content_boundary(text)
+    if boundary["state"] == "redacted":
+        raise ArchiveServiceError("Redacted zettel content is unavailable for this operation.")
+    if boundary["state"] == "blocked":
+        raise ArchiveServiceError(
+            "Zettel content is unavailable because its frontmatter could not be validated."
+        )
+    return boundary["frontmatter"], boundary["body"]
+
+
+def require_readable_zettel_content(path: Path) -> tuple[dict[str, Any], str]:
+    """Return validated non-redacted zettel content or raise a static error."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        raise ArchiveServiceError(
+            "Zettel content is unavailable because it could not be read safely."
+        ) from None
+    return require_readable_zettel_text(text)
+
+
 def require_existing_archive_root(archive_root: Path | str) -> Path:
     root = Path(archive_root).resolve()
     if not root.is_dir():
@@ -3170,6 +3275,7 @@ def archive_status_board(
         "draft": 0,
         "archived": 0,
         "redacted": 0,
+        "unreadable_zettel": 0,
         "other_status": 0,
         "inbox_draft": 0,
         "canonical_folder": 0,
@@ -3209,18 +3315,55 @@ def archive_status_board(
         if not folder_root.is_dir():
             continue
         for path in safe_archive_glob(folder_root, "*.md", root, recursive=True):
-            try:
-                text = path.read_text(encoding="utf-8")
-                frontmatter, body = split_zettel_text(text)
-            except OSError:
+            boundary = read_zettel_content_boundary(path)
+            if boundary["state"] == "blocked":
+                counts["unreadable_zettel"] += 1
+                counts["other_status"] += 1
+                item = {
+                    "path": archive_relative_path(path, root),
+                    "zettel_id": None,
+                    "folder": folder,
+                    "status": ZETTEL_QUARANTINED_STATUS,
+                    "title_present": False,
+                    "document_type": None,
+                    "document_type_present": False,
+                    "audience": None,
+                    "audience_present": False,
+                    "redacted": False,
+                    "frontmatter_readable": False,
+                    "content_issue_code": boundary["reason"],
+                    "abstract_status": "frontmatter_unreadable",
+                }
+                if folder == "zettels":
+                    counts["canonical_folder"] += 1
+                    counts["first_read_unreadable"] += 1
+                    counts["first_read_attention"] += 1
+                    append_limited(boards["canonical"], item, max_items)
+                    append_limited(boards["first_read_attention"], item, max_items)
+                else:
+                    counts["inbox_draft"] += 1
                 continue
-            frontmatter = json_safe(frontmatter)
+            frontmatter = boundary["frontmatter"]
+            body = boundary["body"]
             item = archive_status_item(path, root, frontmatter, folder=folder, expected_status=expected_status)
             status = item["status"]
             if status in {"canonical", "draft", "archived", "redacted"}:
                 counts[status] += 1
             else:
                 counts["other_status"] += 1
+
+            if boundary["state"] == "redacted":
+                item["abstract_status"] = "redacted"
+                if folder == "zettels":
+                    counts["canonical_folder"] += 1
+                    counts["first_read_redacted"] += 1
+                    append_limited(boards["canonical"], item, max_items)
+                else:
+                    counts["inbox_draft"] += 1
+                # The small existence envelope above is intentional. Do not
+                # derive lifecycle, quality, link, or completeness findings
+                # from redacted content.
+                continue
 
             if folder == "zettels":
                 counts["canonical_folder"] += 1
@@ -3478,6 +3621,8 @@ def derived_artifact_staleness_check(
         "unknown_sync_time": 0,
         "missing_source_zettels": 0,
         "unresolved_source_zettels": 0,
+        "unreadable_zettels": 0,
+        "redacted_zettels_excluded": 0,
     }
     boards: dict[str, list[dict[str, Any]]] = {
         "stale_artifacts": [],
@@ -3489,7 +3634,14 @@ def derived_artifact_staleness_check(
     zettel_frontmatter_by_path: dict[Path, dict[str, Any]] = {}
     zettel_path_index: dict[str, Path] = {}
     for candidate in iter_zettel_paths(root):
-        frontmatter = read_zettel_frontmatter_only(candidate)
+        inspection = inspect_zettel_frontmatter_boundary(candidate)
+        if not inspection["metadata_readable"]:
+            counts["unreadable_zettels"] += 1
+            continue
+        frontmatter = inspection["frontmatter"]
+        if frontmatter.get("status") == "redacted":
+            counts["redacted_zettels_excluded"] += 1
+            continue
         zettel_frontmatter_by_path[candidate] = frontmatter
         zettel_id = str(frontmatter.get("id") or "").strip()
         if zettel_id and zettel_id not in zettel_path_index:
@@ -3543,7 +3695,15 @@ def derived_artifact_staleness_check(
                 except ArchiveServiceError:
                     unresolved_source_count += 1
                     continue
-                source_frontmatter = read_zettel_frontmatter_only(source_path)
+                source_inspection = inspect_zettel_frontmatter_boundary(source_path)
+                if (
+                    not source_inspection["metadata_readable"]
+                    or source_inspection["frontmatter"].get("status")
+                    not in ZETTEL_QUERYABLE_STATUSES
+                ):
+                    unresolved_source_count += 1
+                    continue
+                source_frontmatter = source_inspection["frontmatter"]
                 resolved_sources.append(
                     (
                         archive_relative_path(source_path, root),
@@ -5124,9 +5284,27 @@ def operator_envelope_classes(
 
 
 def zettel_summary(path: Path, archive_root: Path, expected_status: str) -> dict[str, Any]:
-    frontmatter, _body = split_zettel_text(path.read_text(encoding="utf-8"))
-    frontmatter = json_safe(frontmatter)
-    if frontmatter.get("status") == "redacted":
+    boundary = read_zettel_content_boundary(path)
+    if boundary["state"] == "blocked":
+        # The path is already part of the caller-visible archive listing, but
+        # no untrusted frontmatter or body value may cross this boundary.
+        return {
+            "path": archive_relative_path(path, archive_root),
+            "id": None,
+            "title": None,
+            "status": ZETTEL_QUARANTINED_STATUS,
+            "kind": None,
+            "created_at": None,
+            "updated_at": None,
+            "facets": {},
+            "visibility": {},
+            "redacted": False,
+            "frontmatter_readable": False,
+            "content_available": False,
+            "content_issue_code": boundary["reason"],
+        }
+    frontmatter = boundary["frontmatter"]
+    if boundary["state"] == "redacted":
         # Privacy: a redacted zettel still appears in listings (so its existence is known), but its
         # content-bearing fields (title/kind/facets/visibility) are suppressed.
         return {
@@ -5364,11 +5542,21 @@ def read_zettel(
         raise ArchiveServiceError("body paging requires section body, document, or all.")
 
     path = resolve_zettel_path(root, zettel_id=zettel_id, relative_path=relative_path)
-    raw_bytes = path.read_bytes()
-    text = raw_bytes.decode("utf-8")
-    frontmatter, body = split_zettel_text(text)
-    frontmatter = json_safe(frontmatter)
-    if frontmatter.get("status") == "redacted":
+    try:
+        raw_bytes = path.read_bytes()
+        text = raw_bytes.decode("utf-8")
+    except (OSError, UnicodeError):
+        raise ArchiveServiceError(
+            "Zettel content is unavailable because it could not be read safely."
+        ) from None
+    boundary = parse_zettel_content_boundary(text)
+    if boundary["state"] == "blocked":
+        raise ArchiveServiceError(
+            "Zettel content is unavailable because its frontmatter could not be validated."
+        )
+    frontmatter = boundary["frontmatter"]
+    body = boundary["body"]
+    if boundary["state"] == "redacted":
         # Privacy: a redacted zettel's body and frontmatter are suppressed on read; only its id and
         # redacted status are returned so callers can see it exists without exposing the content.
         overview, overview_warnings = zettel_first_read_summary(frontmatter, "", redacted=True)
@@ -5486,12 +5674,13 @@ def zet_catalog_abstract(
 
 def zet_catalog_item(path: Path, root: Path, expected_status: str) -> dict[str, Any]:
     relative = archive_relative_path(path, root)
-    frontmatter = read_zettel_frontmatter_only(path)
-    if not frontmatter:
+    inspection = inspect_zettel_frontmatter_boundary(path)
+    frontmatter = inspection["frontmatter"]
+    if not inspection["metadata_readable"]:
         return {
             "path": relative,
-            "id": path.stem,
-            "status": expected_status,
+            "id": None,
+            "status": ZETTEL_QUARANTINED_STATUS,
             "title": None,
             "kind": None,
             "created_at": None,
@@ -5513,17 +5702,21 @@ def zet_catalog_item(path: Path, root: Path, expected_status: str) -> dict[str, 
             "edges_complete": True,
             "redacted": False,
             "frontmatter_readable": False,
-            "body_read": False,
-            "warnings": ["Zet frontmatter could not be read."],
+            "body_read": bool(inspection.get("body_text_read")),
+            "warnings": [
+                "Zet frontmatter could not be validated.",
+                str(inspection.get("issue_code") or "frontmatter_unreadable"),
+            ],
         }
 
-    safe_frontmatter = json_safe(frontmatter)
-    raw_status = str(safe_frontmatter.get("status") or expected_status)
+    safe_frontmatter = frontmatter
+    raw_status = str(safe_frontmatter.get("status"))
     redacted = raw_status == "redacted"
     if redacted:
+        safe_frontmatter = redacted_zettel_safe_frontmatter(frontmatter)
         return {
             "path": relative,
-            "id": safe_frontmatter.get("id") or path.stem,
+            "id": safe_frontmatter.get("id"),
             "status": "redacted",
             "title": None,
             "kind": None,
@@ -6272,7 +6465,7 @@ def read_bounded_abstract_freshness_frontmatter(
 
     with path.open("rb") as handle:
         first = handle.readline()
-        if first.removeprefix(b"\xef\xbb\xbf").strip() != b"---":
+        if re.fullmatch(rb"---[ \t]*\r?\n", first.removeprefix(b"\xef\xbb\xbf")) is None:
             raise ValueError("Canonical zet frontmatter is unavailable.")
         frontmatter_lines: list[bytes] = []
         bytes_read = len(first)
@@ -6283,7 +6476,7 @@ def read_bounded_abstract_freshness_frontmatter(
             bytes_read += len(line)
             if bytes_read > max_file_bytes:
                 raise OSError("Canonical zet frontmatter exceeds the bounded read limit.")
-            if line.strip() == b"---":
+            if re.fullmatch(rb"---[ \t]*\r?\n", line) is not None:
                 break
             frontmatter_lines.append(line)
 
@@ -6296,12 +6489,14 @@ def read_bounded_abstract_freshness_frontmatter(
         raise ValueError("Canonical zet frontmatter is unreadable.") from exc
     if not isinstance(frontmatter, dict):
         raise ValueError("Canonical zet frontmatter must be an object.")
+    if frontmatter.get("status") not in {"canonical", "redacted"}:
+        raise ValueError("Canonical zet frontmatter status is invalid.")
     return frontmatter
 
 
 def parse_abstract_evidence_zettel_bytes(data: bytes) -> tuple[dict[str, Any], str] | None:
     try:
-        return split_zettel_text(decode_utf8_with_universal_newlines(data))
+        return require_readable_zettel_text(decode_utf8_with_universal_newlines(data))
     except Exception:
         return None
 
@@ -6822,7 +7017,7 @@ def abstract_freshness(
                             abstract_sha256 = complete_abstract_sha256
                             body_sha256_candidates.add(canonical_body_sha256(body))
                             try:
-                                raw_frontmatter, raw_body = split_zettel_text(
+                                raw_frontmatter, raw_body = require_readable_zettel_text(
                                     raw_bytes.decode("utf-8")
                                 )
                                 if raw_frontmatter:
@@ -15718,14 +15913,44 @@ def zettel_objet_links(
         }
 
     path = resolve_zettel_path(root, zettel_id=zettel_id, relative_path=relative_path)
-    text = path.read_text(encoding="utf-8")
-    frontmatter, body = split_zettel_text(text)
-    safe_frontmatter = json_safe(frontmatter)
+    boundary = read_zettel_content_boundary(path)
+    safe_frontmatter = boundary["frontmatter"]
+    body = boundary["body"]
     zettel_summary_value = {
         "path": archive_relative_path(path, root),
-        "redacted": safe_frontmatter.get("status") == "redacted",
+        "redacted": boundary["state"] == "redacted",
     }
-    if safe_frontmatter.get("status") == "redacted":
+    if boundary["state"] == "blocked":
+        blockers.append("zettel_content_unavailable")
+        zettel_summary_value["frontmatter_readable"] = False
+        warnings.append(str(boundary["reason"]))
+        return {
+            "ok": False,
+            "dry_run": True,
+            "lifecycle_action": "zettel_objet_links",
+            "archive_id": archive_id,
+            "zettel": zettel_summary_value,
+            "count": 0,
+            "links": [],
+            "truncated": False,
+            "privacy_guards": {
+                "body_text_echoed": False,
+                "frontmatter_values_echoed": False,
+                "absolute_local_paths_echoed": False,
+                "provider_urls_echoed": False,
+                "provider_api_called": False,
+                "presigned_url_created": False,
+                "download_performed": False,
+                "object_file_bytes_read": False,
+                "object_file_hash_verified_now": False,
+                "writes": False,
+            },
+            "would_change": [],
+            "next_safe_actions": ["Repair the zettel frontmatter before rendering objet links."],
+            "blockers": unique_preserve_order(blockers),
+            "warnings": unique_preserve_order(warnings),
+        }
+    if boundary["state"] == "redacted":
         blockers.append("zettel_is_redacted")
         return {
             "ok": False,
@@ -16144,16 +16369,46 @@ def notion_objet_link_plan(
         }
 
     path = resolve_zettel_path(root, zettel_id=zettel_id, relative_path=relative_path)
-    text = path.read_text(encoding="utf-8")
-    frontmatter, body = split_zettel_text(text)
-    safe_frontmatter = json_safe(frontmatter)
+    boundary = read_zettel_content_boundary(path)
+    safe_frontmatter = boundary["frontmatter"]
+    body = boundary["body"]
     zettel_summary_value = {
         "path": archive_relative_path(path, root),
-        "redacted": safe_frontmatter.get("status") == "redacted",
+        "redacted": boundary["state"] == "redacted",
     }
     if isinstance(safe_frontmatter.get("id"), str):
         zettel_summary_value["id"] = safe_frontmatter.get("id")
-    if safe_frontmatter.get("status") == "redacted":
+    if boundary["state"] == "blocked":
+        blockers.append("zettel_content_unavailable")
+        zettel_summary_value["frontmatter_readable"] = False
+        warnings.append(str(boundary["reason"]))
+        return {
+            "ok": False,
+            "dry_run": True,
+            "lifecycle_action": "notion_objet_link_plan",
+            "archive_id": archive_id,
+            "zettel": zettel_summary_value,
+            "locator_count": 0,
+            "locators": [],
+            "manifest_summary": {"manifest_path": "objects/manifests/files.jsonl", "record_count": 0, "notion_labeled_record_count": 0},
+            "truncated": False,
+            "privacy_guards": {
+                "provider_urls_echoed": False,
+                "zettel_body_text_echoed": False,
+                "frontmatter_values_echoed": False,
+                "absolute_local_paths_echoed": False,
+                "provider_api_called": False,
+                "presigned_url_created": False,
+                "download_performed": False,
+                "object_file_bytes_read": False,
+                "writes": False,
+            },
+            "would_change": [],
+            "next_safe_actions": ["Repair the zettel frontmatter before planning Notion locator links."],
+            "blockers": unique_preserve_order(blockers),
+            "warnings": unique_preserve_order(warnings),
+        }
+    if boundary["state"] == "redacted":
         blockers.append("zettel_is_redacted")
         return {
             "ok": False,
@@ -16304,6 +16559,7 @@ def notion_objet_link_index(
 
     scanned_non_redacted = 0
     redacted_zettel_count = 0
+    unreadable_zettel_count = 0
     zettels_with_locator_count = 0
     locator_occurrence_count = 0
     zettel_locator_row_count = 0
@@ -16317,10 +16573,15 @@ def notion_objet_link_index(
         zettel_paths = []
 
     for path in zettel_paths:
-        text = path.read_text(encoding="utf-8")
-        frontmatter, body = split_zettel_text(text)
-        safe_frontmatter = json_safe(frontmatter)
-        if safe_frontmatter.get("status") == "redacted":
+        boundary = read_zettel_content_boundary(path)
+        if boundary["state"] == "blocked":
+            unreadable_zettel_count += 1
+            blockers.append("one_or_more_zettels_have_unreadable_frontmatter")
+            warnings.append(str(boundary["reason"]))
+            continue
+        safe_frontmatter = boundary["frontmatter"]
+        body = boundary["body"]
+        if boundary["state"] == "redacted":
             redacted_zettel_count += 1
             continue
         scanned_non_redacted += 1
@@ -16393,6 +16654,8 @@ def notion_objet_link_index(
 
     unmatched_zettel_locator_row_count = max(0, zettel_locator_row_count - matched_zettel_locator_row_count)
     next_safe_actions: list[str] = []
+    if unreadable_zettel_count:
+        next_safe_actions.append("Repair unreadable zettel frontmatter before relying on this locator index.")
     if blockers:
         next_safe_actions.append("Fix blockers before indexing Notion locator to objet link candidates.")
     elif matched_zettel_locator_row_count:
@@ -16414,6 +16677,7 @@ def notion_objet_link_index(
             "total_zettel_count": len(iter_zettel_paths(root)),
             "scanned_non_redacted_zettel_count": scanned_non_redacted,
             "redacted_zettel_count": redacted_zettel_count,
+            "unreadable_zettel_count": unreadable_zettel_count,
             "zettels_with_locator_count": zettels_with_locator_count,
             "locator_occurrence_count": locator_occurrence_count,
             "zettel_locator_row_count": zettel_locator_row_count,
@@ -16648,6 +16912,87 @@ def notion_source_map_zettel_ref_from_record(root: Path, record: dict[str, Any])
             zettel_id = zettel_id or nested_id
             zettel_path = zettel_path or nested_path
     return zettel_id, zettel_path
+
+
+def inspect_zettel_frontmatter_boundary(path: Path) -> dict[str, Any]:
+    """Inspect only a zettel's frontmatter prefix with indexer-equivalent grammar."""
+
+    def delimiter_line(value: str) -> bool:
+        # Text mode normalizes CRLF to LF.  Requiring the newline keeps an EOF
+        # delimiter from being accepted when FRONTMATTER_RE would reject it.
+        return re.fullmatch(r"---[ \t]*\n", value) is not None
+
+    body_text_read = False
+    try:
+        with path.open("r", encoding="utf-8-sig") as handle:
+            first = handle.readline()
+            if not delimiter_line(first):
+                return {
+                    "frontmatter": {},
+                    "metadata_readable": False,
+                    "issue_code": "frontmatter_boundary_invalid",
+                    "body_text_read": bool(first),
+                }
+            lines: list[str] = []
+            terminated = False
+            for line in handle:
+                if delimiter_line(line):
+                    terminated = True
+                    break
+                lines.append(line)
+            if not terminated:
+                return {
+                    "frontmatter": {},
+                    "metadata_readable": False,
+                    "issue_code": "frontmatter_boundary_invalid",
+                    "body_text_read": True,
+                }
+    except UnicodeError:
+        return {
+            "frontmatter": {},
+            "metadata_readable": False,
+            "issue_code": "frontmatter_unicode_error",
+            "body_text_read": True,
+        }
+    except OSError:
+        return {
+            "frontmatter": {},
+            "metadata_readable": False,
+            "issue_code": "frontmatter_io_error",
+            "body_text_read": True,
+        }
+
+    try:
+        loaded = load_yaml("".join(lines))
+    except Exception:
+        return {
+            "frontmatter": {},
+            "metadata_readable": False,
+            "issue_code": "frontmatter_yaml_invalid",
+            "body_text_read": False,
+        }
+    if not isinstance(loaded, dict):
+        return {
+            "frontmatter": {},
+            "metadata_readable": False,
+            "issue_code": "frontmatter_not_object",
+            "body_text_read": False,
+        }
+    frontmatter = json_safe(loaded)
+    status = frontmatter.get("status")
+    if not isinstance(status, str) or status not in ZETTEL_CONTENT_STATUSES:
+        return {
+            "frontmatter": {},
+            "metadata_readable": False,
+            "issue_code": "frontmatter_status_invalid",
+            "body_text_read": False,
+        }
+    return {
+        "frontmatter": frontmatter,
+        "metadata_readable": True,
+        "issue_code": None,
+        "body_text_read": False,
+    }
 
 
 def read_zettel_frontmatter_only_with_observation(
@@ -17050,8 +17395,17 @@ def notion_objet_source_map_link_plan(
 
     zettel_entries: dict[str, dict[str, Any]] = {}
     redacted_zettel_count = 0
+    unreadable_zettel_count = 0
+    zettel_body_text_read = False
     for path in iter_zettel_paths(root):
-        frontmatter = read_zettel_frontmatter_only(path)
+        inspection = inspect_zettel_frontmatter_boundary(path)
+        zettel_body_text_read = (
+            zettel_body_text_read or bool(inspection["body_text_read"])
+        )
+        if not inspection["metadata_readable"]:
+            unreadable_zettel_count += 1
+            continue
+        frontmatter = inspection["frontmatter"]
         if frontmatter.get("status") == "redacted":
             redacted_zettel_count += 1
             continue
@@ -17231,6 +17585,7 @@ def notion_objet_source_map_link_plan(
             "manifest_record_count": len(manifest_records),
             "zettel_source_count": len(zettel_entries),
             "redacted_zettel_count": redacted_zettel_count,
+            "unreadable_zettel_count": unreadable_zettel_count,
             "object_ref_source_count": len(object_entries),
             "records_with_page_ref": records_with_page_ref,
             "records_with_file_ref": records_with_file_ref,
@@ -17251,7 +17606,7 @@ def notion_objet_source_map_link_plan(
             "provider_urls_echoed": False,
             "provider_locator_text_echoed": False,
             "page_titles_echoed": False,
-            "zettel_body_text_read": False,
+            "zettel_body_text_read": zettel_body_text_read,
             "zettel_body_text_echoed": False,
             "frontmatter_values_echoed": False,
             "absolute_local_paths_echoed": False,
@@ -17397,14 +17752,25 @@ def notion_objet_import_clue_audit(
 
     zettels: list[dict[str, Any]] = []
     redacted_zettel_count = 0
+    unreadable_zettel_count = 0
     scanned_non_redacted_count = 0
+    zettel_body_text_read = bool(
+        source_map_plan.get("privacy_guards", {}).get("zettel_body_text_read")
+    )
     truncated = False
     for path in iter_zettel_paths(root):
         if len(zettels) >= max_zettels:
             truncated = True
             warnings.append("notion_objet_import_clue_audit_zettel_limit_reached")
             break
-        frontmatter = read_zettel_frontmatter_only(path)
+        inspection = inspect_zettel_frontmatter_boundary(path)
+        zettel_body_text_read = (
+            zettel_body_text_read or bool(inspection["body_text_read"])
+        )
+        if not inspection["metadata_readable"]:
+            unreadable_zettel_count += 1
+            continue
+        frontmatter = inspection["frontmatter"]
         if frontmatter.get("status") == "redacted":
             redacted_zettel_count += 1
             continue
@@ -17472,6 +17838,7 @@ def notion_objet_import_clue_audit(
         "summary": {
             "scanned_non_redacted_zettel_count": scanned_non_redacted_count,
             "redacted_zettel_count": redacted_zettel_count,
+            "unreadable_zettel_count": unreadable_zettel_count,
             "notion_import_zettel_count": len(zettels),
             "preserved_object_ref_or_edge_count": preserved_count,
             "source_map_join_available_count": source_map_available_count,
@@ -17489,7 +17856,7 @@ def notion_objet_import_clue_audit(
             "provider_locator_body_rewrite_implemented": False,
         },
         "privacy_guards": {
-            "zettel_body_text_read": False,
+            "zettel_body_text_read": zettel_body_text_read,
             "zettel_body_text_echoed": False,
             "frontmatter_values_echoed": False,
             "provider_urls_echoed": False,
@@ -18388,10 +18755,10 @@ def notion_objet_link_convert(
 def zettel_paths_by_id(archive_root: Path) -> dict[str, Path]:
     paths: dict[str, Path] = {}
     for path in iter_zettel_paths(archive_root):
-        try:
-            frontmatter, _body = split_zettel_text(path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeError):
+        inspection = inspect_zettel_frontmatter_boundary(path)
+        if not inspection["metadata_readable"]:
             continue
+        frontmatter = inspection["frontmatter"]
         zettel_id = str(frontmatter.get("id") or "").strip()
         if zettel_id and zettel_id not in paths:
             paths[zettel_id] = path
@@ -18436,13 +18803,13 @@ def resolve_zettel_path(
 
     for candidate in direct_zettel_id_path_candidates(archive_root, zettel_id):
         if candidate.is_file() and is_path_within_root(candidate, archive_root):
-            frontmatter, _body = split_zettel_text(candidate.read_text(encoding="utf-8"))
-            if frontmatter.get("id") == zettel_id:
+            inspection = inspect_zettel_frontmatter_boundary(candidate)
+            if inspection["metadata_readable"] and inspection["frontmatter"].get("id") == zettel_id:
                 return candidate
 
     for path in iter_zettel_paths(archive_root):
-        frontmatter, _body = split_zettel_text(path.read_text(encoding="utf-8"))
-        if frontmatter.get("id") == zettel_id:
+        inspection = inspect_zettel_frontmatter_boundary(path)
+        if inspection["metadata_readable"] and inspection["frontmatter"].get("id") == zettel_id:
             return path
     raise ArchiveServiceError(f"Zettel id not found: {zettel_id}")
 
@@ -19325,8 +19692,9 @@ def promote_zettel_dry_run(
     draft_relative = archive_relative_path(path, root)
     source_bytes = path.read_bytes()
     source_sha256 = hashlib.sha256(source_bytes).hexdigest()
-    frontmatter, body = split_zettel_text(decode_utf8_with_universal_newlines(source_bytes))
-    frontmatter = json_safe(frontmatter)
+    frontmatter, body = require_readable_zettel_text(
+        decode_utf8_with_universal_newlines(source_bytes)
+    )
     rules = load_zettel_rules(root)
     minting_rules = lifecycle_minting_rules(rules)
     paths = rules.get("paths") if isinstance(rules.get("paths"), dict) else {}
@@ -19515,8 +19883,9 @@ def promote_zettel(
     current_source_sha256 = hashlib.sha256(source_bytes).hexdigest()
     if current_source_sha256 != dry_run.get("source_sha256"):
         raise ArchiveServiceError("Promotion blocked because the source draft changed after dry-run.")
-    source_frontmatter, body = split_zettel_text(decode_utf8_with_universal_newlines(source_bytes))
-    source_frontmatter = json_safe(source_frontmatter)
+    source_frontmatter, body = require_readable_zettel_text(
+        decode_utf8_with_universal_newlines(source_bytes)
+    )
     current_first_read_check = explicit_abstract_publication_check(source_frontmatter)
     if (
         not current_first_read_check["ready_for_publication"]
@@ -19640,8 +20009,7 @@ def mint_zettel_dry_run(
         root, zettel_id=zettel_id, relative_path=relative_path, affirmations=affirmations
     )
     source_path = resolve_zettel_path(root, zettel_id=zettel_id, relative_path=relative_path)
-    source_frontmatter, body = split_zettel_text(source_path.read_text(encoding="utf-8"))
-    source_frontmatter = json_safe(source_frontmatter)
+    source_frontmatter, body = require_readable_zettel_content(source_path)
 
     zettel_id_value = str(source_frontmatter.get("id") or source_path.stem)
     receipt_relative = f"{MINT_RECEIPTS_DIR}/{zettel_id_value}.mint.json"
@@ -19776,8 +20144,7 @@ def mint_zettel(
     if current_source_sha256 != expected_source_sha256:
         raise ArchiveServiceError("Minting blocked because the source draft changed after dry-run.")
     source_text = decode_utf8_with_universal_newlines(source_bytes)
-    source_frontmatter, body = split_zettel_text(source_text)
-    source_frontmatter = json_safe(source_frontmatter)
+    source_frontmatter, body = require_readable_zettel_text(source_text)
     current_first_read_check = explicit_abstract_publication_check(source_frontmatter)
     if (
         not current_first_read_check["ready_for_publication"]
@@ -19994,8 +20361,8 @@ def resolve_inbox_draft_path(archive_root: Path, zettel_id: str | None, relative
     if not inbox_root.is_dir():
         raise ArchiveServiceError("Archive inbox directory is missing.")
     for path in safe_archive_glob(inbox_root, "*.md", archive_root, recursive=True):
-        frontmatter, _body = split_zettel_text(path.read_text(encoding="utf-8"))
-        if frontmatter.get("id") == zettel_id:
+        inspection = inspect_zettel_frontmatter_boundary(path)
+        if inspection["metadata_readable"] and inspection["frontmatter"].get("id") == zettel_id:
             return path
     raise ArchiveServiceError(f"Inbox draft id not found: {zettel_id}")
 
@@ -20270,10 +20637,14 @@ def target_sha_evolved_by_edge_receipts(
         if progress_callback is not None:
             progress_callback("reading target zettel for edge evolution")
         target_text = target_path.read_text(encoding="utf-8")
-        frontmatter, body = split_zettel_text(target_text)
+        frontmatter, body = require_readable_zettel_text(target_text)
     except (OSError, UnicodeError, ArchiveServiceError):
         if progress_callback is not None:
             progress_callback("target edge evolution skipped; target read failed")
+        return False
+    if frontmatter.get("status") != "canonical":
+        if progress_callback is not None:
+            progress_callback("target edge evolution skipped; target status is not canonical")
         return False
     edges = frontmatter.get("edges")
     if not isinstance(edges, list):
@@ -20392,9 +20763,7 @@ def minted_draft_retirement_plan(
     root = require_existing_archive_root(archive_root)
     draft_path = resolve_inbox_draft_path(root, zettel_id, relative_path)
     draft_relative = archive_relative_path(draft_path, root)
-    source_text = draft_path.read_text(encoding="utf-8")
-    source_frontmatter, _body = split_zettel_text(source_text)
-    source_frontmatter = json_safe(source_frontmatter)
+    source_frontmatter, _body = require_readable_zettel_content(draft_path)
     zettel_id_value = str(source_frontmatter.get("id") or "").strip()
 
     blockers: list[str] = []
@@ -20474,8 +20843,13 @@ def minted_draft_retirement_plan(
             blockers.append("Draft snapshot sha256 does not match the inbox draft sha256.")
 
     if canonical_path is not None:
-        canonical_frontmatter, _canonical_body = split_zettel_text(canonical_path.read_text(encoding="utf-8"))
-        canonical_frontmatter = json_safe(canonical_frontmatter)
+        try:
+            canonical_frontmatter, _canonical_body = require_readable_zettel_content(
+                canonical_path
+            )
+        except ArchiveServiceError as exc:
+            blockers.append(str(exc))
+            canonical_frontmatter = {}
         if canonical_frontmatter.get("id") != zettel_id_value:
             blockers.append("Canonical zettel id does not match the inbox draft id.")
         if canonical_frontmatter.get("status") != "canonical":
@@ -21352,10 +21726,50 @@ def remint_reconcile_plan(
     # and NEVER fed into the classifier. It only decorates the returned preview.
     strip_bom_preview = _reconcile_strip_bom_preview(canonical_path.read_bytes()) if strip_bom else None
 
-    canonical_text = canonical_path.read_text(encoding="utf-8-sig")
-    canonical_frontmatter, canonical_body = split_zettel_text(canonical_text)
-    canonical_frontmatter = json_safe(canonical_frontmatter)
-    canonical_parsed = bool(canonical_frontmatter)
+    try:
+        canonical_text = canonical_path.read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeError):
+        raise ArchiveServiceError("Canonical zettel content could not be read safely.") from None
+    canonical_boundary = parse_zettel_content_boundary(canonical_text)
+    if (
+        canonical_boundary["state"] != "readable"
+        or canonical_boundary["frontmatter"].get("status") != "canonical"
+    ):
+        blocked_result = {
+            "ok": False,
+            "dry_run": True,
+            "action": "reconcile_mint_receipt",
+            "zettel_id": (zettel_id or "").strip() or None,
+            "canonical_path": canonical_relative,
+            "mint_receipt_path": None,
+            "draft_snapshot_path": None,
+            "drift_class": "unclassified",
+            "classification_basis": "content_change_fallback",
+            "content_change_ack_required": False,
+            "current_canonical_text": None,
+            "frontmatter_field_changes": [],
+            "body_changed": None,
+            "blockers": [
+                "Reconcile refused: canonical zettel frontmatter could not be validated as readable canonical content."
+            ],
+            "warnings": [],
+            "writes": "none",
+        }
+        blocked_result.update(
+            _reconcile_plan_guidance(
+                command_name="remint-reconcile",
+                zettel_id=str(zettel_id or ""),
+                drift_class="unclassified",
+                blockers=blocked_result["blockers"],
+                strip_bom=strip_bom,
+            )
+        )
+        if strip_bom_preview is not None:
+            blocked_result.update(strip_bom_preview)
+        return blocked_result
+    canonical_frontmatter = canonical_boundary["frontmatter"]
+    canonical_body = canonical_boundary["body"]
+    canonical_parsed = True
 
     resolved_id = str(canonical_frontmatter.get("id") or "").strip()
     receipt_id = resolved_id or (zettel_id or "").strip()
@@ -21470,8 +21884,9 @@ def remint_reconcile_plan(
         try:
             snapshot_raw = snapshot_path.read_bytes()
             snapshot_text = snapshot_path.read_text(encoding="utf-8-sig")
-            snapshot_frontmatter, snapshot_body = split_zettel_text(snapshot_text)
-            snapshot_frontmatter = json_safe(snapshot_frontmatter)
+            snapshot_frontmatter, snapshot_body = require_readable_zettel_text(snapshot_text)
+            if snapshot_frontmatter.get("status") != "draft":
+                raise ArchiveServiceError("Draft snapshot status is invalid.")
         except (OSError, UnicodeError, ArchiveServiceError):
             snapshot_body = None
             snapshot_raw = None
@@ -23569,6 +23984,51 @@ def find_promotion_duplicates(
     duplicate_check: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     canonical_root = archive_root / "zettels"
+    zettel_id = str(frontmatter.get("id") or "")
+    title_key = normalize_compare_text(str(frontmatter.get("title") or ""))
+    body_key = normalize_compare_text(body)[:500]
+    duplicates: list[dict[str, Any]] = []
+    indexed_rows, index_state = promotion_duplicate_index_rows(archive_root)
+    if duplicate_check is not None:
+        duplicate_check.update(index_state)
+    stale_reason_set = set(index_state.get("stale_reasons") or [])
+    for blocking_reason in (
+        "archive_index_incomplete",
+        "live_zettel_stat_unavailable",
+    ):
+        if blocking_reason in stale_reason_set:
+            # Neither a completed-with-quarantine rebuild nor an unenumerable
+            # live tree is a usable approval oracle.  The latter cannot safely
+            # fall back to another filesystem scan because that scan may omit
+            # the same inaccessible or unsafe entry.
+            return [
+                {
+                    "path": INDEX_RELATIVE_PATH,
+                    "reason": blocking_reason,
+                    "severity": "blocker",
+                }
+            ]
+    if not index_state.get("used_generated_index"):
+        # A missing, unreadable, legacy, or stale DB routes to the live body
+        # scan.  Preflight that scan with the strict enumerator too; otherwise
+        # its compatibility glob could silently omit the very path whose
+        # permission/reparse state made enumeration uncertain.
+        preflight_reasons, _preflight_paths_checked = (
+            archive_index_live_zettel_stat_stale_reasons(archive_root, [])
+        )
+        if "live_zettel_stat_unavailable" in preflight_reasons:
+            index_state["stale_reasons"] = unique_preserve_order(
+                [*(index_state.get("stale_reasons") or []), "live_zettel_stat_unavailable"]
+            )
+            if duplicate_check is not None:
+                duplicate_check.update(index_state)
+            return [
+                {
+                    "path": INDEX_RELATIVE_PATH,
+                    "reason": "live_zettel_stat_unavailable",
+                    "severity": "blocker",
+                }
+            ]
     if not canonical_root.is_dir():
         if duplicate_check is not None:
             duplicate_check.update(
@@ -23580,14 +24040,6 @@ def find_promotion_duplicates(
                 }
             )
         return []
-
-    zettel_id = str(frontmatter.get("id") or "")
-    title_key = normalize_compare_text(str(frontmatter.get("title") or ""))
-    body_key = normalize_compare_text(body)[:500]
-    duplicates: list[dict[str, Any]] = []
-    indexed_rows, index_state = promotion_duplicate_index_rows(archive_root)
-    if duplicate_check is not None:
-        duplicate_check.update(index_state)
     if indexed_rows:
         return find_promotion_duplicates_from_rows(
             indexed_rows,
@@ -23605,9 +24057,6 @@ def find_promotion_duplicates(
             continue
         checked += 1
         candidate_relative = archive_relative_path(candidate, archive_root)
-        candidate_frontmatter, candidate_body = split_zettel_text(candidate.read_text(encoding="utf-8"))
-        candidate_frontmatter = json_safe(candidate_frontmatter)
-
         if candidate_relative == proposed_path:
             duplicates.append(
                 {
@@ -23617,6 +24066,23 @@ def find_promotion_duplicates(
                 }
             )
             continue
+        boundary = read_zettel_content_boundary(candidate)
+        if boundary["state"] == "blocked":
+            duplicates.append(
+                {
+                    "path": candidate_relative,
+                    "reason": "canonical_candidate_unreadable",
+                    "severity": "blocker",
+                }
+            )
+            continue
+        if boundary["state"] != "readable":
+            continue
+        candidate_frontmatter = boundary["frontmatter"]
+        candidate_body = boundary["body"]
+        if candidate_frontmatter.get("status") != "canonical":
+            continue
+
         if zettel_id and candidate_frontmatter.get("id") == zettel_id:
             duplicates.append(
                 {
@@ -23673,6 +24139,7 @@ def promotion_duplicate_index_rows(archive_root: Path) -> tuple[list[dict[str, A
         conn = connect_archive_index(db_path, row_factory=True)
         try:
             rows = promotion_duplicate_index_canonical_rows(conn)
+            stat_rows = archive_index_zettel_stat_rows(conn)
             metadata = read_archive_index_metadata(conn)
         finally:
             conn.close()
@@ -23682,6 +24149,20 @@ def promotion_duplicate_index_rows(archive_root: Path) -> tuple[list[dict[str, A
 
     metadata_reasons = archive_index_metadata_stale_reasons(metadata, indexed_canonical_count=len(rows))
     if not metadata_reasons:
+        live_stat_reasons, live_stat_paths_checked = archive_index_live_zettel_stat_stale_reasons(
+            archive_root,
+            stat_rows,
+        )
+        if live_stat_reasons:
+            state.update(
+                {
+                    "fallback_reason": "archive_index_stale",
+                    "staleness_check": "index_metadata_plus_live_stats",
+                    "live_staleness_paths_checked": live_stat_paths_checked,
+                    "stale_reasons": live_stat_reasons,
+                }
+            )
+            return [], state
         state.update(
             {
                 "source": "generated_index",
@@ -23689,13 +24170,15 @@ def promotion_duplicate_index_rows(archive_root: Path) -> tuple[list[dict[str, A
                 "fallback_reason": None,
                 "indexed_canonical_count": len(rows),
                 "canonical_candidates_checked": len(rows),
-                "staleness_check": "index_metadata",
-                "live_staleness_paths_checked": 0,
+                "staleness_check": "index_metadata_plus_live_stats",
+                "live_staleness_paths_checked": live_stat_paths_checked,
                 "stale_reasons": [],
                 "index_metadata": {
                     "schema": metadata.get("schema"),
                     "canonical_zettel_count": metadata.get("canonical_zettel_count"),
                     "canonical_max_mtime_ns": metadata.get("canonical_max_mtime_ns"),
+                    "index_complete": metadata.get("index_complete"),
+                    "quarantined_zettel_count": metadata.get("quarantined_zettel_count"),
                     "updated_by": metadata.get("updated_by"),
                 },
             }
@@ -23725,6 +24208,112 @@ def promotion_duplicate_index_canonical_rows(conn: sqlite3.Connection) -> list[d
             """
         ).fetchall()
     ]
+
+
+def archive_index_zettel_stat_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    return [
+        {
+            "path": str(row["path"] if isinstance(row, sqlite3.Row) else row[0]),
+            "file_size": row["file_size"] if isinstance(row, sqlite3.Row) else row[1],
+            "file_mtime_ns": row["file_mtime_ns"] if isinstance(row, sqlite3.Row) else row[2],
+        }
+        for row in conn.execute(
+            "SELECT path, file_size, file_mtime_ns FROM zettels ORDER BY path"
+        ).fetchall()
+    ]
+
+
+def archive_index_live_zettel_stat_stale_reasons(
+    archive_root: Path,
+    indexed_rows: list[dict[str, Any]],
+) -> tuple[list[str], int]:
+    """Compare every physical zettel path/stat tuple with its generated row."""
+    live_by_path: dict[str, tuple[int, int]] = {}
+    stat_failed = False
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    for folder in ("zettels", "inbox"):
+        folder_root = archive_root / folder
+        try:
+            folder_stat = os.lstat(folder_root)
+        except FileNotFoundError:
+            continue
+        except OSError:
+            stat_failed = True
+            continue
+        if (
+            stat.S_ISLNK(folder_stat.st_mode)
+            or not stat.S_ISDIR(folder_stat.st_mode)
+            or (
+                reparse_flag
+                and getattr(folder_stat, "st_file_attributes", 0) & reparse_flag
+            )
+        ):
+            stat_failed = True
+            continue
+
+        pending = [folder_root]
+        while pending:
+            current = pending.pop()
+            try:
+                with os.scandir(current) as entries:
+                    current_entries = list(entries)
+            except OSError:
+                stat_failed = True
+                continue
+            for entry in current_entries:
+                path = Path(entry.path)
+                try:
+                    entry_stat = entry.stat(follow_symlinks=False)
+                except OSError:
+                    stat_failed = True
+                    continue
+                if (
+                    stat.S_ISLNK(entry_stat.st_mode)
+                    or (
+                        reparse_flag
+                        and getattr(entry_stat, "st_file_attributes", 0) & reparse_flag
+                    )
+                ):
+                    stat_failed = True
+                    continue
+                if stat.S_ISDIR(entry_stat.st_mode):
+                    pending.append(path)
+                    continue
+                if not entry.name.casefold().endswith(".md"):
+                    continue
+                if not stat.S_ISREG(entry_stat.st_mode):
+                    stat_failed = True
+                    continue
+                relative = PurePosixPath(*path.relative_to(archive_root).parts).as_posix()
+                live_by_path[relative] = (entry_stat.st_size, entry_stat.st_mtime_ns)
+
+    indexed_by_path = {str(row.get("path") or ""): row for row in indexed_rows}
+    live_paths = set(live_by_path)
+    indexed_paths = set(indexed_by_path)
+    reasons: list[str] = []
+    if stat_failed:
+        reasons.append("live_zettel_stat_unavailable")
+    if live_paths - indexed_paths:
+        reasons.append("live_zettels_missing_from_index")
+    if indexed_paths - live_paths:
+        reasons.append("index_has_paths_missing_from_live_zettels")
+
+    indexed_stat_invalid = False
+    stat_mismatch = False
+    for relative in sorted(live_paths & indexed_paths):
+        row = indexed_by_path[relative]
+        try:
+            recorded = (int(row.get("file_size")), int(row.get("file_mtime_ns")))
+        except (TypeError, ValueError):
+            indexed_stat_invalid = True
+            continue
+        if recorded != live_by_path[relative]:
+            stat_mismatch = True
+    if indexed_stat_invalid:
+        reasons.append("archive_index_zettel_stat_invalid")
+    if stat_mismatch:
+        reasons.append("live_zettel_stat_differs_from_index")
+    return unique_preserve_order(reasons), len(live_by_path)
 
 
 def read_archive_index_metadata(conn: sqlite3.Connection) -> dict[str, str]:
@@ -23757,6 +24346,24 @@ def archive_index_metadata_stale_reasons(metadata: dict[str, str], *, indexed_ca
         int(metadata.get("canonical_max_mtime_ns", ""))
     except ValueError:
         reasons.append("archive_index_metadata_canonical_max_mtime_invalid")
+    index_complete = metadata.get("index_complete")
+    if index_complete is None:
+        reasons.append("archive_index_metadata_completeness_missing")
+    elif index_complete not in {"true", "false"}:
+        reasons.append("archive_index_metadata_completeness_invalid")
+    elif index_complete == "false":
+        reasons.append("archive_index_incomplete")
+    try:
+        quarantined_zettel_count = int(metadata.get("quarantined_zettel_count", ""))
+        if quarantined_zettel_count < 0:
+            raise ValueError
+    except ValueError:
+        reasons.append("archive_index_metadata_quarantine_count_invalid")
+    else:
+        if index_complete == "true" and quarantined_zettel_count != 0:
+            reasons.append("archive_index_metadata_completeness_mismatch")
+        elif index_complete == "false" and quarantined_zettel_count == 0:
+            reasons.append("archive_index_metadata_completeness_mismatch")
     return reasons
 
 
@@ -24512,8 +25119,7 @@ def ai_scratch_gc_for_zettel(
 ) -> dict[str, Any]:
     root = require_existing_archive_root(archive_root)
     path = resolve_zettel_path(root, zettel_id=zettel_id, relative_path=relative_path)
-    frontmatter, body = split_zettel_text(path.read_text(encoding="utf-8"))
-    frontmatter = json_safe(frontmatter)
+    frontmatter, body = require_readable_zettel_content(path)
     blockers: list[str] = []
     if dry_run and approve:
         blockers.append("Use either --dry-run or --approve, not both.")
@@ -24618,8 +25224,7 @@ def zet_self_contained_check(
 ) -> dict[str, Any]:
     root = require_existing_archive_root(archive_root)
     path = resolve_zettel_path(root, zettel_id=zettel_id, relative_path=relative_path)
-    frontmatter, body = split_zettel_text(path.read_text(encoding="utf-8"))
-    frontmatter = json_safe(frontmatter)
+    frontmatter, body = require_readable_zettel_content(path)
     blockers: list[str] = []
     if not dry_run:
         blockers.append("zet-self-contained-check is read-only and requires --dry-run.")
@@ -25099,8 +25704,7 @@ def zet_quality_check(
 ) -> dict[str, Any]:
     root = require_existing_archive_root(archive_root)
     path = resolve_zettel_path(root, zettel_id=zettel_id, relative_path=relative_path)
-    frontmatter, body = split_zettel_text(path.read_text(encoding="utf-8"))
-    frontmatter = json_safe(frontmatter)
+    frontmatter, body = require_readable_zettel_content(path)
     assessment = zettel_quality_assessment(root, path, frontmatter, body)
     blockers: list[str] = []
     if not dry_run:
@@ -25692,15 +26296,21 @@ def foreign_block_intake_check(
     if relative_path is not None:
         try:
             normalized_path = normalize_archive_relative_path(relative_path)
-            path = resolve_archive_relative_path(root, normalized_path)
-            artifact_path = archive_relative_path(path, root)
-            if not path.is_file():
-                blockers.append(f"Foreign artifact path is not a file: {artifact_path}.")
+            if normalized_path.startswith(VALID_ZETTEL_FOLDERS):
+                blockers.append(
+                    "Native inbox/ and zettels/ files must use zettel read/review commands, not foreign-block intake."
+                )
+                artifact_path = normalized_path
             else:
-                artifact_text = path.read_text(encoding="utf-8")
-                input_source = "archive_path"
-        except (ArchivePathError, OSError, UnicodeError) as exc:
-            blockers.append(f"Foreign artifact path could not be read safely: {exc}")
+                path = resolve_archive_relative_path(root, normalized_path)
+                artifact_path = archive_relative_path(path, root)
+                if not path.is_file():
+                    blockers.append(f"Foreign artifact path is not a file: {artifact_path}.")
+                else:
+                    artifact_text = path.read_text(encoding="utf-8")
+                    input_source = "archive_path"
+        except (ArchivePathError, OSError, UnicodeError):
+            blockers.append("Foreign artifact path could not be read safely.")
         if blockers:
             return foreign_block_empty_result(
                 archive_id=archive_id,
@@ -32421,15 +33031,21 @@ def block_header_preview(
     source_path: str | None = None
     frontmatter: dict[str, Any] = {}
     body = ""
+    content_available = False
     if not blockers:
         try:
             path = resolve_zettel_path(root, zettel_id=zettel_id, relative_path=relative_path)
             source_path = archive_relative_path(path, root)
-            raw_text = path.read_text(encoding="utf-8")
-            frontmatter, body = split_zettel_text(raw_text)
-            frontmatter = json_safe(frontmatter)
-        except (ArchiveServiceError, OSError, UnicodeError) as exc:
-            blockers.append(str(exc))
+            boundary = read_zettel_content_boundary(path)
+            if boundary["state"] == "blocked":
+                blockers.append("Zettel content is unavailable because its frontmatter could not be validated.")
+                warnings.append(str(boundary["reason"]))
+            else:
+                frontmatter = boundary["frontmatter"]
+                body = boundary["body"]
+                content_available = boundary["state"] == "readable"
+        except (ArchiveServiceError, OSError, UnicodeError):
+            blockers.append("Zettel content could not be resolved safely.")
 
     if frontmatter.get("status") == "redacted":
         # Privacy: never preview/expose a redacted zettel's header; block and suppress its content
@@ -32437,6 +33053,7 @@ def block_header_preview(
         blockers.append("Cannot generate a block header for a redacted zettel.")
         frontmatter = {"id": frontmatter.get("id"), "status": "redacted"}
         body = ""
+        content_available = False
 
     resolved_zettel_id = str(frontmatter.get("id") or zettel_id or "")
     title = frontmatter.get("title")
@@ -32472,11 +33089,11 @@ def block_header_preview(
     }
     header_preview = sanitize_block_header_value(header_preview, warnings, "$.header_preview")
     normalized_body = normalize_text_for_block_hash(body)
-    zet_body_sha256 = hashlib.sha256(normalized_body.encode("utf-8")).hexdigest() if path is not None else None
-    header_sha256 = sha256_json_hex(header_preview) if path is not None else None
+    zet_body_sha256 = hashlib.sha256(normalized_body.encode("utf-8")).hexdigest() if content_available else None
+    header_sha256 = sha256_json_hex(header_preview) if content_available else None
     block_hash_preview = (
         sha256_json_hex({"zet_body_sha256": zet_body_sha256, "header_sha256": header_sha256})
-        if path is not None
+        if content_available
         else None
     )
     return {
@@ -32540,6 +33157,7 @@ def zet_projection_plan_preview(
     source_path: str | None = None
     frontmatter: dict[str, Any] = {}
     body = ""
+    content_available = False
     resolved_zettel_id: str | None = None
     raw_ref = str(zet_ref or "").strip()
     if not raw_ref:
@@ -32550,12 +33168,17 @@ def zet_projection_plan_preview(
         try:
             path = resolve_projection_zet_ref(root, raw_ref)
             source_path = archive_relative_path(path, root)
-            raw_text = path.read_text(encoding="utf-8")
-            frontmatter, body = split_zettel_text(raw_text)
-            frontmatter = json_safe(frontmatter)
-            resolved_zettel_id = safe_projection_scalar(frontmatter.get("id")) or (
-                raw_ref if valid_draft_zettel_id(raw_ref) else None
-            )
+            boundary = read_zettel_content_boundary(path)
+            if boundary["state"] == "blocked":
+                blockers.append("Referenced zet content is unavailable because its frontmatter could not be validated.")
+                warnings.append(str(boundary["reason"]))
+            else:
+                frontmatter = boundary["frontmatter"]
+                body = boundary["body"]
+                content_available = boundary["state"] == "readable"
+                resolved_zettel_id = safe_projection_scalar(frontmatter.get("id")) or (
+                    raw_ref if valid_draft_zettel_id(raw_ref) else None
+                )
         except (ArchiveServiceError, OSError, UnicodeError):
             blockers.append("Referenced zet could not be resolved inside the archive.")
 
@@ -32564,16 +33187,17 @@ def zet_projection_plan_preview(
         blockers.append("Cannot project a redacted zettel.")
         frontmatter = {"id": frontmatter.get("id"), "status": "redacted"}
         body = ""
+        content_available = False
 
     title = safe_projection_scalar(frontmatter.get("title"))
     status = safe_projection_scalar(frontmatter.get("status"))
     kind = safe_projection_scalar(frontmatter.get("kind"))
     frontmatter_archive_id = safe_projection_scalar(frontmatter.get("archive_id")) or archive_id
     normalized_body = normalize_text_for_block_hash(body)
-    body_hash = hashlib.sha256(normalized_body.encode("utf-8")).hexdigest() if path is not None else None
-    line_count = normalized_body.count("\n") + 1 if normalized_body and path is not None else 0
-    word_count = len(normalized_body.split()) if path is not None else 0
-    char_count = len(normalized_body) if path is not None else 0
+    body_hash = hashlib.sha256(normalized_body.encode("utf-8")).hexdigest() if content_available else None
+    line_count = normalized_body.count("\n") + 1 if normalized_body and content_available else 0
+    word_count = len(normalized_body.split()) if content_available else 0
+    char_count = len(normalized_body) if content_available else 0
     if projection_format_value != "metadata_only":
         warnings.append("projection_format is operator-declared future intent; v0.2.46 renders no body output.")
     if visibility_value != "unknown":
@@ -40327,10 +40951,10 @@ def resolve_zettel_external_ref(root: Path, target_ref: str, blockers: list[str]
     expected_prefix = f"zet_{source}_"
     matches: list[dict[str, Any]] = []
     for path in iter_zettel_paths(root):
-        try:
-            frontmatter, _body = split_zettel_text(path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeError):
+        inspection = inspect_zettel_frontmatter_boundary(path)
+        if not inspection["metadata_readable"]:
             continue
+        frontmatter = inspection["frontmatter"]
         zettel_id = str(frontmatter.get("id") or "").strip()
         folded_id = zettel_id.casefold()
         if not folded_id.startswith(expected_prefix):
@@ -40369,13 +40993,13 @@ def resolve_zettel_external_ref(root: Path, target_ref: str, blockers: list[str]
             },
         }
     matched = matches[0]
-    if matched.get("status") == "redacted":
-        blockers.append("target zettel is redacted.")
+    if matched.get("status") not in ZETTEL_QUERYABLE_STATUSES:
+        blockers.append("target zettel content is unavailable.")
     return {
         "ref": matched["zettel_id"],
         "input_ref": target_ref,
         "kind": "zettel",
-        "verified": matched.get("status") != "redacted",
+        "verified": matched.get("status") in ZETTEL_QUERYABLE_STATUSES,
         "resolver": {
             "source": source,
             "external_id": external_id,
@@ -40408,13 +41032,16 @@ def zettel_edge_target_summary(
         except ArchiveServiceError:
             blockers.append("target zettel id was not found.")
             return {"ref": text, "kind": "zettel", "verified": False}
-        target_frontmatter, _target_body = split_zettel_text(target_path.read_text(encoding="utf-8"))
-        if target_frontmatter.get("status") == "redacted":
-            blockers.append("target zettel is redacted.")
+        inspection = inspect_zettel_frontmatter_boundary(target_path)
+        target_status = (
+            inspection["frontmatter"].get("status") if inspection["metadata_readable"] else None
+        )
+        if target_status not in ZETTEL_QUERYABLE_STATUSES:
+            blockers.append("target zettel content is unavailable.")
         return {
             "ref": text,
             "kind": "zettel",
-            "verified": target_frontmatter.get("status") != "redacted",
+            "verified": target_status in ZETTEL_QUERYABLE_STATUSES,
         }
 
     object_blockers: list[str] = []
@@ -40585,7 +41212,7 @@ def zettel_edge_write(
     if bool(from_zettel) != bool(from_path):
         try:
             source_path = resolve_zettel_path(root, zettel_id=from_zettel, relative_path=from_path, zettel_path_index=zettel_path_index)
-            source_frontmatter, source_body = split_zettel_text(source_path.read_text(encoding="utf-8"))
+            source_frontmatter, source_body = require_readable_zettel_content(source_path)
             source_zettel_id = str(source_frontmatter.get("id") or source_zettel_id).strip()
             source_relative = archive_relative_path(source_path, root)
             source_summary = {
@@ -40595,8 +41222,6 @@ def zettel_edge_write(
             }
             if not ZETTEL_EDGE_ZETTEL_ID_RE.match(source_zettel_id):
                 blockers.append("source zettel id must be a safe zet_<id> value.")
-            if source_frontmatter.get("status") == "redacted":
-                blockers.append("source zettel is redacted.")
         except ArchiveServiceError as exc:
             blockers.append(str(exc))
 
@@ -41670,7 +42295,11 @@ def zettel_edge_revert(
                 if not source_path.is_file():
                     blockers.append("edge receipt source zettel is missing.")
                 else:
-                    source_frontmatter, source_body = split_zettel_text(source_path.read_text(encoding="utf-8"))
+                    try:
+                        source_frontmatter, source_body = require_readable_zettel_content(source_path)
+                    except ArchiveServiceError as exc:
+                        blockers.append(str(exc))
+                        source_frontmatter, source_body = {}, ""
                     if source_zettel_id and str(source_frontmatter.get("id") or "").strip() != source_zettel_id:
                         blockers.append("edge receipt source_zettel_id does not match the current zettel.")
                     edge_index, matched_edge = zettel_edge_from_receipt(source_frontmatter.get("edges"), receipt_doc, receipt_relative or "")
@@ -58072,9 +58701,7 @@ def check_safe_html_dry_run(
 
     path = resolve_zettel_path(root, zettel_id=zettel_id, relative_path=relative_path)
     source_path = archive_relative_path(path, root)
-    text = path.read_text(encoding="utf-8")
-    frontmatter, body = split_zettel_text(text)
-    frontmatter = json_safe(frontmatter) if isinstance(frontmatter, dict) else {}
+    frontmatter, body = require_readable_zettel_content(path)
 
     blockers: list[str] = []
     warnings: list[str] = []
@@ -62404,8 +63031,11 @@ def select_zettels_for_view(archive_root: Path, view: dict[str, Any]) -> list[di
         relative = archive_relative_path(path, archive_root)
         if not relative.startswith("zettels/"):
             continue
-        frontmatter, body = split_zettel_text(path.read_text(encoding="utf-8"))
-        frontmatter = json_safe(frontmatter)
+        boundary = read_zettel_content_boundary(path)
+        if boundary["state"] != "readable":
+            continue
+        frontmatter = boundary["frontmatter"]
+        body = boundary["body"]
         if frontmatter.get("status") != "canonical":
             continue
         if not zettel_matches_filters(frontmatter, filters):
@@ -77262,6 +77892,7 @@ def index_archive(
     source_map_count = 0
     edge_count = 0
     facet_count = 0
+    quarantined_zettels: list[dict[str, str]] = []
     if progress_callback is not None:
         progress_callback("index-lock-and-schema", "start", None, None)
     conn = connect_archive_index(db_path, write=True)
@@ -77359,6 +77990,42 @@ def index_archive(
             )
             return True
 
+        def insert_quarantined_zettel_row(
+            relative_path: str,
+            *,
+            file_size: int,
+            file_mtime_ns: int,
+            issue_code: str,
+        ) -> None:
+            # Replace any previously indexed plaintext with a content-free row.
+            # This is logical/API sanitization of the generated index, not a
+            # forensic secure-delete claim about SQLite free pages or WAL files.
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO zettels(
+                  path, zettel_id, title, status, kind, body, frontmatter_json,
+                  file_size, file_mtime_ns, body_sha256, approved_body_sha256,
+                  forbidden_location_reference_found
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    relative_path,
+                    None,
+                    "",
+                    ZETTEL_QUARANTINED_STATUS,
+                    None,
+                    "",
+                    "",
+                    file_size,
+                    file_mtime_ns,
+                    "",
+                    "",
+                    0,
+                ),
+            )
+            quarantined_zettels.append({"path": relative_path, "code": issue_code})
+
         zettel_paths = list(iter_zettel_paths(root))
         zettel_path_count = len(zettel_paths)
         if progress_callback is not None:
@@ -77372,14 +78039,38 @@ def index_archive(
             except OSError:
                 zettel_mtime_ns = 0
                 zettel_size = 0
-            text = path.read_text(encoding="utf-8")
             try:
-                frontmatter, body = split_zettel_text(text)
-            except Exception:
-                raise ArchiveServiceError(
-                    f"Zettel frontmatter is unreadable: {relative_path}"
-                ) from None
-            frontmatter = json_safe(frontmatter)
+                text = path.read_text(encoding="utf-8")
+            except UnicodeError:
+                insert_quarantined_zettel_row(
+                    relative_path,
+                    file_size=zettel_size,
+                    file_mtime_ns=zettel_mtime_ns,
+                    issue_code="frontmatter_unicode_error",
+                )
+                zettel_count += 1
+                continue
+            except OSError:
+                insert_quarantined_zettel_row(
+                    relative_path,
+                    file_size=zettel_size,
+                    file_mtime_ns=zettel_mtime_ns,
+                    issue_code="frontmatter_io_error",
+                )
+                zettel_count += 1
+                continue
+            boundary = parse_zettel_content_boundary(text)
+            if boundary["state"] == "blocked":
+                insert_quarantined_zettel_row(
+                    relative_path,
+                    file_size=zettel_size,
+                    file_mtime_ns=zettel_mtime_ns,
+                    issue_code=str(boundary["reason"]),
+                )
+                zettel_count += 1
+                continue
+            frontmatter = boundary["frontmatter"]
+            body = boundary["body"]
             zettel_status = frontmatter.get("status")
             draft_creation = frontmatter.get("draft_creation") if isinstance(frontmatter.get("draft_creation"), dict) else {}
             approved_body_sha256 = draft_creation.get("approved_body_sha256")
@@ -77450,6 +78141,11 @@ def index_archive(
 
         if progress_callback is not None:
             progress_callback("index-zettels", "done", zettel_path_count, zettel_path_count)
+
+        if quarantined_zettels:
+            warnings.append(
+                "One or more zettels were indexed as content-free quarantine rows; repair is required."
+            )
 
         manifest_path = root / "objects" / "manifests" / "files.jsonl"
         manifest_lines = manifest_path.read_text(encoding="utf-8").splitlines() if manifest_path.is_file() else []
@@ -77608,6 +78304,8 @@ def index_archive(
             conn,
             canonical_zettel_count=canonical_metadata_count,
             canonical_max_mtime_ns=canonical_metadata_max_mtime_ns,
+            index_complete=not bool(quarantined_zettels),
+            quarantined_zettel_count=len(quarantined_zettels),
         )
         conn.commit()
         if progress_callback is not None:
@@ -77620,8 +78318,12 @@ def index_archive(
     finally:
         conn.close()
 
+    index_complete = not quarantined_zettels
     return {
-        "ok": True,
+        "ok": index_complete,
+        "state": "completed" if index_complete else "completed_with_quarantined_zettels",
+        "index_rebuilt": True,
+        "index_complete": index_complete,
         "index_path": archive_relative_path(db_path, root),
         "zettels": zettel_count,
         "objects": object_count,
@@ -77630,6 +78332,9 @@ def index_archive(
         "source_map_entries": source_map_count,
         "edges": edge_count,
         "facets": facet_count,
+        "quarantined_zettel_count": len(quarantined_zettels),
+        "quarantined_zettels": quarantined_zettels[:50],
+        "quarantined_zettels_truncated": len(quarantined_zettels) > 50,
         "warnings": warnings,
     }
 
@@ -77639,6 +78344,8 @@ def replace_archive_index_metadata(
     *,
     canonical_zettel_count: int,
     canonical_max_mtime_ns: int,
+    index_complete: bool,
+    quarantined_zettel_count: int,
 ) -> None:
     conn.execute(
         """
@@ -77652,6 +78359,8 @@ def replace_archive_index_metadata(
         "schema": INDEX_METADATA_SCHEMA,
         "canonical_zettel_count": str(max(0, canonical_zettel_count)),
         "canonical_max_mtime_ns": str(max(0, canonical_max_mtime_ns)),
+        "index_complete": "true" if index_complete else "false",
+        "quarantined_zettel_count": str(max(0, quarantined_zettel_count)),
         "updated_at": datetime.now().astimezone().replace(microsecond=0).isoformat(),
         "updated_by": f"wom-kit/{WOM_KIT_VERSION}",
     }
@@ -77679,18 +78388,36 @@ def upsert_zettel_index_entry(root: Path, zettel_path: Path, frontmatter: dict[s
         return False
 
     relative = archive_relative_path(zettel_path, root)
-    zettel_status = frontmatter.get("status")
+    boundary = read_zettel_content_boundary(zettel_path)
+    quarantined = boundary["state"] == "blocked"
+    frontmatter = boundary["frontmatter"]
+    body = boundary["body"]
+    zettel_status = (
+        ZETTEL_QUARANTINED_STATUS if quarantined else frontmatter.get("status")
+    )
     zettel_id = str(frontmatter.get("id") or "")
     redacted = zettel_status == "redacted"
 
     conn = connect_archive_index(db_path, write=True)
     try:
         ensure_archive_index_zettel_columns(conn)
-        old_row = conn.execute("SELECT status FROM zettels WHERE path = ?", (relative,)).fetchone()
+        old_row = conn.execute(
+            "SELECT status, zettel_id FROM zettels WHERE path = ?", (relative,)
+        ).fetchone()
+        old_status = (
+            old_row[0] if old_row is not None and not isinstance(old_row, sqlite3.Row)
+            else old_row["status"] if old_row is not None
+            else None
+        )
+        old_zettel_id = str((
+            old_row[1] if old_row is not None and not isinstance(old_row, sqlite3.Row)
+            else old_row["zettel_id"] if old_row is not None
+            else ""
+        ) or "")
         old_is_canonical = (
             old_row is not None
             and relative.startswith("zettels/")
-            and str(old_row[0] if not isinstance(old_row, sqlite3.Row) else old_row["status"]) == "canonical"
+            and str(old_status or "") == "canonical"
         )
         try:
             zettel_stat = zettel_path.stat()
@@ -77716,23 +78443,26 @@ def upsert_zettel_index_entry(root: Path, zettel_path: Path, frontmatter: dict[s
             (
                 relative,
                 zettel_id or None,
-                "" if redacted else frontmatter.get("title"),
+                "" if (redacted or quarantined) else frontmatter.get("title"),
                 zettel_status,
-                frontmatter.get("kind"),
-                "" if redacted else body,
-                "" if redacted else json.dumps(json_safe(frontmatter), ensure_ascii=False, default=str),
+                None if quarantined else frontmatter.get("kind"),
+                "" if (redacted or quarantined) else body,
+                "" if (redacted or quarantined) else json.dumps(json_safe(frontmatter), ensure_ascii=False, default=str),
                 zettel_size,
                 zettel_mtime_ns,
-                "" if redacted else sha256_text(body),
-                "" if redacted else approved_body_sha256,
-                1 if (not redacted and contains_forbidden_location_reference(full_text)) else 0,
+                "" if (redacted or quarantined) else sha256_text(body),
+                "" if (redacted or quarantined) else approved_body_sha256,
+                1 if (not redacted and not quarantined and contains_forbidden_location_reference(full_text)) else 0,
             ),
         )
 
+        if old_zettel_id:
+            conn.execute("DELETE FROM edges WHERE from_id = ?", (old_zettel_id,))
+            conn.execute("DELETE FROM zettel_facets WHERE zettel_id = ?", (old_zettel_id,))
         if zettel_id:
             conn.execute("DELETE FROM edges WHERE from_id = ?", (zettel_id,))
             conn.execute("DELETE FROM zettel_facets WHERE zettel_id = ?", (zettel_id,))
-            if not redacted:
+            if not redacted and not quarantined:
                 for ref in collect_referenced_zets(frontmatter):
                     conn.execute(
                         "INSERT INTO edges(from_id, to_id, edge_type) VALUES (?, ?, ?)",
@@ -77752,7 +78482,13 @@ def upsert_zettel_index_entry(root: Path, zettel_path: Path, frontmatter: dict[s
             conn,
             zettel_path=zettel_path,
             old_is_canonical=old_is_canonical,
-            new_is_canonical=relative.startswith("zettels/") and zettel_status == "canonical",
+            new_is_canonical=(
+                not quarantined
+                and relative.startswith("zettels/")
+                and zettel_status == "canonical"
+            ),
+            old_is_quarantined=str(old_status or "") == ZETTEL_QUARANTINED_STATUS,
+            new_is_quarantined=quarantined,
         )
         conn.commit()
     finally:
@@ -77766,6 +78502,8 @@ def update_archive_index_metadata_for_zettel_upsert(
     zettel_path: Path,
     old_is_canonical: bool,
     new_is_canonical: bool,
+    old_is_quarantined: bool,
+    new_is_quarantined: bool,
 ) -> None:
     metadata = read_archive_index_metadata(conn)
     if not metadata or metadata.get("schema") != INDEX_METADATA_SCHEMA:
@@ -77773,8 +78511,13 @@ def update_archive_index_metadata_for_zettel_upsert(
     try:
         canonical_count = int(metadata.get("canonical_zettel_count", "0"))
         canonical_max_mtime_ns = int(metadata.get("canonical_max_mtime_ns", "0"))
+        quarantined_zettel_count = int(metadata.get("quarantined_zettel_count", ""))
     except ValueError:
         return
+    index_complete_value = metadata.get("index_complete")
+    if index_complete_value not in {"true", "false"} or quarantined_zettel_count < 0:
+        return
+    index_complete = index_complete_value == "true"
     if old_is_canonical and not new_is_canonical:
         canonical_count = max(0, canonical_count - 1)
     elif new_is_canonical and not old_is_canonical:
@@ -77784,10 +78527,21 @@ def update_archive_index_metadata_for_zettel_upsert(
             canonical_max_mtime_ns = max(canonical_max_mtime_ns, zettel_path.stat().st_mtime_ns)
         except OSError:
             pass
+    if old_is_quarantined and not new_is_quarantined:
+        quarantined_zettel_count = max(0, quarantined_zettel_count - 1)
+    elif new_is_quarantined and not old_is_quarantined:
+        quarantined_zettel_count += 1
+    if new_is_quarantined:
+        index_complete = False
     replace_archive_index_metadata(
         conn,
         canonical_zettel_count=canonical_count,
         canonical_max_mtime_ns=canonical_max_mtime_ns,
+        # A partial upsert cannot prove that every prior quarantine has been
+        # repaired, so it may make completeness false but never promote false
+        # back to true.  Only a full rebuild can do that.
+        index_complete=index_complete,
+        quarantined_zettel_count=quarantined_zettel_count,
     )
 
 
@@ -77869,7 +78623,7 @@ def view_zets(
 
     sql = [
         "SELECT zettel_id, title, status, kind, path FROM zettels",
-        "WHERE zettel_id IS NOT NULL AND coalesce(status, '') != 'redacted'",
+        "WHERE zettel_id IS NOT NULL AND status IN ('draft', 'canonical', 'archived')",
     ]
     params: list[Any] = []
     for key, value in wanted.items():
@@ -77955,7 +78709,7 @@ def normalize_view_facet_filters(raw_filters: dict[str, Any]) -> tuple[dict[str,
 def count_indexed_zets_for_facets(conn: sqlite3.Connection, facets: dict[str, str]) -> int:
     sql = [
         "SELECT COUNT(*) AS count FROM zettels",
-        "WHERE zettel_id IS NOT NULL AND coalesce(status, '') != 'redacted'",
+        "WHERE zettel_id IS NOT NULL AND status IN ('draft', 'canonical', 'archived')",
     ]
     params: list[Any] = []
     for key, value in facets.items():
@@ -77974,7 +78728,7 @@ def indexed_facet_value_count(conn: sqlite3.Connection, key: str, value: str) ->
         SELECT COUNT(DISTINCT f.zettel_id) AS count
         FROM zettel_facets f
         JOIN zettels z ON z.zettel_id = f.zettel_id
-        WHERE coalesce(z.status, '') != 'redacted'
+        WHERE z.status IN ('draft', 'canonical', 'archived')
           AND f.facet_key = ?
           AND f.facet_value = ?
         """,
@@ -77989,7 +78743,7 @@ def indexed_facet_distribution(conn: sqlite3.Connection, key: str, *, limit: int
         SELECT COUNT(DISTINCT facet_value) AS count
         FROM zettel_facets f
         JOIN zettels z ON z.zettel_id = f.zettel_id
-        WHERE coalesce(z.status, '') != 'redacted'
+        WHERE z.status IN ('draft', 'canonical', 'archived')
           AND f.facet_key = ?
         """,
         (key,),
@@ -77999,7 +78753,7 @@ def indexed_facet_distribution(conn: sqlite3.Connection, key: str, *, limit: int
         SELECT f.facet_value, COUNT(DISTINCT f.zettel_id) AS count
         FROM zettel_facets f
         JOIN zettels z ON z.zettel_id = f.zettel_id
-        WHERE coalesce(z.status, '') != 'redacted'
+        WHERE z.status IN ('draft', 'canonical', 'archived')
           AND f.facet_key = ?
         GROUP BY f.facet_value
         ORDER BY count DESC, f.facet_value ASC
@@ -78090,7 +78844,7 @@ def indexed_facet_role_report(conn: sqlite3.Connection, *, used_facet_keys: set[
                COUNT(DISTINCT f.facet_value) AS distinct_value_count
         FROM zettel_facets f
         JOIN zettels z ON z.zettel_id = f.zettel_id
-        WHERE coalesce(z.status, '') != 'redacted'
+        WHERE z.status IN ('draft', 'canonical', 'archived')
         GROUP BY f.facet_key
         ORDER BY f.facet_key ASC
         """
@@ -78444,6 +79198,7 @@ def live_zettel_index_entries(
     db_mtime: float | None = None,
     progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
     read_observations: dict[str, bool] | None = None,
+    inspection_issues: list[dict[str, str]] | None = None,
 ) -> list[dict[str, Any]]:
     entries: list[dict[str, Any]] = []
     zettel_paths = list(iter_zettel_paths(root))
@@ -78451,24 +79206,34 @@ def live_zettel_index_entries(
     if progress_callback is not None:
         progress_callback("index-health-live-zettels", "start", 0, zettel_path_count)
     for path_index, path in enumerate(zettel_paths, start=1):
-        try:
-            frontmatter, body_text_read = read_zettel_frontmatter_only_with_observation(
-                path,
-                strict=True,
-            )
-            if body_text_read and read_observations is not None:
-                read_observations["zettel_body_text_read"] = True
-            stat = path.stat()
-        except (OSError, UnicodeError, ArchiveServiceError):
-            continue
         relative = archive_relative_path(path, root)
+        inspection = inspect_zettel_frontmatter_boundary(path)
+        if inspection.get("body_text_read") and read_observations is not None:
+            read_observations["zettel_body_text_read"] = True
+        try:
+            stat = path.stat()
+        except OSError:
+            stat = None
+            inspection = {
+                "frontmatter": {},
+                "metadata_readable": False,
+                "issue_code": "frontmatter_io_error",
+                "body_text_read": bool(inspection.get("body_text_read")),
+            }
+        frontmatter = inspection.get("frontmatter") if isinstance(inspection.get("frontmatter"), dict) else {}
+        issue_code = inspection.get("issue_code")
+        if isinstance(issue_code, str) and inspection_issues is not None:
+            inspection_issues.append({"path": relative, "code": issue_code})
         entries.append(
             {
                 "path": relative,
-                "zettel_id": str(frontmatter.get("id") or ""),
-                "status": str(frontmatter.get("status") or ""),
-                "kind": str(frontmatter.get("kind") or ""),
-                "modified_after_index": bool(db_mtime is not None and stat.st_mtime > db_mtime),
+                "zettel_id": str(frontmatter.get("id") or "") if inspection.get("metadata_readable") else "",
+                "status": str(frontmatter.get("status") or "") if inspection.get("metadata_readable") else "",
+                "kind": str(frontmatter.get("kind") or "") if inspection.get("metadata_readable") else "",
+                "metadata_readable": bool(inspection.get("metadata_readable")),
+                "modified_after_index": bool(
+                    stat is not None and db_mtime is not None and stat.st_mtime > db_mtime
+                ),
             }
         )
         if progress_callback is not None and (
@@ -78500,11 +79265,13 @@ def index_health(
     max_items = max(1, min(int(max_items), 500))
     db_mtime = db_path.stat().st_mtime if db_path.is_file() else None
     read_observations = {"zettel_body_text_read": False}
+    live_zettel_inspection_issues: list[dict[str, str]] = []
     live_entries = live_zettel_index_entries(
         root,
         db_mtime=db_mtime,
         progress_callback=progress_callback,
         read_observations=read_observations,
+        inspection_issues=live_zettel_inspection_issues,
     )
     live_by_path = {entry["path"]: entry for entry in live_entries}
     indexed_entries: list[dict[str, Any]] = []
@@ -78566,11 +79333,15 @@ def index_health(
     for path_index, path in enumerate(shared_paths, start=1):
         live = live_by_path[path]
         indexed = indexed_by_path[path]
-        changed_fields = [
-            field
-            for field in ("zettel_id", "status", "kind")
-            if str(live.get(field) or "") != str(indexed.get(field) or "")
-        ]
+        changed_fields = (
+            [
+                field
+                for field in ("zettel_id", "status", "kind")
+                if str(live.get(field) or "") != str(indexed.get(field) or "")
+            ]
+            if live.get("metadata_readable")
+            else []
+        )
         if changed_fields:
             changed_metadata.append({"path": path, "changed_fields": changed_fields})
         if progress_callback is not None and (
@@ -78592,12 +79363,19 @@ def index_health(
         stale_reasons.append("indexed_zettel_metadata_differs_from_live_frontmatter")
     if modified_after_index:
         stale_reasons.append("live_zettel_modified_after_index")
+    if live_zettel_inspection_issues:
+        stale_reasons.append("live_zettel_frontmatter_unreadable_or_invalid")
     if blockers:
         stale_reasons.append("index_health_blocked")
 
     index_state = "blocked" if blockers else ("stale_or_incomplete" if stale_reasons else "current")
     next_safe_actions: list[str] = []
-    if "archive_index_missing" in blockers:
+    if live_zettel_inspection_issues:
+        next_safe_actions.append(
+            "Repair the listed zettel frontmatter or encoding before rebuilding the generated index."
+        )
+        next_safe_actions.append("After repair, run archive index and then index-health again.")
+    elif "archive_index_missing" in blockers:
         next_safe_actions.append("Run archive index before view-zets, related-zets, search, or view-health.")
     elif stale_reasons:
         next_safe_actions.append("Run archive index to rebuild the generated local SQLite index from current archive files.")
@@ -78613,6 +79391,10 @@ def index_health(
         "index_state": index_state,
         "summary": {
             "live_zettel_count": len(live_entries),
+            "live_zettel_metadata_readable_count": sum(
+                1 for entry in live_entries if entry.get("metadata_readable")
+            ),
+            "live_zettel_inspection_issue_count": len(live_zettel_inspection_issues),
             "indexed_zettel_count": len(indexed_entries),
             "missing_from_index_count": len(missing_from_index),
             "extra_in_index_count": len(extra_in_index),
@@ -78625,9 +79407,16 @@ def index_health(
             "extra_in_index": extra_in_index[:max_items],
             "changed_metadata": changed_metadata[:max_items],
             "modified_after_index": modified_after_index[:max_items],
+            "live_zettel_inspection_issues": live_zettel_inspection_issues[:max_items],
             "truncated": any(
                 len(items) > max_items
-                for items in (missing_from_index, extra_in_index, changed_metadata, modified_after_index)
+                for items in (
+                    missing_from_index,
+                    extra_in_index,
+                    changed_metadata,
+                    modified_after_index,
+                    live_zettel_inspection_issues,
+                )
             ),
         },
         "stale_reasons": unique_preserve_order(stale_reasons),
@@ -78684,7 +79473,7 @@ def get_related_zets(
         subject = conn.execute(
             "SELECT status FROM zettels WHERE zettel_id = ?", (zettel_id,)
         ).fetchone()
-        if subject is not None and (subject["status"] or "") == "redacted":
+        if subject is None or (subject["status"] or "") not in ZETTEL_QUERYABLE_STATUSES:
             return {"zettel_id": zettel_id, "depth": depth, "count": 0, "related": [], "truncated": False}
         for hop in range(1, depth + 1):
             next_frontier: set[str] = set()
@@ -78708,8 +79497,9 @@ def get_related_zets(
                         "SELECT title, status, kind, path FROM zettels WHERE zettel_id = ?",
                         (other,),
                     ).fetchone()
-                    if zettel_row is not None and (zettel_row["status"] or "") == "redacted":
-                        # Privacy floor: traversal must never walk into a redacted zettel.
+                    if zettel_row is None or (zettel_row["status"] or "") not in ZETTEL_QUERYABLE_STATUSES:
+                        # Privacy floor: traversal must never walk into an
+                        # absent, unvalidated, redacted, or quarantined zettel.
                         visited.add(other)
                         continue
                     visited.add(other)
@@ -78761,7 +79551,7 @@ def search_archive(archive_root: Path | str, query: str, limit: int = 20) -> dic
             FROM zettels
             -- Privacy: a 'redacted' zettel's content is deliberately suppressed; it must never be
             -- matched on or surfaced (body/frontmatter) by search. draft/canonical/archived stay searchable.
-            WHERE coalesce(status, '') != 'redacted'
+            WHERE status IN ('draft', 'canonical', 'archived')
               AND lower(coalesce(zettel_id, '') || ' ' || coalesce(title, '') || ' ' || coalesce(status, '') || ' ' ||
                         coalesce(kind, '') || ' ' || coalesce(body, '') || ' ' || coalesce(frontmatter_json, '')) LIKE ?
             ORDER BY path
@@ -78769,9 +79559,9 @@ def search_archive(archive_root: Path | str, query: str, limit: int = 20) -> dic
             """,
             (like, limit),
         ):
-            if (row["status"] or "") == "redacted":
-                # Defense in depth: redacted zettels are already excluded in SQL above; this guard
-                # guarantees their body can never be emitted even if the query is later modified.
+            if (row["status"] or "") not in ZETTEL_QUERYABLE_STATUSES:
+                # Defense in depth: only validated lifecycle states are selected
+                # above; this guard keeps future query edits fail-closed too.
                 continue
             results.append(
                 {
@@ -79419,13 +80209,22 @@ def sync_base_link_types(
     }
 
 
-def used_zettel_edge_types(root: Path, candidate_types: set[str]) -> dict[str, list[str]]:
+def used_zettel_edge_types(
+    root: Path,
+    candidate_types: set[str],
+) -> tuple[dict[str, list[str]], int]:
     usage: dict[str, list[str]] = {edge_type: [] for edge_type in candidate_types}
+    unavailable_count = 0
     for path in iter_zettel_paths(root):
-        try:
-            frontmatter, _body = split_zettel_text(path.read_text(encoding="utf-8"))
-        except (OSError, ArchiveServiceError, ValueError):
+        inspection = inspect_zettel_frontmatter_boundary(path)
+        if (
+            not inspection["metadata_readable"]
+            or inspection["frontmatter"].get("status")
+            not in ZETTEL_QUERYABLE_STATUSES
+        ):
+            unavailable_count += 1
             continue
+        frontmatter = inspection["frontmatter"]
         edges = frontmatter.get("edges")
         if not isinstance(edges, list):
             continue
@@ -79436,7 +80235,14 @@ def used_zettel_edge_types(root: Path, candidate_types: set[str]) -> dict[str, l
             edge_type = str(edge.get("type") or "").strip()
             if edge_type in candidate_types:
                 usage.setdefault(edge_type, []).append(relative)
-    return {edge_type: unique_preserve_order(paths) for edge_type, paths in usage.items() if paths}
+    return (
+        {
+            edge_type: unique_preserve_order(paths)
+            for edge_type, paths in usage.items()
+            if paths
+        },
+        unavailable_count,
+    )
 
 
 def migrate_link_types_v03_revert(
@@ -79508,7 +80314,22 @@ def migrate_link_types_v03_revert(
         else:
             appended_ids = [str(item) for item in raw_appended_ids if isinstance(item, str) and item in recommended_set]
     revert_candidate_set = set(appended_ids)
-    used_types = used_zettel_edge_types(root, revert_candidate_set)
+    used_types, unavailable_edge_usage_count = used_zettel_edge_types(
+        root,
+        revert_candidate_set,
+    )
+    if unavailable_edge_usage_count:
+        blockers.append(
+            {
+                "path": types_relative,
+                "field": "link_types",
+                "code": "zettel_edge_usage_unavailable",
+                "message": (
+                    "Cannot safely revert link types while one or more zettels "
+                    "have unreadable or redacted edge metadata."
+                ),
+            }
+        )
 
     removable_ids: list[str] = []
     kept_records: list[dict[str, Any]] = []
@@ -79791,34 +80612,57 @@ def migrate_frontmatter_v03(
 
 def frontmatter_v03_migration_plan_for_path(path: Path, archive_root: Path, archive_id: str) -> dict[str, Any]:
     relative_path = archive_relative_path(path, archive_root)
-    text = path.read_text(encoding="utf-8")
-    match = FRONTMATTER_RE.match(text)
     changes: list[dict[str, Any]] = []
     blockers: list[dict[str, Any]] = []
-
-    if not match:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
         return {
             "path": relative_path,
             "changes": changes,
             "blockers": [
-                frontmatter_v03_blocker(relative_path, "$", "missing_frontmatter", "Zettel has no YAML frontmatter.")
+                frontmatter_v03_blocker(
+                    relative_path,
+                    "$",
+                    "frontmatter_unreadable",
+                    "Zettel frontmatter could not be read safely.",
+                )
             ],
-            "new_text": text,
+            "new_text": None,
         }
-
-    frontmatter_text = match.group(1)
-    loaded = load_yaml(frontmatter_text)
-    if not isinstance(loaded, dict):
+    boundary = parse_zettel_content_boundary(text)
+    if boundary["state"] == "blocked":
         return {
             "path": relative_path,
             "changes": changes,
             "blockers": [
-                frontmatter_v03_blocker(relative_path, "$", "invalid_frontmatter", "Zettel frontmatter is not an object.")
+                frontmatter_v03_blocker(
+                    relative_path,
+                    "$",
+                    str(boundary["reason"]),
+                    "Zettel frontmatter could not be validated.",
+                )
             ],
-            "new_text": text,
+            "new_text": None,
+        }
+    if boundary["state"] == "redacted":
+        return {
+            "path": relative_path,
+            "changes": changes,
+            "blockers": [
+                frontmatter_v03_blocker(
+                    relative_path,
+                    "$",
+                    "redacted_zettel_not_migrated",
+                    "Redacted zettels require a separate reviewed migration.",
+                )
+            ],
+            "new_text": None,
         }
 
-    frontmatter = copy.deepcopy(json_safe(loaded))
+    match = FRONTMATTER_RE.match(text)
+    assert match is not None
+    frontmatter = copy.deepcopy(boundary["frontmatter"])
     for field in ("id", "title", "created_at", "updated_at", "archive_id", "status"):
         if not str(frontmatter.get(field) or "").strip():
             blockers.append(
@@ -84227,12 +85071,16 @@ def staged_cleanup_check(
         zettel_count += 1
         if _progress_step(zettel_count):
             _progress("zettel-references", f"scanned {zettel_count} notes")
-        try:
-            frontmatter, _body = split_zettel_text(zettel_path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeError, yaml.YAMLError, ArchiveServiceError):
-            # A malformed/unreadable note reduces reference accuracy at worst; it must never
-            # abort the deletion-safety verdict for an unrelated staged folder.
+        inspection = inspect_zettel_frontmatter_boundary(zettel_path)
+        if (
+            not inspection["metadata_readable"]
+            or inspection["frontmatter"].get("status")
+            not in ZETTEL_QUERYABLE_STATUSES
+        ):
+            # Reference counts are informative only. Ambiguous and redacted
+            # zettels must not contribute content-derived side channels.
             continue
+        frontmatter = inspection["frontmatter"]
         for ref in collect_referenced_objets(json_safe(frontmatter)):
             ref_blockers: list[str] = []
             ref_id = normalize_object_id(str(ref.get("value") or ref.get("object_id") or ""), ref_blockers)

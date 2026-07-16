@@ -30635,8 +30635,6 @@ state:
             index_result = archive_services.index_archive(archive_root)
             self.assertTrue(index_result["ok"])
 
-            broken_path = archive_root / "zettels" / "zet_20260621_scope_unrelated_broken.md"
-            broken_path.write_text("This unrelated file has no frontmatter.\n", encoding="utf-8")
             code, output = self.run_cli(
                 ["validate", str(archive_root), "--scope", "source_database=database_2_0", "--format", "json"]
             )
@@ -30646,6 +30644,21 @@ state:
             self.assertEqual(result["scope"]["mode"], "facet")
             self.assertEqual(result["scope"]["zettel_count"], 1)
             self.assertTrue(result["scope"]["index_cache_used"])
+
+            broken_path = archive_root / "zettels" / "zet_20260621_scope_unrelated_broken.md"
+            broken_path.write_text("This unrelated file has no frontmatter.\n", encoding="utf-8")
+            stale_code, stale_output = self.run_cli(
+                ["validate", str(archive_root), "--scope", "source_database=database_2_0", "--format", "json"]
+            )
+            self.assertEqual(stale_code, 1, stale_output)
+            stale_result = json.loads(stale_output)
+            self.assertFalse(stale_result["scope"]["index_cache_used"])
+            stale_blocker = next(
+                item
+                for item in stale_result["diagnostics"]
+                if item["code"] == "validate_scope_blocked"
+            )
+            self.assertIn("live_zettels_missing_from_index", stale_blocker["message"])
             self.assertNotIn("zet_20260621_scope_unrelated_broken", output)
 
             conn = archive_services.connect_archive_index(archive_root / archive_services.INDEX_RELATIVE_PATH, row_factory=True)
@@ -36755,6 +36768,56 @@ state:
             self.assertNotIn(artifact_ref_marker, text_output)
             self.assertNotIn(body_marker, text_output)
 
+    def test_derived_artifact_staleness_treats_redacted_source_as_unresolved(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            source_path = archive_root / "zettels" / "zet_20240504_fake_lunch_thought.md"
+            target_path = archive_root / "zettels" / "zet_20260519_fake_family_memory.md"
+            source_frontmatter, source_body = archive_services.split_zettel_text(
+                source_path.read_text(encoding="utf-8")
+            )
+            target_frontmatter, target_body = archive_services.split_zettel_text(
+                target_path.read_text(encoding="utf-8")
+            )
+            secret = "PRIVATE_REDACTED_STALENESS_SOURCE_5521"
+            source_frontmatter["status"] = "redacted"
+            source_frontmatter["updated_at"] = "2099-01-01T00:00:00Z"
+            source_frontmatter["title"] = secret
+            target_frontmatter["derived_artifacts"] = [
+                {
+                    "artifact_ref": "private-redacted-source-report",
+                    "source_zettels": [
+                        "zettels/zet_20240504_fake_lunch_thought.md"
+                    ],
+                    "last_synced_at": "2026-01-01T00:00:00Z",
+                    "sync_status": "synced",
+                }
+            ]
+            source_path.write_text(
+                "---\n" + archive_cli.dump_yaml(source_frontmatter) + "---\n\n"
+                + source_body.rstrip() + f"\n{secret}\n",
+                encoding="utf-8",
+            )
+            target_path.write_text(
+                "---\n" + archive_cli.dump_yaml(target_frontmatter) + "---\n\n"
+                + target_body.rstrip() + "\n",
+                encoding="utf-8",
+            )
+
+            result = archive_services.derived_artifact_staleness_check(
+                archive_root, dry_run=True
+            )
+
+            self.assertFalse(result["ok"], result)
+            self.assertEqual(result["counts"]["redacted_zettels_excluded"], 1)
+            self.assertEqual(result["counts"]["unresolved_source_zettels"], 1)
+            self.assertEqual(result["counts"]["stale_artifact"], 0)
+            self.assertNotIn(secret, json.dumps(result))
+            self.assertNotIn(
+                "zettels/zet_20240504_fake_lunch_thought.md",
+                json.dumps(result["boards"]["unresolved_source_zettels"]),
+            )
+
     def test_read_zettel_by_id_and_path(self) -> None:
         archive_root = KIT_ROOT / "examples" / "fake-life-archive"
         zettel_id = "zet_20240504_fake_lunch_thought"
@@ -41286,8 +41349,11 @@ state:
             dry_result = json.loads(dry_output)
             self.assertTrue(dry_result["duplicate_check"]["used_generated_index"])
             self.assertEqual(dry_result["duplicate_check"]["source"], "generated_index")
-            self.assertEqual(dry_result["duplicate_check"]["staleness_check"], "index_metadata")
-            self.assertEqual(dry_result["duplicate_check"]["live_staleness_paths_checked"], 0)
+            self.assertEqual(
+                dry_result["duplicate_check"]["staleness_check"],
+                "index_metadata_plus_live_stats",
+            )
+            self.assertGreater(dry_result["duplicate_check"]["live_staleness_paths_checked"], 0)
 
             approve_code, approve_output = self.run_cli(
                 [
@@ -41305,8 +41371,11 @@ state:
             self.assertEqual(approve_code, 0, approve_output)
             approve_result = json.loads(approve_output)
             self.assertTrue(approve_result["duplicate_check"]["used_generated_index"])
-            self.assertEqual(approve_result["duplicate_check"]["staleness_check"], "index_metadata")
-            self.assertEqual(approve_result["duplicate_check"]["live_staleness_paths_checked"], 0)
+            self.assertEqual(
+                approve_result["duplicate_check"]["staleness_check"],
+                "index_metadata_plus_live_stats",
+            )
+            self.assertGreater(approve_result["duplicate_check"]["live_staleness_paths_checked"], 0)
             self.assertTrue(approve_result["generated_index_updated"])
 
             health = archive_services.index_health(archive_root, dry_run=True)
@@ -41330,9 +41399,6 @@ state:
             with patch(
                 "wom_kit.archive_services.iter_zettel_paths",
                 side_effect=AssertionError("mint by standard draft id should not scan all zettels"),
-            ), patch(
-                "wom_kit.archive_services.safe_archive_glob",
-                side_effect=AssertionError("mint generated-index staleness check should not glob canonical zettels"),
             ):
                 dry_code, dry_output = self.run_cli(
                     [
@@ -41349,8 +41415,11 @@ state:
                 dry_result = json.loads(dry_output)
                 self.assertEqual(dry_result["draft_path"], "inbox/zet_20260519_draft_ai_lunch_note.md")
                 self.assertTrue(dry_result["duplicate_check"]["used_generated_index"])
-                self.assertEqual(dry_result["duplicate_check"]["staleness_check"], "index_metadata")
-                self.assertEqual(dry_result["duplicate_check"]["live_staleness_paths_checked"], 0)
+                self.assertEqual(
+                    dry_result["duplicate_check"]["staleness_check"],
+                    "index_metadata_plus_live_stats",
+                )
+                self.assertGreater(dry_result["duplicate_check"]["live_staleness_paths_checked"], 0)
 
                 approve_code, approve_output = self.run_cli(
                     [
@@ -41369,8 +41438,11 @@ state:
                 approve_result = json.loads(approve_output)
                 self.assertEqual(approve_result["draft_path"], "inbox/zet_20260519_draft_ai_lunch_note.md")
                 self.assertTrue(approve_result["duplicate_check"]["used_generated_index"])
-                self.assertEqual(approve_result["duplicate_check"]["staleness_check"], "index_metadata")
-                self.assertEqual(approve_result["duplicate_check"]["live_staleness_paths_checked"], 0)
+                self.assertEqual(
+                    approve_result["duplicate_check"]["staleness_check"],
+                    "index_metadata_plus_live_stats",
+                )
+                self.assertGreater(approve_result["duplicate_check"]["live_staleness_paths_checked"], 0)
                 self.assertTrue(approve_result["generated_index_updated"])
 
     def test_mint_zettel_real_blocks_dry_run_blockers_without_writing(self) -> None:
@@ -41734,7 +41806,7 @@ state:
                 health["summary"]["indexed_zettel_count"],
             )
 
-    def test_invalid_yaml_index_failure_is_sanitized_and_preserves_previous_rows(self) -> None:
+    def test_invalid_yaml_index_installs_content_free_quarantine_and_reports_incomplete(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
             previous = archive_services.index_archive(archive_root)
@@ -41758,25 +41830,321 @@ state:
             )
 
             self.assertEqual(code, 1, stdout + stderr)
-            self.assertEqual(stdout, "")
+            summary = json.loads(stdout)
+            self.assertFalse(summary["ok"])
+            self.assertEqual(summary["state"], "completed_with_quarantined_zettels")
+            self.assertTrue(summary["index_rebuilt"])
+            self.assertFalse(summary["index_complete"])
+            self.assertEqual(summary["summary"]["quarantined_zettel_count"], 1)
             self.assertNotIn("private yaml marker", stderr)
             self.assertNotIn("Private body marker", stderr)
             saved_text = (archive_root / relative).read_text(encoding="utf-8")
             self.assertNotIn("private yaml marker", saved_text)
             self.assertNotIn("Private body marker", saved_text)
             saved = json.loads(saved_text)
-            self.assertEqual(saved["lifecycle_action"], "index_command_failure")
+            self.assertFalse(saved["ok"])
+            self.assertEqual(saved["state"], "completed_with_quarantined_zettels")
+            self.assertTrue(saved["index_rebuilt"])
+            self.assertFalse(saved["index_complete"])
+            self.assertEqual(saved["quarantined_zettel_count"], 1)
+            self.assertEqual(saved["quarantined_zettels"][0]["code"], "frontmatter_yaml_invalid")
             self.assertEqual(saved["cli_execution"]["exit_code"], 1)
-            self.assertEqual(saved["cli_execution"]["error"]["type"], "ArchiveServiceError")
+            self.assertTrue(saved["cli_execution"]["result_available"])
+            self.assertIsNone(saved["cli_execution"]["error"])
 
             conn = archive_services.connect_archive_index(
                 archive_root / archive_services.INDEX_RELATIVE_PATH,
+                row_factory=True,
             )
             try:
                 preserved_count = int(conn.execute("SELECT COUNT(*) FROM zettels").fetchone()[0])
+                indexed_canonical_count = int(
+                    conn.execute(
+                        "SELECT COUNT(*) FROM zettels "
+                        "WHERE coalesce(status, '') = 'canonical' AND path LIKE 'zettels/%'"
+                    ).fetchone()[0]
+                )
+                metadata = archive_services.read_archive_index_metadata(conn)
+                row = conn.execute(
+                    "SELECT zettel_id, title, status, kind, body, frontmatter_json "
+                    "FROM zettels WHERE path = ?",
+                    (archive_services.archive_relative_path(broken_path, archive_root),),
+                ).fetchone()
             finally:
                 conn.close()
             self.assertEqual(preserved_count, previous_count)
+            self.assertIsNotNone(row)
+            self.assertIsNone(row["zettel_id"])
+            self.assertEqual(row["title"], "")
+            self.assertEqual(row["status"], archive_services.ZETTEL_QUARANTINED_STATUS)
+            self.assertIsNone(row["kind"])
+            self.assertEqual(row["body"], "")
+            self.assertEqual(row["frontmatter_json"], "")
+            self.assertEqual(metadata["schema"], archive_services.INDEX_METADATA_SCHEMA)
+            self.assertEqual(metadata["index_complete"], "false")
+            self.assertEqual(metadata["quarantined_zettel_count"], "1")
+            self.assertIn(
+                "archive_index_incomplete",
+                archive_services.archive_index_metadata_stale_reasons(
+                    metadata,
+                    indexed_canonical_count=indexed_canonical_count,
+                ),
+            )
+
+            readable_path = next(
+                path
+                for path in sorted((archive_root / "zettels").glob("*.md"))
+                if path != broken_path
+            )
+            readable_frontmatter, readable_body = archive_services.require_readable_zettel_content(
+                readable_path
+            )
+            self.assertTrue(
+                archive_services.upsert_zettel_index_entry(
+                    archive_root,
+                    readable_path,
+                    readable_frontmatter,
+                    readable_body,
+                )
+            )
+            conn = archive_services.connect_archive_index(
+                archive_root / archive_services.INDEX_RELATIVE_PATH,
+                row_factory=True,
+            )
+            try:
+                metadata_after_upsert = archive_services.read_archive_index_metadata(conn)
+            finally:
+                conn.close()
+            self.assertEqual(metadata_after_upsert["index_complete"], "false")
+            self.assertEqual(metadata_after_upsert["quarantined_zettel_count"], "1")
+
+    def test_incomplete_index_blocks_mint_oracle_and_scoped_validate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            self.make_fake_lunch_draft_promotion_ready(
+                archive_root,
+                title="Incomplete index approval gate probe",
+                replacement_body=(
+                    "A distinct promotion body that must not bypass an incomplete generated index.\n"
+                ),
+            )
+            broken_path = sorted((archive_root / "zettels").glob("*.md"))[0]
+            broken_path.write_text(
+                "---\nid: [unterminated approval gate marker\n---\nPrivate body.\n",
+                encoding="utf-8",
+            )
+
+            index_result = archive_services.index_archive(archive_root)
+            self.assertFalse(index_result["index_complete"], index_result)
+            rows, state = archive_services.promotion_duplicate_index_rows(archive_root)
+            self.assertEqual(rows, [])
+            self.assertFalse(state["used_generated_index"])
+            self.assertEqual(state["source"], "live_scan")
+            self.assertEqual(state["fallback_reason"], "archive_index_stale")
+            self.assertIn("archive_index_incomplete", state["stale_reasons"])
+
+            mint_code, mint_output = self.run_cli(
+                [
+                    "mint-zet",
+                    str(archive_root),
+                    "--path",
+                    "inbox/zet_20260519_draft_ai_lunch_note.md",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(mint_code, 1, mint_output)
+            mint_result = json.loads(mint_output)
+            self.assertFalse(mint_result["ok"])
+            self.assertIn("archive_index_incomplete", mint_result["duplicate_check"]["stale_reasons"])
+            self.assertEqual(
+                [item["reason"] for item in mint_result["near_duplicates"]],
+                ["archive_index_incomplete"],
+            )
+
+            validate_code, validate_output = self.run_cli(
+                [
+                    "validate",
+                    str(archive_root),
+                    "--scope",
+                    "source_database=database_2_0",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(validate_code, 1, validate_output)
+            validate_result = json.loads(validate_output)
+            self.assertFalse(validate_result["ok"])
+            self.assertFalse(validate_result["scope"]["index_cache_used"])
+            scope_blocker = next(
+                item
+                for item in validate_result["diagnostics"]
+                if item["code"] == "validate_scope_blocked"
+            )
+            self.assertIn("archive_index_incomplete", scope_blocker["message"])
+
+    def test_incomplete_index_blocks_mint_when_canonical_root_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            self.make_fake_lunch_draft_promotion_ready(
+                archive_root,
+                title="Missing canonical root incomplete gate",
+                replacement_body="A valid draft must not bypass incomplete metadata.\n",
+            )
+            shutil.rmtree(archive_root / "zettels")
+            malformed_relative = "inbox/zet_20260717_malformed_inbox_peer.md"
+            (archive_root / malformed_relative).write_text(
+                "---\nid: [unterminated missing-root marker\n---\nPrivate body.\n",
+                encoding="utf-8",
+            )
+            index_result = archive_services.index_archive(archive_root)
+            self.assertFalse(index_result["index_complete"], index_result)
+
+            result = archive_services.promote_zettel_dry_run(
+                archive_root,
+                relative_path="inbox/zet_20260519_draft_ai_lunch_note.md",
+            )
+
+            self.assertFalse(result["ok"], result)
+            self.assertIn("archive_index_incomplete", result["duplicate_check"]["stale_reasons"])
+            self.assertEqual(
+                [item["reason"] for item in result["near_duplicates"]],
+                ["archive_index_incomplete"],
+            )
+
+    def test_current_index_stat_check_falls_back_and_blocks_corrupted_candidate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            self.make_fake_lunch_draft_promotion_ready(
+                archive_root,
+                title="Current index stat fallback probe",
+                replacement_body="A current index must be rechecked before approval.\n",
+            )
+            index_result = archive_services.index_archive(archive_root)
+            self.assertTrue(index_result["index_complete"], index_result)
+            broken_path = sorted((archive_root / "zettels").glob("*.md"))[0]
+            previous_mtime_ns = broken_path.stat().st_mtime_ns
+            secret = "CURRENT_INDEX_CORRUPTION_SECRET_7305"
+            broken_path.write_text(
+                f"---\nid: [unterminated {secret}\n---\nPrivate body {secret}.\n",
+                encoding="utf-8",
+            )
+            current_stat = broken_path.stat()
+            os.utime(
+                broken_path,
+                ns=(current_stat.st_atime_ns, max(current_stat.st_mtime_ns, previous_mtime_ns + 1_000_000_000)),
+            )
+
+            rows, state = archive_services.promotion_duplicate_index_rows(archive_root)
+            self.assertEqual(rows, [])
+            self.assertFalse(state["used_generated_index"])
+            self.assertEqual(state["staleness_check"], "index_metadata_plus_live_stats")
+            self.assertGreater(state["live_staleness_paths_checked"], 0)
+            self.assertIn("live_zettel_stat_differs_from_index", state["stale_reasons"])
+            result = archive_services.promote_zettel_dry_run(
+                archive_root,
+                relative_path="inbox/zet_20260519_draft_ai_lunch_note.md",
+            )
+            self.assertFalse(result["ok"], result)
+            self.assertIn(
+                "canonical_candidate_unreadable",
+                [item["reason"] for item in result["near_duplicates"]],
+            )
+            self.assertNotIn(secret, json.dumps(result))
+
+    def test_current_index_stat_check_fails_closed_when_tree_cannot_be_enumerated(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            self.make_fake_lunch_draft_promotion_ready(
+                archive_root,
+                title="Unenumerable tree approval gate",
+                replacement_body="An unenumerable tree must block approval.\n",
+            )
+            index_result = archive_services.index_archive(archive_root)
+            self.assertTrue(index_result["index_complete"], index_result)
+            private_error = PermissionError("C:/private/UNSTATABLE_TREE_SECRET_7306")
+
+            with patch(
+                "wom_kit.archive_services.os.scandir",
+                side_effect=private_error,
+            ):
+                rows, state = archive_services.promotion_duplicate_index_rows(archive_root)
+                result = archive_services.promote_zettel_dry_run(
+                    archive_root,
+                    relative_path="inbox/zet_20260519_draft_ai_lunch_note.md",
+                )
+
+            self.assertEqual(rows, [])
+            self.assertFalse(state["used_generated_index"])
+            self.assertEqual(state["fallback_reason"], "archive_index_stale")
+            self.assertIn("live_zettel_stat_unavailable", state["stale_reasons"])
+            self.assertNotIn("UNSTATABLE_TREE_SECRET_7306", json.dumps(state))
+            self.assertFalse(result["ok"], result)
+            self.assertEqual(
+                [item["reason"] for item in result["near_duplicates"]],
+                ["live_zettel_stat_unavailable"],
+            )
+            self.assertNotIn("UNSTATABLE_TREE_SECRET_7306", json.dumps(result))
+
+            db_path = archive_root / archive_services.INDEX_RELATIVE_PATH
+            for candidate in (db_path, Path(str(db_path) + "-wal"), Path(str(db_path) + "-shm")):
+                if candidate.exists():
+                    candidate.unlink()
+            with patch(
+                "wom_kit.archive_services.os.scandir",
+                side_effect=private_error,
+            ):
+                no_index_result = archive_services.promote_zettel_dry_run(
+                    archive_root,
+                    relative_path="inbox/zet_20260519_draft_ai_lunch_note.md",
+                )
+            self.assertFalse(no_index_result["ok"], no_index_result)
+            self.assertEqual(
+                [item["reason"] for item in no_index_result["near_duplicates"]],
+                ["live_zettel_stat_unavailable"],
+            )
+            self.assertIn(
+                "live_zettel_stat_unavailable",
+                no_index_result["duplicate_check"]["stale_reasons"],
+            )
+            self.assertNotIn("UNSTATABLE_TREE_SECRET_7306", json.dumps(no_index_result))
+
+    def test_live_duplicate_fallback_blocks_unreadable_canonical_candidate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            self.make_fake_lunch_draft_promotion_ready(
+                archive_root,
+                title="Live duplicate fallback unreadable probe",
+                replacement_body=(
+                    "A distinct promotion body used to verify unreadable candidates fail closed.\n"
+                ),
+            )
+            db_path = archive_root / archive_services.INDEX_RELATIVE_PATH
+            for candidate in (db_path, Path(str(db_path) + "-wal"), Path(str(db_path) + "-shm")):
+                if candidate.exists():
+                    candidate.unlink()
+            secret = "UNREADABLE_LIVE_DUPLICATE_SECRET_7303"
+            relative = "zettels/zet_unreadable_live_duplicate_probe.md"
+            (archive_root / relative).write_text(
+                f"---\nid: [unterminated {secret}\n---\nPrivate body {secret}.\n",
+                encoding="utf-8",
+            )
+
+            result = archive_services.promote_zettel_dry_run(
+                archive_root,
+                relative_path="inbox/zet_20260519_draft_ai_lunch_note.md",
+            )
+
+            self.assertFalse(result["ok"], result)
+            blocker = next(
+                item
+                for item in result["near_duplicates"]
+                if item["path"] == relative
+            )
+            self.assertEqual(blocker["reason"], "canonical_candidate_unreadable")
+            self.assertEqual(blocker["severity"], "blocker")
+            self.assertNotIn(secret, json.dumps(result))
 
     def test_invalid_view_yaml_index_failure_is_sanitized_and_rolls_back(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -42181,6 +42549,304 @@ state:
             self.assertNotIn("private parser marker", stderr)
             self.assertFalse((archive_root / relative).exists())
 
+    def test_content_boundary_parser_accepts_supported_forms_and_blocks_ambiguous_forms(self) -> None:
+        valid_frontmatter = "id: zet_boundary_probe\nstatus: canonical\nkind: note\n"
+        supported = {
+            "lf": "---\n" + valid_frontmatter + "---\nBody.\n",
+            "crlf": ("---\r\n" + valid_frontmatter.replace("\n", "\r\n") + "---\r\nBody.\r\n"),
+            "bom_and_trailing_space": "\ufeff---  \n" + valid_frontmatter + "--- \t\nBody.\n",
+        }
+        for label, text in supported.items():
+            with self.subTest(label=label):
+                parsed = archive_services.parse_zettel_content_boundary(text)
+                self.assertEqual(parsed["state"], "readable", parsed)
+                self.assertEqual(parsed["frontmatter"]["id"], "zet_boundary_probe")
+                self.assertIn("Body.", parsed["body"])
+
+        blocked = {
+            "missing_opening": "id: zet_boundary_probe\nstatus: redacted\nSECRET\n",
+            "indented_opening": "  ---\nid: zet_boundary_probe\nstatus: redacted\n---\nSECRET\n",
+            "missing_closing": "---\nid: zet_boundary_probe\nstatus: redacted\nSECRET\n",
+            "closing_at_eof": "---\nid: zet_boundary_probe\nstatus: redacted\n---",
+            "invalid_yaml": "---\nid: [unterminated\nstatus: redacted\n---\nSECRET\n",
+            "yaml_scalar": "---\nscalar\n---\nSECRET\n",
+            "missing_status": "---\nid: zet_boundary_probe\n---\nSECRET\n",
+            "invalid_status": "---\nid: zet_boundary_probe\nstatus: redactd\n---\nSECRET\n",
+        }
+        for label, text in blocked.items():
+            with self.subTest(label=label):
+                parsed = archive_services.parse_zettel_content_boundary(text)
+                self.assertEqual(parsed["state"], "blocked", parsed)
+                self.assertEqual(parsed["frontmatter"], {})
+                self.assertEqual(parsed["body"], "")
+                self.assertNotIn("SECRET", json.dumps(parsed))
+
+        redacted = archive_services.parse_zettel_content_boundary(
+            "---\nid: zet_boundary_redacted\nstatus: redacted\n"
+            "title: SECRET TITLE\nkind: note\n---\nSECRET BODY\n"
+        )
+        self.assertEqual(redacted["state"], "redacted")
+        self.assertEqual(redacted["body"], "")
+        self.assertNotIn("SECRET", json.dumps(redacted))
+
+        unsafe_scalar_canary = "NESTED_REDACTED_ENVELOPE_SECRET_7301"
+        unsafe_redacted = archive_services.parse_zettel_content_boundary(
+            "---\n"
+            "id:\n"
+            f"  private: {unsafe_scalar_canary}\n"
+            "status: redacted\n"
+            f"kind: [{unsafe_scalar_canary}]\n"
+            f"created_at: {{private: {unsafe_scalar_canary}}}\n"
+            'updated_at: "2026-07-17T01:02:03+09:00"\n'
+            "---\n"
+            f"Body {unsafe_scalar_canary}\n"
+        )
+        self.assertEqual(unsafe_redacted["state"], "redacted")
+        self.assertEqual(
+            unsafe_redacted["frontmatter"],
+            {"status": "redacted", "updated_at": "2026-07-17T01:02:03+09:00"},
+        )
+        self.assertNotIn(unsafe_scalar_canary, json.dumps(unsafe_redacted))
+
+    def test_frontmatter_prefix_inspection_sanitizes_io_errors(self) -> None:
+        secret = "PRIVATE_PERMISSION_ERROR_3307"
+        with patch.object(
+            Path,
+            "open",
+            side_effect=PermissionError(f"C:/private/{secret}.md"),
+        ):
+            result = archive_services.inspect_zettel_frontmatter_boundary(
+                Path("unavailable.md")
+            )
+
+        self.assertFalse(result["metadata_readable"])
+        self.assertEqual(result["issue_code"], "frontmatter_io_error")
+        self.assertEqual(result["frontmatter"], {})
+        self.assertTrue(result["body_text_read"])
+        self.assertNotIn(secret, json.dumps(result))
+
+    def test_malformed_redacted_zettel_fails_closed_across_content_and_index_surfaces(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            secret = "ZzzMalformedRedactedCanary9917"
+            relative = "zettels/zet_malformed_redacted_probe.md"
+            path = archive_root / relative
+            path.write_text(
+                "<<<<<<< unresolved conflict\n"
+                "---\nid: zet_malformed_redacted_probe\nstatus: redacted\nkind: note\n"
+                f"title: {secret}\nfacets:\n  secret: {secret}\n---\n"
+                f"Body {secret} objet:sha256:{'a' * 64} C:/private/{secret}.txt\n",
+                encoding="utf-8",
+            )
+
+            listed = archive_services.list_zettels(archive_root, status="all", limit=500)
+            entry = next(item for item in listed["zettels"] if item["path"] == relative)
+            self.assertEqual(entry["status"], archive_services.ZETTEL_QUARANTINED_STATUS)
+            self.assertFalse(entry["frontmatter_readable"])
+            self.assertFalse(entry["content_available"])
+
+            with self.assertRaises(archive_services.ArchiveServiceError) as read_error:
+                archive_services.read_zettel(archive_root, relative_path=relative)
+            self.assertNotIn(secret, str(read_error.exception))
+
+            source_map_plan = archive_services.notion_objet_source_map_link_plan(
+                archive_root, dry_run=True
+            )
+            import_clue_audit = archive_services.notion_objet_import_clue_audit(
+                archive_root, dry_run=True
+            )
+            results = [
+                archive_services.block_header_preview(archive_root, relative_path=relative, dry_run=True),
+                archive_services.zet_projection_plan_preview(
+                    archive_root, zet_ref=relative, surface="static_site", dry_run=True
+                ),
+                archive_services.zettel_objet_links(
+                    archive_root, relative_path=relative, dry_run=True
+                ),
+                archive_services.notion_objet_link_plan(
+                    archive_root, relative_path=relative, dry_run=True
+                ),
+                archive_services.notion_objet_link_index(archive_root, dry_run=True),
+                source_map_plan,
+                import_clue_audit,
+                archive_services.archive_status_board(
+                    archive_root, dry_run=True, include_quality=True
+                ),
+                archive_services.zet_catalog_item(path, archive_root, "canonical"),
+                archive_services.foreign_block_intake_check(
+                    archive_root, relative_path=relative, dry_run=True
+                ),
+                archive_services.remint_reconcile_plan(
+                    archive_root, relative_path=relative
+                ),
+                archive_services.frontmatter_v03_migration_plan_for_path(
+                    path,
+                    archive_root,
+                    archive_services.read_archive_id(archive_root),
+                ),
+                archive_services.zettel_edge_write(
+                    archive_root,
+                    from_path=relative,
+                    target_ref="zet_missing_safe_target",
+                    edge_type="references",
+                    dry_run=True,
+                ),
+            ]
+            for result in results:
+                self.assertNotIn(secret, json.dumps(result), result)
+            self.assertTrue(
+                source_map_plan["privacy_guards"]["zettel_body_text_read"]
+            )
+            self.assertTrue(
+                import_clue_audit["privacy_guards"]["zettel_body_text_read"]
+            )
+
+            for operation in (
+                lambda: archive_services.check_safe_html_dry_run(
+                    archive_root, relative_path=relative
+                ),
+                lambda: archive_services.zet_quality_check(
+                    archive_root, relative_path=relative, dry_run=True
+                ),
+                lambda: archive_services.zet_self_contained_check(
+                    archive_root, relative_path=relative, dry_run=True
+                ),
+                lambda: archive_services.ai_scratch_gc_for_zettel(
+                    archive_root, relative_path=relative, dry_run=True
+                ),
+            ):
+                with self.assertRaises(archive_services.ArchiveServiceError) as blocked:
+                    operation()
+                self.assertNotIn(secret, str(blocked.exception))
+
+            index_result = archive_services.index_archive(archive_root)
+            self.assertFalse(index_result["ok"], index_result)
+            self.assertEqual(index_result["state"], "completed_with_quarantined_zettels")
+            self.assertEqual(index_result["quarantined_zettel_count"], 1)
+            self.assertNotIn(secret, json.dumps(index_result))
+
+            conn = archive_services.connect_archive_index(
+                archive_root / archive_services.INDEX_RELATIVE_PATH,
+                row_factory=True,
+            )
+            try:
+                row = conn.execute(
+                    "SELECT zettel_id, title, status, kind, body, frontmatter_json "
+                    "FROM zettels WHERE path = ?",
+                    (relative,),
+                ).fetchone()
+                outgoing_edges = int(
+                    conn.execute(
+                        "SELECT COUNT(*) FROM edges WHERE from_id = 'zet_malformed_redacted_probe'"
+                    ).fetchone()[0]
+                )
+                facets = int(
+                    conn.execute(
+                        "SELECT COUNT(*) FROM zettel_facets WHERE zettel_id = 'zet_malformed_redacted_probe'"
+                    ).fetchone()[0]
+                )
+            finally:
+                conn.close()
+            self.assertIsNotNone(row)
+            self.assertIsNone(row["zettel_id"])
+            self.assertEqual(row["title"], "")
+            self.assertEqual(row["status"], archive_services.ZETTEL_QUARANTINED_STATUS)
+            self.assertIsNone(row["kind"])
+            self.assertEqual(row["body"], "")
+            self.assertEqual(row["frontmatter_json"], "")
+            self.assertEqual(outgoing_edges, 0)
+            self.assertEqual(facets, 0)
+            self.assertNotIn(secret.encode("utf-8"), (archive_root / "db" / "archive-index.sqlite").read_bytes())
+
+            search = archive_services.search_archive(archive_root, secret)
+            self.assertEqual(search["results"], [])
+
+    def test_redacted_non_scalar_envelope_values_are_omitted_before_index_binding(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            secret = "NESTED_REDACTED_INDEX_SECRET_7302"
+            relative = "zettels/zet_redacted_non_scalar_envelope.md"
+            (archive_root / relative).write_text(
+                "---\n"
+                "id:\n"
+                f"  private: {secret}\n"
+                "status: redacted\n"
+                f"kind: [{secret}]\n"
+                f"created_at: {{private: {secret}}}\n"
+                "---\n"
+                f"Private body {secret}.\n",
+                encoding="utf-8",
+            )
+
+            result = archive_services.index_archive(archive_root)
+
+            self.assertTrue(result["ok"], result)
+            self.assertNotIn(secret, json.dumps(result))
+            listed = archive_services.list_zettels(archive_root, status="all", limit=500)
+            entry = next(item for item in listed["zettels"] if item["path"] == relative)
+            self.assertIsNone(entry["id"])
+            self.assertEqual(entry["status"], "redacted")
+            self.assertNotIn(secret, json.dumps(entry))
+            catalog = archive_services.zet_catalog(
+                archive_root,
+                status="all",
+                dry_run=True,
+            )
+            catalog_entry = next(item for item in catalog["items"] if item["path"] == relative)
+            self.assertIsNone(catalog_entry["id"])
+            self.assertEqual(catalog_entry["status"], "redacted")
+            self.assertNotIn(secret, json.dumps(catalog))
+            conn = archive_services.connect_archive_index(
+                archive_root / archive_services.INDEX_RELATIVE_PATH,
+                row_factory=True,
+            )
+            try:
+                row = conn.execute(
+                    "SELECT zettel_id, status, kind, body, frontmatter_json FROM zettels WHERE path = ?",
+                    (relative,),
+                ).fetchone()
+            finally:
+                conn.close()
+            self.assertIsNotNone(row)
+            self.assertIsNone(row["zettel_id"])
+            self.assertEqual(row["status"], "redacted")
+            self.assertIsNone(row["kind"])
+            self.assertEqual(row["body"], "")
+            self.assertEqual(row["frontmatter_json"], "")
+            self.assertNotIn(
+                secret.encode("utf-8"),
+                (archive_root / archive_services.INDEX_RELATIVE_PATH).read_bytes(),
+            )
+
+    def test_search_and_related_filter_legacy_unknown_status_rows_before_rebuild(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            archive_services.index_archive(archive_root)
+            secret = "ZzzLegacyUnknownStatusCanary1182"
+            conn = archive_services.connect_archive_index(
+                archive_root / archive_services.INDEX_RELATIVE_PATH,
+                write=True,
+            )
+            try:
+                row = conn.execute(
+                    "SELECT path, zettel_id FROM zettels WHERE zettel_id IS NOT NULL LIMIT 1"
+                ).fetchone()
+                self.assertIsNotNone(row)
+                subject_id = str(row[1])
+                conn.execute(
+                    "UPDATE zettels SET status = NULL, title = ?, body = ?, frontmatter_json = ? "
+                    "WHERE path = ?",
+                    (secret, secret, secret, row[0]),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+            search = archive_services.search_archive(archive_root, secret)
+            self.assertEqual(search["results"], [])
+            related = archive_services.get_related_zets(archive_root, subject_id)
+            self.assertEqual(related["related"], [])
+
     def test_search_excludes_redacted_zettels_and_never_leaks_their_body(self) -> None:
         # Privacy regression guard: a status='redacted' zettel must never be matched on or
         # surfaced (body/frontmatter/title) by search; draft/canonical/archived stay searchable.
@@ -42259,6 +42925,9 @@ state:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
             archive_id = archive_services.read_archive_id(archive_root)
+            baseline_status = archive_services.archive_status_board(
+                archive_root, dry_run=True, include_quality=True
+            )
             secret = "Zzz9RedactedAcrossSurfaces5566"
             zid = "zet_20260608_redacted_surfaces"
             frontmatter = {
@@ -42308,6 +42977,75 @@ state:
             )
             self.assertFalse(proj["ok"])
             self.assertNotIn(secret, json.dumps(proj), "no redacted content may leak via projection preview")
+
+            redacted_status = archive_services.archive_status_board(
+                archive_root, dry_run=True, include_quality=True
+            )
+            self.assertEqual(
+                redacted_status["counts"]["redacted"],
+                baseline_status["counts"]["redacted"] + 1,
+            )
+            self.assertEqual(
+                redacted_status["counts"]["first_read_redacted"],
+                baseline_status["counts"]["first_read_redacted"] + 1,
+            )
+            for count_name in (
+                "canonical_lifecycle_metadata_missing",
+                "mint_receipt_gap",
+                "document_type_missing",
+                "audience_missing",
+                "source_metadata_gap",
+                "derived_artifact_gap",
+                "quality_blocker_candidate",
+                "quality_warning_candidate",
+                "first_read_attention",
+            ):
+                self.assertEqual(
+                    redacted_status["counts"][count_name],
+                    baseline_status["counts"][count_name],
+                    count_name,
+                )
+            self.assertNotIn(secret, json.dumps(redacted_status))
+
+    def test_status_board_counts_redacted_inbox_file_as_physical_inbox_draft(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            baseline = archive_services.archive_status_board(
+                archive_root,
+                dry_run=True,
+                include_quality=True,
+            )
+            secret = "REDACTED_INBOX_STATUS_SECRET_7304"
+            (archive_root / "inbox" / "zet_20260717_redacted_inbox_probe.md").write_text(
+                "---\n"
+                "id: zet_20260717_redacted_inbox_probe\n"
+                "status: redacted\n"
+                "kind: note\n"
+                f"title: {secret}\n"
+                "---\n"
+                f"Private body {secret}.\n",
+                encoding="utf-8",
+            )
+
+            result = archive_services.archive_status_board(
+                archive_root,
+                dry_run=True,
+                include_quality=True,
+            )
+
+            self.assertEqual(result["counts"]["redacted"], baseline["counts"]["redacted"] + 1)
+            self.assertEqual(
+                result["counts"]["inbox_draft"],
+                baseline["counts"]["inbox_draft"] + 1,
+            )
+            for count_name in (
+                "active_draft",
+                "minted_draft_pending_retire",
+                "quality_blocker_candidate",
+                "quality_warning_candidate",
+            ):
+                self.assertEqual(result["counts"][count_name], baseline["counts"][count_name])
+            self.assertNotIn(secret, json.dumps(result))
 
     def test_sources_cli_lists_registered_sources(self) -> None:
         archive_root = KIT_ROOT / "examples" / "fake-life-archive"
@@ -46794,6 +47532,46 @@ state:
             self.assertIn("link_type_in_use", json.dumps(result, ensure_ascii=False))
             self.assertIn("embed", result["archive_link_type_status"]["used_recommended_edge_types"])
 
+    def test_migrate_link_types_v03_revert_fails_closed_on_unreadable_edge_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            types_path = archive_root / "zettel-kasten" / "types.yml"
+            types_data = archive_cli.load_yaml(types_path.read_text(encoding="utf-8"))
+            types_data["link_types"] = [
+                item
+                for item in types_data["link_types"]
+                if isinstance(item, dict) and item.get("id") != "embed"
+            ]
+            types_path.write_text(archive_cli.dump_yaml(types_data), encoding="utf-8")
+            migrate_code, migrate_output = self.run_cli(
+                ["migrate", str(archive_root), "--target", "link-types-v0.3", "--approve", "--format", "json"]
+            )
+            self.assertEqual(migrate_code, 0, migrate_output)
+            migrated_text = types_path.read_text(encoding="utf-8")
+            secret = "PRIVATE_UNREADABLE_EDGE_USAGE_4418"
+            (archive_root / "zettels" / f"zet_{secret}.md").write_text(
+                "---\n"
+                f"id: zet_{secret}\n"
+                "status: typo-status\n"
+                "edges:\n"
+                "  - type: embed\n"
+                "    target: zet_private_target\n"
+                "---\n"
+                f"Body {secret}\n",
+                encoding="utf-8",
+            )
+
+            code, output = self.run_cli(
+                ["migrate", str(archive_root), "--target", "link-types-v0.3", "--revert", "--dry-run", "--format", "json"]
+            )
+            result = json.loads(output)
+
+            self.assertEqual(code, 1, output)
+            self.assertTrue(result["blocked"])
+            self.assertIn("zettel_edge_usage_unavailable", output)
+            self.assertNotIn(secret, output)
+            self.assertEqual(types_path.read_text(encoding="utf-8"), migrated_text)
+
     def _strip_link_type(self, types_path: Path, edge_id: str) -> None:
         types_data = archive_cli.load_yaml(types_path.read_text(encoding="utf-8"))
         types_data["link_types"] = [
@@ -48901,6 +49679,19 @@ class ObjetCaptureTests(unittest.TestCase):
     def test_staged_cleanup_check_all_captured_is_safe(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root, digest, staged = self._captured_sandbox(tmp)
+            secret = "PRIVATE_REDACTED_CLEANUP_REF_9912"
+            (archive_root / "zettels" / "zet_redacted_cleanup_probe.md").write_text(
+                "---\n"
+                "id: zet_redacted_cleanup_probe\n"
+                "status: redacted\n"
+                f"title: {secret}\n"
+                "source_refs:\n"
+                "  - type: object_id\n"
+                f"    value: sha256:{digest}\n"
+                "---\n"
+                f"Body {secret}\n",
+                encoding="utf-8",
+            )
             result = archive_services.staged_cleanup_check(archive_root, staged)
             self.assertTrue(result["ok"], result)
             self.assertTrue(result["safe_to_cleanup"])
@@ -48909,6 +49700,8 @@ class ObjetCaptureTests(unittest.TestCase):
             self.assertEqual(entry["status"], "preserved")
             self.assertTrue(entry["preserved_bytes_verified"])
             self.assertTrue(entry["manifest_record_present"])
+            self.assertEqual(entry["referencing_zets"], 0)
+            self.assertNotIn(secret, json.dumps(result))
 
     def test_staged_cleanup_check_progress_is_content_free(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -49189,6 +49982,33 @@ class ObjetCaptureTests(unittest.TestCase):
             result = archive_services.get_related_zets(archive_root, "zet_20260610_d")
             self.assertEqual(result["count"], 0, "a redacted neighbor must never be returned")
             self.assertNotIn("REDACTED SECRET TITLE", json.dumps(result))
+
+    def test_related_zets_excludes_and_does_not_traverse_dangling_neighbor(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._sandbox(tmp, "archive:personal:dangling-related")
+            self._write_edge_zettel(
+                archive_root,
+                "zet_20260717_dangling_subject",
+                edges=[
+                    {
+                        "type": "references",
+                        "target": "zet_20260717_missing_neighbor",
+                    }
+                ],
+            )
+            index_result = archive_services.index_archive(archive_root)
+            self.assertTrue(index_result["ok"], index_result)
+            self.assertEqual(index_result["edges"], 1)
+
+            result = archive_services.get_related_zets(
+                archive_root,
+                "zet_20260717_dangling_subject",
+                depth=3,
+            )
+
+            self.assertEqual(result["count"], 0)
+            self.assertEqual(result["related"], [])
+            self.assertFalse(result["truncated"])
 
     def test_related_zets_cycle_terminates(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -49578,6 +50398,31 @@ class ObjetCaptureTests(unittest.TestCase):
             self.assertTrue(rebuilt["ok"], rebuilt)
             self.assertEqual(rebuilt["index_state"], "current")
 
+    def test_index_health_prioritizes_source_repair_when_index_is_also_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._facet_archive(tmp)
+            db_path = archive_root / archive_services.INDEX_RELATIVE_PATH
+            for candidate in (db_path, Path(str(db_path) + "-wal"), Path(str(db_path) + "-shm")):
+                if candidate.exists():
+                    candidate.unlink()
+            relative = "zettels/zet_20260717_missing_index_invalid_source.md"
+            (archive_root / relative).write_text(
+                "---\nid: [unterminated repair-first marker\n---\nPrivate body.\n",
+                encoding="utf-8",
+            )
+
+            health = archive_services.index_health(archive_root, dry_run=True)
+
+            self.assertFalse(health["ok"], health)
+            self.assertIn("archive_index_missing", health["blockers"])
+            self.assertEqual(health["summary"]["live_zettel_inspection_issue_count"], 1)
+            self.assertEqual(
+                health["samples"]["live_zettel_inspection_issues"],
+                [{"path": relative, "code": "frontmatter_yaml_invalid"}],
+            )
+            self.assertTrue(health["next_safe_actions"][0].startswith("Repair"))
+            self.assertIn("After repair, run archive index", health["next_safe_actions"][1])
+
     def test_index_health_reads_frontmatter_only_and_captures_stale_exit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self._facet_archive(tmp)
@@ -49641,6 +50486,45 @@ class ObjetCaptureTests(unittest.TestCase):
             self.assertTrue(saved["cli_execution"]["result_available"])
             self.assertIsNone(saved["cli_execution"]["error"])
 
+    def test_index_health_counts_non_utf8_path_and_reports_fixed_issue(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._facet_archive(tmp)
+            before = archive_services.index_health(archive_root, dry_run=True)
+            bad_relative = "zettels/zet_non_utf8_probe.md"
+            (archive_root / bad_relative).write_bytes(b"\xff\xfePRIVATE-BINARY-MARKER")
+
+            health = archive_services.index_health(archive_root, dry_run=True)
+
+            self.assertFalse(health["ok"], health)
+            self.assertEqual(
+                health["summary"]["live_zettel_count"],
+                before["summary"]["live_zettel_count"] + 1,
+            )
+            self.assertEqual(
+                health["summary"]["live_zettel_metadata_readable_count"],
+                before["summary"]["live_zettel_metadata_readable_count"],
+            )
+            self.assertEqual(health["summary"]["live_zettel_inspection_issue_count"], 1)
+            self.assertEqual(health["summary"]["missing_from_index_count"], 1)
+            self.assertEqual(
+                health["samples"]["live_zettel_inspection_issues"],
+                [{"path": bad_relative, "code": "frontmatter_unicode_error"}],
+            )
+            rendered = json.dumps(health)
+            self.assertNotIn(str(archive_root), rendered)
+            self.assertNotIn("PRIVATE-BINARY-MARKER", rendered)
+
+            rebuilt = archive_services.index_archive(archive_root)
+            self.assertFalse(rebuilt["ok"], rebuilt)
+            self.assertEqual(rebuilt["quarantined_zettel_count"], 1)
+            after_rebuild = archive_services.index_health(archive_root, dry_run=True)
+            self.assertEqual(after_rebuild["summary"]["missing_from_index_count"], 0)
+            self.assertFalse(after_rebuild["ok"])
+            self.assertIn(
+                "live_zettel_frontmatter_unreadable_or_invalid",
+                after_rebuild["stale_reasons"],
+            )
+
     def test_index_health_reports_body_read_for_malformed_frontmatter_boundaries(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self._facet_archive(tmp)
@@ -49657,10 +50541,21 @@ class ObjetCaptureTests(unittest.TestCase):
 
             health = archive_services.index_health(archive_root, dry_run=True)
 
-            self.assertTrue(health["ok"], health)
+            self.assertFalse(health["ok"], health)
+            self.assertEqual(health["index_state"], "stale_or_incomplete")
+            self.assertEqual(
+                health["stale_reasons"],
+                ["live_zettel_frontmatter_unreadable_or_invalid"],
+            )
+            self.assertEqual(health["summary"]["live_zettel_inspection_issue_count"], 2)
+            self.assertEqual(
+                {item["code"] for item in health["samples"]["live_zettel_inspection_issues"]},
+                {"frontmatter_boundary_invalid"},
+            )
             self.assertTrue(health["privacy_guards"]["zettel_body_text_read"])
+            self.assertIn("Repair", health["next_safe_actions"][0])
 
-    def test_invalid_yaml_index_health_failure_is_sanitized_and_captured(self) -> None:
+    def test_invalid_yaml_index_health_returns_sanitized_issue_and_captures_result(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self._facet_archive(tmp)
             broken_path = sorted((archive_root / "zettels").glob("*.md"))[0]
@@ -49683,16 +50578,24 @@ class ObjetCaptureTests(unittest.TestCase):
             )
 
             self.assertEqual(code, 1, stdout + stderr)
-            self.assertEqual(stdout, "")
+            summary = json.loads(stdout)
+            self.assertFalse(summary["ok"])
+            self.assertEqual(summary["index_state"], "stale_or_incomplete")
             self.assertNotIn("private yaml marker", stderr)
             self.assertNotIn("Private body marker", stderr)
             saved_text = (archive_root / relative).read_text(encoding="utf-8")
             self.assertNotIn("private yaml marker", saved_text)
             self.assertNotIn("Private body marker", saved_text)
             saved = json.loads(saved_text)
-            self.assertEqual(saved["lifecycle_action"], "index_health_command_failure")
+            self.assertEqual(saved["lifecycle_action"], "index_health")
+            self.assertEqual(saved["index_state"], "stale_or_incomplete")
+            self.assertEqual(
+                saved["samples"]["live_zettel_inspection_issues"][0]["code"],
+                "frontmatter_yaml_invalid",
+            )
             self.assertEqual(saved["cli_execution"]["exit_code"], 1)
-            self.assertEqual(saved["cli_execution"]["error"]["type"], "ValueError")
+            self.assertTrue(saved["cli_execution"]["result_available"])
+            self.assertIsNone(saved["cli_execution"]["error"])
 
     def test_index_health_output_records_handled_cli_failure(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

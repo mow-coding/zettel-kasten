@@ -5,7 +5,9 @@ same-count suppression and counted-unit/rate contract in v0.3.222; safe receipt
 phase and reporter coalescing in v0.3.223; explicit runtime-context full-Doctor
 progress in v0.3.224; aggregate edge-receipt progress in v0.3.227; current
 local-profile safety counters in v0.3.228; index and index-health progress,
-complete-only result capture, and crash-safe index rebuild in v0.3.255
+complete-only result capture, and crash-safe index rebuild in v0.3.255;
+quarantined-index completion semantics and honest unreadable-source counts in
+v0.3.256
 
 ## Purpose
 
@@ -215,6 +217,13 @@ PTY/agent displayed the later compact terminal summary. Determine success from
 Handled failures store a fixed error type/code and never store the raw exception
 message, which may contain a local path or parser excerpt.
 
+Since v0.3.256, a rebuild that safely installs one or more path/stat-only
+quarantine rows is also a completed nonzero command result, not an exception
+artifact. Its saved result has `ok: false`,
+`state: completed_with_quarantined_zettels`, `index_rebuilt: true`,
+`index_complete: false`, and exit code 1. Result capture preserves those fields
+and must not relabel “completed” as a successful complete index.
+
 These two output files are complete-only. WOM-kit publishes the final path only
 after it has a complete command result and execution envelope. A forced
 termination before publication has no complete output file. File absence after
@@ -277,6 +286,35 @@ fails, the rebuilt index may already be current even though no complete result
 file exists. Treat that as a partial result-capture failure and run a fresh
 official `index-health` check; do not infer either success or failure from the
 missing scratch file alone.
+
+## v0.3.256 Quarantined Index Completion
+
+The strict existing-archive zettel boundary accepts the supported frontmatter
+delimiter grammar, a YAML object, and one lifecycle status from `draft`,
+`canonical`, `archived`, or `redacted`. Invalid delimiter/YAML/object/status,
+UTF-8, and I/O states yield fixed content-free issue codes. They never provide
+parsed frontmatter or body content to the indexer.
+
+The rebuild still commits its safe generated state. Each affected file gets a
+path/stat-only `unreadable` row with logical content, edges, and facets cleared.
+The normal transaction protects the complete replacement, while the command
+result separately says the installed index is incomplete. This avoids two bad
+outcomes: retaining an older queryable unsafe row by rolling back the rebuild,
+or silently treating an omitted physical file as success.
+
+`index-health` likewise keeps every safely enumerated physical zettel path in
+its live count and reports separate readable-metadata and inspection-issue
+counts. `live_zettel_frontmatter_unreadable_or_invalid` routes the operator to
+source repair before another rebuild. A malformed delimiter may require reading
+past the intended frontmatter boundary to prove it invalid; the privacy guard
+reports that read honestly while never echoing the bytes.
+
+Logical quarantine is not forensic secure deletion from SQLite free pages,
+WAL, backups, snapshots, storage media, or the source file. This release also
+does not claim strict fingerprint-first ordering for revision/restore,
+retire-reconcile, abstract-backfill, or target-workpack flows; those follow in
+v0.3.257. Bounded-memory default S3-compatible transport follows separately in
+v0.3.258.
 
 ## Primary References
 

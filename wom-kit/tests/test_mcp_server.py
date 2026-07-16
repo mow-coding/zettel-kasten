@@ -10479,6 +10479,214 @@ class McpServerTests(unittest.TestCase):
         finally:
             self.stop_server(process)
 
+    def test_malformed_redacted_zettel_is_content_free_through_read_and_index_health_tools(self) -> None:
+        process = self.start_server()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+                relative_path = "zettels/zet_20260717_mcp_malformed_boundary.md"
+                private_id = "zet_PRIVATE_MCP_MALFORMED_ID"
+                private_title = "PRIVATE_MCP_MALFORMED_TITLE"
+                private_body = "PRIVATE_MCP_MALFORMED_BODY"
+                private_hash = "sha256:" + "a" * 64
+                malformed_path = archive_root / relative_path
+                malformed_path.write_text(
+                    "---\n"
+                    f"id: {private_id}\n"
+                    f"title: {private_title}\n"
+                    "status: redacted\n"
+                    "kind: note\n"
+                    f"private_digest: {private_hash}\n"
+                    "  ---\n\n"
+                    f"{private_body}\n",
+                    encoding="utf-8",
+                )
+
+                read_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "read_zettel",
+                            "arguments": {
+                                "archive_root": str(archive_root),
+                                "path": relative_path,
+                                "section": "all",
+                            },
+                        },
+                    },
+                )
+                self.assertTrue(read_response["result"]["isError"])
+                self.assertEqual(
+                    read_response["result"]["structuredContent"]["error"],
+                    "Zettel content is unavailable because its frontmatter could not be validated.",
+                )
+                serialized_read = json.dumps(read_response, ensure_ascii=False)
+                for private_value in (private_id, private_title, private_body, private_hash):
+                    self.assertNotIn(private_value, serialized_read)
+
+                index_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "archive_index",
+                            "arguments": {"archive_root": str(archive_root)},
+                        },
+                    },
+                )
+                self.assertFalse(index_response["result"]["isError"])
+                index_result = index_response["result"]["structuredContent"]
+                self.assertFalse(index_result["ok"])
+                self.assertEqual(index_result["state"], "completed_with_quarantined_zettels")
+                self.assertEqual(index_result["quarantined_zettel_count"], 1)
+                self.assertEqual(
+                    index_result["quarantined_zettels"],
+                    [{"path": relative_path, "code": "frontmatter_boundary_invalid"}],
+                )
+
+                health_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 3,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "index_health",
+                            "arguments": {"archive_root": str(archive_root)},
+                        },
+                    },
+                )
+                self.assertFalse(health_response["result"]["isError"])
+                health = health_response["result"]["structuredContent"]
+                self.assertFalse(health["ok"])
+                self.assertEqual(health["index_state"], "stale_or_incomplete")
+                self.assertEqual(health["summary"]["live_zettel_inspection_issue_count"], 1)
+                self.assertEqual(
+                    health["samples"]["live_zettel_inspection_issues"],
+                    [{"path": relative_path, "code": "frontmatter_boundary_invalid"}],
+                )
+                self.assertIn(
+                    "live_zettel_frontmatter_unreadable_or_invalid",
+                    health["stale_reasons"],
+                )
+                self.assertTrue(health["privacy_guards"]["zettel_body_text_read"])
+                self.assertFalse(health["privacy_guards"]["zettel_body_text_echoed"])
+                serialized_health = json.dumps(health_response, ensure_ascii=False)
+                serialized_index = json.dumps(index_response, ensure_ascii=False)
+                for private_value in (private_id, private_title, private_body, private_hash):
+                    self.assertNotIn(private_value, serialized_index)
+                    self.assertNotIn(private_value, serialized_health)
+        finally:
+            self.stop_server(process)
+
+    def test_valid_redacted_zettel_exposes_only_safe_envelope_through_read_and_index_health_tools(self) -> None:
+        process = self.start_server()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+                relative_path = "zettels/zet_20260717_mcp_redacted.md"
+                zettel_id = "zet_20260717_mcp_redacted"
+                private_title = "PRIVATE_MCP_REDACTED_TITLE"
+                private_frontmatter = "PRIVATE_MCP_REDACTED_FRONTMATTER"
+                private_body = "PRIVATE_MCP_REDACTED_BODY"
+                private_hash = "sha256:" + "b" * 64
+                (archive_root / relative_path).write_text(
+                    "---\n"
+                    f"id: {zettel_id}\n"
+                    f"title: {private_title}\n"
+                    "status: redacted\n"
+                    "kind: note\n"
+                    "created_at: 2026-07-17T00:00:00+09:00\n"
+                    "updated_at: 2026-07-17T00:00:00+09:00\n"
+                    f"private_note: {private_frontmatter}\n"
+                    f"private_digest: {private_hash}\n"
+                    "---\n\n"
+                    f"{private_body}\n",
+                    encoding="utf-8",
+                )
+
+                index_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "archive_index",
+                            "arguments": {"archive_root": str(archive_root)},
+                        },
+                    },
+                )
+                self.assertFalse(index_response["result"]["isError"])
+                self.assertTrue(index_response["result"]["structuredContent"]["ok"])
+
+                read_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "read_zettel",
+                            "arguments": {
+                                "archive_root": str(archive_root),
+                                "path": relative_path,
+                                "section": "all",
+                            },
+                        },
+                    },
+                )
+                self.assertFalse(read_response["result"]["isError"])
+                read_result = read_response["result"]["structuredContent"]
+                self.assertTrue(read_result["redacted"])
+                self.assertEqual(read_result["viewer_mode"], "redacted")
+                self.assertEqual(
+                    read_result["frontmatter"],
+                    {"id": zettel_id, "status": "redacted"},
+                )
+                self.assertEqual(read_result["body"], "")
+                self.assertEqual(read_result["integrity"]["file_sha256"], None)
+                self.assertEqual(read_result["integrity"]["body_sha256"], None)
+
+                health_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 3,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "index_health",
+                            "arguments": {"archive_root": str(archive_root)},
+                        },
+                    },
+                )
+                self.assertFalse(health_response["result"]["isError"])
+                health = health_response["result"]["structuredContent"]
+                self.assertTrue(health["ok"])
+                self.assertEqual(health["index_state"], "current")
+                self.assertEqual(health["summary"]["live_zettel_inspection_issue_count"], 0)
+                self.assertFalse(health["privacy_guards"]["zettel_body_text_read"])
+                self.assertFalse(health["privacy_guards"]["zettel_body_text_echoed"])
+
+                serialized_responses = json.dumps(
+                    [index_response, read_response, health_response],
+                    ensure_ascii=False,
+                )
+                for private_value in (
+                    private_title,
+                    private_frontmatter,
+                    private_body,
+                    private_hash,
+                ):
+                    self.assertNotIn(private_value, serialized_responses)
+        finally:
+            self.stop_server(process)
+
     def test_promotion_check_dry_run_never_writes_canonical_memory(self) -> None:
         process = self.start_server()
         try:

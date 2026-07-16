@@ -908,6 +908,15 @@ def _add_validate_scope_facet_paths(scope: ValidationScope, root: Path, filters:
             canonical_count = int(canonical_count_row["count"] if isinstance(canonical_count_row, sqlite3.Row) else canonical_count_row[0])
             metadata = archive_services.read_archive_index_metadata(conn)
             stale_reasons = archive_services.archive_index_metadata_stale_reasons(metadata, indexed_canonical_count=canonical_count)
+            if not stale_reasons:
+                stat_rows = archive_services.archive_index_zettel_stat_rows(conn)
+                live_stat_reasons, _live_stat_paths_checked = (
+                    archive_services.archive_index_live_zettel_stat_stale_reasons(
+                        root,
+                        stat_rows,
+                    )
+                )
+                stale_reasons.extend(live_stat_reasons)
             if stale_reasons:
                 scope.blockers.append(
                     "validate --scope requires a current generated index. Run `archive index` first. "
@@ -917,7 +926,7 @@ def _add_validate_scope_facet_paths(scope: ValidationScope, root: Path, filters:
                 return
             sql = [
                 "SELECT path FROM zettels",
-                "WHERE zettel_id IS NOT NULL AND coalesce(status, '') != 'redacted'",
+                "WHERE zettel_id IS NOT NULL AND status IN ('draft', 'canonical', 'archived')",
             ]
             params: list[Any] = []
             for key, value in filters.items():
@@ -12148,10 +12157,11 @@ def command_index(args: argparse.Namespace) -> int:
     finally:
         reporter.close()
 
+    result_exit_code = 0 if result.get("ok", True) else 1
     output_metadata: dict[str, Any] | None = None
     if capture is not None:
         try:
-            output_metadata = capture.write_completed(exit_code=0, result=result)
+            output_metadata = capture.write_completed(exit_code=result_exit_code, result=result)
         except (OSError, ValueError) as exc:
             best_effort_terminal_print(
                 f"Index completed, but --output result capture failed ({type(exc).__name__}).",
@@ -12159,14 +12169,17 @@ def command_index(args: argparse.Namespace) -> int:
             )
             return 1
         best_effort_terminal_print(
-            f"[index] completed exit_code=0 result={output_metadata['path']}",
+            f"[index] completed exit_code={result_exit_code} result={output_metadata['path']}",
             file=sys.stderr,
         )
 
     if output_metadata is not None:
         summary_result = {
-            "ok": True,
+            "ok": bool(result.get("ok", True)),
             "lifecycle_action": "index_output_summary",
+            "state": result.get("state"),
+            "index_rebuilt": bool(result.get("index_rebuilt")),
+            "index_complete": bool(result.get("index_complete", True)),
             "summary": {
                 key: result.get(key)
                 for key in (
@@ -12177,6 +12190,7 @@ def command_index(args: argparse.Namespace) -> int:
                     "source_map_entries",
                     "edges",
                     "facets",
+                    "quarantined_zettel_count",
                 )
             },
             "warning_count": len(result.get("warnings", [])),
@@ -12185,18 +12199,24 @@ def command_index(args: argparse.Namespace) -> int:
         if args.format == "json":
             best_effort_terminal_json(summary_result)
         else:
-            best_effort_terminal_print(
-                "Archive index completed.\n"
-                f"Full result written to: {output_metadata['path']}"
-            )
-        return 0
+            if result_exit_code:
+                best_effort_terminal_print(
+                    "Archive index was rebuilt with content-free quarantined zettels; repair is required.\n"
+                    f"Full result written to: {output_metadata['path']}"
+                )
+            else:
+                best_effort_terminal_print(
+                    "Archive index completed.\n"
+                    f"Full result written to: {output_metadata['path']}"
+                )
+        return result_exit_code
 
     if args.format == "json":
         print_json(result)
     else:
         print(
-            "Indexed "
-            f"{result['zettels']} zettel(s), "
+            ("Indexed " if result_exit_code == 0 else "Indexed with quarantined zettels: ")
+            + f"{result['zettels']} zettel(s), "
             f"{result['objects']} object(s), "
             f"{result['derived_texts']} derived text record(s), "
             f"{result['views']} view(s), "
@@ -12204,7 +12224,7 @@ def command_index(args: argparse.Namespace) -> int:
             f"at {result['index_path']}"
         )
     sys.stdout.flush()
-    return 0
+    return result_exit_code
 
 
 def command_view_zets(args: argparse.Namespace) -> int:

@@ -6,6 +6,37 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.256 - 2026-07-17
+
+- **Existing-archive zet reads now fail closed at one strict content boundary.**
+  Invalid delimiter grammar, YAML, object shape, lifecycle status, UTF-8, or
+  file access can no longer turn ambiguous frontmatter into readable body text.
+  Direct read, index, search, view, related-zet, catalog, link-analysis, and
+  adjacent core surfaces either block without content or skip/count the entry;
+  valid redacted zets keep their small metadata envelope with content hidden.
+- **Index rebuild and health results account for unreadable physical files.**
+  Rebuilds install a path/stat-only `unreadable` quarantine row, clear logical
+  content plus edge/facet rows, and finish nonzero as
+  `completed_with_quarantined_zettels` instead of preserving unsafe query data.
+  `index-health` counts every safely enumerated path, reports fixed inspection
+  issues, and recommends source repair before another rebuild.
+- **Incomplete generated indexes cannot authorize canonical writes.** Index
+  metadata v0.2 persists completeness and quarantine count in the rebuild
+  transaction. Mint/promotion duplicate checks and facet-scoped validation
+  reject an incomplete index, while live duplicate fallback blocks unreadable
+  canonical candidates. Related traversal also excludes absent edge targets,
+  and redacted existence fields are limited to validated scalar formats.
+- **Index metadata is paired with a live stat snapshot before approval use.**
+  Mint duplicate checks and facet-scoped validation enumerate every physical
+  zet and compare stored file size/mtime before trusting indexed rows. Added,
+  removed, or changed paths route mint through its content-validating live
+  fallback. Unstatable or unsafe traversal uncertainty blocks mint outright,
+  and scope validation requires a rebuild for either class.
+- **The maintenance boundary remains explicit.** Revision/restore,
+  retire-reconcile, abstract-backfill, and target-workpack fingerprint ordering
+  are assigned to v0.3.257. Bounded-memory default S3-compatible upload/download
+  transport is assigned to v0.3.258; neither is claimed by this release.
+
 ## v0.3.255 - 2026-07-16
 
 - **Crash-safe generated-index rebuild.** `archive index` now keeps
