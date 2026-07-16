@@ -4,7 +4,8 @@ Status: implemented in v0.3.214; complete-only catalog JSONL in v0.3.216;
 same-count suppression and counted-unit/rate contract in v0.3.222; safe receipt
 phase and reporter coalescing in v0.3.223; explicit runtime-context full-Doctor
 progress in v0.3.224; aggregate edge-receipt progress in v0.3.227; current
-local-profile safety counters in v0.3.228
+local-profile safety counters in v0.3.228; index and index-health progress,
+complete-only result capture, and crash-safe index rebuild in v0.3.255
 
 ## Purpose
 
@@ -21,9 +22,16 @@ archive upgrade-check
 archive zet-catalog
 ```
 
+Since v0.3.255, the same transport-safety contract also covers:
+
+```text
+archive index
+archive index-health
+```
+
 ## Progress Contract
 
-Add `--progress` to any of the three commands:
+Add `--progress` to any supported command:
 
 ```powershell
 archive ai-start-here <archive-root> --dry-run --progress --format json
@@ -38,6 +46,8 @@ archive zet-catalog <archive-root> `
   --dry-run `
   --progress `
   --format json
+archive index <archive-root> --progress --format json
+archive index-health <archive-root> --dry-run --progress --format json
 ```
 
 Progress is written only to stderr. The final result remains on stdout. This
@@ -128,6 +138,12 @@ abstracts, body text, object refs, provider values, credential refs, tokens, or
 secret values. Path-bearing Doctor trace messages are reduced to stage/count
 events rather than forwarded.
 
+For `index` and `index-health`, `--progress` emits only fixed stage labels,
+safe aggregate counts, elapsed time, and a 10-second heartbeat while a stage is
+still active. It does not change exit-code semantics. Without `--output`, the
+complete final command result remains on stdout exactly as it does without
+`--progress`.
+
 ## Full Result In Private Scratch
 
 When the full result is too large for stdout, add a new archive-relative JSON
@@ -141,6 +157,17 @@ archive zet-catalog <archive-root> `
   --progress `
   --output .wom-scratch/diagnostics/catalog-page-000.json `
   --format json
+
+archive index <archive-root> `
+  --progress `
+  --output .wom-scratch/diagnostics/index-20260716T180000Z.json `
+  --format json
+
+archive index-health <archive-root> `
+  --dry-run `
+  --progress `
+  --output .wom-scratch/diagnostics/index-health-20260716T180200Z.json `
+  --format json
 ```
 
 With `--output`, WOM-kit writes the full JSON result and prints only a compact
@@ -149,18 +176,118 @@ summary to stdout. The writer:
 - accepts only archive-relative paths below `.wom-scratch/diagnostics/`;
 - accepts only `.json` filenames;
 - refuses path traversal and any existing destination;
-- uses an atomic file replacement helper after the nonexistence check;
+- publishes only a complete JSON file rather than an in-place partial result;
 - labels the result as local scratch, not a WOM record or receipt;
 - never echoes the local absolute path.
+
+For `index` and `index-health`, the stricter result writer also rejects every
+symbolic-link or Windows reparse-point component, writes and `fsync()`s a unique
+private partial, and atomically publishes only when the destination is still
+absent. Windows uses no-overwrite rename semantics; other platforms use a
+same-filesystem hard link. Concurrent attempts therefore have one winner and
+cannot replace the first complete result.
 
 The full result can contain private catalog metadata such as titles and
 abstracts. Keep it local, do not commit it, review it according to the archive's
 privacy policy, and delete it when no longer needed.
 
-The core inspection remains read-only. `--output` is an explicit exception that
-creates one scratch result file and any missing parent directory inside the
-allowlisted scratch surface. It does not write zets, manifests, receipts,
-indexes, maps, provider state, or external backups.
+For `index` and `index-health`, the saved root object includes both the existing
+`cli_output_artifact` metadata and this complete execution envelope:
+
+```json
+{
+  "cli_execution": {
+    "status": "completed",
+    "exit_code": 0,
+    "exit_code_scope": "command_result_before_terminal_transport",
+    "terminal_output_delivery": "best_effort_not_observed",
+    "started_at": "2026-07-16T09:00:00Z",
+    "finished_at": "2026-07-16T09:01:30Z",
+    "error": null
+  }
+}
+```
+
+`status: completed` means only that the CLI reached and saved its command-result
+boundary. It does not mean that the command succeeded or that the surrounding
+PTY/agent displayed the later compact terminal summary. Determine success from
+`exit_code` together with the command result, including `ok` or `index_state`.
+Handled failures store a fixed error type/code and never store the raw exception
+message, which may contain a local path or parser excerpt.
+
+These two output files are complete-only. WOM-kit publishes the final path only
+after it has a complete command result and execution envelope. A forced
+termination before publication has no complete output file. File absence after
+an interruption is therefore an unknown result, never success evidence. A
+termination after publication can leave the complete file even if the compact
+stdout/stderr summary is not delivered; judge that file by its command result
+and scoped exit code. A completed nonzero result may have a file and must not be
+relabeled as success.
+
+With `--output`, the full result is stored in the scratch file and stdout becomes
+the established compact completion summary. stderr remains the progress stream.
+After publication those terminal messages are best-effort, so a closed terminal
+cannot relabel the already completed command result.
+A preexisting destination or a path outside `.wom-scratch/diagnostics/*.json`
+is rejected before command work begins. Use a new filename for every attempt.
+
+For inspection commands such as `zet-catalog` and `index-health`, the core
+inspection remains read-only. `--output` is an explicit exception that creates
+one scratch result file and any missing parent directory inside the allowlisted
+scratch surface. It does not write zets, manifests, receipts, indexes, maps,
+provider state, or external backups. `archive index` separately writes only its
+disposable generated index through the crash-safe boundary below.
+
+## v0.3.255 Crash-Safe Index Rebuild
+
+`archive index` is a generated-index write, so its database safety is separate
+from scratch result capture. The complete schema setup, old-row deletion, new
+row insertion, and index metadata update run inside one explicit SQLite
+transaction. The transaction begins inside the `executescript()` statement with
+`BEGIN IMMEDIATE`; the existing final connection commit publishes the rebuild.
+
+The basoon v0.3.254 incident exposed both boundaries. Three post-mint commands
+lost their operator-visible final output. A later official read-only health run
+completed after roughly 90 seconds with exit code 1 and reported 8,586 live
+zettels, zero indexed zettels, and 8,586 missing rows. The first observation did
+not prove why output disappeared; the later result separately proved that the
+generated index had reached an empty-zettel state.
+
+This boundary is required because Python `sqlite3.Connection.executescript()`
+commits a pending transaction before running its script and does not add another
+implicit transaction around the remaining Python inserts. A deletion performed
+outside the rebuild transaction can therefore survive while later inserts roll
+back. With the v0.3.255 boundary, an exception, cancellation, process loss, or
+connection close before the final commit rolls the complete rebuild back and
+preserves the previously committed index.
+
+On a first-ever build there is no prior schema to preserve, and SQLite can
+leave a small database file after rollback. `index-health` checks for the
+`zettels` table before querying it and returns
+`archive_index_schema_incomplete` / `stale_or_incomplete` instead of a raw
+missing-table exception.
+
+A temporary-database atomic swap was considered but rejected. Replacing a live
+SQLite database on Windows while coordinating WAL and shared-memory sidecars is
+more complex than using SQLite's own transaction and crash-recovery contract.
+
+The database commit and the scratch result publish are two different
+boundaries. If the database commit succeeds and the later `--output` publish
+fails, the rebuilt index may already be current even though no complete result
+file exists. Treat that as a partial result-capture failure and run a fresh
+official `index-health` check; do not infer either success or failure from the
+missing scratch file alone.
+
+## Primary References
+
+- Python documents the transaction boundary of
+  [`sqlite3.Connection.executescript()`](https://docs.python.org/3/library/sqlite3.html#sqlite3.Connection.executescript).
+- SQLite documents explicit transaction behavior in
+  [Transactions](https://www.sqlite.org/lang_transaction.html).
+- Python documents the filesystem primitives used by the complete-only writer:
+  [`os.fsync()`](https://docs.python.org/3/library/os.html#os.fsync),
+  [`os.rename()`](https://docs.python.org/3/library/os.html#os.rename), and
+  [`os.link()`](https://docs.python.org/3/library/os.html#os.link).
 
 ## Honest Performance Boundary
 

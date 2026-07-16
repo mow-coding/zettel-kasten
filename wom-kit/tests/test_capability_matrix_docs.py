@@ -255,6 +255,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             / "docs"
             / "archive-infra-decision-log-2026-07-12-v03227-aggregate-edge-progress.md"
         ).read_text(encoding="utf-8")
+        changelog_text = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
         upgrade_text = (REPO_ROOT / "UPGRADE.md").read_text(encoding="utf-8")
         readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
         readme_ko_text = (REPO_ROOT / "README.ko.md").read_text(encoding="utf-8")
@@ -7163,6 +7164,39 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             public_map_ko_text,
         )
 
+
+    def test_v03255_index_result_capture_and_crash_safety_docs_match(self) -> None:
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        progress_text = (KIT_ROOT / "docs" / "large-command-progress-and-output.md").read_text(
+            encoding="utf-8"
+        )
+        health_text = (KIT_ROOT / "docs" / "index-health.md").read_text(encoding="utf-8")
+        decision_text = (
+            KIT_ROOT
+            / "docs"
+            / "archive-infra-decision-log-2026-07-16-v03255-index-result-capture.md"
+        ).read_text(encoding="utf-8")
+        changelog_text = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+
+        for phrase in (
+            "v0.3.255 adds opt-in progress",
+            "Previous checkpoint: Status: v0.3.254 independent-audit follow-up and hash-bound body-reading checkpoint",
+            "atomic no-overwrite semantics",
+            "archive_index_schema_incomplete",
+            "zettel_body_text_read: true",
+            "not complete object, derived-text, view, source-map, edge, facet, or warning counts",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, matrix_text)
+        for text in (progress_text, health_text, decision_text):
+            with self.subTest(document="index-result-contract"):
+                self.assertIn("command_result_before_terminal_transport", text)
+                self.assertIn("BEGIN IMMEDIATE", text)
+                self.assertIn("no-overwrite", text)
+        self.assertIn("health first, index only for a missing or stale", decision_text)
+        self.assertIn("forced termination before result publication", health_text)
+        self.assertIn("Crash-safe generated-index rebuild", changelog_text)
+        self.assertIn("archive_index_schema_incomplete", changelog_text)
 
     def test_top_level_readmes_expose_current_installation_on_ramp(self) -> None:
         readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")

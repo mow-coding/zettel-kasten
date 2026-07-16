@@ -24,6 +24,34 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.255 Crash-Safe Index Rebuild And Durable Result Capture
+
+No archive migration is required. Existing zets, objets, manifests, receipts,
+views, source maps, and generated indexes remain compatible.
+
+This release fixes the generated-index rebuild boundary. `archive index` now
+keeps schema setup, old-row deletion, replacement rows, and metadata updates in
+one explicit SQLite transaction. If the process stops before commit, the prior
+committed index remains available instead of leaving a delete-only result.
+
+Long `index` and `index-health` commands can now add content-free progress with
+`--progress` and write one complete private diagnostic with `--output
+.wom-scratch/diagnostics/<new-name>.json`. Use a new filename for every run.
+The file appears only after a complete command-result boundary; absence after an
+interruption means unconfirmed, not success.
+
+After upgrading a project that observed stale or missing index rows, follow this
+explicit sequence:
+
+1. Run `archive index-health <archive-root> --dry-run --progress --format json`.
+2. Run `archive index` only when health reports a missing or stale index.
+3. Run `index-health` again and require exit code 0 plus matching live and
+   indexed zettel counts.
+
+`index-health` never rebuilds automatically. The optional output file is local
+scratch, not a receipt or canonical archive record. Progress and handled errors
+do not echo zet bodies, titles, local absolute paths, or parser excerpts.
+
 ## v0.3.254 Independent Audit Follow-Up And Hash-Bound Body Reading
 
 No archive migration is required. Existing zets, objets, manifests, derived

@@ -2,6 +2,33 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.3.255 충돌 안전 인덱스 재생성과 지속 가능한 결과 저장
+
+아카이브 마이그레이션은 필요하지 않습니다. 기존 zet, objet, manifest,
+영수증, view, source map, 생성 인덱스는 계속 호환됩니다.
+
+이번 릴리스는 생성 인덱스 재생성 경계를 수정합니다. `archive index`는
+스키마 준비, 이전 행 삭제, 새 행 삽입, 메타데이터 갱신 전체를 하나의
+명시적 SQLite 트랜잭션에서 처리합니다. 커밋 전에 프로세스가 멈추면
+삭제만 반영된 상태 대신 이전에 커밋된 인덱스가 보존됩니다.
+
+오래 걸리는 `index`와 `index-health` 명령에는 `--progress`로 내용 없는
+진행 표시를 켤 수 있고, `--output
+.wom-scratch/diagnostics/<새-이름>.json`으로 완성된 비공개 진단 결과 하나를
+남길 수 있습니다. 실행마다 새 파일 이름을 사용해야 합니다. 중단 뒤
+파일이 없으면 성공이 아니라 결과 미확인 상태입니다.
+
+인덱스 누락이나 stale 상태를 관찰한 프로젝트는 업그레이드 후 다음
+순서를 따릅니다.
+
+1. `archive index-health <archive-root> --dry-run --progress --format json`을 실행합니다.
+2. health가 missing 또는 stale을 보고할 때만 `archive index`를 실행합니다.
+3. `index-health`를 다시 실행해 exit code 0과 live/indexed zet 수 일치를 확인합니다.
+
+`index-health`는 자동으로 재생성하지 않습니다. 선택적 결과 파일은 로컬
+scratch이며 영수증이나 정식 아카이브 기록이 아닙니다. 진행 표시와 처리된
+오류는 zet 본문, 제목, 로컬 절대경로, 파서 원문을 출력하지 않습니다.
+
 ## v0.3.254 독립 감사 후속 및 해시 결합 본문 읽기
 
 아카이브 마이그레이션은 필요하지 않습니다. 기존 zet, 오브제, 목록, 파생
