@@ -331,6 +331,7 @@ import re
 import secrets
 import shutil
 import sqlite3
+import stat
 import subprocess
 import sys
 import threading
@@ -694,6 +695,14 @@ PROGRESS_STAGE_UNITS = {
     "abstract-lock-audit": "transaction_locks",
     "source-hash": "bytes",
     "store-hash": "bytes",
+    "index-zettels": "zet_files",
+    "index-objects": "object_manifest_rows",
+    "index-derived-texts": "derived_text_records",
+    "index-views": "view_files",
+    "index-source-maps": "source_map_rows",
+    "index-health-live-zettels": "zet_files",
+    "index-health-index-rows": "index_rows",
+    "index-health-compare": "zet_rows",
 }
 PROGRESS_SAME_COUNT_REPEAT_SECONDS = 30.0
 PROGRESS_NESTED_AGGREGATE_SECONDS = 10.0
@@ -1191,8 +1200,21 @@ class CommandProgressReporter:
                     self._last_forwarded_progress = progress_key
         if safe_message == "working" or safe_message.startswith("working ") or not forward:
             return
+        self._emit(stage, safe_message, current, total)
+
+    def _emit(self, stage: str, message: str, current: int | None, total: int | None) -> None:
+        """Keep progress-stream failures observational, never transactional."""
         with self._callback_lock:
-            self._callback(stage, safe_message, current, total)
+            callback = self._callback
+            if callback is None:
+                return
+            try:
+                callback(stage, message, current, total)
+            except (OSError, UnicodeError, ValueError):
+                # stderr can disappear when a PTY or agent transport closes.
+                # Disable future progress instead of changing command meaning.
+                self._callback = None
+                self._stop.set()
 
     @staticmethod
     def _content_free_message(message: str, current: int | None, total: int | None) -> str:
@@ -1309,9 +1331,7 @@ class CommandProgressReporter:
             stage_annotation = self._stage_annotation(stage, "heartbeat")
             if stage_annotation:
                 message += f" {stage_annotation}"
-            with self._callback_lock:
-                if self._callback is not None:
-                    self._callback(stage, message, current, total)
+            self._emit(stage, message, current, total)
 
     def close(self) -> None:
         self._stop.set()
@@ -12058,10 +12078,118 @@ def command_retire_draft_batch(args: argparse.Namespace) -> int:
 
 def command_index(args: argparse.Namespace) -> int:
     try:
-        result = archive_services.index_archive(Path(args.archive_root))
-    except archive_services.ArchiveServiceError as exc:
-        print(str(exc), file=sys.stderr)
+        archive_root = archive_services.require_existing_archive_root(Path(args.archive_root))
+    except (archive_services.ArchiveServiceError, OSError):
+        print("Archive root does not exist or is not a directory.", file=sys.stderr, flush=True)
         return 1
+    reporter = CommandProgressReporter(
+        bool(getattr(args, "progress", False)),
+        label="index",
+        stage_order=(
+            "index-lock-and-schema",
+            "index-zettels",
+            "index-objects",
+            "index-derived-texts",
+            "index-views",
+            "index-source-maps",
+            "index-commit",
+        ),
+    )
+    capture: CommandRunResultCapture | None = None
+    try:
+        if getattr(args, "output", None):
+            capture = CommandRunResultCapture.prepare(
+                str(args.output),
+                archive_root,
+                command="index",
+            )
+            best_effort_terminal_print(
+                f"[index] result pending: {capture.metadata['path']}",
+                file=sys.stderr,
+            )
+        result = archive_services.index_archive(
+            archive_root,
+            progress_callback=reporter.progress,
+        )
+    except (archive_services.ArchiveServiceError, OSError, UnicodeError, sqlite3.Error, ValueError) as exc:
+        failure_result_written = False
+        if capture is not None:
+            try:
+                capture.write_completed(exit_code=1, error=exc)
+                failure_result_written = True
+                best_effort_terminal_print(
+                    f"[index] completed exit_code=1 result={capture.metadata['path']}",
+                    file=sys.stderr,
+                )
+            except (OSError, ValueError) as capture_exc:
+                best_effort_terminal_print(
+                    f"Index failed; result capture also failed ({type(capture_exc).__name__}).",
+                    file=sys.stderr,
+                )
+        if failure_result_written:
+            best_effort_terminal_print(
+                "Index failed; the saved result contains a sanitized failure code.",
+                file=sys.stderr,
+            )
+        elif capture is not None:
+            best_effort_terminal_print(
+                "Index failed; no complete result artifact was published.",
+                file=sys.stderr,
+            )
+        elif getattr(args, "output", None) and isinstance(exc, ValueError):
+            print(str(exc), file=sys.stderr, flush=True)
+        else:
+            print(
+                f"Index failed ({type(exc).__name__}); no raw exception message was printed.",
+                file=sys.stderr,
+                flush=True,
+            )
+        return 1
+    finally:
+        reporter.close()
+
+    output_metadata: dict[str, Any] | None = None
+    if capture is not None:
+        try:
+            output_metadata = capture.write_completed(exit_code=0, result=result)
+        except (OSError, ValueError) as exc:
+            best_effort_terminal_print(
+                f"Index completed, but --output result capture failed ({type(exc).__name__}).",
+                file=sys.stderr,
+            )
+            return 1
+        best_effort_terminal_print(
+            f"[index] completed exit_code=0 result={output_metadata['path']}",
+            file=sys.stderr,
+        )
+
+    if output_metadata is not None:
+        summary_result = {
+            "ok": True,
+            "lifecycle_action": "index_output_summary",
+            "summary": {
+                key: result.get(key)
+                for key in (
+                    "zettels",
+                    "objects",
+                    "derived_texts",
+                    "views",
+                    "source_map_entries",
+                    "edges",
+                    "facets",
+                )
+            },
+            "warning_count": len(result.get("warnings", [])),
+            "output": output_metadata,
+        }
+        if args.format == "json":
+            best_effort_terminal_json(summary_result)
+        else:
+            best_effort_terminal_print(
+                "Archive index completed.\n"
+                f"Full result written to: {output_metadata['path']}"
+            )
+        return 0
 
     if args.format == "json":
         print_json(result)
@@ -12075,6 +12203,7 @@ def command_index(args: argparse.Namespace) -> int:
             f"{result['source_map_entries']} source map item(s) "
             f"at {result['index_path']}"
         )
+    sys.stdout.flush()
     return 0
 
 
@@ -12200,14 +12329,110 @@ def command_index_health(args: argparse.Namespace) -> int:
         print("index-health is read-only and requires --dry-run.", file=sys.stderr)
         return 1
     try:
+        archive_root = archive_services.require_existing_archive_root(Path(args.archive_root))
+    except (archive_services.ArchiveServiceError, OSError):
+        print("Archive root does not exist or is not a directory.", file=sys.stderr, flush=True)
+        return 1
+    reporter = CommandProgressReporter(
+        bool(getattr(args, "progress", False)),
+        label="index-health",
+        stage_order=(
+            "index-health-live-zettels",
+            "index-health-index-rows",
+            "index-health-compare",
+        ),
+    )
+    capture: CommandRunResultCapture | None = None
+    try:
+        if getattr(args, "output", None):
+            capture = CommandRunResultCapture.prepare(
+                str(args.output),
+                archive_root,
+                command="index-health",
+            )
+            best_effort_terminal_print(
+                f"[index-health] result pending: {capture.metadata['path']}",
+                file=sys.stderr,
+            )
         result = archive_services.index_health(
-            Path(args.archive_root),
+            archive_root,
             dry_run=True,
             max_items=args.max_items,
+            progress_callback=reporter.progress,
         )
-    except archive_services.ArchiveServiceError as exc:
-        print(str(exc), file=sys.stderr)
+    except (archive_services.ArchiveServiceError, OSError, UnicodeError, sqlite3.Error, ValueError) as exc:
+        failure_result_written = False
+        if capture is not None:
+            try:
+                capture.write_completed(exit_code=1, error=exc)
+                failure_result_written = True
+                best_effort_terminal_print(
+                    f"[index-health] completed exit_code=1 result={capture.metadata['path']}",
+                    file=sys.stderr,
+                )
+            except (OSError, ValueError) as capture_exc:
+                best_effort_terminal_print(
+                    f"Index health failed; result capture also failed ({type(capture_exc).__name__}).",
+                    file=sys.stderr,
+                )
+        if failure_result_written:
+            best_effort_terminal_print(
+                "Index health failed; the saved result contains a sanitized failure code.",
+                file=sys.stderr,
+            )
+        elif capture is not None:
+            best_effort_terminal_print(
+                "Index health failed; no complete result artifact was published.",
+                file=sys.stderr,
+            )
+        elif getattr(args, "output", None) and isinstance(exc, ValueError):
+            print(str(exc), file=sys.stderr, flush=True)
+        else:
+            print(
+                f"Index health failed ({type(exc).__name__}); no raw exception message was printed.",
+                file=sys.stderr,
+                flush=True,
+            )
         return 1
+    finally:
+        reporter.close()
+
+    exit_code = 0 if result.get("ok") else 1
+    output_metadata: dict[str, Any] | None = None
+    if capture is not None:
+        try:
+            output_metadata = capture.write_completed(exit_code=exit_code, result=result)
+        except (OSError, ValueError) as exc:
+            best_effort_terminal_print(
+                f"Index health completed, but --output result capture failed ({type(exc).__name__}).",
+                file=sys.stderr,
+            )
+            return 1
+        best_effort_terminal_print(
+            f"[index-health] completed exit_code={exit_code} result={output_metadata['path']}",
+            file=sys.stderr,
+        )
+
+    if output_metadata is not None:
+        summary_result = {
+            "ok": bool(result.get("ok")),
+            "lifecycle_action": "index_health_output_summary",
+            "index_state": result.get("index_state"),
+            "summary": result.get("summary"),
+            "stale_reasons": result.get("stale_reasons"),
+            "blocker_count": len(result.get("blockers", [])),
+            "warning_count": len(result.get("warnings", [])),
+            "output": output_metadata,
+        }
+        if args.format == "json":
+            best_effort_terminal_json(summary_result)
+        else:
+            best_effort_terminal_print(
+                f"Index health: {result.get('index_state')}\n"
+                f"Full result written to: {output_metadata['path']}"
+            )
+        return exit_code
+
     if args.format == "json":
         print_json(result)
     else:
@@ -12225,7 +12450,8 @@ def command_index_health(args: argparse.Namespace) -> int:
         for action in result.get("next_safe_actions", []):
             print(f"NEXT: {action}")
         print("Writes: none")
-    return 0 if result.get("ok") else 1
+    sys.stdout.flush()
+    return exit_code
 
 
 def command_related_zets(args: argparse.Namespace) -> int:
@@ -15648,7 +15874,24 @@ def apply_provider_profile(target: Path, provider_profile: str | None) -> None:
 
 
 def print_json(data: Any) -> None:
-    print(json.dumps(data, indent=2, ensure_ascii=False, default=str))
+    print(json.dumps(data, indent=2, ensure_ascii=False, default=str), flush=True)
+
+
+def best_effort_terminal_print(*values: Any, file: Any = None) -> bool:
+    """Emit advisory terminal output without overriding a durable result."""
+    try:
+        print(*values, file=file, flush=True)
+    except (OSError, UnicodeError, ValueError):
+        return False
+    return True
+
+
+def best_effort_terminal_json(data: Any) -> bool:
+    try:
+        print_json(data)
+    except (OSError, UnicodeError, ValueError):
+        return False
+    return True
 
 
 def parse_diagnostic_level_filter(value: str | None) -> tuple[set[str], str]:
@@ -15743,6 +15986,197 @@ def display_output_path(path: Path, archive_root: Path) -> str:
         return archive_relative_path(path, archive_root)
     except (ArchivePathError, OSError, ValueError):
         return "<output-file>"
+
+
+def resolve_command_result_output_path(
+    archive_root: Path,
+    path_arg: str,
+) -> tuple[Path, Path, str]:
+    root = archive_services.require_existing_archive_root(archive_root)
+    normalized = path_arg.replace("\\", "/").strip()
+    required_prefix = ".wom-scratch/diagnostics/"
+    if not normalized.startswith(required_prefix):
+        raise ValueError(f"--output must be under {required_prefix}")
+    if not normalized.lower().endswith(".json"):
+        raise ValueError("--output must use a .json filename.")
+    if ".." in PurePosixPath(normalized).parts:
+        raise ValueError("--output must not contain path traversal.")
+
+    unresolved = root
+    for part in PurePosixPath(normalized).parts:
+        unresolved = unresolved / part
+        try:
+            entry_stat = os.lstat(unresolved)
+        except FileNotFoundError:
+            break
+        except OSError as exc:
+            raise ValueError("--output path components could not be verified.") from exc
+        reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+        if stat.S_ISLNK(entry_stat.st_mode) or (
+            reparse_flag and getattr(entry_stat, "st_file_attributes", 0) & reparse_flag
+        ):
+            raise ValueError("--output paths must not contain symbolic links.")
+    return root, resolve_archive_relative_path(root, normalized), normalized
+
+
+def write_complete_json_no_overwrite(
+    output_path: Path,
+    payload: dict[str, Any],
+    *,
+    run_id: str,
+) -> None:
+    """Publish complete JSON atomically while preserving no-overwrite semantics."""
+    data = (json.dumps(payload, indent=2, ensure_ascii=False, default=str) + "\n").encode("utf-8")
+    partial_path = output_path.with_name(f".{output_path.name}.{run_id}.partial")
+    descriptor: int | None = None
+    published = False
+    try:
+        descriptor = os.open(str(partial_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "wb") as handle:
+            descriptor = None
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+
+        if output_path.exists() or output_path.is_symlink():
+            raise ValueError("--output refuses to overwrite an existing result file.")
+        if os.name == "nt":
+            # Windows rename fails when the destination appeared concurrently.
+            os.rename(partial_path, output_path)
+            published = True
+        else:
+            # A same-filesystem hard link creates the destination only if absent.
+            os.link(partial_path, output_path)
+            published = True
+            try:
+                partial_path.unlink()
+            except OSError:
+                pass
+        if output_path.is_symlink() or not output_path.is_file():
+            raise OSError("Command result publication was not verified.")
+        if output_path.stat().st_size != len(data):
+            raise OSError("Command result size verification failed.")
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        if partial_path.exists():
+            try:
+                partial_path.unlink()
+            except OSError:
+                pass
+        if not published and output_path.is_symlink():
+            raise ValueError("--output refuses a symbolic-link destination.")
+
+
+@dataclass
+class CommandRunResultCapture:
+    """Publish one complete CLI result without treating scratch as a receipt."""
+
+    output_path: Path
+    archive_root: Path
+    command: str
+    run_id: str
+    started_at: str
+    relative_path: str
+    metadata: dict[str, Any]
+
+    @classmethod
+    def prepare(
+        cls,
+        path_arg: str,
+        archive_root: Path,
+        *,
+        command: str,
+    ) -> "CommandRunResultCapture":
+        root, output_path, normalized = resolve_command_result_output_path(archive_root, path_arg)
+        if output_path.exists() or output_path.is_symlink():
+            raise ValueError("--output refuses to overwrite an existing result file.")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        checked_root, checked_path, checked_normalized = resolve_command_result_output_path(root, normalized)
+        if checked_root != root or checked_path != output_path or checked_normalized != normalized:
+            raise ValueError("--output path changed while it was being prepared.")
+        metadata = {
+            "path": display_output_path(output_path, root),
+            "path_kind": "archive_relative_scratch",
+            "relative_to": "archive_root",
+            "contains": "complete_command_result_and_cli_execution_json",
+            "command": command,
+            "result_artifact_written": True,
+            "archive_record_written": False,
+            "receipt_written": False,
+            "tracking_policy": "local_scratch_diagnostic_not_archive_record_do_not_commit",
+            "absolute_path_echoed": False,
+        }
+        return cls(
+            output_path=output_path,
+            archive_root=root,
+            command=command,
+            run_id=secrets.token_hex(16),
+            started_at=datetime.now().astimezone().replace(microsecond=0).isoformat(),
+            relative_path=normalized,
+            metadata=metadata,
+        )
+
+    def write_completed(
+        self,
+        *,
+        exit_code: int,
+        result: dict[str, Any] | None = None,
+        error: BaseException | None = None,
+    ) -> dict[str, Any]:
+        if result is None and error is None:
+            raise ValueError("A completed command result requires a result or error.")
+        checked_root, checked_path, checked_normalized = resolve_command_result_output_path(
+            self.archive_root,
+            self.relative_path,
+        )
+        if (
+            checked_root != self.archive_root
+            or checked_path != self.output_path
+            or checked_normalized != self.relative_path
+        ):
+            raise ValueError("--output path changed before result publication.")
+        if self.output_path.exists() or self.output_path.is_symlink():
+            raise ValueError("--output refuses to overwrite an existing result file.")
+        finished_at = datetime.now().astimezone().replace(microsecond=0).isoformat()
+        if result is not None:
+            payload: dict[str, Any] = dict(result)
+        else:
+            failure_code = f"{self.command.replace('-', '_')}_command_failed"
+            payload = {
+                "ok": False,
+                "lifecycle_action": f"{self.command.replace('-', '_')}_command_failure",
+                "blockers": [failure_code],
+                "warnings": [],
+            }
+        error_payload = None
+        if error is not None:
+            error_type = re.sub(r"[^A-Za-z0-9_.-]", "_", type(error).__name__) or "CommandError"
+            error_payload = {
+                "type": error_type,
+                "code": f"{self.command.replace('-', '_')}_command_failed",
+                "message": "The command failed before a complete successful result was available.",
+                "raw_message_stored": False,
+            }
+        payload["cli_execution"] = {
+            "status": "completed",
+            "run_id": self.run_id,
+            "command": self.command,
+            "started_at": self.started_at,
+            "finished_at": finished_at,
+            "exit_code": int(exit_code),
+            "exit_code_scope": "command_result_before_terminal_transport",
+            "terminal_output_delivery": "best_effort_not_observed",
+            "result_available": result is not None,
+            "error": error_payload,
+        }
+        payload["cli_output_artifact"] = self.metadata
+        write_complete_json_no_overwrite(
+            self.output_path,
+            payload,
+            run_id=self.run_id,
+        )
+        return self.metadata
 
 
 def write_command_result_output_file(
@@ -20732,6 +21166,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     index = subcommands.add_parser("index", help="Build a generated local SQLite search index.")
     index.add_argument("archive_root", help="Archive root to index.")
+    index.add_argument(
+        "--progress",
+        action="store_true",
+        help="Print content-free stage/count progress and a 10-second heartbeat to stderr.",
+    )
+    index.add_argument(
+        "--output",
+        help="Optional new .wom-scratch/diagnostics/*.json file for the complete result and CLI exit evidence.",
+    )
     index.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     index.set_defaults(func=command_index)
 
@@ -20740,8 +21183,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="Check whether the generated local SQLite index matches live zettel files.",
     )
     index_health_parser.add_argument("archive_root", help="Archive root to inspect.")
-    index_health_parser.add_argument("--dry-run", action="store_true", help="Required. Preview only; write nothing.")
+    index_health_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Required. Core inspection writes nothing; --output may write one local scratch result.",
+    )
     index_health_parser.add_argument("--max-items", type=int, default=50, help="Maximum sample paths to return per drift bucket.")
+    index_health_parser.add_argument(
+        "--progress",
+        action="store_true",
+        help="Print content-free stage/count progress and a 10-second heartbeat to stderr.",
+    )
+    index_health_parser.add_argument(
+        "--output",
+        help="Optional new .wom-scratch/diagnostics/*.json file for the complete result and CLI exit evidence.",
+    )
     index_health_parser.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     index_health_parser.set_defaults(func=command_index_health)
 

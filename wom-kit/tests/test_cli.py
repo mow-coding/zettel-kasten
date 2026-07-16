@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 import unicodedata
@@ -41617,6 +41618,569 @@ state:
             self.assertEqual(journal_mode, "wal")
             self.assertEqual(busy_timeout, archive_services.ARCHIVE_INDEX_BUSY_TIMEOUT_MS)
 
+    def test_interrupted_index_rebuild_rolls_back_and_preserves_previous_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            first = archive_services.index_archive(archive_root)
+            previous_count = int(first["zettels"])
+
+            new_path = archive_root / "zettels" / "zet_20260716_atomic_rebuild_probe.md"
+            new_path.write_text(
+                "---\n"
+                + archive_cli.dump_yaml(
+                    {
+                        "id": "zet_20260716_atomic_rebuild_probe",
+                        "title": "Atomic rebuild probe",
+                        "status": "canonical",
+                        "kind": "note",
+                    }
+                )
+                + "---\n\nBody that must not matter to rollback.\n",
+                encoding="utf-8",
+            )
+
+            def interrupt_after_first_zettel(
+                stage: str,
+                message: str,
+                current: int | None,
+                _total: int | None,
+            ) -> None:
+                if stage == "index-zettels" and message == "scanned" and current == 1:
+                    raise RuntimeError("simulated agent interruption")
+
+            with self.assertRaisesRegex(RuntimeError, "simulated agent interruption"):
+                archive_services.index_archive(
+                    archive_root,
+                    progress_callback=interrupt_after_first_zettel,
+                )
+
+            conn = archive_services.connect_archive_index(
+                archive_root / archive_services.INDEX_RELATIVE_PATH,
+                row_factory=True,
+            )
+            try:
+                preserved_count = int(conn.execute("SELECT COUNT(*) FROM zettels").fetchone()[0])
+                new_row = conn.execute(
+                    "SELECT 1 FROM zettels WHERE zettel_id = ?",
+                    ("zet_20260716_atomic_rebuild_probe",),
+                ).fetchone()
+            finally:
+                conn.close()
+
+            self.assertEqual(preserved_count, previous_count)
+            self.assertIsNone(new_row)
+            health = archive_services.index_health(archive_root, dry_run=True)
+            self.assertEqual(health["summary"]["indexed_zettel_count"], previous_count)
+            self.assertEqual(health["summary"]["missing_from_index_count"], 1)
+
+    def test_interrupted_first_index_build_is_structured_as_incomplete_schema(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            db_path = archive_root / archive_services.INDEX_RELATIVE_PATH
+            for candidate in (db_path, Path(str(db_path) + "-wal"), Path(str(db_path) + "-shm")):
+                if candidate.exists():
+                    candidate.unlink()
+
+            def interrupt_after_schema(
+                stage: str,
+                message: str,
+                _current: int | None,
+                _total: int | None,
+            ) -> None:
+                if stage == "index-lock-and-schema" and message == "done":
+                    raise RuntimeError("simulated first-build interruption")
+
+            with self.assertRaisesRegex(RuntimeError, "first-build interruption"):
+                archive_services.index_archive(
+                    archive_root,
+                    progress_callback=interrupt_after_schema,
+                )
+
+            self.assertTrue(db_path.is_file())
+            health = archive_services.index_health(archive_root, dry_run=True)
+            self.assertFalse(health["ok"])
+            self.assertEqual(health["index_state"], "stale_or_incomplete")
+            self.assertIn("archive_index_schema_incomplete", health["stale_reasons"])
+            self.assertFalse(health["summary"]["index_schema_complete"])
+            self.assertEqual(health["summary"]["indexed_zettel_count"], 0)
+            self.assertEqual(
+                health["summary"]["missing_from_index_count"],
+                health["summary"]["live_zettel_count"],
+            )
+
+    def test_post_commit_progress_failure_does_not_relabel_successful_index(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+
+            def break_only_after_commit(
+                stage: str,
+                message: str,
+                _current: int | None,
+                _total: int | None,
+            ) -> None:
+                if stage == "index-commit" and message == "done":
+                    raise BrokenPipeError("simulated progress transport loss after commit")
+
+            result = archive_services.index_archive(
+                archive_root,
+                progress_callback=break_only_after_commit,
+            )
+            health = archive_services.index_health(archive_root, dry_run=True)
+
+            self.assertTrue(result["ok"], result)
+            self.assertTrue(health["ok"], health)
+            self.assertEqual(
+                health["summary"]["live_zettel_count"],
+                health["summary"]["indexed_zettel_count"],
+            )
+
+    def test_invalid_yaml_index_failure_is_sanitized_and_preserves_previous_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            previous = archive_services.index_archive(archive_root)
+            previous_count = int(previous["zettels"])
+            broken_path = sorted((archive_root / "zettels").glob("*.md"))[0]
+            broken_path.write_text(
+                "---\nid: [unterminated private yaml marker\n---\nPrivate body marker.\n",
+                encoding="utf-8",
+            )
+            relative = ".wom-scratch/diagnostics/invalid-yaml-index.json"
+
+            code, stdout, stderr = self.run_cli_split(
+                [
+                    "index",
+                    str(archive_root),
+                    "--output",
+                    relative,
+                    "--format",
+                    "json",
+                ]
+            )
+
+            self.assertEqual(code, 1, stdout + stderr)
+            self.assertEqual(stdout, "")
+            self.assertNotIn("private yaml marker", stderr)
+            self.assertNotIn("Private body marker", stderr)
+            saved_text = (archive_root / relative).read_text(encoding="utf-8")
+            self.assertNotIn("private yaml marker", saved_text)
+            self.assertNotIn("Private body marker", saved_text)
+            saved = json.loads(saved_text)
+            self.assertEqual(saved["lifecycle_action"], "index_command_failure")
+            self.assertEqual(saved["cli_execution"]["exit_code"], 1)
+            self.assertEqual(saved["cli_execution"]["error"]["type"], "ArchiveServiceError")
+
+            conn = archive_services.connect_archive_index(
+                archive_root / archive_services.INDEX_RELATIVE_PATH,
+            )
+            try:
+                preserved_count = int(conn.execute("SELECT COUNT(*) FROM zettels").fetchone()[0])
+            finally:
+                conn.close()
+            self.assertEqual(preserved_count, previous_count)
+
+    def test_invalid_view_yaml_index_failure_is_sanitized_and_rolls_back(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            previous = archive_services.index_archive(archive_root)
+            views_root = archive_root / "views"
+            views_root.mkdir(exist_ok=True)
+            broken_path = views_root / "private-owner-view.yml"
+            broken_path.write_text(
+                "id: [unterminated private view yaml marker\n",
+                encoding="utf-8",
+            )
+            relative = ".wom-scratch/diagnostics/invalid-view-yaml-index.json"
+
+            code, stdout, stderr = self.run_cli_split(
+                [
+                    "index",
+                    str(archive_root),
+                    "--output",
+                    relative,
+                    "--format",
+                    "json",
+                ]
+            )
+
+            self.assertEqual(code, 1, stdout + stderr)
+            self.assertEqual(stdout, "")
+            self.assertNotIn("private-owner-view", stderr)
+            self.assertNotIn("private view yaml marker", stderr)
+            saved_text = (archive_root / relative).read_text(encoding="utf-8")
+            self.assertNotIn("private-owner-view", saved_text)
+            self.assertNotIn("private view yaml marker", saved_text)
+            saved = json.loads(saved_text)
+            self.assertEqual(saved["lifecycle_action"], "index_command_failure")
+            self.assertEqual(saved["cli_execution"]["exit_code"], 1)
+            self.assertEqual(
+                saved["cli_execution"]["error"]["type"],
+                "ArchiveServiceError",
+            )
+
+            conn = archive_services.connect_archive_index(
+                archive_root / archive_services.INDEX_RELATIVE_PATH,
+            )
+            try:
+                preserved_zettels = int(
+                    conn.execute("SELECT COUNT(*) FROM zettels").fetchone()[0]
+                )
+                preserved_views = int(
+                    conn.execute("SELECT COUNT(*) FROM views").fetchone()[0]
+                )
+            finally:
+                conn.close()
+            self.assertEqual(preserved_zettels, int(previous["zettels"]))
+            self.assertEqual(preserved_views, int(previous["views"]))
+
+    def test_index_progress_and_output_preserve_completion_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            output_relative = ".wom-scratch/diagnostics/index-result.json"
+
+            code, stdout, stderr = self.run_cli_split(
+                [
+                    "index",
+                    str(archive_root),
+                    "--progress",
+                    "--output",
+                    output_relative,
+                    "--format",
+                    "json",
+                ]
+            )
+
+            self.assertEqual(code, 0, stdout + stderr)
+            summary = json.loads(stdout)
+            self.assertEqual(summary["lifecycle_action"], "index_output_summary")
+            self.assertEqual(summary["output"]["path"], output_relative)
+            self.assertIn("[index] result pending", stderr)
+            self.assertIn("index-lock-and-schema", stderr)
+            self.assertIn("index-zettels", stderr)
+            self.assertIn("index-commit", stderr)
+            self.assertIn("completed exit_code=0", stderr)
+            self.assertNotIn(str(archive_root), stderr)
+
+            saved = json.loads((archive_root / output_relative).read_text(encoding="utf-8"))
+            self.assertTrue(saved["ok"])
+            self.assertGreater(saved["zettels"], 0)
+            self.assertEqual(saved["cli_execution"]["status"], "completed")
+            self.assertEqual(saved["cli_execution"]["exit_code"], 0)
+            self.assertIsNone(saved["cli_execution"]["error"])
+            self.assertTrue(saved["cli_output_artifact"]["result_artifact_written"])
+            self.assertFalse(saved["cli_output_artifact"]["archive_record_written"])
+
+            with patch.object(archive_services, "index_archive") as rebuild:
+                overwrite_code, _overwrite_stdout, overwrite_stderr = self.run_cli_split(
+                    [
+                        "index",
+                        str(archive_root),
+                        "--output",
+                        output_relative,
+                        "--format",
+                        "json",
+                    ]
+                )
+            self.assertEqual(overwrite_code, 1)
+            self.assertIn("refuses to overwrite", overwrite_stderr)
+            rebuild.assert_not_called()
+
+    def test_index_output_rejects_missing_archive_root_without_creating_it(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            missing_root = Path(tmp) / "misspelled-archive"
+            with patch.object(archive_services, "index_archive") as rebuild:
+                code, _stdout, stderr = self.run_cli_split(
+                    [
+                        "index",
+                        str(missing_root),
+                        "--output",
+                        ".wom-scratch/diagnostics/index-result.json",
+                        "--format",
+                        "json",
+                    ]
+                )
+            self.assertEqual(code, 1)
+            self.assertIn("does not exist", stderr)
+            self.assertNotIn(str(missing_root), stderr)
+            self.assertFalse(missing_root.exists())
+            rebuild.assert_not_called()
+
+    def test_index_output_rejects_symbolic_link_path_component(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            scratch_root = archive_root / ".wom-scratch"
+            scratch_root.mkdir(parents=True, exist_ok=True)
+            outside_diagnostics = archive_root / "tracked-output-target"
+            outside_diagnostics.mkdir()
+            diagnostics_link = scratch_root / "diagnostics"
+            if diagnostics_link.is_dir():
+                diagnostics_link.rmdir()
+            try:
+                diagnostics_link.symlink_to(outside_diagnostics, target_is_directory=True)
+            except OSError as exc:
+                self.skipTest(f"symlink creation is unavailable: {exc}")
+
+            with patch.object(archive_services, "index_archive") as rebuild:
+                code, _stdout, stderr = self.run_cli_split(
+                    [
+                        "index",
+                        str(archive_root),
+                        "--output",
+                        ".wom-scratch/diagnostics/index-result.json",
+                        "--format",
+                        "json",
+                    ]
+                )
+            self.assertEqual(code, 1)
+            self.assertIn("symbolic links", stderr)
+            self.assertFalse((outside_diagnostics / "index-result.json").exists())
+            rebuild.assert_not_called()
+
+    def test_index_output_rejects_windows_junction_path_component(self) -> None:
+        if os.name != "nt":
+            self.skipTest("Windows junction regression")
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            scratch_root = archive_root / ".wom-scratch"
+            scratch_root.mkdir(parents=True, exist_ok=True)
+            outside_diagnostics = archive_root / "junction-output-target"
+            outside_diagnostics.mkdir()
+            diagnostics_junction = scratch_root / "diagnostics"
+            if diagnostics_junction.is_dir():
+                diagnostics_junction.rmdir()
+            created = subprocess.run(
+                ["cmd", "/c", "mklink", "/J", str(diagnostics_junction), str(outside_diagnostics)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if created.returncode != 0:
+                self.skipTest("junction creation is unavailable in this environment")
+            try:
+                with patch.object(archive_services, "index_archive") as rebuild:
+                    code, _stdout, stderr = self.run_cli_split(
+                        [
+                            "index",
+                            str(archive_root),
+                            "--output",
+                            ".wom-scratch/diagnostics/index-result.json",
+                            "--format",
+                            "json",
+                        ]
+                    )
+                self.assertEqual(code, 1)
+                self.assertIn("symbolic links", stderr)
+                self.assertFalse((outside_diagnostics / "index-result.json").exists())
+                rebuild.assert_not_called()
+            finally:
+                diagnostics_junction.rmdir()
+
+    def test_index_output_rejects_traversal_before_rebuild(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            with patch.object(archive_services, "index_archive") as rebuild:
+                code, _stdout, stderr = self.run_cli_split(
+                    [
+                        "index",
+                        str(archive_root),
+                        "--output",
+                        ".wom-scratch/diagnostics/../escaped.json",
+                        "--format",
+                        "json",
+                    ]
+                )
+            self.assertEqual(code, 1)
+            self.assertIn("path traversal", stderr)
+            self.assertFalse((archive_root / ".wom-scratch" / "escaped.json").exists())
+            rebuild.assert_not_called()
+
+    def test_command_result_capture_reserves_destination_without_overwrite(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            relative = ".wom-scratch/diagnostics/shared-result.json"
+            first = archive_cli.CommandRunResultCapture.prepare(
+                relative,
+                archive_root,
+                command="index",
+            )
+            second = archive_cli.CommandRunResultCapture.prepare(
+                relative,
+                archive_root,
+                command="index",
+            )
+
+            first.write_completed(exit_code=0, result={"ok": True, "writer": "first"})
+            result_path = archive_root / relative
+            first_bytes = result_path.read_bytes()
+            with self.assertRaisesRegex(ValueError, "refuses to overwrite"):
+                second.write_completed(exit_code=0, result={"ok": True, "writer": "second"})
+
+            self.assertEqual(result_path.read_bytes(), first_bytes)
+            self.assertFalse(list(result_path.parent.glob(".*.partial")))
+
+    def test_command_result_capture_concurrent_publish_has_exactly_one_winner(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            relative = ".wom-scratch/diagnostics/concurrent-result.json"
+            captures = [
+                archive_cli.CommandRunResultCapture.prepare(relative, archive_root, command="index"),
+                archive_cli.CommandRunResultCapture.prepare(relative, archive_root, command="index"),
+            ]
+            barrier = threading.Barrier(2)
+            original_publish = archive_cli.write_complete_json_no_overwrite
+            outcomes: list[tuple[str, str]] = []
+
+            def synchronized_publish(*args, **kwargs) -> None:
+                barrier.wait(timeout=5)
+                original_publish(*args, **kwargs)
+
+            def publish(capture: archive_cli.CommandRunResultCapture, writer: str) -> None:
+                try:
+                    capture.write_completed(
+                        exit_code=0,
+                        result={"ok": True, "writer": writer},
+                    )
+                except (OSError, ValueError) as exc:
+                    outcomes.append(("failed", type(exc).__name__))
+                else:
+                    outcomes.append(("written", writer))
+
+            with patch.object(
+                archive_cli,
+                "write_complete_json_no_overwrite",
+                side_effect=synchronized_publish,
+            ):
+                threads = [
+                    threading.Thread(target=publish, args=(captures[0], "first")),
+                    threading.Thread(target=publish, args=(captures[1], "second")),
+                ]
+                for thread in threads:
+                    thread.start()
+                for thread in threads:
+                    thread.join(timeout=10)
+
+            self.assertTrue(all(not thread.is_alive() for thread in threads))
+            self.assertEqual(sum(status == "written" for status, _value in outcomes), 1)
+            self.assertEqual(sum(status == "failed" for status, _value in outcomes), 1)
+            saved = json.loads((archive_root / relative).read_text(encoding="utf-8"))
+            self.assertIn(saved["writer"], {"first", "second"})
+            self.assertFalse(list((archive_root / relative).parent.glob(".*.partial")))
+
+    def test_index_output_is_absent_after_forced_termination(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            relative = ".wom-scratch/diagnostics/interrupted-index.json"
+            with patch.object(archive_services, "index_archive", side_effect=KeyboardInterrupt):
+                with self.assertRaises(KeyboardInterrupt):
+                    self.run_cli_split(
+                        [
+                            "index",
+                            str(archive_root),
+                            "--output",
+                            relative,
+                            "--format",
+                            "json",
+                        ]
+                    )
+            self.assertFalse((archive_root / relative).exists())
+
+    def test_index_durable_result_survives_broken_terminal_streams(self) -> None:
+        class BrokenTerminal:
+            def write(self, _value: str) -> int:
+                raise BrokenPipeError("simulated closed terminal")
+
+            def flush(self) -> None:
+                raise BrokenPipeError("simulated closed terminal")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            relative = ".wom-scratch/diagnostics/broken-terminal-index.json"
+            with (
+                patch.object(archive_cli.sys, "stdout", BrokenTerminal()),
+                patch.object(archive_cli.sys, "stderr", BrokenTerminal()),
+            ):
+                code = archive_cli.main(
+                    [
+                        "index",
+                        str(archive_root),
+                        "--progress",
+                        "--output",
+                        relative,
+                        "--format",
+                        "json",
+                    ]
+                )
+
+            self.assertEqual(code, 0)
+            saved = json.loads((archive_root / relative).read_text(encoding="utf-8"))
+            self.assertTrue(saved["ok"])
+            self.assertEqual(saved["cli_execution"]["exit_code"], 0)
+            self.assertEqual(
+                saved["cli_execution"]["exit_code_scope"],
+                "command_result_before_terminal_transport",
+            )
+            self.assertEqual(
+                saved["cli_execution"]["terminal_output_delivery"],
+                "best_effort_not_observed",
+            )
+
+    def test_index_and_health_no_output_failures_do_not_echo_raw_private_errors(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            private_error = OSError(
+                r"D:\private-owner\archive\zettels\private.md Private body marker"
+            )
+            with patch.object(archive_services, "index_archive", side_effect=private_error):
+                index_code, index_stdout, index_stderr = self.run_cli_split(
+                    ["index", str(archive_root), "--format", "json"]
+                )
+            with patch.object(archive_services, "index_health", side_effect=private_error):
+                health_code, health_stdout, health_stderr = self.run_cli_split(
+                    ["index-health", str(archive_root), "--dry-run", "--format", "json"]
+                )
+
+            self.assertEqual(index_code, 1, index_stdout + index_stderr)
+            self.assertEqual(health_code, 1, health_stdout + health_stderr)
+            combined = index_stdout + index_stderr + health_stdout + health_stderr
+            self.assertNotIn("private-owner", combined)
+            self.assertNotIn("Private body marker", combined)
+            self.assertIn("no raw exception message was printed", index_stderr)
+            self.assertIn("no raw exception message was printed", health_stderr)
+
+    def test_index_failure_does_not_claim_result_when_capture_publication_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            relative = ".wom-scratch/diagnostics/unpublished-failure.json"
+            with (
+                patch.object(
+                    archive_services,
+                    "index_archive",
+                    side_effect=archive_services.ArchiveServiceError("private parser marker"),
+                ),
+                patch.object(
+                    archive_cli.CommandRunResultCapture,
+                    "write_completed",
+                    side_effect=OSError(r"D:\private-owner\capture failed"),
+                ),
+            ):
+                code, stdout, stderr = self.run_cli_split(
+                    [
+                        "index",
+                        str(archive_root),
+                        "--output",
+                        relative,
+                        "--format",
+                        "json",
+                    ]
+                )
+
+            self.assertEqual(code, 1, stdout + stderr)
+            self.assertEqual(stdout, "")
+            self.assertIn("no complete result artifact was published", stderr)
+            self.assertNotIn("saved result contains", stderr)
+            self.assertNotIn("private-owner", stderr)
+            self.assertNotIn("private parser marker", stderr)
+            self.assertFalse((archive_root / relative).exists())
+
     def test_search_excludes_redacted_zettels_and_never_leaks_their_body(self) -> None:
         # Privacy regression guard: a status='redacted' zettel must never be matched on or
         # surfaced (body/frontmatter/title) by search; draft/canonical/archived stay searchable.
@@ -47310,6 +47874,13 @@ class ObjetCaptureTests(unittest.TestCase):
             code = archive_cli.main(args)
         return code, buffer.getvalue()
 
+    def run_cli_split(self, args: list[str]) -> tuple[int, str, str]:
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            code = archive_cli.main(args)
+        return code, stdout.getvalue(), stderr.getvalue()
+
     def _sandbox(self, tmp: str, archive_id: str = "archive:personal:capture") -> Path:
         archive_root = Path(tmp) / "capture-archive"
         code, output = self.run_cli(
@@ -49006,6 +49577,193 @@ class ObjetCaptureTests(unittest.TestCase):
             rebuilt = archive_services.index_health(archive_root, dry_run=True)
             self.assertTrue(rebuilt["ok"], rebuilt)
             self.assertEqual(rebuilt["index_state"], "current")
+
+    def test_index_health_reads_frontmatter_only_and_captures_stale_exit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._facet_archive(tmp)
+            guarded_path = sorted((archive_root / "zettels").glob("*.md"))[0]
+            real_read_text = Path.read_text
+
+            def reject_full_zettel_read(path: Path, *args, **kwargs):
+                if path == guarded_path:
+                    raise AssertionError("index-health must not read the complete zettel body")
+                return real_read_text(path, *args, **kwargs)
+
+            with patch.object(Path, "read_text", reject_full_zettel_read):
+                current = archive_services.index_health(archive_root, dry_run=True)
+            self.assertTrue(current["ok"], current)
+            self.assertFalse(current["privacy_guards"]["zettel_body_text_read"])
+
+            new_path = archive_root / "zettels" / "zet_20260716_health_output_probe.md"
+            new_path.write_text(
+                "---\n"
+                + archive_cli.dump_yaml(
+                    {
+                        "id": "zet_20260716_health_output_probe",
+                        "title": "Health output probe",
+                        "status": "canonical",
+                        "kind": "note",
+                    }
+                )
+                + "---\n\nPrivate body marker must not be emitted.\n",
+                encoding="utf-8",
+            )
+            output_relative = ".wom-scratch/diagnostics/index-health-stale.json"
+            code, stdout, stderr = self.run_cli_split(
+                [
+                    "index-health",
+                    str(archive_root),
+                    "--dry-run",
+                    "--progress",
+                    "--output",
+                    output_relative,
+                    "--format",
+                    "json",
+                ]
+            )
+
+            self.assertEqual(code, 1, stdout + stderr)
+            summary = json.loads(stdout)
+            self.assertEqual(summary["lifecycle_action"], "index_health_output_summary")
+            self.assertEqual(summary["index_state"], "stale_or_incomplete")
+            self.assertEqual(summary["output"]["path"], output_relative)
+            self.assertIn("index-health-live-zettels", stderr)
+            self.assertIn("index-health-index-rows", stderr)
+            self.assertIn("index-health-compare", stderr)
+            self.assertIn("completed exit_code=1", stderr)
+            self.assertNotIn(str(archive_root), stderr)
+
+            saved = json.loads((archive_root / output_relative).read_text(encoding="utf-8"))
+            self.assertEqual(saved["index_state"], "stale_or_incomplete")
+            self.assertEqual(saved["summary"]["missing_from_index_count"], 1)
+            self.assertEqual(saved["cli_execution"]["status"], "completed")
+            self.assertEqual(saved["cli_execution"]["exit_code"], 1)
+            self.assertTrue(saved["cli_execution"]["result_available"])
+            self.assertIsNone(saved["cli_execution"]["error"])
+
+    def test_index_health_reports_body_read_for_malformed_frontmatter_boundaries(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._facet_archive(tmp)
+            (archive_root / "zettels" / "zet_missing_opening_delimiter.md").write_text(
+                "This first line is body text.\nPrivate body marker.\n",
+                encoding="utf-8",
+            )
+            (archive_root / "zettels" / "zet_missing_closing_delimiter.md").write_text(
+                "---\nid: zet_missing_closing_delimiter\n"
+                "status: canonical\nkind: note\nPrivate body marker.\n",
+                encoding="utf-8",
+            )
+            archive_services.index_archive(archive_root)
+
+            health = archive_services.index_health(archive_root, dry_run=True)
+
+            self.assertTrue(health["ok"], health)
+            self.assertTrue(health["privacy_guards"]["zettel_body_text_read"])
+
+    def test_invalid_yaml_index_health_failure_is_sanitized_and_captured(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._facet_archive(tmp)
+            broken_path = sorted((archive_root / "zettels").glob("*.md"))[0]
+            broken_path.write_text(
+                "---\nid: [unterminated private yaml marker\n---\nPrivate body marker.\n",
+                encoding="utf-8",
+            )
+            relative = ".wom-scratch/diagnostics/invalid-yaml-health.json"
+
+            code, stdout, stderr = self.run_cli_split(
+                [
+                    "index-health",
+                    str(archive_root),
+                    "--dry-run",
+                    "--output",
+                    relative,
+                    "--format",
+                    "json",
+                ]
+            )
+
+            self.assertEqual(code, 1, stdout + stderr)
+            self.assertEqual(stdout, "")
+            self.assertNotIn("private yaml marker", stderr)
+            self.assertNotIn("Private body marker", stderr)
+            saved_text = (archive_root / relative).read_text(encoding="utf-8")
+            self.assertNotIn("private yaml marker", saved_text)
+            self.assertNotIn("Private body marker", saved_text)
+            saved = json.loads(saved_text)
+            self.assertEqual(saved["lifecycle_action"], "index_health_command_failure")
+            self.assertEqual(saved["cli_execution"]["exit_code"], 1)
+            self.assertEqual(saved["cli_execution"]["error"]["type"], "ValueError")
+
+    def test_index_health_output_records_handled_cli_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._facet_archive(tmp)
+            output_relative = ".wom-scratch/diagnostics/index-health-error.json"
+            private_error = (
+                r"D:\private-owner\archive\zettels\private.md "
+                "Private body marker must not enter durable output."
+            )
+            with patch.object(
+                archive_services,
+                "index_health",
+                side_effect=archive_services.ArchiveServiceError(private_error),
+            ):
+                code, stdout, stderr = self.run_cli_split(
+                    [
+                        "index-health",
+                        str(archive_root),
+                        "--dry-run",
+                        "--output",
+                        output_relative,
+                        "--format",
+                        "json",
+                    ]
+                )
+
+            self.assertEqual(code, 1, stdout + stderr)
+            self.assertEqual(stdout, "")
+            self.assertIn("sanitized failure code", stderr)
+            self.assertNotIn("private-owner", stderr)
+            self.assertNotIn("Private body marker", stderr)
+            saved_text = (archive_root / output_relative).read_text(encoding="utf-8")
+            self.assertNotIn("private-owner", saved_text)
+            self.assertNotIn("Private body marker", saved_text)
+            saved = json.loads(saved_text)
+            self.assertFalse(saved["ok"])
+            self.assertEqual(saved["lifecycle_action"], "index_health_command_failure")
+            self.assertEqual(saved["cli_execution"]["status"], "completed")
+            self.assertEqual(saved["cli_execution"]["exit_code"], 1)
+            self.assertFalse(saved["cli_execution"]["result_available"])
+            self.assertEqual(saved["cli_execution"]["error"]["type"], "ArchiveServiceError")
+            self.assertFalse(saved["cli_execution"]["error"]["raw_message_stored"])
+            self.assertEqual(saved["blockers"], ["index_health_command_failed"])
+
+    def test_index_health_result_survives_discarded_subprocess_stdout(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._facet_archive(tmp)
+            output_relative = ".wom-scratch/diagnostics/index-health-subprocess.json"
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(KIT_ROOT / "cli" / "archive.py"),
+                    "index-health",
+                    str(archive_root),
+                    "--dry-run",
+                    "--output",
+                    output_relative,
+                    "--format",
+                    "json",
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            saved = json.loads((archive_root / output_relative).read_text(encoding="utf-8"))
+            self.assertTrue(saved["ok"])
+            self.assertEqual(saved["index_state"], "current")
+            self.assertEqual(saved["cli_execution"]["exit_code"], 0)
 
     def test_staged_cleanup_check_fails_closed_on_unenumerable_tree(self) -> None:
         # A deletion-safety verifier must NEVER report safe when it cannot fully enumerate

@@ -16650,24 +16650,53 @@ def notion_source_map_zettel_ref_from_record(root: Path, record: dict[str, Any])
     return zettel_id, zettel_path
 
 
-def read_zettel_frontmatter_only(path: Path) -> dict[str, Any]:
+def read_zettel_frontmatter_only_with_observation(
+    path: Path,
+    *,
+    strict: bool = False,
+) -> tuple[dict[str, Any], bool]:
+    """Read through the frontmatter boundary and report any body-byte read.
+
+    A malformed zet without an opening or closing delimiter cannot honestly be
+    described as a frontmatter-only read.  The boolean lets privacy-sensitive
+    callers preserve that distinction instead of publishing a false guard.
+    """
+    body_text_read = False
     try:
         with path.open("r", encoding="utf-8-sig") as handle:
             first = handle.readline()
             if first.strip() != "---":
-                return {}
+                return {}, bool(first)
             lines: list[str] = []
+            terminated = False
             for line in handle:
                 if line.strip() == "---":
+                    terminated = True
                     break
                 lines.append(line)
+            if not terminated:
+                # With no closing delimiter, split_zettel_text() treats the
+                # complete file as body text.  Do not try to parse it as YAML.
+                return {}, True
     except OSError:
-        return {}
+        if strict:
+            raise
+        return {}, body_text_read
     try:
         data = load_yaml("".join(lines))
     except Exception:
-        return {}
-    return json_safe(data) if isinstance(data, dict) else {}
+        if strict:
+            raise ValueError("Zettel frontmatter is unreadable.") from None
+        return {}, body_text_read
+    return (json_safe(data) if isinstance(data, dict) else {}), body_text_read
+
+
+def read_zettel_frontmatter_only(path: Path, *, strict: bool = False) -> dict[str, Any]:
+    frontmatter, _body_text_read = read_zettel_frontmatter_only_with_observation(
+        path,
+        strict=strict,
+    )
+    return frontmatter
 
 
 def notion_source_map_archive_json_records(
@@ -77217,7 +77246,11 @@ def sensitive_categories_for_frontmatter(frontmatter: dict[str, Any]) -> list[st
     return sorted(found)
 
 
-def index_archive(archive_root: Path | str) -> dict[str, Any]:
+def index_archive(
+    archive_root: Path | str,
+    *,
+    progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
+) -> dict[str, Any]:
     root = require_existing_archive_root(archive_root)
     db_path = archive_internal_path(root, INDEX_RELATIVE_PATH)
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -77229,10 +77262,13 @@ def index_archive(archive_root: Path | str) -> dict[str, Any]:
     source_map_count = 0
     edge_count = 0
     facet_count = 0
+    if progress_callback is not None:
+        progress_callback("index-lock-and-schema", "start", None, None)
     conn = connect_archive_index(db_path, write=True)
     try:
         conn.executescript(
             """
+            BEGIN IMMEDIATE;
             CREATE TABLE IF NOT EXISTS zettels (
               path TEXT PRIMARY KEY,
               zettel_id TEXT,
@@ -77307,6 +77343,8 @@ def index_archive(archive_root: Path | str) -> dict[str, Any]:
             """
         )
         ensure_archive_index_zettel_columns(conn)
+        if progress_callback is not None:
+            progress_callback("index-lock-and-schema", "done", None, None)
 
         warnings: list[str] = []
         canonical_metadata_count = 0
@@ -77321,7 +77359,11 @@ def index_archive(archive_root: Path | str) -> dict[str, Any]:
             )
             return True
 
-        for path in iter_zettel_paths(root):
+        zettel_paths = list(iter_zettel_paths(root))
+        zettel_path_count = len(zettel_paths)
+        if progress_callback is not None:
+            progress_callback("index-zettels", "start", 0, zettel_path_count)
+        for path_index, path in enumerate(zettel_paths, start=1):
             relative_path = archive_relative_path(path, root)
             try:
                 zettel_stat = path.stat()
@@ -77331,7 +77373,12 @@ def index_archive(archive_root: Path | str) -> dict[str, Any]:
                 zettel_mtime_ns = 0
                 zettel_size = 0
             text = path.read_text(encoding="utf-8")
-            frontmatter, body = split_zettel_text(text)
+            try:
+                frontmatter, body = split_zettel_text(text)
+            except Exception:
+                raise ArchiveServiceError(
+                    f"Zettel frontmatter is unreadable: {relative_path}"
+                ) from None
             frontmatter = json_safe(frontmatter)
             zettel_status = frontmatter.get("status")
             draft_creation = frontmatter.get("draft_creation") if isinstance(frontmatter.get("draft_creation"), dict) else {}
@@ -77396,31 +77443,53 @@ def index_archive(archive_root: Path | str) -> dict[str, Any]:
                                             f"facet list member not indexed: {from_id} facets.{facet_key}[{index}]"
                                         )
 
-        manifest_path = root / "objects" / "manifests" / "files.jsonl"
-        if manifest_path.is_file():
-            for raw_line in manifest_path.read_text(encoding="utf-8").splitlines():
-                line = raw_line.strip()
-                if not line:
-                    continue
-                try:
-                    record = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                conn.execute(
-                    """
-                    INSERT OR REPLACE INTO objects(object_id, logical_key, mime, manifest_json)
-                    VALUES (?, ?, ?, ?)
-                    """,
-                    (
-                        record.get("object_id"),
-                        record.get("logical_key"),
-                        record.get("mime"),
-                        json.dumps(record, ensure_ascii=False, default=str),
-                    ),
-                )
-                object_count += 1
+            if progress_callback is not None and (
+                path_index == 1 or path_index == zettel_path_count or path_index % 250 == 0
+            ):
+                progress_callback("index-zettels", "scanned", path_index, zettel_path_count)
 
-        for record in load_derived_text_records(root):
+        if progress_callback is not None:
+            progress_callback("index-zettels", "done", zettel_path_count, zettel_path_count)
+
+        manifest_path = root / "objects" / "manifests" / "files.jsonl"
+        manifest_lines = manifest_path.read_text(encoding="utf-8").splitlines() if manifest_path.is_file() else []
+        manifest_line_count = len(manifest_lines)
+        if progress_callback is not None:
+            progress_callback("index-objects", "start", 0, manifest_line_count)
+        for line_index, raw_line in enumerate(manifest_lines, start=1):
+            if progress_callback is not None and (
+                line_index == 1 or line_index == manifest_line_count or line_index % 250 == 0
+            ):
+                progress_callback("index-objects", "scanned", line_index, manifest_line_count)
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO objects(object_id, logical_key, mime, manifest_json)
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    record.get("object_id"),
+                    record.get("logical_key"),
+                    record.get("mime"),
+                    json.dumps(record, ensure_ascii=False, default=str),
+                ),
+            )
+            object_count += 1
+
+        if progress_callback is not None:
+            progress_callback("index-objects", "done", manifest_line_count, manifest_line_count)
+
+        derived_text_records = list(load_derived_text_records(root))
+        derived_text_total = len(derived_text_records)
+        if progress_callback is not None:
+            progress_callback("index-derived-texts", "start", 0, derived_text_total)
+        for record_index, record in enumerate(derived_text_records, start=1):
             text_body = ""
             text_logical_key = record.get("text_logical_key")
             if isinstance(text_logical_key, str) and text_logical_key:
@@ -77452,11 +77521,29 @@ def index_archive(archive_root: Path | str) -> dict[str, Any]:
                 ),
             )
             derived_text_count += 1
+            if progress_callback is not None and (
+                record_index == 1 or record_index == derived_text_total or record_index % 250 == 0
+            ):
+                progress_callback("index-derived-texts", "scanned", record_index, derived_text_total)
+
+        if progress_callback is not None:
+            progress_callback("index-derived-texts", "done", derived_text_total, derived_text_total)
 
         views_root = root / "views"
+        if progress_callback is not None:
+            progress_callback("index-views", "start", None, None)
         if views_root.is_dir():
             for path in safe_archive_glob(views_root, "*.yml", root):
-                data = load_yaml(path.read_text(encoding="utf-8"))
+                try:
+                    data = load_yaml(path.read_text(encoding="utf-8"))
+                except Exception as exc:
+                    # PyYAML parser errors can contain a local path and a
+                    # source excerpt.  Keep the index command inside its
+                    # sanitized failure boundary while the surrounding
+                    # transaction rolls the rebuild back.
+                    raise ArchiveServiceError(
+                        "Archive view definition is unreadable."
+                    ) from exc
                 safe_data = json_safe(data)
                 conn.execute(
                     """
@@ -77472,8 +77559,15 @@ def index_archive(archive_root: Path | str) -> dict[str, Any]:
                     ),
                 )
                 view_count += 1
+                if progress_callback is not None and (view_count == 1 or view_count % 250 == 0):
+                    progress_callback("index-views", "scanned", view_count, None)
+
+        if progress_callback is not None:
+            progress_callback("index-views", "done", view_count, view_count)
 
         source_maps_root = root / SOURCE_MAPS_DIR
+        if progress_callback is not None:
+            progress_callback("index-source-maps", "start", None, None)
         if source_maps_root.is_dir():
             for path in safe_archive_glob(source_maps_root, "*.jsonl", root):
                 for raw_line in path.read_text(encoding="utf-8").splitlines():
@@ -77505,12 +77599,24 @@ def index_archive(archive_root: Path | str) -> dict[str, Any]:
                     )
                     source_map_count += 1
 
+        if progress_callback is not None:
+            progress_callback("index-source-maps", "done", source_map_count, source_map_count)
+
+        if progress_callback is not None:
+            progress_callback("index-commit", "start", None, None)
         replace_archive_index_metadata(
             conn,
             canonical_zettel_count=canonical_metadata_count,
             canonical_max_mtime_ns=canonical_metadata_max_mtime_ns,
         )
         conn.commit()
+        if progress_callback is not None:
+            try:
+                progress_callback("index-commit", "done", None, None)
+            except Exception:
+                # The database is already committed.  A progress transport
+                # failure must not relabel the completed rebuild as failed.
+                pass
     finally:
         conn.close()
 
@@ -78332,12 +78438,26 @@ def view_recommendation_plan(
     }
 
 
-def live_zettel_index_entries(root: Path, *, db_mtime: float | None = None) -> list[dict[str, Any]]:
+def live_zettel_index_entries(
+    root: Path,
+    *,
+    db_mtime: float | None = None,
+    progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
+    read_observations: dict[str, bool] | None = None,
+) -> list[dict[str, Any]]:
     entries: list[dict[str, Any]] = []
-    for path in iter_zettel_paths(root):
+    zettel_paths = list(iter_zettel_paths(root))
+    zettel_path_count = len(zettel_paths)
+    if progress_callback is not None:
+        progress_callback("index-health-live-zettels", "start", 0, zettel_path_count)
+    for path_index, path in enumerate(zettel_paths, start=1):
         try:
-            text = path.read_text(encoding="utf-8")
-            frontmatter, _body = split_zettel_text(text)
+            frontmatter, body_text_read = read_zettel_frontmatter_only_with_observation(
+                path,
+                strict=True,
+            )
+            if body_text_read and read_observations is not None:
+                read_observations["zettel_body_text_read"] = True
             stat = path.stat()
         except (OSError, UnicodeError, ArchiveServiceError):
             continue
@@ -78351,6 +78471,12 @@ def live_zettel_index_entries(root: Path, *, db_mtime: float | None = None) -> l
                 "modified_after_index": bool(db_mtime is not None and stat.st_mtime > db_mtime),
             }
         )
+        if progress_callback is not None and (
+            path_index == 1 or path_index == zettel_path_count or path_index % 250 == 0
+        ):
+            progress_callback("index-health-live-zettels", "scanned", path_index, zettel_path_count)
+    if progress_callback is not None:
+        progress_callback("index-health-live-zettels", "done", zettel_path_count, zettel_path_count)
     return entries
 
 
@@ -78359,6 +78485,7 @@ def index_health(
     *,
     dry_run: bool = True,
     max_items: int = 50,
+    progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
 ) -> dict[str, Any]:
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
@@ -78372,24 +78499,59 @@ def index_health(
 
     max_items = max(1, min(int(max_items), 500))
     db_mtime = db_path.stat().st_mtime if db_path.is_file() else None
-    live_entries = live_zettel_index_entries(root, db_mtime=db_mtime)
+    read_observations = {"zettel_body_text_read": False}
+    live_entries = live_zettel_index_entries(
+        root,
+        db_mtime=db_mtime,
+        progress_callback=progress_callback,
+        read_observations=read_observations,
+    )
     live_by_path = {entry["path"]: entry for entry in live_entries}
     indexed_entries: list[dict[str, Any]] = []
+    index_schema_incomplete = False
+    index_schema_complete = False
 
     if db_path.is_file():
         conn = connect_archive_index(db_path, row_factory=True)
         try:
-            indexed_entries = [
-                {
-                    "path": row["path"],
-                    "zettel_id": row["zettel_id"],
-                    "status": row["status"],
-                    "kind": row["kind"],
-                }
-                for row in conn.execute("SELECT path, zettel_id, status, kind FROM zettels ORDER BY path").fetchall()
-            ]
+            zettels_table = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'zettels'"
+            ).fetchone()
+            if zettels_table is None:
+                index_schema_incomplete = True
+                indexed_rows = []
+            else:
+                index_schema_complete = True
+                indexed_rows = conn.execute(
+                    "SELECT path, zettel_id, status, kind FROM zettels ORDER BY path"
+                ).fetchall()
+            indexed_row_count = len(indexed_rows)
+            if progress_callback is not None:
+                progress_callback("index-health-index-rows", "start", 0, indexed_row_count)
+            for row_index, row in enumerate(indexed_rows, start=1):
+                indexed_entries.append(
+                    {
+                        "path": row["path"],
+                        "zettel_id": row["zettel_id"],
+                        "status": row["status"],
+                        "kind": row["kind"],
+                    }
+                )
+                if progress_callback is not None and (
+                    row_index == 1 or row_index == indexed_row_count or row_index % 250 == 0
+                ):
+                    progress_callback(
+                        "index-health-index-rows", "scanned", row_index, indexed_row_count
+                    )
+            if progress_callback is not None:
+                progress_callback(
+                    "index-health-index-rows", "done", indexed_row_count, indexed_row_count
+                )
         finally:
             conn.close()
+    elif progress_callback is not None:
+        progress_callback("index-health-index-rows", "start", 0, 0)
+        progress_callback("index-health-index-rows", "done", 0, 0)
     indexed_by_path = {str(entry.get("path") or ""): entry for entry in indexed_entries}
 
     live_paths = set(live_by_path)
@@ -78397,7 +78559,11 @@ def index_health(
     missing_from_index = sorted(live_paths - indexed_paths)
     extra_in_index = sorted(indexed_paths - live_paths)
     changed_metadata: list[dict[str, Any]] = []
-    for path in sorted(live_paths & indexed_paths):
+    shared_paths = sorted(live_paths & indexed_paths)
+    shared_path_count = len(shared_paths)
+    if progress_callback is not None:
+        progress_callback("index-health-compare", "start", 0, shared_path_count)
+    for path_index, path in enumerate(shared_paths, start=1):
         live = live_by_path[path]
         indexed = indexed_by_path[path]
         changed_fields = [
@@ -78407,9 +78573,17 @@ def index_health(
         ]
         if changed_fields:
             changed_metadata.append({"path": path, "changed_fields": changed_fields})
+        if progress_callback is not None and (
+            path_index == 1 or path_index == shared_path_count or path_index % 250 == 0
+        ):
+            progress_callback("index-health-compare", "compared", path_index, shared_path_count)
+    if progress_callback is not None:
+        progress_callback("index-health-compare", "done", shared_path_count, shared_path_count)
     modified_after_index = sorted(entry["path"] for entry in live_entries if entry.get("modified_after_index"))
 
     stale_reasons: list[str] = []
+    if index_schema_incomplete:
+        stale_reasons.append("archive_index_schema_incomplete")
     if missing_from_index:
         stale_reasons.append("live_zettels_missing_from_index")
     if extra_in_index:
@@ -78444,6 +78618,7 @@ def index_health(
             "extra_in_index_count": len(extra_in_index),
             "changed_metadata_count": len(changed_metadata),
             "modified_after_index_count": len(modified_after_index),
+            "index_schema_complete": index_schema_complete,
         },
         "samples": {
             "missing_from_index": missing_from_index[:max_items],
@@ -78457,6 +78632,7 @@ def index_health(
         },
         "stale_reasons": unique_preserve_order(stale_reasons),
         "privacy_guards": {
+            "zettel_body_text_read": read_observations["zettel_body_text_read"],
             "zettel_body_text_echoed": False,
             "zettel_titles_echoed": False,
             "absolute_local_paths_echoed": False,

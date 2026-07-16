@@ -6,6 +6,21 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.255 - 2026-07-16
+
+- **Crash-safe generated-index rebuild.** `archive index` now keeps
+  schema setup, prior-row deletion, replacement rows, and metadata in one
+  explicit SQLite transaction, so interruption before commit preserves the
+  prior committed index. A first-build file with no committed schema is
+  diagnosed as `archive_index_schema_incomplete` instead of raising a raw SQL
+  error.
+- **Long index commands become observable without changing stdout by default.**
+  CLI `index` and `index-health` add opt-in content-free progress/heartbeat
+  output plus complete-only private result capture under
+  `.wom-scratch/diagnostics/`. Captured results record scoped command exit
+  evidence, reject traversal/symlink/reparse/overwrite races, and sanitize
+  handled errors. `index-health` remains explicit and never auto-rebuilds.
+
 ## v0.3.254 - 2026-07-16
 
 - **Independent v0.3.253 audit follow-up.** Current object-storage upload help
