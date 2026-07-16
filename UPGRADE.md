@@ -24,6 +24,65 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.256 Fail-Closed Zettel Integrity And Honest Index Health
+
+No archive schema migration is required. Existing valid draft, canonical,
+archived, and redacted zets remain compatible. The disposable generated-index
+metadata format advances to v0.2, so a v0.3.255 index is not trusted as the
+current metadata fast path until it is rebuilt.
+
+This release separates tolerant foreign-input parsing from the stricter
+existing-archive content boundary. An archive zet is readable only when it has
+supported frontmatter delimiters, a YAML object, and one recognized lifecycle
+status. Invalid YAML, delimiter shape, encoding, file access, missing status, or
+an unknown status now produces a fixed content-free issue instead of letting
+ambiguous bytes become ordinary body text. Search, views, facet reports, and
+related-zets also allowlist readable lifecycle statuses, so a legacy generated
+index row with a null or unknown status is excluded even before a rebuild.
+
+`archive index` can safely commit a rebuilt index when one or more source zets
+are unreadable. Each affected file gets a path/stat-only row with status
+`unreadable`; title, id, kind, body, frontmatter, hashes, edges, and facets are
+not retained as queryable logical content. The command then returns exit code
+1 with `state: completed_with_quarantined_zettels`, `index_rebuilt: true`, and
+`index_complete: false`. That means a safe but incomplete generated index was
+installed and the source files still need repair. It is neither a complete
+success nor an index rollback.
+
+The v0.2 index metadata stores `index_complete` and the quarantine count in the
+same transaction. Mint/promotion duplicate approval checks and `validate
+--scope` reject an incomplete index. Repair the listed source files and perform
+a complete rebuild before either workflow; a live duplicate fallback also
+blocks any unreadable canonical candidate instead of silently skipping it.
+
+Even `index_complete: true` is paired with a live path/stat snapshot before
+these consumers trust indexed rows. WOM-kit enumerates physical zets and
+compares each stored file-size/mtime tuple. If a zet was added, removed, or
+changed, mint falls back to live content validation. If enumeration/stat is
+unavailable or an unsafe symlink/junction/reparse boundary appears, mint blocks
+instead of attempting another potentially incomplete scan. Facet-scoped
+validation asks for a rebuild in either case.
+
+After upgrading:
+
+1. Run `archive index-health <archive-root> --dry-run --progress --format json`.
+2. If it reports `live_zettel_frontmatter_unreadable_or_invalid`, repair the
+   reported archive-relative source files first. Rebuilding cannot repair a
+   malformed source zet.
+3. Run `archive index` explicitly when health still reports a missing or stale
+   generated index. Honor `ok`, `index_complete`, and the process exit code.
+4. Run a fresh `index-health` and require `index_state: current` with no live
+   inspection issues before treating the generated index as complete.
+
+Quarantine is logical/API sanitization, not forensic secure deletion from
+SQLite free pages, WAL files, backups, snapshots, the filesystem, or the source
+zet itself.
+
+This release deliberately does not claim every approval-heavy historical
+workflow has the same strict validation ordering. Revision/restore,
+retire-reconcile, abstract-backfill, and target-workpack follow in v0.3.257.
+Bounded-memory default S3-compatible transport follows separately in v0.3.258.
+
 ## v0.3.255 Crash-Safe Index Rebuild And Durable Result Capture
 
 No archive migration is required. Existing zets, objets, manifests, receipts,
