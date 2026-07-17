@@ -7240,6 +7240,55 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         self.assertIn("순환 alias", upgrade_ko_text)
         self.assertIn("새 transaction engine이 아닙니다", upgrade_ko_text)
 
+    def test_v03258_bounded_object_storage_docs_match(self) -> None:
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        release_text = (
+            KIT_ROOT / "docs" / "releases" / "v0.3.258.md"
+        ).read_text(encoding="utf-8")
+        decision_text = (
+            KIT_ROOT
+            / "docs"
+            / "archive-infra-decision-log-2026-07-17-v03258-bounded-object-storage-transport.md"
+        ).read_text(encoding="utf-8")
+        contract_text = (
+            KIT_ROOT / "docs" / "object-storage-adapter-execution-contract.md"
+        ).read_text(encoding="utf-8")
+        changelog_text = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+        upgrade_text = (REPO_ROOT / "UPGRADE.md").read_text(encoding="utf-8")
+        upgrade_ko_text = (REPO_ROOT / "UPGRADE.ko.md").read_text(
+            encoding="utf-8"
+        )
+
+        for phrase in (
+            "Status: v0.3.258 bounded object-storage transport checkpoint",
+            "Current checkpoint note: since v0.3.258",
+            "replayable 1 MiB path chunks",
+            "unconditional mismatch DELETE",
+            "Only HEAD 404 proves absence",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, matrix_text)
+        for phrase in (
+            "replayable iterable",
+            "only HEAD 404 proves absence",
+            "64 KiB prefix",
+            "unconditional DELETE",
+            "HTTP-200-with-`<Error>`",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, release_text)
+        for phrase in (
+            "at most 20 digits",
+            "short-but-plausible UploadId",
+            "no unconditional mismatch DELETE",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, decision_text)
+        self.assertIn("Since v0.3.258", contract_text)
+        self.assertIn("Mismatch cleanup is generation-safe", changelog_text)
+        self.assertIn("future generation/ETag-conditional", upgrade_text)
+        self.assertIn("무조건 object DELETE", upgrade_ko_text)
+
     def test_top_level_readmes_expose_current_installation_on_ramp(self) -> None:
         readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
         readme_ko_text = (REPO_ROOT / "README.ko.md").read_text(encoding="utf-8")

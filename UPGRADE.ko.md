@@ -2,6 +2,40 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.3.258 bounded object-storage 전송
+
+아카이브, object manifest, 영수증, provider schema 마이그레이션은 필요하지
+않습니다. 기존 object-storage 명령, credential ref, key strategy, tier gate,
+multipart 설정은 계속 호환됩니다.
+
+기본 S3-compatible sender는 이제 단일 path PUT을 정확히 서명된
+`Content-Length` 아래에서 재실행 가능한 1 MiB chunk로 전송합니다. 전체 객체
+검증 GET도 streaming 방식으로 처리하고 SHA-256, byte count, 완전성 근거만
+남깁니다. control/provider error 응답은 64 KiB로 제한하며, 자동 redirect를
+막고, 권한을 가진 multipart XML은 완전한 message boundary가 증명될 때만
+신뢰합니다.
+
+원격 근거도 더 엄격해졌습니다. HEAD와 전체 객체 GET은 HTTP 200이어야 하고,
+HEAD 404만 부재를 증명합니다. 누락되거나 모순된 근거는 `unavailable`이며,
+암묵적인 repair PUT, adopt, skip, conflict 판정을 허가하지 않습니다.
+CompleteMultipartUpload의 `200 + <Error>`도 실패로 처리하고 재시도 전에 해당
+upload를 abort합니다.
+
+mismatch 뒤 무조건 object DELETE도 중단합니다. GET은 읽은 세대만 증명하며,
+DELETE 직전에 올바른 동시 replacement가 같은 key를 차지할 수 있기 때문입니다.
+따라서 검증 실패 뒤 올바르거나 아직 증명되지 않은 원격 객체가 남을 수
+있습니다. 먼저 조사하고, 정리는 미래의 generation/ETag 조건부 provider
+계약으로 수행해야 합니다.
+
+업그레이드 후에는 다음 순서를 따르세요.
+
+1. `archive version <project-or-archive-root> --format json`에서 `0.3.258`을
+   확인합니다.
+2. 한 객체만 선택한 local upload plan과 byte verify를 dry-run으로 다시
+   실행합니다.
+3. 첫 live provider 실행은 기존 reviewed tier gate 아래에서 작게 수행합니다.
+4. 검증 실패나 unavailable 결과만 보고 원격 key를 삭제하지 마세요.
+
 ## v0.3.257 엄격한 revision 승인 snapshot
 
 아카이브 스키마 마이그레이션은 필요하지 않습니다. 형식이 올바른 기존

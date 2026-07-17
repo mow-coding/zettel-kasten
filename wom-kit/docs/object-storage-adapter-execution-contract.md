@@ -93,7 +93,8 @@ multipart). A forced re-PUT bypasses the present+match skip (`skipped_remote_sam
 the resume-ledger terminal-success short-circuit, but PRESERVES the pre-PUT local
 `sha256(local)==object_id` re-verify (a corrupt local file is refused before any PUT)
 and the HEAD-after re-download-and-hash verification (a re-PUT is verified exactly like a
-first PUT, with SA-5 delete-on-mismatch and the cumulative PUT ceiling still in force).
+first PUT, with fail-closed, generation-safe no-delete behavior and the cumulative PUT
+ceiling still in force).
 Since v0.3.177, that ledger bypass also applies when a post-crash/handoff state has a
 terminal resume-ledger row but no `wom_uploaded` manifest location, and a forced result
 with `put_calls == 0` fails closed as `force_reupload_not_performed`. It requires
@@ -165,12 +166,26 @@ to the object id byte-for-byte. This is identical for single-part and multipart
 objects and depends on no provider checksum surface. The upload requests still
 sign the real payload SHA-256 in SigV4 (`x-amz-content-sha256`), so the provider
 independently validates each PUT/part body on the wire; we simply do not rely on
-the provider to store or surface a whole-object SHA-256. If the object cannot be
-read back and hashed to the object id, the object FAILS — it is never confirmed on
-ETag or size alone, and a completed-but-wrong object is deleted. The one live
-residual (`unproven_against_live_provider` until the first live object) is
-signature ACCEPTANCE by R2's authorizer and read-after-write consistency, not any
-checksum-surface question.
+the provider to store or surface a whole-object SHA-256.
+
+Since v0.3.258, the default sender keeps both directions bounded: single path
+PUTs are replayable 1 MiB iterables under the exact signed `Content-Length`, and
+verification GETs retain only digest, byte count, and completeness evidence.
+Automatic redirects are disabled so signed authorization headers cannot cross
+origins. HEAD/whole-object GET must be HTTP 200; only HEAD 404 proves absence.
+Missing, invalid, contradictory, partial, or truncated length/body evidence is
+`unavailable`, not mismatch or absence. Authority-bearing multipart XML and error
+bodies are capped at 64 KiB and are trusted only when their message boundary is
+complete, including the HTTP-200-with-`<Error>` case from CompleteMultipartUpload.
+
+If the object cannot be read back and hashed to the object id, the object FAILS —
+it is never confirmed on ETag or size alone. The executor does not issue an
+unconditional mismatch DELETE: a concurrent correct replacement could occupy the
+same key between verification and deletion. The remote object is preserved for a
+future operator action or provider-supported generation/ETag-conditional cleanup.
+The one live residual (`unproven_against_live_provider` until the first live object)
+is signature ACCEPTANCE by R2's authorizer and read-after-write consistency, not
+any checksum-surface question.
 
 Official references checked for this checkpoint:
 
@@ -220,7 +235,8 @@ receipt-recorded operator choice; the part-size flag does not silently move it.
 Integrity is unchanged by the part size. The before-hash is the whole-object
 `content_sha256`, computed once over the whole file; `complete_multipart` and the
 HEAD-after re-download-and-hash both verify the FULL-OBJECT sha256, never a per-part
-digest; SA-5 delete-on-mismatch and the leak gate are unconditional. On any part-size,
+digest; failure remains fail-closed without unconditional DELETE, and the leak gate is
+unconditional. On any part-size,
 threshold, or acknowledgment violation the run does not proceed and no provider PUT is
 issued. The execution receipt records `effective_multipart_part_size_bytes` so an auditor
 can verify `ceil(size / part_size) == part_count` and confirm the split was forced.

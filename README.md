@@ -34,10 +34,10 @@ not re-grow baseline ladders or tag lists here.
 Current public baseline:
 
 ```text
-v0.3.257 pre-release
+v0.3.258 pre-release
 ```
 
-Previous public baseline: v0.3.256 pre-release.
+Previous public baseline: v0.3.257 pre-release.
 
 Full release history: see [CHANGELOG.md](CHANGELOG.md) and [wom-kit/docs/releases/](wom-kit/docs/releases/).
 
@@ -55,7 +55,7 @@ future-only boundaries.
 Install the exact release wheel as an isolated command-line tool:
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.257/wom_kit-0.3.257-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.258/wom_kit-0.3.258-py3-none-any.whl"
 archive --version
 ```
 
@@ -200,10 +200,10 @@ Object storage:
 - manifest-aware object-storage recommendation matching with surfaced bucket names, exact next commands, and Cloudflare R2 setup field guidance,
 - object-storage adapter readiness planning, operation request packaging, upload execution-contract planning, and presigned URL planning,
 - approval-gated external upload evidence registration and read-only upload evidence auditing before live provider adapters,
-- Stage 2 of the live upload adapter: a real hand-rolled AWS SigV4 R2/S3 transport behind a single networking seam (no new dependency), with a bounded retry loop (single-PUT and multipart), a hard cumulative PUT ceiling, whole-object integrity verified by re-download-and-hash (no dependence on any provider checksum surface), orphan cleanup, and a tiered tiny-first gate; the capability is now real but a live `--approve` still fails closed without env credentials, a met tiered gate, and endpoint/bucket, and stays `unproven_against_live_provider` until the first human-run live object,
+- Stage 2 of the live upload adapter: a real hand-rolled AWS SigV4 R2/S3 transport behind a single networking seam (no new dependency), with bounded replayable single-PUT bodies, bounded streaming verification GETs, strict response-completeness evidence, disabled automatic redirects, a bounded retry loop, a hard cumulative PUT ceiling, whole-object re-download-and-hash verification, generation-safe preservation instead of unconditional mismatch DELETE, and a tiered tiny-first gate; live `--approve` still fails closed without env credentials, a met tiered gate, and endpoint/bucket, and stays `unproven_against_live_provider` until the first human-run live object,
 - a selectable, recorded upload key strategy (`--key-strategy sha256_content_addressed|prefix`, default unchanged) plus a safe `object-storage-adopt-existing` command: objects already stored under an operator's own key layout are adopted only on a live HEAD proving presence + size-match at the recorded key, and under a live transport the executor always re-HEADs that recorded key before any skip (a 404 re-uploads, never a silent skip); an opt-in `--key-map` (JSONL sha256 -> exact remote key) adopts objects stored under the operator's own per-object extension when the content-addressed template cannot recover it, size still manifest-sourced and every key digest-bound and leak-guarded,
 - verified adopt (HEAD-only) is decoupled from the upload 5 GiB tier proof: because adopt moves zero bytes, one prior verified tiny-first adopt unlocks a batch handover of any size (the wrong-key self-limit, declared-never-counts, and byte-identical upload tier ladder all hold),
-- a live-verification `--multipart-part-size` override (with the `--allow-tiny-parts` acknowledgment, bounded `[4096, 64 MiB]`, recorded in the receipt as `effective_multipart_part_size_bytes`) that, paired with a lowered `--multipart-threshold`, forces multipart on a small object to prove LIVE R2 multipart; it changes only `handle.read()` fragmentation and leaves the whole-object before-hash, HEAD-after full-object verify, orphan cleanup, and leak gate byte-for-byte unchanged,
+- a live-verification `--multipart-part-size` override (with the `--allow-tiny-parts` acknowledgment, bounded `[4096, 64 MiB]`, recorded in the receipt as `effective_multipart_part_size_bytes`) that, paired with a lowered `--multipart-threshold`, forces multipart on a small object to prove LIVE R2 multipart; it changes only `handle.read()` fragmentation and leaves the whole-object before-hash, HEAD-after full-object verify, generation-safe no-delete boundary, and leak gate unchanged,
 - a live-verification `--force-reupload` that re-PUTs an already-present object (approval + reviewer gated, refused for a non-sha key, inert under `--dry-run`, corrupt-local still refused before any PUT), now also bypassing resume-ledger-only skips and failing closed with `force_reupload_not_performed` if no provider PUT is attempted, so a small forced multipart can prove upload tier2, which a real multipart (`part_count>1`) now satisfies alongside the existing 5 GiB path,
 
 IMAP:
@@ -494,7 +494,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
-v0.3.257 (current checkpoint)
+v0.3.258 (current checkpoint)
 ```
 
 Public releases from `v0.2.5` onward are tagged as compatibility checkpoints.
