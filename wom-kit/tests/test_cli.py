@@ -44152,6 +44152,147 @@ state:
                 "best_effort_not_observed",
             )
 
+    def test_index_and_health_no_output_completed_results_survive_broken_terminal_streams(self) -> None:
+        class BrokenTerminal:
+            def write(self, _value: str) -> int:
+                raise BrokenPipeError("simulated closed terminal")
+
+            def flush(self) -> None:
+                raise BrokenPipeError("simulated closed terminal")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            broken_terminal = BrokenTerminal()
+            with (
+                patch.object(archive_cli.sys, "stdout", broken_terminal),
+                patch.object(archive_cli.sys, "stderr", broken_terminal),
+            ):
+                index_code = archive_cli.main(
+                    ["index", str(archive_root), "--format", "json"]
+                )
+                health_code = archive_cli.main(
+                    [
+                        "index-health",
+                        str(archive_root),
+                        "--dry-run",
+                        "--format",
+                        "json",
+                    ]
+                )
+
+            health = archive_services.index_health(archive_root, dry_run=True)
+            self.assertEqual(index_code, 0)
+            self.assertEqual(health_code, 0)
+            self.assertTrue(health["ok"], health)
+            self.assertEqual(health["index_state"], "current")
+
+            broken_path = sorted((archive_root / "zettels").glob("*.md"))[0]
+            broken_path.write_text(
+                "---\nid: [unterminated private yaml marker\n---\nPrivate body marker.\n",
+                encoding="utf-8",
+            )
+            broken_terminal = BrokenTerminal()
+            with (
+                patch.object(archive_cli.sys, "stdout", broken_terminal),
+                patch.object(archive_cli.sys, "stderr", broken_terminal),
+            ):
+                incomplete_index_code = archive_cli.main(
+                    ["index", str(archive_root), "--format", "text"]
+                )
+                incomplete_health_code = archive_cli.main(
+                    [
+                        "index-health",
+                        str(archive_root),
+                        "--dry-run",
+                        "--format",
+                        "text",
+                    ]
+                )
+
+            incomplete_health = archive_services.index_health(
+                archive_root, dry_run=True
+            )
+            self.assertEqual(incomplete_index_code, 1)
+            self.assertEqual(incomplete_health_code, 1)
+            self.assertFalse(incomplete_health["ok"], incomplete_health)
+            self.assertEqual(
+                incomplete_health["index_state"], "stale_or_incomplete"
+            )
+
+    def test_index_and_health_process_exit_codes_survive_closed_os_pipes(self) -> None:
+        def run_with_closed_stream(
+            args: list[str], *, closed_stream: str
+        ) -> tuple[int, bytes, bytes]:
+            env = dict(os.environ)
+            env["PYTHONDONTWRITEBYTECODE"] = "1"
+            with subprocess.Popen(
+                [sys.executable, str(KIT_ROOT / "cli" / "archive.py"), *args],
+                cwd=KIT_ROOT,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            ) as process:
+                self.assertIsNotNone(process.stdout)
+                self.assertIsNotNone(process.stderr)
+                if closed_stream == "stdout":
+                    process.stdout.close()
+                    stderr = process.stderr.read()
+                    process.stderr.close()
+                    return process.wait(timeout=30), b"", stderr
+                if closed_stream == "stderr":
+                    process.stderr.close()
+                    stdout = process.stdout.read()
+                    process.stdout.close()
+                    return process.wait(timeout=30), stdout, b""
+                self.fail(f"unsupported closed_stream: {closed_stream}")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            archive_root = self.copy_fake_archive(workspace / "stdout-archive")
+
+            success_code, _stdout, success_stderr = run_with_closed_stream(
+                ["index", str(archive_root), "--format", "json"],
+                closed_stream="stdout",
+            )
+            self.assertEqual(success_code, 0, success_stderr.decode("utf-8", errors="replace"))
+
+            broken_path = sorted((archive_root / "zettels").glob("*.md"))[0]
+            broken_path.write_text(
+                "---\nid: [unterminated private yaml marker\n---\nPrivate body marker.\n",
+                encoding="utf-8",
+            )
+            incomplete_code, _stdout, incomplete_stderr = run_with_closed_stream(
+                ["index", str(archive_root), "--format", "text"],
+                closed_stream="stdout",
+            )
+            self.assertEqual(
+                incomplete_code,
+                1,
+                incomplete_stderr.decode("utf-8", errors="replace"),
+            )
+
+            progress_root = self.copy_fake_archive(workspace / "stderr-archive")
+            progress_code, progress_stdout, _stderr = run_with_closed_stream(
+                ["index", str(progress_root), "--progress", "--format", "json"],
+                closed_stream="stderr",
+            )
+            self.assertEqual(progress_code, 0)
+            self.assertTrue(json.loads(progress_stdout)["ok"])
+
+            health_code, health_stdout, _stderr = run_with_closed_stream(
+                [
+                    "index-health",
+                    str(progress_root),
+                    "--dry-run",
+                    "--progress",
+                    "--format",
+                    "json",
+                ],
+                closed_stream="stderr",
+            )
+            self.assertEqual(health_code, 0)
+            self.assertEqual(json.loads(health_stdout)["index_state"], "current")
+
     def test_index_and_health_no_output_failures_do_not_echo_raw_private_errors(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")

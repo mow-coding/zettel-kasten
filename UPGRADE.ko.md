@@ -2,6 +2,32 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.3.259 완료 결과의 terminal 의미
+
+아카이브, 인덱스, 결과, 영수증 schema 마이그레이션은 필요하지 않습니다.
+명령 인자와 정상 JSON/text 출력도 계속 호환됩니다.
+
+`archive index` 또는 `archive index-health`가 결과 계산을 이미 마친 뒤에는,
+`--output`이 없는 terminal 전달을 이제 best effort로 취급합니다. broken pipe,
+닫힌 stdout/stderr stream, console encoding 실패가 계산된 exit code를 덮지
+않습니다. 커밋된 정상 rebuild는 exit 0을, 격리를 포함해 완료된 rebuild나
+stale/incomplete health 결과는 exit 1을 그대로 유지합니다.
+
+이 변경이 terminal text를 durable하게 만들지는 않습니다. 무인 작업이나 오래
+걸리는 작업에서는 검토된 archive-relative 경로와 함께
+`--output .wom-scratch/diagnostics/<name>.json`을 사용하고 complete-only 저장
+결과를 확인하세요. 서비스 결과가 생기기 전에 발생한 오류는 그대로 오류이며,
+이번 변경이 삼키지 않습니다.
+
+업그레이드 후에는 다음 순서를 따르세요.
+
+1. `archive version <project-or-archive-root> --format json`에서 `0.3.259`를
+   확인합니다.
+2. terminal 전송 손실 뒤에도 결과가 남아야 하는 작업에는 `--output`을 계속
+   사용합니다.
+3. process exit code와 terminal text가 실제로 관찰됐는지는 서로 다른 근거로
+   구분합니다.
+
 ## v0.3.258 bounded object-storage 전송
 
 아카이브, object manifest, 영수증, provider schema 마이그레이션은 필요하지
