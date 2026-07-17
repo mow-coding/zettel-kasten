@@ -42,6 +42,14 @@ if str(SRC_ROOT) not in sys.path:
 from wom_kit import archive_cli, archive_services
 
 
+class _FakeUrlOpener:
+    def __init__(self, callback):
+        self._callback = callback
+
+    def open(self, request):
+        return self._callback(request)
+
+
 class _FakeObjectStorageTransport:
     """In-memory injected transport for the object-storage upload spine tests.
 
@@ -15970,7 +15978,7 @@ state:
             self.assertEqual(ok["result_status"], "uploaded")
             self.assertEqual(transport.multipart_calls, 1)
             # Truncated multipart (wrong whole-object sha) must FAIL, never pass on
-            # size alone, AND clean up the completed-but-wrong object (SA-5).
+            # size alone, and preserve the unpinned remote generation.
             ledger2 = archive_services.ResumeLedger(Path(tmp) / "l2.jsonl")
             trunc = _FakeObjectStorageTransport(truncate_multipart=True)
             failed = archive_services.object_storage_execute_one_upload(
@@ -15978,8 +15986,8 @@ state:
                 content_sha256=digest, multipart_threshold_bytes=1, skip_uploaded=False, ledger=ledger2,
             )
             self.assertEqual(failed["result_status"], "failed_upload")
-            self.assertEqual(trunc.delete_calls, 1, "completed-then-mismatch must delete the orphan (SA-5)")
-            self.assertEqual(trunc.deleted_keys, [key_hint])
+            self.assertEqual(trunc.delete_calls, 0, "mismatch proof must not delete a later remote generation")
+            self.assertEqual(trunc.deleted_keys, [])
 
     def test_object_storage_upload_multipart_threshold_override_bounds(self) -> None:  # Item 5
         # v0.3.167 Item 5: --multipart-threshold override is code-bounded to
@@ -16897,6 +16905,100 @@ state:
             )
             self.assertEqual(gating, key)
 
+    def test_presence_only_missing_or_invalid_content_length_stays_unavailable(self) -> None:
+        s = archive_services
+        credential = {
+            "endpoint_host": "acct.r2.cloudflarestorage.com",
+            "bucket": "b",
+            "access_key_id": "AKIAEX",
+            "secret_access_key": "s" * 40,
+            "region": "auto",
+        }
+
+        for label, response_headers in (
+            ("missing", {}),
+            ("invalid", {"content-length": "not-a-number"}),
+        ):
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as tmp:
+                tmp_path = Path(tmp)
+                archive_root = self.copy_fake_archive(tmp_path / "recorded")
+                key = s.object_storage_remote_key(
+                    strategy="prefix",
+                    key_prefix=self._BASOON_PREFIX,
+                    digest=_FAKE_SHA_A,
+                )
+                with self._adopt_env():
+                    seed = _FakeObjectStorageTransport()
+                    seed.store[key] = {"size": 151, "sha": _FAKE_SHA_A}
+                    seeded = self._adopt_run(
+                        archive_root,
+                        only=f"sha256:{_FAKE_SHA_A}",
+                        max_objects=1,
+                        reviewed_by="kim",
+                        key_strategy="prefix",
+                        key_prefix=self._BASOON_PREFIX,
+                        approve=True,
+                        transport=seed,
+                    )
+                self.assertEqual(seeded["adopt_summary"]["adopted_count"], 1)
+
+                upload_methods = []
+
+                def upload_send(*, method, url, headers, data_path=None, data_bytes=None):
+                    upload_methods.append(method)
+                    return {"status": 200, "headers": response_headers, "body": b""}
+
+                upload_transport = s.object_storage_resolve_transport(
+                    "cloudflare-r2", send=upload_send, credential=credential
+                )
+                with self._adopt_env():
+                    refused = self._upload_run(
+                        archive_root,
+                        store_ref="r2-basoon-20260704",
+                        only=f"sha256:{_FAKE_SHA_A}",
+                        max_objects=1,
+                        reviewed_by="kim",
+                        approve=True,
+                        transport=upload_transport,
+                        skip_uploaded=True,
+                        key_strategy="prefix",
+                        key_prefix=self._BASOON_PREFIX,
+                    )
+                self.assertFalse(refused["ok"], refused)
+                self.assertEqual(upload_methods, ["HEAD"])
+                self.assertTrue(
+                    any("remote_verification_unavailable" in blocker for blocker in refused["blockers"]),
+                    refused["blockers"],
+                )
+
+                adopt_methods = []
+
+                def adopt_send(*, method, url, headers, data_path=None, data_bytes=None):
+                    adopt_methods.append(method)
+                    return {"status": 200, "headers": response_headers, "body": b""}
+
+                adopt_transport = s.object_storage_resolve_transport(
+                    "cloudflare-r2", send=adopt_send, credential=credential
+                )
+                fresh_root = self.copy_fake_archive(tmp_path / "fresh")
+                with self._adopt_env():
+                    adopt_result = self._adopt_run(
+                        fresh_root,
+                        only=f"sha256:{_FAKE_SHA_A}",
+                        max_objects=1,
+                        reviewed_by="kim",
+                        key_strategy="prefix",
+                        key_prefix=self._BASOON_PREFIX,
+                        approve=True,
+                        transport=adopt_transport,
+                    )
+                self.assertEqual(adopt_methods, ["HEAD"])
+                self.assertEqual(adopt_result["adopt_summary"]["adopted_count"], 0)
+                self.assertEqual(
+                    adopt_result["adopt_results"][0]["adopt_status"],
+                    "remote_verification_unavailable",
+                )
+
     # --- §12.6 declared adopt is opt-in + labeled + NON-gating ---
 
     def test_object_storage_declared_adopt_is_nongating(self) -> None:  # §12.6
@@ -17180,6 +17282,39 @@ state:
                 self.assertEqual(len(sorted(ledger_dir.glob("*.resume-ledger.jsonl"))), 1)
                 # The manifest wom_uploaded location is INTACT (this is NOT the
                 # crash-recovery case where it is stripped) => verdict already_uploaded.
+
+                class _UnavailableRecordedHead(_FakeObjectStorageTransport):
+                    def head_object(self, *, key, presence_only=False):
+                        self.heads.append(key)
+                        return {
+                            "present": False,
+                            "size": None,
+                            "checksum_sha256": None,
+                            "presence_state": "unavailable",
+                        }
+
+                class _UnavailableRecordedSize(_FakeObjectStorageTransport):
+                    def head_object(self, *, key, presence_only=False):
+                        self.heads.append(key)
+                        return {
+                            "present": True,
+                            "size": None,
+                            "checksum_sha256": None,
+                            "presence_state": "present",
+                            "verification_state": "unavailable",
+                        }
+
+                for unavailable in (_UnavailableRecordedHead(), _UnavailableRecordedSize()):
+                    refused = self._upload_run(
+                        archive_root, only=f"sha256:{_FAKE_SHA_A}", max_objects=1,
+                        reviewed_by="kim", approve=True, transport=unavailable, skip_uploaded=True,
+                    )
+                    self.assertFalse(refused["ok"], refused)
+                    self.assertEqual(unavailable.put_calls, 0)
+                    self.assertTrue(
+                        any("remote_verification_unavailable" in blocker for blocker in refused["blockers"]),
+                        refused["blockers"],
+                    )
 
                 # WIPE the remote: a brand-new empty transport (bucket lost / object gone).
                 wiped = _FakeObjectStorageTransport()  # empty store => every HEAD 404s
@@ -18164,8 +18299,13 @@ state:
         # (R2 "Feature Not Implemented") and an explicit octet-stream Content-Type.
         self.assertNotIn("x-amz-checksum-sha256", put_headers)
         self.assertNotIn("x-amz-checksum-algorithm", put_headers)
+        self.assertEqual(put_headers["content-length"], str(len(object_body)))
         self.assertEqual(put_headers["content-type"], "application/octet-stream")
         self.assertEqual(put_headers["x-amz-content-sha256"], digest)
+        self.assertIn(
+            "SignedHeaders=content-length;content-type;host;x-amz-content-sha256;x-amz-date",
+            put_headers["authorization"],
+        )
         # HEAD and GET both occur, in that order, for the after-verification.
         methods = [m for m, _, _ in calls]
         self.assertIn("HEAD", methods)
@@ -18220,19 +18360,56 @@ state:
         self.assertIn("<Part><PartNumber>1</PartNumber><ETag>", body_text)
         self.assertNotIn("<ChecksumSHA256>", body_text)  # no top-level object checksum
 
+    def test_complete_multipart_200_embedded_error_aborts_and_remains_retryable(self) -> None:
+        s = archive_services
+        calls = []
+
+        def fake_send(*, method, url, headers, data_path=None, data_bytes=None):
+            calls.append((method, url))
+            if method == "POST" and "uploads" in url:
+                return {"status": 200, "headers": {}, "body": b"<r><UploadId>up-error</UploadId></r>"}
+            if method == "PUT":
+                return {"status": 200, "headers": {"etag": '"part"'}, "body": b""}
+            if method == "POST":
+                return {"status": 200, "headers": {}, "body": b"<Error><Code>SlowDown</Code></Error>"}
+            return {"status": 204, "headers": {}, "body": b""}
+
+        cred = {
+            "endpoint_host": "acct.r2.cloudflarestorage.com",
+            "bucket": "b",
+            "access_key_id": "AKIAEX",
+            "secret_access_key": "s" * 40,
+            "region": "auto",
+        }
+        transport = s.object_storage_resolve_transport("cloudflare-r2", send=fake_send, credential=cred)
+        with tempfile.TemporaryDirectory() as tmp:
+            data_path = Path(tmp) / "multipart.bin"
+            data_path.write_bytes(b"abcdefgh")
+            result, part_count = s._object_storage_multipart_put(
+                transport=transport,
+                key="sha256/mp/x",
+                data_path=data_path,
+                content_sha256=hashlib.sha256(b"abcdefgh").hexdigest(),
+                part_size_bytes=4,
+            )
+
+        self.assertEqual(result["status_class"], "rate_limited")
+        self.assertEqual(part_count, 2)
+        self.assertEqual([method for method, _ in calls], ["POST", "PUT", "PUT", "POST", "DELETE"])
+        self.assertIn("uploadId=up-error", calls[-1][1])
+
     def test_default_sender_preserves_explicit_content_type_no_socket(self) -> None:
         # Prove (without opening a socket) that the default sender does NOT let the
         # stdlib default a body-carrying request to application/x-www-form-urlencoded
         # when we set an explicit Content-Type. Intercepts urlopen to capture the
         # built Request; never touches the network.
         s = archive_services
-        sender = s._default_urllib_sender()
         captured = {}
 
         class _FakeResp:
             status = 200
             headers = {}
-            def read(self): return b""
+            def read(self, size=-1): return b""
             def __enter__(self): return self
             def __exit__(self, *a): return False
 
@@ -18241,7 +18418,12 @@ state:
             captured["method"] = req.get_method()
             return _FakeResp()
 
-        with patch.object(s.urllib.request, "urlopen", side_effect=fake_urlopen):
+        with patch.object(
+            s.urllib.request,
+            "build_opener",
+            return_value=_FakeUrlOpener(fake_urlopen),
+        ):
+            sender = s._default_urllib_sender()
             sender(
                 method="POST", url="https://acct.example/b/k?uploadId=1",
                 headers={"content-type": "text/xml", "content-length": "3"},
@@ -18249,6 +18431,787 @@ state:
             )
         self.assertEqual(captured["content_type"], "text/xml")
         self.assertNotEqual(captured["content_type"], "application/x-www-form-urlencoded")
+
+    def test_default_sender_streams_data_path_in_bounded_replayable_chunks_no_socket(self) -> None:
+        s = archive_services
+        payload = (b"bounded-object-storage-" * 100_000) + b"tail"
+        opened_read_sizes = []
+        captured = {}
+
+        class _GuardedFile(io.BytesIO):
+            def read(self, size=-1):
+                if size is None or size < 0 or size > s.OBJECT_STORAGE_HTTP_STREAM_CHUNK_BYTES:
+                    raise AssertionError(f"unbounded path read: {size}")
+                opened_read_sizes.append(size)
+                return super().read(size)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                self.close()
+                return False
+
+        class _FakeResp:
+            status = 200
+            headers = {}
+
+            def read(self, size=-1):
+                if size is None or size < 0:
+                    raise AssertionError(f"unbounded response read: {size}")
+                return b""
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        def fake_urlopen(req):
+            handler = s.urllib.request.HTTPHandler()
+            handler.parent = type("_Parent", (), {"addheaders": []})()
+            req = handler.do_request_(req)
+            captured["data_is_bytes"] = isinstance(req.data, (bytes, bytearray))
+            captured["content_length"] = req.get_header("Content-length")
+            captured["transfer_encoding"] = req.get_header("Transfer-encoding")
+            captured["payload_hash"] = req.get_header("X-amz-content-sha256")
+            captured["first"] = b"".join(req.data)
+            captured["second"] = b"".join(req.data)
+            return _FakeResp()
+
+        with patch("builtins.open", side_effect=lambda *args, **kwargs: _GuardedFile(payload)):
+            with patch.object(
+                s.urllib.request,
+                "build_opener",
+                return_value=_FakeUrlOpener(fake_urlopen),
+            ):
+                sender = s._default_urllib_sender()
+                response = sender(
+                    method="PUT",
+                    url="https://acct.example/b/k",
+                    headers={
+                        "content-length": str(len(payload)),
+                        "content-type": "application/octet-stream",
+                        "x-amz-content-sha256": hashlib.sha256(payload).hexdigest(),
+                    },
+                    data_path=Path("fixture.bin"),
+                )
+
+        self.assertEqual(response["status"], 200)
+        self.assertFalse(captured["data_is_bytes"])
+        self.assertEqual(captured["content_length"], str(len(payload)))
+        self.assertIsNone(captured["transfer_encoding"])
+        self.assertEqual(captured["payload_hash"], hashlib.sha256(payload).hexdigest())
+        self.assertEqual(captured["first"], payload)
+        self.assertEqual(captured["second"], payload)
+        self.assertTrue(opened_read_sizes)
+        self.assertTrue(all(0 < size <= s.OBJECT_STORAGE_HTTP_STREAM_CHUNK_BYTES for size in opened_read_sizes))
+
+    def test_s3_transport_verification_get_hashes_bounded_chunks_without_raw_echo(self) -> None:
+        s = archive_services
+        marker = b"raw-object-secret-marker"
+        payload = (b"verification-stream-" * 100_000) + marker
+        get_read_sizes = []
+
+        class _FakeResp:
+            def __init__(self, body, *, headers):
+                self.status = 200
+                self.headers = headers
+                self._body = io.BytesIO(body)
+
+            def read(self, size=-1):
+                if size is None or size < 0:
+                    raise AssertionError(f"unbounded response read: {size}")
+                get_read_sizes.append(size)
+                return self._body.read(size)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        responses = [
+            _FakeResp(b"", headers={"content-length": str(len(payload))}),
+            _FakeResp(payload, headers={"content-length": str(len(payload))}),
+        ]
+
+        def fake_urlopen(req):
+            return responses.pop(0)
+
+        cred = {
+            "endpoint_host": "acct.r2.cloudflarestorage.com",
+            "bucket": "b",
+            "access_key_id": "AKIAEX",
+            "secret_access_key": "s" * 40,
+            "region": "auto",
+        }
+        with patch.object(
+            s.urllib.request,
+            "build_opener",
+            return_value=_FakeUrlOpener(fake_urlopen),
+        ):
+            sender = s._default_urllib_sender()
+            transport = s.object_storage_resolve_transport("cloudflare-r2", send=sender, credential=cred)
+            result = transport.head_object(key="sha256/aa/" + hashlib.sha256(payload).hexdigest())
+
+        self.assertEqual(result["size"], len(payload))
+        self.assertEqual(result["checksum_sha256"], hashlib.sha256(payload).hexdigest())
+        self.assertNotIn(marker.decode("ascii"), json.dumps(result))
+        self.assertTrue(get_read_sizes)
+        self.assertTrue(
+            all(
+                0 < size <= max(
+                    s.OBJECT_STORAGE_HTTP_STREAM_CHUNK_BYTES,
+                    s.OBJECT_STORAGE_HTTP_CONTROL_BODY_MAX_BYTES + 1,
+                )
+                for size in get_read_sizes
+            )
+        )
+        self.assertTrue(any(size == s.OBJECT_STORAGE_HTTP_STREAM_CHUNK_BYTES for size in get_read_sizes))
+
+    def test_incomplete_verification_get_never_deletes_uploaded_object(self) -> None:
+        s = archive_services
+        payload = b"complete-local-object"
+        digest = hashlib.sha256(payload).hexdigest()
+        methods = []
+        head_count = 0
+
+        class _FakeResp:
+            def __init__(self, status, body=b"", headers=None):
+                self.status = status
+                self.headers = headers or {}
+                self._body = io.BytesIO(body)
+
+            def read(self, size=-1):
+                if size is None or size < 0:
+                    raise AssertionError(f"unbounded response read: {size}")
+                return self._body.read(size)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        def fake_urlopen(req):
+            nonlocal head_count
+            method = req.get_method()
+            methods.append(method)
+            if method == "HEAD":
+                head_count += 1
+                if head_count == 1:
+                    return _FakeResp(404)
+                return _FakeResp(200, headers={"content-length": str(len(payload))})
+            if method == "PUT":
+                self.assertEqual(b"".join(req.data), payload)
+                return _FakeResp(200)
+            if method == "GET":
+                return _FakeResp(
+                    200,
+                    body=payload[:-3],
+                    headers={"content-length": str(len(payload))},
+                )
+            return _FakeResp(200)
+
+        cred = {
+            "endpoint_host": "acct.r2.cloudflarestorage.com",
+            "bucket": "b",
+            "access_key_id": "AKIAEX",
+            "secret_access_key": "s" * 40,
+            "region": "auto",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            data_path = Path(tmp) / "object.bin"
+            data_path.write_bytes(payload)
+            ledger = s.ResumeLedger(Path(tmp) / "resume.jsonl")
+            with patch.object(
+                s.urllib.request,
+                "build_opener",
+                return_value=_FakeUrlOpener(fake_urlopen),
+            ):
+                sender = s._default_urllib_sender()
+                transport = s.object_storage_resolve_transport("cloudflare-r2", send=sender, credential=cred)
+                result = s.object_storage_execute_one_upload(
+                    transport=transport,
+                    key="sha256/aa/" + digest,
+                    data_path=data_path,
+                    size=len(payload),
+                    content_sha256=digest,
+                    multipart_threshold_bytes=1024 * 1024,
+                    skip_uploaded=False,
+                    ledger=ledger,
+                    sleep=_NOOP_SLEEP,
+                    rng=_ZERO_RNG,
+                )
+
+        self.assertEqual(result["result_status"], "failed_upload")
+        self.assertEqual(methods, ["HEAD", "PUT", "HEAD", "GET"])
+        self.assertNotIn("DELETE", methods)
+
+    def test_unknown_length_early_eof_never_deletes_uploaded_object(self) -> None:
+        s = archive_services
+        payload = b"local-object-with-known-size"
+        digest = hashlib.sha256(payload).hexdigest()
+        methods = []
+        head_count = 0
+
+        class _FakeResp:
+            def __init__(self, status, body=b""):
+                self.status = status
+                self.headers = {}
+                self._body = io.BytesIO(body)
+
+            def read(self, size=-1):
+                if size is None or size < 0:
+                    raise AssertionError(f"unbounded response read: {size}")
+                return self._body.read(size)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        def fake_urlopen(req):
+            nonlocal head_count
+            method = req.get_method()
+            methods.append(method)
+            if method == "HEAD":
+                head_count += 1
+                return _FakeResp(404 if head_count == 1 else 200)
+            if method == "PUT":
+                self.assertEqual(b"".join(req.data), payload)
+                return _FakeResp(200)
+            if method == "GET":
+                # Clean-looking EOF with no response length is not enough to
+                # distinguish a complete wrong object from a broken connection.
+                return _FakeResp(200, payload[:-5])
+            return _FakeResp(200)
+
+        cred = {
+            "endpoint_host": "acct.r2.cloudflarestorage.com",
+            "bucket": "b",
+            "access_key_id": "AKIAEX",
+            "secret_access_key": "s" * 40,
+            "region": "auto",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            data_path = Path(tmp) / "object.bin"
+            data_path.write_bytes(payload)
+            with patch.object(
+                s.urllib.request,
+                "build_opener",
+                return_value=_FakeUrlOpener(fake_urlopen),
+            ):
+                transport = s.object_storage_resolve_transport(
+                    "cloudflare-r2",
+                    send=s._default_urllib_sender(),
+                    credential=cred,
+                )
+                result = s.object_storage_execute_one_upload(
+                    transport=transport,
+                    key="sha256/aa/" + digest,
+                    data_path=data_path,
+                    size=len(payload),
+                    content_sha256=digest,
+                    multipart_threshold_bytes=1024 * 1024,
+                    skip_uploaded=False,
+                    ledger=s.ResumeLedger(Path(tmp) / "resume.jsonl"),
+                    sleep=_NOOP_SLEEP,
+                    rng=_ZERO_RNG,
+                )
+
+        self.assertEqual(result["result_status"], "failed_upload")
+        self.assertEqual(methods, ["HEAD", "PUT", "HEAD", "GET"])
+        self.assertNotIn("DELETE", methods)
+
+    def test_content_length_proof_requires_strict_ascii_decimal(self) -> None:
+        s = archive_services
+        for invalid in (
+            "-0",
+            "+0",
+            " 0 ",
+            "",
+            "0, 0",
+            "\u0660",
+            "1" * (s.OBJECT_STORAGE_HTTP_CONTENT_LENGTH_MAX_DIGITS + 1),
+            "1" * 5000,
+        ):
+            with self.subTest(invalid=invalid):
+                self.assertIsNone(s._object_storage_parse_content_length(invalid))
+        self.assertEqual(s._object_storage_parse_content_length("0"), 0)
+        self.assertEqual(s._object_storage_parse_content_length("0007"), 7)
+        body = b"control"
+        self.assertTrue(s._object_storage_control_body_complete({}, body, truncated=False))
+        self.assertTrue(
+            s._object_storage_control_body_complete(
+                {"content-length": str(len(body))}, body, truncated=False
+            )
+        )
+        self.assertFalse(
+            s._object_storage_control_body_complete(
+                {"content-length": "not-a-number"}, body, truncated=False
+            )
+        )
+        self.assertFalse(
+            s._object_storage_control_body_complete(
+                {"content-length": str(len(body) + 1)}, body, truncated=False
+            )
+        )
+
+        cred = {
+            "endpoint_host": "acct.r2.cloudflarestorage.com",
+            "bucket": "b",
+            "access_key_id": "AKIAEX",
+            "secret_access_key": "s" * 40,
+            "region": "auto",
+        }
+        for invalid in ("-0", "+0", " 0 "):
+            def fake_send(*, method, url, headers, data_path=None, data_bytes=None, value=invalid):
+                return {"status": 200, "headers": {"content-length": value}, "body": b""}
+
+            transport = s.object_storage_resolve_transport("cloudflare-r2", send=fake_send, credential=cred)
+            result = transport.head_object(key="sha256/aa/" + "a" * 64, presence_only=True)
+            self.assertEqual(result["presence_state"], "present")
+            self.assertEqual(result["verification_state"], "unavailable")
+            self.assertIsNone(result["size"])
+
+    def test_default_sender_caps_success_and_error_control_bodies(self) -> None:
+        s = archive_services
+        cap = s.OBJECT_STORAGE_HTTP_CONTROL_BODY_MAX_BYTES
+        hidden_marker = b"oversized-provider-secret-marker"
+        success_body = b"<r><UploadId>up-9</UploadId></r>" + (b"x" * cap) + hidden_marker
+        error_body = b"<Error><Code>SlowDown</Code></Error>" + (b"y" * cap) + hidden_marker
+        readers = []
+
+        class _GuardedResp:
+            def __init__(self, status, body):
+                self.status = status
+                self.headers = {}
+                self._body = io.BytesIO(body)
+                self.read_sizes = []
+                readers.append(self)
+
+            def read(self, size=-1):
+                if size is None or size < 0 or size > cap + 1:
+                    raise AssertionError(f"unbounded control read: {size}")
+                self.read_sizes.append(size)
+                return self._body.read(size)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        queued = [_GuardedResp(200, success_body), _GuardedResp(503, error_body)]
+
+        def fake_urlopen(req):
+            return queued.pop(0)
+
+        cred = {
+            "endpoint_host": "acct.r2.cloudflarestorage.com",
+            "bucket": "b",
+            "access_key_id": "AKIAEX",
+            "secret_access_key": "s" * 40,
+            "region": "auto",
+        }
+        with patch.object(
+            s.urllib.request,
+            "build_opener",
+            return_value=_FakeUrlOpener(fake_urlopen),
+        ):
+            sender = s._default_urllib_sender()
+            transport = s.object_storage_resolve_transport("cloudflare-r2", send=sender, credential=cred)
+            with self.assertRaises(s._ObjectStorageProviderError):
+                transport.create_multipart(key="sha256/mp/x")
+            failed = transport.put_object(
+                key="sha256/aa/" + "a" * 64,
+                data_path=None,
+                size=1,
+                content_sha256="a" * 64,
+            )
+
+        self.assertEqual(failed["status_class"], "rate_limited")
+        self.assertNotIn(hidden_marker.decode("ascii"), json.dumps(failed))
+        self.assertTrue(all(reader.read_sizes == [cap + 1] for reader in readers))
+
+    def test_default_sender_rejects_short_control_body_against_declared_length(self) -> None:
+        s = archive_services
+        body = b"<r><UploadId>attacker-prefix</UploadId></r>"
+        responses = []
+
+        class _ShortResp:
+            status = 200
+            headers = {"Content-Length": str(len(body) + 100)}
+
+            def __init__(self):
+                self._body = io.BytesIO(body)
+                self.read_sizes = []
+                responses.append(self)
+
+            def read(self, size=-1):
+                if size is None or size < 0:
+                    raise AssertionError(f"unbounded control read: {size}")
+                self.read_sizes.append(size)
+                return self._body.read(size)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        def fake_urlopen(req):
+            return _ShortResp()
+
+        cred = {
+            "endpoint_host": "acct.r2.cloudflarestorage.com",
+            "bucket": "b",
+            "access_key_id": "AKIAEX",
+            "secret_access_key": "s" * 40,
+            "region": "auto",
+        }
+        with patch.object(
+            s.urllib.request,
+            "build_opener",
+            return_value=_FakeUrlOpener(fake_urlopen),
+        ):
+            sender = s._default_urllib_sender()
+            scalar = sender(
+                method="POST",
+                url="https://acct.example/b/k?uploads=",
+                headers={},
+            )
+            transport = s.object_storage_resolve_transport(
+                "cloudflare-r2", send=sender, credential=cred
+            )
+            with self.assertRaises(s._ObjectStorageProviderError):
+                transport.create_multipart(key="sha256/mp/x")
+
+        self.assertFalse(scalar["body_truncated"])
+        self.assertFalse(scalar["body_complete"])
+        self.assertEqual(scalar["body"], body)
+        self.assertTrue(
+            all(
+                response.read_sizes[0] == s.OBJECT_STORAGE_HTTP_CONTROL_BODY_MAX_BYTES + 1
+                for response in responses
+            )
+        )
+
+    def test_default_sender_refuses_redirect_and_caps_http_error_body(self) -> None:
+        s = archive_services
+        cap = s.OBJECT_STORAGE_HTTP_CONTROL_BODY_MAX_BYTES
+        hidden_marker = b"redirect-secret-marker"
+        read_sizes = []
+        captured_handlers = []
+
+        class _GuardedErrorBody(io.BytesIO):
+            def read(self, size=-1):
+                if size is None or size < 0 or size > cap + 1:
+                    raise AssertionError(f"unbounded redirect body read: {size}")
+                read_sizes.append(size)
+                return super().read(size)
+
+        error_body = _GuardedErrorBody((b"r" * (cap + 1)) + hidden_marker)
+        redirect_error = s.urllib.error.HTTPError(
+            "https://acct.example/b/k",
+            302,
+            "Found",
+            {"Location": "https://other-origin.example/leak"},
+            error_body,
+        )
+
+        class _RedirectingOpener:
+            def open(self, request):
+                raise redirect_error
+
+        def fake_build_opener(*handlers):
+            captured_handlers.extend(handlers)
+            return _RedirectingOpener()
+
+        with patch.object(s.urllib.request, "build_opener", side_effect=fake_build_opener):
+            sender = s._default_urllib_sender()
+            result = sender(
+                method="GET",
+                url="https://acct.example/b/k",
+                headers={
+                    "authorization": "AWS4-HMAC-SHA256 secret-signature",
+                    "x-amz-content-sha256": s.SIGV4_UNSIGNED_PAYLOAD,
+                },
+            )
+
+        self.assertEqual(result["status"], 302)
+        self.assertTrue(result["body_truncated"])
+        self.assertEqual(len(result["body"]), cap)
+        self.assertEqual(read_sizes, [cap + 1])
+        self.assertNotIn(hidden_marker, result["body"])
+        self.assertEqual(len(captured_handlers), 1)
+        self.assertIsNone(
+            captured_handlers[0].redirect_request(None, None, 302, "Found", {}, "https://other.example/")
+        )
+
+    def test_default_sender_refuses_short_and_long_signed_path_bodies(self) -> None:
+        s = archive_services
+        payload = b"signed-path-body"
+
+        class _NeverResponse:
+            status = 200
+            headers = {}
+
+            def read(self, size=-1):
+                return b""
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        def consume_request(request):
+            b"".join(request.data)
+            return _NeverResponse()
+
+        for declared_size in (len(payload) - 1, len(payload) + 1):
+            with self.subTest(declared_size=declared_size):
+                with patch("builtins.open", side_effect=lambda *args, **kwargs: io.BytesIO(payload)):
+                    with patch.object(
+                        s.urllib.request,
+                        "build_opener",
+                        return_value=_FakeUrlOpener(consume_request),
+                    ):
+                        result = s._default_urllib_sender()(
+                            method="PUT",
+                            url="https://acct.example/b/k",
+                            headers={
+                                "content-length": str(declared_size),
+                                "content-type": "application/octet-stream",
+                            },
+                            data_path=Path("fixture.bin"),
+                        )
+                self.assertTrue(result["transport_error"])
+                self.assertEqual(result["status"], 0)
+                self.assertEqual(result["body"], b"")
+
+    def test_default_sender_timeout_drops_partial_get_evidence(self) -> None:
+        s = archive_services
+
+        class _TimeoutResp:
+            status = 200
+            headers = {"content-length": "100"}
+
+            def __init__(self):
+                self.calls = 0
+
+            def read(self, size=-1):
+                self.calls += 1
+                if self.calls == 1:
+                    return b"partial"
+                raise TimeoutError("simulated timeout with private detail")
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        with patch.object(
+            s.urllib.request,
+            "build_opener",
+            return_value=_FakeUrlOpener(lambda request: _TimeoutResp()),
+        ):
+            result = s._default_urllib_sender()(
+                method="GET",
+                url="https://acct.example/b/k",
+                headers={"x-amz-content-sha256": s.SIGV4_UNSIGNED_PAYLOAD},
+            )
+
+        self.assertTrue(result["transport_error"])
+        self.assertEqual(result["status"], 0)
+        self.assertEqual(result["body"], b"")
+        self.assertNotIn("body_sha256", result)
+        self.assertNotIn("partial", repr(result))
+
+    def test_partial_verification_get_never_deletes_uploaded_object(self) -> None:
+        s = archive_services
+        payload = b"full-local-payload"
+        digest = hashlib.sha256(payload).hexdigest()
+        methods = []
+        head_count = 0
+
+        def fake_send(*, method, url, headers, data_path=None, data_bytes=None):
+            nonlocal head_count
+            methods.append(method)
+            if method == "HEAD":
+                head_count += 1
+                return {
+                    "status": 404 if head_count == 1 else 200,
+                    "headers": {},
+                    "body": b"",
+                }
+            if method == "GET":
+                return {"status": 206, "headers": {}, "body": payload}
+            return {"status": 200, "headers": {}, "body": b""}
+
+        cred = {
+            "endpoint_host": "acct.r2.cloudflarestorage.com",
+            "bucket": "b",
+            "access_key_id": "AKIAEX",
+            "secret_access_key": "s" * 40,
+            "region": "auto",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            data_path = Path(tmp) / "object.bin"
+            data_path.write_bytes(payload)
+            transport = s.object_storage_resolve_transport("cloudflare-r2", send=fake_send, credential=cred)
+            result = s.object_storage_execute_one_upload(
+                transport=transport,
+                key="sha256/aa/" + digest,
+                data_path=data_path,
+                size=len(payload),
+                content_sha256=digest,
+                multipart_threshold_bytes=1024 * 1024,
+                skip_uploaded=False,
+                ledger=s.ResumeLedger(Path(tmp) / "resume.jsonl"),
+                sleep=_NOOP_SLEEP,
+                rng=_ZERO_RNG,
+            )
+
+        self.assertEqual(result["result_status"], "failed_upload")
+        self.assertEqual(methods, ["HEAD", "PUT", "HEAD", "GET"])
+        self.assertNotIn("DELETE", methods)
+
+    def test_unavailable_head_before_never_authorizes_put(self) -> None:
+        s = archive_services
+        methods = []
+
+        def fake_send(*, method, url, headers, data_path=None, data_bytes=None):
+            methods.append(method)
+            return {
+                "status": 503 if method == "HEAD" else 200,
+                "headers": {},
+                "body": b"<Error><Code>SlowDown</Code></Error>" if method == "HEAD" else b"",
+            }
+
+        cred = {
+            "endpoint_host": "acct.r2.cloudflarestorage.com",
+            "bucket": "b",
+            "access_key_id": "AKIAEX",
+            "secret_access_key": "s" * 40,
+            "region": "auto",
+        }
+        payload = b"must-not-overwrite"
+        digest = hashlib.sha256(payload).hexdigest()
+        with tempfile.TemporaryDirectory() as tmp:
+            data_path = Path(tmp) / "object.bin"
+            data_path.write_bytes(payload)
+            transport = s.object_storage_resolve_transport("cloudflare-r2", send=fake_send, credential=cred)
+            result = s.object_storage_execute_one_upload(
+                transport=transport,
+                key="sha256/aa/" + digest,
+                data_path=data_path,
+                size=len(payload),
+                content_sha256=digest,
+                multipart_threshold_bytes=1024 * 1024,
+                skip_uploaded=False,
+                ledger=s.ResumeLedger(Path(tmp) / "resume.jsonl"),
+                sleep=_NOOP_SLEEP,
+                rng=_ZERO_RNG,
+            )
+
+        self.assertEqual(result["result_status"], "failed_upload")
+        self.assertEqual(methods, ["HEAD"])
+        self.assertEqual(result["put_calls"], 0)
+
+    def test_unavailable_content_get_before_never_claims_conflict_or_put(self) -> None:
+        s = archive_services
+        payload = b"already-remote"
+        digest = hashlib.sha256(payload).hexdigest()
+        methods = []
+
+        def fake_send(*, method, url, headers, data_path=None, data_bytes=None):
+            methods.append(method)
+            if method == "HEAD":
+                return {"status": 200, "headers": {"content-length": str(len(payload))}, "body": b""}
+            if method == "GET":
+                return {"status": 0, "headers": {}, "body": b"", "transport_error": True}
+            return {"status": 200, "headers": {}, "body": b""}
+
+        cred = {
+            "endpoint_host": "acct.r2.cloudflarestorage.com",
+            "bucket": "b",
+            "access_key_id": "AKIAEX",
+            "secret_access_key": "s" * 40,
+            "region": "auto",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            data_path = Path(tmp) / "object.bin"
+            data_path.write_bytes(payload)
+            transport = s.object_storage_resolve_transport("cloudflare-r2", send=fake_send, credential=cred)
+            result = s.object_storage_execute_one_upload(
+                transport=transport,
+                key="sha256/aa/" + digest,
+                data_path=data_path,
+                size=len(payload),
+                content_sha256=digest,
+                multipart_threshold_bytes=1024 * 1024,
+                skip_uploaded=False,
+                ledger=s.ResumeLedger(Path(tmp) / "resume.jsonl"),
+                sleep=_NOOP_SLEEP,
+                rng=_ZERO_RNG,
+            )
+
+        self.assertEqual(result["result_status"], "failed_upload")
+        self.assertEqual(methods, ["HEAD", "GET"])
+        self.assertEqual(result["put_calls"], 0)
+
+    def test_inconsistent_complete_marker_never_authorizes_delete(self) -> None:
+        s = archive_services
+
+        class _InconsistentTransport:
+            def __init__(self):
+                self.head_calls = 0
+                self.delete_calls = 0
+
+            def head_object(self, *, key, presence_only=False):
+                self.head_calls += 1
+                if self.head_calls == 1:
+                    return {"present": False, "size": None, "checksum_sha256": None}
+                return {
+                    "present": False,
+                    "size": None,
+                    "checksum_sha256": None,
+                    "verification_state": "complete",
+                }
+
+            def put_object(self, *, key, data_path, size, content_sha256):
+                return {"status_class": "ok"}
+
+            def delete_object(self, *, key):
+                self.delete_calls += 1
+
+        payload = b"local"
+        digest = hashlib.sha256(payload).hexdigest()
+        with tempfile.TemporaryDirectory() as tmp:
+            data_path = Path(tmp) / "object.bin"
+            data_path.write_bytes(payload)
+            transport = _InconsistentTransport()
+            result = s.object_storage_execute_one_upload(
+                transport=transport,
+                key="sha256/aa/" + digest,
+                data_path=data_path,
+                size=len(payload),
+                content_sha256=digest,
+                multipart_threshold_bytes=1024 * 1024,
+                skip_uploaded=False,
+                ledger=s.ResumeLedger(Path(tmp) / "resume.jsonl"),
+                sleep=_NOOP_SLEEP,
+                rng=_ZERO_RNG,
+            )
+
+        self.assertEqual(result["result_status"], "failed_upload")
+        self.assertEqual(transport.delete_calls, 0)
 
     def test_s3_transport_error_classification_and_no_body(self) -> None:  # CA-9
         s = archive_services
@@ -18875,7 +19838,7 @@ state:
             self.assertEqual(result["execution_results"][0]["result_status"], "failed_upload")
             self.assertEqual(transport.put_calls, puts_after_seed, "a corrupt local file must never be PUT")
 
-    def test_force_reupload_head_after_mismatch_deletes_orphan(self) -> None:  # FIX A #10 (Q5)
+    def test_force_reupload_head_after_mismatch_preserves_unpinned_remote(self) -> None:  # v0.3.258
         floor = archive_services.OBJECT_STORAGE_MULTIPART_MIN_PART_SIZE_BYTES
         size = floor * 3 + 111
         with tempfile.TemporaryDirectory() as tmp:
@@ -18889,9 +19852,9 @@ state:
                 seed = _FakeObjectStorageTransport()
                 self._seed_uploaded_object(archive_root, seed, only=f"sha256:{digest}")
                 # A transport whose completed multipart yields a WRONG whole-object sha:
-                # HEAD-after must fail and the orphan must be deleted (SA-5), even on a
-                # forced re-PUT. Prime it as present+match so F0-b enters the skip path
-                # that force-reupload bypasses.
+                # HEAD-after must fail, but an unconditional DELETE could erase a
+                # correct concurrent replacement. Prime it as present+match so
+                # F0-b enters the skip path that force-reupload bypasses.
                 trunc = _FakeObjectStorageTransport(truncate_multipart=True, present="same",
                                                     present_size=size, present_checksum=digest)
                 result = self._upload_run(
@@ -18902,7 +19865,7 @@ state:
                     allow_tiny_parts=True,
                 )
             self.assertEqual(result["execution_results"][0]["result_status"], "failed_upload", result)
-            self.assertGreaterEqual(trunc.delete_calls, 1, "HEAD-after mismatch must delete the orphan (SA-5)")
+            self.assertEqual(trunc.delete_calls, 0, "unconditional cleanup is not generation-safe")
 
     def test_force_reupload_without_approve_refused(self) -> None:  # FIX A #11
         with tempfile.TemporaryDirectory() as tmp:

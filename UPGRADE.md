@@ -24,6 +24,41 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.258 Bounded Object-Storage Transport
+
+No archive, object-manifest, receipt, or provider schema migration is required.
+Existing object-storage commands, credential references, key strategies, tier
+gates, and multipart settings remain compatible.
+
+The default S3-compatible sender now streams a single path PUT in replayable 1
+MiB chunks under its exact signed `Content-Length`. Whole-object verification
+GETs are also streamed; only SHA-256, byte count, and completeness evidence are
+kept. Control and provider-error responses are capped at 64 KiB, automatic
+redirects are disabled, and authority-bearing multipart XML must reach a proven
+message boundary before WOM-kit trusts it.
+
+Remote evidence is stricter after this upgrade. HEAD and whole-object GET must
+be HTTP 200, only HEAD 404 proves absence, and missing or contradictory proof is
+`unavailable`. An unavailable provider response no longer authorizes an
+implicit repair PUT, adopt, skip, or conflict claim. CompleteMultipartUpload
+`200 + <Error>` is treated as failure and its upload is aborted before retry.
+
+WOM-kit also stops issuing unconditional object DELETE after mismatch. A GET
+proves the generation read, but a correct concurrent replacement could occupy
+the same key before deletion. A failed verification may therefore leave a
+correct or unproven remote object present. Investigate first; cleanup requires a
+future generation/ETag-conditional provider contract.
+
+After upgrading:
+
+1. Run `archive version <project-or-archive-root> --format json` and confirm
+   `0.3.258`.
+2. Re-run a one-object local upload plan and byte verification in dry-run mode.
+3. Keep the first live provider run tiny and use the existing reviewed tier
+   gate.
+4. If verification reports failure or unavailability, do not delete the remote
+   key based only on that result.
+
 ## v0.3.257 Strict Revision Approval Snapshots
 
 No archive schema migration is required. Existing valid revision and exact

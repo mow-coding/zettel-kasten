@@ -1794,6 +1794,14 @@ OBJECT_STORAGE_TOTAL_PUT_CEILING = 64
 # Hard per-object attempt ceiling for the bounded retry loop (SA-3).
 OBJECT_STORAGE_MAX_ATTEMPTS_PER_OBJECT = 4
 OBJECT_STORAGE_BACKOFF_BASE_MS = 200
+# v0.3.258: the stdlib S3-compatible sender must never materialize a whole
+# object in memory. Path PUTs and verification GETs use fixed-size chunks; only
+# small XML/error control prefixes may be retained for provider classification.
+OBJECT_STORAGE_HTTP_STREAM_CHUNK_BYTES = 1024 * 1024  # 1 MiB
+OBJECT_STORAGE_HTTP_CONTROL_BODY_MAX_BYTES = 64 * 1024  # 64 KiB
+# More than 20 decimal digits cannot describe a supported object size and may
+# trip Python's defensive integer-string limit. Treat it as unavailable proof.
+OBJECT_STORAGE_HTTP_CONTENT_LENGTH_MAX_DIGITS = 20
 # SigV4 named constants (CA-2/CA-6). EMPTY_SHA256_HEX is sha256(b"").
 SIGV4_EMPTY_SHA256_HEX = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 SIGV4_UNSIGNED_PAYLOAD = "UNSIGNED-PAYLOAD"
@@ -72911,7 +72919,9 @@ class ObjectStorageTransport(Protocol):
     """
 
     def head_object(self, *, key: str, presence_only: bool = False) -> dict[str, Any]:
-        # -> {"present": bool, "size": int | None, "checksum_sha256": str | None}
+        # -> {"present": bool, "size": int | None, "checksum_sha256": str | None,
+        #     "presence_state": "present"|"absent"|"unavailable",
+        #     "verification_state": "complete"|"unavailable" (requested proof)}
         # presence_only=True MUST NOT read the object body: it returns presence +
         # size only and leaves checksum_sha256 None. On R2 the whole-object sha256
         # is a GetObject-and-rehash (V14), so a presence+size caller (verified
@@ -72941,8 +72951,8 @@ class ObjectStorageTransport(Protocol):
         ...
 
     def delete_object(self, *, key: str) -> None:
-        # SA-5: cleanup of a completed-but-wrong remote object after a
-        # multipart HEAD-after mismatch, so no orphan accrues storage cost.
+        # Explicit primitive retained for callers with their own generation
+        # proof. The upload executor never invokes unconditional cleanup.
         ...
 
 
@@ -73029,36 +73039,186 @@ def _object_storage_classify_http_status(status: int, error_code: str | None) ->
     return "failed"
 
 
+class _ReplayableObjectStoragePathBody:
+    """Re-open one exact path for every urllib replay and yield bounded chunks."""
+
+    def __init__(self, data_path: Path | str, *, expected_size: int) -> None:
+        self._data_path = data_path
+        self._expected_size = int(expected_size)
+
+    def __iter__(self):
+        emitted = 0
+        with open(self._data_path, "rb") as handle:
+            while True:
+                chunk = handle.read(OBJECT_STORAGE_HTTP_STREAM_CHUNK_BYTES)
+                if not chunk:
+                    break
+                if not isinstance(chunk, (bytes, bytearray)):
+                    raise OSError("object-storage request returned non-bytes")
+                emitted += len(chunk)
+                if emitted > self._expected_size:
+                    raise OSError("object-storage request body length changed")
+                yield chunk
+        if emitted != self._expected_size:
+            raise OSError("object-storage request body length changed")
+
+
+def _object_storage_bounded_control_body(handle: Any) -> tuple[bytes, bool]:
+    """Read at most cap+1 bytes and retain only the bounded prefix."""
+
+    limit = OBJECT_STORAGE_HTTP_CONTROL_BODY_MAX_BYTES + 1
+    chunks: list[bytes] = []
+    total = 0
+    while total < limit:
+        requested = limit - total
+        raw = handle.read(requested)
+        if not raw:
+            break
+        if not isinstance(raw, (bytes, bytearray)) or len(raw) > requested:
+            raise OSError("object-storage control response returned invalid bytes")
+        chunk = bytes(raw)
+        chunks.append(chunk)
+        total += len(chunk)
+    value = b"".join(chunks)
+    truncated = len(value) > OBJECT_STORAGE_HTTP_CONTROL_BODY_MAX_BYTES
+    return value[:OBJECT_STORAGE_HTTP_CONTROL_BODY_MAX_BYTES], truncated
+
+
+def _object_storage_stream_response_digest(handle: Any) -> tuple[str, int]:
+    """Consume a verification body with O(1) memory and return scalar evidence."""
+
+    digest = hashlib.sha256()
+    size = 0
+    while True:
+        chunk = handle.read(OBJECT_STORAGE_HTTP_STREAM_CHUNK_BYTES)
+        if not chunk:
+            break
+        if not isinstance(chunk, (bytes, bytearray)):
+            raise OSError("object-storage response returned non-bytes")
+        if len(chunk) > OBJECT_STORAGE_HTTP_STREAM_CHUNK_BYTES:
+            raise OSError("object-storage response exceeded requested chunk")
+        digest.update(chunk)
+        size += len(chunk)
+    return digest.hexdigest(), size
+
+
+def _object_storage_parse_content_length(raw: Any) -> int | None:
+    if not isinstance(raw, str) or re.fullmatch(r"[0-9]+", raw) is None:
+        return None
+    if len(raw) > OBJECT_STORAGE_HTTP_CONTENT_LENGTH_MAX_DIGITS:
+        return None
+    try:
+        return int(raw)
+    except (ValueError, OverflowError):
+        return None
+
+
+def _object_storage_response_content_length(headers: dict[str, str]) -> int | None:
+    return _object_storage_parse_content_length(headers.get("content-length"))
+
+
+def _object_storage_control_body_complete(
+    headers: dict[str, str], body: bytes, *, truncated: bool
+) -> bool:
+    """Prove a bounded control response reached its declared end."""
+
+    if truncated:
+        return False
+    raw_length = headers.get("content-length")
+    if raw_length is None:
+        # EOF is the message boundary for a valid response without Content-Length.
+        return True
+    expected_size = _object_storage_parse_content_length(raw_length)
+    return expected_size is not None and len(body) == expected_size
+
+
 def _default_urllib_sender() -> Callable[..., dict[str, Any]]:
     """Return the ONLY thin wrapper over stdlib networking (SA-7).
 
-    This factory is the sole place a transport method may reach urllib. It is
-    never constructed in tests; tests inject a fake `send`. The returned callable
-    accepts a signed request dict and returns a scalar response dict, never a
-    body destined for a durable surface.
+    The callable signature intentionally remains the original five-keyword
+    injected-sender contract. Path PUTs use a replayable iterable under the
+    caller's signed Content-Length. Verification GETs return only digest/count
+    completeness evidence; XML and provider-error bodies are capped.
     """
 
+    import http.client as _http_client
+
+    class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+        # SigV4 Authorization is valid only for the signed host/path. The
+        # stdlib's default redirect handler can forward those headers to a new
+        # origin, so every 3xx must remain a bounded provider response.
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            return None
+
+    opener = urllib.request.build_opener(_NoRedirectHandler())
+
     def _send(*, method: str, url: str, headers: dict[str, str], data_path=None, data_bytes=None) -> dict[str, Any]:
+        normalized_method = str(method).upper()
         body = None
         if data_path is not None:
-            with open(data_path, "rb") as handle:
-                body = handle.read()
+            raw_content_length = next(
+                (value for name, value in headers.items() if str(name).lower() == "content-length"),
+                None,
+            )
+            expected_size = _object_storage_parse_content_length(raw_content_length)
+            if expected_size is None:
+                return {"status": 0, "headers": {}, "body": b"", "transport_error": True}
+            body = _ReplayableObjectStoragePathBody(data_path, expected_size=expected_size)
         elif data_bytes is not None:
             body = data_bytes
-        request = urllib.request.Request(url=url, method=str(method).upper(), headers=headers, data=body)
+        request = urllib.request.Request(url=url, method=normalized_method, headers=headers, data=body)
         try:
-            with urllib.request.urlopen(request) as response:  # noqa: S310 - signed request, fixed host
-                raw = response.read()
+            with opener.open(request) as response:  # noqa: S310 - signed request, fixed host
                 resp_headers = {str(k).lower(): str(v) for k, v in response.headers.items()}
-                return {"status": int(response.status), "headers": resp_headers, "body": raw}
+                status = int(response.status)
+                if normalized_method == "GET" and status == 200:
+                    digest_hex, body_size = _object_storage_stream_response_digest(response)
+                    expected_size = _object_storage_response_content_length(resp_headers)
+                    complete = expected_size is None or body_size == expected_size
+                    return {
+                        "status": status,
+                        "headers": resp_headers,
+                        "body": b"",
+                        "body_sha256": digest_hex if complete else None,
+                        "body_size": body_size,
+                        "body_complete": complete,
+                        "body_length_known": expected_size is not None,
+                        "body_truncated": False,
+                        "transport_error": not complete,
+                    }
+                raw, truncated = _object_storage_bounded_control_body(response)
+                body_complete = _object_storage_control_body_complete(
+                    resp_headers, raw, truncated=truncated
+                )
+                return {
+                    "status": status,
+                    "headers": resp_headers,
+                    "body": raw,
+                    "body_truncated": truncated,
+                    "body_complete": body_complete,
+                }
         except urllib.error.HTTPError as exc:  # provider returned a non-2xx
-            try:
-                raw = exc.read()
-            except OSError:
-                raw = b""
             resp_headers = {str(k).lower(): str(v) for k, v in (exc.headers or {}).items()}
-            return {"status": int(exc.code), "headers": resp_headers, "body": raw}
-        except (urllib.error.URLError, OSError):
+            try:
+                raw, truncated = _object_storage_bounded_control_body(exc)
+            except (OSError, _http_client.HTTPException):
+                raw, truncated = b"", False
+            finally:
+                try:
+                    exc.close()
+                except OSError:
+                    pass
+            body_complete = _object_storage_control_body_complete(
+                resp_headers, raw, truncated=truncated
+            )
+            return {
+                "status": int(exc.code),
+                "headers": resp_headers,
+                "body": raw,
+                "body_truncated": truncated,
+                "body_complete": body_complete,
+            }
+        except (urllib.error.URLError, OSError, _http_client.HTTPException):
             # Socket reset / timeout / DNS: a retryable transport condition. No
             # body, no message text — only a scalar signal for classification.
             return {"status": 0, "headers": {}, "body": b"", "transport_error": True}
@@ -73197,40 +73357,99 @@ class S3CompatibleTransport:
         # that explicit to the caller.
         head = self._dispatch(method="HEAD", key=key, payload_hash=SIGV4_UNSIGNED_PAYLOAD)
         head_status = int(head.get("status") or 0)
+        if head.get("transport_error"):
+            return {
+                "present": False,
+                "size": None,
+                "checksum_sha256": None,
+                "presence_state": "unavailable",
+            }
         if head_status == 404:
-            return {"present": False, "size": None, "checksum_sha256": None}
-        if not (200 <= head_status < 300):
-            return {"present": False, "size": None, "checksum_sha256": None}
+            return {
+                "present": False,
+                "size": None,
+                "checksum_sha256": None,
+                "presence_state": "absent",
+            }
+        if head_status != 200:
+            return {
+                "present": False,
+                "size": None,
+                "checksum_sha256": None,
+                "presence_state": "unavailable",
+            }
         head_headers = head.get("headers") or {}
         size = None
         if isinstance(head_headers, dict):
             raw_len = head_headers.get("content-length")
             if raw_len is not None:
-                try:
-                    size = int(raw_len)
-                except (ValueError, TypeError):
-                    size = None
+                size = _object_storage_parse_content_length(raw_len)
         if presence_only:
             # Presence + size only: NO GetObject, NO body read, NO egress cost.
-            return {"present": True, "size": size, "checksum_sha256": None}
+            return {
+                "present": True,
+                "size": size,
+                "checksum_sha256": None,
+                "presence_state": "present",
+                "verification_state": "complete" if size is not None else "unavailable",
+            }
         # GetObject and hash the streamed bytes to the whole-object sha256 hex.
-        checksum_hex = self._get_object_sha256_hex(key)
-        return {"present": True, "size": size, "checksum_sha256": checksum_hex}
+        checksum_hex, verified_size, verification_complete = self._get_object_sha256_evidence(
+            key,
+            expected_size=size,
+        )
+        return {
+            "present": True,
+            "size": size if size is not None else verified_size,
+            "checksum_sha256": checksum_hex,
+            "presence_state": "present",
+            "verification_state": "complete" if verification_complete else "unavailable",
+        }
 
     def _get_object_sha256_hex(self, key: str) -> str | None:
+        checksum_hex, _, _ = self._get_object_sha256_evidence(key, expected_size=None)
+        return checksum_hex
+
+    def _get_object_sha256_evidence(
+        self,
+        key: str,
+        *,
+        expected_size: int | None,
+    ) -> tuple[str | None, int | None, bool]:
         # GET the object body and return its lowercase-hex sha256, or None if the
-        # object could not be read. The body is consumed ONLY to compute the
-        # scalar digest; it is never returned or logged (RC5).
+        # object could not be read completely. The default sender supplies only
+        # scalar streamed evidence; legacy injected fakes may still supply body.
         response = self._dispatch(method="GET", key=key, payload_hash=SIGV4_UNSIGNED_PAYLOAD)
         status = int(response.get("status") or 0)
-        if not (200 <= status < 300):
-            return None
+        if response.get("transport_error") or status != 200:
+            return None, None, False
+        if "body_complete" in response or "body_sha256" in response:
+            checksum_hex = response.get("body_sha256")
+            body_size = response.get("body_size")
+            length_proven = expected_size is not None or response.get("body_length_known") is True
+            if (
+                response.get("body_complete") is True
+                and length_proven
+                and isinstance(checksum_hex, str)
+                and re.fullmatch(r"[0-9a-f]{64}", checksum_hex)
+                and isinstance(body_size, int)
+                and body_size >= 0
+                and (expected_size is None or body_size == expected_size)
+            ):
+                return checksum_hex, body_size, True
+            return None, None, False
         body = response.get("body")
         if isinstance(body, (bytes, bytearray)):
-            return hashlib.sha256(bytes(body)).hexdigest()
+            value = bytes(body)
+            if expected_size is None or len(value) != expected_size:
+                return None, None, False
+            return hashlib.sha256(value).hexdigest(), len(value), True
         if isinstance(body, str):
-            return hashlib.sha256(body.encode("utf-8")).hexdigest()
-        return None
+            value = body.encode("utf-8")
+            if expected_size is None or len(value) != expected_size:
+                return None, None, False
+            return hashlib.sha256(value).hexdigest(), len(value), True
+        return None, None, False
 
     def put_object(self, *, key: str, data_path: Path, size: int, content_sha256: str) -> dict[str, Any]:
         # Single-part PUT signs the REAL lowercase-hex payload hash (CA-2), giving
@@ -73281,9 +73500,18 @@ class S3CompatibleTransport:
             query={"uploads": ""},
         )
         status = int(response.get("status") or 0)
-        if not (200 <= status < 300):
+        if status != 200:
             error_code = _sigv4_extract_error_code(response.get("body"))
-            raise _ObjectStorageProviderError(_object_storage_classify_http_status(status, error_code))
+            status_class = (
+                _object_storage_classify_http_status(status, error_code)
+                if not (200 <= status < 300)
+                else "failed"
+            )
+            raise _ObjectStorageProviderError(status_class)
+        if response.get("body_truncated") is True or response.get("body_complete") is False:
+            # UploadId is authority-bearing control data. A prefix from an
+            # oversized or short response is not a complete initiation receipt.
+            raise _ObjectStorageProviderError("failed")
         body = response.get("body")
         text = body.decode("utf-8", "replace") if isinstance(body, (bytes, bytearray)) else str(body or "")
         match = re.search(r"<UploadId>([^<]+)</UploadId>", text)
@@ -73353,9 +73581,27 @@ class S3CompatibleTransport:
         status = int(response.get("status") or 0)
         if response.get("transport_error"):
             return {"status_class": "rate_limited"}
-        if not (200 <= status < 300):
+        if status != 200:
             error_code = _sigv4_extract_error_code(response.get("body"))
-            return {"status_class": _object_storage_classify_http_status(status, error_code)}
+            status_class = (
+                _object_storage_classify_http_status(status, error_code)
+                if not (200 <= status < 300)
+                else "failed"
+            )
+            return {"status_class": status_class}
+        if response.get("body_truncated") is True or response.get("body_complete") is False:
+            return {"status_class": "failed"}
+        body = response.get("body")
+        error_code = _sigv4_extract_error_code(body)
+        if error_code:
+            if error_code in _SIGV4_AUTH_ERROR_CODES:
+                return {"status_class": "auth"}
+            if error_code in _SIGV4_RATE_LIMITED_CODES:
+                return {"status_class": "rate_limited"}
+            return {"status_class": "failed"}
+        error_text = body.decode("utf-8", "replace") if isinstance(body, (bytes, bytearray)) else str(body or "")
+        if re.search(r"<Error(?:\s|>)", error_text):
+            return {"status_class": "failed"}
         return {"status_class": "ok"}
 
     def abort_multipart(self, *, key: str, upload_id: str) -> None:
@@ -73367,7 +73613,7 @@ class S3CompatibleTransport:
         )
 
     def delete_object(self, *, key: str) -> None:
-        # SA-5: remove a completed-but-wrong object so no orphan accrues cost.
+        # Not used by the executor without a generation-bound condition.
         self._dispatch(method="DELETE", key=key, payload_hash=SIGV4_EMPTY_SHA256_HEX)
 
 
@@ -74429,6 +74675,16 @@ def object_storage_execute_one_upload(
         head_before = {"present": False} if force_upload else transport.head_object(key=key)
         if not force_upload:
             attempts += 1
+            if (
+                head_before.get("presence_state") == "unavailable"
+                or head_before.get("verification_state") == "unavailable"
+            ):
+                # Only a real 404 proves absence. Auth/rate/network/other HEAD
+                # failures and incomplete content GETs must never authorize a
+                # potentially overwriting PUT or claim a byte conflict.
+                return _object_storage_failed_result(
+                    object_id, key_hint, "failed_upload", attempts, backoff_ms_total, 0
+                )
         if head_before.get("present"):
             remote_size = head_before.get("size")
             remote_checksum = head_before.get("checksum_sha256")
@@ -74508,22 +74764,35 @@ def object_storage_execute_one_upload(
         # HEAD-after: verify non-secret size + full-object sha256. Never pass on size alone.
         head_after = transport.head_object(key=key)
         attempts += 1
+        remote_checksum = head_after.get("checksum_sha256")
+        remote_size = head_after.get("size")
+        verification_state = head_after.get("verification_state")
+        scalar_proof_complete = (
+            bool(head_after.get("present"))
+            and isinstance(remote_size, int)
+            and not isinstance(remote_size, bool)
+            and remote_size >= 0
+            and isinstance(remote_checksum, str)
+            and re.fullmatch(r"[0-9a-f]{64}", remote_checksum) is not None
+        )
+        verification_complete = scalar_proof_complete and verification_state in {None, "complete"}
+        if not verification_complete:
+            # A timeout, truncated GET, invalid response length, or unavailable
+            # digest is not proof that the remote object is wrong. Preserve the
+            # possibly-correct upload and fail closed without DELETE.
+            return _object_storage_failed_result(
+                object_id, key_hint, "failed_upload", attempts, backoff_ms_total, put_calls
+            )
         head_after_ok = (
             head_after.get("present")
-            and head_after.get("size") == size
-            and head_after.get("checksum_sha256") == content_sha256
+            and remote_size == size
+            and remote_checksum == content_sha256
         )
         if not head_after_ok:
-            # SA-5: a completed-but-wrong remote object is an orphan that accrues
-            # storage cost. For a multipart-COMPLETED upload the parts are gone
-            # (composed into the object), so delete the object; a single PUT is
-            # atomic but a mismatch still means a wrong object may be present.
-            try:
-                transport.delete_object(key=key)
-            except ArchiveServiceError:
-                pass
-            attempts += 1
-            put_calls += 1
+            # The complete GET proves only the generation that was read. An
+            # unconditional later DELETE is not generation-bound and could erase
+            # a correct concurrent replacement. Preserve the remote object until
+            # a provider-neutral conditional-delete contract exists.
             return _object_storage_failed_result(
                 object_id, key_hint, "failed_upload", attempts, backoff_ms_total, put_calls
             )
@@ -74604,6 +74873,11 @@ def _object_storage_multipart_put(
         completed = transport.complete_multipart(
             key=key, upload_id=upload_id, parts=parts, content_sha256=content_sha256
         )
+        if str(completed.get("status_class") or "failed") != "ok":
+            try:
+                transport.abort_multipart(key=key, upload_id=upload_id)
+            except ArchiveServiceError:
+                pass
         return completed, part_number
     except _ObjectStorageProviderError as exc:
         if upload_id is not None:
@@ -75161,8 +75435,9 @@ def object_storage_upload_run(
     # OBJECT_STORAGE_MULTIPART_PART_SIZE_BYTES (64 MiB)] and, below the 64 MiB default,
     # requires the --allow-tiny-parts acknowledgment. It changes ONLY handle.read()
     # fragmentation and the threshold floor governing the threshold validator below;
-    # the whole-object before-hash, HEAD-after full-object check, SA-5 delete, and the
-    # §6 leak gate are all invariant. This is evaluated BEFORE the threshold block so
+    # the whole-object before-hash, HEAD-after full-object check, generation-safe
+    # no-delete boundary, and the §6 leak gate are all invariant. This is evaluated
+    # BEFORE the threshold block so
     # effective_multipart_part_size_bytes is known when the threshold floor is checked.
     effective_multipart_part_size_bytes = OBJECT_STORAGE_MULTIPART_PART_SIZE_BYTES
     if multipart_part_size_bytes is not None:
@@ -75465,6 +75740,16 @@ def object_storage_upload_run(
                                 key=remote_key, presence_only=presence_size_gate
                             )
                             result["closed_actions"]["provider_api_called"] = True
+                            remote_verification_unavailable = (
+                                head_now.get("presence_state") == "unavailable"
+                                or head_now.get("verification_state") == "unavailable"
+                            )
+                            if remote_verification_unavailable and not force_reupload:
+                                blockers.append(
+                                    "remote_verification_unavailable: recorded remote_key could not prove "
+                                    f"presence/content for {object_id[:20]}; refusing PUT."
+                                )
+                                continue
                             size_matches = (
                                 head_now.get("present")
                                 and isinstance(manifest_size, int)
@@ -75498,8 +75783,8 @@ def object_storage_upload_run(
                             # HEAD-before are bypassed for this object. Control still
                             # falls THROUGH to the unconditional pre-PUT local re-verify
                             # below (a corrupt local file is refused before any PUT) and
-                            # to the HEAD-after GET-rehash + orphan cleanup — a re-PUT is
-                            # verified exactly like a first PUT.
+                            # to the HEAD-after GET-rehash + generation-safe no-delete
+                            # boundary — a re-PUT is verified exactly like a first PUT.
                             if force_reupload:
                                 force_upload_after_absent = True
                             # Absent / size-mismatch at the recorded key: re-upload.
@@ -76333,6 +76618,21 @@ def object_storage_adopt_existing_run(
                             key=row["remote_key"], presence_only=not content_hash_verify
                         )
                         result["closed_actions"]["provider_api_called"] = True
+                        if (
+                            head.get("presence_state") == "unavailable"
+                            or head.get("verification_state") == "unavailable"
+                        ):
+                            not_adopted_count += 1
+                            adopt_results.append(
+                                {
+                                    "object_id": row["object_id"],
+                                    "adopt_status": "remote_verification_unavailable",
+                                    "remote_key": row["remote_key"],
+                                    "gating": False,
+                                    "caveat": "remote verification was unavailable; no presence or mismatch claim was made.",
+                                }
+                            )
+                            continue
                         present = bool(head.get("present"))
                         remote_size = head.get("size")
                         size_match = (

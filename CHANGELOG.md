@@ -6,6 +6,29 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.258 - 2026-07-17
+
+- **Default S3-compatible transfers are bounded by chunk size, not object
+  size.** Single path PUTs use a replayable 1 MiB iterable under the exact
+  signed Content-Length, while verification GETs retain only SHA-256, byte
+  count, and completeness evidence. Multipart XML and provider-error bodies are
+  capped at 64 KiB, and the five-keyword injected sender seam remains compatible.
+- **Remote evidence is explicit and fail-closed.** Automatic redirects are
+  disabled; HEAD/whole-object GET require HTTP 200; only HEAD 404 proves absence;
+  strict Content-Length and complete-body evidence gate skip, PUT, adopt, and
+  conflict decisions. Network, auth, rate, partial, truncated, invalid, and
+  contradictory responses remain unavailable instead of being reclassified.
+- **Multipart control responses cannot hide failure behind HTTP 200.** A short
+  or oversized UploadId response is refused, and CompleteMultipartUpload
+  `200 + <Error>` is classified as failure and followed by abort before retry.
+- **Mismatch cleanup is generation-safe.** The executor no longer issues an
+  unconditional object DELETE after verification failure or mismatch, because
+  a correct concurrent replacement may occupy the key after the generation was
+  read. Remote cleanup remains future provider-conditional work.
+- **No archive migration or CLI change is required.** Multipart sizing, the 5
+  GiB threshold, retry/cost gates, credential refs, key layouts, manifests,
+  receipts, and public command arguments remain compatible.
+
 ## v0.3.257 - 2026-07-17
 
 - **Revision and restore evidence is derived only from fully validated zet
