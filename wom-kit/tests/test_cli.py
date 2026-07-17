@@ -31336,6 +31336,270 @@ state:
             self.assertEqual(result["counts"]["unreadable"], 1)
             self.assertNotIn("PRIVATE_BROKEN_BODY", output)
 
+    def test_validated_approval_zettel_snapshot_rejects_without_exposing_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            canonical_path = sorted((archive_root / "zettels").glob("*.md"))[0]
+            original = canonical_path.read_bytes()
+            original_text = original.decode("utf-8")
+            archive_id = archive_services.read_archive_id(archive_root)
+            zettel_id = canonical_path.stem
+            duplicate_status = original_text.replace(
+                "status: canonical",
+                "status: canonical\nstatus: redacted",
+                1,
+            ).encode("utf-8")
+            invalid_schema = re.sub(
+                r"(?m)^title:.*$", "title: []", original_text, count=1
+            ).encode("utf-8")
+            redacted = original_text.replace(
+                "status: canonical", "status: redacted", 1
+            ).encode("utf-8")
+            cases = (
+                (
+                    "malformed_boundary",
+                    b"PRIVATE MALFORMED BODY WITHOUT FRONTMATTER\n",
+                    zettel_id,
+                    archive_id,
+                    "canonical",
+                    len(original) + 1024,
+                    "frontmatter_boundary_invalid",
+                ),
+                (
+                    "invalid_utf8",
+                    b"---\nid: zet_invalid\nstatus: canonical\n---\n\n\xff\n",
+                    zettel_id,
+                    archive_id,
+                    "canonical",
+                    len(original) + 1024,
+                    "frontmatter_unicode_error",
+                ),
+                (
+                    "duplicate_yaml_key",
+                    duplicate_status,
+                    zettel_id,
+                    archive_id,
+                    "canonical",
+                    len(duplicate_status) + 1,
+                    "frontmatter_duplicate_key",
+                ),
+                (
+                    "schema_invalid",
+                    invalid_schema,
+                    zettel_id,
+                    archive_id,
+                    "canonical",
+                    len(invalid_schema) + 1,
+                    "frontmatter_schema_invalid",
+                ),
+                (
+                    "redacted",
+                    redacted,
+                    zettel_id,
+                    archive_id,
+                    "canonical",
+                    len(redacted) + 1,
+                    "frontmatter_status_mismatch",
+                ),
+                (
+                    "wrong_id",
+                    original,
+                    "zet_wrong_expected_identity",
+                    archive_id,
+                    "canonical",
+                    len(original) + 1,
+                    "frontmatter_identity_mismatch",
+                ),
+                (
+                    "wrong_archive",
+                    original,
+                    zettel_id,
+                    "archive:personal:wrong",
+                    "canonical",
+                    len(original) + 1,
+                    "frontmatter_archive_identity_mismatch",
+                ),
+                (
+                    "wrong_status",
+                    original,
+                    zettel_id,
+                    archive_id,
+                    "draft",
+                    len(original) + 1,
+                    "frontmatter_status_mismatch",
+                ),
+                (
+                    "oversize",
+                    original,
+                    zettel_id,
+                    archive_id,
+                    "canonical",
+                    len(original) - 1,
+                    "zettel_size_limit_exceeded",
+                ),
+            )
+            for (
+                name,
+                raw_bytes,
+                expected_id,
+                expected_archive,
+                expected_status,
+                max_bytes,
+                expected_issue,
+            ) in cases:
+                with self.subTest(name=name):
+                    canonical_path.write_bytes(raw_bytes)
+                    snapshot = archive_services.validated_approval_zettel_snapshot(
+                        canonical_path,
+                        max_bytes=max_bytes,
+                        expected_zettel_id=expected_id,
+                        expected_archive_id=expected_archive,
+                        expected_status=expected_status,
+                    )
+                    self.assertFalse(snapshot["ok"], snapshot)
+                    self.assertIn(expected_issue, snapshot["issue_codes"])
+                    self.assertIsNone(snapshot["bytes"])
+                    self.assertEqual(snapshot["frontmatter"], {})
+                    self.assertEqual(snapshot["body"], "")
+
+            canonical_path.write_bytes(original)
+            valid = archive_services.validated_approval_zettel_snapshot(
+                canonical_path,
+                max_bytes=len(original),
+                expected_zettel_id=zettel_id,
+                expected_archive_id=archive_id,
+                expected_status="canonical",
+            )
+            self.assertTrue(valid["ok"], valid)
+            self.assertEqual(valid["bytes"], original)
+
+            unquoted_timestamps = re.sub(
+                r'(?m)^(created_at|updated_at): "([^"]+)"$',
+                r"\1: \2",
+                original_text,
+            ).encode("utf-8")
+            canonical_path.write_bytes(unquoted_timestamps)
+            compatible_timestamp_snapshot = (
+                archive_services.validated_approval_zettel_snapshot(
+                    canonical_path,
+                    max_bytes=len(unquoted_timestamps),
+                    expected_zettel_id=zettel_id,
+                    expected_archive_id=archive_id,
+                    expected_status="canonical",
+                )
+            )
+            self.assertTrue(
+                compatible_timestamp_snapshot["ok"],
+                compatible_timestamp_snapshot,
+            )
+            self.assertIsInstance(
+                compatible_timestamp_snapshot["frontmatter"]["created_at"], str
+            )
+            self.assertIsInstance(
+                compatible_timestamp_snapshot["frontmatter"]["updated_at"], str
+            )
+
+    def test_validated_approval_snapshot_rejects_non_json_yaml_trees_before_hashing(
+        self,
+    ) -> None:
+        yaml_fragments = {
+            "cyclic_alias": "approval_cycle: &approval_cycle [*approval_cycle]",
+            "non_string_key": "1: hidden",
+            "yaml_set": "approval_custom: !!set {a: null}",
+            "yaml_binary": "approval_custom: !!binary SGVsbG8=",
+            "non_finite_float": "approval_custom: .nan",
+            "excessive_depth": (
+                "approval_custom: " + "[" * 66 + "null" + "]" * 66
+            ),
+        }
+        for name, fragment in yaml_fragments.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
+                archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+                fixture = self.create_zet_revision_proposal(archive_root)
+                proposal_text = fixture["proposal_path"].read_text(encoding="utf-8")
+                fixture["proposal_path"].write_text(
+                    proposal_text.replace(
+                        "\n---\n\n",
+                        f"\n{fragment}\n---\n\n",
+                        1,
+                    ),
+                    encoding="utf-8",
+                )
+
+                snapshot = archive_services.validated_zet_revision_snapshot(
+                    fixture["proposal_path"],
+                    expected_zettel_id=fixture["zettel_id"],
+                    expected_archive_id=archive_services.read_archive_id(archive_root),
+                )
+                self.assertFalse(snapshot["ok"], snapshot)
+                self.assertIn("frontmatter_yaml_invalid", snapshot["issue_codes"])
+                self.assertIsNone(snapshot["bytes"])
+                self.assertEqual(snapshot["frontmatter"], {})
+                self.assertEqual(snapshot["body"], "")
+
+                with patch.object(
+                    archive_services.hashlib,
+                    "sha256",
+                    side_effect=AssertionError(
+                        "non-JSON approval YAML must not reach hashing"
+                    ),
+                ):
+                    plan = archive_services.zet_revision_plan(
+                        archive_root,
+                        zettel_id=fixture["zettel_id"],
+                        proposal_path=fixture["proposal_relative"],
+                        dry_run=True,
+                    )
+                self.assertFalse(plan["ok"], plan)
+                self.assertEqual(plan["status"], "blocked")
+                self.assertIsNone(plan["canonical"]["sha256"])
+                self.assertIsNone(plan["proposal"]["sha256"])
+                self.assertIsNone(plan["plan_digest"])
+
+    def test_zet_revision_plan_rejects_invalid_inputs_before_hash_or_plan_digest(self) -> None:
+        for target in ("canonical", "proposal"):
+            with self.subTest(target=target), tempfile.TemporaryDirectory() as tmp:
+                archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+                fixture = self.create_zet_revision_proposal(archive_root)
+                path = (
+                    fixture["canonical_path"]
+                    if target == "canonical"
+                    else fixture["proposal_path"]
+                )
+                private_marker = f"PRIVATE_DUPLICATE_{target.upper()}_VALUE"
+                text = path.read_text(encoding="utf-8")
+                path.write_text(
+                    text.replace(
+                        "status: canonical",
+                        f"status: canonical\nstatus: {private_marker}",
+                        1,
+                    ),
+                    encoding="utf-8",
+                )
+
+                with patch.object(
+                    archive_services.hashlib,
+                    "sha256",
+                    side_effect=AssertionError(
+                        "rejected zettel bytes must not be fingerprinted"
+                    ),
+                ):
+                    result = archive_services.zet_revision_plan(
+                        archive_root,
+                        zettel_id=fixture["zettel_id"],
+                        proposal_path=fixture["proposal_relative"],
+                        dry_run=True,
+                    )
+
+                self.assertEqual(result["status"], "blocked", result)
+                self.assertIsNone(result["canonical"]["sha256"])
+                self.assertIsNone(result["proposal"]["sha256"])
+                self.assertIsNone(result["proposal"]["semantic_sha256"])
+                self.assertIsNone(result["plan_digest"])
+                self.assertNotIn(
+                    private_marker, json.dumps(result, ensure_ascii=False)
+                )
+
     def test_zet_revision_plan_binds_one_private_proposal_without_echoing_content(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
@@ -31841,6 +32105,81 @@ state:
                 fixture["canonical_path"].read_bytes(), fixture["original_bytes"]
             )
             self.assertEqual(list(fixture["proposal_path"].parent.glob("*.write.lock")), [])
+
+    def test_zet_revision_write_rejects_invalid_changed_proposal_before_any_write(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            fixture = self.create_zet_revision_proposal(archive_root)
+            plan = fixture["plan"]
+            base = {
+                "zettel_id": fixture["zettel_id"],
+                "proposal_path": fixture["proposal_relative"],
+                "expected_canonical_sha256": plan["canonical"]["sha256"],
+                "expected_proposal_sha256": plan["proposal"]["sha256"],
+                "expected_proposal_semantic_sha256": plan["proposal"][
+                    "semantic_sha256"
+                ],
+                "expected_plan_digest": plan["plan_digest"],
+                "revision_at": "2026-07-17T12:10:00Z",
+            }
+            preview = archive_services.zet_revision_write(
+                archive_root, **base, dry_run=True
+            )
+            self.assertTrue(preview["ok"], preview)
+            proposal_text = fixture["proposal_path"].read_text(encoding="utf-8")
+            private_marker = "PRIVATE_DUPLICATE_WRITE_PROPOSAL"
+            fixture["proposal_path"].write_text(
+                proposal_text.replace(
+                    "status: canonical",
+                    f"status: canonical\nstatus: {private_marker}",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+
+            with (
+                patch.object(
+                    archive_services,
+                    "write_bytes_atomic",
+                    side_effect=AssertionError("canonical write must not run"),
+                ),
+                patch.object(
+                    archive_services,
+                    "write_json_new_file",
+                    side_effect=AssertionError("receipt write must not run"),
+                ),
+                patch.object(
+                    archive_services,
+                    "preserve_zet_revision_before_snapshot",
+                    side_effect=AssertionError("snapshot write must not run"),
+                ),
+            ):
+                blocked = archive_services.zet_revision_write(
+                    archive_root,
+                    **base,
+                    expected_write_plan_digest=preview["write_plan"]["actual_digest"],
+                    approve=True,
+                    reviewed_by="person:fake-reviewer",
+                    affirm_revision_reviewed=True,
+                    affirm_abstract_body_pair_reviewed=True,
+                )
+
+            self.assertEqual(blocked["status"], "blocked", blocked)
+            self.assertIn("frontmatter_duplicate_key", blocked["blockers"])
+            self.assertIsNone(blocked["proposal"]["actual_sha256"])
+            self.assertIsNone(blocked["proposal"]["actual_semantic_sha256"])
+            self.assertIsNone(blocked["revision_plan"]["actual_digest"])
+            self.assertNotIn(
+                private_marker, json.dumps(blocked, ensure_ascii=False)
+            )
+            self.assertEqual(
+                fixture["canonical_path"].read_bytes(), fixture["original_bytes"]
+            )
+            self.assertEqual(
+                list(fixture["proposal_path"].parent.glob("*.write.lock")), []
+            )
+            receipt_root = archive_root / "receipts" / "revisions" / "canonical"
+            self.assertFalse(receipt_root.exists())
 
     def test_zet_revision_write_blocks_canonical_changed_after_preview(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -32599,6 +32938,110 @@ state:
             self.assertNotIn(drift_marker, output)
             self.assertNotIn(fixture["zettel_id"], output)
 
+    def test_zet_revision_receipt_checks_reject_invalid_canonical_before_hashing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            fixture = self.create_zet_revision_proposal(archive_root)
+            applied_bundle = self.approve_zet_revision_fixture(
+                archive_root, fixture, revision_at="2026-07-14T14:21:00Z"
+            )
+            applied = applied_bundle["applied"]
+            receipt_path = archive_root / applied["receipt"]["path"]
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            frontmatter, body = archive_services.split_zettel_text(
+                fixture["canonical_path"].read_text(encoding="utf-8")
+            )
+            rejected_marker = "PRIVATE_REJECTED_DUPLICATE_CANONICAL_TITLE"
+            fixture["canonical_path"].write_text(
+                "---\n"
+                + f"title: {rejected_marker}\n"
+                + archive_cli.dump_yaml(frontmatter)
+                + "---\n\n"
+                + body.rstrip()
+                + "\n",
+                encoding="utf-8",
+            )
+
+            real_sha256 = hashlib.sha256
+
+            def reject_unvalidated_hash(
+                value: bytes = b"", *args: Any, **kwargs: Any
+            ) -> Any:
+                if rejected_marker.encode("utf-8") in value:
+                    raise AssertionError("rejected canonical bytes reached sha256")
+                return real_sha256(value, *args, **kwargs)
+
+            with patch(
+                "wom_kit.archive_services.hashlib.sha256",
+                side_effect=reject_unvalidated_hash,
+            ):
+                verification = archive_services.verify_zet_revision_receipt(
+                    archive_root,
+                    receipt_path,
+                    archive_id=receipt["archive_id"],
+                    zettel_id=receipt["zettel_id"],
+                    expected_canonical_sha256=receipt["before"]["file_sha256"],
+                    expected_proposal_sha256=receipt["proposal_sha256"],
+                    expected_proposal_semantic_sha256=receipt[
+                        "proposal_semantic_sha256"
+                    ],
+                    expected_plan_digest=receipt["plan_digest"],
+                    expected_write_plan_digest=receipt["write_plan_digest"],
+                )
+                audit = archive_services.zet_revision_receipt_audit(
+                    archive_root, dry_run=True
+                )
+                repeated = archive_services.zet_revision_write(
+                    archive_root,
+                    **applied_bundle["arguments"],
+                    expected_write_plan_digest=applied_bundle["preview"]["write_plan"][
+                        "actual_digest"
+                    ],
+                    approve=True,
+                    reviewed_by="person:fake-reviewer",
+                    affirm_revision_reviewed=True,
+                    affirm_abstract_body_pair_reviewed=True,
+                )
+
+            self.assertFalse(verification["ok"])
+            self.assertIn(
+                "existing_revision_receipt_current_state_mismatch",
+                verification["blockers"],
+            )
+            self.assertFalse(repeated["ok"])
+            self.assertEqual(repeated["status"], "blocked")
+            self.assertIn(
+                "existing_revision_receipt_current_state_mismatch",
+                repeated["blockers"],
+            )
+            self.assertIsNone(repeated["canonical"]["actual_before_sha256"])
+            self.assertFalse(repeated["canonical"]["expected_sha256_matches"])
+            self.assertIsNone(repeated["canonical"]["candidate_file_sha256"])
+            self.assertIsNone(repeated["canonical"]["candidate_semantic_sha256"])
+            self.assertIsNone(repeated["proposal"]["actual_semantic_sha256"])
+            self.assertFalse(
+                repeated["proposal"]["expected_semantic_sha256_matches"]
+            )
+            self.assertIsNone(repeated["revision_plan"]["actual_digest"])
+            self.assertFalse(repeated["revision_plan"]["expected_digest_matches"])
+            self.assertIsNone(repeated["write_plan"]["actual_digest"])
+            self.assertFalse(repeated["write_plan"]["expected_digest_matches"])
+            self.assertFalse(audit["ok"])
+            self.assertEqual(audit["summary"]["canonical_target_unavailable"], 1)
+            self.assertIn(
+                "canonical_target_unavailable",
+                {
+                    code
+                    for problem in audit["problems"]
+                    for code in problem["blocker_codes"]
+                },
+            )
+            serialized = json.dumps(
+                {"verification": verification, "audit": audit, "repeated": repeated},
+                ensure_ascii=False,
+            )
+            self.assertNotIn(rejected_marker, serialized)
+
     def test_zet_revision_receipt_audit_classifies_missing_receipt_and_prewrite_locks(self) -> None:
         for interruption_point in ("after_write", "before_write"):
             with self.subTest(interruption_point=interruption_point):
@@ -33205,6 +33648,92 @@ state:
             )
             self.assertFalse(result["restore_proposal"]["exists"])
 
+    def test_zet_revision_restore_materialization_rejects_invalid_snapshot_without_scratch_residue(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            fixture = self.create_zet_revision_proposal(archive_root)
+            applied = self.approve_zet_revision_fixture(
+                archive_root,
+                fixture,
+                revision_at="2026-07-14T15:55:00Z",
+            )["applied"]
+            receipt_relative = applied["receipt"]["path"]
+            receipt_path = archive_root / receipt_relative
+            receipt_sha256 = "sha256:" + hashlib.sha256(
+                receipt_path.read_bytes()
+            ).hexdigest()
+            preview = archive_services.zet_revision_restore_proposal_from_snapshot(
+                archive_root,
+                receipt_path=receipt_relative,
+                expected_receipt_sha256=receipt_sha256,
+                dry_run=True,
+            )
+            self.assertTrue(preview["ok"], preview)
+            restore_root = archive_root / ".wom-scratch" / "revisions" / "restores"
+            self.assertFalse(restore_root.exists())
+
+            snapshot_path = archive_root / applied["before_snapshot"]["logical_key"]
+            rejected_marker = "PRIVATE_INVALID_RESTORE_SNAPSHOT_TITLE"
+            snapshot_text = snapshot_path.read_text(encoding="utf-8")
+            snapshot_path.write_text(
+                snapshot_text.replace(
+                    "---\n", f"---\ntitle: {rejected_marker}\n", 1
+                ),
+                encoding="utf-8",
+            )
+            real_sha256 = hashlib.sha256
+
+            def reject_unvalidated_hash(
+                value: bytes = b"", *args: Any, **kwargs: Any
+            ) -> Any:
+                if rejected_marker.encode("utf-8") in value:
+                    raise AssertionError("rejected restore snapshot reached sha256")
+                return real_sha256(value, *args, **kwargs)
+
+            healthy_history = {
+                "ok": True,
+                "status": "healthy",
+                "warnings": [],
+                "audit_digest": "sha256:" + "1" * 64,
+                "summary": {},
+            }
+            with (
+                patch.object(
+                    archive_services,
+                    "_zet_revision_receipt_audit",
+                    return_value=healthy_history,
+                ),
+                patch.object(
+                    archive_services,
+                    "verify_zet_revision_before_snapshot",
+                    side_effect=AssertionError(
+                        "invalid snapshot must not reach hash verification"
+                    ),
+                ),
+                patch(
+                    "wom_kit.archive_services.hashlib.sha256",
+                    side_effect=reject_unvalidated_hash,
+                ),
+            ):
+                blocked = archive_services.zet_revision_restore_proposal_from_snapshot(
+                    archive_root,
+                    receipt_path=receipt_relative,
+                    expected_receipt_sha256=receipt_sha256,
+                    expected_plan_digest=preview["plan_digest"],
+                    approve=True,
+                )
+
+            self.assertEqual(blocked["status"], "blocked", blocked)
+            self.assertIn("frontmatter_duplicate_key", blocked["blockers"])
+            self.assertIsNone(blocked["plan_digest"])
+            self.assertFalse(restore_root.exists())
+            self.assertFalse(
+                (archive_root / preview["restore_proposal"]["relative_path"]).exists()
+            )
+            self.assertNotIn(
+                rejected_marker, json.dumps(blocked, ensure_ascii=False)
+            )
+
     def test_zet_revision_restore_plan_accepts_exact_recovered_bytes_without_writing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
@@ -33346,6 +33875,75 @@ state:
             self.assertIn(
                 "expected_receipt_sha256_invalid",
                 json.loads(bad_output)["blockers"],
+            )
+
+    def test_zet_revision_restore_plan_and_write_reject_invalid_proposal_before_hashing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            fixture = self.create_zet_revision_restore_fixture(archive_root)
+            original_plan = fixture["restore_plan"]
+            rejected_marker = "PRIVATE_INVALID_RESTORE_PROPOSAL_TITLE"
+            proposal_text = fixture["restore_path"].read_text(encoding="utf-8")
+            fixture["restore_path"].write_text(
+                proposal_text.replace(
+                    "---\n", f"---\ntitle: {rejected_marker}\n", 1
+                ),
+                encoding="utf-8",
+            )
+            real_sha256 = hashlib.sha256
+
+            def reject_unvalidated_hash(
+                value: bytes = b"", *args: Any, **kwargs: Any
+            ) -> Any:
+                if rejected_marker.encode("utf-8") in value:
+                    raise AssertionError("rejected restore proposal reached sha256")
+                return real_sha256(value, *args, **kwargs)
+
+            with patch(
+                "wom_kit.archive_services.hashlib.sha256",
+                side_effect=reject_unvalidated_hash,
+            ):
+                plan = archive_services.zet_revision_restore_plan(
+                    archive_root,
+                    receipt_path=fixture["receipt_relative"],
+                    expected_receipt_sha256=fixture["receipt_sha256"],
+                    restore_proposal_path=fixture["restore_relative"],
+                    dry_run=True,
+                )
+                write = archive_services.zet_revision_restore_write(
+                    archive_root,
+                    receipt_path=fixture["receipt_relative"],
+                    expected_receipt_sha256=fixture["receipt_sha256"],
+                    restore_proposal_path=fixture["restore_relative"],
+                    expected_current_sha256=original_plan["current"]["state"][
+                        "file_sha256"
+                    ],
+                    expected_restore_proposal_sha256=original_plan[
+                        "restore_proposal"
+                    ]["state"]["file_sha256"],
+                    expected_restore_proposal_semantic_sha256=original_plan[
+                        "restore_proposal"
+                    ]["state"]["semantic_sha256"],
+                    expected_restore_plan_digest=original_plan["plan_digest"],
+                    revision_at="2026-07-14T16:30:00Z",
+                    dry_run=True,
+                )
+
+            self.assertEqual(plan["status"], "blocked", plan)
+            self.assertIn("frontmatter_duplicate_key", plan["blockers"])
+            self.assertIsNone(plan["restore_proposal"]["state"])
+            self.assertEqual(plan["restore_proposal"]["bytes_read"], 0)
+            self.assertIsNone(plan["plan_digest"])
+            self.assertEqual(write["status"], "blocked", write)
+            self.assertIn("frontmatter_duplicate_key", write["blockers"])
+            self.assertIsNone(write["restore_proposal"]["actual_sha256"])
+            self.assertIsNone(
+                write["restore_proposal"]["actual_semantic_sha256"]
+            )
+            self.assertIsNone(write["restore_plan"]["actual_digest"])
+            self.assertNotIn(
+                rejected_marker,
+                json.dumps({"plan": plan, "write": write}, ensure_ascii=False),
             )
 
     def test_zet_revision_restore_plan_requires_the_actual_repeated_state_chain_tip(self) -> None:
@@ -33683,6 +34281,106 @@ state:
                 Path(fixture["receipt_relative"]).name,
             ):
                 self.assertNotIn(private_marker, public_output)
+
+    def test_verify_zet_revision_restore_receipt_rejects_invalid_canonical_before_hashing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            fixture = self.create_zet_revision_restore_fixture(archive_root)
+            restore_plan = fixture["restore_plan"]
+            base = {
+                "receipt_path": fixture["receipt_relative"],
+                "expected_receipt_sha256": fixture["receipt_sha256"],
+                "restore_proposal_path": fixture["restore_relative"],
+                "expected_current_sha256": restore_plan["current"]["state"][
+                    "file_sha256"
+                ],
+                "expected_restore_proposal_sha256": restore_plan[
+                    "restore_proposal"
+                ]["state"]["file_sha256"],
+                "expected_restore_proposal_semantic_sha256": restore_plan[
+                    "restore_proposal"
+                ]["state"]["semantic_sha256"],
+                "expected_restore_plan_digest": restore_plan["plan_digest"],
+                "revision_at": "2026-07-14T17:05:00Z",
+            }
+            preview = archive_services.zet_revision_restore_write(
+                archive_root, **base, dry_run=True
+            )
+            self.assertTrue(preview["ok"], preview)
+            applied = archive_services.zet_revision_restore_write(
+                archive_root,
+                **base,
+                expected_write_plan_digest=preview["write_plan"]["actual_digest"],
+                approve=True,
+                reviewed_by="person:fake-restore-reviewer",
+                affirm_restore_reviewed=True,
+                affirm_abstract_body_pair_reviewed=True,
+            )
+            self.assertTrue(applied["ok"], applied)
+            restore_receipt_path = archive_root / applied["receipt"]["path"]
+            restore_receipt = json.loads(
+                restore_receipt_path.read_text(encoding="utf-8")
+            )
+
+            canonical_path = fixture["revision_fixture"]["canonical_path"]
+            rejected_marker = "PRIVATE_INVALID_RESTORED_CANONICAL_TITLE"
+            canonical_text = canonical_path.read_text(encoding="utf-8")
+            canonical_path.write_text(
+                canonical_text.replace(
+                    "---\n", f"---\ntitle: {rejected_marker}\n", 1
+                ),
+                encoding="utf-8",
+            )
+            real_sha256 = hashlib.sha256
+
+            def reject_unvalidated_hash(
+                value: bytes = b"", *args: Any, **kwargs: Any
+            ) -> Any:
+                if rejected_marker.encode("utf-8") in value:
+                    raise AssertionError("rejected restored canonical reached sha256")
+                return real_sha256(value, *args, **kwargs)
+
+            with patch(
+                "wom_kit.archive_services.hashlib.sha256",
+                side_effect=reject_unvalidated_hash,
+            ):
+                verification = archive_services.verify_zet_revision_restore_receipt(
+                    archive_root,
+                    restore_receipt_path,
+                    archive_id=restore_receipt["archive_id"],
+                    zettel_id=restore_receipt["zettel_id"],
+                    source_receipt_sha256=restore_receipt[
+                        "source_receipt_sha256"
+                    ],
+                    source_write_plan_digest=restore_receipt[
+                        "source_write_plan_digest"
+                    ],
+                    expected_current_sha256=restore_receipt["before"][
+                        "file_sha256"
+                    ],
+                    expected_restore_proposal_sha256=restore_receipt[
+                        "restore_proposal_sha256"
+                    ],
+                    expected_restore_proposal_semantic_sha256=restore_receipt[
+                        "restore_proposal_semantic_sha256"
+                    ],
+                    expected_restore_plan_digest=restore_receipt[
+                        "restore_plan_digest"
+                    ],
+                    expected_write_plan_digest=restore_receipt[
+                        "write_plan_digest"
+                    ],
+                )
+
+            self.assertFalse(verification["ok"], verification)
+            self.assertIn("frontmatter_duplicate_key", verification["blockers"])
+            self.assertIn(
+                "existing_restore_receipt_current_state_mismatch",
+                verification["blockers"],
+            )
+            self.assertNotIn(
+                rejected_marker, json.dumps(verification, ensure_ascii=False)
+            )
 
     def test_zet_revision_restore_write_rolls_back_when_receipt_write_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

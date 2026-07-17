@@ -11,6 +11,7 @@ import hmac
 import fnmatch
 import importlib.util
 import imaplib
+import math
 import mimetypes
 import os
 import random
@@ -3034,6 +3035,97 @@ def load_yaml(text: str) -> Any:
     return yaml.load(text, Loader=loader)  # type: ignore[union-attr]
 
 
+class ApprovalYamlDuplicateKeyError(ValueError):
+    """Static approval-boundary error for an ambiguous YAML mapping."""
+
+
+class ApprovalYamlValueError(ValueError):
+    """Static approval-boundary error for a non-JSON YAML value tree."""
+
+
+APPROVAL_YAML_MAX_DEPTH = 64
+APPROVAL_YAML_MAX_NODES = 100_000
+
+
+def load_approval_yaml_without_duplicate_keys(text: str) -> Any:
+    """Load approval-bound YAML while rejecting duplicate keys at every depth."""
+    require_yaml()
+    base_loader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)  # type: ignore[union-attr]
+
+    class DuplicateRejectingApprovalLoader(base_loader):  # type: ignore[misc, valid-type]
+        def construct_mapping(self, node: Any, deep: bool = False) -> Any:
+            if not isinstance(node, yaml.MappingNode):  # type: ignore[union-attr]
+                return super().construct_mapping(node, deep=deep)
+            self.flatten_mapping(node)
+            mapping: dict[Any, Any] = {}
+            for key_node, value_node in node.value:
+                key = self.construct_object(key_node, deep=deep)
+                if not isinstance(key, str):
+                    raise ApprovalYamlValueError("approval_yaml_mapping_key_invalid")
+                try:
+                    duplicate = key in mapping
+                except TypeError as exc:
+                    raise ValueError("approval_yaml_mapping_key_invalid") from exc
+                if duplicate:
+                    raise ApprovalYamlDuplicateKeyError("approval_yaml_duplicate_key")
+                mapping[key] = self.construct_object(value_node, deep=deep)
+            return mapping
+
+    return yaml.load(text, Loader=DuplicateRejectingApprovalLoader)  # type: ignore[union-attr]
+
+
+def normalize_approval_json_tree(value: Any) -> Any:
+    """Copy an approval YAML value into one bounded, acyclic JSON value tree."""
+    active_containers: set[int] = set()
+    visited_nodes = 0
+
+    def normalize(item: Any, depth: int) -> Any:
+        nonlocal visited_nodes
+        visited_nodes += 1
+        if visited_nodes > APPROVAL_YAML_MAX_NODES:
+            raise ApprovalYamlValueError("approval_yaml_node_limit_exceeded")
+        if depth > APPROVAL_YAML_MAX_DEPTH:
+            raise ApprovalYamlValueError("approval_yaml_depth_limit_exceeded")
+        if item is None or isinstance(item, (str, bool, int)):
+            return item
+        if isinstance(item, (date, datetime)):
+            # Preserve the project's documented compatibility treatment for
+            # unquoted YAML timestamps while still returning a JSON string.
+            return item.isoformat()
+        if isinstance(item, float):
+            if not math.isfinite(item):
+                raise ApprovalYamlValueError("approval_yaml_non_finite_number")
+            return item
+        if isinstance(item, dict):
+            identity = id(item)
+            if identity in active_containers:
+                raise ApprovalYamlValueError("approval_yaml_cycle_detected")
+            active_containers.add(identity)
+            try:
+                normalized: dict[str, Any] = {}
+                for key, child in item.items():
+                    if not isinstance(key, str):
+                        raise ApprovalYamlValueError(
+                            "approval_yaml_mapping_key_invalid"
+                        )
+                    normalized[key] = normalize(child, depth + 1)
+                return normalized
+            finally:
+                active_containers.remove(identity)
+        if isinstance(item, list):
+            identity = id(item)
+            if identity in active_containers:
+                raise ApprovalYamlValueError("approval_yaml_cycle_detected")
+            active_containers.add(identity)
+            try:
+                return [normalize(child, depth + 1) for child in item]
+            finally:
+                active_containers.remove(identity)
+        raise ApprovalYamlValueError("approval_yaml_value_type_invalid")
+
+    return normalize(value, 0)
+
+
 def dump_yaml(data: Any) -> str:
     require_yaml()
     return yaml.safe_dump(data, sort_keys=False, allow_unicode=True)  # type: ignore[union-attr]
@@ -3127,6 +3219,44 @@ def parse_zettel_content_boundary(text: str) -> dict[str, Any]:
     }
 
 
+def parse_approval_zettel_content_boundary(text: str) -> dict[str, Any]:
+    """Parse one approval-bound zettel with duplicate-key rejection."""
+    if text.startswith("\ufeff"):
+        text = text[1:]
+    match = FRONTMATTER_RE.match(text)
+    if match is None:
+        return blocked_zettel_content_boundary("frontmatter_boundary_invalid")
+    try:
+        loaded = load_approval_yaml_without_duplicate_keys(match.group(1))
+    except ApprovalYamlDuplicateKeyError:
+        return blocked_zettel_content_boundary("frontmatter_duplicate_key")
+    except Exception:
+        return blocked_zettel_content_boundary("frontmatter_yaml_invalid")
+    if not isinstance(loaded, dict):
+        return blocked_zettel_content_boundary("frontmatter_not_object")
+    try:
+        frontmatter = normalize_approval_json_tree(loaded)
+    except (ApprovalYamlValueError, RecursionError):
+        return blocked_zettel_content_boundary("frontmatter_yaml_invalid")
+    status = frontmatter.get("status")
+    if not isinstance(status, str) or status not in ZETTEL_CONTENT_STATUSES:
+        return blocked_zettel_content_boundary("frontmatter_status_invalid")
+    body = text[match.end() :].lstrip()
+    if status == "redacted":
+        return {
+            "state": "redacted",
+            "reason": None,
+            "frontmatter": redacted_zettel_safe_frontmatter(frontmatter),
+            "body": "",
+        }
+    return {
+        "state": "readable",
+        "reason": None,
+        "frontmatter": frontmatter,
+        "body": body,
+    }
+
+
 def read_zettel_content_boundary(path: Path) -> dict[str, Any]:
     """Read a zettel into the fail-closed content boundary without raw errors."""
     try:
@@ -3159,6 +3289,126 @@ def require_readable_zettel_content(path: Path) -> tuple[dict[str, Any], str]:
             "Zettel content is unavailable because it could not be read safely."
         ) from None
     return require_readable_zettel_text(text)
+
+
+def validated_approval_zettel_snapshot(
+    path: Path,
+    *,
+    max_bytes: int,
+    expected_zettel_id: str | None,
+    expected_archive_id: str | None,
+    expected_status: str,
+) -> dict[str, Any]:
+    """Expose one exact zettel snapshot only after full approval validation.
+
+    Rejected bytes never cross this boundary, so callers cannot accidentally
+    turn malformed, redacted, wrong-identity, or wrong-lifecycle content into
+    a trusted hash, equality result, plan digest, or write candidate.
+    """
+
+    def blocked(*issue_codes: str) -> dict[str, Any]:
+        return {
+            "ok": False,
+            "issue_codes": unique_preserve_order(
+                [code for code in issue_codes if code]
+            ),
+            "bytes": None,
+            "frontmatter": {},
+            "body": "",
+        }
+
+    if max_bytes < 1:
+        return blocked("zettel_size_limit_invalid")
+    try:
+        before = os.lstat(path)
+    except OSError:
+        return blocked("frontmatter_io_error")
+    if not stat.S_ISREG(before.st_mode):
+        return blocked("zettel_not_regular_file")
+    if before.st_size > max_bytes:
+        return blocked("zettel_size_limit_exceeded")
+
+    try:
+        with path.open("rb") as handle:
+            opened = os.fstat(handle.fileno())
+            if (
+                not stat.S_ISREG(opened.st_mode)
+                or (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino)
+                or opened.st_size != before.st_size
+            ):
+                return blocked("zettel_snapshot_changed")
+            raw_bytes = handle.read(max_bytes + 1)
+            opened_after = os.fstat(handle.fileno())
+    except OSError:
+        return blocked("frontmatter_io_error")
+    if len(raw_bytes) > max_bytes:
+        return blocked("zettel_size_limit_exceeded")
+    try:
+        after = os.lstat(path)
+    except OSError:
+        return blocked("zettel_snapshot_changed")
+    before_generation = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+    opened_generation = (
+        opened.st_dev,
+        opened.st_ino,
+        opened.st_size,
+        opened.st_mtime_ns,
+    )
+    opened_after_generation = (
+        opened_after.st_dev,
+        opened_after.st_ino,
+        opened_after.st_size,
+        opened_after.st_mtime_ns,
+    )
+    after_generation = (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
+    if (
+        before_generation != opened_generation
+        or opened_generation != opened_after_generation
+        or opened_after_generation != after_generation
+        or len(raw_bytes) != before.st_size
+    ):
+        return blocked("zettel_snapshot_changed")
+
+    try:
+        text = decode_utf8_with_universal_newlines(raw_bytes)
+    except UnicodeError:
+        return blocked("frontmatter_unicode_error")
+    boundary = parse_approval_zettel_content_boundary(text)
+    if boundary.get("state") == "blocked":
+        return blocked(str(boundary.get("reason") or "frontmatter_boundary_invalid"))
+    frontmatter = boundary.get("frontmatter")
+    if not isinstance(frontmatter, dict):
+        return blocked("frontmatter_not_object")
+
+    issues: list[str] = []
+    actual_zettel_id = frontmatter.get("id")
+    if (
+        not isinstance(actual_zettel_id, str)
+        or not ZETTEL_EDGE_ZETTEL_ID_RE.fullmatch(actual_zettel_id)
+    ):
+        issues.append("frontmatter_identity_invalid")
+    if expected_zettel_id is not None and actual_zettel_id != expected_zettel_id:
+        issues.append("frontmatter_identity_mismatch")
+    if (
+        expected_archive_id is not None
+        and frontmatter.get("archive_id") != expected_archive_id
+    ):
+        issues.append("frontmatter_archive_identity_mismatch")
+    if frontmatter.get("status") != expected_status:
+        issues.append("frontmatter_status_mismatch")
+    if boundary.get("state") != "readable":
+        issues.append("frontmatter_status_mismatch")
+    if validate_schema(frontmatter, "zettel-frontmatter.schema.json"):
+        issues.append("frontmatter_schema_invalid")
+    if issues:
+        return blocked(*issues)
+    return {
+        "ok": True,
+        "issue_codes": [],
+        "bytes": raw_bytes,
+        "frontmatter": frontmatter,
+        "body": str(boundary.get("body") or ""),
+    }
 
 
 def require_existing_archive_root(archive_root: Path | str) -> Path:
@@ -7999,13 +8249,17 @@ def resolve_zet_revision_proposal_path(root: Path, raw_path: str) -> Path:
         raise ArchiveServiceError(
             f"Zet revision proposal must be a Markdown file under {ZET_REVISION_PROPOSAL_PREFIX}"
         )
-    unresolved = root.resolve()
-    for part in normalized.split("/"):
-        unresolved = unresolved / part
-        if unresolved.is_symlink():
-            raise ArchiveServiceError("Zet revision proposal paths must not contain symbolic links.")
+    lexical_path = root.joinpath(*PurePosixPath(normalized).parts)
+    if zet_revision_path_has_symlink_component(root, lexical_path):
+        raise ArchiveServiceError(
+            "Zet revision proposal paths must not contain symbolic links or reparse points."
+        )
     path = resolve_archive_relative_path(root, normalized)
-    if path.is_symlink() or not path.is_file():
+    if (
+        path.is_symlink()
+        or zet_revision_path_has_symlink_component(root, path)
+        or not path.is_file()
+    ):
         raise ArchiveServiceError("Zet revision proposal must be an existing regular file.")
     return path
 
@@ -8023,15 +8277,17 @@ def resolve_zet_revision_restore_proposal_path(root: Path, raw_path: str) -> Pat
         raise ArchiveServiceError(
             "Zet revision restore proposal must be a Markdown file under the private restore scratch folder."
         )
-    unresolved = root.resolve()
-    for part in normalized.split("/"):
-        unresolved = unresolved / part
-        if unresolved.is_symlink():
-            raise ArchiveServiceError(
-                "Zet revision restore proposal paths must not contain symbolic links."
-            )
+    lexical_path = root.joinpath(*PurePosixPath(normalized).parts)
+    if zet_revision_path_has_symlink_component(root, lexical_path):
+        raise ArchiveServiceError(
+            "Zet revision restore proposal paths must not contain symbolic links or reparse points."
+        )
     path = resolve_archive_relative_path(root, normalized)
-    if path.is_symlink() or not path.is_file():
+    if (
+        path.is_symlink()
+        or zet_revision_path_has_symlink_component(root, path)
+        or not path.is_file()
+    ):
         raise ArchiveServiceError(
             "Zet revision restore proposal must be an existing regular file."
         )
@@ -8053,15 +8309,17 @@ def resolve_zet_revision_restore_receipt_path(root: Path, raw_path: str) -> Path
         raise ArchiveServiceError(
             "Zet revision restore receipt must be a canonical revision receipt."
         )
-    unresolved = root.resolve()
-    for part in normalized.split("/"):
-        unresolved = unresolved / part
-        if unresolved.is_symlink():
-            raise ArchiveServiceError(
-                "Zet revision restore receipt paths must not contain symbolic links."
-            )
+    lexical_path = root.joinpath(*normalized_path.parts)
+    if zet_revision_path_has_symlink_component(root, lexical_path):
+        raise ArchiveServiceError(
+            "Zet revision restore receipt paths must not contain symbolic links or reparse points."
+        )
     path = resolve_archive_relative_path(root, normalized)
-    if path.is_symlink() or not path.is_file():
+    if (
+        path.is_symlink()
+        or zet_revision_path_has_symlink_component(root, path)
+        or not path.is_file()
+    ):
         raise ArchiveServiceError(
             "Zet revision restore receipt must be an existing regular file."
         )
@@ -8085,6 +8343,161 @@ def read_zet_revision_file_bytes(path: Path, label: str) -> bytes:
     return value
 
 
+def validated_zet_revision_snapshot(
+    path: Path,
+    *,
+    expected_zettel_id: str,
+    expected_archive_id: str,
+) -> dict[str, Any]:
+    """Validate one canonical revision participant before deriving evidence."""
+    return validated_approval_zettel_snapshot(
+        path,
+        max_bytes=ZET_REVISION_MAX_FILE_BYTES,
+        expected_zettel_id=expected_zettel_id,
+        expected_archive_id=expected_archive_id,
+        expected_status="canonical",
+    )
+
+
+def resolve_zet_revision_canonical_candidate(root: Path, zettel_id: str) -> Path:
+    """Locate the direct canonical path without trusting its frontmatter first."""
+    direct = root / "zettels" / f"{zettel_id}.md"
+    if os.path.lexists(direct):
+        return direct
+    return resolve_zettel_path(root, zettel_id=zettel_id, relative_path=None)
+
+
+def zet_revision_snapshot_blockers(
+    snapshot: dict[str, Any],
+    *,
+    identity_code: str,
+    archive_identity_code: str,
+    status_code: str,
+) -> list[str]:
+    """Translate shared boundary issues without exposing rejected content."""
+    translated: list[str] = []
+    for raw_issue in snapshot.get("issue_codes", []):
+        issue = str(raw_issue)
+        if issue in {"frontmatter_identity_invalid", "frontmatter_identity_mismatch"}:
+            translated.append(identity_code)
+        elif issue == "frontmatter_archive_identity_mismatch":
+            translated.append(archive_identity_code)
+        elif issue in {"frontmatter_status_invalid", "frontmatter_status_mismatch"}:
+            translated.append(status_code)
+        else:
+            translated.append(issue)
+    return unique_preserve_order(translated)
+
+
+def zet_revision_state_from_validated_snapshot(
+    snapshot: dict[str, Any],
+) -> dict[str, Any]:
+    """Derive revision fingerprints only from an approved immutable snapshot."""
+    if snapshot.get("ok") is not True or not isinstance(snapshot.get("bytes"), bytes):
+        raise ArchiveServiceError("revision_zettel_snapshot_not_validated")
+    frontmatter = snapshot["frontmatter"]
+    body = snapshot["body"]
+    raw_bytes = snapshot["bytes"]
+    first_read = explicit_abstract_publication_check(frontmatter)
+    return {
+        "file_sha256": "sha256:" + hashlib.sha256(raw_bytes).hexdigest(),
+        "semantic_sha256": zet_revision_semantic_sha256(frontmatter, body),
+        "abstract_sha256": (
+            first_read.get("abstract_sha256")
+            if first_read.get("ready_for_publication")
+            else None
+        ),
+        "body_sha256": canonical_body_sha256(canonical_publication_body(body)),
+    }
+
+
+def blocked_zet_revision_plan_payload(
+    *,
+    archive_id: str,
+    dry_run: bool,
+    blockers: list[str],
+    warnings: list[str],
+) -> dict[str, Any]:
+    """Return the public plan schema without evidence from rejected bytes."""
+    return {
+        "ok": False,
+        "dry_run": bool(dry_run),
+        "schema": ZET_REVISION_PLAN_SCHEMA,
+        "lifecycle_action": "zet_revision_plan",
+        "status": "blocked",
+        "archive_id": archive_id,
+        "canonical": {
+            "sha256": None,
+            "bytes_read": 0,
+            "path_echoed": False,
+            "zettel_id_echoed": False,
+        },
+        "proposal": {
+            "sha256": None,
+            "semantic_sha256": None,
+            "bytes_read": 0,
+            "path_policy": ZET_REVISION_PROPOSAL_PREFIX + "<private>.md",
+            "path_echoed": False,
+            "tracking_policy": "private_ai_working_file_do_not_commit",
+        },
+        "plan_digest": None,
+        "change_summary": {},
+        "first_read_check": {},
+        "abstract_review_basis": None,
+        "quality_review": {
+            "blocker_count": 0,
+            "warning_count": 0,
+            "blocker_codes": [],
+            "warning_codes": [],
+            "issue_values_echoed": False,
+        },
+        "self_containment_review": {
+            "status": "not_evaluated",
+            "warning_count": 0,
+            "warning_values_echoed": False,
+        },
+        "approval_contract": {
+            "approved_write_implemented": True,
+            "approved_write_command": "zet-revision-write",
+            "approved_write_requires_separate_dry_run": True,
+            "human_review_required": True,
+            "future_write_must_bind_canonical_sha256": True,
+            "future_write_must_bind_proposal_sha256": True,
+            "future_write_must_bind_plan_digest": True,
+            "future_write_must_revalidate_both_files": True,
+            "future_write_must_record_before_after_hashes": True,
+            "future_write_must_record_reviewed_abstract_body_pair": True,
+            "manual_canonical_edit_recommended": False,
+        },
+        "write_boundary": {
+            "files_written": False,
+            "canonical_zets_changed": False,
+            "receipts_written": False,
+            "provider_state_written": False,
+        },
+        "privacy_guards": {
+            "canonical_path_echoed": False,
+            "proposal_path_echoed": False,
+            "zettel_id_echoed": False,
+            "title_text_echoed": False,
+            "abstract_text_echoed": False,
+            "body_text_echoed": False,
+            "custom_frontmatter_values_echoed": False,
+            "reviewer_id_echoed": False,
+            "absolute_local_paths_echoed": False,
+            "provider_urls_echoed": False,
+            "provider_api_called": False,
+            "model_called": False,
+            "secret_store_or_environment_read": False,
+        },
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+        "next_safe_actions": [
+            "Repair the rejected zettel boundary or identity, then rerun this read-only plan. Do not edit the canonical zet to bypass the blocker."
+        ],
+    }
+
+
 def zet_revision_path_has_symlink_component(root: Path, path: Path) -> bool:
     try:
         lexical_relative = path.relative_to(root)
@@ -8093,7 +8506,19 @@ def zet_revision_path_has_symlink_component(root: Path, path: Path) -> bool:
     lexical_component = root
     for part in lexical_relative.parts:
         lexical_component = lexical_component / part
-        if lexical_component.is_symlink():
+        try:
+            component_stat = os.lstat(lexical_component)
+        except FileNotFoundError:
+            return False
+        except OSError:
+            return True
+        if stat.S_ISLNK(component_stat.st_mode):
+            return True
+        reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+        if (
+            reparse_flag
+            and getattr(component_stat, "st_file_attributes", 0) & reparse_flag
+        ):
             return True
     return False
 
@@ -8190,7 +8615,7 @@ def zet_revision_plan(
 
     proposal = resolve_zet_revision_proposal_path(root, proposal_path)
     try:
-        canonical = resolve_zettel_path(root, zettel_id=zettel_id, relative_path=None)
+        canonical = resolve_zet_revision_canonical_candidate(root, zettel_id)
     except (ArchiveServiceError, OSError, UnicodeError) as exc:
         raise ArchiveServiceError("Canonical zet is unavailable or unreadable.") from exc
     except yaml.YAMLError as exc:  # type: ignore[union-attr]
@@ -8204,38 +8629,48 @@ def zet_revision_plan(
     ):
         raise ArchiveServiceError("Zet revision target must be one plain canonical zet.")
 
-    canonical_bytes = read_zet_revision_file_bytes(canonical, "Canonical zet")
-    proposal_bytes = read_zet_revision_file_bytes(proposal, "Zet revision proposal")
+    canonical_snapshot = validated_zet_revision_snapshot(
+        canonical,
+        expected_zettel_id=zettel_id,
+        expected_archive_id=archive_id,
+    )
+    proposal_snapshot = validated_zet_revision_snapshot(
+        proposal,
+        expected_zettel_id=zettel_id,
+        expected_archive_id=archive_id,
+    )
+    blockers.extend(
+        zet_revision_snapshot_blockers(
+            canonical_snapshot,
+            identity_code="canonical_frontmatter_identity_mismatch",
+            archive_identity_code="canonical_archive_identity_mismatch",
+            status_code="target_status_not_canonical",
+        )
+    )
+    blockers.extend(
+        zet_revision_snapshot_blockers(
+            proposal_snapshot,
+            identity_code="proposal_frontmatter_identity_mismatch",
+            archive_identity_code="proposal_archive_identity_mismatch",
+            status_code="proposal_status_must_remain_canonical",
+        )
+    )
+    if canonical_snapshot.get("ok") is not True or proposal_snapshot.get("ok") is not True:
+        return blocked_zet_revision_plan_payload(
+            archive_id=archive_id,
+            dry_run=dry_run,
+            blockers=blockers,
+            warnings=warnings,
+        )
+
+    canonical_bytes = canonical_snapshot["bytes"]
+    proposal_bytes = proposal_snapshot["bytes"]
+    current_frontmatter = canonical_snapshot["frontmatter"]
+    current_body = canonical_snapshot["body"]
+    proposed_frontmatter = proposal_snapshot["frontmatter"]
+    proposed_body = proposal_snapshot["body"]
     canonical_sha256 = "sha256:" + hashlib.sha256(canonical_bytes).hexdigest()
     proposal_sha256 = "sha256:" + hashlib.sha256(proposal_bytes).hexdigest()
-    try:
-        current_frontmatter, current_body = split_zettel_text(
-            decode_utf8_with_universal_newlines(canonical_bytes)
-        )
-        proposed_frontmatter, proposed_body = split_zettel_text(
-            decode_utf8_with_universal_newlines(proposal_bytes)
-        )
-    except (UnicodeError, ArchiveServiceError) as exc:
-        raise ArchiveServiceError(
-            "Canonical zet or revision proposal is not valid UTF-8 Markdown with readable frontmatter."
-        ) from exc
-    except yaml.YAMLError as exc:  # type: ignore[union-attr]
-        raise ArchiveServiceError(
-            "Canonical zet or revision proposal is not valid UTF-8 Markdown with readable frontmatter."
-        ) from exc
-    current_frontmatter = json_safe(current_frontmatter)
-    proposed_frontmatter = json_safe(proposed_frontmatter)
-
-    if current_frontmatter.get("id") != zettel_id:
-        blockers.append("canonical_frontmatter_identity_mismatch")
-    if current_frontmatter.get("status") != "canonical":
-        blockers.append("target_status_not_canonical")
-    if proposed_frontmatter.get("id") != zettel_id:
-        blockers.append("proposal_frontmatter_identity_mismatch")
-    if proposed_frontmatter.get("archive_id") != archive_id:
-        blockers.append("proposal_archive_identity_mismatch")
-    if proposed_frontmatter.get("status") != "canonical":
-        blockers.append("proposal_status_must_remain_canonical")
 
     for field in REQUIRED_ZETTEL_FIELDS:
         if field not in proposed_frontmatter:
@@ -9068,26 +9503,31 @@ def verify_zet_revision_receipt(
 
     current_matches = False
     try:
-        canonical = resolve_zettel_path(root, zettel_id=zettel_id, relative_path=None)
+        canonical = resolve_zet_revision_canonical_candidate(root, zettel_id)
         canonical_relative = archive_relative_path(canonical, root)
-        current_bytes = read_zet_revision_file_bytes(canonical, "Canonical zet")
-        current_frontmatter, current_body = split_zettel_text(
-            decode_utf8_with_universal_newlines(current_bytes)
+        if (
+            canonical_relative != receipt.get("canonical_path")
+            or not canonical_relative.startswith("zettels/")
+            or canonical.is_symlink()
+            or zet_revision_path_has_symlink_component(root, canonical)
+        ):
+            raise ArchiveServiceError("canonical_target_unavailable")
+        current_snapshot = validated_zet_revision_snapshot(
+            canonical,
+            expected_zettel_id=zettel_id,
+            expected_archive_id=archive_id,
         )
-        current_first_read = explicit_abstract_publication_check(current_frontmatter)
-        current_matches = bool(
-            canonical_relative == receipt.get("canonical_path")
-            and canonical_relative.startswith("zettels/")
-            and not canonical.is_symlink()
-            and not zet_revision_path_has_symlink_component(root, canonical)
-            and "sha256:" + hashlib.sha256(current_bytes).hexdigest()
-            == after.get("file_sha256")
-            and zet_revision_semantic_sha256(current_frontmatter, current_body)
-            == after.get("semantic_sha256")
-            and current_first_read.get("abstract_sha256")
-            == after.get("abstract_sha256")
-            and canonical_body_sha256(canonical_publication_body(current_body))
-            == after.get("body_sha256")
+        if current_snapshot.get("ok") is not True:
+            raise ArchiveServiceError("canonical_target_unavailable")
+        current_state = zet_revision_state_from_validated_snapshot(current_snapshot)
+        current_matches = all(
+            current_state.get(field) == after.get(field)
+            for field in (
+                "file_sha256",
+                "semantic_sha256",
+                "abstract_sha256",
+                "body_sha256",
+            )
         )
     except (
         ArchiveServiceError,
@@ -9484,7 +9924,22 @@ def zet_revision_write(
         return result_payload("blocked")
 
     proposal = resolve_zet_revision_proposal_path(root, proposal_path)
-    proposal_bytes = read_zet_revision_file_bytes(proposal, "Zet revision proposal")
+    proposal_snapshot = validated_zet_revision_snapshot(
+        proposal,
+        expected_zettel_id=zettel_id,
+        expected_archive_id=archive_id,
+    )
+    blockers.extend(
+        zet_revision_snapshot_blockers(
+            proposal_snapshot,
+            identity_code="proposal_frontmatter_identity_mismatch",
+            archive_identity_code="proposal_archive_identity_mismatch",
+            status_code="proposal_status_must_remain_canonical",
+        )
+    )
+    if proposal_snapshot.get("ok") is not True:
+        return result_payload("blocked")
+    proposal_bytes = proposal_snapshot["bytes"]
     actual_proposal = "sha256:" + hashlib.sha256(proposal_bytes).hexdigest()
     if actual_proposal != expected_proposal:
         blockers.append("proposal_sha256_mismatch")
@@ -9514,19 +9969,20 @@ def zet_revision_write(
                 expected_write_plan_digest=expected_write,
             )
             receipt_sha256 = verification.get("receipt_sha256")
-            actual_canonical = expected_canonical
-            actual_semantic = expected_semantic
-            actual_plan = expected_plan
-            actual_write_plan = expected_write
-            candidate_file_sha256 = verification.get("candidate_file_sha256")
-            candidate_semantic_sha256 = verification.get(
-                "candidate_semantic_sha256"
-            )
-            before_snapshot = verification.get("before_snapshot")
-            before_snapshot_verified = bool(
-                verification.get("before_snapshot_verified")
-            )
-            change_summary = verification.get("change_summary", {})
+            if verification.get("ok"):
+                actual_canonical = expected_canonical
+                actual_semantic = expected_semantic
+                actual_plan = expected_plan
+                actual_write_plan = expected_write
+                candidate_file_sha256 = verification.get("candidate_file_sha256")
+                candidate_semantic_sha256 = verification.get(
+                    "candidate_semantic_sha256"
+                )
+                before_snapshot = verification.get("before_snapshot")
+                before_snapshot_verified = bool(
+                    verification.get("before_snapshot_verified")
+                )
+                change_summary = verification.get("change_summary", {})
             if verification.get("revision_at") != normalized_revision_at:
                 blockers.append("existing_revision_receipt_revision_at_mismatch")
             blockers.extend(
@@ -9597,16 +10053,10 @@ def zet_revision_write(
                 blockers.append("existing_revision_write_lock_timestamp_invalid")
                 return result_payload("blocked")
             try:
-                recovery_canonical = resolve_zettel_path(
-                    root, zettel_id=zettel_id, relative_path=None
+                recovery_canonical = resolve_zet_revision_canonical_candidate(
+                    root, zettel_id
                 )
                 recovery_relative = archive_relative_path(recovery_canonical, root)
-                recovery_bytes = read_zet_revision_file_bytes(
-                    recovery_canonical, "Canonical zet"
-                )
-                recovery_sha256 = (
-                    "sha256:" + hashlib.sha256(recovery_bytes).hexdigest()
-                )
             except (
                 ArchiveServiceError,
                 ArchivePathError,
@@ -9625,30 +10075,34 @@ def zet_revision_write(
             ):
                 blockers.append("revision_write_lock_target_path_unsafe")
                 return result_payload("blocked")
-            if recovery_sha256 == early_lock.get("candidate_file_sha256"):
-                try:
-                    recovery_frontmatter, recovery_body = split_zettel_text(
-                        decode_utf8_with_universal_newlines(recovery_bytes)
+            recovery_snapshot = validated_zet_revision_snapshot(
+                recovery_canonical,
+                expected_zettel_id=zettel_id,
+                expected_archive_id=archive_id,
+            )
+            if recovery_snapshot.get("ok") is not True:
+                blockers.append("revision_write_lock_target_approval_boundary_failed")
+                blockers.extend(
+                    zet_revision_snapshot_blockers(
+                        recovery_snapshot,
+                        identity_code="revision_write_lock_target_identity_mismatch",
+                        archive_identity_code="revision_write_lock_target_archive_mismatch",
+                        status_code="revision_write_lock_target_status_mismatch",
                     )
-                except (UnicodeError, ArchiveServiceError):
-                    blockers.append("revision_write_recovery_candidate_unreadable")
-                    return result_payload("blocked")
-                except yaml.YAMLError:  # type: ignore[union-attr]
-                    blockers.append("revision_write_recovery_candidate_unreadable")
-                    return result_payload("blocked")
-                recovery_first_read = explicit_abstract_publication_check(
-                    recovery_frontmatter
                 )
+                return result_payload("blocked")
+            recovery_state = zet_revision_state_from_validated_snapshot(
+                recovery_snapshot
+            )
+            recovery_bytes = recovery_snapshot["bytes"]
+            recovery_sha256 = recovery_state["file_sha256"]
+            if recovery_sha256 == early_lock.get("candidate_file_sha256"):
                 if (
-                    zet_revision_semantic_sha256(
-                        recovery_frontmatter, recovery_body
-                    )
+                    recovery_state["semantic_sha256"]
                     != early_lock.get("candidate_semantic_sha256")
-                    or recovery_first_read.get("abstract_sha256")
+                    or recovery_state["abstract_sha256"]
                     != early_lock.get("candidate_abstract_sha256")
-                    or canonical_body_sha256(
-                        canonical_publication_body(recovery_body)
-                    )
+                    or recovery_state["body_sha256"]
                     != early_lock.get("candidate_body_sha256")
                 ):
                     blockers.append("revision_write_recovery_candidate_hash_mismatch")
@@ -9794,6 +10248,9 @@ def zet_revision_write(
         if isinstance(plan.get("change_summary"), dict)
         else {}
     )
+    if not plan.get("ok"):
+        blockers.extend(f"revision_plan:{item}" for item in plan.get("blockers", []))
+        return result_payload("blocked")
     for actual, expected, code in (
         (actual_canonical, expected_canonical, "canonical_sha256_mismatch"),
         (actual_proposal, expected_proposal, "proposal_sha256_mismatch"),
@@ -9806,20 +10263,60 @@ def zet_revision_write(
     ):
         if actual != expected:
             blockers.append(code)
-    if not plan.get("ok"):
-        blockers.extend(f"revision_plan:{item}" for item in plan.get("blockers", []))
 
-    canonical = resolve_zettel_path(root, zettel_id=zettel_id, relative_path=None)
+    canonical = resolve_zet_revision_canonical_candidate(root, zettel_id)
     canonical_relative = archive_relative_path(canonical, root)
-    canonical_bytes = read_zet_revision_file_bytes(canonical, "Canonical zet")
-    current_frontmatter, current_body = split_zettel_text(
-        decode_utf8_with_universal_newlines(canonical_bytes)
+    if (
+        not canonical_relative.startswith("zettels/")
+        or canonical.is_symlink()
+        or zet_revision_path_has_symlink_component(root, canonical)
+        or not canonical.is_file()
+    ):
+        blockers.append("revision_target_path_unsafe")
+        return result_payload("blocked")
+    canonical_snapshot = validated_zet_revision_snapshot(
+        canonical,
+        expected_zettel_id=zettel_id,
+        expected_archive_id=archive_id,
     )
-    proposed_frontmatter, proposed_body = split_zettel_text(
-        decode_utf8_with_universal_newlines(proposal_bytes)
+    latest_proposal_snapshot = validated_zet_revision_snapshot(
+        proposal,
+        expected_zettel_id=zettel_id,
+        expected_archive_id=archive_id,
     )
-    current_frontmatter = json_safe(current_frontmatter)
-    proposed_frontmatter = json_safe(proposed_frontmatter)
+    blockers.extend(
+        zet_revision_snapshot_blockers(
+            canonical_snapshot,
+            identity_code="canonical_frontmatter_identity_mismatch",
+            archive_identity_code="canonical_archive_identity_mismatch",
+            status_code="target_status_not_canonical",
+        )
+    )
+    blockers.extend(
+        zet_revision_snapshot_blockers(
+            latest_proposal_snapshot,
+            identity_code="proposal_frontmatter_identity_mismatch",
+            archive_identity_code="proposal_archive_identity_mismatch",
+            status_code="proposal_status_must_remain_canonical",
+        )
+    )
+    if (
+        canonical_snapshot.get("ok") is not True
+        or latest_proposal_snapshot.get("ok") is not True
+    ):
+        return result_payload("blocked")
+    canonical_bytes = canonical_snapshot["bytes"]
+    proposal_bytes = latest_proposal_snapshot["bytes"]
+    if "sha256:" + hashlib.sha256(canonical_bytes).hexdigest() != actual_canonical:
+        blockers.append("canonical_changed_after_revision_plan")
+    if "sha256:" + hashlib.sha256(proposal_bytes).hexdigest() != actual_proposal:
+        blockers.append("proposal_changed_after_revision_plan")
+    if blockers:
+        return result_payload("blocked")
+    current_frontmatter = canonical_snapshot["frontmatter"]
+    current_body = canonical_snapshot["body"]
+    proposed_frontmatter = latest_proposal_snapshot["frontmatter"]
+    proposed_body = latest_proposal_snapshot["body"]
     current_updated_at = parse_receipt_time(current_frontmatter.get("updated_at"))
     parsed_revision_at = parse_receipt_time(normalized_revision_at)
     if (
@@ -10012,7 +10509,16 @@ def zet_revision_write(
             if lock_descriptor is not None:
                 os.close(lock_descriptor)
 
-    latest_canonical_bytes = read_zet_revision_file_bytes(canonical, "Canonical zet")
+    latest_canonical_snapshot = validated_zet_revision_snapshot(
+        canonical,
+        expected_zettel_id=zettel_id,
+        expected_archive_id=archive_id,
+    )
+    if latest_canonical_snapshot.get("ok") is not True:
+        blockers.append("canonical_approval_boundary_failed_after_write_lock")
+        warnings.append("matching_revision_write_lock_retained_for_human_inspection")
+        return result_payload("blocked")
+    latest_canonical_bytes = latest_canonical_snapshot["bytes"]
     latest_canonical_sha256 = "sha256:" + hashlib.sha256(latest_canonical_bytes).hexdigest()
     recovery_finalize_only = latest_canonical_sha256 == candidate_file_sha256
     if recovery_finalize_only:
@@ -10022,9 +10528,16 @@ def zet_revision_write(
         warnings.append("matching_revision_write_lock_retained_for_human_inspection")
         return result_payload("blocked")
     else:
-        latest_proposal_bytes = read_zet_revision_file_bytes(
-            proposal, "Zet revision proposal"
+        latest_proposal_snapshot = validated_zet_revision_snapshot(
+            proposal,
+            expected_zettel_id=zettel_id,
+            expected_archive_id=archive_id,
         )
+        if latest_proposal_snapshot.get("ok") is not True:
+            blockers.append("proposal_approval_boundary_failed_after_write_lock")
+            warnings.append("matching_revision_write_lock_retained_for_human_inspection")
+            return result_payload("blocked")
+        latest_proposal_bytes = latest_proposal_snapshot["bytes"]
         if "sha256:" + hashlib.sha256(latest_proposal_bytes).hexdigest() != expected_proposal:
             blockers.append("proposal_changed_after_write_lock")
             warnings.append("matching_revision_write_lock_retained_for_human_inspection")
@@ -10087,12 +10600,28 @@ def zet_revision_write(
                 bool(snapshot_result.get("manifest_record_appended_this_run"))
             )
         if not recovery_finalize_only:
-            if read_zet_revision_file_bytes(canonical, "Canonical zet") != canonical_bytes:
+            prewrite_snapshot = validated_zet_revision_snapshot(
+                canonical,
+                expected_zettel_id=zettel_id,
+                expected_archive_id=archive_id,
+            )
+            if (
+                prewrite_snapshot.get("ok") is not True
+                or prewrite_snapshot.get("bytes") != canonical_bytes
+            ):
                 raise RuntimeError("canonical_changed_immediately_before_revision_write")
             canonical_write_attempt_count += 1
             write_bytes_atomic(canonical, candidate["bytes"])
             canonical_written_this_run = True
-            if read_zet_revision_file_bytes(canonical, "Canonical zet") != candidate["bytes"]:
+            written_snapshot = validated_zet_revision_snapshot(
+                canonical,
+                expected_zettel_id=zettel_id,
+                expected_archive_id=archive_id,
+            )
+            if (
+                written_snapshot.get("ok") is not True
+                or written_snapshot.get("bytes") != candidate["bytes"]
+            ):
                 raise RuntimeError("canonical_revision_write_verification_failed")
             canonical_files_written = 1
         receipt_path.parent.mkdir(parents=True, exist_ok=True)
@@ -10156,9 +10685,14 @@ def zet_revision_write(
         if canonical_written_this_run:
             try:
                 write_bytes_atomic(canonical, canonical_bytes)
-                canonical_restored = (
-                    read_zet_revision_file_bytes(canonical, "Canonical zet")
-                    == canonical_bytes
+                restored_snapshot = validated_zet_revision_snapshot(
+                    canonical,
+                    expected_zettel_id=zettel_id,
+                    expected_archive_id=archive_id,
+                )
+                canonical_restored = bool(
+                    restored_snapshot.get("ok") is True
+                    and restored_snapshot.get("bytes") == canonical_bytes
                 )
             except Exception:
                 canonical_restored = False
@@ -10344,35 +10878,19 @@ def _zet_revision_receipt_audit(
                 or not canonical_path.is_file()
             ):
                 raise ArchiveServiceError("unsafe_or_missing")
-            canonical_bytes = read_zet_revision_file_bytes(
-                canonical_path, "Canonical zet"
+            canonical_snapshot = validated_zet_revision_snapshot(
+                canonical_path,
+                expected_zettel_id=zettel_id_value,
+                expected_archive_id=archive_id,
             )
+            if canonical_snapshot.get("ok") is not True:
+                raise ArchiveServiceError("canonical_validation_failed")
+            state = zet_revision_state_from_validated_snapshot(canonical_snapshot)
+            canonical_bytes = canonical_snapshot.get("bytes")
+            if not isinstance(canonical_bytes, bytes):
+                raise ArchiveServiceError("canonical_validation_failed")
             canonical_files_read += 1
             canonical_bytes_read += len(canonical_bytes)
-            frontmatter, body = split_zettel_text(
-                decode_utf8_with_universal_newlines(canonical_bytes)
-            )
-            frontmatter = json_safe(frontmatter)
-            if (
-                frontmatter.get("id") != zettel_id_value
-                or frontmatter.get("archive_id") != archive_id
-                or frontmatter.get("status") != "canonical"
-            ):
-                raise ArchiveServiceError("canonical_identity_or_status_mismatch")
-            first_read = explicit_abstract_publication_check(frontmatter)
-            state = {
-                "file_sha256": "sha256:"
-                + hashlib.sha256(canonical_bytes).hexdigest(),
-                "semantic_sha256": zet_revision_semantic_sha256(frontmatter, body),
-                "abstract_sha256": (
-                    first_read.get("abstract_sha256")
-                    if first_read.get("ready_for_publication")
-                    else None
-                ),
-                "body_sha256": canonical_body_sha256(
-                    canonical_publication_body(body)
-                ),
-            }
             current_state_cache[key] = (state, None)
         except (
             ArchiveServiceError,
@@ -11471,6 +11989,12 @@ def zet_revision_restore_proposal_from_snapshot(
         blockers.append("revision_receipt_schema_invalid")
     if receipt.get("archive_id") != archive_id:
         blockers.append("revision_receipt_archive_identity_mismatch")
+    zettel_id_value = receipt.get("zettel_id")
+    if not isinstance(zettel_id_value, str) or not ZETTEL_EDGE_ZETTEL_ID_RE.fullmatch(
+        zettel_id_value
+    ):
+        zettel_id_value = None
+        blockers.append("revision_receipt_zettel_id_invalid")
 
     source_write_plan_digest = receipt.get("write_plan_digest")
     if (
@@ -11495,15 +12019,6 @@ def zet_revision_restore_proposal_from_snapshot(
         else {}
     )
     snapshot_blockers: list[str] = []
-    if before_file_sha256:
-        snapshot_blockers = verify_zet_revision_before_snapshot(
-            root,
-            snapshot,
-            expected_before_sha256=before_file_sha256,
-        )
-        blockers.extend(snapshot_blockers)
-    else:
-        blockers.append("before_snapshot_evidence_missing_or_invalid")
 
     object_id = snapshot.get("object_id")
     logical_key = snapshot.get("logical_key")
@@ -11521,6 +12036,8 @@ def zet_revision_restore_proposal_from_snapshot(
     destination_relative: str | None = None
     destination: Path | None = None
     snapshot_path: Path | None = None
+    snapshot_validated: dict[str, Any] | None = None
+    snapshot_state: dict[str, Any] | None = None
     if safe_snapshot_descriptor:
         digest = object_id.removeprefix("sha256:")
         destination_relative = (
@@ -11533,6 +12050,47 @@ def zet_revision_restore_proposal_from_snapshot(
             blockers.append("restore_proposal_destination_path_unsafe")
     else:
         blockers.append("before_snapshot_evidence_missing_or_invalid")
+
+    if (
+        before_file_sha256
+        and snapshot_path is not None
+        and zettel_id_value is not None
+    ):
+        snapshot_validated = validated_zet_revision_snapshot(
+            snapshot_path,
+            expected_zettel_id=zettel_id_value,
+            expected_archive_id=archive_id,
+        )
+        snapshot_validation_blockers = zet_revision_snapshot_blockers(
+            snapshot_validated,
+            identity_code="before_snapshot_frontmatter_identity_mismatch",
+            archive_identity_code="before_snapshot_archive_identity_mismatch",
+            status_code="before_snapshot_status_must_be_canonical",
+        )
+        snapshot_blockers.extend(snapshot_validation_blockers)
+        if snapshot_validated.get("ok") is True:
+            snapshot_state = zet_revision_state_from_validated_snapshot(
+                snapshot_validated
+            )
+            if (
+                snapshot_state["file_sha256"] != before_file_sha256
+                or snapshot_state["file_sha256"] != object_id
+                or len(snapshot_validated["bytes"]) != size_bytes
+            ):
+                snapshot_blockers.append("before_snapshot_bytes_hash_mismatch")
+            else:
+                snapshot_blockers.extend(
+                    verify_zet_revision_before_snapshot(
+                        root,
+                        snapshot,
+                        expected_before_sha256=before_file_sha256,
+                    )
+                )
+    elif before_file_sha256:
+        snapshot_blockers.append("before_snapshot_evidence_missing_or_invalid")
+    else:
+        snapshot_blockers.append("before_snapshot_evidence_missing_or_invalid")
+    blockers.extend(snapshot_blockers)
 
     destination_exists = False
     destination_exact = False
@@ -11548,9 +12106,29 @@ def zet_revision_restore_proposal_from_snapshot(
             destination_stat = os.lstat(destination)
             if not stat.S_ISREG(destination_stat.st_mode):
                 raise OSError("destination_not_regular")
+            if zettel_id_value is None:
+                raise OSError("destination_identity_unavailable")
+            destination_snapshot = validated_zet_revision_snapshot(
+                destination,
+                expected_zettel_id=zettel_id_value,
+                expected_archive_id=archive_id,
+            )
+            blockers.extend(
+                zet_revision_snapshot_blockers(
+                    destination_snapshot,
+                    identity_code="restore_proposal_frontmatter_identity_mismatch",
+                    archive_identity_code="restore_proposal_archive_identity_mismatch",
+                    status_code="restore_proposal_status_must_be_canonical",
+                )
+            )
+            if destination_snapshot.get("ok") is not True:
+                raise OSError("destination_validation_failed")
+            destination_state = zet_revision_state_from_validated_snapshot(
+                destination_snapshot
+            )
             destination_exact = bool(
                 destination_stat.st_size == size_bytes
-                and sha256_path(destination) == object_id.removeprefix("sha256:")
+                and destination_state["file_sha256"] == object_id
             )
             destination_independent = bool(
                 snapshot_path is not None
@@ -11566,22 +12144,26 @@ def zet_revision_restore_proposal_from_snapshot(
                 "restore_proposal_must_not_share_storage_identity_with_snapshot"
             )
 
-    plan_digest = sha256_json_value(
-        {
-            "schema": ZET_REVISION_RESTORE_PROPOSAL_FROM_SNAPSHOT_SCHEMA,
-            "runtime_version": WOM_KIT_VERSION,
-            "archive_id": archive_id,
-            "receipt_sha256": receipt_sha256,
-            "source_write_plan_digest": source_write_plan_digest,
-            "before_file_sha256": before_file_sha256 or None,
-            "before_snapshot": {
-                "object_id": object_id if safe_snapshot_descriptor else None,
-                "logical_key": logical_key if safe_snapshot_descriptor else None,
-                "size_bytes": size_bytes if safe_snapshot_descriptor else None,
-            },
-            "destination_relative": destination_relative,
-            "copy_contract": "independent_exact_bytes_no_overwrite",
-        }
+    plan_digest = (
+        sha256_json_value(
+            {
+                "schema": ZET_REVISION_RESTORE_PROPOSAL_FROM_SNAPSHOT_SCHEMA,
+                "runtime_version": WOM_KIT_VERSION,
+                "archive_id": archive_id,
+                "receipt_sha256": receipt_sha256,
+                "source_write_plan_digest": source_write_plan_digest,
+                "before_file_sha256": before_file_sha256 or None,
+                "before_snapshot": {
+                    "object_id": object_id if safe_snapshot_descriptor else None,
+                    "logical_key": logical_key if safe_snapshot_descriptor else None,
+                    "size_bytes": size_bytes if safe_snapshot_descriptor else None,
+                },
+                "destination_relative": destination_relative,
+                "copy_contract": "independent_exact_bytes_no_overwrite",
+            }
+        )
+        if snapshot_state is not None and not snapshot_blockers
+        else None
     )
     expected_plan_valid = bool(
         isinstance(expected_plan_digest, str)
@@ -11598,43 +12180,77 @@ def zet_revision_restore_proposal_from_snapshot(
     proposal_written = False
     restore_directory_created = False
     if approve and not blockers and destination is not None and not destination_exists:
+        assert snapshot_path is not None
+        assert zettel_id_value is not None
+        latest_snapshot = validated_zet_revision_snapshot(
+            snapshot_path,
+            expected_zettel_id=zettel_id_value,
+            expected_archive_id=archive_id,
+        )
+        latest_snapshot_blockers = zet_revision_snapshot_blockers(
+            latest_snapshot,
+            identity_code="before_snapshot_frontmatter_identity_mismatch",
+            archive_identity_code="before_snapshot_archive_identity_mismatch",
+            status_code="before_snapshot_status_must_be_canonical",
+        )
+        if latest_snapshot.get("ok") is not True:
+            blockers.extend(latest_snapshot_blockers)
+        else:
+            latest_snapshot_state = zet_revision_state_from_validated_snapshot(
+                latest_snapshot
+            )
+            if (
+                latest_snapshot_state["file_sha256"] != before_file_sha256
+                or latest_snapshot_state["file_sha256"] != object_id
+                or len(latest_snapshot["bytes"]) != size_bytes
+            ):
+                blockers.append("before_snapshot_bytes_changed_before_copy")
+
+    if approve and not blockers and destination is not None and not destination_exists:
         parent_existed = destination.parent.exists()
         destination.parent.mkdir(parents=True, exist_ok=True)
         restore_directory_created = not parent_existed
         if zet_revision_path_has_symlink_component(root, destination):
             blockers.append("restore_proposal_destination_path_unsafe")
         else:
-            assert snapshot_path is not None
-            source_bytes = read_zet_revision_file_bytes(
-                snapshot_path, "Zet revision before snapshot"
-            )
-            if (
-                len(source_bytes) != size_bytes
-                or hashlib.sha256(source_bytes).hexdigest()
-                != object_id.removeprefix("sha256:")
-            ):
-                blockers.append("before_snapshot_bytes_changed_before_copy")
-            else:
-                try:
-                    write_zet_revision_restore_proposal_copy_new(
-                        destination, source_bytes
-                    )
-                    proposal_written = True
-                except FileExistsError:
-                    pass
-                except OSError:
-                    blockers.append("restore_proposal_write_failed")
+            source_bytes = latest_snapshot["bytes"]
+            try:
+                write_zet_revision_restore_proposal_copy_new(
+                    destination, source_bytes
+                )
+                proposal_written = True
+            except FileExistsError:
+                pass
+            except OSError:
+                blockers.append("restore_proposal_write_failed")
 
         if destination.exists() and not blockers:
             try:
                 destination_stat = os.lstat(destination)
                 destination_exists = True
+                destination_snapshot = validated_zet_revision_snapshot(
+                    destination,
+                    expected_zettel_id=zettel_id_value,
+                    expected_archive_id=archive_id,
+                )
+                blockers.extend(
+                    zet_revision_snapshot_blockers(
+                        destination_snapshot,
+                        identity_code="restore_proposal_frontmatter_identity_mismatch",
+                        archive_identity_code="restore_proposal_archive_identity_mismatch",
+                        status_code="restore_proposal_status_must_be_canonical",
+                    )
+                )
+                if destination_snapshot.get("ok") is not True:
+                    raise OSError("destination_validation_failed")
+                destination_state = zet_revision_state_from_validated_snapshot(
+                    destination_snapshot
+                )
                 destination_exact = bool(
                     stat.S_ISREG(destination_stat.st_mode)
                     and not destination.is_symlink()
                     and destination_stat.st_size == size_bytes
-                    and sha256_path(destination)
-                    == object_id.removeprefix("sha256:")
+                    and destination_state["file_sha256"] == object_id
                 )
                 destination_independent = bool(
                     not os.path.samefile(snapshot_path, destination)
@@ -11790,11 +12406,9 @@ def _zet_revision_restore_plan(
     receipt_bytes = read_zet_revision_file_bytes(
         receipt_file, "Zet revision restore receipt"
     )
-    proposal_bytes = read_zet_revision_file_bytes(
-        restore_proposal, "Zet revision restore proposal"
-    )
+    proposal_bytes: bytes | None = None
+    proposal_sha256: str | None = None
     receipt_sha256 = "sha256:" + hashlib.sha256(receipt_bytes).hexdigest()
-    proposal_sha256 = "sha256:" + hashlib.sha256(proposal_bytes).hexdigest()
     expected_receipt_valid = bool(
         isinstance(expected_receipt_sha256, str)
         and re.fullmatch(r"sha256:[0-9a-f]{64}", expected_receipt_sha256)
@@ -11923,34 +12537,37 @@ def _zet_revision_restore_plan(
         if not zet_revision_event_review_verified(receipt):
             blockers.append("revision_receipt_human_review_invalid")
 
-    try:
-        proposed_frontmatter, proposed_body = split_zettel_text(
-            decode_utf8_with_universal_newlines(proposal_bytes)
+    proposed_frontmatter: dict[str, Any] = {}
+    proposed_body = ""
+    proposed_first_read: dict[str, Any] = {}
+    proposal_state: dict[str, Any] | None = None
+    if zettel_id_value is not None:
+        proposal_snapshot = validated_zet_revision_snapshot(
+            restore_proposal,
+            expected_zettel_id=zettel_id_value,
+            expected_archive_id=archive_id,
         )
-    except (UnicodeError, ArchiveServiceError) as exc:
-        raise ArchiveServiceError(
-            "Zet revision restore proposal is not valid UTF-8 Markdown with readable frontmatter."
-        ) from exc
-    except yaml.YAMLError as exc:  # type: ignore[union-attr]
-        raise ArchiveServiceError(
-            "Zet revision restore proposal is not valid UTF-8 Markdown with readable frontmatter."
-        ) from exc
-    proposed_frontmatter = json_safe(proposed_frontmatter)
-    proposed_first_read = explicit_abstract_publication_check(proposed_frontmatter)
-    proposal_state = {
-        "file_sha256": proposal_sha256,
-        "semantic_sha256": zet_revision_semantic_sha256(
-            proposed_frontmatter, proposed_body
-        ),
-        "abstract_sha256": (
-            proposed_first_read.get("abstract_sha256")
-            if proposed_first_read.get("ready_for_publication")
-            else None
-        ),
-        "body_sha256": canonical_body_sha256(
-            canonical_publication_body(proposed_body)
-        ),
-    }
+        blockers.extend(
+            zet_revision_snapshot_blockers(
+                proposal_snapshot,
+                identity_code="restore_proposal_frontmatter_identity_mismatch",
+                archive_identity_code="restore_proposal_archive_identity_mismatch",
+                status_code="restore_proposal_status_must_be_canonical",
+            )
+        )
+        if proposal_snapshot.get("ok") is True:
+            proposal_bytes = proposal_snapshot["bytes"]
+            proposed_frontmatter = proposal_snapshot["frontmatter"]
+            proposed_body = proposal_snapshot["body"]
+            proposed_first_read = explicit_abstract_publication_check(
+                proposed_frontmatter
+            )
+            proposal_state = zet_revision_state_from_validated_snapshot(
+                proposal_snapshot
+            )
+            proposal_sha256 = proposal_state["file_sha256"]
+    else:
+        blockers.append("restore_proposal_identity_unavailable_for_validation")
     current_bytes: bytes | None = None
     current_frontmatter: dict[str, Any] = {}
     current_body = ""
@@ -11965,31 +12582,28 @@ def _zet_revision_restore_plan(
                 or not canonical_path.is_file()
             ):
                 raise ArchiveServiceError("unsafe_or_missing")
-            current_bytes = read_zet_revision_file_bytes(
-                canonical_path, "Canonical zet"
+            current_snapshot = validated_zet_revision_snapshot(
+                canonical_path,
+                expected_zettel_id=zettel_id_value,
+                expected_archive_id=archive_id,
             )
-            parsed_frontmatter, current_body = split_zettel_text(
-                decode_utf8_with_universal_newlines(current_bytes)
+            blockers.extend(
+                zet_revision_snapshot_blockers(
+                    current_snapshot,
+                    identity_code="current_canonical_frontmatter_identity_mismatch",
+                    archive_identity_code="current_canonical_archive_identity_mismatch",
+                    status_code="current_target_status_not_canonical",
+                )
             )
-            current_frontmatter = json_safe(parsed_frontmatter)
-            current_first_read = explicit_abstract_publication_check(
-                current_frontmatter
-            )
-            current_state = {
-                "file_sha256": "sha256:"
-                + hashlib.sha256(current_bytes).hexdigest(),
-                "semantic_sha256": zet_revision_semantic_sha256(
-                    current_frontmatter, current_body
-                ),
-                "abstract_sha256": (
-                    current_first_read.get("abstract_sha256")
-                    if current_first_read.get("ready_for_publication")
-                    else None
-                ),
-                "body_sha256": canonical_body_sha256(
-                    canonical_publication_body(current_body)
-                ),
-            }
+            if current_snapshot.get("ok") is True:
+                current_bytes = current_snapshot["bytes"]
+                current_frontmatter = current_snapshot["frontmatter"]
+                current_body = current_snapshot["body"]
+                current_state = zet_revision_state_from_validated_snapshot(
+                    current_snapshot
+                )
+            else:
+                blockers.append("current_canonical_unavailable_or_invalid")
         except (
             ArchiveServiceError,
             ArchivePathError,
@@ -12004,7 +12618,7 @@ def _zet_revision_restore_plan(
 
     if current_state is not None and after is not None and current_state != after:
         blockers.append("current_canonical_does_not_match_receipt_after_state")
-    if before is not None and proposal_state != before:
+    if before is not None and proposal_state is not None and proposal_state != before:
         blockers.append("restore_proposal_does_not_match_receipt_before_state")
 
     selected_receipt_is_chain_tip = False
@@ -12142,7 +12756,7 @@ def _zet_revision_restore_plan(
             proposed_frontmatter,
             proposed_body,
         )
-        if current_state is not None
+        if current_state is not None and proposal_state is not None
         else {
             "semantic_change_present": False,
             "body_changed": False,
@@ -12183,48 +12797,52 @@ def _zet_revision_restore_plan(
         if target_lock_present:
             blockers.append("canonical_revision_transaction_lock_present")
 
-    plan_digest = sha256_json_value(
-        {
-            "schema": ZET_REVISION_RESTORE_PLAN_SCHEMA,
-            "wom_kit_version": WOM_KIT_VERSION,
-            "archive_id": archive_id,
-            "zettel_id": zettel_id_value,
-            "canonical_path": canonical_relative,
-            "receipt_sha256": receipt_sha256,
-            "receipt_write_plan_digest": write_plan_digest,
-            "selected_receipt_is_chain_tip": selected_receipt_is_chain_tip,
-            "latest_event_write_plan_digest": (
-                latest_event.get("write_plan_digest")
-                if latest_event is not None
-                else None
-            ),
-            "latest_event_receipt_sha256": (
-                latest_event.get("receipt_sha256")
-                if latest_event is not None
-                else None
-            ),
-            "receipt_before": before,
-            "receipt_after": after,
-            "current_state": current_state,
-            "restore_proposal_state": proposal_state,
-            "restore_delta": restore_delta,
-            "history_audit_digest": history_audit.get("audit_digest"),
-            "policy_checks": {
-                "frontmatter_schema_valid": not proposal_schema_errors,
-                "explicit_abstract_ready": bool(
-                    proposed_first_read.get("ready_for_publication")
+    plan_digest = (
+        sha256_json_value(
+            {
+                "schema": ZET_REVISION_RESTORE_PLAN_SCHEMA,
+                "wom_kit_version": WOM_KIT_VERSION,
+                "archive_id": archive_id,
+                "zettel_id": zettel_id_value,
+                "canonical_path": canonical_relative,
+                "receipt_sha256": receipt_sha256,
+                "receipt_write_plan_digest": write_plan_digest,
+                "selected_receipt_is_chain_tip": selected_receipt_is_chain_tip,
+                "latest_event_write_plan_digest": (
+                    latest_event.get("write_plan_digest")
+                    if latest_event is not None
+                    else None
                 ),
-                "title_present": proposal_title_present,
-                "body_present": proposal_body_present,
-                "private_locator_absent": private_locator_absent,
-                "kind_policy_status": kind_policy_status,
-                "object_id_only_status": object_status,
-                "allowed_edges_status": edge_status,
-                "quality_blocker_codes": quality_blocker_codes,
-                "quality_warning_codes": quality_warning_codes,
-                "self_containment_status": self_contained.get("status"),
-            },
-        }
+                "latest_event_receipt_sha256": (
+                    latest_event.get("receipt_sha256")
+                    if latest_event is not None
+                    else None
+                ),
+                "receipt_before": before,
+                "receipt_after": after,
+                "current_state": current_state,
+                "restore_proposal_state": proposal_state,
+                "restore_delta": restore_delta,
+                "history_audit_digest": history_audit.get("audit_digest"),
+                "policy_checks": {
+                    "frontmatter_schema_valid": not proposal_schema_errors,
+                    "explicit_abstract_ready": bool(
+                        proposed_first_read.get("ready_for_publication")
+                    ),
+                    "title_present": proposal_title_present,
+                    "body_present": proposal_body_present,
+                    "private_locator_absent": private_locator_absent,
+                    "kind_policy_status": kind_policy_status,
+                    "object_id_only_status": object_status,
+                    "allowed_edges_status": edge_status,
+                    "quality_blocker_codes": quality_blocker_codes,
+                    "quality_warning_codes": quality_warning_codes,
+                    "self_containment_status": self_contained.get("status"),
+                },
+            }
+        )
+        if current_state is not None and proposal_state is not None
+        else None
     )
     blockers = unique_preserve_order(blockers)
     warnings = unique_preserve_order(warnings)
@@ -12277,7 +12895,7 @@ def _zet_revision_restore_plan(
         },
         "restore_proposal": {
             "state": proposal_state,
-            "bytes_read": len(proposal_bytes),
+            "bytes_read": len(proposal_bytes) if proposal_bytes is not None else 0,
             "matches_receipt_before": bool(
                 before is not None and proposal_state == before
             ),
@@ -12552,27 +13170,34 @@ def verify_zet_revision_restore_receipt(
     try:
         canonical = resolve_zettel_path(root, zettel_id=zettel_id, relative_path=None)
         canonical_relative = archive_relative_path(canonical, root)
-        current_bytes = read_zet_revision_file_bytes(canonical, "Canonical zet")
-        current_frontmatter, current_body = split_zettel_text(
-            decode_utf8_with_universal_newlines(current_bytes)
+        current_snapshot = validated_zet_revision_snapshot(
+            canonical,
+            expected_zettel_id=zettel_id,
+            expected_archive_id=archive_id,
         )
-        current_first_read = explicit_abstract_publication_check(
-            current_frontmatter
+        blockers.extend(
+            zet_revision_snapshot_blockers(
+                current_snapshot,
+                identity_code=(
+                    "existing_restore_receipt_current_frontmatter_identity_mismatch"
+                ),
+                archive_identity_code=(
+                    "existing_restore_receipt_current_archive_identity_mismatch"
+                ),
+                status_code="existing_restore_receipt_current_status_not_canonical",
+            )
         )
-        current_matches = bool(
-            canonical_relative == receipt.get("canonical_path")
-            and canonical_relative.startswith("zettels/")
-            and not canonical.is_symlink()
-            and not zet_revision_path_has_symlink_component(root, canonical)
-            and "sha256:" + hashlib.sha256(current_bytes).hexdigest()
-            == after.get("file_sha256")
-            and zet_revision_semantic_sha256(current_frontmatter, current_body)
-            == after.get("semantic_sha256")
-            and current_first_read.get("abstract_sha256")
-            == after.get("abstract_sha256")
-            and canonical_body_sha256(canonical_publication_body(current_body))
-            == after.get("body_sha256")
-        )
+        if current_snapshot.get("ok") is True:
+            current_state = zet_revision_state_from_validated_snapshot(
+                current_snapshot
+            )
+            current_matches = bool(
+                canonical_relative == receipt.get("canonical_path")
+                and canonical_relative.startswith("zettels/")
+                and not canonical.is_symlink()
+                and not zet_revision_path_has_symlink_component(root, canonical)
+                and current_state == after
+            )
     except (
         ArchiveServiceError,
         ArchivePathError,
@@ -12656,6 +13281,7 @@ def zet_revision_restore_write(
     actual_current: str | None = None
     actual_proposal: str | None = None
     actual_semantic: str | None = None
+    proposal_bytes: bytes | None = None
     actual_plan: str | None = None
     actual_write_plan: str | None = None
     source_write_plan_digest: str | None = None
@@ -12897,15 +13523,9 @@ def zet_revision_restore_write(
     source_receipt_bytes = read_zet_revision_file_bytes(
         source_receipt_path, "Zet revision restore source receipt"
     )
-    proposal_bytes = read_zet_revision_file_bytes(
-        proposal_path, "Zet revision restore proposal"
-    )
     actual_receipt = "sha256:" + hashlib.sha256(source_receipt_bytes).hexdigest()
-    actual_proposal = "sha256:" + hashlib.sha256(proposal_bytes).hexdigest()
     if actual_receipt != expected_receipt:
         blockers.append("source_receipt_sha256_mismatch")
-    if actual_proposal != expected_proposal:
-        blockers.append("restore_proposal_sha256_mismatch")
 
     try:
         source_receipt_document = json.loads(source_receipt_bytes.decode("utf-8"))
@@ -12971,31 +13591,32 @@ def zet_revision_restore_write(
     if source_after.get("file_sha256") != expected_current:
         blockers.append("expected_current_does_not_match_source_receipt_after")
 
-    try:
-        proposal_frontmatter, proposal_body = split_zettel_text(
-            decode_utf8_with_universal_newlines(proposal_bytes)
+    proposal_state: dict[str, Any] = {}
+    if zettel_id_value is not None:
+        proposal_snapshot = validated_zet_revision_snapshot(
+            proposal_path,
+            expected_zettel_id=zettel_id_value,
+            expected_archive_id=archive_id,
         )
-        proposal_frontmatter = json_safe(proposal_frontmatter)
-        proposal_first_read = explicit_abstract_publication_check(
-            proposal_frontmatter
+        blockers.extend(
+            zet_revision_snapshot_blockers(
+                proposal_snapshot,
+                identity_code="restore_proposal_frontmatter_identity_mismatch",
+                archive_identity_code="restore_proposal_archive_identity_mismatch",
+                status_code="restore_proposal_status_must_be_canonical",
+            )
         )
-        proposal_state = {
-            "file_sha256": actual_proposal,
-            "semantic_sha256": zet_revision_semantic_sha256(
-                proposal_frontmatter, proposal_body
-            ),
-            "abstract_sha256": proposal_first_read.get("abstract_sha256"),
-            "body_sha256": canonical_body_sha256(
-                canonical_publication_body(proposal_body)
-            ),
-        }
-        actual_semantic = proposal_state["semantic_sha256"]
-    except (ArchiveServiceError, UnicodeError):
-        proposal_state = {}
-        blockers.append("restore_proposal_unreadable_or_invalid")
-    except yaml.YAMLError:  # type: ignore[union-attr]
-        proposal_state = {}
-        blockers.append("restore_proposal_unreadable_or_invalid")
+        if proposal_snapshot.get("ok") is True:
+            proposal_bytes = proposal_snapshot["bytes"]
+            proposal_state = zet_revision_state_from_validated_snapshot(
+                proposal_snapshot
+            )
+            actual_proposal = proposal_state["file_sha256"]
+            actual_semantic = proposal_state["semantic_sha256"]
+    else:
+        blockers.append("restore_proposal_identity_unavailable_for_validation")
+    if actual_proposal != expected_proposal:
+        blockers.append("restore_proposal_sha256_mismatch")
     if actual_semantic != expected_semantic:
         blockers.append("restore_proposal_semantic_sha256_mismatch")
     if blockers:
@@ -13004,6 +13625,7 @@ def zet_revision_restore_write(
     assert zettel_id_value is not None
     assert canonical_relative is not None
     assert source_write_plan_digest is not None
+    assert proposal_bytes is not None
     canonical = archive_internal_path(root, canonical_relative)
     if (
         canonical.is_symlink()
@@ -13179,10 +13801,28 @@ def zet_revision_restore_write(
 
     resume_finalize_from_lock = False
     if matching_existing_lock is not None:
-        recovery_bytes = read_zet_revision_file_bytes(canonical, "Canonical zet")
-        recovery_sha256 = (
-            "sha256:" + hashlib.sha256(recovery_bytes).hexdigest()
+        recovery_snapshot = validated_zet_revision_snapshot(
+            canonical,
+            expected_zettel_id=zettel_id_value,
+            expected_archive_id=archive_id,
         )
+        blockers.extend(
+            zet_revision_snapshot_blockers(
+                recovery_snapshot,
+                identity_code="current_canonical_frontmatter_identity_mismatch",
+                archive_identity_code="current_canonical_archive_identity_mismatch",
+                status_code="current_target_status_not_canonical",
+            )
+        )
+        if recovery_snapshot.get("ok") is not True:
+            warnings.append(
+                "matching_restore_write_lock_retained_for_human_inspection"
+            )
+            return result_payload("blocked")
+        recovery_state = zet_revision_state_from_validated_snapshot(
+            recovery_snapshot
+        )
+        recovery_sha256 = recovery_state["file_sha256"]
         resume_finalize_from_lock = bool(
             recovery_sha256
             == matching_existing_lock.get("candidate_file_sha256")
@@ -13462,9 +14102,22 @@ def zet_revision_restore_write(
     latest_source_receipt_bytes = read_zet_revision_file_bytes(
         source_receipt_path, "Zet revision restore source receipt"
     )
-    latest_proposal_bytes = read_zet_revision_file_bytes(
-        proposal_path, "Zet revision restore proposal"
+    latest_proposal_snapshot = validated_zet_revision_snapshot(
+        proposal_path,
+        expected_zettel_id=zettel_id_value,
+        expected_archive_id=archive_id,
     )
+    latest_proposal_blockers = zet_revision_snapshot_blockers(
+        latest_proposal_snapshot,
+        identity_code="restore_proposal_frontmatter_identity_mismatch",
+        archive_identity_code="restore_proposal_archive_identity_mismatch",
+        status_code="restore_proposal_status_must_be_canonical",
+    )
+    if latest_proposal_snapshot.get("ok") is not True:
+        blockers.extend(latest_proposal_blockers)
+        warnings.append("matching_restore_write_lock_retained_for_human_inspection")
+        return result_payload("blocked")
+    latest_proposal_bytes = latest_proposal_snapshot["bytes"]
     if latest_source_receipt_bytes != source_receipt_bytes:
         blockers.append("source_receipt_changed_after_write_lock")
         warnings.append("matching_restore_write_lock_retained_for_human_inspection")
@@ -13474,12 +14127,26 @@ def zet_revision_restore_write(
         warnings.append("matching_restore_write_lock_retained_for_human_inspection")
         return result_payload("blocked")
 
-    latest_canonical_bytes = read_zet_revision_file_bytes(
-        canonical, "Canonical zet"
+    latest_canonical_snapshot = validated_zet_revision_snapshot(
+        canonical,
+        expected_zettel_id=zettel_id_value,
+        expected_archive_id=archive_id,
     )
-    latest_canonical_sha256 = (
-        "sha256:" + hashlib.sha256(latest_canonical_bytes).hexdigest()
+    latest_canonical_blockers = zet_revision_snapshot_blockers(
+        latest_canonical_snapshot,
+        identity_code="current_canonical_frontmatter_identity_mismatch",
+        archive_identity_code="current_canonical_archive_identity_mismatch",
+        status_code="current_target_status_not_canonical",
     )
+    if latest_canonical_snapshot.get("ok") is not True:
+        blockers.extend(latest_canonical_blockers)
+        warnings.append("matching_restore_write_lock_retained_for_human_inspection")
+        return result_payload("blocked")
+    latest_canonical_bytes = latest_canonical_snapshot["bytes"]
+    latest_canonical_state = zet_revision_state_from_validated_snapshot(
+        latest_canonical_snapshot
+    )
+    latest_canonical_sha256 = latest_canonical_state["file_sha256"]
     recovery_finalize_only = latest_canonical_sha256 == candidate_file_sha256
     if recovery_finalize_only:
         recovery["finalized_from_already_written_candidate"] = True
@@ -13557,20 +14224,30 @@ def zet_revision_restore_write(
     receipt_parent_existed = restore_receipt_path.parent.exists()
     try:
         if not recovery_finalize_only:
-            if (
-                read_zet_revision_file_bytes(canonical, "Canonical zet")
-                != canonical_before_bytes
-            ):
+            immediate_before_snapshot = validated_zet_revision_snapshot(
+                canonical,
+                expected_zettel_id=zettel_id_value,
+                expected_archive_id=archive_id,
+            )
+            if immediate_before_snapshot.get("ok") is not True:
+                raise RuntimeError(
+                    "canonical_invalid_immediately_before_restore_write"
+                )
+            if immediate_before_snapshot["bytes"] != canonical_before_bytes:
                 raise RuntimeError(
                     "canonical_changed_immediately_before_restore_write"
                 )
             canonical_write_attempt_count += 1
             write_bytes_atomic(canonical, proposal_bytes)
             canonical_written_this_run = True
-            if (
-                read_zet_revision_file_bytes(canonical, "Canonical zet")
-                != proposal_bytes
-            ):
+            written_canonical_snapshot = validated_zet_revision_snapshot(
+                canonical,
+                expected_zettel_id=zettel_id_value,
+                expected_archive_id=archive_id,
+            )
+            if written_canonical_snapshot.get("ok") is not True:
+                raise RuntimeError("canonical_restore_write_validation_failed")
+            if written_canonical_snapshot["bytes"] != proposal_bytes:
                 raise RuntimeError("canonical_restore_write_verification_failed")
             canonical_files_written = 1
         restore_receipt_path.parent.mkdir(parents=True, exist_ok=True)
@@ -13665,8 +14342,14 @@ def zet_revision_restore_write(
         if canonical_written_this_run:
             try:
                 write_bytes_atomic(canonical, canonical_before_bytes)
-                canonical_restored = (
-                    read_zet_revision_file_bytes(canonical, "Canonical zet")
+                restored_canonical_snapshot = validated_zet_revision_snapshot(
+                    canonical,
+                    expected_zettel_id=zettel_id_value,
+                    expected_archive_id=archive_id,
+                )
+                canonical_restored = bool(
+                    restored_canonical_snapshot.get("ok") is True
+                    and restored_canonical_snapshot["bytes"]
                     == canonical_before_bytes
                 )
             except Exception:
