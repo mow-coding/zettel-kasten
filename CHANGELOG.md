@@ -6,6 +6,22 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.259 - 2026-07-17
+
+- **Completed index results keep their computed exit meaning when the terminal
+  disappears.** Without `--output`, `index` and `index-health` now treat final
+  stdout/stderr delivery as best effort after the service result exists. A
+  broken pipe, closed stream, or console encoding failure cannot turn a
+  committed successful rebuild into an unhandled exception or CPython's
+  shutdown-time exit code 120.
+- **Completed nonzero results are not relabeled as success.** A quarantining
+  index rebuild and a stale/incomplete health result still return exit code 1
+  when terminal delivery fails. Normal JSON/text content, command arguments,
+  and the durable complete-only `--output` contract remain unchanged.
+- **The boundary stays narrow.** This release does not suppress failures before
+  a result is computed, invent a terminal-delivery receipt, change archive or
+  result schemas, or modify normal CLI wording.
+
 ## v0.3.258 - 2026-07-17
 
 - **Default S3-compatible transfers are bounded by chunk size, not object

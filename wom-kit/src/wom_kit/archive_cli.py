@@ -1222,6 +1222,7 @@ class CommandProgressReporter:
             except (OSError, UnicodeError, ValueError):
                 # stderr can disappear when a PTY or agent transport closes.
                 # Disable future progress instead of changing command meaning.
+                _neutralize_failed_standard_stream(sys.stderr)
                 self._callback = None
                 self._stop.set()
 
@@ -12212,9 +12213,9 @@ def command_index(args: argparse.Namespace) -> int:
         return result_exit_code
 
     if args.format == "json":
-        print_json(result)
+        best_effort_terminal_json(result)
     else:
-        print(
+        best_effort_terminal_print(
             ("Indexed " if result_exit_code == 0 else "Indexed with quarantined zettels: ")
             + f"{result['zettels']} zettel(s), "
             f"{result['objects']} object(s), "
@@ -12223,7 +12224,6 @@ def command_index(args: argparse.Namespace) -> int:
             f"{result['source_map_entries']} source map item(s) "
             f"at {result['index_path']}"
         )
-    sys.stdout.flush()
     return result_exit_code
 
 
@@ -12454,23 +12454,23 @@ def command_index_health(args: argparse.Namespace) -> int:
         return exit_code
 
     if args.format == "json":
-        print_json(result)
+        best_effort_terminal_json(result)
     else:
         summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
-        print(f"Index health: {result.get('index_state')}")
-        print(
+        output_lines = [
+            f"Index health: {result.get('index_state')}",
             "Zettels: "
             f"{summary.get('live_zettel_count', 0)} live, "
-            f"{summary.get('indexed_zettel_count', 0)} indexed"
-        )
+            f"{summary.get('indexed_zettel_count', 0)} indexed",
+        ]
         for reason in result.get("stale_reasons", []):
-            print(f"STALE: {reason}")
+            output_lines.append(f"STALE: {reason}")
         for blocker in result.get("blockers", []):
-            print(f"BLOCKED: {blocker}")
+            output_lines.append(f"BLOCKED: {blocker}")
         for action in result.get("next_safe_actions", []):
-            print(f"NEXT: {action}")
-        print("Writes: none")
-    sys.stdout.flush()
+            output_lines.append(f"NEXT: {action}")
+        output_lines.append("Writes: none")
+        best_effort_terminal_print("\n".join(output_lines))
     return exit_code
 
 
@@ -15897,19 +15897,55 @@ def print_json(data: Any) -> None:
     print(json.dumps(data, indent=2, ensure_ascii=False, default=str), flush=True)
 
 
+class _FailedTerminalSink:
+    """Discard output after an OS standard stream has already failed."""
+
+    encoding = "utf-8"
+    errors = "replace"
+    closed = False
+
+    @staticmethod
+    def write(value: str) -> int:
+        return len(value)
+
+    @staticmethod
+    def flush() -> None:
+        return None
+
+    @staticmethod
+    def isatty() -> bool:
+        return False
+
+
+_FAILED_TERMINAL_SINK = _FailedTerminalSink()
+
+
+def _neutralize_failed_standard_stream(stream: Any) -> None:
+    """Prevent CPython shutdown from re-flushing a standard stream that failed."""
+
+    if stream is sys.stdout:
+        sys.stdout = _FAILED_TERMINAL_SINK
+    if stream is sys.stderr:
+        sys.stderr = _FAILED_TERMINAL_SINK
+
+
 def best_effort_terminal_print(*values: Any, file: Any = None) -> bool:
     """Emit advisory terminal output without overriding a durable result."""
+    target = sys.stdout if file is None else file
     try:
         print(*values, file=file, flush=True)
     except (OSError, UnicodeError, ValueError):
+        _neutralize_failed_standard_stream(target)
         return False
     return True
 
 
 def best_effort_terminal_json(data: Any) -> bool:
+    target = sys.stdout
     try:
         print_json(data)
     except (OSError, UnicodeError, ValueError):
+        _neutralize_failed_standard_stream(target)
         return False
     return True
 

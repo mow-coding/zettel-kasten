@@ -24,6 +24,32 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.259 Completed-Result Terminal Semantics
+
+No archive, index, result, or receipt schema migration is required. Command
+arguments and normal JSON/text output remain compatible.
+
+When `archive index` or `archive index-health` has already computed its result,
+terminal delivery without `--output` is now best effort. A broken pipe, closed
+stdout/stderr stream, or console encoding failure no longer overrides the
+computed exit code. A committed successful rebuild remains exit 0; a completed
+quarantining rebuild or stale/incomplete health result remains exit 1.
+
+This does not make terminal text durable. For unattended or long-running work,
+continue to pass `--output .wom-scratch/diagnostics/<name>.json` with a reviewed
+archive-relative path and inspect the complete-only saved result. Errors that
+happen before a service result exists remain errors and are not swallowed by
+this change.
+
+After upgrading:
+
+1. Run `archive version <project-or-archive-root> --format json` and confirm
+   `0.3.259`.
+2. Keep using `--output` for operations whose result must survive terminal
+   transport loss.
+3. Treat the process exit code as the command result only after distinguishing
+   it from whether terminal text was actually observed.
+
 ## v0.3.258 Bounded Object-Storage Transport
 
 No archive, object-manifest, receipt, or provider schema migration is required.
