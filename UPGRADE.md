@@ -24,6 +24,43 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.257 Strict Revision Approval Snapshots
+
+No archive schema migration is required. Existing valid revision and exact
+restore commands, private proposal locations, receipts, and plan schemas remain
+compatible.
+
+This release changes when revision and restore evidence is allowed to exist.
+Before WOM-kit computes a file hash, semantic hash, equality result, plan
+digest, or approved candidate, the complete canonical zet or private proposal
+must pass a bounded regular-file read plus UTF-8, frontmatter, schema, zet id,
+archive id, and canonical-status validation. Rejected bytes are represented by
+fixed blocker codes and null/false evidence fields; they are not fingerprinted
+as if they were trusted zet state.
+
+Approval-bound YAML also rejects duplicate keys, non-string keys, cyclic
+aliases, excessive nesting or expansion, YAML-only set/binary values, and
+non-finite numbers. The existing compatibility treatment for unquoted YAML
+timestamps remains: they are normalized to ISO strings before schema checks.
+The tolerant parser used by import and capture workflows is unchanged.
+
+After upgrading:
+
+1. Create or review the private revision/restore proposal as usual.
+2. Run a fresh `archive zet-revision-plan ... --dry-run --format json` or
+   `archive zet-revision-restore-plan ... --dry-run --format json`.
+3. If the result is blocked, repair the proposal or source zet deliberately.
+   Do not copy an old digest into a new approval command.
+4. Run `archive zet-revision-receipt-audit <archive-root> --dry-run --format
+   json` before relying on revision history for another restore.
+5. Approve only the new dry-run result and its exact hashes/digests.
+
+This is a validation-ordering release, not a new transaction engine. Canonical
+replacement, receipt publication, locks, rollback, and recovery retain their
+existing algorithms. Abstract-backfill, reconcile, workpack, approval-handoff,
+and the broader recoverable mutation-engine work remain separate maintenance
+batches.
+
 ## v0.3.256 Fail-Closed Zettel Integrity And Honest Index Health
 
 No archive schema migration is required. Existing valid draft, canonical,

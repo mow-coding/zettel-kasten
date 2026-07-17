@@ -6,6 +6,31 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.257 - 2026-07-17
+
+- **Revision and restore evidence is derived only from fully validated zet
+  snapshots.** Canonical zets, private proposals, retained before-snapshots,
+  and restore candidates must pass bounded regular-file, UTF-8, frontmatter,
+  schema, identity, archive, and canonical-status checks before file or
+  semantic hashes, equality, plan digests, or approved candidates exist.
+- **Approval YAML has an unambiguous bounded value model.** Duplicate keys,
+  non-string mapping keys, cyclic aliases, excessive depth or node count,
+  YAML set/binary values, and non-finite numbers fail closed without returning
+  the rejected bytes. The existing compatibility normalization for unquoted
+  YAML timestamps remains intact; tolerant import/capture parsing is unchanged.
+- **Receipt and recovery paths preserve content-free failure evidence.** A
+  malformed current canonical zet cannot be reported through a prior receipt
+  hash as if it were the observed current state. Revision history audit,
+  restore receipt verification, interrupted-write recovery, and restore
+  proposal materialization all stop before deriving unvalidated state.
+- **Restore scratch output is validation-first.** A rejected retained snapshot
+  creates no restore proposal or new scratch directory, while existing valid
+  revision and exact-restore commands, receipts, and schemas remain compatible.
+- **Mutation-engine work remains separate.** This release does not redesign
+  canonical replacement, publisher, lock, rollback, or recovery algorithms.
+  The broader combined implementation was stopped before versioning after
+  independent review found Linux/Docker and hard-exit regressions.
+
 ## v0.3.256 - 2026-07-17
 
 - **Existing-archive zet reads now fail closed at one strict content boundary.**

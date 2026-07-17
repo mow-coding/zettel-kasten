@@ -2,6 +2,41 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.3.257 엄격한 revision 승인 snapshot
+
+아카이브 스키마 마이그레이션은 필요하지 않습니다. 형식이 올바른 기존
+revision/정확 복원 명령, 비공개 proposal 위치, 영수증, plan schema는 계속
+호환됩니다.
+
+이번 릴리스는 revision과 restore 근거를 언제 만들 수 있는지 바로잡습니다.
+WOM-kit은 파일 hash, semantic hash, 동일성 결과, plan digest, 승인 후보를
+계산하기 전에 canonical zet 또는 비공개 proposal 전체를 제한된 크기의 일반
+파일로 읽고 UTF-8, frontmatter, schema, zet id, archive id, canonical status를
+모두 검증합니다. 거부된 바이트는 고정 blocker와 null/false 근거로만
+표현되며, 신뢰할 수 있는 zet 상태인 것처럼 fingerprint하지 않습니다.
+
+승인 경계의 YAML은 중복 key, 문자열이 아닌 key, 순환 alias, 과도한 깊이와
+노드 수, YAML 전용 set/binary 값, 유한하지 않은 숫자도 거부합니다. 기존
+호환 계약인 따옴표 없는 YAML timestamp는 ISO 문자열로 정규화한 뒤 schema를
+검사합니다. import/capture에서 사용하는 관대한 parser는 바뀌지 않습니다.
+
+업그레이드 후에는 다음 순서를 따르세요.
+
+1. 평소처럼 비공개 revision/restore proposal을 만들고 검토합니다.
+2. 새 `archive zet-revision-plan ... --dry-run --format json` 또는
+   `archive zet-revision-restore-plan ... --dry-run --format json`을 실행합니다.
+3. 차단되면 proposal이나 원본 zet을 의도적으로 고칩니다. 예전 digest를 새
+   승인 명령에 그대로 복사하지 마세요.
+4. revision 이력을 다음 restore의 근거로 쓰기 전에 `archive
+   zet-revision-receipt-audit <archive-root> --dry-run --format json`을
+   실행합니다.
+5. 새 dry-run이 돌려준 정확한 hash와 digest만 승인에 사용합니다.
+
+이번 릴리스는 검증 순서를 고친 것이며 새 transaction engine이 아닙니다.
+canonical 교체, 영수증 게시, lock, rollback, recovery 알고리즘은 기존 경계를
+유지합니다. abstract-backfill, reconcile, workpack, approval-handoff와 더 넓은
+복구 가능한 mutation-engine 작업은 별도 유지보수 배치로 남습니다.
+
 ## v0.3.256 Fail-Closed zet 무결성과 정직한 인덱스 상태 확인
 
 아카이브 스키마 마이그레이션은 필요하지 않습니다. 올바른 draft,

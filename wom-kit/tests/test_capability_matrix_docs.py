@@ -7198,6 +7198,48 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         self.assertIn("Crash-safe generated-index rebuild", changelog_text)
         self.assertIn("archive_index_schema_incomplete", changelog_text)
 
+    def test_v03257_strict_revision_snapshot_docs_match(self) -> None:
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        release_text = (
+            KIT_ROOT / "docs" / "releases" / "v0.3.257.md"
+        ).read_text(encoding="utf-8")
+        decision_text = (
+            KIT_ROOT
+            / "docs"
+            / "archive-infra-decision-log-2026-07-17-v03257-strict-revision-boundary.md"
+        ).read_text(encoding="utf-8")
+        changelog_text = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+        upgrade_text = (REPO_ROOT / "UPGRADE.md").read_text(encoding="utf-8")
+        upgrade_ko_text = (REPO_ROOT / "UPGRADE.ko.md").read_text(
+            encoding="utf-8"
+        )
+
+        for phrase in (
+            "Status: v0.3.257 strict revision and restore approval snapshot checkpoint",
+            "Current checkpoint note: since v0.3.257",
+            "Rejected bytes produce fixed content-free blockers",
+            "does not redesign the existing publisher",
+            "Retire-reconcile, abstract-backfill, target-workpack, and approval-handoff",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, matrix_text)
+        for phrase in (
+            "bounded acyclic JSON value tree",
+            "unquoted timestamp compatibility",
+            "does not claim a new",
+            "cross-platform transaction engine",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, release_text)
+        for text in (decision_text, changelog_text, upgrade_text):
+            with self.subTest(document="strict-revision-boundary"):
+                self.assertIn("validation", text.lower())
+                self.assertIn("revision", text.lower())
+                self.assertIn("restore", text.lower())
+                self.assertIn("separate", text.lower())
+        self.assertIn("순환 alias", upgrade_ko_text)
+        self.assertIn("새 transaction engine이 아닙니다", upgrade_ko_text)
+
     def test_top_level_readmes_expose_current_installation_on_ramp(self) -> None:
         readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
         readme_ko_text = (REPO_ROOT / "README.ko.md").read_text(encoding="utf-8")
