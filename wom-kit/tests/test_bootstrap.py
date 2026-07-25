@@ -123,7 +123,18 @@ class BootstrapTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 1)
         combined = result.stdout + result.stderr
-        self.assertRegex(combined, r"daem\s*on is not reachable")
+        # PowerShell's error formatter hard-wraps Write-Error at the console
+        # width and breaks mid-word, so the fold lands at a different character
+        # per console width: a developer machine split "daem on" while the CI
+        # runner split "not \nreachable". Strip whitespace from both sides so
+        # the assertion does not depend on the console width at all.
+        def without_whitespace(text: str) -> str:
+            return "".join(text.split())
+
+        self.assertIn(
+            without_whitespace("Docker is installed, but the daemon is not reachable"),
+            without_whitespace(combined),
+        )
         self.assertNotIn("NativeCommandError", combined)
         self.assert_no_baseline_created(before, archives_before)
 

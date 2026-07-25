@@ -36,6 +36,22 @@ The safer path is gradual:
 5. Stage 4: require that status check before merging into `main`.
 6. Stage 5: optionally require PR review or release-supervisor review before merge.
 
+### Stage 3 Status
+
+Stage 3 shipped in v0.3.260 as `.github/workflows/ci.yml`. It runs the
+release-readiness gate, packaged resource synchronization, and the complete
+WOM-kit suite on `ubuntu-latest` (3.12 and the supported 3.10 floor) and
+`windows-latest` (3.12).
+
+It is intentionally still an observed, non-required workflow. Stages 1, 2, 4,
+and 5 change GitHub repository settings rather than repository contents, so
+they remain separate decisions that a human makes deliberately.
+
+Its first runs justified the staging order: they surfaced two cross-platform
+defects that the Windows-only development machine could not observe, and
+because the check was not yet required, fixing them did not block the release
+flow.
+
 This lets the project tighten safety without suddenly blocking the existing release flow.
 
 ## Why Not Enable Everything Immediately

@@ -1,0 +1,97 @@
+name: CI
+
+# Stage 3 of wom-kit/docs/main-branch-protection-readiness.md: introduce an
+# optional GitHub Actions workflow that runs the existing local release gate and
+# the WOM-kit test suite. This workflow is deliberately NOT a required status
+# check yet. Stage 4 (requiring it) and stricter branch protection remain
+# separate, explicit decisions.
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Korean product-language text appears in docs, tests, and CLI output. Windows
+  # runners default to a non-UTF-8 console encoding, so pin it on every job.
+  PYTHONIOENCODING: utf-8
+  PYTHONDONTWRITEBYTECODE: '1'
+
+jobs:
+  gate:
+    name: Release readiness gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # PyYAML is wom-kit's only runtime dependency (wom-kit/pyproject.toml).
+      - name: Install runtime dependency
+        run: python -m pip install --disable-pip-version-check "PyYAML>=6.0"
+
+      # Same four hygiene checkers the local pre-release gate runs:
+      # public links, Korean product language, public privacy, runtime skill.
+      - name: Release readiness gate
+        run: python wom-kit/tools/check_release_readiness.py
+
+      - name: Packaged resource synchronization
+        run: python wom-kit/tools/sync_package_resources.py --check
+
+  tests:
+    name: Tests ${{ matrix.os }} py${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      # One platform failing must not hide the result on the other.
+      fail-fast: false
+      matrix:
+        include:
+          # Primary Linux target: the default Docker runtime platform, and the
+          # one the local Windows development machine never exercises.
+          - os: ubuntu-latest
+            python-version: '3.12'
+          # Lowest supported interpreter (requires-python = ">=3.10").
+          - os: ubuntu-latest
+            python-version: '3.10'
+          # Keeps parity with the machine releases are currently cut on.
+          - os: windows-latest
+            python-version: '3.12'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install runtime dependency
+        run: python -m pip install --disable-pip-version-check "PyYAML>=6.0"
+
+      # The suite is plain unittest with subTest; pytest is not a dependency.
+      # Docker-backed cases stay opt-in via AI_ARCHIVE_RUN_DOCKER_TESTS.
+      - name: WOM-kit test suite
+        run: python -m unittest discover -s wom-kit/tests -v
+
+      # A test that writes into the repository would break the project's
+      # artifact-hygiene contract, so fail loudly instead of silently drifting.
+      - name: Assert tests left the worktree clean
+        shell: bash
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "::error::The test suite modified tracked or untracked repository files."
+            git status --porcelain
+            exit 1
+          fi

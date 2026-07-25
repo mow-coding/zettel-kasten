@@ -1,9 +1,10 @@
 # WOM-kit Capability Matrix
 
-Status: v0.3.259 completed-result terminal semantics checkpoint
-Date: 2026-07-17
-Version: v0.3.259, release candidate
+Status: v0.3.260 cross-platform release verification checkpoint
+Date: 2026-07-26
+Version: v0.3.260, release candidate
 
+Previous checkpoint: Status: v0.3.259 completed-result terminal semantics checkpoint
 Previous checkpoint: Status: v0.3.258 bounded object-storage transport checkpoint
 Previous checkpoint: Status: v0.3.257 strict revision and restore approval snapshot checkpoint
 Previous checkpoint: Status: v0.3.256 fail-closed zettel read/index/query/health integrity checkpoint
@@ -428,7 +429,8 @@ rollback, or recovery algorithms.
 | Public release link hygiene | `local hygiene tool` | none | Checks repository Markdown links for release note copy safety. No GitHub Release edit or external URL fetch. |
 | Korean product-language hygiene | `local hygiene tool` | none | Checks public Markdown drift against the Korean product-language baseline. No auto-rewrite. |
 | Public privacy hygiene | `local hygiene tool` | none | Checks public files for obvious local path, token, private key, seed phrase, and private endpoint leaks. |
-| Release readiness gate | `local hygiene tool` | none | Runs the public hygiene checkers together. It is not CI or branch protection. |
+| Release readiness gate | `local hygiene tool` | none | Runs the public hygiene checkers together. Since v0.3.260 the same gate also runs in CI, but the local tool itself is still not CI or branch protection. |
+| Continuous integration workflow | `implemented non-required CI` | none; the workflow declares `contents: read`, uses no secrets, and publishes no artifact | Since v0.3.260, `.github/workflows/ci.yml` runs the four-checker release readiness gate, packaged resource synchronization, and the complete WOM-kit suite on `ubuntu-latest` (3.12 and the supported 3.10 floor) and `windows-latest` (3.12), then asserts the suite left the working tree clean. Only PyYAML is installed; the suite is stdlib `unittest`. This is Stage 3 of the staged plan in `main-branch-protection-readiness.md`: the workflow is observed, not required, and Stages 1/2/4/5 change GitHub repository settings rather than repository contents, so they remain separate human decisions. A green run on a release commit is now checkable evidence; before v0.3.260 every release claim was local and self-attested. CI does not build or install a wheel — `check_wheel_install.py` needs network access for build isolation and stays a release-time local step. |
 | Public product roadmap | `documented-only` | none | `docs/product-roadmap.md` explains the intended pre-1.0 version-line phases: `v0.1.x` idea/protocol language, `v0.2.x` local implementation, current `v0.3.x` WOM real-use feedback and safety hardening, planned `v0.4.x` custom UI control layer, and planned `v0.5.x` ZET real-use feedback. It adds no UI, provider adapter, ZET transport, wallet, token, sync, or background worker. |
 | Main branch protection readiness | `documented-only` | none | Documents a staged path toward future repository settings. It changes no GitHub settings. |
 | Real ZET transport | `not implemented` | none | No send/receive relay, P2P, inbox transport, or transport worker exists. |

@@ -50,6 +50,50 @@ class PackageResourceTests(unittest.TestCase):
                 self.assertEqual(len(data), row["bytes"])
                 self.assertEqual(hashlib.sha256(data).hexdigest(), row["sha256"])
 
+    def test_manifest_order_is_platform_independent(self) -> None:
+        # pathlib sorts Windows paths case-insensitively and POSIX paths
+        # case-sensitively. Sorting Path objects therefore emitted a manifest
+        # whose order depended on the generating machine, so `--check` failed
+        # on Linux for a tree that was correct on Windows. Each group must stay
+        # ordered by its packaged POSIX string, which sorts identically
+        # everywhere.
+        manifest_path = PACKAGED_ROOT / "resource-manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        grouped: dict[str, list[str]] = {}
+        for row in manifest["files"]:
+            group = row["packaged"].split("/", 1)[0]
+            grouped.setdefault(group, []).append(row["packaged"])
+        self.assertIn("templates", grouped)
+        for group, packaged_paths in grouped.items():
+            with self.subTest(group=group):
+                self.assertEqual(packaged_paths, sorted(packaged_paths))
+
+    def test_sync_tool_sorts_sources_without_pathlib_case_folding(self) -> None:
+        # Guard the mechanism, not only its current output: a mixed-case tree
+        # must come back in case-sensitive POSIX order on every platform.
+        sync_tool_source = SYNC_TOOL.read_text(encoding="utf-8")
+        self.assertIn("key=lambda path: path.relative_to(source_root).as_posix()", sync_tool_source)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "references").mkdir()
+            (root / "references" / "operator-contract.md").write_bytes(b"a")
+            (root / "SKILL.md").write_bytes(b"b")
+            (root / "archive.yml").write_bytes(b"c")
+            (root / "README.md").write_bytes(b"d")
+            ordered = [
+                path.relative_to(root).as_posix()
+                for path in sorted(
+                    root.rglob("*"),
+                    key=lambda path: path.relative_to(root).as_posix(),
+                )
+                if path.is_file()
+            ]
+        self.assertEqual(
+            ordered,
+            ["README.md", "SKILL.md", "archive.yml", "references/operator-contract.md"],
+        )
+
     def test_resource_resolver_prefers_source_checkout(self) -> None:
         self.assertTrue(resource_paths.source_checkout_available())
         self.assertEqual(

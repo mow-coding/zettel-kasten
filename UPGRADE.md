@@ -24,6 +24,27 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.260 Cross-Platform Release Verification
+
+No archive, zettel, index, receipt, or schema migration is required. Command
+names, arguments, output shapes, and exit codes are unchanged.
+
+This release adds the project's first continuous-integration workflow and fixes
+the two cross-platform defects it found. The packaged resource manifest is
+regenerated: it contains the same 91 entries with identical byte counts and
+SHA-256 values, and only their order changed, so an installed wheel behaves
+exactly as before.
+
+One behavior difference is worth knowing. Passing a Windows-style traversal
+argument such as `..eport.json` to `--prompt-boundary-report` now returns the
+fixed "must not contain path traversal" message on Linux and macOS, where it
+previously fell through to a raw file-not-found error. Windows behavior is
+unchanged, and ordinary relative paths are unaffected.
+
+If you maintain a fork, note that `sync_package_resources.py` now sorts sources
+on the archive-relative POSIX string. Regenerate your manifest once so it stops
+depending on the platform that produced it.
+
 ## v0.3.259 Completed-Result Terminal Semantics
 
 No archive, index, result, or receipt schema migration is required. Command
