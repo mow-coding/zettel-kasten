@@ -25,6 +25,11 @@ This project uses semantic versioning for public compatibility checkpoints.
   `..\report.json` argument to `--prompt-boundary-report` is now refused
   everywhere instead of becoming an ordinary POSIX filename, matching the
   normalization the sibling `--output` validator already used.
+- **Two test assertions no longer depend on the machine that runs them.** One
+  hardcoded a backslash path separator and failed on Linux; one matched a
+  PowerShell error message at a fixed console-fold position and failed only on
+  the Windows runner, because `Write-Error` hard-wraps mid-word at the console
+  width. Each platform caught what the other could not.
 - **The boundary stays narrow.** No archive, zettel, index, receipt, or schema
   migration is required, no repository setting is changed, and no product CLI,
   MCP, provider, or network behavior changes.

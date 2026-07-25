@@ -62,9 +62,18 @@ the gate on Linux.
 3. **One test hardcoded a separator.** A project-intake assertion required
    `endswith("archive-objets\\intake")`. `recommended_paths` are OS-native
    local paths the human types, so the assertion now compares path components.
+4. **One test encoded a console fold position.** The Windows leg alone then
+   failed: PowerShell's error formatter hard-wraps `Write-Error` at the console
+   width and breaks mid-word, so the developer console produced `daem on` while
+   the runner produced `not \nreachable`. The assertion's regex had encoded the
+   first of those. Comparing with all whitespace stripped removes the console
+   dependency, verified against simulated mid-word folds at every width from 20
+   to 120.
 
 The first two are corrections to verification and safety plumbing, not to
-product behavior a user depends on. The third is a test defect.
+product behavior a user depends on. The last two are test defects, and they
+failed on opposite platforms — which is the concrete argument for keeping both
+in the matrix rather than adding Linux alone.
 
 ## Verification Contract
 
