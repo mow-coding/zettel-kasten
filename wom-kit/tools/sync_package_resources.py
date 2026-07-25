@@ -39,7 +39,15 @@ def current_version() -> str:
 
 def iter_source_rows() -> Iterable[tuple[str, Path, Path]]:
     for group, source_root in GROUP_SOURCES.items():
-        for source_path in sorted(source_root.rglob("*")):
+        # Sort on the archive-relative POSIX string, never on Path objects.
+        # pathlib compares Windows paths case-insensitively and POSIX paths
+        # case-sensitively, so sorting Path objects would order `SKILL.md`
+        # against `references/` differently per platform and make the emitted
+        # manifest unreproducible outside the machine that generated it.
+        for source_path in sorted(
+            source_root.rglob("*"),
+            key=lambda path: path.relative_to(source_root).as_posix(),
+        ):
             if source_path.is_symlink():
                 raise RuntimeError(f"Runtime resource must not be a symlink: {source_path}")
             if source_path.is_file():

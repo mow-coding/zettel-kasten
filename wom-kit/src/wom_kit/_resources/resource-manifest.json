@@ -251,6 +251,12 @@
       "sha256": "282866fdc4b5d727f8d0eec6da776a1116c4ae9c2ce6cc748f7202385e9c4641"
     },
     {
+      "source": "templates/ai-runtime/wom-archive/SKILL.md",
+      "packaged": "templates/ai-runtime/wom-archive/SKILL.md",
+      "bytes": 5325,
+      "sha256": "5626e91da78b6b597a98ebaba145b045e8c056a85d490b9a0ddc3dcfd901c58d"
+    },
+    {
       "source": "templates/ai-runtime/wom-archive/references/capture-draft-and-publication.md",
       "packaged": "templates/ai-runtime/wom-archive/references/capture-draft-and-publication.md",
       "bytes": 3295,
@@ -285,12 +291,6 @@
       "packaged": "templates/ai-runtime/wom-archive/references/startup-and-update.md",
       "bytes": 2656,
       "sha256": "a581fe6598ed231f672cd8263bb769e88db0cc7d77138585239dfe1404d00443"
-    },
-    {
-      "source": "templates/ai-runtime/wom-archive/SKILL.md",
-      "packaged": "templates/ai-runtime/wom-archive/SKILL.md",
-      "bytes": 5325,
-      "sha256": "5626e91da78b6b597a98ebaba145b045e8c056a85d490b9a0ddc3dcfd901c58d"
     },
     {
       "source": "templates/company/AGENTS.md",
