@@ -12498,7 +12498,12 @@ def command_related_zets(args: argparse.Namespace) -> int:
 
 def command_search(args: argparse.Namespace) -> int:
     try:
-        result = archive_services.search_archive(Path(args.archive_root), args.query, limit=args.limit)
+        result = archive_services.search_archive(
+            Path(args.archive_root),
+            args.query,
+            limit=args.limit,
+            count_total=bool(getattr(args, "count_total", False)),
+        )
     except archive_services.ArchiveServiceError as exc:
         print(str(exc), file=sys.stderr)
         return 1
@@ -12506,7 +12511,21 @@ def command_search(args: argparse.Namespace) -> int:
     if args.format == "json":
         print_json(result)
     else:
-        print(f"Found {result['count']} result(s).")
+        # Text is the default format, so this line is what most callers read.
+        # Reporting only the returned row count is what lets a capped page be
+        # mistaken for the complete answer.
+        if not result["truncated"]:
+            print(f"Found {result['total_matches']} result(s); this is the complete match set.")
+        elif result["total_matches_known"]:
+            print(
+                f"Returned {result['returned']} of {result['total_matches']} match(es); "
+                f"more matches exist beyond --limit {result['limit_applied']}."
+            )
+        else:
+            print(
+                f"Returned {result['returned']} match(es); more matches exist beyond "
+                f"--limit {result['limit_applied']}. Add --count-total for the exact number."
+            )
         for item in result["results"]:
             print(
                 "\t".join(
@@ -21311,6 +21330,11 @@ def build_parser() -> argparse.ArgumentParser:
     search.add_argument("archive_root", help="Archive root to search.")
     search.add_argument("query", help="Search query.")
     search.add_argument("--limit", type=int, default=20, help="Maximum number of results to return.")
+    search.add_argument(
+        "--count-total",
+        action="store_true",
+        help="Also count every match beyond the limit. Costs a full scan of each searched table.",
+    )
     search.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     search.set_defaults(func=command_search)
 

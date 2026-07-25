@@ -10474,6 +10474,66 @@ class McpServerTests(unittest.TestCase):
                 search_result = search_response["result"]
                 self.assertFalse(search_result["isError"])
                 self.assertGreaterEqual(search_result["structuredContent"]["count"], 1)
+
+                # The AI-facing summary must not present a capped page as the
+                # whole answer: that phrasing is how a host concludes "that is
+                # all there is" and stops looking.
+                complete_text = search_result["content"][0]["text"]
+                self.assertIn("complete match set", complete_text)
+                self.assertFalse(search_result["structuredContent"]["truncated"])
+
+                capped_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 3,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "archive_search",
+                            "arguments": {
+                                "archive_root": str(archive_root),
+                                "query": "zet",
+                                "limit": 1,
+                            },
+                        },
+                    },
+                )
+                capped_result = capped_response["result"]
+                self.assertFalse(capped_result["isError"])
+                capped_structured = capped_result["structuredContent"]
+                self.assertEqual(capped_structured["returned"], 1)
+                self.assertTrue(capped_structured["truncated"])
+                # Truncation is always known; the exact total is not, because
+                # counting it costs a full scan of every searched table.
+                self.assertIsNone(capped_structured["total_matches"])
+                self.assertFalse(capped_structured["total_matches_known"])
+                capped_text = capped_result["content"][0]["text"]
+                self.assertIn("more matches exist", capped_text)
+                self.assertIn("count_total", capped_text)
+
+                counted_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 4,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "archive_search",
+                            "arguments": {
+                                "archive_root": str(archive_root),
+                                "query": "zet",
+                                "limit": 1,
+                                "count_total": True,
+                            },
+                        },
+                    },
+                )
+                counted_structured = counted_response["result"]["structuredContent"]
+                self.assertTrue(counted_structured["truncated"])
+                self.assertTrue(counted_structured["total_matches_known"])
+                self.assertGreater(counted_structured["total_matches"], 1)
+                counted_text = counted_response["result"]["content"][0]["text"]
+                self.assertIn(f"of {counted_structured['total_matches']} match(es)", counted_text)
                 first_path = search_result["structuredContent"]["results"][0]["path"]
                 self.assertNotIn("\\", first_path)
         finally:
