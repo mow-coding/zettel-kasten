@@ -17195,7 +17195,13 @@ def load_prompt_boundary_report_file(path: str | None) -> dict[str, Any] | None:
     if not path:
         return None
     report_path = Path(path)
-    if "\x00" in path or ".." in report_path.parts:
+    # Check traversal on a separator-normalized form so the verdict is identical
+    # on every platform. `Path("..\\report.json").parts` is ('..', 'report.json')
+    # on Windows but a single backslash-bearing filename on POSIX, so the raw
+    # parts would silently accept a Windows-authored traversal path on Linux.
+    # resolve_command_result_output_path already normalizes before this check.
+    normalized_parts = PurePosixPath(path.replace("\\", "/")).parts
+    if "\x00" in path or ".." in normalized_parts:
         raise ValueError("prompt-boundary report path must not contain path traversal.")
     try:
         data = json.loads(report_path.read_text(encoding="utf-8"))
