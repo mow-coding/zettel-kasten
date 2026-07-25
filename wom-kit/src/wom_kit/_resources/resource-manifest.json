@@ -1,6 +1,6 @@
 {
   "schema": "wom-kit/package-resource-manifest/v0.1",
-  "version": "0.3.259",
+  "version": "0.3.260",
   "source_of_truth": "wom-kit source resource directories",
   "file_count": 91,
   "files": [
@@ -251,6 +251,12 @@
       "sha256": "282866fdc4b5d727f8d0eec6da776a1116c4ae9c2ce6cc748f7202385e9c4641"
     },
     {
+      "source": "templates/ai-runtime/wom-archive/SKILL.md",
+      "packaged": "templates/ai-runtime/wom-archive/SKILL.md",
+      "bytes": 5325,
+      "sha256": "5626e91da78b6b597a98ebaba145b045e8c056a85d490b9a0ddc3dcfd901c58d"
+    },
+    {
       "source": "templates/ai-runtime/wom-archive/references/capture-draft-and-publication.md",
       "packaged": "templates/ai-runtime/wom-archive/references/capture-draft-and-publication.md",
       "bytes": 3295,
@@ -285,12 +291,6 @@
       "packaged": "templates/ai-runtime/wom-archive/references/startup-and-update.md",
       "bytes": 2656,
       "sha256": "a581fe6598ed231f672cd8263bb769e88db0cc7d77138585239dfe1404d00443"
-    },
-    {
-      "source": "templates/ai-runtime/wom-archive/SKILL.md",
-      "packaged": "templates/ai-runtime/wom-archive/SKILL.md",
-      "bytes": 5325,
-      "sha256": "5626e91da78b6b597a98ebaba145b045e8c056a85d490b9a0ddc3dcfd901c58d"
     },
     {
       "source": "templates/company/AGENTS.md",
@@ -545,10 +545,10 @@
       "sha256": "d619dc26af3216498c8392dfe838b0fe752d4bad9da998a58ca682d668fc510c"
     },
     {
-      "source": "docs/releases/v0.3.259.md",
-      "packaged": "release-notes/v0.3.259.md",
-      "bytes": 3617,
-      "sha256": "48dfd5fa1c346eb8e6f2d782011d0b24a26024ba5b42053945219e0164e60816"
+      "source": "docs/releases/v0.3.260.md",
+      "packaged": "release-notes/v0.3.260.md",
+      "bytes": 4517,
+      "sha256": "178c96a39c5ac9bbf13a62290206a280e32f5bcf894c6e187e528b94fab8c1e7"
     }
   ]
 }

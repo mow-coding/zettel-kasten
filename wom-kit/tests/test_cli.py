@@ -45201,12 +45201,16 @@ state:
             self.assertTrue(result["ok"])
             self.assertEqual(result["action"], "archive_project_intake_staging_guide")
             self.assertEqual(result["project_slug"], "alpha-project")
+            # recommended_paths are OS-native local paths the human will type, so
+            # compare path components instead of a hardcoded separator.
             self.assertTrue(result["recommended_paths"]["objet_store_root"].endswith("archive-objets"))
-            self.assertTrue(result["recommended_paths"]["intake_root"].endswith("archive-objets\\intake"))
-            self.assertTrue(
-                result["recommended_paths"]["staged_project_folder"].endswith(
-                    "archive-objets\\intake\\alpha-project"
-                )
+            self.assertEqual(
+                Path(result["recommended_paths"]["intake_root"]).parts[-2:],
+                ("archive-objets", "intake"),
+            )
+            self.assertEqual(
+                Path(result["recommended_paths"]["staged_project_folder"]).parts[-3:],
+                ("archive-objets", "intake", "alpha-project"),
             )
             self.assertFalse(result["path_policy"]["create_directories"])
             self.assertFalse(result["path_policy"]["copy_files"])
