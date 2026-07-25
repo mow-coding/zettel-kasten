@@ -24,6 +24,30 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.261 Honest Search Coverage
+
+No archive, index, receipt, or schema migration is required, and no index
+rebuild is needed for this release.
+
+`archive search`, its default text output, and the MCP `archive_search` tool
+now report their own coverage: `truncated`, `complete`, `returned`,
+`total_matches`, `total_matches_known`, `matches_by_type`, `limit_applied`, and
+`limit_ceiling`. Until now the result reported only how many rows it returned,
+so a capped page looked exactly like a complete answer.
+
+Knowing that more matches exist stays free. Knowing exactly how many now needs
+`--count-total` (or `count_total` on MCP), because that requires a full scan of
+each searched table. A result set that is not truncated already reports its
+exact total.
+
+Existing callers keep working. `count`, `query`, and `results` are unchanged,
+matching behavior and ordering are unchanged, and the 100-result ceiling is
+unchanged — it is now reported rather than silent.
+
+If you have automation that treated `count` as a total, switch it to
+`total_matches` and check `truncated` before concluding that a result set is
+everything the archive holds.
+
 ## v0.3.260 Cross-Platform Release Verification
 
 No archive, zettel, index, receipt, or schema migration is required. Command
@@ -36,7 +60,7 @@ SHA-256 values, and only their order changed, so an installed wheel behaves
 exactly as before.
 
 One behavior difference is worth knowing. Passing a Windows-style traversal
-argument such as `..eport.json` to `--prompt-boundary-report` now returns the
+argument such as `..\report.json` to `--prompt-boundary-report` now returns the
 fixed "must not contain path traversal" message on Linux and macOS, where it
 previously fell through to a raw file-not-found error. Windows behavior is
 unchanged, and ordinary relative paths are unaffected.

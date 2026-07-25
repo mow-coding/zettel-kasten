@@ -2671,13 +2671,26 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
     },
     {
         "name": "archive_search",
-        "description": "Search zettels, object manifest entries, and views through the generated local SQLite index.",
+        "description": (
+            "Search zettels, object manifest entries, derived texts, views, and source-map entries "
+            "through the generated local SQLite index. Results are capped by `limit` (max 100), so "
+            "check `truncated` before treating the returned rows as every match. `total_matches` is "
+            "exact when `truncated` is false; when true it is null unless `count_total` is set."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "archive_root": {"type": "string"},
                 "query": {"type": "string"},
                 "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
+                "count_total": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": (
+                        "Count every match beyond the limit. Costs a full scan of each searched "
+                        "table, so leave it off when only `truncated` matters."
+                    ),
+                },
             },
             "required": ["archive_root", "query"],
         },
@@ -5641,8 +5654,29 @@ def tool_archive_search(arguments: dict[str, Any]) -> dict[str, Any]:
     archive_root = require_path_arg(arguments, "archive_root")
     query = require_string_arg(arguments, "query")
     limit = int(arguments.get("limit", 20))
-    result = call_service(archive_services.search_archive, archive_root, query, limit=limit)
-    return tool_success_result(f"Found {result['count']} result(s).", result)
+    count_total = bool(arguments.get("count_total", False))
+    result = call_service(
+        archive_services.search_archive,
+        archive_root,
+        query,
+        limit=limit,
+        count_total=count_total,
+    )
+    # Reporting only the returned count reads as a complete answer, which is how
+    # a host AI concludes "that is all there is" from a truncated page.
+    if not result["truncated"]:
+        summary = f"Found {result['total_matches']} result(s); this is the complete match set."
+    elif result["total_matches_known"]:
+        summary = (
+            f"Returned {result['returned']} of {result['total_matches']} match(es); "
+            f"more matches exist beyond the requested limit."
+        )
+    else:
+        summary = (
+            f"Returned {result['returned']} match(es); more matches exist beyond the requested "
+            f"limit. Call again with count_total for the exact number."
+        )
+    return tool_success_result(summary, result)
 
 
 def tool_promotion_check(arguments: dict[str, Any]) -> dict[str, Any]:

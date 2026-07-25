@@ -6,6 +6,30 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.261 - 2026-07-26
+
+- **Search states its own coverage, on every surface.** `archive search`, its
+  default text output, and the MCP `archive_search` tool now report
+  `truncated`, `complete`, `returned`, `total_matches`, `total_matches_known`,
+  `matches_by_type`, `limit_applied`, and `limit_ceiling`. Until now a capped
+  page was indistinguishable from a complete answer, which is how an operating
+  AI reports a wrong total and stops looking. `count`, `query`, and `results`
+  are unchanged.
+- **Knowing that more exist stays cheap; knowing how many is opt-in.**
+  Truncation is proved by reading one row past the requested limit, so every
+  channel keeps its `LIMIT` and search still stops early. An exact total needs
+  `--count-total` (CLI) or `count_total` (MCP) because a leading-wildcard
+  `LIKE` cannot use an index. A non-truncated result set reports its exact
+  total for free.
+- **Totals cannot disclose suppressed content.** Each channel's `WHERE` clause
+  is defined once and shared by its result query and its count query, so a
+  redacted zettel whose body contains the query term is neither returned nor
+  counted.
+- **The boundary stays narrow.** Matching behavior, result ordering, the
+  channel cascade, and the 100-result ceiling are unchanged; the ceiling is now
+  reported rather than silent. No archive, index, receipt, or schema migration
+  is required, and no index rebuild is needed.
+
 ## v0.3.260 - 2026-07-26
 
 - **The project has continuous integration.** A GitHub Actions workflow runs

@@ -43292,6 +43292,104 @@ state:
             self.assertEqual(code, 1)
             self.assertIn("Archive index is missing", output)
 
+    def test_search_reports_truncation_instead_of_silently_capping(self) -> None:
+        # WOM's own doctrine forbids presenting a truncated read as complete
+        # coverage; the catalog enforces that but search used to report only the
+        # number of rows it returned, so a caller could not tell a complete
+        # answer from a capped one.
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            token = "zztruncationprobezz"
+            for index in range(5):
+                (archive_root / "zettels" / f"zet_probe_{index}.md").write_text(
+                    f"---\nid: ZETPROBE{index}\ntitle: Probe {index}\n"
+                    f"status: canonical\nkind: note\n---\n\nbody carries {token}.\n",
+                    encoding="utf-8",
+                )
+            self.assertEqual(self.run_cli(["index", str(archive_root), "--format", "json"])[0], 0)
+
+            # Capped page: truncation is always known, and is proved by reading
+            # one row past the limit rather than by scanning every table.
+            code, output = self.run_cli(
+                ["search", str(archive_root), token, "--limit", "2", "--format", "json"]
+            )
+            self.assertEqual(code, 0, output)
+            capped = json.loads(output)
+            self.assertEqual(capped["returned"], 2)
+            self.assertEqual(len(capped["results"]), 2)
+            self.assertTrue(capped["truncated"])
+            self.assertFalse(capped["complete"])
+            self.assertIsNone(capped["total_matches"])
+            self.assertFalse(capped["total_matches_known"])
+            self.assertEqual(capped["limit_applied"], 2)
+            self.assertEqual(capped["count"], capped["returned"])
+
+            # Exact totals are opt-in because they cost a full scan per channel.
+            code, output = self.run_cli(
+                ["search", str(archive_root), token, "--limit", "2", "--count-total", "--format", "json"]
+            )
+            self.assertEqual(code, 0, output)
+            counted = json.loads(output)
+            self.assertEqual(counted["returned"], 2)
+            self.assertTrue(counted["truncated"])
+            self.assertEqual(counted["total_matches"], 5)
+            self.assertTrue(counted["total_matches_known"])
+            self.assertEqual(counted["matches_by_type"], {"zettel": 5})
+
+            code, output = self.run_cli(
+                ["search", str(archive_root), token, "--limit", "50", "--format", "json"]
+            )
+            self.assertEqual(code, 0, output)
+            complete = json.loads(output)
+            self.assertEqual(complete["returned"], 5)
+            self.assertEqual(complete["total_matches"], 5)
+            self.assertTrue(complete["total_matches_known"])
+            self.assertFalse(complete["truncated"])
+            self.assertTrue(complete["complete"])
+
+            # Text is the default format, so it must not present a capped page
+            # as the whole answer either.
+            code, text_output = self.run_cli(["search", str(archive_root), token, "--limit", "2"])
+            self.assertEqual(code, 0, text_output)
+            self.assertIn("more matches exist", text_output)
+            self.assertIn("--count-total", text_output)
+            code, text_output = self.run_cli(["search", str(archive_root), token, "--limit", "50"])
+            self.assertEqual(code, 0, text_output)
+            self.assertIn("complete match set", text_output)
+
+    def test_search_totals_never_count_redacted_zettels(self) -> None:
+        # A count computed from a different WHERE clause than the result query
+        # would disclose that suppressed content matched the query.
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            token = "zzredactedcountprobezz"
+            (archive_root / "zettels" / "zet_probe_visible.md").write_text(
+                f"---\nid: ZETVISIBLE1\ntitle: Visible probe\nstatus: canonical\nkind: note\n"
+                f"---\n\nbody carries {token}.\n",
+                encoding="utf-8",
+            )
+            (archive_root / "zettels" / "zet_probe_redacted.md").write_text(
+                f"---\nid: ZETREDACTED1\ntitle: Redacted probe\nstatus: redacted\nkind: note\n"
+                f"---\n\nbody carries {token}.\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(self.run_cli(["index", str(archive_root), "--format", "json"])[0], 0)
+
+            for limit, extra in (("1", []), ("50", []), ("1", ["--count-total"])):
+                with self.subTest(limit=limit, extra=tuple(extra)):
+                    code, output = self.run_cli(
+                        ["search", str(archive_root), token, "--limit", limit, *extra, "--format", "json"]
+                    )
+                    self.assertEqual(code, 0, output)
+                    result = json.loads(output)
+                    # Only the visible zettel may be returned or counted; the
+                    # redacted one carries the same token in its body.
+                    self.assertEqual(result["total_matches"], 1)
+                    self.assertEqual(result["matches_by_type"], {"zettel": 1})
+                    self.assertFalse(result["truncated"])
+                    self.assertNotIn("ZETREDACTED1", output)
+                    self.assertNotIn("Redacted probe", output)
+
     def test_index_then_search_finds_zettels_objects_and_views(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
