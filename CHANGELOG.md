@@ -6,6 +6,29 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.260 - 2026-07-26
+
+- **The project has continuous integration.** A GitHub Actions workflow runs
+  the existing release readiness gate, packaged resource synchronization, and
+  the complete WOM-kit suite on `ubuntu-latest` (3.12 and the supported 3.10
+  floor) and `windows-latest` (3.12), then asserts the suite left the working
+  tree clean. It is Stage 3 of the staged plan in
+  `wom-kit/docs/main-branch-protection-readiness.md` and is deliberately not a
+  required status check yet.
+- **The packaged resource manifest is reproducible across platforms.**
+  `sync_package_resources.py` sorted `Path` objects, which pathlib compares
+  case-insensitively on Windows and case-sensitively on POSIX, so the emitted
+  order depended on the generating machine and `--check` failed on Linux — the
+  platform of the project's own documented container runtime. The regenerated
+  manifest keeps the same 91 entries with identical bytes and SHA-256 values.
+- **Path-traversal detection no longer changes verdict by platform.** A
+  `..\report.json` argument to `--prompt-boundary-report` is now refused
+  everywhere instead of becoming an ordinary POSIX filename, matching the
+  normalization the sibling `--output` validator already used.
+- **The boundary stays narrow.** No archive, zettel, index, receipt, or schema
+  migration is required, no repository setting is changed, and no product CLI,
+  MCP, provider, or network behavior changes.
+
 ## v0.3.259 - 2026-07-17
 
 - **Completed index results keep their computed exit meaning when the terminal
