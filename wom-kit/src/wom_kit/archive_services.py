@@ -80515,7 +80515,56 @@ def get_related_zets(
     return {"zettel_id": zettel_id, "depth": depth, "count": len(related), "related": related, "truncated": False}
 
 
-def search_archive(archive_root: Path | str, query: str, limit: int = 20) -> dict[str, Any]:
+# Each channel's WHERE clause is defined once and shared by its result query and
+# its optional COUNT query. Duplicating the text would let the two drift, and the
+# zettel clause carries the redaction/lifecycle filter, so a drifted count could
+# imply that suppressed rows matched.
+SEARCH_ZETTEL_WHERE = (
+    # Privacy: a 'redacted' zettel's content is deliberately suppressed; it must never be
+    # matched on or surfaced (body/frontmatter) by search. draft/canonical/archived stay searchable.
+    # The status list is generated from ZETTEL_QUERYABLE_STATUSES so this filter and the
+    # Python-side guard below cannot describe different sets.
+    "status IN (" + ", ".join(f"'{status}'" for status in ZETTEL_QUERYABLE_STATUSES) + ")\n"
+    "  AND lower(coalesce(zettel_id, '') || ' ' || coalesce(title, '') || ' ' || coalesce(status, '') || ' ' ||\n"
+    "            coalesce(kind, '') || ' ' || coalesce(body, '') || ' ' || coalesce(frontmatter_json, '')) LIKE ?"
+)
+SEARCH_OBJECT_WHERE = (
+    "lower(coalesce(object_id, '') || ' ' || coalesce(logical_key, '') || ' ' ||\n"
+    "      coalesce(mime, '') || ' ' || coalesce(manifest_json, '')) LIKE ?"
+)
+SEARCH_DERIVED_TEXT_WHERE = (
+    "lower(coalesce(derived_text_id, '') || ' ' || coalesce(source_object_id, '') || ' ' ||\n"
+    "      coalesce(derivation_kind, '') || ' ' || coalesce(review_status, '') || ' ' ||\n"
+    "      coalesce(language, '') || ' ' || coalesce(text_logical_key, '') || ' ' ||\n"
+    "      coalesce(text_body, '') || ' ' || coalesce(manifest_json, '')) LIKE ?"
+)
+SEARCH_VIEW_WHERE = (
+    "lower(coalesce(view_id, '') || ' ' || coalesce(name, '') || ' ' ||\n"
+    "      coalesce(view_for, '') || ' ' || coalesce(view_json, '')) LIKE ?"
+)
+SEARCH_SOURCE_MAP_WHERE = (
+    "lower(coalesce(item_id, '') || ' ' || coalesce(source_id, '') || ' ' ||\n"
+    "      coalesce(item_kind, '') || ' ' || coalesce(relative_path, '') || ' ' ||\n"
+    "      coalesce(external_url, '') || ' ' || coalesce(scan_status, '') || ' ' ||\n"
+    "      coalesce(source_json, '')) LIKE ?"
+)
+SEARCH_CHANNEL_TABLES: tuple[tuple[str, str, str], ...] = (
+    ("zettel", "zettels", SEARCH_ZETTEL_WHERE),
+    ("object", "objects", SEARCH_OBJECT_WHERE),
+    ("derived_text", "derived_texts", SEARCH_DERIVED_TEXT_WHERE),
+    ("view", "views", SEARCH_VIEW_WHERE),
+    ("source_map", "source_map_entries", SEARCH_SOURCE_MAP_WHERE),
+)
+SEARCH_LIMIT_CEILING = 100
+
+
+def search_archive(
+    archive_root: Path | str,
+    query: str,
+    limit: int = 20,
+    *,
+    count_total: bool = False,
+) -> dict[str, Any]:
     root = require_existing_archive_root(archive_root)
     if not query.strip():
         raise ArchiveServiceError("query is required.")
@@ -80524,24 +80573,30 @@ def search_archive(archive_root: Path | str, query: str, limit: int = 20) -> dic
         raise ArchiveServiceError("Archive index is missing. Run archive index first.")
 
     like = f"%{query.lower()}%"
-    limit = max(1, min(int(limit), 100))
+    requested_limit = max(1, int(limit))
+    limit = min(requested_limit, SEARCH_LIMIT_CEILING)
+    # Read one row past the caller's limit. That single extra row is what proves
+    # whether more matches exist, and it keeps every channel's LIMIT in place so
+    # the cascade still stops early instead of scanning whole tables.
+    probe_budget = limit + 1
+    rows_seen = 0
     results: list[dict[str, Any]] = []
     conn = connect_archive_index(db_path, row_factory=True)
     try:
+        # One read transaction so the returned rows and any later count describe
+        # the same database state even if a rebuild commits alongside.
+        conn.execute("BEGIN")
         for row in conn.execute(
-            """
+            f"""
             SELECT path, zettel_id, title, status, kind, body, frontmatter_json
             FROM zettels
-            -- Privacy: a 'redacted' zettel's content is deliberately suppressed; it must never be
-            -- matched on or surfaced (body/frontmatter) by search. draft/canonical/archived stay searchable.
-            WHERE status IN ('draft', 'canonical', 'archived')
-              AND lower(coalesce(zettel_id, '') || ' ' || coalesce(title, '') || ' ' || coalesce(status, '') || ' ' ||
-                        coalesce(kind, '') || ' ' || coalesce(body, '') || ' ' || coalesce(frontmatter_json, '')) LIKE ?
+            WHERE {SEARCH_ZETTEL_WHERE}
             ORDER BY path
             LIMIT ?
             """,
-            (like, limit),
+            (like, probe_budget),
         ):
+            rows_seen += 1
             if (row["status"] or "") not in ZETTEL_QUERYABLE_STATUSES:
                 # Defense in depth: only validated lifecycle states are selected
                 # above; this guard keeps future query edits fail-closed too.
@@ -80558,19 +80613,19 @@ def search_archive(archive_root: Path | str, query: str, limit: int = 20) -> dic
                 }
             )
 
-        remaining = limit - len(results)
+        remaining = probe_budget - rows_seen
         if remaining > 0:
             for row in conn.execute(
-                """
+                f"""
                 SELECT object_id, logical_key, mime, manifest_json
                 FROM objects
-                WHERE lower(coalesce(object_id, '') || ' ' || coalesce(logical_key, '') || ' ' ||
-                            coalesce(mime, '') || ' ' || coalesce(manifest_json, '')) LIKE ?
+                WHERE {SEARCH_OBJECT_WHERE}
                 ORDER BY logical_key
                 LIMIT ?
                 """,
                 (like, remaining),
             ):
+                rows_seen += 1
                 results.append(
                     {
                         "type": "object",
@@ -80582,22 +80637,20 @@ def search_archive(archive_root: Path | str, query: str, limit: int = 20) -> dic
                     }
                 )
 
-        remaining = limit - len(results)
+        remaining = probe_budget - rows_seen
         if remaining > 0:
             for row in conn.execute(
-                """
+                f"""
                 SELECT derived_text_id, source_object_id, derivation_kind, review_status,
                        language, text_logical_key, text_body, manifest_json
                 FROM derived_texts
-                WHERE lower(coalesce(derived_text_id, '') || ' ' || coalesce(source_object_id, '') || ' ' ||
-                            coalesce(derivation_kind, '') || ' ' || coalesce(review_status, '') || ' ' ||
-                            coalesce(language, '') || ' ' || coalesce(text_logical_key, '') || ' ' ||
-                            coalesce(text_body, '') || ' ' || coalesce(manifest_json, '')) LIKE ?
+                WHERE {SEARCH_DERIVED_TEXT_WHERE}
                 ORDER BY text_logical_key
                 LIMIT ?
                 """,
                 (like, remaining),
             ):
+                rows_seen += 1
                 results.append(
                     {
                         "type": "derived_text",
@@ -80612,19 +80665,19 @@ def search_archive(archive_root: Path | str, query: str, limit: int = 20) -> dic
                     }
                 )
 
-        remaining = limit - len(results)
+        remaining = probe_budget - rows_seen
         if remaining > 0:
             for row in conn.execute(
-                """
+                f"""
                 SELECT path, view_id, name, view_for, view_json
                 FROM views
-                WHERE lower(coalesce(view_id, '') || ' ' || coalesce(name, '') || ' ' ||
-                            coalesce(view_for, '') || ' ' || coalesce(view_json, '')) LIKE ?
+                WHERE {SEARCH_VIEW_WHERE}
                 ORDER BY path
                 LIMIT ?
                 """,
                 (like, remaining),
             ):
+                rows_seen += 1
                 results.append(
                     {
                         "type": "view",
@@ -80636,21 +80689,19 @@ def search_archive(archive_root: Path | str, query: str, limit: int = 20) -> dic
                     }
                 )
 
-        remaining = limit - len(results)
+        remaining = probe_budget - rows_seen
         if remaining > 0:
             for row in conn.execute(
-                """
+                f"""
                 SELECT item_id, source_id, item_kind, relative_path, external_url, scan_status, source_json
                 FROM source_map_entries
-                WHERE lower(coalesce(item_id, '') || ' ' || coalesce(source_id, '') || ' ' ||
-                            coalesce(item_kind, '') || ' ' || coalesce(relative_path, '') || ' ' ||
-                            coalesce(external_url, '') || ' ' || coalesce(scan_status, '') || ' ' ||
-                            coalesce(source_json, '')) LIKE ?
+                WHERE {SEARCH_SOURCE_MAP_WHERE}
                 ORDER BY source_id, relative_path, external_url
                 LIMIT ?
                 """,
                 (like, remaining),
             ):
+                rows_seen += 1
                 title = row["relative_path"] or row["external_url"] or row["item_id"]
                 results.append(
                     {
@@ -80664,10 +80715,58 @@ def search_archive(archive_root: Path | str, query: str, limit: int = 20) -> dic
                         "snippet": make_snippet(row["source_json"] or "", query),
                     }
                 )
+
+        # The channels share one budget in order, so reading one row past the
+        # limit is enough to prove whether more matches exist.
+        truncated = rows_seen > limit
+        results = results[:limit]
+
+        matches_by_type: dict[str, int] | None = None
+        if not truncated:
+            # Every channel was exhausted, so the returned rows are the whole
+            # match set and its exact composition is already known.
+            total_matches: int | None = len(results)
+            matches_by_type = {}
+            for entry in results:
+                entry_type = str(entry.get("type") or "")
+                matches_by_type[entry_type] = matches_by_type.get(entry_type, 0) + 1
+        elif count_total:
+            # Opt-in only: a leading-wildcard LIKE cannot use an index, so an
+            # exact total costs a full scan of every channel. Callers that only
+            # need to know that more exist should not pay for it.
+            matches_by_type = {}
+            for channel, table, where_clause in SEARCH_CHANNEL_TABLES:
+                counted = conn.execute(
+                    f"SELECT COUNT(*) FROM {table} WHERE {where_clause}",  # noqa: S608 - fixed clause constants
+                    (like,),
+                ).fetchone()
+                channel_total = int(counted[0] or 0)
+                if channel_total:
+                    matches_by_type[channel] = channel_total
+            total_matches = max(sum(matches_by_type.values()), len(results))
+        else:
+            total_matches = None
     finally:
+        conn.rollback()
         conn.close()
 
-    return {"query": query, "count": len(results), "results": results}
+    return {
+        "query": query,
+        # `count` is the number of returned results and is kept for
+        # compatibility; `total_matches` is the scope-wide number when known.
+        "count": len(results),
+        "returned": len(results),
+        "truncated": truncated,
+        "complete": not truncated,
+        # None means "more matches exist and were not counted"; rerun with
+        # count_total to pay for the exact number.
+        "total_matches": total_matches,
+        "total_matches_known": total_matches is not None,
+        "matches_by_type": matches_by_type,
+        "limit_applied": limit,
+        "limit_ceiling": SEARCH_LIMIT_CEILING,
+        "results": results,
+    }
 
 
 def iter_zettel_paths(archive_root: Path) -> list[Path]:

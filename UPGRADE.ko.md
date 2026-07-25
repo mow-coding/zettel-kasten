@@ -2,6 +2,28 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.3.261 정직한 검색 커버리지
+
+아카이브, 인덱스, 영수증, schema 마이그레이션은 필요하지 않고, 이번 릴리스에
+인덱스 재생성도 필요 없습니다.
+
+`archive search`와 그 기본 text 출력, MCP `archive_search`가 이제 자기
+커버리지를 보고합니다: `truncated`, `complete`, `returned`, `total_matches`,
+`total_matches_known`, `matches_by_type`, `limit_applied`, `limit_ceiling`.
+지금까지는 반환한 행 수만 알려줘서, 잘린 페이지와 완전한 답이 겉보기에
+똑같았습니다.
+
+"더 있는지"는 그대로 공짜입니다. "정확히 몇 개인지"는 이제 `--count-total`
+(MCP는 `count_total`)이 필요합니다. 검색 대상 테이블을 전부 훑어야 하기
+때문입니다. 잘리지 않은 결과는 정확한 총계를 그냥 보고합니다.
+
+기존 호출자는 그대로 동작합니다. `count`, `query`, `results`의 의미와 형태,
+매칭 동작과 정렬 순서, 100건 상한 모두 그대로이며 상한만 이제 결과에
+드러납니다.
+
+`count`를 전체 개수로 쓰던 자동화가 있다면 `total_matches`로 바꾸고, 결과가
+아카이브의 전부라고 결론짓기 전에 `truncated`를 확인하세요.
+
 ## v0.3.260 크로스플랫폼 릴리스 검증
 
 아카이브, zet, 인덱스, 영수증, schema 마이그레이션은 필요하지 않습니다. 명령
@@ -13,7 +35,7 @@
 바뀌었으므로, 설치된 wheel의 동작은 이전과 동일합니다.
 
 동작이 달라지는 지점이 하나 있습니다. `--prompt-boundary-report`에
-`..eport.json` 같은 윈도우식 상위 경로 인자를 주면, 이제 리눅스와 macOS에서도
+`..\report.json` 같은 윈도우식 상위 경로 인자를 주면, 이제 리눅스와 macOS에서도
 "path traversal" 고정 메시지로 거부합니다. 예전에는 그 자리에서 파일 없음 오류가
 그대로 나왔습니다. 윈도우 동작과 일반 상대 경로 처리는 그대로입니다.
 
