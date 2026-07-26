@@ -9178,6 +9178,75 @@ def command_zet_title_readiness(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 1
 
 
+def command_zet_title_remap_plan(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("zet-title-remap-plan is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    reporter = CommandProgressReporter(
+        bool(getattr(args, "progress", False)),
+        label="zet-title-remap-plan",
+    )
+    try:
+        result = archive_services.zet_title_remap_plan(
+            Path(args.archive_root),
+            proposal_path=str(args.proposal),
+            max_items=int(args.max_items),
+            dry_run=True,
+            progress_callback=reporter.progress,
+        )
+    except archive_services.ArchiveServiceError:
+        print(
+            "zet-title-remap-plan could not read a safe private proposal or archive target.",
+            file=sys.stderr,
+        )
+        return 1
+    except (ArchivePathError, OSError, ValueError):
+        print(
+            "zet-title-remap-plan failed before a privacy-safe result could be produced.",
+            file=sys.stderr,
+        )
+        return 1
+    except Exception:
+        # The proposal is untrusted input. Nothing it contains may reach the
+        # default excepthook, whose traceback carries local absolute paths.
+        print(
+            "zet-title-remap-plan failed before a privacy-safe result could be produced.",
+            file=sys.stderr,
+        )
+        return 1
+    finally:
+        reporter.close()
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+        print(f"WOM zet title remap plan: {result.get('status') or 'unknown'}")
+        print(f"Candidates: {summary.get('candidate_count', 0)}")
+        print(f"Ready for review: {summary.get('ready_for_review_count', 0)}")
+        print(
+            f"- of which the old title was provably its own imported id: "
+            f"{summary.get('provenance_bound_ready_count', 0)}"
+        )
+        print(f"Blocked: {summary.get('blocked_count', 0)}")
+        # Without this a top-level blocker (empty proposal, over --max-items)
+        # shows as "Blocked: 0" beside a non-zero exit and no stated reason.
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+        if result.get("next_safe_actions"):
+            print("Next safe actions:")
+            for action in result["next_safe_actions"]:
+                print(f"- {action}")
+        print("Writes: none")
+    return 0 if result.get("ok") else 1
+
+
 def command_first_read_readiness(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print("first-read-readiness is read-only and requires --dry-run.", file=sys.stderr)
@@ -19750,6 +19819,41 @@ def build_parser() -> argparse.ArgumentParser:
         help="Output format.",
     )
     zet_title_readiness.set_defaults(func=command_zet_title_readiness)
+
+    zet_title_remap_plan = subcommands.add_parser(
+        "zet-title-remap-plan",
+        aliases=["title-remap-plan"],
+        help="Validate private reviewed replacement titles against exact current canonical zet bytes without writing.",
+    )
+    zet_title_remap_plan.add_argument("archive_root", help="Archive root containing canonical zets.")
+    zet_title_remap_plan.add_argument(
+        "--proposal",
+        required=True,
+        help="Private JSONL under .wom-scratch/title-remap/; its path and values are never echoed.",
+    )
+    zet_title_remap_plan.add_argument(
+        "--max-items",
+        type=int,
+        default=500,
+        help="Maximum proposal rows to inspect (1-5000).",
+    )
+    zet_title_remap_plan.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Required. Reads the proposal and the named canonical zets but writes nothing.",
+    )
+    zet_title_remap_plan.add_argument(
+        "--progress",
+        action="store_true",
+        help="Stream content-free byte and row counts plus 10-second heartbeats to stderr.",
+    )
+    zet_title_remap_plan.add_argument(
+        "--format",
+        choices=["text", "json"],
+        default="json",
+        help="Output format.",
+    )
+    zet_title_remap_plan.set_defaults(func=command_zet_title_remap_plan)
 
     abstract_freshness = subcommands.add_parser(
         "abstract-freshness",

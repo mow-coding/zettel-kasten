@@ -24,6 +24,57 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.263 Reviewed Title Remap Plan
+
+No archive, zettel, index, receipt, or schema migration is required, and no
+existing command changes behavior.
+
+This release adds one read-only command:
+
+```powershell
+archive zet-title-remap-plan <archive-root> --proposal <private.jsonl> --dry-run
+```
+
+v0.3.262 told you how many canonical zets have an imported page id where a name
+should be. This checks the replacement names you already have. You supply a
+private JSONL file under `.wom-scratch/title-remap/`, one row per zet, authored
+against the shipped `zet-title-remap-proposal.schema.json` contract. Every row
+needs all five fields — the `schema` marker is required and a row without it is
+rejected:
+
+```json
+{"schema":"wom-kit/zet-title-remap-proposal/v0.1","zettel_id":"zet_import_notion_a1b2c3d4e5f60718","expected_file_sha256":"sha256:<64 hex>","title":"2026 startup club test results","basis":"source_export_property"}
+```
+
+`basis` is either `source_export_property` or `human_written`, and
+`expected_file_sha256` is the hash of that zet as you last saw it.
+
+Nothing is written. The command reports which rows are ready for a human to
+review and which are blocked, and why. It reads each named canonical zet in
+full — body included — in order to hash it, so this is a wider read than the
+v0.3.262 census, which was frontmatter-only.
+
+Three refusals are worth knowing about in advance:
+
+- A zet whose current title is a name a human chose is refused. This command
+  repairs imported identifiers and is not a general title editor.
+- A replacement that is itself an identifier is refused.
+- A replacement that would fail the promotion checklist's "specific enough"
+  rule is refused.
+
+A row also blocks if the zet changed after you built the proposal, so a plan is
+never made against content you did not look at. A replacement that would be
+flagged again by `zet-title-readiness` — including one that equals the record's
+own imported identifier — is refused for the same reason.
+
+Unlike the readiness commands, a blocked row makes the command exit 1. This is a
+plan that either fully validates or does not. The command also exits 1 when the
+proposal is empty, when it has more rows than `--max-items` allows (the default
+is 500, so a mapping of a few thousand rows needs a higher value or splitting),
+or when `--max-items` is itself out of range.
+
+The approved write, its receipts, and the revert path come in later releases.
+
 ## v0.3.262 Identifier-Title Census
 
 No archive, zettel, index, receipt, or schema migration is required, and no

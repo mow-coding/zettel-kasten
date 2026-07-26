@@ -31825,6 +31825,298 @@ state:
             self.assertTrue(result["readiness_met"])
             self.assertEqual(self.snapshot_archive_files(archive_root), before)
 
+    def _write_title_remap_proposal(self, archive_root: Path, rows: list[dict]) -> str:
+        relative = ".wom-scratch/title-remap/reviewed.jsonl"
+        path = archive_root / ".wom-scratch" / "title-remap" / "reviewed.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows),
+            encoding="utf-8",
+        )
+        return relative
+
+    def _canonical_sha256(self, archive_root: Path, name: str) -> str:
+        data = (archive_root / "zettels" / f"{name}.md").read_bytes()
+        return "sha256:" + hashlib.sha256(data).hexdigest()
+
+    def test_zet_title_remap_plan_binds_reviewed_titles_without_echoing_values(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            identifier = "32634f642e1b80b68144d468b836da79"
+            name = "zet_import_notion_c3d4e5f607182930"
+            self._write_title_probe_zet(
+                archive_root,
+                name,
+                f"id: {name}\ntitle: {identifier}\n"
+                "status: canonical\nkind: note\n"
+                "facets:\n  notion_page_id: 32634f64-2e1b-80b6-8144-d468b836da79\n",
+            )
+            replacement = "2026학년도 창업동아리 티니핑 테스트 결과지"
+            proposal = self._write_title_remap_proposal(
+                archive_root,
+                [
+                    {
+                        "schema": "wom-kit/zet-title-remap-proposal/v0.1",
+                        "zettel_id": name,
+                        "expected_file_sha256": self._canonical_sha256(archive_root, name),
+                        "title": replacement,
+                        "basis": "source_export_property",
+                    }
+                ],
+            )
+            before = self.snapshot_archive_files(archive_root)
+
+            code, output = self.run_cli(
+                ["zet-title-remap-plan", str(archive_root), "--proposal", proposal, "--dry-run"]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertEqual(result["status"], "ready_for_human_review")
+            self.assertEqual(result["summary"]["ready_for_review_count"], 1)
+            self.assertEqual(result["summary"]["blocked_count"], 0)
+            # The old title equalled a registered page-ref facet, so the replacement
+            # rests on the record itself rather than only on the operator's export.
+            self.assertEqual(result["summary"]["provenance_bound_ready_count"], 1)
+            self.assertTrue(result["items"][0]["provenance_bound"])
+            self.assertTrue(result["items"][0]["expected_file_sha256_matches"])
+
+            # Neither the old identifier nor the new title may appear anywhere.
+            self.assertNotIn(identifier, output)
+            self.assertNotIn("32634f64-2e1b-80b6", output)
+            self.assertNotIn(replacement, output)
+            self.assertNotIn("창업동아리", output)
+            self.assertFalse(result["privacy_guards"]["replacement_title_values_echoed"])
+            # A digest of a short human-scale title is recoverable by search once
+            # its exact length is published beside it, so neither may be emitted.
+            item = result["items"][0]
+            self.assertNotIn("title_sha256", item)
+            self.assertNotIn("title_char_count", item)
+            self.assertNotIn("title_sha256", json.dumps(result["plan_digest"]))
+            self.assertFalse(result["write_boundary"]["canonical_zets_changed"])
+            self.assertFalse(result["approval_contract"]["approved_write_implemented"])
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+
+    def test_zet_title_remap_plan_requires_identifier_shape_not_just_a_census_signal(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            # A human-readable title that happens to equal a registered page-ref
+            # facet value. The census's title_matches_external_id signal fires with
+            # no shape test, so accepting "any census signal" would let this tool
+            # rewrite an ordinary title to anything the operator likes.
+            name = "zet_import_notion_f6071829304152a3"
+            self._write_title_probe_zet(
+                archive_root,
+                name,
+                f"id: {name}\ntitle: Weekly Planning Database\n"
+                "status: canonical\nkind: note\n"
+                "facets:\n  external_id: Weekly Planning Database\n",
+            )
+            proposal = self._write_title_remap_proposal(
+                archive_root,
+                [
+                    {
+                        "schema": "wom-kit/zet-title-remap-proposal/v0.1",
+                        "zettel_id": name,
+                        "expected_file_sha256": self._canonical_sha256(archive_root, name),
+                        "title": "Whatever the operator would rather it said today",
+                        "basis": "human_written",
+                    }
+                ],
+            )
+            code, output = self.run_cli(
+                ["zet-title-remap-plan", str(archive_root), "--proposal", proposal, "--dry-run"]
+            )
+            self.assertEqual(code, 1, output)
+            result = json.loads(output)
+            self.assertIn(
+                "current_title_not_identifier_shaped", result["items"][0]["blocker_codes"]
+            )
+            self.assertEqual(result["summary"]["ready_for_review_count"], 0)
+
+    def test_zet_title_remap_plan_refuses_a_replacement_the_census_would_reflag(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            # The replacement equals this record's own page-ref value. It is not
+            # identifier-shaped, so the shape refusal alone misses it -- but the
+            # census would flag it again the moment an approved write landed.
+            name = "zet_import_notion_0718293041526374"
+            self._write_title_probe_zet(
+                archive_root,
+                name,
+                f"id: {name}\ntitle: 32634f642e1b80b68144d468b836da79\n"
+                "status: canonical\nkind: note\n"
+                "facets:\n  external_id: Weekly Planning Database\n",
+            )
+            proposal = self._write_title_remap_proposal(
+                archive_root,
+                [
+                    {
+                        "schema": "wom-kit/zet-title-remap-proposal/v0.1",
+                        "zettel_id": name,
+                        "expected_file_sha256": self._canonical_sha256(archive_root, name),
+                        "title": "Weekly Planning Database",
+                        "basis": "source_export_property",
+                    }
+                ],
+            )
+            code, output = self.run_cli(
+                ["zet-title-remap-plan", str(archive_root), "--proposal", proposal, "--dry-run"]
+            )
+            self.assertEqual(code, 1, output)
+            result = json.loads(output)
+            self.assertIn(
+                "replacement_would_be_reflagged_by_census",
+                result["items"][0]["blocker_codes"],
+            )
+
+    def test_zet_title_remap_plan_does_not_judge_a_redacted_target(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            name = "zet_import_notion_1829304152637485"
+            self._write_title_probe_zet(
+                archive_root,
+                name,
+                f"id: {name}\ntitle: 32634f642e1b80b68144d468b836da79\n"
+                "status: redacted\nkind: note\n"
+                "facets:\n  external_id: 32634f64-2e1b-80b6-8144-d468b836da79\n",
+            )
+            proposal = self._write_title_remap_proposal(
+                archive_root,
+                [
+                    {
+                        "schema": "wom-kit/zet-title-remap-proposal/v0.1",
+                        "zettel_id": name,
+                        "expected_file_sha256": self._canonical_sha256(archive_root, name),
+                        "title": "A reviewed replacement name",
+                        "basis": "source_export_property",
+                    }
+                ],
+            )
+            code, output = self.run_cli(
+                ["zet-title-remap-plan", str(archive_root), "--proposal", proposal, "--dry-run"]
+            )
+            self.assertEqual(code, 1, output)
+            result = json.loads(output)
+            item = result["items"][0]
+            self.assertIn("target_status_not_canonical", item["blocker_codes"])
+            # A redacted zet exposes no title to judge, so the report must publish
+            # no title-derived fact about it.
+            self.assertEqual(item["current_title_signals"], [])
+            self.assertFalse(item["provenance_bound"])
+            self.assertEqual(
+                result["summary"]["ready_row_current_title_signal_counts"],
+                {"title_matches_external_id": 0, "title_is_identifier_shaped": 0},
+            )
+
+    def test_zet_title_remap_plan_survives_a_hostile_proposal_line(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            path = archive_root / ".wom-scratch" / "title-remap" / "reviewed.jsonl"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            # Well under the 1 MiB per-row ceiling, but deep enough that json
+            # raises RecursionError, which is not a JSONDecodeError.
+            path.write_text("[" * 5000 + "]" * 5000 + "\n", encoding="utf-8")
+            code, output = self.run_cli(
+                [
+                    "zet-title-remap-plan",
+                    str(archive_root),
+                    "--proposal",
+                    ".wom-scratch/title-remap/reviewed.jsonl",
+                    "--dry-run",
+                ]
+            )
+            self.assertEqual(code, 1)
+            # No traceback, and nothing carrying a local absolute path.
+            self.assertNotIn("Traceback", output)
+            self.assertNotIn("archive_services.py", output)
+            self.assertNotIn(str(archive_root), output)
+
+    def test_zet_title_remap_plan_refuses_titles_the_census_would_not_flag(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            # A title a human chose. This command exists to repair imported
+            # identifiers, so it must not become a general title rewriter.
+            name = "zet_probe_human_title"
+            self._write_title_probe_zet(
+                archive_root,
+                name,
+                f"id: {name}\ntitle: Lunch with the startup club advisor\n"
+                "status: canonical\nkind: note\n",
+            )
+            proposal = self._write_title_remap_proposal(
+                archive_root,
+                [
+                    {
+                        "schema": "wom-kit/zet-title-remap-proposal/v0.1",
+                        "zettel_id": name,
+                        "expected_file_sha256": self._canonical_sha256(archive_root, name),
+                        "title": "Something the operator would rather it said",
+                        "basis": "human_written",
+                    }
+                ],
+            )
+            code, output = self.run_cli(
+                ["zet-title-remap-plan", str(archive_root), "--proposal", proposal, "--dry-run"]
+            )
+            self.assertEqual(code, 1)
+            result = json.loads(output)
+            self.assertEqual(result["status"], "blocked")
+            self.assertIn(
+                "current_title_not_identifier_shaped", result["items"][0]["blocker_codes"]
+            )
+            self.assertFalse(result["write_boundary"]["canonical_zets_changed"])
+
+    def test_zet_title_remap_plan_blocks_stale_bytes_and_identifier_replacements(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            stale = "zet_import_notion_d4e5f60718293041"
+            reshape = "zet_import_notion_e5f6071829304152"
+            for name in (stale, reshape):
+                self._write_title_probe_zet(
+                    archive_root,
+                    name,
+                    f"id: {name}\ntitle: 24334f642e1b80ea9877f84bf54c4b0e\n"
+                    "status: canonical\nkind: note\n",
+                )
+            stale_sha = self._canonical_sha256(archive_root, stale)
+            # The zet changed after the operator built the proposal.
+            (archive_root / "zettels" / f"{stale}.md").write_text(
+                f"---\nid: {stale}\ntitle: 24334f642e1b80ea9877f84bf54c4b0e\n"
+                "status: canonical\nkind: note\n---\n\nbody text edited later\n",
+                encoding="utf-8",
+            )
+            proposal = self._write_title_remap_proposal(
+                archive_root,
+                [
+                    {
+                        "schema": "wom-kit/zet-title-remap-proposal/v0.1",
+                        "zettel_id": stale,
+                        "expected_file_sha256": stale_sha,
+                        "title": "Startup club meeting notes for the spring term",
+                        "basis": "source_export_property",
+                    },
+                    {
+                        "schema": "wom-kit/zet-title-remap-proposal/v0.1",
+                        "zettel_id": reshape,
+                        "expected_file_sha256": self._canonical_sha256(archive_root, reshape),
+                        # Replacing one identifier with another leaves the archive
+                        # exactly as unbrowsable as before.
+                        "title": "9f41ab076c224d159e3370bb1c5ad284",
+                        "basis": "source_export_property",
+                    },
+                ],
+            )
+            code, output = self.run_cli(
+                ["zet-title-remap-plan", str(archive_root), "--proposal", proposal, "--dry-run"]
+            )
+            self.assertEqual(code, 1)
+            result = json.loads(output)
+            self.assertEqual(result["summary"]["ready_for_review_count"], 0)
+            self.assertEqual(result["summary"]["blocked_count"], 2)
+            by_row = {item["row_index"]: item["blocker_codes"] for item in result["items"]}
+            self.assertIn("canonical_file_sha256_mismatch", by_row[0])
+            self.assertIn("title_is_identifier_shaped", by_row[1])
+
     def test_zet_title_readiness_does_not_claim_readiness_over_unjudged_zets(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")

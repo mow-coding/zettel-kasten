@@ -7492,6 +7492,18 @@ ZET_TITLE_READINESS_SCHEMA = "wom-kit/zet-title-readiness/v0.1"
 ZET_TITLE_IDENTIFIER_MIN_HEX_CHARS = 16
 ZET_TITLE_HEX_RE = re.compile(r"\A[0-9a-f]+\Z")
 
+ZET_TITLE_REMAP_PROPOSAL_SCHEMA = "wom-kit/zet-title-remap-proposal/v0.1"
+ZET_TITLE_REMAP_PLAN_SCHEMA = "wom-kit/zet-title-remap-plan/v0.1"
+ZET_TITLE_REMAP_PROPOSAL_PREFIX = ".wom-scratch/title-remap/"
+# Where the operator says the replacement name came from. A remap is only
+# defensible if a name already existed somewhere; neither value is invented here.
+ZET_TITLE_REMAP_BASIS_VALUES = {"source_export_property", "human_written"}
+ZET_TITLE_REMAP_MAX_ITEMS = 5000
+ZET_TITLE_REMAP_MAX_FILE_BYTES = 64 * 1024 * 1024
+ZET_TITLE_REMAP_MAX_LINE_BYTES = 1024 * 1024
+ZET_TITLE_REMAP_MAX_CANONICAL_FILE_BYTES = 16 * 1024 * 1024
+ZET_TITLE_REMAP_MAX_TITLE_CHARS = 200
+
 
 def compact_zet_title_comparison_form(value: str) -> str:
     """Collapse a title or identifier to the house comparison form.
@@ -7815,6 +7827,476 @@ def zet_title_readiness(
             "title_derived_references_withheld": bool(
                 paths_withheld_count or zettel_ids_withheld_count
             ),
+            "writes": False,
+        },
+    }
+
+
+def resolve_zet_title_remap_proposal_path(root: Path, raw_path: str) -> Path:
+    try:
+        normalized = normalize_archive_relative_path(raw_path)
+    except ArchivePathError as exc:
+        raise ArchiveServiceError("Title remap proposal path must be archive-relative.") from exc
+    if not normalized.startswith(ZET_TITLE_REMAP_PROPOSAL_PREFIX) or not normalized.lower().endswith(".jsonl"):
+        raise ArchiveServiceError(
+            f"Title remap proposal must be a .jsonl file under {ZET_TITLE_REMAP_PROPOSAL_PREFIX}"
+        )
+    unresolved = root.resolve()
+    for part in normalized.split("/"):
+        unresolved = unresolved / part
+        if unresolved.is_symlink():
+            raise ArchiveServiceError("Title remap proposal paths must not contain symbolic links.")
+    path = resolve_archive_relative_path(root, normalized)
+    if path.is_symlink() or not path.is_file():
+        raise ArchiveServiceError("Title remap proposal must be an existing regular file.")
+    return path
+
+
+def read_zet_title_remap_proposal_bytes(
+    proposal_path: Path,
+    *,
+    progress_callback: Callable[[str, str, int | None, int | None], None] | None,
+) -> tuple[bytes, str]:
+    size = proposal_path.stat().st_size
+    if size > ZET_TITLE_REMAP_MAX_FILE_BYTES:
+        raise ArchiveServiceError("Title remap proposal exceeds the 64 MiB safety limit.")
+    chunks: list[bytes] = []
+    completed = 0
+    if progress_callback is not None:
+        progress_callback("title-remap-proposal", "start", 0, size)
+    with proposal_path.open("rb") as handle:
+        while True:
+            chunk = handle.read(1024 * 1024)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            completed += len(chunk)
+            if completed > ZET_TITLE_REMAP_MAX_FILE_BYTES:
+                raise ArchiveServiceError("Title remap proposal exceeds the 64 MiB safety limit.")
+            if progress_callback is not None:
+                progress_callback("title-remap-proposal", "scanned", completed, size)
+    if progress_callback is not None:
+        progress_callback("title-remap-proposal", "done", completed, size)
+    raw_bytes = b"".join(chunks)
+    return raw_bytes, "sha256:" + hashlib.sha256(raw_bytes).hexdigest()
+
+
+def read_zet_title_remap_canonical_bytes(path: Path) -> bytes:
+    """Read a canonical zet under the published ceiling, checked after the read.
+
+    A stat-then-unbounded-read makes the ceiling advisory: the file can grow
+    between the two calls. Reading one byte past the limit and re-checking makes
+    the number the report publishes actually hold.
+    """
+    if path.stat().st_size > ZET_TITLE_REMAP_MAX_CANONICAL_FILE_BYTES:
+        raise ArchiveServiceError("Canonical zet exceeds the 16 MiB title remap limit.")
+    with path.open("rb") as handle:
+        value = handle.read(ZET_TITLE_REMAP_MAX_CANONICAL_FILE_BYTES + 1)
+    if len(value) > ZET_TITLE_REMAP_MAX_CANONICAL_FILE_BYTES:
+        raise ArchiveServiceError("Canonical zet exceeds the 16 MiB title remap limit.")
+    return value
+
+
+def normalized_zet_title_candidate(value: Any, blocker_codes: list[str]) -> str | None:
+    """Validate a proposed replacement title without returning it to any report."""
+    if not isinstance(value, str):
+        blocker_codes.append("title_not_string")
+        return None
+    normalized = re.sub(r"\s+", " ", value).strip()
+    if not normalized:
+        blocker_codes.append("title_empty")
+        return None
+    if normalized != value:
+        blocker_codes.append("title_not_normalized_single_line")
+        return None
+    if len(normalized) > ZET_TITLE_REMAP_MAX_TITLE_CHARS:
+        blocker_codes.append("title_too_long")
+        return None
+    if (
+        header_string_is_private_or_unsafe(normalized)
+        or source_intake_has_provider_url(normalized)
+        or source_intake_secret_like(normalized)
+    ):
+        blocker_codes.append("title_private_locator_or_secret_like")
+        return None
+    # A replacement that is itself identifier-shaped would be scored by
+    # zet-title-readiness exactly as the value it replaces. Refuse it here rather
+    # than let the census re-flag the archive after an approved write.
+    compact = compact_zet_title_comparison_form(normalized)
+    if len(compact) >= ZET_TITLE_IDENTIFIER_MIN_HEX_CHARS and ZET_TITLE_HEX_RE.match(compact):
+        blocker_codes.append("title_is_identifier_shaped")
+        return None
+    if not title_is_specific_enough_for_checklist(normalized):
+        blocker_codes.append("title_not_specific_enough_for_promotion_checklist")
+        return None
+    return normalized
+
+
+def zet_title_remap_plan(
+    archive_root: Path | str,
+    *,
+    proposal_path: str,
+    max_items: int = 500,
+    dry_run: bool = False,
+    progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
+) -> dict[str, Any]:
+    """Validate reviewed replacement titles against exact current canonical bytes.
+
+    v0.3.262 counts canonical zets whose title is an imported identifier. This is
+    the next rung: an operator supplies the names that already exist in the source
+    export, and this checks each one against the archive without writing. It
+    proposes no text of its own -- every replacement comes from the proposal file.
+
+    The rule that keeps this from becoming a general title rewriter: a row is only
+    accepted when the *current* title is one the census would flag. A title a human
+    chose is not remappable through this path.
+    """
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if not dry_run:
+        blockers.append("dry_run_required")
+    requested_max_items = int(max_items)
+    effective_max_items = max(1, min(requested_max_items, ZET_TITLE_REMAP_MAX_ITEMS))
+    if requested_max_items != effective_max_items:
+        blockers.append("max_items_out_of_range")
+    resolved_proposal = resolve_zet_title_remap_proposal_path(root, proposal_path)
+    raw_bytes, proposal_sha256 = read_zet_title_remap_proposal_bytes(
+        resolved_proposal,
+        progress_callback=progress_callback,
+    )
+    raw_lines = raw_bytes.splitlines(keepends=True)
+    if not raw_lines:
+        blockers.append("proposal_empty")
+    truncated_due_to_max_items = len(raw_lines) > effective_max_items
+    if truncated_due_to_max_items:
+        blockers.append("proposal_exceeds_max_items")
+
+    rows: list[dict[str, Any] | None] = []
+    for raw_line in raw_lines[:effective_max_items]:
+        if len(raw_line) > ZET_TITLE_REMAP_MAX_LINE_BYTES:
+            rows.append(None)
+            continue
+        if not raw_line.strip():
+            rows.append(None)
+            continue
+        try:
+            parsed = json.loads(raw_line.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
+            # RecursionError is not a JSONDecodeError. A deeply nested array well
+            # under the per-line ceiling would otherwise escape to the default
+            # excepthook and print a traceback carrying local absolute paths.
+            parsed = None
+        rows.append(parsed if isinstance(parsed, dict) else None)
+
+    seen_zettel_ids: set[str] = set()
+    item_results: list[dict[str, Any]] = []
+    fingerprint_rows: list[dict[str, Any]] = []
+    basis_counts = {basis: 0 for basis in sorted(ZET_TITLE_REMAP_BASIS_VALUES)}
+    current_signal_counts = {
+        "title_matches_external_id": 0,
+        "title_is_identifier_shaped": 0,
+    }
+    if progress_callback is not None:
+        progress_callback("title-remap-candidates", "start", 0, len(rows))
+    for index, row in enumerate(rows):
+        row_blockers: list[str] = []
+        expected_file_sha256: str | None = None
+        normalized_title: str | None = None
+        basis: str | None = None
+        expected_matches: bool | None = None
+        current_signals: list[str] = []
+
+        if row is None:
+            row_blockers.append("row_not_valid_json_object")
+        else:
+            allowed_keys = {"schema", "zettel_id", "expected_file_sha256", "title", "basis"}
+            if set(row) - allowed_keys:
+                row_blockers.append("unsupported_fields")
+            if row.get("schema") != ZET_TITLE_REMAP_PROPOSAL_SCHEMA:
+                row_blockers.append("unsupported_schema")
+            zettel_id = row.get("zettel_id")
+            if not isinstance(zettel_id, str) or not ZETTEL_EDGE_ZETTEL_ID_RE.fullmatch(zettel_id):
+                row_blockers.append("zettel_id_invalid")
+                zettel_id = None
+            elif zettel_id in seen_zettel_ids:
+                row_blockers.append("zettel_id_duplicate")
+                # Stop here: inspecting the same zet twice would read it twice and
+                # tally its signals twice for one zet.
+                zettel_id = None
+            else:
+                seen_zettel_ids.add(zettel_id)
+
+            raw_expected_sha256 = row.get("expected_file_sha256")
+            if (
+                not isinstance(raw_expected_sha256, str)
+                or not re.fullmatch(r"sha256:[0-9a-f]{64}", raw_expected_sha256)
+            ):
+                row_blockers.append("expected_file_sha256_invalid")
+            else:
+                expected_file_sha256 = raw_expected_sha256
+
+            basis_value = row.get("basis")
+            if basis_value not in ZET_TITLE_REMAP_BASIS_VALUES:
+                row_blockers.append("basis_invalid")
+            else:
+                basis = str(basis_value)
+
+            normalized_title = normalized_zet_title_candidate(row.get("title"), row_blockers)
+
+            if zettel_id is not None:
+                try:
+                    zettel_path = resolve_zettel_path(root, zettel_id=zettel_id, relative_path=None)
+                    relative = archive_relative_path(zettel_path, root)
+                    if not relative.startswith("zettels/") or zettel_path.is_symlink():
+                        row_blockers.append("target_not_plain_canonical_zet")
+                    else:
+                        canonical_bytes = read_zet_title_remap_canonical_bytes(zettel_path)
+                        current_file_sha256 = "sha256:" + hashlib.sha256(canonical_bytes).hexdigest()
+                        expected_matches = bool(
+                            expected_file_sha256 and expected_file_sha256 == current_file_sha256
+                        )
+                        if not expected_matches:
+                            row_blockers.append("canonical_file_sha256_mismatch")
+                        # Parse the frontmatter out of the bytes that were just
+                        # hashed. Re-reading the path would let every decision below
+                        # rest on content the recorded hash never covered.
+                        try:
+                            canonical_text = canonical_bytes.decode("utf-8-sig")
+                        except UnicodeDecodeError as exc:
+                            raise ArchiveServiceError("Canonical zet is not valid UTF-8.") from exc
+                        frontmatter, _canonical_body = split_zettel_text(canonical_text)
+                        if not frontmatter or frontmatter.get("id") != zettel_id:
+                            row_blockers.append("canonical_frontmatter_identity_mismatch")
+                        if frontmatter.get("status") != "canonical":
+                            # A redacted or otherwise non-canonical zet is not judged
+                            # at all. The census excludes redacted zets because they
+                            # expose no title to judge; publishing title-derived facts
+                            # about one here would undo that.
+                            row_blockers.append("target_status_not_canonical")
+                        else:
+                            current_signals = zet_title_identifier_signals(
+                                {
+                                    "title": frontmatter.get("title"),
+                                    "facets": frontmatter.get("facets"),
+                                }
+                            )
+                            # Shape is the requirement, not merely "the census would
+                            # flag it". `title_matches_external_id` fires whenever the
+                            # title equals a registered page-ref facet value, and that
+                            # value can be an ordinary human name -- which would make
+                            # this a general title editor for any zet whose facets
+                            # happen to repeat its title.
+                            if "title_is_identifier_shaped" not in current_signals:
+                                row_blockers.append("current_title_not_identifier_shaped")
+                            current_title = frontmatter.get("title")
+                            if (
+                                normalized_title is not None
+                                and isinstance(current_title, str)
+                                and compact_zet_title_comparison_form(current_title)
+                                == compact_zet_title_comparison_form(normalized_title)
+                            ):
+                                row_blockers.append("title_unchanged")
+                            # Run the full census predicate on the replacement, with
+                            # this target's facets in scope. Refusing only
+                            # identifier-shaped replacements missed the other signal:
+                            # a replacement equal to the record's own page-ref value
+                            # would be re-flagged the moment the write landed.
+                            if normalized_title is not None and zet_title_identifier_signals(
+                                {
+                                    "title": normalized_title,
+                                    "facets": frontmatter.get("facets"),
+                                }
+                            ):
+                                row_blockers.append("replacement_would_be_reflagged_by_census")
+                except (ArchiveServiceError, ArchivePathError, OSError, ValueError):
+                    row_blockers.append("canonical_target_unavailable_or_unreadable")
+
+        row_blockers = unique_preserve_order(row_blockers)
+        ready = not row_blockers
+        if ready:
+            # The proposal file's own sha256 already binds every replacement title
+            # collectively, so the plan digest carries no per-title digest. A digest
+            # of a short human-scale title is recoverable by search once the other
+            # row fields are published beside it.
+            fingerprint_rows.append(
+                {
+                    "row_index": index,
+                    "expected_file_sha256": expected_file_sha256,
+                    "basis": basis,
+                }
+            )
+            if basis is not None:
+                basis_counts[basis] += 1
+            for signal in current_signals:
+                current_signal_counts[signal] += 1
+        item_results.append(
+            {
+                "row_index": index,
+                "status": "ready_for_review" if ready else "blocked",
+                "basis": basis,
+                "expected_file_sha256_matches": expected_matches,
+                "current_title_signals": current_signals,
+                "provenance_bound": "title_matches_external_id" in current_signals,
+                "blocker_codes": row_blockers,
+            }
+        )
+        if progress_callback is not None and (
+            index == 0 or index + 1 == len(rows) or (index + 1) % 250 == 0
+        ):
+            progress_callback("title-remap-candidates", "scanned", index + 1, len(rows))
+    if progress_callback is not None:
+        progress_callback("title-remap-candidates", "done", len(rows), len(rows))
+
+    ready_count = sum(1 for item in item_results if item["status"] == "ready_for_review")
+    blocked_count = len(item_results) - ready_count
+    provenance_bound_ready = sum(
+        1
+        for item in item_results
+        if item["status"] == "ready_for_review" and item["provenance_bound"]
+    )
+    if blocked_count:
+        blockers.append("one_or_more_proposals_blocked")
+    if not item_results:
+        blockers.append("no_proposal_rows")
+    if ready_count and provenance_bound_ready < ready_count:
+        warnings.append(
+            "Some ready rows replace a title that is only identifier-shaped, not provably this "
+            "record's own imported identifier. Those rest on the operator's source, not on the zet."
+        )
+    if len(item_results) >= 1000:
+        warnings.append("Large proposal batch: review in bounded groups before any future approved write.")
+    blockers = unique_preserve_order(blockers)
+    ok = not blockers
+
+    next_safe_actions: list[str] = []
+    if blocked_count:
+        next_safe_actions.append(
+            "Fix only the blocked row indexes in the private proposal and run the plan again; "
+            "each row reports why it blocked in blocker_codes."
+        )
+    if truncated_due_to_max_items:
+        next_safe_actions.append(
+            "The proposal has more rows than --max-items allows. Raise --max-items or split the "
+            "proposal; nothing was planned for the rows past the ceiling."
+        )
+    if ok:
+        next_safe_actions.append(
+            "Have a human review the ready rows against the source record that holds each name. "
+            "The approved write is not implemented in this release."
+        )
+
+    # Derived from what the payload actually carries rather than asserted. A
+    # literal cannot notice a field that starts echoing a value.
+    payload_probe = json.dumps(json_safe(item_results), ensure_ascii=False)
+    replacement_echoed = any(
+        isinstance(row, dict)
+        and isinstance(row.get("title"), str)
+        and row["title"].strip()
+        and row["title"] in payload_probe
+        for row in rows
+    )
+    return {
+        "ok": ok,
+        "dry_run": bool(dry_run),
+        "schema": ZET_TITLE_REMAP_PLAN_SCHEMA,
+        "lifecycle_action": "zet_title_remap_plan",
+        "status": "ready_for_human_review" if ok else "blocked",
+        "archive_id": archive_id,
+        "proposal": {
+            "schema": ZET_TITLE_REMAP_PROPOSAL_SCHEMA,
+            "sha256": proposal_sha256,
+            "path_policy": ZET_TITLE_REMAP_PROPOSAL_PREFIX + "<private>.jsonl",
+            "path_echoed": False,
+            "bytes_read": len(raw_bytes),
+            "line_count": len(raw_lines),
+            "contains_private_zettel_ids_and_titles": True,
+            "expected_content": "proposal_metadata_and_replacement_title_text_not_canonical_body_text",
+            "untrusted_extra_content_possible": True,
+            "untrusted_content_echoed": False,
+            "tracking_policy": "private_ai_working_file_do_not_commit",
+        },
+        "plan_digest": sha256_json_value(
+            {
+                "proposal_sha256": proposal_sha256,
+                "archive_id": archive_id,
+                "items": fingerprint_rows,
+            }
+        ),
+        "summary": {
+            "candidate_count": len(item_results),
+            "proposal_line_count": len(raw_lines),
+            "inspected_count": len(item_results),
+            "truncated_due_to_max_items": truncated_due_to_max_items,
+            "ready_for_review_count": ready_count,
+            "blocked_count": blocked_count,
+            "provenance_bound_ready_count": provenance_bound_ready,
+            "ready_row_basis_counts": basis_counts,
+            "ready_row_current_title_signal_counts": current_signal_counts,
+            "signals_may_overlap_one_row": True,
+            "per_row_count_is": "summary.ready_for_review_count",
+            "max_items": effective_max_items,
+            "max_canonical_file_bytes": ZET_TITLE_REMAP_MAX_CANONICAL_FILE_BYTES,
+            "all_candidates_bound_to_current_canonical_bytes": bool(item_results)
+            and all(item["expected_file_sha256_matches"] for item in item_results),
+        },
+        "items": item_results,
+        "detection": {
+            "remappable_only_when_current_title_is_identifier_shaped": True,
+            "identifier_shape_is_required_not_merely_a_census_signal": True,
+            "replacement_must_not_trip_either_census_signal": True,
+            "replacement_must_pass_promotion_checklist_specificity": True,
+            "replacement_text_originates_from": sorted(ZET_TITLE_REMAP_BASIS_VALUES),
+            "non_canonical_or_redacted_targets_are_not_judged": True,
+        },
+        "claim_boundary": {
+            "checked": (
+                "Each proposed replacement against the exact current bytes and frontmatter of its "
+                "named canonical zet at this run."
+            ),
+            "not_checked": [
+                "Whether the replacement title is the name the source record actually carried.",
+                "Whether the operator's source export is itself complete or correct.",
+                "Any canonical zet not named by a proposal row.",
+            ],
+        },
+        "approval_contract": {
+            "approved_write_implemented": False,
+            "human_review_required": True,
+            "future_write_must_bind_proposal_sha256": True,
+            "future_write_must_revalidate_each_canonical_sha256": True,
+            "future_write_must_record_before_after_and_title_hashes": True,
+            "manual_canonical_edit_recommended": False,
+        },
+        "write_boundary": {
+            "files_written": False,
+            "canonical_zets_changed": False,
+            "receipts_written": False,
+            "provider_state_written": False,
+        },
+        "blockers": blockers,
+        "warnings": warnings,
+        "next_safe_actions": next_safe_actions,
+        "exit_policy": {
+            "zero_only_when_no_blockers_and_every_row_is_ready_for_review": True,
+            "nonzero_when_any_row_is_blocked": True,
+            "nonzero_also_when_the_proposal_is_empty_exceeds_max_items_or_max_items_is_out_of_range": True,
+        },
+        "privacy_guards": {
+            "title_values_echoed": False,
+            "external_id_values_echoed": False,
+            "replacement_title_values_echoed": replacement_echoed,
+            "replacement_title_digests_published": False,
+            "replacement_title_lengths_published": False,
+            "proposal_path_echoed": False,
+            "zettel_ids_echoed": False,
+            "zettel_paths_echoed": False,
+            "body_text_echoed": False,
+            "local_absolute_paths_echoed": False,
+            "provider_urls_echoed": False,
+            "canonical_file_bytes_read": True,
+            "untrusted_proposal_text_read": True,
             "writes": False,
         },
     }
@@ -14873,7 +15355,10 @@ def zet_abstract_backfill_plan(
             continue
         try:
             parsed = json.loads(raw_line.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError):
+        except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
+            # RecursionError is not a JSONDecodeError. A deeply nested array well
+            # under the per-line ceiling would otherwise escape to the default
+            # excepthook and print a traceback carrying local absolute paths.
             parsed = None
         rows.append(parsed if isinstance(parsed, dict) else None)
 

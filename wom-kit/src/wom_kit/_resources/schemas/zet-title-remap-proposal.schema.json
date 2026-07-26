@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wom.local/schemas/zet-title-remap-proposal.schema.json",
+  "title": "WOM zet title remap proposal row",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "zettel_id",
+    "expected_file_sha256",
+    "title",
+    "basis"
+  ],
+  "properties": {
+    "schema": {
+      "const": "wom-kit/zet-title-remap-proposal/v0.1"
+    },
+    "zettel_id": {
+      "type": "string",
+      "pattern": "^zet_[A-Za-z0-9][A-Za-z0-9_-]{0,159}$"
+    },
+    "expected_file_sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "basis": {
+      "type": "string",
+      "enum": ["source_export_property", "human_written"]
+    }
+  }
+}

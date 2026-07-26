@@ -34,10 +34,10 @@ not re-grow baseline ladders or tag lists here.
 Current public baseline:
 
 ```text
-v0.3.262 pre-release
+v0.3.263 pre-release
 ```
 
-Previous public baseline: v0.3.261 pre-release.
+Previous public baseline: v0.3.262 pre-release.
 
 Full release history: see [CHANGELOG.md](CHANGELOG.md) and [wom-kit/docs/releases/](wom-kit/docs/releases/).
 
@@ -55,7 +55,7 @@ future-only boundaries.
 Install the exact release wheel as an isolated command-line tool:
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.262/wom_kit-0.3.262-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.263/wom_kit-0.3.263-py3-none-any.whl"
 archive --version
 ```
 
@@ -494,7 +494,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
-v0.3.262 (current checkpoint)
+v0.3.263 (current checkpoint)
 ```
 
 Public releases from `v0.2.5` onward are tagged as compatibility checkpoints.

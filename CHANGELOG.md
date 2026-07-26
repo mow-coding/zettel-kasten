@@ -6,6 +6,41 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.263 - 2026-07-26
+
+- **Reviewed replacement titles can now be checked before anyone writes them.**
+  `archive zet-title-remap-plan <archive-root> --proposal <private.jsonl>
+  --dry-run` (alias `title-remap-plan`) validates each proposed title against
+  the exact current bytes of the canonical zet it names. A zet that changed
+  after the proposal was built blocks that row instead of planning against
+  stale content.
+- **It repairs imported identifiers; it is not a title editor.** A row is
+  accepted only when the current title is identifier-shaped. A human-chosen
+  title is refused — including one whose facets happen to repeat it, which is
+  the case that defeated an earlier "any census signal" gate, since
+  `title_matches_external_id` carries no shape test. A replacement the census
+  would flag is refused, checked with the full census predicate against the
+  target's own facets rather than for shape alone. A replacement that fails the
+  promotion checklist's specificity rule is refused, so a remap cannot introduce
+  a title minting would reject. A non-canonical or redacted target is blocked
+  without being judged, so no title-derived fact about it is reported.
+- **The command invents nothing.** Every replacement comes from the operator's
+  proposal file, and each row records whether it came from a source export
+  property or a human. Rows whose old title was provably that record's own
+  imported identifier are counted apart from merely identifier-shaped ones, and
+  the report warns when the two differ — that gap is exactly how much the
+  reviewer has to take on trust.
+- **No value leaves the archive — and no digest or length of one either.** An
+  earlier draft published a per-row title digest beside the exact character
+  count; a pre-release review recovered a two-syllable Korean title from those
+  two fields in seconds, so both are gone and `plan_digest` no longer carries a
+  per-title digest. The proposal file's own hash already binds every replacement
+  collectively. The echo guard is derived from the assembled payload rather than
+  asserted. The command does read each named canonical zet in full to hash it,
+  which the guards now state rather than leave to inference.
+- **Nothing is written.** `approved_write_implemented` is false. The approved
+  write, its receipts, and its revert path are separate later releases.
+
 ## v0.3.262 - 2026-07-26
 
 - **New read-only census of identifier-shaped zet titles.**
