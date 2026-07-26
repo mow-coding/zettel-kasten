@@ -31645,6 +31645,216 @@ state:
         self.assertNotIn("\\", result["zettels"][0]["path"])
         self.assertIn("T", result["zettels"][0]["created_at"])
 
+    def _write_title_probe_zet(self, archive_root: Path, name: str, frontmatter: str) -> None:
+        (archive_root / "zettels" / f"{name}.md").write_text(
+            f"---\n{frontmatter}---\n\nbody text\n", encoding="utf-8"
+        )
+
+    def test_zet_title_readiness_separates_provenance_bound_from_shape_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            # Title is literally this record's own imported id, only formatted
+            # differently. Provable from the zet alone.
+            self._write_title_probe_zet(
+                archive_root,
+                "zet_probe_provenance",
+                "id: ZETPROBEA\ntitle: 32634f642e1b80b68144d468b836da79\n"
+                "status: canonical\nkind: note\n"
+                "facets:\n  external_id: 32634f64-2e1b-80b6-8144-d468b836da79\n",
+            )
+            # Same shape, but nothing in frontmatter proves what it was meant to be.
+            self._write_title_probe_zet(
+                archive_root,
+                "zet_probe_shape",
+                "id: ZETPROBEB\ntitle: 24334f642e1b80ea9877f84bf54c4b0e\n"
+                "status: canonical\nkind: note\n",
+            )
+            # Short hex-looking words are ordinary titles and must not trip the rule.
+            self._write_title_probe_zet(
+                archive_root,
+                "zet_probe_ok",
+                "id: ZETPROBEC\ntitle: deadbeef\nstatus: canonical\nkind: note\n",
+            )
+
+            code, output = self.run_cli(
+                ["zet-title-readiness", str(archive_root), "--dry-run", "--format", "json"]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertEqual(result["state"], "needs_attention")
+            self.assertFalse(result["readiness_met"])
+            # The signal counters overlap: the provenance-bound zet trips both
+            # rules, so they are reported apart from the partition counts and do
+            # not sum to a count of zets.
+            self.assertEqual(result["signal_counts"]["title_matches_external_id"], 1)
+            self.assertEqual(result["signal_counts"]["title_is_identifier_shaped"], 2)
+            self.assertEqual(result["signal_counts"]["both_signals"], 1)
+            self.assertEqual(result["attention"]["total_count"], 2)
+            self.assertNotIn("title_matches_external_id", result["counts"])
+            self.assertEqual(
+                sum(result["counts"].values()) + result["attention"]["total_count"],
+                result["canonical_zet_count"],
+            )
+
+            by_path = {item["path"]: item for item in result["attention"]["items"]}
+            provenance = by_path["zettels/zet_probe_provenance.md"]
+            self.assertTrue(provenance["provenance_bound"])
+            self.assertIn("title_matches_external_id", provenance["signals"])
+            shape_only = by_path["zettels/zet_probe_shape.md"]
+            self.assertFalse(shape_only["provenance_bound"])
+            self.assertEqual(shape_only["signals"], ["title_is_identifier_shaped"])
+            self.assertNotIn("zettels/zet_probe_ok.md", by_path)
+
+    def test_zet_title_readiness_never_echoes_title_or_identifier_values(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            identifier = "32634f642e1b80b68144d468b836da79"
+            # The house mints a zet id -- and therefore its filename -- from the
+            # title, so an attention row can carry the very value this census
+            # withholds. A hand-named fixture closes that channel by construction
+            # and proves nothing; these reproduce the real derivations.
+            minted = f"zet_20260726_120000_{identifier}"
+            self._write_title_probe_zet(
+                archive_root,
+                minted,
+                f"id: {minted}\ntitle: {identifier}\n"
+                "status: canonical\nkind: note\n"
+                "facets:\n  external_id: 32634f64-2e1b-80b6-8144-d468b836da79\n",
+            )
+            # An importer may also set the bare identifier as the draft id, which
+            # reaches canonical as the filename with no zet_ prefix to gate on.
+            self._write_title_probe_zet(
+                archive_root,
+                identifier,
+                f"id: {identifier}\ntitle: {identifier}\n"
+                "status: canonical\nkind: note\n",
+            )
+            # The mint truncates its slug at 32 characters, so a dashed uuid title
+            # leaves a long prefix rather than the whole value in the filename.
+            # A partial identifier is still the identifier.
+            truncated = "zet_20260726_120001_9f41ab07_6c22_4d15_9e33_70bb1c5a"
+            self._write_title_probe_zet(
+                archive_root,
+                truncated,
+                f"id: {truncated}\ntitle: 9f41ab07-6c22-4d15-9e33-70bb1c5ad284\n"
+                "status: canonical\nkind: note\n",
+            )
+
+            code, output = self.run_cli(
+                ["zet-title-readiness", str(archive_root), "--dry-run", "--format", "json"]
+            )
+            self.assertEqual(code, 0, output)
+            # The offending value is the thing a report is most tempted to print.
+            self.assertNotIn(identifier, output)
+            self.assertNotIn("32634f64-2e1b-80b6", output)
+            self.assertNotIn("9f41ab07", output)
+            result = json.loads(output)
+            self.assertFalse(result["privacy_guards"]["title_values_echoed"])
+            self.assertFalse(result["privacy_guards"]["external_id_values_echoed"])
+            self.assertFalse(result["privacy_guards"]["writes"])
+            self.assertEqual(result["would_change"], [])
+
+            # Withholding is disclosed rather than silent, so an operator can tell
+            # a clean report from a suppressed one.
+            attention = result["attention"]
+            self.assertEqual(attention["total_count"], 3)
+            self.assertEqual(attention["paths_withheld_count"], 3)
+            self.assertEqual(attention["zettel_ids_withheld_count"], 3)
+            for item in attention["items"]:
+                self.assertIsNone(item["path"])
+                self.assertIsNone(item["zettel_id"])
+                self.assertEqual(item["path_withheld_reason"], "discloses_title")
+                self.assertEqual(item["zettel_id_withheld_reason"], "discloses_title")
+
+    def test_zet_title_readiness_keeps_references_that_cannot_disclose(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            # Importer-minted names digest the source record rather than the title
+            # (external_import_zettel_id), so they cannot disclose it. Withholding
+            # must not fire here, or the census stops being actionable for exactly
+            # the imported population it exists to report on.
+            name = "zet_import_notion_a1b2c3d4e5f60718"
+            self._write_title_probe_zet(
+                archive_root,
+                name,
+                f"id: {name}\ntitle: 32634f642e1b80b68144d468b836da79\n"
+                "status: canonical\nkind: note\n",
+            )
+            code, output = self.run_cli(
+                ["zet-title-readiness", str(archive_root), "--dry-run", "--format", "json"]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            attention = result["attention"]
+            self.assertEqual(attention["total_count"], 1)
+            self.assertEqual(attention["paths_withheld_count"], 0)
+            self.assertEqual(attention["zettel_ids_withheld_count"], 0)
+            item = attention["items"][0]
+            self.assertEqual(item["path"], f"zettels/{name}.md")
+            self.assertEqual(item["zettel_id"], name)
+            self.assertIsNone(item["path_withheld_reason"])
+            self.assertIsNone(item["zettel_id_withheld_reason"])
+            # The digest in that name is a 16-character hex run. A shape-only rule
+            # would suppress it; the rule is title-relative, so it does not.
+            self.assertIn("a1b2c3d4e5f60718", output)
+
+    def test_zet_title_readiness_is_read_only_and_excludes_redacted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            self._write_title_probe_zet(
+                archive_root,
+                "zet_probe_redacted",
+                "id: ZETPROBEE\ntitle: 32634f642e1b80b68144d468b836da79\n"
+                "status: redacted\nkind: note\n",
+            )
+            before = self.snapshot_archive_files(archive_root)
+
+            code, output = self.run_cli(["zet-title-readiness", str(archive_root), "--format", "json"])
+            self.assertEqual(code, 1)
+            self.assertIn("requires --dry-run", output)
+
+            code, output = self.run_cli(
+                ["zet-title-readiness", str(archive_root), "--dry-run", "--format", "json"]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            # A redacted zet exposes no title to judge and must not be accused.
+            self.assertEqual(result["counts"]["redacted"], 1)
+            self.assertEqual(result["signal_counts"]["title_is_identifier_shaped"], 0)
+            self.assertEqual(result["state"], "ready")
+            self.assertTrue(result["readiness_met"])
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+
+    def test_zet_title_readiness_does_not_claim_readiness_over_unjudged_zets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            # Frontmatter this census could not read is not evidence of a good
+            # title. Counting it as human-readable would claim a check never ran.
+            (archive_root / "zettels" / "zet_probe_broken.md").write_text(
+                "---\nid: ZETPROBEF\ntitle: [unclosed\nstatus: canonical\n---\n\nbody\n",
+                encoding="utf-8",
+            )
+            code, output = self.run_cli(
+                ["zet-title-readiness", str(archive_root), "--dry-run", "--format", "json"]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertEqual(result["attention"]["total_count"], 0)
+            self.assertEqual(result["counts"]["frontmatter_unreadable"], 1)
+            self.assertEqual(result["readiness"]["unjudged_count"], 1)
+            # No attention rows, but the census still cannot call the archive ready.
+            self.assertFalse(result["readiness_met"])
+            self.assertFalse(result["readiness"]["all_titles_human_readable"])
+            self.assertEqual(result["state"], "needs_attention")
+            self.assertIn(
+                "Canonical zets whose frontmatter could not be read.",
+                result["claim_boundary"]["not_checked"],
+            )
+            # A finding is not a command failure.
+            self.assertFalse(result["exit_policy"]["needs_attention_is_command_failure"])
+            self.assertEqual(result["blockers"], [])
+            self.assertEqual(result["warnings"], [])
+
     def test_first_read_readiness_requires_explicit_abstracts_without_echoing_content(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")

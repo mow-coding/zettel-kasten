@@ -9110,6 +9110,74 @@ def command_zet_catalog(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 1
 
 
+def command_zet_title_readiness(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("zet-title-readiness is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    reporter = CommandProgressReporter(
+        bool(getattr(args, "progress", False)),
+        label="zet-title-readiness",
+    )
+    try:
+        result = archive_services.zet_title_readiness(
+            Path(args.archive_root),
+            dry_run=True,
+            max_items=args.max_items,
+            progress_callback=reporter.progress,
+        )
+    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    finally:
+        reporter.close()
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        counts = result.get("counts", {})
+        signal_counts = result.get("signal_counts", {})
+        attention = result.get("attention", {})
+        print(f"WOM zet title readiness: {result.get('state') or 'unknown'}")
+        print(f"Canonical zets checked: {result.get('canonical_zet_count', 0)}")
+        print(f"Human-readable titles: {counts.get('human_readable', 0)}")
+        print(f"Title absent or suppressed (not judged): {counts.get('title_unavailable', 0)}")
+        print(f"Redacted (excluded): {counts.get('redacted', 0)}")
+        print(f"Unreadable frontmatter (not judged): {counts.get('frontmatter_unreadable', 0)}")
+        print(f"Zets needing review: {attention.get('total_count', 0)}")
+        # Printed under the attention total, and labelled as shares of it, because
+        # one zet can trip both rules and these do not sum to a count of zets.
+        print(
+            f"- of which title equals its imported identifier: "
+            f"{signal_counts.get('title_matches_external_id', 0)}"
+        )
+        print(
+            f"- of which title is identifier-shaped: "
+            f"{signal_counts.get('title_is_identifier_shaped', 0)}"
+        )
+        print(f"- counted in both of the above: {signal_counts.get('both_signals', 0)}")
+        if attention.get("truncated"):
+            print(
+                f"Listed {attention.get('returned_count', 0)} of them; raise --max-items to list more."
+            )
+        withheld_paths = attention.get("paths_withheld_count", 0)
+        withheld_ids = attention.get("zettel_ids_withheld_count", 0)
+        if withheld_paths or withheld_ids:
+            print(
+                f"Withheld as title-disclosing: {withheld_paths} path(s), {withheld_ids} id(s); "
+                "the value was minted from the offending title."
+            )
+        exit_policy = result.get("exit_policy") or {}
+        if result.get("state") == "needs_attention" and not exit_policy.get(
+            "needs_attention_is_command_failure", True
+        ):
+            print("Command completed: yes; title attention is not a command failure.")
+        if result.get("next_actions"):
+            print("Next actions:")
+            for action in result["next_actions"]:
+                print(f"- {action}")
+    return 0 if result.get("ok") else 1
+
+
 def command_first_read_readiness(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print("first-read-readiness is read-only and requires --dry-run.", file=sys.stderr)
@@ -19652,6 +19720,36 @@ def build_parser() -> argparse.ArgumentParser:
         help="Output format.",
     )
     first_read_readiness.set_defaults(func=command_first_read_readiness)
+
+    zet_title_readiness = subcommands.add_parser(
+        "zet-title-readiness",
+        aliases=["title-readiness", "zet-title-check"],
+        help="Report canonical zets whose title is an imported identifier instead of a name.",
+    )
+    zet_title_readiness.add_argument("archive_root", help="Archive root to inspect.")
+    zet_title_readiness.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Required. Read canonical frontmatter only; write nothing.",
+    )
+    zet_title_readiness.add_argument(
+        "--max-items",
+        type=int,
+        default=100,
+        help="Maximum content-free title-attention records to return (1-500).",
+    )
+    zet_title_readiness.add_argument(
+        "--progress",
+        action="store_true",
+        help="Stream content-free scan counts, stages, and 10-second heartbeats to stderr.",
+    )
+    zet_title_readiness.add_argument(
+        "--format",
+        choices=["text", "json"],
+        default="text",
+        help="Output format.",
+    )
+    zet_title_readiness.set_defaults(func=command_zet_title_readiness)
 
     abstract_freshness = subcommands.add_parser(
         "abstract-freshness",
