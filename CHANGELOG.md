@@ -6,6 +6,36 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.262 - 2026-07-26
+
+- **New read-only census of identifier-shaped zet titles.**
+  `archive zet-title-readiness <archive-root> --dry-run` (aliases
+  `title-readiness`, `zet-title-check`) reports canonical zets whose title is an
+  imported page id rather than a name. An import can faithfully copy a source
+  title that was itself an id; the bytes are correct, but the archive stops
+  being browsable by title and title search no longer reaches those zets.
+- **Two signals, reported separately.** `title_matches_external_id` means the
+  title equals this record's own imported identifier and is provable from the
+  zet alone; `title_is_identifier_shaped` is a bare 16+ character hex run and is
+  only a shape heuristic. Merging them would hide which zets can be traced back
+  to a source record that still holds the intended name.
+- **No value ever leaves the archive.** The report emits counts and a bounded
+  attention list, never a title or identifier value. Because the house mints a
+  zet's id — and so its filename — from its title, an attention row's own `path`
+  and `zettel_id` are withheld when they would reproduce the offending title, and
+  the report counts how often it withheld. The echo guards are derived from what
+  each row actually carries rather than asserted, so they cannot disagree with
+  the payload. Redacted zets are excluded rather than judged.
+- **The verdict covers only what was judged.** A zet whose frontmatter could not
+  be read, or whose title was absent or suppressed as unsafe, gets its own count
+  and blocks a `ready` verdict instead of being scored human-readable. The two
+  signal counters overlap by design and are reported apart from the partition
+  counts, so they cannot be summed into a false rate.
+- **Nothing else changes.** No title is proposed or rewritten, no existing
+  command changes behavior, and no archive, index, receipt, or schema migration
+  is required. A reviewed bulk retitle and any promotion-checklist tightening
+  remain separate, later releases.
+
 ## v0.3.261 - 2026-07-26
 
 - **Search states its own coverage, on every surface.** `archive search`, its

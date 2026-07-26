@@ -7486,6 +7486,338 @@ def abstract_freshness(
     }
 
 
+ZET_TITLE_READINESS_SCHEMA = "wom-kit/zet-title-readiness/v0.1"
+# A human title is never a bare 16+ character hex run. Below that length real
+# words and short codes collide with hex too easily to accuse a title.
+ZET_TITLE_IDENTIFIER_MIN_HEX_CHARS = 16
+ZET_TITLE_HEX_RE = re.compile(r"\A[0-9a-f]+\Z")
+
+
+def compact_zet_title_comparison_form(value: str) -> str:
+    """Collapse a title or identifier to the house comparison form.
+
+    Uses the same separator set as the promotion checklist's title compaction so
+    `32634f64-2e1b-80b6` and `32634f642e1b80b6` compare equal.
+    """
+    return re.sub(r"[\s._-]+", "", str(value).casefold())
+
+
+def zet_title_reference_discloses_title(reference: Any, compact_title: str) -> bool:
+    """Whether emitting `reference` would reproduce the title it is reported for.
+
+    The house mints a zet id -- and therefore its filename -- from the title
+    (`make_zettel_id`), so an attention row's own path or id can carry the very
+    value this census withholds. The mint truncates its slug at 32 characters, so
+    a long title survives as a prefix rather than whole; a prefix of identifier
+    length is still the identifier.
+
+    The test is title-relative on purpose. A shape-only rule would also suppress
+    importer-minted names like `zet_import_<system>_<digest16>`
+    (`external_import_zettel_id`), whose hex run digests the source record and
+    cannot disclose a title -- and those are the names the imported population
+    this census exists for actually carries.
+    """
+    if not isinstance(reference, str) or not compact_title:
+        return False
+    compact_reference = compact_zet_title_comparison_form(reference)
+    if not compact_reference:
+        return False
+    if compact_title in compact_reference:
+        return True
+    longest_shared_prefix = min(len(compact_title), len(compact_reference))
+    for size in range(longest_shared_prefix, ZET_TITLE_IDENTIFIER_MIN_HEX_CHARS - 1, -1):
+        if compact_title[:size] in compact_reference:
+            return True
+    return False
+
+
+def zet_title_identifier_signals(item: dict[str, Any]) -> list[str]:
+    """Return which identifier-shaped signals a catalog item's title matches.
+
+    Signal `title_matches_external_id` is provenance-bound: the title is literally
+    the record's own imported identifier, which is provable from the zet alone.
+    Signal `title_is_identifier_shaped` is a shape heuristic for the same failure
+    when the source identifier was not preserved in frontmatter. They are reported
+    separately because only the first proves what the title was supposed to be.
+    """
+    title = item.get("title")
+    if not isinstance(title, str):
+        return []
+    compact_title = compact_zet_title_comparison_form(title)
+    if not compact_title:
+        return []
+
+    signals: list[str] = []
+    facets = item.get("facets")
+    if isinstance(facets, dict):
+        # Consult the house's registered provider page-reference vocabulary rather
+        # than a hand-written pair. The previous pair named `source_page_id`, a key
+        # nothing in this project writes, so the signal covered one key while
+        # appearing to cover two.
+        for facet_key in sorted(facets, key=str):
+            if notion_source_map_ref_family_for_key(facet_key) != "page_refs":
+                continue
+            facet_value = facets.get(facet_key)
+            if isinstance(facet_value, (str, int)) and compact_zet_title_comparison_form(
+                facet_value
+            ) == compact_title:
+                signals.append("title_matches_external_id")
+                break
+    if (
+        len(compact_title) >= ZET_TITLE_IDENTIFIER_MIN_HEX_CHARS
+        and ZET_TITLE_HEX_RE.match(compact_title)
+    ):
+        signals.append("title_is_identifier_shaped")
+    return signals
+
+
+def zet_title_readiness(
+    archive_root: Path | str,
+    *,
+    dry_run: bool = False,
+    max_items: int = 100,
+    item_cache: dict[str, dict[str, Any]] | None = None,
+    progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
+) -> dict[str, Any]:
+    """Report canonical zets whose title is an identifier rather than a name.
+
+    An import can faithfully copy a source title that was itself a page id. The
+    bytes are correct and nothing is lost, but the archive becomes unbrowsable by
+    title and title search stops reaching those zets. This is a read-only census
+    of that condition; it proposes nothing and writes nothing.
+    """
+    root = require_existing_archive_root(archive_root)
+    blockers: list[str] = []
+    max_items = max(1, min(int(max_items), 500))
+    if not dry_run:
+        blockers.append("zet-title-readiness is read-only and requires --dry-run.")
+
+    path_entries = zet_catalog_paths(root, "canonical")
+    entries, scan = zet_catalog_entries(
+        root,
+        path_entries,
+        item_cache,
+        progress_callback=progress_callback,
+    )
+    snapshot = zet_catalog_snapshot(root, entries)
+
+    # `counts` partitions the entries this census saw; `signal_counts` reports how
+    # often each rule fired. They are kept apart because a single zet can trip both
+    # rules, so the signal numbers do not sum to a count of zets.
+    counts = {
+        "human_readable": 0,
+        "title_unavailable": 0,
+        "redacted": 0,
+        "frontmatter_unreadable": 0,
+    }
+    signal_counts = {
+        "title_matches_external_id": 0,
+        "title_is_identifier_shaped": 0,
+        "both_signals": 0,
+    }
+    attention_items: list[dict[str, Any]] = []
+    attention_count = 0
+    paths_withheld_count = 0
+    zettel_ids_withheld_count = 0
+    title_values_echoed = False
+    external_id_values_echoed = False
+    for _path, _expected_status, item, _signature in entries:
+        if bool(item.get("redacted")):
+            # A redacted zet exposes no title to judge, and its content is
+            # deliberately suppressed. It is not an attention item.
+            counts["redacted"] += 1
+            continue
+        if not bool(item.get("frontmatter_readable")):
+            counts["frontmatter_unreadable"] += 1
+            continue
+        title = item.get("title")
+        compact_title = (
+            compact_zet_title_comparison_form(title) if isinstance(title, str) else ""
+        )
+        if not compact_title:
+            # The title is absent, or the catalog suppressed it as private or
+            # unsafe before this census could see it. Either way it was not judged,
+            # and scoring it as human-readable would claim a check that never ran.
+            counts["title_unavailable"] += 1
+            continue
+        signals = zet_title_identifier_signals(item)
+        if not signals:
+            counts["human_readable"] += 1
+            continue
+        for signal in signals:
+            signal_counts[signal] += 1
+        if len(signals) > 1:
+            signal_counts["both_signals"] += 1
+        attention_count += 1
+        if len(attention_items) >= max_items:
+            continue
+
+        path_value = item.get("path")
+        path_discloses = zet_title_reference_discloses_title(path_value, compact_title)
+        if path_discloses:
+            paths_withheld_count += 1
+        zettel_id = item.get("id")
+        if zet_title_reference_discloses_title(zettel_id, compact_title):
+            # Checked before the syntax gate: disclosure is why the value is being
+            # withheld, and that is true whether or not the id is well formed.
+            safe_zettel_id: str | None = None
+            zettel_id_withheld_reason: str | None = "discloses_title"
+            zettel_ids_withheld_count += 1
+        elif not (
+            isinstance(zettel_id, str) and ZETTEL_EDGE_ZETTEL_ID_RE.match(zettel_id)
+        ):
+            safe_zettel_id = None
+            zettel_id_withheld_reason = "unsafe_id_syntax"
+        else:
+            safe_zettel_id = zettel_id
+            zettel_id_withheld_reason = None
+
+        row = {
+            "path": None if path_discloses else path_value,
+            "path_withheld_reason": "discloses_title" if path_discloses else None,
+            "zettel_id": safe_zettel_id,
+            "zettel_id_withheld_reason": zettel_id_withheld_reason,
+            "signals": signals,
+            "provenance_bound": "title_matches_external_id" in signals,
+        }
+        # Derive the privacy guards from what this row actually carries rather than
+        # asserting a literal, so the flags cannot disagree with the payload if a
+        # gate above ever stops firing.
+        if any(
+            zet_title_reference_discloses_title(value, compact_title)
+            for value in (row["path"], row["zettel_id"])
+        ):
+            title_values_echoed = True
+            if row["provenance_bound"]:
+                external_id_values_echoed = True
+        attention_items.append(row)
+
+    # A zet whose frontmatter could not be read, or whose title the catalog
+    # suppressed, was never judged. Redacted zets are excluded by an explicit and
+    # separately reported decision, so they do not count as unjudged.
+    unjudged_count = counts["frontmatter_unreadable"] + counts["title_unavailable"]
+    titles_are_human_readable = attention_count == 0 and unjudged_count == 0
+    if blockers:
+        state = "blocked"
+    elif titles_are_human_readable:
+        state = "ready"
+    else:
+        state = "needs_attention"
+
+    next_actions: list[str] = []
+    if attention_count:
+        next_actions.append(
+            "Review the listed canonical zets against their original source records; a reviewed "
+            "retitle is a separate approval-gated flow and this command never proposes replacement text."
+        )
+        next_actions.append(
+            "Keep the original source export that carries the human-readable names; it is the only "
+            "evidence that can justify a later reviewed retitle."
+        )
+    if paths_withheld_count or zettel_ids_withheld_count:
+        next_actions.append(
+            "Some attention rows withheld their path or id because the value was minted from the "
+            "offending title and would have reproduced it; locate those zets from the archive "
+            "itself rather than from this report."
+        )
+    if unjudged_count:
+        next_actions.append(
+            "Resolve the canonical zets whose frontmatter could not be read or whose title was "
+            "suppressed as private or unsafe; this census could not judge them and does not count "
+            "them as human-readable."
+        )
+    if not attention_count and not unjudged_count:
+        next_actions.append(
+            "No canonical zet title looks like a bare identifier at this snapshot, across the "
+            f"{counts['human_readable']} canonical zets whose title could be read."
+        )
+
+    return {
+        "ok": not blockers,
+        "schema": ZET_TITLE_READINESS_SCHEMA,
+        "lifecycle_action": "zet_title_readiness",
+        "state": state,
+        "readiness_met": titles_are_human_readable,
+        "archive_id": read_archive_id(root),
+        "dry_run": dry_run,
+        "canonical_zet_count": len(entries),
+        "counts": counts,
+        "signal_counts": signal_counts,
+        "readiness": {
+            "canonical_node_inventory_checked": not blockers,
+            "all_titles_human_readable": titles_are_human_readable,
+            "judged_count": counts["human_readable"] + attention_count,
+            "unjudged_count": unjudged_count,
+            "redacted_entries_excluded": True,
+        },
+        "detection": {
+            "title_matches_external_id": (
+                "The compared title equals the record's own imported identifier after case folding "
+                "and separator removal. Provable from the zet alone."
+            ),
+            "title_is_identifier_shaped": (
+                f"The compared title is a bare hexadecimal run of at least "
+                f"{ZET_TITLE_IDENTIFIER_MIN_HEX_CHARS} characters. A shape heuristic, not proof."
+            ),
+            "comparison_form": "casefold_then_remove_whitespace_dot_underscore_hyphen",
+            "compared_facet_keys": sorted(NOTION_SOURCE_MAP_PAGE_REF_KEYS),
+            "compared_facet_key_suffix_rule": "_page_id",
+            "signals_may_overlap_one_zet": True,
+            "per_zet_count_is": "attention.total_count",
+        },
+        "attention": {
+            "total_count": attention_count,
+            "returned_count": len(attention_items),
+            "truncated": attention_count > len(attention_items),
+            "max_items": max_items,
+            "paths_withheld_count": paths_withheld_count,
+            "zettel_ids_withheld_count": zettel_ids_withheld_count,
+            "items": attention_items,
+        },
+        "scan": {
+            **scan,
+            "status": "canonical",
+            "frontmatter_only": True,
+            "zettel_bodies_read": False,
+            "objet_bytes_read": False,
+            "provider_api_called": False,
+            "secrets_read": False,
+        },
+        "snapshot": snapshot,
+        "claim_boundary": {
+            "checked": "Canonical zet frontmatter titles and imported identifiers at this snapshot.",
+            "not_checked": [
+                "Whether a human-readable replacement title exists anywhere.",
+                "Whether a title that is not identifier-shaped is actually meaningful.",
+                "Draft, archived, or redacted zets.",
+                "Canonical zets whose frontmatter could not be read.",
+                "Canonical zets whose title was absent or suppressed as private or unsafe.",
+            ],
+        },
+        "blockers": blockers,
+        "warnings": [],
+        "exit_policy": {
+            "zero_when_diagnostic_completed": True,
+            "needs_attention_is_command_failure": False,
+            "nonzero_reserved_for_blocked_input_or_execution_failure": True,
+        },
+        "next_actions": next_actions,
+        "would_change": [],
+        "privacy_guards": {
+            "title_values_echoed": title_values_echoed,
+            "external_id_values_echoed": external_id_values_echoed,
+            "abstract_text_echoed": False,
+            "body_text_echoed": False,
+            "local_absolute_paths_echoed": False,
+            "provider_urls_echoed": False,
+            "title_derived_references_withheld": bool(
+                paths_withheld_count or zettel_ids_withheld_count
+            ),
+            "writes": False,
+        },
+    }
+
+
 def first_read_readiness(
     archive_root: Path | str,
     *,
