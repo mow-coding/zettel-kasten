@@ -7516,6 +7516,12 @@ def zet_title_reference_discloses_title(reference: Any, compact_title: str) -> b
     (`external_import_zettel_id`), whose hex run digests the source record and
     cannot disclose a title -- and those are the names the imported population
     this census exists for actually carries.
+
+    Testing the first `ZET_TITLE_IDENTIFIER_MIN_HEX_CHARS` characters covers every
+    longer prefix too: if a prefix of length n >= that floor appears in the
+    reference, its own opening characters appear with it. So the two checks below
+    are the whole rule -- the title entire, at any length, or identifier-length
+    evidence of it.
     """
     if not isinstance(reference, str) or not compact_title:
         return False
@@ -7524,11 +7530,7 @@ def zet_title_reference_discloses_title(reference: Any, compact_title: str) -> b
         return False
     if compact_title in compact_reference:
         return True
-    longest_shared_prefix = min(len(compact_title), len(compact_reference))
-    for size in range(longest_shared_prefix, ZET_TITLE_IDENTIFIER_MIN_HEX_CHARS - 1, -1):
-        if compact_title[:size] in compact_reference:
-            return True
-    return False
+    return compact_title[:ZET_TITLE_IDENTIFIER_MIN_HEX_CHARS] in compact_reference
 
 
 def zet_title_identifier_signals(item: dict[str, Any]) -> list[str]:
