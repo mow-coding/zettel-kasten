@@ -24,6 +24,35 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.262 Identifier-Title Census
+
+No archive, zettel, index, receipt, or schema migration is required, and no
+existing command changes behavior.
+
+This release adds one read-only command:
+
+```powershell
+archive zet-title-readiness <archive-root> --dry-run --format json
+```
+
+It reports how many canonical zets have a title that is really an imported page
+id rather than a name. Import batches can copy such a title faithfully from the
+source record, and nothing existing flags it: the schema accepts any string as a
+title, and a long hex value passes the promotion checklist's specific-enough
+test.
+
+The command reads canonical frontmatter only — the title and the imported
+identifier facets, not the abstract or the body — writes nothing, and never
+prints a title or identifier value. Because a zet's id and filename are minted
+from its title, an attention row withholds its own `path` or `zettel_id` when
+that value would reproduce the offending title, and reports how many it withheld.
+A zet whose frontmatter could not be read, or whose title was suppressed, is
+counted separately and keeps the archive from being called ready. It requires
+`--dry-run` and exits 1 without it; a `needs_attention` finding still exits 0.
+
+It does not fix anything. A reviewed bulk retitle is a separate approval-gated
+flow that will ship across its own releases.
+
 ## v0.3.261 Honest Search Coverage
 
 No archive, index, receipt, or schema migration is required, and no index
