@@ -221,7 +221,11 @@ Never infer the affirmation, reviewer, or approval from a green plan. The
 writer revalidates every canonical hash, changes only `frontmatter.abstract`,
 writes one revision receipt, and rolls back every attempted canonical byte on a
 runtime item or receipt failure. Do not edit the same targets concurrently.
-Forced termination has no automatic crash-recovery journal in v0.3.219.
+Since v0.3.265, an approved apply publishes a private hash-only transaction
+journal before its first canonical mutation. Forced termination retains that
+journal and its lock for audit; it does not automatically resume or roll back.
+Preserve both files until the archive-wide audit and a deliberate forensic
+decision establish the next action.
 
 If a human later decides to remove that whole applied abstract batch, never
 hand-edit the zets and never infer removal authority. Retain the applied
@@ -240,7 +244,9 @@ archive zet-abstract-backfill-revert <archive-root> --receipt receipts/revisions
 Any later canonical change blocks the revert. Preserve both receipts. A matching
 retry is `already_reverted`; reapplying even the same text requires a newly
 reviewed proposal byte sequence and new proposal hash. The scratch lock does
-not protect against external editors or forced termination.
+not protect against external editors. Since v0.3.265, approved revert also
+publishes the private pre-mutation journal; forced termination retains journal
+plus lock but still has no automatic recovery.
 
 After one or more abstract apply/revert batches, and at session handoff, audit
 the whole bounded receipt lifecycle:
@@ -252,8 +258,13 @@ archive zet-abstract-backfill-receipt-audit <archive-root> --dry-run --max-recei
 Healthy lifecycles are compact counts plus `audit_digest`; investigate only the
 bounded problem rows. A completed-receipt lock is a warning, while a lock with
 no matching completed receipt is an unresolved-transaction blocker. Never read
-lock content, never auto-delete a lock, and never edit an immutable receipt to
-silence this audit.
+lock content. The same audit reads and validates bounded private transaction
+journals, including participant ids/paths and reviewer metadata, and compares
+canonical hashes without echoing those private values. Prepared, partial,
+complete-without-receipt, divergent, invalid, and unverified journal states
+block; completed residue warns only when the final receipt fully verifies.
+`--max-locks` independently caps locks and journals. Never auto-delete a lock or
+journal, and never edit an immutable receipt to silence this audit.
 
 For an ordinary correction to one canonical zet, prepare a complete private
 proposal under `.wom-scratch/revisions/`, use `zet-revision-plan`, preview the
