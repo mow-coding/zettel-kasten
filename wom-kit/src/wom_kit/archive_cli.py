@@ -9382,6 +9382,105 @@ def command_zet_title_remap_write(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 1
 
 
+def command_zet_title_remap_receipt_audit(
+    args: argparse.Namespace,
+) -> int:
+    if not args.dry_run:
+        print(
+            "zet-title-remap-receipt-audit is read-only and requires --dry-run.",
+            file=sys.stderr,
+        )
+        return 1
+    reporter = CommandProgressReporter(
+        bool(getattr(args, "progress", False)),
+        label="zet-title-remap-receipt-audit",
+        stage_order=(
+            "title-remap-receipt-audit",
+            "title-remap-journal-audit",
+        ),
+    )
+    try:
+        result = archive_services.zet_title_remap_receipt_audit(
+            Path(args.archive_root),
+            dry_run=True,
+            max_receipts=int(args.max_receipts),
+            max_journals=int(args.max_journals),
+            max_problems=int(args.max_problems),
+            progress_callback=reporter.progress,
+        )
+    except archive_services.ArchiveServiceError:
+        print(
+            "zet-title-remap-receipt-audit could not inspect the private title evidence safely.",
+            file=sys.stderr,
+        )
+        return 1
+    except (
+        ArchivePathError,
+        OSError,
+        UnicodeError,
+        ValueError,
+        RecursionError,
+    ):
+        print(
+            "zet-title-remap-receipt-audit failed before a privacy-safe result could be produced.",
+            file=sys.stderr,
+        )
+        return 1
+    except Exception:
+        print(
+            "zet-title-remap-receipt-audit failed before a privacy-safe result could be produced.",
+            file=sys.stderr,
+        )
+        return 1
+    finally:
+        reporter.close()
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        summary = (
+            result.get("summary")
+            if isinstance(result.get("summary"), dict)
+            else {}
+        )
+        interrupted_count = sum(
+            int(summary.get(key, 0))
+            for key in (
+                "journal_prepared",
+                "journal_partially_applied",
+                "journal_fully_applied_receipt_missing",
+            )
+        )
+        invalid_journal_count = int(
+            summary.get("journal_divergent", 0)
+        ) + int(summary.get("journal_invalid", 0))
+        print(
+            "WOM zet title remap receipt audit: "
+            f"{result.get('status') or 'unknown'}"
+        )
+        print(f"Receipts: {summary.get('receipt_count', 0)}")
+        print(
+            "Verified receipts: "
+            f"{summary.get('receipt_verified', 0)}"
+        )
+        print(f"Transaction journals: {summary.get('journal_count', 0)}")
+        print(
+            "Interrupted transactions: "
+            f"{interrupted_count}"
+        )
+        print(
+            "Divergent or invalid journals: "
+            f"{invalid_journal_count}"
+        )
+        print(
+            "Matching write lock: "
+            f"{'yes' if summary.get('write_lock_matching') else 'no'}"
+        )
+        print(f"Problems: {summary.get('problem_count', 0)}")
+        print("Writes: none")
+    return 0 if result.get("ok") else 1
+
+
 def command_abstract_freshness(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print("abstract-freshness is read-only and requires --dry-run.", file=sys.stderr)
@@ -20145,6 +20244,62 @@ def build_parser() -> argparse.ArgumentParser:
     )
     zet_title_remap_write.set_defaults(
         func=command_zet_title_remap_write
+    )
+
+    zet_title_remap_receipt_audit = subcommands.add_parser(
+        "zet-title-remap-receipt-audit",
+        aliases=["title-remap-receipt-audit"],
+        help="Audit title-remap receipts, retained transaction journals, and the common write lock without echoing private title evidence.",
+    )
+    zet_title_remap_receipt_audit.add_argument(
+        "archive_root",
+        help="Archive root containing canonical zets and private title-remap evidence.",
+    )
+    zet_title_remap_receipt_audit.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Required. Reads bounded receipts, journals, snapshots, locks, and canonical hashes; writes nothing.",
+    )
+    zet_title_remap_receipt_audit.add_argument(
+        "--max-receipts",
+        type=int,
+        default=archive_services.ZET_TITLE_REMAP_AUDIT_MAX_RECEIPTS,
+        help=(
+            "Maximum title-remap receipts to audit "
+            f"(1-{archive_services.ZET_TITLE_REMAP_AUDIT_MAX_RECEIPTS})."
+        ),
+    )
+    zet_title_remap_receipt_audit.add_argument(
+        "--max-journals",
+        type=int,
+        default=archive_services.ZET_TITLE_REMAP_AUDIT_MAX_JOURNALS,
+        help=(
+            "Maximum retained title-remap transaction journals to audit "
+            f"(1-{archive_services.ZET_TITLE_REMAP_AUDIT_MAX_JOURNALS})."
+        ),
+    )
+    zet_title_remap_receipt_audit.add_argument(
+        "--max-problems",
+        type=int,
+        default=100,
+        help=(
+            "Maximum content-free problem records to return "
+            f"(1-{archive_services.ZET_TITLE_REMAP_AUDIT_MAX_PROBLEMS})."
+        ),
+    )
+    zet_title_remap_receipt_audit.add_argument(
+        "--progress",
+        action="store_true",
+        help="Stream content-free receipt and journal counts plus 10-second heartbeats to stderr.",
+    )
+    zet_title_remap_receipt_audit.add_argument(
+        "--format",
+        choices=["text", "json"],
+        default="json",
+        help="Output format.",
+    )
+    zet_title_remap_receipt_audit.set_defaults(
+        func=command_zet_title_remap_receipt_audit
     )
 
     abstract_freshness = subcommands.add_parser(

@@ -6,6 +6,27 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.270 - 2026-07-28
+
+- Added read-only `zet-title-remap-receipt-audit` and alias
+  `title-remap-receipt-audit`.
+- Verify every bounded completed title-remap receipt against strict runtime
+  allowlists, duplicate-key rejection, archive/filename binding, current
+  canonical file/title/body hashes, and prior-byte object-manifest evidence.
+- Verify retained transaction journals against their strict schema, digest,
+  filename/final-receipt binding, snapshots, participant identities, and
+  current whole-file hashes.
+- Classify retained transactions as `prepared`, `partially_applied`,
+  `fully_applied_receipt_missing`, `divergent`, or `stale_completed`.
+- Require the common title-remap write lock to match one valid retained
+  journal; missing, mismatched, malformed, orphaned, or non-unique evidence
+  requires attention.
+- Return only bounded counts, fixed codes, and transaction case handles; echo
+  no title text/hash/length, zet id/path, evidence path, reviewer, proposal
+  SHA, provider value, or absolute local path.
+- Audit calls write and delete nothing, call no provider/model, expose no MCP
+  method, and do not recover, finalize, clean up, or revert title changes.
+
 ## v0.3.269 - 2026-07-28
 
 - Added approval-gated `zet-title-remap-write` and alias

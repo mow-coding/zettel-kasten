@@ -32,10 +32,10 @@ wom-kit/docs/releases/에만 쌓고, baseline 사다리와 tag 목록을 여기�
 현재 공개 기준:
 
 ```text
-v0.3.269 pre-release
+v0.3.270 pre-release
 ```
 
-이전 공개 기준: v0.3.268 pre-release.
+이전 공개 기준: v0.3.269 pre-release.
 
 전체 릴리스 이력은 [CHANGELOG.md](CHANGELOG.md)와 [wom-kit/docs/releases/](wom-kit/docs/releases/)를 보세요.
 
@@ -52,7 +52,7 @@ Roadmap 요약: `v0.1.x`는 아이디어/프로토콜 언어 라인, `v0.2.x`는
 정확한 릴리스 파일을 격리된 명령줄 도구로 설치합니다.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.269/wom_kit-0.3.269-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.270/wom_kit-0.3.270-py3-none-any.whl"
 archive --version
 ```
 
@@ -90,7 +90,7 @@ archive runtime-skill-install --dry-run --format json
 - object-storage doctor는 이제 같은 key의 `skipped_remote_same` coverage를 인정하고, 진짜 누락된 `wom_uploaded` manifest binding은 승인 게이트가 있는 `object-storage-wom-location-reconcile`로 복구할 수 있게 하며, 그 명령의 audit receipt도 전용 schema로 검증합니다.
 - 완료된 전체 검진 인수인계 문서는 ERROR/WARN을 단순 개수로 버리지 않고 제한된 항목, 전체 코드별 개수, 권장 명령을 남깁니다. BOM 진단은 검증된 canonical zet 아이디를 reconcile 미리보기에 실제로 채우며, 아이디가 없거나 안전하지 않으면 미완성 placeholder 명령을 내보내지 않습니다. compact heartbeat는 보존된 과거 엣지 집계보다 현재 local-profile secret-safety의 파일·내용·프로필 처리량을 우선하며, 일반 파일 안전 순회는 확인한 디렉터리 경계를 재사용하면서 심볼릭 링크 이탈 검사는 엄격하게 유지합니다.
 - read-only `archive zet-quality-check --dry-run`으로 mint 전 entity-term, document-type, OCR/parse metadata, table-structure, correction-event, source-rights, audience, derived-artifact dependency 위험을 점검합니다. 선택적 `zet-quality-rules.yml` 프로젝트 규칙은 matched term을 출력하지 않으면서 금지 entity alias를 mint blocker로 만들 수 있습니다.
-- 사람이 검토한 가져오기 제목 수정안을 위한 read-only `archive zet-title-remap-plan --dry-run` 뒤에 CLI 전용 승인형 `archive zet-title-remap-write --dry-run|--approve`가 이어집니다. v0.3.269 writer는 변경되지 않은 제안·계획·쓰기 digest와 명시적 사람 검토를 모두 묶고, YAML 최상위 `title` scalar만 바꾸기 전에 모든 정본 원본 바이트를 검증된 콘텐츠 주소형 object로 보존합니다. 마지막에 제목/본문 텍스트가 없는 비공개 영수증을 쓰고, 일반 오류는 원복하며, 강제 종료는 비공개 journal과 공통 lock을 남깁니다. 제목 영수증 전체 감사·자동 중단 복구·승인형 되돌리기는 아직 미래 작업입니다.
+- 사람이 검토한 가져오기 제목 수정안을 위한 read-only `archive zet-title-remap-plan --dry-run` 뒤에 CLI 전용 승인형 `archive zet-title-remap-write --dry-run|--approve`가 이어집니다. v0.3.269 writer는 변경되지 않은 제안·계획·쓰기 digest와 명시적 사람 검토를 모두 묶고, YAML 최상위 `title` scalar만 바꾸기 전에 모든 정본 원본 바이트를 검증된 콘텐츠 주소형 object로 보존합니다. 마지막에 제목/본문 텍스트가 없는 비공개 영수증을 쓰고, 일반 오류는 원복하며, 강제 종료는 비공개 journal과 공통 lock을 남깁니다. v0.3.270은 비공개 값을 되비추지 않는 read-only `archive zet-title-remap-receipt-audit --dry-run`으로 모든 제한 범위 영수증·snapshot·잔류 journal·현재 참여 파일 hash·공통 lock을 검증합니다. 자동 중단 복구와 승인형 되돌리기는 아직 미래 작업입니다.
 - read-only `archive status-board --dry-run`으로 canonical zet, active draft, retire 대기 minted draft, document/audience metadata gap, source metadata gap, derived-artifact sync gap, 선택적 quality count를 한 번에 요약합니다. title/body/source value/provider URL/local path는 출력하지 않습니다.
 - 초록 데이터만 읽는 `archive first-read-readiness --dry-run`과 MCP `first_read_readiness`는 일반 보관함 검진과 AI 기억 재구성 준비 상태를 분리합니다. 비공개 처리되지 않은 모든 정본 zet에 명시적 `abstract`가 있고 모든 zet 아이디가 하나로 안전하게 해석될 때만 `ready`가 됩니다. 호환용 요약과 제한된 보완 후보는 보여주되 제목, 초록 문장, 본문, 중복 아이디 값, 절대 경로, 외부 서비스 값, 비밀정보는 출력하지 않습니다. `create-draft`는 초록이 없는 미완성 생각도 보존하지만, `mint-zet`, `mint-zettel`, 이전 `promote`는 정본 발행 파일을 쓰기 전에 명시적이고 안전한 초록 데이터를 요구하고 다시 검증합니다. 이어서 읽기 전용 `archive abstract-freshness --dry-run`과 MCP `abstract_freshness`는 현재 초록 데이터와 본문의 해시 짝을 사람이 검토한 근거와 대조해 `fresh`, `stale`, `unverified`, `missing`, `unreadable`, 정책상 제외 상태를 한 번의 영수증 색인과 한 번의 정본 순회로 구분하며, 문장을 출력하거나 기억을 자동 수정하지 않습니다. 읽기 전용 `archive zet-revision-plan --dry-run`과 MCP `zet_revision_plan`은 `.wom-scratch/revisions/` 아래의 비공개 전체 zet 수정안 하나를 현재 정본 바이트와 묶고, 아이디·발행 이력·최초 작성자 정보를 고정한 채 해시와 고정된 변경 종류만 보여줍니다. 이어서 CLI 전용 `archive zet-revision-write --dry-run|--approve`는 실제 쓰기 후보의 별도 해시, 명시적 사람 검토, 교체 직전 바이트의 로컬 콘텐츠 주소형 오브제 보존, 원자 교체, 실행 중 오류 복구, 중단 뒤 영수증 마무리, 초록 신선도 근거가 되는 불변 v0.2 수정 영수증을 제공합니다. 읽기 전용 CLI `archive zet-revision-receipt-audit --dry-run`은 일반 수정과 정확 복원을 하나의 엄격한 시간순 사건 이력으로 검사하고, 새 이전-상태 보존본과 목록 기록을 검증하며, 근거가 완전한 반복 상태(예: `A -> B -> A`)는 허용하고, 비공개 내용을 출력하거나 잠금을 지우지 않은 채 남은 작업 잠금을 분류합니다. CLI 전용 `archive zet-revision-restore-proposal-from-snapshot --dry-run|--approve`은 검증된 v0.2 이전-상태 보존본을 정본 변경 없이 독립된 콘텐츠 주소형 비공개 검토 복사본으로 만듭니다. CLI 전용 `archive zet-revision-restore-plan --dry-run`은 비공개 백업에서 따로 복구한 과거 전체 zet를 실제 최신 영수증 사건의 이전 상태와 묶고 현재 정책을 다시 검사합니다. 이어서 별도의 승인형 `archive zet-revision-restore-write --dry-run|--approve`는 사람이 검토한 그 바이트만 원자적으로 설치하고, 과거 형식과 `updated_at`을 보존하며, 실행 중 오류를 되돌리고, 중단된 작업을 재개하고, 불변 복원 영수증을 남깁니다. 이것은 WOM이 말하는 **메멘토 문제**에 대한 답의 한 층입니다. 새 AI 세션은 흐려지는 대화 기억을 믿거나 근거 없이 기억을 직접 고치는 대신, 사람이 검토한 로컬 아티팩트에서 오래가는 맥락을 다시 세우고 수정하며 필요할 때 근거 있는 복구를 수행해야 합니다. v0.3.240부터 첫 읽기 진단 완료와 준비 완료를 분리하고, 최신성 검진은 영속 캐시 없이 현재 필요한 증거 후보만 열며, 2단계 진행 순서를 표시하고, 대형 옛 보관함은 자동 대량 보완이 아니라 사람이 검토하는 3건 표본부터 시작합니다. v0.3.241부터 최신성 검진은 최대 8개 작업으로 제한된 초록 데이터를 읽고, 유효한 명시적 초록 데이터가 있는 대상만 전체 본문 바이트를 엽니다.
 - read-only `archive derived-artifact-staleness --dry-run`으로 `derived_artifacts`가 마지막 검토 sync 이후 더 최신 source zet을 놓치고 있는지 확인합니다. 외부 보고서 본문은 열지 않고, artifact ref/title/body/provider URL/local path는 출력하지 않습니다.
@@ -389,7 +389,7 @@ WOM, `zettel-kasten`, `zet`, `ZET`는 버전이 있는 protocol family로 관리
 Release tag는 compatibility checkpoint입니다.
 
 ```text
-v0.3.269 (현재 checkpoint)
+v0.3.270 (현재 checkpoint)
 ```
 
 `v0.2.5` 이후의 공개 릴리스에는 compatibility checkpoint tag가 붙습니다. 전체
