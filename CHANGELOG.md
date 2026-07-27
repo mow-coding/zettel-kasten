@@ -6,6 +6,28 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.267 - 2026-07-28
+
+- Added approval-gated single-case `zet-abstract-backfill-recover` and alias
+  `abstract-backfill-recover`.
+- Execution is bound to one operation, basis SHA-256, complete recovery-plan
+  digest, and fixed action, then revalidated under a recovery-only OS advisory
+  guard immediately before mutation.
+- Prepared and verified-completed cases clean only their matching lock and
+  journal. Interrupted apply restores exact before hashes. Interrupted revert
+  completes exact after hashes and writes/verifies the deterministic text-free
+  revert receipt. Manual hold is never executable.
+- Safe-direction progress survives ordinary failures and real `os._exit` hard
+  exits through the retained journal and basis lock; a fresh plan digest and
+  fresh approval are required to resume.
+- Approval requires both explicit recovery review and explicit archive
+  quiescence because external editors, older WOM versions, and ordinary
+  different-basis writers remain outside the recovery guard.
+- Recovery-produced revert receipts record
+  `rollback_on_runtime_failure: false`. The v0.1 schema now accepts either
+  boolean value, preserving every older receipt but requiring v0.3.267 or newer
+  to audit a newly recovery-produced receipt.
+
 ## v0.3.266 - 2026-07-27
 
 - Added read-only `zet-abstract-backfill-recovery-plan` and alias

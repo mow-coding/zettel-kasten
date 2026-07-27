@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 from pathlib import Path
 
@@ -7467,12 +7468,13 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "finalize_revert_receipt",
             "manual_forensic_hold",
             "fresh_recovery_approval_required: true",
-            "execution_implemented: false",
             "safe_to_execute_now: false",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, guide_text)
                 self.assertIn(phrase, release_text)
+        self.assertIn("execution_implemented: false", release_text)
+        self.assertIn("execution_implemented: true", guide_text)
         self.assertIn("present_unverified", guide_text)
         self.assertIn("writes/deletes no canonical file", matrix_text)
         self.assertIn(
@@ -7493,6 +7495,122 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         )
         self.assertNotIn("automatic recovery is implemented", guide_text)
         self.assertNotIn("자동 복구가 구현", root_readme_ko_text)
+
+    def test_v03267_abstract_recovery_executor_docs_match_approval_and_retry_contract(
+        self,
+    ) -> None:
+        guide_text = (
+            KIT_ROOT / "docs" / "zet-abstract-backfill-recover.md"
+        ).read_text(encoding="utf-8")
+        plan_text = (
+            KIT_ROOT / "docs" / "zet-abstract-backfill-recovery-plan.md"
+        ).read_text(encoding="utf-8")
+        release_text = (
+            KIT_ROOT / "docs" / "releases" / "v0.3.267.md"
+        ).read_text(encoding="utf-8")
+        packaged_release_text = (
+            KIT_ROOT
+            / "src"
+            / "wom_kit"
+            / "_resources"
+            / "release-notes"
+            / "v0.3.267.md"
+        ).read_text(encoding="utf-8")
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        kit_readme_text = (KIT_ROOT / "README.md").read_text(
+            encoding="utf-8"
+        )
+        root_readme_text = (REPO_ROOT / "README.md").read_text(
+            encoding="utf-8"
+        )
+        root_readme_ko_text = (REPO_ROOT / "README.ko.md").read_text(
+            encoding="utf-8"
+        )
+        operator_source_text = (
+            KIT_ROOT
+            / "templates"
+            / "ai-runtime"
+            / "wom-archive"
+            / "references"
+            / "operator-contract.md"
+        ).read_text(encoding="utf-8")
+        operator_resource_text = (
+            KIT_ROOT
+            / "src"
+            / "wom_kit"
+            / "_resources"
+            / "templates"
+            / "ai-runtime"
+            / "wom-archive"
+            / "references"
+            / "operator-contract.md"
+        ).read_text(encoding="utf-8")
+        public_map_text = (
+            KIT_ROOT / "docs" / "public-documentation-map.md"
+        ).read_text(encoding="utf-8")
+        public_map_ko_text = (
+            KIT_ROOT / "docs" / "public-documentation-map.ko.md"
+        ).read_text(encoding="utf-8")
+        upgrade_text = (REPO_ROOT / "UPGRADE.md").read_text(
+            encoding="utf-8"
+        )
+        upgrade_ko_text = (REPO_ROOT / "UPGRADE.ko.md").read_text(
+            encoding="utf-8"
+        )
+        revert_schema = json.loads(
+            (
+                KIT_ROOT
+                / "schemas"
+                / "zet-abstract-backfill-revert-receipt.schema.json"
+            ).read_text(encoding="utf-8")
+        )
+
+        for text in (
+            guide_text,
+            release_text,
+            packaged_release_text,
+            matrix_text,
+            kit_readme_text,
+            root_readme_text,
+            root_readme_ko_text,
+            operator_source_text,
+            operator_resource_text,
+        ):
+            with self.subTest(document="recovery-executor-contract"):
+                self.assertIn(
+                    "zet-abstract-backfill-recover",
+                    text,
+                )
+        for phrase in (
+            "--expected-plan-digest",
+            "--expected-action",
+            "--affirm-recovery-reviewed",
+            "--affirm-archive-quiescent",
+            "manual_forensic_hold",
+            "rollback_on_runtime_failure: false",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, guide_text)
+                self.assertIn(phrase, release_text)
+        self.assertIn("single-case executor", plan_text)
+        self.assertIn("OS advisory guard", guide_text)
+        self.assertIn("new plan", guide_text)
+        self.assertIn("one-way reader", guide_text)
+        self.assertIn("one-way reader", upgrade_text)
+        self.assertIn("단방향 reader", upgrade_ko_text)
+        self.assertIn(
+            "[zet Abstract Backfill Recovery Executor]",
+            public_map_text,
+        )
+        self.assertIn(
+            "[zet 초록 일괄 작업 승인 복구 실행기]",
+            public_map_ko_text,
+        )
+        rollback_schema = revert_schema["properties"][
+            "mutation_contract"
+        ]["properties"]["rollback_on_runtime_failure"]
+        self.assertEqual(rollback_schema, {"type": "boolean"})
+        self.assertNotIn("automatic recovery", guide_text.lower())
 
 
 if __name__ == "__main__":

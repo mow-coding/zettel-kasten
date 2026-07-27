@@ -26,6 +26,7 @@ import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
+from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
@@ -2875,6 +2876,7 @@ ZET_ABSTRACT_BACKFILL_REVERT_SCHEMA = "wom-kit/zet-abstract-backfill-revert/v0.1
 ZET_ABSTRACT_BACKFILL_REVERT_RECEIPT_SCHEMA = "wom-kit/zet-abstract-backfill-revert-receipt/v0.1"
 ZET_ABSTRACT_BACKFILL_RECEIPT_AUDIT_SCHEMA = "wom-kit/zet-abstract-backfill-receipt-audit/v0.1"
 ZET_ABSTRACT_BACKFILL_RECOVERY_PLAN_SCHEMA = "wom-kit/zet-abstract-backfill-recovery-plan/v0.1"
+ZET_ABSTRACT_BACKFILL_RECOVER_SCHEMA = "wom-kit/zet-abstract-backfill-recover/v0.1"
 ZET_ABSTRACT_BACKFILL_TRANSACTION_JOURNAL_SCHEMA = (
     "wom-kit/zet-abstract-backfill-transaction-journal/v0.1"
 )
@@ -2890,6 +2892,19 @@ ZET_ABSTRACT_BACKFILL_MAX_CANONICAL_FILE_BYTES = 16 * 1024 * 1024
 ZET_ABSTRACT_BACKFILL_MAX_TOTAL_CANONICAL_BYTES = 256 * 1024 * 1024
 ZET_ABSTRACT_BACKFILL_MAX_RECEIPT_BYTES = 16 * 1024 * 1024
 ZET_ABSTRACT_BACKFILL_MAX_TRANSACTION_JOURNAL_BYTES = 16 * 1024 * 1024
+ZET_ABSTRACT_BACKFILL_RECOVERY_ACTIONS = frozenset(
+    {
+        "cleanup_unstarted_transaction_evidence",
+        "rollback_uncommitted_apply_to_before",
+        "resume_revert_forward_and_finalize_receipt",
+        "finalize_revert_receipt",
+        "cleanup_verified_completed_evidence",
+        "manual_forensic_hold",
+    }
+)
+ZET_ABSTRACT_BACKFILL_EXECUTABLE_RECOVERY_ACTIONS = (
+    ZET_ABSTRACT_BACKFILL_RECOVERY_ACTIONS - {"manual_forensic_hold"}
+)
 ZETTEL_OVERVIEW_FRONTMATTER_FIELDS = ("abstract", "gist", "summary", "description", "overview")
 ZET_CATALOG_SCHEMA = "wom-kit/zet-catalog/v0.8"
 ZET_CATALOG_MAX_PAGE_SIZE = 10000
@@ -18184,6 +18199,61 @@ def zet_abstract_backfill_receipt_audit(
     }
 
 
+def zet_abstract_backfill_recovery_decision(
+    case: dict[str, Any],
+) -> tuple[str, str]:
+    operation = str(case.get("operation") or "unknown")
+    observed_state = str(case.get("observed_state") or "invalid")
+    final_receipt_state = str(case.get("final_receipt_state") or "unknown")
+    if final_receipt_state == "present_unverified":
+        return (
+            "manual_forensic_hold",
+            "deterministic_final_receipt_exists_but_lifecycle_is_unverified",
+        )
+    if observed_state == "invalid":
+        return "manual_forensic_hold", "journal_contract_is_invalid"
+    if observed_state == "divergent":
+        return (
+            "manual_forensic_hold",
+            "participant_state_is_missing_or_outside_recorded_hashes",
+        )
+    if observed_state == "stale_completed":
+        return (
+            "cleanup_verified_completed_evidence",
+            "verified_receipt_committed_transaction_cleanup_did_not_finish",
+        )
+    if observed_state == "prepared":
+        return (
+            "cleanup_unstarted_transaction_evidence",
+            "all_participants_remain_at_before_hash",
+        )
+    if operation == "apply" and observed_state in {
+        "partially_applied",
+        "fully_applied_receipt_missing",
+    }:
+        return (
+            "rollback_uncommitted_apply_to_before",
+            "apply_has_no_verified_commit_receipt_and_before_state_is_reconstructible",
+        )
+    if operation == "revert" and observed_state == "partially_applied":
+        return (
+            "resume_revert_forward_and_finalize_receipt",
+            "revert_after_state_is_reconstructible_but_removed_private_text_is_not",
+        )
+    if (
+        operation == "revert"
+        and observed_state == "fully_applied_receipt_missing"
+    ):
+        return (
+            "finalize_revert_receipt",
+            "all_participants_reached_revert_after_hash_but_commit_receipt_is_missing",
+        )
+    return (
+        "manual_forensic_hold",
+        "transaction_state_has_no_approved_recovery_policy",
+    )
+
+
 def zet_abstract_backfill_recovery_plan(
     archive_root: Path | str,
     *,
@@ -18258,53 +18328,9 @@ def zet_abstract_backfill_recovery_plan(
         before_count = int(case.get("before_count") or 0)
         after_count = int(case.get("after_count") or 0)
 
-        if final_receipt_state == "present_unverified":
-            recommended_action = "manual_forensic_hold"
-            reason_code = (
-                "deterministic_final_receipt_exists_but_lifecycle_is_unverified"
-            )
-        elif observed_state == "invalid":
-            recommended_action = "manual_forensic_hold"
-            reason_code = "journal_contract_is_invalid"
-        elif observed_state == "divergent":
-            recommended_action = "manual_forensic_hold"
-            reason_code = (
-                "participant_state_is_missing_or_outside_recorded_hashes"
-            )
-        elif observed_state == "stale_completed":
-            recommended_action = "cleanup_verified_completed_evidence"
-            reason_code = (
-                "verified_receipt_committed_transaction_cleanup_did_not_finish"
-            )
-        elif observed_state == "prepared":
-            recommended_action = "cleanup_unstarted_transaction_evidence"
-            reason_code = "all_participants_remain_at_before_hash"
-        elif operation == "apply" and observed_state in {
-            "partially_applied",
-            "fully_applied_receipt_missing",
-        }:
-            recommended_action = "rollback_uncommitted_apply_to_before"
-            reason_code = (
-                "apply_has_no_verified_commit_receipt_and_before_state_is_reconstructible"
-            )
-        elif operation == "revert" and observed_state == "partially_applied":
-            recommended_action = (
-                "resume_revert_forward_and_finalize_receipt"
-            )
-            reason_code = (
-                "revert_after_state_is_reconstructible_but_removed_private_text_is_not"
-            )
-        elif (
-            operation == "revert"
-            and observed_state == "fully_applied_receipt_missing"
-        ):
-            recommended_action = "finalize_revert_receipt"
-            reason_code = (
-                "all_participants_reached_revert_after_hash_but_commit_receipt_is_missing"
-            )
-        else:
-            recommended_action = "manual_forensic_hold"
-            reason_code = "transaction_state_has_no_approved_recovery_policy"
+        recommended_action, reason_code = (
+            zet_abstract_backfill_recovery_decision(case)
+        )
 
         if recommended_action == "rollback_uncommitted_apply_to_before":
             participant_write_count = after_count
@@ -18345,7 +18371,10 @@ def zet_abstract_backfill_recovery_plan(
                 ),
                 "current_state_revalidation_required": True,
                 "fresh_recovery_approval_required": True,
-                "execution_implemented": False,
+                "execution_implemented": (
+                    recommended_action
+                    in ZET_ABSTRACT_BACKFILL_EXECUTABLE_RECOVERY_ACTIONS
+                ),
                 "safe_to_execute_now": False,
                 "issue_codes": [
                     str(code)
@@ -18359,8 +18388,6 @@ def zet_abstract_backfill_recovery_plan(
         warnings.append(
             "one_or_more_recovery_cases_require_manual_forensic_hold"
         )
-    if planned_cases:
-        warnings.append("recovery_execution_not_implemented")
     non_journal_problem_count = max(
         0,
         int(audit_summary.get("problem_count") or 0)
@@ -18424,9 +18451,12 @@ def zet_abstract_backfill_recovery_plan(
         },
         "cases": planned_cases,
         "execution_boundary": {
-            "execution_implemented": False,
+            "execution_implemented": True,
             "automatic_recovery": False,
             "fresh_recovery_approval_required": True,
+            "archive_quiescence_affirmation_required": True,
+            "single_case_sha_and_plan_bound_execution": True,
+            "recovery_executor_serialization_implemented": True,
             "cross_basis_participant_serialization_implemented": False,
         },
         "write_boundary": {
@@ -18466,12 +18496,1004 @@ def zet_abstract_backfill_recovery_plan(
             ]
             if not planned_cases and ok
             else [
-                "Have a human review each fixed recovery decision while retaining every journal and lock.",
-                "Do not edit canonical zets or create, replace, or delete receipts from this plan; the recovery executor is not implemented.",
+                "Have a human review each fixed recovery decision while retaining every journal and lock until an approved executor run.",
+                "Use the single-case recovery executor only with this complete plan digest, the case basis SHA-256, and the exact expected action.",
                 "Resolve every manual_forensic_hold case before any future approved recovery write.",
             ]
         ),
     }
+
+
+def zet_abstract_backfill_recovery_paths(
+    root: Path,
+    *,
+    operation: str,
+    basis_sha256: str,
+) -> tuple[Path, Path]:
+    if operation not in {"apply", "revert"}:
+        raise ArchiveServiceError("Abstract recovery operation is invalid.")
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", basis_sha256):
+        raise ArchiveServiceError("Abstract recovery basis SHA-256 is invalid.")
+    digest = basis_sha256.removeprefix("sha256:")
+    lock_kind = "write" if operation == "apply" else "abstract-revert"
+    lock_root = archive_internal_path(
+        root,
+        ZET_ABSTRACT_BACKFILL_PROPOSAL_PREFIX.rstrip("/"),
+    )
+    lock_path = lock_root / f".{digest}.{lock_kind}.lock"
+    return (
+        lock_path,
+        zet_abstract_backfill_transaction_journal_path(lock_path),
+    )
+
+
+@contextmanager
+def zet_abstract_backfill_recovery_guard(
+    root: Path,
+) -> Iterable[dict[str, bool]]:
+    guard_root = archive_internal_path(
+        root,
+        ZET_ABSTRACT_BACKFILL_PROPOSAL_PREFIX.rstrip("/"),
+    )
+    guard_root.mkdir(parents=True, exist_ok=True)
+    guard_path = guard_root / ".recovery-executor.guard"
+    if guard_path.is_symlink() or (
+        guard_path.exists() and not guard_path.is_file()
+    ):
+        raise ArchiveServiceError("Abstract recovery guard path is unsafe.")
+    created_this_run = not guard_path.exists()
+    handle = guard_path.open("a+b")
+    locked = False
+    try:
+        handle.seek(0, os.SEEK_END)
+        if handle.tell() == 0:
+            handle.write(b"\0")
+            handle.flush()
+            os.fsync(handle.fileno())
+        handle.seek(0)
+        try:
+            if os.name == "nt":
+                import msvcrt
+
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(
+                    handle.fileno(),
+                    fcntl.LOCK_EX | fcntl.LOCK_NB,
+                )
+            locked = True
+        except (BlockingIOError, OSError) as exc:
+            raise ArchiveServiceError(
+                "Another abstract recovery executor is active."
+            ) from exc
+        yield {
+            "acquired": True,
+            "guard_file_created_this_run": created_this_run,
+        }
+    finally:
+        if locked:
+            try:
+                handle.seek(0)
+                if os.name == "nt":
+                    import msvcrt
+
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            except OSError:
+                pass
+        handle.close()
+
+
+def reacquire_zet_abstract_backfill_basis_lock(
+    lock_path: Path,
+    *,
+    basis_sha256: str,
+) -> bool:
+    if lock_path.is_symlink() or (
+        lock_path.exists() and not lock_path.is_file()
+    ):
+        raise ArchiveServiceError("Abstract recovery basis lock path is unsafe.")
+    if lock_path.is_file():
+        return False
+    descriptor: int | None = None
+    created = False
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        descriptor = os.open(
+            lock_path,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            0o600,
+        )
+        created = True
+        with os.fdopen(descriptor, "wb") as handle:
+            descriptor = None
+            handle.write((basis_sha256 + "\n").encode("ascii"))
+            handle.flush()
+            os.fsync(handle.fileno())
+        fsync_directory(lock_path.parent)
+        return True
+    except FileExistsError as exc:
+        raise ArchiveServiceError(
+            "Abstract recovery basis lock was created concurrently."
+        ) from exc
+    except OSError as exc:
+        if descriptor is not None:
+            os.close(descriptor)
+        if created:
+            try:
+                lock_path.unlink()
+                fsync_directory(lock_path.parent)
+            except OSError:
+                pass
+        raise ArchiveServiceError(
+            "Abstract recovery basis lock could not be acquired."
+        ) from exc
+
+
+def materialize_zet_abstract_backfill_recovery_writes(
+    root: Path,
+    journal: dict[str, Any],
+    *,
+    operation: str,
+) -> list[dict[str, Any]]:
+    writes: list[dict[str, Any]] = []
+    total_bytes = 0
+    for item in journal["items"]:
+        canonical_path = archive_internal_path(root, item["canonical_path"])
+        if canonical_path.is_symlink() or not canonical_path.is_file():
+            raise ArchiveServiceError(
+                "Abstract recovery participant is unavailable."
+            )
+        current_bytes = read_zet_abstract_backfill_canonical_bytes(
+            canonical_path
+        )
+        total_bytes += len(current_bytes)
+        if total_bytes > ZET_ABSTRACT_BACKFILL_MAX_TOTAL_CANONICAL_BYTES:
+            raise ArchiveServiceError(
+                "Abstract recovery participants exceed the total byte limit."
+            )
+        current_sha256 = (
+            "sha256:" + hashlib.sha256(current_bytes).hexdigest()
+        )
+        if operation == "apply":
+            source_sha256 = item["after_file_sha256"]
+            target_sha256 = item["before_file_sha256"]
+        else:
+            source_sha256 = item["before_file_sha256"]
+            target_sha256 = item["after_file_sha256"]
+        if current_sha256 == target_sha256:
+            continue
+        if current_sha256 != source_sha256:
+            raise ArchiveServiceError(
+                "Abstract recovery participant hash changed."
+            )
+        target_bytes = zet_abstract_backfill_revert_candidate_bytes(
+            current_bytes,
+            expected_abstract_sha256=item["abstract_sha256"],
+            expected_before_file_sha256=target_sha256,
+        )
+        writes.append(
+            {
+                "row_index": item["row_index"],
+                "path": canonical_path,
+                "source_bytes": current_bytes,
+                "target_bytes": target_bytes,
+                "target_sha256": target_sha256,
+            }
+        )
+    return writes
+
+
+def find_zet_abstract_backfill_source_receipt_for_recovery(
+    root: Path,
+    *,
+    archive_id: str,
+    source_receipt_sha256: str,
+    journal: dict[str, Any],
+    max_receipts: int,
+) -> tuple[str, dict[str, Any]]:
+    source_root = archive_internal_path(
+        root,
+        ZET_ABSTRACT_BACKFILL_RECEIPTS_DIR,
+    )
+    source_paths = (
+        safe_archive_glob(
+            source_root,
+            "*.zet-abstract-backfill.json",
+            root,
+        )
+        if source_root.is_dir()
+        else []
+    )
+    if len(source_paths) > max_receipts:
+        raise ArchiveServiceError(
+            "Abstract recovery source receipt scan is incomplete."
+        )
+    matches: list[tuple[Path, dict[str, Any]]] = []
+    for source_path in source_paths:
+        if source_path.is_symlink():
+            continue
+        try:
+            _raw, source_receipt, actual_sha256 = (
+                read_zet_abstract_backfill_receipt_document(source_path)
+            )
+        except ArchiveServiceError:
+            continue
+        if actual_sha256 == source_receipt_sha256:
+            matches.append((source_path, source_receipt))
+    if len(matches) != 1:
+        raise ArchiveServiceError(
+            "Abstract recovery source receipt is missing or ambiguous."
+        )
+    source_path, source_receipt = matches[0]
+    source_relative = archive_relative_path(source_path, root)
+    proposal_sha256 = source_receipt.get("proposal_sha256")
+    source_items = source_receipt.get("items")
+    if (
+        validate_schema(
+            source_receipt,
+            "zet-abstract-backfill-receipt.schema.json",
+        )
+        or source_receipt.get("schema")
+        != ZET_ABSTRACT_BACKFILL_RECEIPT_SCHEMA
+        or source_receipt.get("archive_id") != archive_id
+        or source_receipt.get("human_affirmation")
+        != "all_proposed_abstracts_reviewed"
+        or not isinstance(proposal_sha256, str)
+        or not re.fullmatch(r"sha256:[0-9a-f]{64}", proposal_sha256)
+        or source_path.name
+        != (
+            f"{proposal_sha256.removeprefix('sha256:')}"
+            ".zet-abstract-backfill.json"
+        )
+        or not isinstance(source_items, list)
+        or len(source_items) != len(journal["items"])
+        or source_receipt.get("item_count") != len(source_items)
+        or source_receipt.get("plan_digest") != journal.get("plan_digest")
+    ):
+        raise ArchiveServiceError(
+            "Abstract recovery source receipt contract is invalid."
+        )
+    for source_item, journal_item in zip(
+        source_items,
+        journal["items"],
+        strict=True,
+    ):
+        if (
+            not isinstance(source_item, dict)
+            or source_item.get("row_index")
+            != journal_item.get("row_index")
+            or source_item.get("zettel_id")
+            != journal_item.get("zettel_id")
+            or source_item.get("canonical_path")
+            != journal_item.get("canonical_path")
+            or source_item.get("generation_mode")
+            != journal_item.get("generation_mode")
+            or source_item.get("before_file_sha256")
+            != journal_item.get("after_file_sha256")
+            or source_item.get("after_file_sha256")
+            != journal_item.get("before_file_sha256")
+            or source_item.get("abstract_sha256")
+            != journal_item.get("abstract_sha256")
+            or source_item.get("body_sha256")
+            != journal_item.get("body_sha256")
+        ):
+            raise ArchiveServiceError(
+                "Abstract recovery source receipt does not match the journal."
+            )
+    return source_relative, source_receipt
+
+
+def zet_abstract_backfill_recovery_revert_receipt(
+    *,
+    archive_id: str,
+    source_receipt_relative: str,
+    source_receipt_sha256: str,
+    source_receipt: dict[str, Any],
+    journal: dict[str, Any],
+    reviewed_by: str,
+    recovered_at: str,
+) -> dict[str, Any]:
+    return {
+        "schema": ZET_ABSTRACT_BACKFILL_REVERT_RECEIPT_SCHEMA,
+        "action": "zet_abstract_backfill_revert",
+        "status": "reverted",
+        "reverted_at": recovered_at,
+        "archive_id": archive_id,
+        "source_receipt_path": source_receipt_relative,
+        "source_receipt_sha256": source_receipt_sha256,
+        "source_proposal_sha256": source_receipt["proposal_sha256"],
+        "source_plan_digest": source_receipt["plan_digest"],
+        "reviewed_by": reviewed_by,
+        "human_affirmation": "abstract_removal_reviewed",
+        "item_count": len(journal["items"]),
+        "items": [
+            {
+                "row_index": item["row_index"],
+                "zettel_id": item["zettel_id"],
+                "canonical_path": item["canonical_path"],
+                "generation_mode": item["generation_mode"],
+                "applied_file_sha256": item["before_file_sha256"],
+                "reverted_file_sha256": item["after_file_sha256"],
+                "removed_abstract_sha256": item["abstract_sha256"],
+                "body_sha256": item["body_sha256"],
+            }
+            for item in journal["items"]
+        ],
+        "mutation_contract": {
+            "field_removed": "frontmatter.abstract",
+            "exact_before_file_hash_restored": True,
+            "body_bytes_preserved": True,
+            "other_frontmatter_semantics_preserved": True,
+            "updated_at_changed": False,
+            "source_receipt_preserved": True,
+            "rollback_on_runtime_failure": False,
+            "crash_recovery_journal_written": True,
+        },
+        "privacy_guards": {
+            "abstract_text_stored_in_receipt": False,
+            "body_text_stored_in_receipt": False,
+            "provider_api_called": False,
+            "model_called": False,
+            "secret_store_or_environment_read": False,
+        },
+    }
+
+
+def zet_abstract_backfill_recover(
+    archive_root: Path | str,
+    *,
+    operation: str,
+    basis_sha256: str,
+    expected_plan_digest: str,
+    expected_action: str,
+    dry_run: bool = False,
+    approve: bool = False,
+    reviewed_by: str | None = None,
+    affirm_recovery_reviewed: bool = False,
+    affirm_archive_quiescent: bool = False,
+    max_receipts: int = 5000,
+    max_locks: int = 5000,
+    max_cases: int = 100,
+    progress_callback: Callable[
+        [str, str, int | None, int | None],
+        None,
+    ]
+    | None = None,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    operation = str(operation or "").strip()
+    basis_sha256 = str(basis_sha256 or "").strip()
+    expected_plan_digest = str(expected_plan_digest or "").strip()
+    expected_action = str(expected_action or "").strip()
+    reviewer = safe_foreign_quarantine_actor_id(reviewed_by)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    selected_case: dict[str, Any] | None = None
+    actual_plan_digest: str | None = None
+    observed_state: str | None = None
+    canonical_files_written = 0
+    canonical_write_attempt_count = 0
+    revert_receipt_written = False
+    revert_receipt_verified = False
+    revert_receipt_sha256: str | None = None
+    final_receipt_exists_after_run: bool | None = None
+    basis_lock_reacquired = False
+    basis_lock_removed: bool | None = None
+    transaction_journal_removed: bool | None = None
+    recovery_guard_acquired = False
+    recovery_guard_file_created = False
+    lock_path: Path | None = None
+    journal_path: Path | None = None
+    final_receipt_path: Path | None = None
+
+    def result_payload(status: str) -> dict[str, Any]:
+        ok = status in {"ready_to_recover", "recovered"} and not blockers
+        case_payload = (
+            {
+                "operation": selected_case.get("operation"),
+                "basis_sha256": selected_case.get("basis_sha256"),
+                "observed_state": selected_case.get("observed_state"),
+                "final_receipt_state": selected_case.get(
+                    "final_receipt_state"
+                ),
+                "expected_lock_state": selected_case.get(
+                    "expected_lock_state"
+                ),
+                "recommended_action": selected_case.get(
+                    "recommended_action"
+                ),
+                "participant_write_count": selected_case.get(
+                    "participant_write_count"
+                ),
+                "receipt_write_required": selected_case.get(
+                    "receipt_write_required"
+                ),
+            }
+            if selected_case is not None
+            else None
+        )
+        return {
+            "ok": ok,
+            "schema": ZET_ABSTRACT_BACKFILL_RECOVER_SCHEMA,
+            "lifecycle_action": "zet_abstract_backfill_recover",
+            "status": status,
+            "dry_run": bool(dry_run),
+            "approved": bool(approve and status == "recovered"),
+            "archive_id": archive_id,
+            "operation": operation,
+            "basis_sha256": basis_sha256,
+            "expected_plan_digest": expected_plan_digest,
+            "actual_plan_digest": actual_plan_digest,
+            "expected_plan_digest_matches": bool(
+                actual_plan_digest
+                and actual_plan_digest == expected_plan_digest
+            ),
+            "expected_action": expected_action,
+            "case": case_payload,
+            "summary": {
+                "canonical_files_written_this_run": (
+                    canonical_files_written
+                ),
+                "canonical_write_attempt_count": (
+                    canonical_write_attempt_count
+                ),
+                "revert_receipt_written_this_run": (
+                    revert_receipt_written
+                ),
+                "revert_receipt_verified": revert_receipt_verified,
+                "revert_receipt_sha256": revert_receipt_sha256,
+                "final_receipt_exists_after_run": (
+                    final_receipt_exists_after_run
+                ),
+                "basis_lock_reacquired": basis_lock_reacquired,
+                "basis_lock_removed": basis_lock_removed,
+                "transaction_journal_removed": (
+                    transaction_journal_removed
+                ),
+            },
+            "approval_contract": {
+                "fresh_recovery_approval_required": True,
+                "reviewed_by_supplied": bool(reviewer),
+                "reviewed_by_echoed": False,
+                "recovery_reviewed_affirmed": bool(
+                    affirm_recovery_reviewed
+                ),
+                "archive_quiescent_affirmed": bool(
+                    affirm_archive_quiescent
+                ),
+                "plan_digest_and_action_bound": bool(
+                    selected_case is not None
+                    and actual_plan_digest == expected_plan_digest
+                    and selected_case.get("recommended_action")
+                    == expected_action
+                ),
+            },
+            "recovery_guard": {
+                "acquired": recovery_guard_acquired,
+                "guard_file_created_this_run": (
+                    recovery_guard_file_created
+                ),
+                "automatically_released": (
+                    True if recovery_guard_acquired else None
+                ),
+                "path_echoed": False,
+                "serializes_recovery_executors_only": True,
+            },
+            "write_boundary": {
+                "canonical_zets_modified": (
+                    canonical_files_written > 0
+                ),
+                "canonical_body_bytes_changed": False,
+                "other_frontmatter_fields_changed": False,
+                "updated_at_changed": False,
+                "revert_receipt_created": revert_receipt_written,
+                "existing_receipt_modified_or_deleted": False,
+                "basis_lock_created": basis_lock_reacquired,
+                "basis_lock_deleted": bool(basis_lock_removed),
+                "transaction_journal_deleted": bool(
+                    transaction_journal_removed
+                ),
+                "recovery_guard_file_created": (
+                    recovery_guard_file_created
+                ),
+                "provider_state_written": False,
+                "objet_bytes_written": False,
+                "database_rows_written": False,
+            },
+            "retry_contract": {
+                "safe_direction_only": True,
+                "successful_recovery_writes_rolled_back_on_later_failure": (
+                    False
+                ),
+                "journal_retained_on_incomplete_recovery": bool(
+                    status
+                    in {
+                        "blocked",
+                        "recovery_incomplete_evidence_retained",
+                    }
+                    and journal_path is not None
+                    and journal_path.exists()
+                ),
+                "fresh_plan_and_approval_required_after_incomplete_recovery": (
+                    True
+                ),
+            },
+            "privacy_guards": {
+                "journal_private_metadata_read": bool(
+                    selected_case is not None and approve
+                ),
+                "journal_or_receipt_paths_echoed": False,
+                "zettel_ids_echoed": False,
+                "zettel_paths_echoed": False,
+                "zettel_titles_echoed": False,
+                "zettel_body_text_echoed": False,
+                "abstract_text_echoed": False,
+                "reviewed_by_echoed": False,
+                "lock_content_read_or_echoed": False,
+                "absolute_local_paths_echoed": False,
+                "provider_api_called": False,
+                "model_called": False,
+                "secret_store_or_environment_read": False,
+            },
+            "blockers": unique_preserve_order(blockers),
+            "warnings": unique_preserve_order(warnings),
+            "next_safe_actions": (
+                [
+                    "Run this exact SHA-bound case with --approve only after review and archive-quiescence confirmation."
+                ]
+                if status == "ready_to_recover"
+                else [
+                    "Recovery completed and matching transaction evidence was removed."
+                ]
+                if status == "recovered"
+                else [
+                    "Retain every journal, lock, and receipt; generate a fresh recovery plan before another approved attempt."
+                ]
+            ),
+        }
+
+    if bool(dry_run) == bool(approve):
+        blockers.append("choose_exactly_one_of_dry_run_or_approve")
+    if operation not in {"apply", "revert"}:
+        blockers.append("recovery_operation_invalid")
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", basis_sha256):
+        blockers.append("recovery_basis_sha256_invalid")
+    if not re.fullmatch(
+        r"sha256:[0-9a-f]{64}",
+        expected_plan_digest,
+    ):
+        blockers.append("expected_recovery_plan_digest_invalid")
+    if expected_action not in ZET_ABSTRACT_BACKFILL_RECOVERY_ACTIONS:
+        blockers.append("expected_recovery_action_invalid")
+    if approve:
+        if reviewer is None:
+            blockers.append("safe_reviewed_by_required")
+        if not affirm_recovery_reviewed:
+            blockers.append("affirm_recovery_reviewed_required")
+        if not affirm_archive_quiescent:
+            blockers.append("affirm_archive_quiescent_required")
+    elif (
+        reviewed_by
+        or affirm_recovery_reviewed
+        or affirm_archive_quiescent
+    ):
+        blockers.append("approval_fields_only_valid_with_approve")
+    if blockers:
+        return result_payload("blocked")
+
+    def fresh_plan() -> dict[str, Any]:
+        return zet_abstract_backfill_recovery_plan(
+            root,
+            dry_run=True,
+            max_receipts=max_receipts,
+            max_locks=max_locks,
+            max_cases=max_cases,
+            progress_callback=progress_callback,
+        )
+
+    def select_case(plan: dict[str, Any]) -> dict[str, Any] | None:
+        matches = [
+            case
+            for case in plan.get("cases", [])
+            if isinstance(case, dict)
+            and case.get("operation") == operation
+            and case.get("basis_sha256") == basis_sha256
+        ]
+        return matches[0] if len(matches) == 1 else None
+
+    plan = fresh_plan()
+    actual_plan_digest = (
+        plan.get("plan_digest")
+        if isinstance(plan.get("plan_digest"), str)
+        else None
+    )
+    if not plan.get("ok"):
+        blockers.extend(
+            f"plan:{code}" for code in plan.get("blockers", [])
+        )
+    if actual_plan_digest != expected_plan_digest:
+        blockers.append("recovery_plan_digest_mismatch")
+    selected_case = select_case(plan)
+    if selected_case is None:
+        blockers.append("recovery_case_not_found_or_ambiguous")
+    elif selected_case.get("recommended_action") != expected_action:
+        blockers.append("recovery_expected_action_mismatch")
+    elif expected_action == "manual_forensic_hold":
+        blockers.append("manual_forensic_hold_not_executable")
+    elif not selected_case.get("execution_implemented"):
+        blockers.append("recovery_action_not_implemented")
+    if blockers:
+        return result_payload("blocked")
+    if dry_run:
+        return result_payload("ready_to_recover")
+
+    assert reviewer is not None
+    try:
+        with zet_abstract_backfill_recovery_guard(root) as guard:
+            recovery_guard_acquired = bool(guard.get("acquired"))
+            recovery_guard_file_created = bool(
+                guard.get("guard_file_created_this_run")
+            )
+            plan = fresh_plan()
+            actual_plan_digest = (
+                plan.get("plan_digest")
+                if isinstance(plan.get("plan_digest"), str)
+                else None
+            )
+            fresh_case = select_case(plan)
+            if (
+                not plan.get("ok")
+                or actual_plan_digest != expected_plan_digest
+                or fresh_case is None
+                or fresh_case.get("recommended_action")
+                != expected_action
+            ):
+                blockers.append(
+                    "recovery_case_changed_before_execution"
+                )
+                return result_payload("blocked")
+            selected_case = fresh_case
+            if fresh_case.get("expected_lock_state") == "unsupported":
+                blockers.append("recovery_basis_lock_unsupported")
+                return result_payload("blocked")
+            lock_path, journal_path = (
+                zet_abstract_backfill_recovery_paths(
+                    root,
+                    operation=operation,
+                    basis_sha256=basis_sha256,
+                )
+            )
+            _journal_bytes, journal = (
+                read_zet_abstract_backfill_transaction_journal(
+                    root,
+                    journal_path,
+                    archive_id=archive_id,
+                )
+            )
+            basis = journal.get("transaction_basis")
+            if (
+                journal.get("operation") != operation
+                or not isinstance(basis, dict)
+                or basis.get("sha256") != basis_sha256
+            ):
+                blockers.append("recovery_journal_binding_changed")
+                return result_payload("blocked")
+            state = classify_zet_abstract_backfill_transaction_journal(
+                root,
+                journal,
+            )
+            observed_state = str(state.get("status") or "invalid")
+            state_matches_case = (
+                observed_state == fresh_case.get("observed_state")
+                or (
+                    fresh_case.get("observed_state") == "stale_completed"
+                    and observed_state
+                    == "fully_applied_receipt_missing"
+                )
+            )
+            if (
+                not state_matches_case
+                or any(
+                    int(state.get(key) or 0)
+                    != int(fresh_case.get(key) or 0)
+                    for key in (
+                        "before_count",
+                        "after_count",
+                        "divergent_count",
+                        "missing_count",
+                    )
+                )
+            ):
+                blockers.append(
+                    "recovery_participant_state_changed_after_plan"
+                )
+                return result_payload("blocked")
+            final_receipt_path = archive_internal_path(
+                root,
+                journal["final_receipt_path"],
+            )
+            final_receipt_exists_after_run = (
+                final_receipt_path.exists()
+            )
+            action_writes_receipt = expected_action in {
+                "resume_revert_forward_and_finalize_receipt",
+                "finalize_revert_receipt",
+            }
+            if (
+                expected_action
+                != "cleanup_verified_completed_evidence"
+                and (
+                    final_receipt_path.exists()
+                    or final_receipt_path.is_symlink()
+                )
+            ):
+                blockers.append(
+                    "recovery_final_receipt_became_occupied"
+                )
+                return result_payload("blocked")
+
+            source_receipt_relative: str | None = None
+            source_receipt: dict[str, Any] | None = None
+            recovery_revert_receipt: dict[str, Any] | None = None
+            participant_writes: list[dict[str, Any]] = []
+            if expected_action == "rollback_uncommitted_apply_to_before":
+                participant_writes = (
+                    materialize_zet_abstract_backfill_recovery_writes(
+                        root,
+                        journal,
+                        operation="apply",
+                    )
+                )
+            elif expected_action in {
+                "resume_revert_forward_and_finalize_receipt",
+                "finalize_revert_receipt",
+            }:
+                source_receipt_relative, source_receipt = (
+                    find_zet_abstract_backfill_source_receipt_for_recovery(
+                        root,
+                        archive_id=archive_id,
+                        source_receipt_sha256=basis_sha256,
+                        journal=journal,
+                        max_receipts=int(max_receipts),
+                    )
+                )
+                participant_writes = (
+                    materialize_zet_abstract_backfill_recovery_writes(
+                        root,
+                        journal,
+                        operation="revert",
+                    )
+                )
+                recovered_at = (
+                    datetime.now(timezone.utc)
+                    .replace(microsecond=0)
+                    .isoformat()
+                    .replace("+00:00", "Z")
+                )
+                recovery_revert_receipt = (
+                    zet_abstract_backfill_recovery_revert_receipt(
+                        archive_id=archive_id,
+                        source_receipt_relative=source_receipt_relative,
+                        source_receipt_sha256=basis_sha256,
+                        source_receipt=source_receipt,
+                        journal=journal,
+                        reviewed_by=reviewer,
+                        recovered_at=recovered_at,
+                    )
+                )
+                if validate_schema(
+                    recovery_revert_receipt,
+                    "zet-abstract-backfill-revert-receipt.schema.json",
+                ):
+                    blockers.append(
+                        "recovery_revert_receipt_schema_invalid"
+                    )
+                    return result_payload("blocked")
+            elif expected_action not in {
+                "cleanup_unstarted_transaction_evidence",
+                "cleanup_verified_completed_evidence",
+            }:
+                blockers.append("recovery_action_not_implemented")
+                return result_payload("blocked")
+
+            basis_lock_reacquired = (
+                reacquire_zet_abstract_backfill_basis_lock(
+                    lock_path,
+                    basis_sha256=basis_sha256,
+                )
+            )
+            if participant_writes and progress_callback is not None:
+                progress_callback(
+                    "abstract-recovery-write",
+                    "start",
+                    0,
+                    len(participant_writes),
+                )
+            for index, item in enumerate(participant_writes, start=1):
+                if (
+                    read_zet_abstract_backfill_canonical_bytes(
+                        item["path"]
+                    )
+                    != item["source_bytes"]
+                ):
+                    raise ArchiveServiceError(
+                        "Abstract recovery participant changed immediately before write."
+                    )
+                canonical_write_attempt_count += 1
+                write_bytes_atomic(
+                    item["path"],
+                    item["target_bytes"],
+                )
+                written_bytes = (
+                    read_zet_abstract_backfill_canonical_bytes(
+                        item["path"]
+                    )
+                )
+                if (
+                    written_bytes != item["target_bytes"]
+                    or "sha256:"
+                    + hashlib.sha256(written_bytes).hexdigest()
+                    != item["target_sha256"]
+                ):
+                    raise ArchiveServiceError(
+                        "Abstract recovery canonical write verification failed."
+                    )
+                canonical_files_written += 1
+                if progress_callback is not None:
+                    progress_callback(
+                        "abstract-recovery-write",
+                        "written",
+                        index,
+                        len(participant_writes),
+                    )
+            if participant_writes and progress_callback is not None:
+                progress_callback(
+                    "abstract-recovery-write",
+                    "done",
+                    len(participant_writes),
+                    len(participant_writes),
+                )
+
+            final_state = (
+                classify_zet_abstract_backfill_transaction_journal(
+                    root,
+                    journal,
+                )
+            )
+            expected_final_state = (
+                "prepared"
+                if expected_action
+                == "rollback_uncommitted_apply_to_before"
+                else "fully_applied_receipt_missing"
+                if action_writes_receipt
+                else observed_state
+            )
+            if final_state.get("status") != expected_final_state:
+                raise ArchiveServiceError(
+                    "Abstract recovery final participant state did not verify."
+                )
+            if (
+                expected_action
+                != "cleanup_verified_completed_evidence"
+                and (
+                    final_receipt_path.exists()
+                    or final_receipt_path.is_symlink()
+                )
+            ):
+                raise ArchiveServiceError(
+                    "Abstract recovery final receipt became occupied."
+                )
+
+            if action_writes_receipt:
+                assert recovery_revert_receipt is not None
+                assert source_receipt_relative is not None
+                if progress_callback is not None:
+                    progress_callback(
+                        "abstract-recovery-receipt",
+                        "start",
+                        None,
+                        None,
+                    )
+                final_receipt_path.parent.mkdir(
+                    parents=True,
+                    exist_ok=True,
+                )
+                write_json_new_file(
+                    final_receipt_path,
+                    recovery_revert_receipt,
+                )
+                revert_receipt_written = True
+                final_receipt_exists_after_run = True
+                verification = (
+                    verify_zet_abstract_backfill_revert_receipt(
+                        root,
+                        final_receipt_path,
+                        archive_id=archive_id,
+                        source_receipt_sha256=basis_sha256,
+                        source_receipt_relative=source_receipt_relative,
+                        max_items=ZET_ABSTRACT_BACKFILL_MAX_ITEMS,
+                    )
+                )
+                revert_receipt_sha256 = verification.get(
+                    "receipt_sha256"
+                )
+                revert_receipt_verified = bool(
+                    verification.get("ok")
+                )
+                if not revert_receipt_verified:
+                    raise ArchiveServiceError(
+                        "Abstract recovery revert receipt verification failed."
+                    )
+                if progress_callback is not None:
+                    progress_callback(
+                        "abstract-recovery-receipt",
+                        "done",
+                        None,
+                        None,
+                    )
+
+            try:
+                if lock_path.exists():
+                    lock_path.unlink()
+                    fsync_directory(lock_path.parent)
+                basis_lock_removed = not lock_path.exists()
+            except OSError:
+                basis_lock_removed = False
+            if not basis_lock_removed:
+                blockers.append(
+                    "recovery_completed_but_basis_lock_cleanup_failed"
+                )
+                return result_payload(
+                    "recovery_incomplete_evidence_retained"
+                )
+            try:
+                journal_path.unlink()
+                fsync_directory(journal_path.parent)
+                transaction_journal_removed = (
+                    not journal_path.exists()
+                )
+            except OSError:
+                transaction_journal_removed = False
+            if not transaction_journal_removed:
+                blockers.append(
+                    "recovery_completed_but_journal_cleanup_failed"
+                )
+                return result_payload(
+                    "recovery_incomplete_evidence_retained"
+                )
+            return result_payload("recovered")
+    except (
+        ArchiveServiceError,
+        ArchivePathError,
+        OSError,
+        UnicodeDecodeError,
+        ValueError,
+    ):
+        blockers.append("recovery_execution_failed_evidence_retained")
+        if lock_path is not None:
+            basis_lock_removed = not lock_path.exists()
+        if journal_path is not None:
+            transaction_journal_removed = not journal_path.exists()
+        if final_receipt_path is not None:
+            final_receipt_exists_after_run = (
+                final_receipt_path.exists()
+            )
+        return result_payload(
+            "recovery_incomplete_evidence_retained"
+            if (
+                canonical_files_written
+                or revert_receipt_written
+                or bool(final_receipt_exists_after_run)
+            )
+            else "blocked"
+        )
 
 
 def objet_ref_occurrences_in_text(text: str, *, source: str, field: str | None = None) -> list[dict[str, Any]]:
