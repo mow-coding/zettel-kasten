@@ -3011,6 +3011,14 @@ class ArchiveServiceError(Exception):
     pass
 
 
+class ZetTitleRemapInputError(ArchiveServiceError):
+    """A title-remap input error whose fixed code/message are safe to print."""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
 class NotionProviderRequestError(ArchiveServiceError):
     def __init__(
         self,
@@ -7522,7 +7530,26 @@ ZET_TITLE_REMAP_MAX_ITEMS = 5000
 ZET_TITLE_REMAP_MAX_FILE_BYTES = 64 * 1024 * 1024
 ZET_TITLE_REMAP_MAX_LINE_BYTES = 1024 * 1024
 ZET_TITLE_REMAP_MAX_CANONICAL_FILE_BYTES = 16 * 1024 * 1024
-ZET_TITLE_REMAP_MAX_TITLE_CHARS = 200
+ZET_TITLE_REMAP_MAX_TITLE_CHARS = 2000
+ZET_TITLE_REMAP_LINE_BREAK_CHARS = frozenset(
+    {"\r", "\n", "\v", "\f", "\x85", "\u2028", "\u2029"}
+)
+ZET_TITLE_REMAP_PUBLIC_WEB_URL_RE = re.compile(r"(?i)\bhttps?://")
+ZET_TITLE_REMAP_PRIVATE_PROVIDER_URL_RE = re.compile(
+    r"(?i)\b(?:s3|b2|r2|gs)://"
+)
+ZET_TITLE_REMAP_TOKEN_VALUE_RE = re.compile(
+    r"(?i)\b(?:AKIA[0-9A-Z]{16}|"
+    r"ghp_[A-Za-z0-9_]{20,}|"
+    r"github_pat_[A-Za-z0-9_]{20,}|"
+    r"sk-[A-Za-z0-9_-]{20,})\b"
+)
+ZET_TITLE_REMAP_SAFETY_RULES = (
+    "local_absolute_path",
+    "private_provider_url",
+    "credential_assignment_or_private_key",
+    "token_shaped_value",
+)
 
 
 def compact_zet_title_comparison_form(value: str) -> str:
@@ -7856,19 +7883,32 @@ def resolve_zet_title_remap_proposal_path(root: Path, raw_path: str) -> Path:
     try:
         normalized = normalize_archive_relative_path(raw_path)
     except ArchivePathError as exc:
-        raise ArchiveServiceError("Title remap proposal path must be archive-relative.") from exc
+        raise ZetTitleRemapInputError(
+            "proposal_path_not_archive_relative",
+            "Title remap proposal path must be archive-relative.",
+        ) from exc
     if not normalized.startswith(ZET_TITLE_REMAP_PROPOSAL_PREFIX) or not normalized.lower().endswith(".jsonl"):
-        raise ArchiveServiceError(
-            f"Title remap proposal must be a .jsonl file under {ZET_TITLE_REMAP_PROPOSAL_PREFIX}"
+        raise ZetTitleRemapInputError(
+            "proposal_path_outside_private_scratch",
+            (
+                "Title remap proposal must be a .jsonl file under "
+                f"{ZET_TITLE_REMAP_PROPOSAL_PREFIX}"
+            ),
         )
     unresolved = root.resolve()
     for part in normalized.split("/"):
         unresolved = unresolved / part
         if unresolved.is_symlink():
-            raise ArchiveServiceError("Title remap proposal paths must not contain symbolic links.")
+            raise ZetTitleRemapInputError(
+                "proposal_path_contains_symbolic_link",
+                "Title remap proposal paths must not contain symbolic links.",
+            )
     path = resolve_archive_relative_path(root, normalized)
     if path.is_symlink() or not path.is_file():
-        raise ArchiveServiceError("Title remap proposal must be an existing regular file.")
+        raise ZetTitleRemapInputError(
+            "proposal_file_missing_or_not_regular",
+            "Title remap proposal must be an existing regular file.",
+        )
     return path
 
 
@@ -7879,7 +7919,10 @@ def read_zet_title_remap_proposal_bytes(
 ) -> tuple[bytes, str]:
     size = proposal_path.stat().st_size
     if size > ZET_TITLE_REMAP_MAX_FILE_BYTES:
-        raise ArchiveServiceError("Title remap proposal exceeds the 64 MiB safety limit.")
+        raise ZetTitleRemapInputError(
+            "proposal_file_exceeds_64_mib",
+            "Title remap proposal exceeds the 64 MiB safety limit.",
+        )
     chunks: list[bytes] = []
     completed = 0
     if progress_callback is not None:
@@ -7892,7 +7935,10 @@ def read_zet_title_remap_proposal_bytes(
             chunks.append(chunk)
             completed += len(chunk)
             if completed > ZET_TITLE_REMAP_MAX_FILE_BYTES:
-                raise ArchiveServiceError("Title remap proposal exceeds the 64 MiB safety limit.")
+                raise ZetTitleRemapInputError(
+                    "proposal_file_exceeds_64_mib",
+                    "Title remap proposal exceeds the 64 MiB safety limit.",
+                )
             if progress_callback is not None:
                 progress_callback("title-remap-proposal", "scanned", completed, size)
     if progress_callback is not None:
@@ -7917,8 +7963,37 @@ def read_zet_title_remap_canonical_bytes(path: Path) -> bytes:
     return value
 
 
-def normalized_zet_title_candidate(value: Any, blocker_codes: list[str]) -> str | None:
-    """Validate a proposed replacement title without returning it to any report."""
+def zet_title_remap_safety_rules(value: str) -> list[str]:
+    """Return fixed rule names without returning the matched private values."""
+
+    rules: list[str] = []
+    private_provider_url = bool(
+        ZET_TITLE_REMAP_PRIVATE_PROVIDER_URL_RE.search(value)
+        or ZETTEL_PRIVATE_PROVIDER_LOCATOR_RE.search(value)
+    )
+    if private_provider_url:
+        rules.append("private_provider_url")
+    if contains_forbidden_location_reference(value) and not bool(
+        ZET_TITLE_REMAP_PRIVATE_PROVIDER_URL_RE.search(value)
+    ):
+        rules.append("local_absolute_path")
+    token_shaped_value = bool(ZET_TITLE_REMAP_TOKEN_VALUE_RE.search(value))
+    if DRAFT_SECRET_VALUE_RE.search(value) and not token_shaped_value:
+        rules.append("credential_assignment_or_private_key")
+    if token_shaped_value:
+        rules.append("token_shaped_value")
+    return unique_preserve_order(rules)
+
+
+def normalized_zet_title_candidate(
+    value: Any,
+    blocker_codes: list[str],
+    *,
+    matched_safety_rules: list[str] | None = None,
+    warning_codes: list[str] | None = None,
+) -> str | None:
+    """Validate one private replacement title without echoing its value."""
+
     if not isinstance(value, str):
         blocker_codes.append("title_not_string")
         return None
@@ -7926,19 +8001,40 @@ def normalized_zet_title_candidate(value: Any, blocker_codes: list[str]) -> str 
     if not normalized:
         blocker_codes.append("title_empty")
         return None
-    if normalized != value:
-        blocker_codes.append("title_not_normalized_single_line")
+    contains_line_break = any(
+        character in ZET_TITLE_REMAP_LINE_BREAK_CHARS for character in value
+    )
+    contains_non_normalized_whitespace = bool(
+        value.startswith(" ")
+        or value.endswith(" ")
+        or "  " in value
+        or any(
+            character.isspace()
+            and character != " "
+            and character not in ZET_TITLE_REMAP_LINE_BREAK_CHARS
+            for character in value
+        )
+    )
+    if contains_line_break:
+        blocker_codes.append("title_contains_line_break")
+    if contains_non_normalized_whitespace:
+        blocker_codes.append("title_contains_non_normalized_whitespace")
+    if contains_line_break or contains_non_normalized_whitespace:
         return None
     if len(normalized) > ZET_TITLE_REMAP_MAX_TITLE_CHARS:
         blocker_codes.append("title_too_long")
         return None
-    if (
-        header_string_is_private_or_unsafe(normalized)
-        or source_intake_has_provider_url(normalized)
-        or source_intake_secret_like(normalized)
-    ):
+    safety_rules = zet_title_remap_safety_rules(normalized)
+    if matched_safety_rules is not None:
+        matched_safety_rules.extend(safety_rules)
+    if safety_rules:
         blocker_codes.append("title_private_locator_or_secret_like")
         return None
+    if (
+        warning_codes is not None
+        and ZET_TITLE_REMAP_PUBLIC_WEB_URL_RE.search(normalized)
+    ):
+        warning_codes.append("title_contains_public_web_url")
     # A replacement that is itself identifier-shaped would be scored by
     # zet-title-readiness exactly as the value it replaces. Refuse it here rather
     # than let the census re-flag the archive after an approved write.
@@ -8018,10 +8114,18 @@ def zet_title_remap_plan(
         "title_matches_external_id": 0,
         "title_is_identifier_shaped": 0,
     }
+    safety_rule_counts = {
+        rule: 0 for rule in ZET_TITLE_REMAP_SAFETY_RULES
+    }
+    warning_code_counts = {
+        "title_contains_public_web_url": 0,
+    }
     if progress_callback is not None:
         progress_callback("title-remap-candidates", "start", 0, len(rows))
     for index, row in enumerate(rows):
         row_blockers: list[str] = []
+        row_warnings: list[str] = []
+        matched_safety_rules: list[str] = []
         expected_file_sha256: str | None = None
         normalized_title: str | None = None
         basis: str | None = None
@@ -8063,7 +8167,12 @@ def zet_title_remap_plan(
             else:
                 basis = str(basis_value)
 
-            normalized_title = normalized_zet_title_candidate(row.get("title"), row_blockers)
+            normalized_title = normalized_zet_title_candidate(
+                row.get("title"),
+                row_blockers,
+                matched_safety_rules=matched_safety_rules,
+                warning_codes=row_warnings,
+            )
 
             if zettel_id is not None:
                 try:
@@ -8134,6 +8243,14 @@ def zet_title_remap_plan(
                     row_blockers.append("canonical_target_unavailable_or_unreadable")
 
         row_blockers = unique_preserve_order(row_blockers)
+        row_warnings = unique_preserve_order(row_warnings)
+        matched_safety_rules = unique_preserve_order(
+            matched_safety_rules
+        )
+        for rule in matched_safety_rules:
+            safety_rule_counts[rule] += 1
+        for code in row_warnings:
+            warning_code_counts[code] += 1
         ready = not row_blockers
         if ready:
             # The proposal file's own sha256 already binds every replacement title
@@ -8159,7 +8276,9 @@ def zet_title_remap_plan(
                 "expected_file_sha256_matches": expected_matches,
                 "current_title_signals": current_signals,
                 "provenance_bound": "title_matches_external_id" in current_signals,
+                "matched_safety_rules": matched_safety_rules,
                 "blocker_codes": row_blockers,
+                "warning_codes": row_warnings,
             }
         )
         if progress_callback is not None and (
@@ -8254,6 +8373,8 @@ def zet_title_remap_plan(
             "provenance_bound_ready_count": provenance_bound_ready,
             "ready_row_basis_counts": basis_counts,
             "ready_row_current_title_signal_counts": current_signal_counts,
+            "matched_safety_rule_counts": safety_rule_counts,
+            "warning_code_counts": warning_code_counts,
             "signals_may_overlap_one_row": True,
             "per_row_count_is": "summary.ready_for_review_count",
             "max_items": effective_max_items,
@@ -8267,8 +8388,31 @@ def zet_title_remap_plan(
             "identifier_shape_is_required_not_merely_a_census_signal": True,
             "replacement_must_not_trip_either_census_signal": True,
             "replacement_must_pass_promotion_checklist_specificity": True,
+            "replacement_title_max_characters": (
+                ZET_TITLE_REMAP_MAX_TITLE_CHARS
+            ),
             "replacement_text_originates_from": sorted(ZET_TITLE_REMAP_BASIS_VALUES),
             "non_canonical_or_redacted_targets_are_not_judged": True,
+        },
+        "normalization_contract": {
+            "performed_automatically": False,
+            "proposal_author_supplies_normalized_title": True,
+            "line_breaks_allowed": False,
+            "allowed_whitespace_character": "U+0020 SPACE",
+            "leading_or_trailing_space_allowed": False,
+            "consecutive_spaces_allowed": False,
+            "other_unicode_whitespace_allowed": False,
+            "review_normalization_against_source_before_resubmitting": True,
+        },
+        "title_safety_contract": {
+            "matched_rule_names_reported": True,
+            "matched_values_reported": False,
+            "blocking_rule_names": list(ZET_TITLE_REMAP_SAFETY_RULES),
+            "ordinary_public_http_https_url_allowed": True,
+            "ordinary_public_http_https_url_warning_code": (
+                "title_contains_public_web_url"
+            ),
+            "bare_security_topic_words_blocked": False,
         },
         "claim_boundary": {
             "checked": (
@@ -8308,6 +8452,8 @@ def zet_title_remap_plan(
             "external_id_values_echoed": False,
             "replacement_title_values_echoed": replacement_echoed,
             "replacement_title_digests_published": False,
+            "matched_safety_rule_names_echoed": True,
+            "matched_safety_rule_values_echoed": False,
             "replacement_title_lengths_published": False,
             "proposal_path_echoed": False,
             "zettel_ids_echoed": False,

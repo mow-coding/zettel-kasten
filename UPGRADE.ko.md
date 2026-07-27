@@ -2,6 +2,40 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.3.268 제목 리맵 사용성
+
+`archive zet-title-remap-plan`은 계속 읽기 전용 제안 검증기입니다. 이번
+릴리스는 정본 제목 쓰기를 승인하거나 실행하지 않습니다.
+
+제안 제목 상한은 200자에서 Unicode 2,000자로 늘었습니다. schema id는
+`wom-kit/zet-title-remap-proposal/v0.1` 그대로이며, 더 큰 `maxLength`는
+이전의 모든 유효한 제안을 계속 허용하는 하위 호환 완화입니다.
+
+공백은 자동으로 고치지 않습니다. 제목은 한 줄이어야 하고, 공백으로
+U+0020 SPACE만 쓰며, 앞뒤 공백이나 연속 공백이 없어야 합니다. 줄바꿈은
+`title_contains_line_break`, 탭·NBSP·기타 Unicode 공백과 공백 배치 문제는
+`title_contains_non_normalized_whitespace`로 나뉩니다.
+
+비공개 또는 민감한 값은 실제 일치 값을 출력하지 않고 다음의 고정
+`matched_safety_rules` 이름만 보고합니다.
+
+- `local_absolute_path`
+- `private_provider_url`
+- `credential_assignment_or_private_key`
+- `token_shaped_value`
+
+일반 공개 HTTP/HTTPS 제목 URL은 `title_contains_public_web_url` 경고와 함께
+허용합니다. `password` 같은 주제 단어만으로는 차단하지 않습니다. 제안
+경로·크기 오류는 허용 목록의 고정 안전 코드만 설명하고, 예상 밖 오류와
+archive-root 오류는 계속 숨깁니다.
+
+신뢰할 자동 원본 제목이 없으면 사람이 구체적인 제목을 쓰고 검토한 뒤
+`basis: human_written`을 사용하고, 현재 정본 SHA-256을 갱신해 전체 계획을
+다시 실행할 수 있습니다. WOM이 제목을 대신 발명하지는 않습니다. 자세한
+계약은
+[`wom-kit/docs/zet-title-remap-plan.md`](wom-kit/docs/zet-title-remap-plan.md)를
+참조하세요.
+
 ## v0.3.267 승인 기반 초록 복구 실행기
 
 아카이브 전체를 마이그레이션할 필요는 없습니다. v0.3.265 이상에서 남은 초록
