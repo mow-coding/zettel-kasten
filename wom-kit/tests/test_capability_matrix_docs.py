@@ -7407,6 +7407,93 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         self.assertIn("one-way tool-version gate", upgrade_text)
         self.assertIn("단방향 게이트", upgrade_ko_text)
 
+    def test_v03266_abstract_recovery_plan_docs_match_read_only_contract(
+        self,
+    ) -> None:
+        guide_text = (
+            KIT_ROOT / "docs" / "zet-abstract-backfill-recovery-plan.md"
+        ).read_text(encoding="utf-8")
+        release_text = (
+            KIT_ROOT / "docs" / "releases" / "v0.3.266.md"
+        ).read_text(encoding="utf-8")
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        kit_readme_text = (KIT_ROOT / "README.md").read_text(encoding="utf-8")
+        root_readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        root_readme_ko_text = (REPO_ROOT / "README.ko.md").read_text(
+            encoding="utf-8"
+        )
+        operator_source_text = (
+            KIT_ROOT
+            / "templates"
+            / "ai-runtime"
+            / "wom-archive"
+            / "references"
+            / "operator-contract.md"
+        ).read_text(encoding="utf-8")
+        operator_resource_text = (
+            KIT_ROOT
+            / "src"
+            / "wom_kit"
+            / "_resources"
+            / "templates"
+            / "ai-runtime"
+            / "wom-archive"
+            / "references"
+            / "operator-contract.md"
+        ).read_text(encoding="utf-8")
+        public_map_text = (
+            KIT_ROOT / "docs" / "public-documentation-map.md"
+        ).read_text(encoding="utf-8")
+        public_map_ko_text = (
+            KIT_ROOT / "docs" / "public-documentation-map.ko.md"
+        ).read_text(encoding="utf-8")
+
+        for text in (
+            guide_text,
+            release_text,
+            matrix_text,
+            kit_readme_text,
+            operator_source_text,
+            operator_resource_text,
+        ):
+            with self.subTest(document="recovery-plan-contract"):
+                self.assertIn(
+                    "zet-abstract-backfill-recovery-plan",
+                    text,
+                )
+        for phrase in (
+            "rollback_uncommitted_apply_to_before",
+            "resume_revert_forward_and_finalize_receipt",
+            "finalize_revert_receipt",
+            "manual_forensic_hold",
+            "fresh_recovery_approval_required: true",
+            "execution_implemented: false",
+            "safe_to_execute_now: false",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, guide_text)
+                self.assertIn(phrase, release_text)
+        self.assertIn("present_unverified", guide_text)
+        self.assertIn("writes/deletes no canonical file", matrix_text)
+        self.assertIn(
+            "zet-abstract-backfill-recovery-plan",
+            root_readme_text,
+        )
+        self.assertIn(
+            "zet-abstract-backfill-recovery-plan",
+            root_readme_ko_text,
+        )
+        self.assertIn(
+            "[zet Abstract Backfill Recovery Plan]",
+            public_map_text,
+        )
+        self.assertIn(
+            "[zet 초록 일괄 작업 읽기 전용 복구 계획]",
+            public_map_ko_text,
+        )
+        self.assertNotIn("automatic recovery is implemented", guide_text)
+        self.assertNotIn("자동 복구가 구현", root_readme_ko_text)
+
 
 if __name__ == "__main__":
     unittest.main()
