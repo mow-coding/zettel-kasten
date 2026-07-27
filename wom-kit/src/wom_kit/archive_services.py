@@ -21172,7 +21172,9 @@ def create_draft_zettel(
         raise ArchiveServiceError("Draft creation blocked: " + "; ".join(unique_preserve_order(blockers)))
 
     inbox.mkdir(parents=True, exist_ok=True)
-    path.write_text("---\n" + dump_yaml(frontmatter) + "---\n\n" + normalized_body, encoding="utf-8")
+    # A kill mid-write must not leave a half-written zet in the inbox for a later
+    # read to treat as a real draft.
+    write_text_atomic(path, "---\n" + dump_yaml(frontmatter) + "---\n\n" + normalized_body)
     return {
         "ok": True,
         "dry_run": False,
@@ -29246,8 +29248,24 @@ def build_foreign_quarantine_receipt(
 
 
 def write_json_new_file(path: Path, payload: dict[str, Any]) -> None:
+    """Create-new receipt writer, durable.
+
+    The `x` mode is the point: a receipt must never overwrite one. The fsync is
+    new in v0.3.264 and is not decoration. Canonical zet mutations became durable
+    in that release, and a receipt that stayed in the page cache while the zet it
+    proves did not would have turned a symmetric loss ("both gone") into an
+    asymmetric one ("the archive changed and nothing records why"). Making one
+    side of that pair durable without the other is worse than making neither.
+    """
     with path.open("x", encoding="utf-8") as handle:
         handle.write(json.dumps(json_safe(payload), indent=2, ensure_ascii=False, default=str) + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    # The directory entry too. A receipt is created with "x", so for a brand-new
+    # file the entry IS what a power cut loses: the bytes reach the platter while
+    # nothing links them into the namespace. Fsyncing only the data would have
+    # inverted the asymmetry this docstring claims to remove, not removed it.
+    fsync_directory(path.parent)
 
 
 def cleanup_empty_archive_dirs(root: Path, paths: list[Path]) -> None:
@@ -42893,12 +42911,15 @@ def zettel_edge_write(
     receipt_path.parent.mkdir(parents=True, exist_ok=True)
     zettel_written = False
     try:
-        source_path.write_text(updated_text, encoding="utf-8")
+        # Atomic: a kill mid-write leaves the canonical zet byte-identical rather
+        # than truncated. The rollback below only runs on OSError, so it is not a
+        # substitute for the write itself being all-or-nothing.
+        write_text_atomic(source_path, updated_text)
         zettel_written = True
         write_json_new_file(receipt_path, receipt)
     except OSError:
         if zettel_written:
-            source_path.write_text(original_text, encoding="utf-8")
+            write_text_atomic(source_path, original_text)
         if receipt_path.exists():
             try:
                 receipt_path.unlink()
@@ -43262,8 +43283,9 @@ def restore_zettel_edge_batch_snapshots(snapshots: dict[str, str | None], root: 
             if path.exists():
                 path.unlink()
             continue
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(original, encoding="utf-8")
+        # Restoring a snapshot is itself a canonical write; a partial restore is
+        # the worst possible outcome of a rollback.
+        write_text_atomic(path, original)
 
 
 def zettel_edge_batch_write(
@@ -43913,12 +43935,12 @@ def zettel_edge_revert(
     revert_receipt_path.parent.mkdir(parents=True, exist_ok=True)
     zettel_written = False
     try:
-        source_path.write_text(updated_text, encoding="utf-8")
+        write_text_atomic(source_path, updated_text)
         zettel_written = True
         write_json_new_file(revert_receipt_path, revert_receipt)
     except OSError:
         if zettel_written:
-            source_path.write_text(original_text, encoding="utf-8")
+            write_text_atomic(source_path, original_text)
         if revert_receipt_path.exists():
             try:
                 revert_receipt_path.unlink()
@@ -64108,24 +64130,119 @@ def build_operator_records(operator_ids_after: list[str], new_owner: str, iso_no
     return records
 
 
+# Worst case ~0.36s per failing write. Kept modest on purpose: a persistently
+# locked destination on Windows fails every attempt, so a batch rollback pays
+# this per zet. See the release notes on batch behaviour under a held lock.
+ATOMIC_REPLACE_ATTEMPTS = 8
+ATOMIC_REPLACE_BACKOFF_SECONDS = 0.01
+
+
+def replace_with_retry(temporary_path: Path, path: Path) -> None:
+    """`os.replace` with a bounded retry for a transiently locked destination.
+
+    On Windows `MoveFileEx` refuses to replace a file that anyone holds open, so
+    a rename can fail for reasons that have nothing to do with permissions: a
+    virus scanner or search indexer reading the zet, or a second writer replacing
+    the same path. Measured here, two threads writing one path fail this way in
+    roughly five runs out of six. Retrying is what makes the write survive that;
+    the fsync above is what makes it survive a power loss. They are different
+    guarantees and both are needed.
+
+    The retry is bounded and re-raises, so a genuinely unwritable destination
+    still surfaces as an error rather than being masked by a spin.
+    """
+    # ONLY the rename is retried. Anything after it runs once, outside the loop:
+    # the rename has already committed by then, so re-entering would retry a
+    # replace whose temp path no longer exists and raise FileNotFoundError for a
+    # write that in fact succeeded -- which zettel_edge_write's `except OSError`
+    # would answer by rolling a correctly written zet back.
+    for attempt in range(ATOMIC_REPLACE_ATTEMPTS):
+        try:
+            os.replace(temporary_path, path)
+            break
+        except PermissionError:
+            if attempt == ATOMIC_REPLACE_ATTEMPTS - 1:
+                raise
+            time.sleep(ATOMIC_REPLACE_BACKOFF_SECONDS * (attempt + 1))
+    else:  # pragma: no cover - structural backstop if the attempt count is ever 0
+        raise OSError("atomic_replace_attempted_zero_times")
+    fsync_directory(path.parent)
+
+
+def fsync_directory(directory: Path) -> None:
+    """Flush the directory entry that the preceding rename created.
+
+    Without this the file's data is durable but the link naming it is not, so a
+    power cut just after the replace can leave the previous content in place. The
+    write stays atomic either way -- this is what makes it durable.
+
+    Windows cannot open a directory for this, so it is a POSIX-only guarantee and
+    short-circuits there, matching `_objet_capture_fsync_dir`'s existing treatment
+    of the same platform gap. Stated in the release notes rather than papered
+    over: on Windows a write is atomic but not durable.
+    """
+    if os.name == "nt":
+        return
+    try:
+        descriptor = os.open(directory, os.O_RDONLY)
+    except (OSError, ValueError):
+        return
+    try:
+        os.fsync(descriptor)
+    except OSError:
+        pass
+    finally:
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+
+
 def write_text_atomic(path: Path, text: str) -> None:
-    temporary_path = path.with_name(path.name + ".tmp")
+    """Durable temp+fsync+os.replace text writer.
+
+    Three separate properties, none of which a plain write-then-rename has:
+
+    * `fsync` before the rename. Without it the rename can be durable while the
+      data behind it is not, so a power loss can leave an empty or truncated file
+      where a complete one was. Every TEXT-mode canonical zet mutation reaches
+      disk through here; raw-byte mutations go through `write_bytes_atomic` and
+      the remint / strip-BOM paths through `_atomic_write*`. Auditing this one
+      function does not audit every canonical write -- believing otherwise is
+      what let a shadowed duplicate of the byte writer survive.
+    * A unique temp name. A fixed `<name>.tmp` makes two writers to one path
+      share one temp file -- the loser's `finally` unlinks the winner's temp
+      mid-flight. This fixes the TEMP collision and nothing else.
+    * A retried rename, in `replace_with_retry`. The unique name alone was
+      measured insufficient: the contended resource is the DESTINATION, and
+      `os.replace` still failed roughly five runs in six. Do not conflate the
+      two -- they fix different halves.
+
+    The encoding call is deliberately left as-is (no `newline=` argument), so the
+    bytes written are identical to what this function has always produced,
+    including the platform newline translation. Making canonical writes durable
+    and making them byte-deterministic across platforms are separate decisions;
+    this is only the first.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # Hidden dotfile temp, matching write_bytes_atomic's existing convention so a
+    # crash leftover is not picked up as an archive file by a scanner.
+    temporary_path = path.with_name(f".{path.name}.{secrets.token_hex(8)}.tmp")
     try:
-        temporary_path.write_text(text, encoding="utf-8")
-        temporary_path.replace(path)
+        with temporary_path.open("w", encoding="utf-8") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        replace_with_retry(temporary_path, path)
     finally:
-        if temporary_path.exists():
-            temporary_path.unlink()
+        temporary_path.unlink(missing_ok=True)
 
 
-def write_bytes_atomic(path: Path, data: bytes) -> None:
-    temporary_path = path.with_name(path.name + ".tmp")
-    try:
-        temporary_path.write_bytes(data)
-        temporary_path.replace(path)
-    finally:
-        if temporary_path.exists():
-            temporary_path.unlink()
+
+# NOTE: `write_bytes_atomic` is defined once, further down this module. An
+# earlier draft of v0.3.264 added a second definition here and "fixed" it; the
+# later definition shadowed it, so the edit was dead code and every byte-writing
+# caller kept the old behavior. Do not reintroduce a definition at this point.
 
 
 def _archive_identity_reconcile_analysis(
@@ -69804,7 +69921,7 @@ def operational_context(
         try:
             target_path.parent.mkdir(parents=True, exist_ok=True)
             receipt_path.parent.mkdir(parents=True, exist_ok=True)
-            target_path.write_bytes(written_bytes)
+            write_bytes_atomic(target_path, written_bytes)
             write_json_new_file(receipt_path, receipt)
         except Exception:
             if previous_bytes is None:
@@ -69813,7 +69930,7 @@ def operational_context(
                 except OSError:
                     pass
             else:
-                target_path.write_bytes(previous_bytes)
+                write_bytes_atomic(target_path, previous_bytes)
             raise
 
         result.update(
@@ -71198,9 +71315,18 @@ def wom_kit_project_update_target_evidence(
 
 
 def write_bytes_atomic(path: Path, value: bytes) -> None:
+    """Durable, byte-exact writer. This is the ONLY definition; see the note above
+    the text writer about a shadowed duplicate.
+
+    Already reserved its temp file with O_EXCL and fsynced before v0.3.264. What
+    it lacked was a retried rename: Windows `MoveFileEx` refuses to replace a file
+    anyone holds open, so a virus scanner or indexer reading the zet, or a second
+    writer, failed the write outright.
+    """
     temporary_path: Path | None = None
     descriptor: int | None = None
     try:
+        path.parent.mkdir(parents=True, exist_ok=True)
         for _ in range(8):
             candidate = path.with_name(f".{path.name}.{secrets.token_hex(8)}.tmp")
             try:
@@ -71216,7 +71342,7 @@ def write_bytes_atomic(path: Path, value: bytes) -> None:
             handle.write(value)
             handle.flush()
             os.fsync(handle.fileno())
-        temporary_path.replace(path)
+        replace_with_retry(temporary_path, path)
     finally:
         if descriptor is not None:
             os.close(descriptor)
