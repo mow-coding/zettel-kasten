@@ -2,6 +2,29 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.3.270 읽기 전용 제목 증거 감사
+
+보관함 마이그레이션은 필요하지 않습니다. v0.3.270은 v0.3.269가 만든 제목
+리맵 영수증·transaction journal·이전 바이트 snapshot·공통 lock 증거를 읽고
+검증합니다.
+
+```powershell
+archive zet-title-remap-receipt-audit <archive-root> --dry-run --format json
+```
+
+제목 쓰기가 끝난 뒤, 예기치 않은 종료 뒤, 또는 복구를 계획하기 전에
+실행하세요. 제한된 영수증을 현재 정본 파일·제목·본문 hash와 이전 바이트
+object-manifest 증거에 대조하고, 남은 journal을 `prepared`,
+`partially_applied`, `fully_applied_receipt_missing`, `divergent`,
+`stale_completed`로 분류합니다.
+
+이 명령은 어떤 파일도 쓰거나 지우지 않습니다. 보고된 영수증·journal·lock·
+정본 참여 파일·snapshot을 손으로 고치거나 지우지 마세요. v0.3.270은 제목
+변경을 복구·마무리·정리·되돌리지 않습니다. 이 증거를 해석할 때는
+v0.3.270 이상을 사용하세요. 자세한 내용은
+[`wom-kit/docs/zet-title-remap-receipt-audit.md`](wom-kit/docs/zet-title-remap-receipt-audit.md)를
+보세요.
+
 ## v0.3.269 승인 기반 제목 리맵 쓰기
 
 아카이브 전체 마이그레이션은 필요하지 않습니다. 기존의 읽기 전용 제목 계획
@@ -25,10 +48,11 @@ content-addressed object로 보존하고 검증합니다. writer는 YAML 최상�
 journal, 공통 lock을 남길 수 있으므로 이 증거를 삭제하거나 손으로 고치면 안
 됩니다.
 
-v0.3.269은 중단 증거를 남기지만 제목 리맵 전체 감사, 자동 복구, 되돌리기는
-아직 구현하지 않습니다. 구버전도 성공적으로 변경된 정본 Markdown은 읽을 수
-있지만 새 영수증/저널 증거를 이해하지 못합니다. 이 작업에는 v0.3.269 이상을
-유지하세요. 자세한 절차는
+v0.3.269은 중단 증거를 남기지만 그 버전 자체로는 제목 리맵 전체 감사, 자동
+복구, 되돌리기를 수행하지 않습니다. v0.3.270은 읽기 전용 감사를 추가했으며
+복구와 되돌리기는 여전히 이후 작업입니다. 구버전도 성공적으로 변경된 정본
+Markdown은 읽을 수 있지만 새 영수증/저널 증거를 이해하지 못합니다. 이
+작업에는 v0.3.270 이상을 유지하세요. 자세한 절차는
 [`wom-kit/docs/zet-title-remap-write.md`](wom-kit/docs/zet-title-remap-write.md)를
 참조하세요.
 

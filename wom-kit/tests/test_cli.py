@@ -32806,6 +32806,502 @@ archive_services.zet_title_remap_write(
                     original,
                 )
 
+    def test_zet_title_remap_receipt_audit_requires_dry_run_and_is_read_only(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            before = self.snapshot_archive_files(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "zet-title-remap-receipt-audit",
+                    str(archive_root),
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 1)
+            self.assertIn("requires --dry-run", output)
+
+            code, output = self.run_cli(
+                [
+                    "title-remap-receipt-audit",
+                    str(archive_root),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertEqual(result["status"], "healthy")
+            self.assertTrue(result["summary"]["complete"])
+            self.assertEqual(result["summary"]["receipt_count"], 0)
+            self.assertEqual(result["summary"]["journal_count"], 0)
+            self.assertEqual(result["summary"]["problem_count"], 0)
+            self.assertFalse(result["summary"]["write_lock_present"])
+            self.assertEqual(
+                result["write_boundary"],
+                {
+                    "files_written": False,
+                    "files_deleted": False,
+                    "locks_deleted": False,
+                    "receipts_modified": False,
+                    "canonical_zets_modified": False,
+                },
+            )
+            self.assertEqual(
+                self.snapshot_archive_files(archive_root),
+                before,
+            )
+            from wom_kit import mcp_server
+
+            self.assertNotIn(
+                "zet_title_remap_receipt_audit",
+                {
+                    definition["name"]
+                    for definition in mcp_server.TOOL_DEFINITIONS
+                },
+            )
+
+            bounded_code, bounded_output = self.run_cli(
+                [
+                    "zet-title-remap-receipt-audit",
+                    str(archive_root),
+                    "--dry-run",
+                    "--max-journals",
+                    "0",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(bounded_code, 1, bounded_output)
+            bounded_result = json.loads(bounded_output)
+            self.assertFalse(bounded_result["summary"]["complete"])
+            self.assertIn(
+                "max_journals_out_of_range",
+                bounded_result["blockers"],
+            )
+            self.assertEqual(
+                self.snapshot_archive_files(archive_root),
+                before,
+            )
+
+            missing_root = Path(tmp) / "PRIVATE_MISSING_AUDIT_ARCHIVE"
+            missing_code, missing_output = self.run_cli(
+                [
+                    "zet-title-remap-receipt-audit",
+                    str(missing_root),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(missing_code, 1)
+            self.assertIn(
+                "could not inspect the private title evidence safely",
+                missing_output,
+            )
+            self.assertNotIn(str(missing_root), missing_output)
+
+    def test_zet_title_remap_receipt_audit_verifies_completed_receipt_privately(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            fixture = self._create_title_remap_write_fixture(
+                archive_root,
+                count=1,
+                proposal_name="audit-completed.jsonl",
+            )
+            reviewer = "person:title-audit-completed-reviewer"
+            applied = archive_services.zet_title_remap_write(
+                archive_root,
+                proposal_path=fixture["relative"],
+                expected_proposal_sha256=fixture["proposal_sha256"],
+                expected_plan_digest=fixture["plan_digest"],
+                expected_write_plan_digest=fixture["write_plan_digest"],
+                max_items=1,
+                approve=True,
+                reviewed_by=reviewer,
+                affirm_titles_reviewed=True,
+            )
+            self.assertEqual(applied["status"], "applied", applied)
+            before = self.snapshot_archive_files(archive_root)
+
+            real_manifest_index = (
+                archive_services.zet_revision_snapshot_manifest_index
+            )
+            with patch.object(
+                archive_services,
+                "zet_revision_snapshot_manifest_index",
+                wraps=real_manifest_index,
+            ) as manifest_index:
+                code, output = self.run_cli(
+                    [
+                        "zet-title-remap-receipt-audit",
+                        str(archive_root),
+                        "--dry-run",
+                        "--format",
+                        "json",
+                    ]
+                )
+
+            self.assertEqual(code, 0, output)
+            self.assertEqual(manifest_index.call_count, 1)
+            result = json.loads(output)
+            self.assertEqual(result["status"], "healthy")
+            self.assertEqual(result["summary"]["receipt_count"], 1)
+            self.assertEqual(result["summary"]["receipt_verified"], 1)
+            self.assertEqual(result["summary"]["journal_count"], 0)
+            self.assertEqual(result["summary"]["problem_count"], 0)
+            self.assertFalse(result["summary"]["write_lock_present"])
+            for private_value in (
+                fixture["proposal_sha256"],
+                fixture["rows"][0]["zettel_id"],
+                fixture["rows"][0]["title"],
+                reviewer,
+                str(next(iter(fixture["originals"]))),
+            ):
+                self.assertNotIn(private_value, output)
+            self.assertFalse(
+                result["privacy_guards"]["old_or_new_title_text_echoed"]
+            )
+            self.assertFalse(
+                result["privacy_guards"]["title_hashes_echoed"]
+            )
+            self.assertFalse(
+                result["privacy_guards"]["receipt_paths_echoed"]
+            )
+            self.assertEqual(
+                self.snapshot_archive_files(archive_root),
+                before,
+            )
+
+            receipt_path = archive_root.joinpath(
+                *PurePosixPath(applied["receipt"]["path"]).parts
+            )
+            receipt_text = receipt_path.read_text(encoding="utf-8")
+            receipt_path.write_text(
+                '{"schema":"wom-kit/invalid-duplicate/v0.1",'
+                + receipt_text.lstrip()[1:],
+                encoding="utf-8",
+            )
+            duplicate_code, duplicate_output = self.run_cli(
+                [
+                    "zet-title-remap-receipt-audit",
+                    str(archive_root),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(duplicate_code, 1, duplicate_output)
+            duplicate_result = json.loads(duplicate_output)
+            self.assertEqual(
+                duplicate_result["summary"][
+                    "receipt_invalid_or_divergent"
+                ],
+                1,
+            )
+            self.assertIn(
+                "one_or_more_title_remap_receipts_invalid_or_divergent",
+                duplicate_result["blockers"],
+            )
+            for private_value in (
+                fixture["proposal_sha256"],
+                fixture["rows"][0]["zettel_id"],
+                fixture["rows"][0]["title"],
+                reviewer,
+            ):
+                self.assertNotIn(private_value, duplicate_output)
+
+    def test_zet_title_remap_receipt_audit_classifies_retained_transaction_states(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            fixture = self._create_title_remap_write_fixture(
+                archive_root,
+                count=2,
+                proposal_name="audit-hard-exit.jsonl",
+            )
+            reviewer = "person:title-audit-hard-exit-reviewer"
+            child_code = """
+import os
+import sys
+from pathlib import Path
+from wom_kit import archive_services
+
+archive_root = Path(sys.argv[1])
+real_write = archive_services.write_bytes_atomic
+
+def write_then_hard_exit(path, value):
+    real_write(path, value)
+    os._exit(91)
+
+archive_services.write_bytes_atomic = write_then_hard_exit
+archive_services.zet_title_remap_write(
+    archive_root,
+    proposal_path=sys.argv[2],
+    expected_proposal_sha256=sys.argv[3],
+    expected_plan_digest=sys.argv[4],
+    expected_write_plan_digest=sys.argv[5],
+    max_items=2,
+    approve=True,
+    reviewed_by=sys.argv[6],
+    affirm_titles_reviewed=True,
+)
+"""
+            child_env = os.environ.copy()
+            child_env["PYTHONPATH"] = str(SRC_ROOT)
+            child = subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    child_code,
+                    str(archive_root),
+                    fixture["relative"],
+                    fixture["proposal_sha256"],
+                    fixture["plan_digest"],
+                    fixture["write_plan_digest"],
+                    reviewer,
+                ],
+                cwd=KIT_ROOT,
+                env=child_env,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            self.assertEqual(child.returncode, 91, child.stderr)
+            title_remap_root = (
+                archive_root / ".wom-scratch" / "title-remap"
+            )
+            transaction_journal = next(
+                title_remap_root.glob(".*.write.transaction.json")
+            )
+            journal = json.loads(
+                transaction_journal.read_text(encoding="utf-8")
+            )
+
+            def audit() -> tuple[int, str, dict[str, Any]]:
+                before = self.snapshot_archive_files(archive_root)
+                code, output = self.run_cli(
+                    [
+                        "zet-title-remap-receipt-audit",
+                        str(archive_root),
+                        "--dry-run",
+                        "--format",
+                        "json",
+                    ]
+                )
+                self.assertEqual(
+                    self.snapshot_archive_files(archive_root),
+                    before,
+                )
+                result = json.loads(output)
+                for private_value in (
+                    fixture["proposal_sha256"],
+                    fixture["rows"][0]["zettel_id"],
+                    fixture["rows"][1]["zettel_id"],
+                    fixture["rows"][0]["title"],
+                    fixture["rows"][1]["title"],
+                    reviewer,
+                    str(transaction_journal),
+                ):
+                    self.assertNotIn(private_value, output)
+                return code, output, result
+
+            code, output, result = audit()
+            self.assertEqual(code, 1, output)
+            self.assertEqual(
+                result["transaction_journal_cases"][0]["observed_state"],
+                "partially_applied",
+            )
+            self.assertEqual(
+                result["transaction_journal_cases"][0][
+                    "write_lock_state"
+                ],
+                "present_matching",
+            )
+            self.assertEqual(
+                result["summary"]["journal_partially_applied"],
+                1,
+            )
+            self.assertEqual(result["summary"]["write_lock_matching"], 1)
+
+            for item in journal["items"]:
+                path = archive_root.joinpath(
+                    *PurePosixPath(item["canonical_path"]).parts
+                )
+                path.write_bytes(fixture["originals"][path])
+            code, output, result = audit()
+            self.assertEqual(code, 1, output)
+            self.assertEqual(
+                result["transaction_journal_cases"][0]["observed_state"],
+                "prepared",
+            )
+            write_lock = title_remap_root / ".title-remap.write.lock"
+            write_lock_bytes = write_lock.read_bytes()
+            write_lock.unlink()
+            code, output, result = audit()
+            self.assertEqual(code, 1, output)
+            self.assertEqual(
+                result["transaction_journal_cases"][0][
+                    "write_lock_state"
+                ],
+                "missing_or_mismatched",
+            )
+            self.assertEqual(
+                result["summary"]["write_lock_missing_for_journal"],
+                1,
+            )
+            write_lock.write_bytes(write_lock_bytes)
+
+            for item in journal["items"]:
+                path = archive_root.joinpath(
+                    *PurePosixPath(item["canonical_path"]).parts
+                )
+                row = fixture["rows"][item["row_index"]]
+                path.write_bytes(
+                    archive_services.zet_title_remap_candidate_bytes(
+                        fixture["originals"][path],
+                        row["title"],
+                    )
+                )
+            code, output, result = audit()
+            self.assertEqual(code, 1, output)
+            self.assertEqual(
+                result["transaction_journal_cases"][0]["observed_state"],
+                "fully_applied_receipt_missing",
+            )
+
+            receipt = {
+                "schema": "wom-kit/zet-title-remap-receipt/v0.1",
+                "action": "zet_title_remap_write",
+                "status": "applied",
+                "applied_at": journal["prepared_at"],
+                "archive_id": journal["archive_id"],
+                "proposal_sha256": journal["proposal_sha256"],
+                "plan_digest": journal["plan_digest"],
+                "write_plan_digest": journal["write_plan_digest"],
+                "reviewed_by": journal["reviewed_by"],
+                "human_affirmation": journal["human_affirmation"],
+                "item_count": journal["item_count"],
+                "items": journal["items"],
+                "mutation_contract": {
+                    "field_replaced": "frontmatter.title",
+                    "body_bytes_preserved": True,
+                    "other_frontmatter_semantics_preserved": True,
+                    "updated_at_changed": False,
+                    "prior_byte_snapshots_verified_before_first_canonical_write": True,
+                    "rollback_on_runtime_failure": True,
+                    "crash_recovery_journal_written": True,
+                },
+                "privacy_guards": {
+                    "old_title_text_stored_in_receipt": False,
+                    "new_title_text_stored_in_receipt": False,
+                    "body_text_stored_in_receipt": False,
+                    "provider_api_called": False,
+                    "model_called": False,
+                    "secret_store_or_environment_read": False,
+                },
+            }
+            receipt_path = archive_root.joinpath(
+                *PurePosixPath(journal["final_receipt_path"]).parts
+            )
+            receipt_path.parent.mkdir(parents=True, exist_ok=True)
+            receipt_path.write_text(
+                json.dumps(
+                    receipt,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            code, output, result = audit()
+            self.assertEqual(code, 0, output)
+            self.assertEqual(result["status"], "attention_required")
+            self.assertEqual(
+                result["transaction_journal_cases"][0]["observed_state"],
+                "stale_completed",
+            )
+            self.assertEqual(result["summary"]["receipt_verified"], 1)
+            self.assertEqual(result["summary"]["journal_stale_completed"], 1)
+            self.assertEqual(result["summary"]["problem_count"], 0)
+
+            mismatched_receipt = dict(receipt)
+            mismatched_receipt["plan_digest"] = "sha256:" + ("0" * 64)
+            receipt_path.write_text(
+                json.dumps(
+                    mismatched_receipt,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            code, output, result = audit()
+            self.assertEqual(code, 1, output)
+            journal_case = result["transaction_journal_cases"][0]
+            self.assertEqual(journal_case["observed_state"], "divergent")
+            self.assertEqual(
+                journal_case["final_receipt_state"],
+                "present_unverified",
+            )
+            self.assertIn(
+                "title_transaction_final_receipt_binding_mismatch",
+                journal_case["issue_codes"],
+            )
+            receipt_path.write_text(
+                json.dumps(
+                    receipt,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            first_item = journal["items"][0]
+            first_path = archive_root.joinpath(
+                *PurePosixPath(first_item["canonical_path"]).parts
+            )
+            first_path.write_bytes(first_path.read_bytes() + b"\n")
+            code, output, result = audit()
+            self.assertEqual(code, 1, output)
+            self.assertEqual(
+                result["transaction_journal_cases"][0]["observed_state"],
+                "divergent",
+            )
+            self.assertEqual(
+                result["summary"]["receipt_invalid_or_divergent"],
+                1,
+            )
+            self.assertEqual(result["summary"]["journal_divergent"], 1)
+
+            journal_text = transaction_journal.read_text(encoding="utf-8")
+            transaction_journal.write_text(
+                '{"schema":"wom-kit/invalid-duplicate/v0.1",'
+                + journal_text.lstrip()[1:],
+                encoding="utf-8",
+            )
+            code, output, result = audit()
+            self.assertEqual(code, 1, output)
+            self.assertEqual(result["summary"]["journal_invalid"], 1)
+            self.assertEqual(
+                result["summary"]["write_lock_orphaned_or_invalid"],
+                1,
+            )
+            self.assertEqual(
+                result["transaction_journal_cases"][0][
+                    "write_lock_state"
+                ],
+                "not_verifiable",
+            )
+
     def test_zet_title_remap_plan_binds_reviewed_titles_without_echoing_values(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")

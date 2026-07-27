@@ -114,9 +114,10 @@ leave:
 - the write lock;
 - no final receipt.
 
-Do not delete or hand-edit those retained files. v0.3.269 records the evidence
-but does not automatically audit, resume, roll back, or revert that state.
-Those operations remain a later release track.
+Do not delete or hand-edit those retained files. v0.3.270 can inspect them
+with the read-only `zet-title-remap-receipt-audit --dry-run` command, but it
+does not resume, roll back, finalize, clean up, or revert that state. Those
+mutations remain a later release track.
 
 On Windows the implementation uses atomic replacement and flushes file
 contents. Windows does not provide the same directory `fsync` guarantee as
@@ -124,17 +125,19 @@ POSIX, so this is not a claim of power-loss-proof storage.
 
 ## Current Boundary
 
-v0.3.269 implements:
+The v0.3.269 writer plus the v0.3.270 auditor implement:
 
 - read-only title proposal planning;
 - approval-gated title-only batch write;
 - exact prior-byte snapshots;
 - private final receipts;
 - ordinary-failure rollback;
-- hard-exit transaction evidence.
+- hard-exit transaction evidence;
+- archive-wide completed-receipt and retained-transaction diagnosis.
 
 It does not yet implement:
 
-- archive-wide title-remap receipt audit;
 - automatic hard-exit recovery;
 - approved revert from a completed title-remap receipt.
+
+See [zet Title Remap Receipt And Interruption Audit](zet-title-remap-receipt-audit.md).

@@ -10,10 +10,10 @@ It is not a website, SaaS app, dashboard, or visual note-taking product. The int
 
 ## Install The Command-Line Tool
 
-v0.3.269 provides a self-contained wheel on the exact GitHub release:
+v0.3.270 provides a self-contained wheel on the exact GitHub release:
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.269/wom_kit-0.3.269-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.270/wom_kit-0.3.270-py3-none-any.whl"
 archive --version
 ```
 
@@ -179,6 +179,7 @@ docs/ai-start-here.md
 docs/archive-identity-reconcile.md
 docs/zet-title-remap-plan.md
 docs/zet-title-remap-write.md
+docs/zet-title-remap-receipt-audit.md
 docs/zet-catalog-one-process-pass.md
 docs/runtime-canonical-entrypoints.md
 docs/operational-context.md
