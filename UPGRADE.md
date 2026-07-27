@@ -24,6 +24,61 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.265 Durable Abstract Batch Journals
+
+No existing archive, zet, index, or receipt migration is required. The release
+adds no command or approval flag. It changes what happens internally when these
+two existing approved operations run:
+
+```powershell
+archive zet-abstract-backfill-write <archive-root> ... --approve
+archive zet-abstract-backfill-revert <archive-root> ... --approve
+```
+
+Before either command changes its first canonical zet, it now writes a private
+transaction journal under `.wom-scratch/abstract-backfill/`. The journal stores
+the exact participant ids/paths and before/after hashes, proposal or source
+receipt hash, final receipt path, and review authority. It stores no body or
+abstract text.
+
+The apply lock and journal are keyed by proposal SHA in the shared
+`.wom-scratch/abstract-backfill/` root. Two byte-identical copies of one
+proposal therefore contend on the same lock even when their filenames or nested
+directories differ.
+
+Normal success removes the journal after the immutable receipt is written and
+verified. A complete in-process rollback removes it after every participant is
+verified restored. A process kill or incomplete rollback retains the journal and
+the existing lock.
+
+Inspect retained evidence with the existing read-only command:
+
+```powershell
+archive zet-abstract-backfill-receipt-audit <archive-root> --dry-run --format json
+```
+
+The audit now reports whether the batch was prepared but not started, partially
+applied, fully applied with its receipt missing, externally diverged, or
+completed with stale cleanup files. It does not print the private ids, paths,
+reviewer, journal digest, body, or abstract.
+
+Do not delete a retained journal or lock merely to make the audit green. This
+release diagnoses the interrupted state but does not automatically resume,
+finish, write a missing receipt, or roll it back. Preserve the evidence for a
+later recovery release or a deliberate forensic decision.
+
+New receipts set the existing `crash_recovery_journal_written` field to `true`;
+v0.3.265 continues to validate older receipts whose field is `false`. If you
+have run an approved abstract batch with v0.3.265, later audit and revert
+operations must use v0.3.265 or newer. v0.3.264 and older enforce `false` in the
+v0.1 receipt schema, reject the new `true` receipts as invalid, and therefore
+cannot audit or revert those batches. This is a one-way tool-version gate even
+though no archive migration is required.
+
+Windows retains the v0.3.264 boundary: files are atomically created/replaced, but
+the directory entry cannot be `fsync`ed, so a process kill is covered while a
+sudden power loss is not claimed durable.
+
 ## v0.3.264 Durable Canonical Writes
 
 No archive, zettel, index, receipt, or schema migration is required. No command

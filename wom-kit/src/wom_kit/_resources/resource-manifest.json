@@ -1,8 +1,8 @@
 {
   "schema": "wom-kit/package-resource-manifest/v0.1",
-  "version": "0.3.264",
+  "version": "0.3.265",
   "source_of_truth": "wom-kit source resource directories",
-  "file_count": 92,
+  "file_count": 93,
   "files": [
     {
       "source": "schemas/anchor-metadata.schema.json",
@@ -193,14 +193,20 @@
     {
       "source": "schemas/zet-abstract-backfill-receipt.schema.json",
       "packaged": "schemas/zet-abstract-backfill-receipt.schema.json",
-      "bytes": 3546,
-      "sha256": "9787690268cef571496fa97e6e434d4f612b0c74573ef98e0dfa71ea21908342"
+      "bytes": 3549,
+      "sha256": "f79b127dcf73159bd6d5d44cec178a4879a16fe951d9800f069862dc8747d369"
     },
     {
       "source": "schemas/zet-abstract-backfill-revert-receipt.schema.json",
       "packaged": "schemas/zet-abstract-backfill-revert-receipt.schema.json",
-      "bytes": 4116,
-      "sha256": "d211395a4bc7d76359d0121aa1e83aae4c1b43a07634a61f02fb28c28d3fc8e1"
+      "bytes": 4119,
+      "sha256": "38c4e6d77bce2c1477c1eea0928539200530df69159cdee104b246d1abd9bf3d"
+    },
+    {
+      "source": "schemas/zet-abstract-backfill-transaction-journal.schema.json",
+      "packaged": "schemas/zet-abstract-backfill-transaction-journal.schema.json",
+      "bytes": 4562,
+      "sha256": "b5c5be5e016c2d45c9001dfb4d627a1860ab366a2f7a1debcefcf1f281243766"
     },
     {
       "source": "schemas/zet-revision-receipt-v0.2.schema.json",
@@ -277,8 +283,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/references/operator-contract.md",
       "packaged": "templates/ai-runtime/wom-archive/references/operator-contract.md",
-      "bytes": 50064,
-      "sha256": "5fa3d6ee58ff2d35b4ec4bcc6b73210c42e265449383166b0cf7e881e5d309e6"
+      "bytes": 50906,
+      "sha256": "b2d21bfd059a8a2b10d2ec1ae005dfe909d9740c4eed3daf5adba22d22e9df1c"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/reading-memory-and-revision.md",
@@ -551,10 +557,10 @@
       "sha256": "d619dc26af3216498c8392dfe838b0fe752d4bad9da998a58ca682d668fc510c"
     },
     {
-      "source": "docs/releases/v0.3.264.md",
-      "packaged": "release-notes/v0.3.264.md",
-      "bytes": 6762,
-      "sha256": "56cf6a331e79381e3f4700b154072d2062b7fdb6a93b6a79d8b668d3104b7044"
+      "source": "docs/releases/v0.3.265.md",
+      "packaged": "release-notes/v0.3.265.md",
+      "bytes": 8054,
+      "sha256": "e89b4f3d36b77402eb336b70463b3781f61e5af80fa805be838c52d84f88b2bb"
     }
   ]
 }
