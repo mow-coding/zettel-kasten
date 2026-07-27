@@ -6,6 +6,38 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.264 - 2026-07-26
+
+- **A canonical zet can no longer be left half-written.** Every zet mutation now
+  writes to a hidden temp file, flushes, `fsync`s, and replaces. `write_text_atomic`
+  previously renamed with no flush at all, so a rename could become durable while
+  its data was not. `zettel_edge_write`, `zettel_edge_revert`,
+  `restore_zettel_edge_batch_snapshots`, `create_draft_zettel`, and the
+  operational-context write used no atomic writer at all and overwrote in place,
+  with an `OSError`-only rollback that does not run on a process kill.
+- **A locked destination no longer fails the write.** Windows `MoveFileEx`
+  refuses to replace a file anyone holds open, so a virus scanner or indexer
+  reading a zet failed the write. A unique temp name did NOT fix this — the
+  contended resource is the destination, and `os.replace` still failed in about
+  five runs of six. The rename is now retried, bounded, `PermissionError` only,
+  re-raising afterwards. Measured after: ten runs of the race, zero failures.
+- **Receipts are durable too.** Making the zet durable while the receipt proving
+  it stayed in the page cache would have turned a symmetric loss into "the
+  archive changed and nothing records why". `write_json_new_file` now fsyncs.
+- **The rename itself is durable, on POSIX.** The directory entry is flushed
+  after the replace. Windows cannot open a directory for that, so it fails soft:
+  Windows gets atomicity, not durability. Stated rather than implied.
+- **A shadowed duplicate meant an earlier draft of this release changed nothing
+  for byte writes.** `write_bytes_atomic` was defined twice and the later
+  definition won, so the edited one never executed. The dead definition is
+  removed; the live one already fsynced and now also retries its rename and
+  creates its parent.
+- **No byte changes, and a stated cost.** The temp file is opened with no
+  `newline` argument, so output is identical to before including platform newline
+  translation, asserted by regression. Each write now costs one extra flush —
+  about +1 ms locally, more on network storage — which is felt in a bulk
+  frontmatter migration that issues one per changed zet.
+
 ## v0.3.263 - 2026-07-26
 
 - **Reviewed replacement titles can now be checked before anyone writes them.**

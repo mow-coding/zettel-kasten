@@ -31645,6 +31645,214 @@ state:
         self.assertNotIn("\\", result["zettels"][0]["path"])
         self.assertIn("T", result["zettels"][0]["created_at"])
 
+    def test_write_text_atomic_survives_concurrent_writers_to_one_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "zet_probe.md"
+            target.write_text("seed\n", encoding="utf-8")
+            errors: list[str] = []
+
+            def writer(marker: str) -> None:
+                try:
+                    for _ in range(60):
+                        archive_services.write_text_atomic(target, marker * 2000 + "\n")
+                except Exception as exc:  # noqa: BLE001 - the point is to see any of them
+                    errors.append(f"{type(exc).__name__}: {exc}")
+
+            threads = [
+                threading.Thread(target=writer, args=("X",)),
+                threading.Thread(target=writer, args=("Y",)),
+            ]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+
+            # A fixed <name>.tmp makes both writers share one temp file: one
+            # replace() fails while the other still holds it open, or the loser's
+            # cleanup unlinks the winner's temp mid-flight.
+            self.assertEqual(errors, [])
+            # Whoever won, the file is one writer's complete output, never a blend.
+            final = target.read_text(encoding="utf-8")
+            self.assertIn(final, {"X" * 2000 + "\n", "Y" * 2000 + "\n"})
+            leftovers = [p.name for p in Path(tmp).iterdir() if p.name != target.name]
+            self.assertEqual(leftovers, [])
+
+    def test_archive_services_defines_no_top_level_name_twice(self) -> None:
+        # v0.3.264 shipped a "fix" to write_bytes_atomic that never ran: the module
+        # defined it twice and the later definition won, so the edited one was dead
+        # code and 15 call sites inherited nothing. Reading the diff could not catch
+        # that. This can.
+        import ast
+
+        source_path = Path(archive_services.__file__)
+        tree = ast.parse(source_path.read_text(encoding="utf-8"))
+        seen: dict[str, int] = {}
+        duplicates: list[str] = []
+        for node in tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                if node.name in seen:
+                    duplicates.append(f"{node.name} (lines {seen[node.name]} and {node.lineno})")
+                seen[node.name] = node.lineno
+        self.assertEqual(duplicates, [], "shadowed top-level definitions in archive_services.py")
+
+    def test_atomic_writers_bind_to_their_only_definition(self) -> None:
+        # The companion to the AST sweep: what the module exports must be the
+        # definition the file contains, so "I edited the function" and "the edited
+        # function runs" cannot drift apart again.
+        import ast
+        import inspect
+
+        source_path = Path(archive_services.__file__)
+        tree = ast.parse(source_path.read_text(encoding="utf-8"))
+        by_name = {
+            node.name: node.lineno
+            for node in tree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+        for name in ("write_text_atomic", "write_bytes_atomic", "replace_with_retry"):
+            bound = getattr(archive_services, name)
+            self.assertEqual(
+                inspect.getsourcelines(bound)[1],
+                by_name[name],
+                f"{name} does not bind to its definition in the source file",
+            )
+            self.assertIn("replace_with_retry", inspect.getsource(bound))
+
+    def test_write_bytes_atomic_creates_parents_and_survives_concurrent_writers(self) -> None:
+        # The byte writer had no direct test at all, which is exactly why an edit to
+        # a shadowed copy of it went unnoticed. Both of its new behaviors are
+        # covered here, mirroring the text-writer cases.
+        with tempfile.TemporaryDirectory() as tmp:
+            nested = Path(tmp) / "a" / "b" / "c.bin"
+            archive_services.write_bytes_atomic(nested, b"payload\x00\xff")
+            self.assertEqual(nested.read_bytes(), b"payload\x00\xff")
+            self.assertEqual([p.name for p in nested.parent.iterdir()], ["c.bin"])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "zet_probe.bin"
+            target.write_bytes(b"seed")
+            errors: list[str] = []
+
+            def writer(marker: bytes) -> None:
+                try:
+                    for _ in range(60):
+                        archive_services.write_bytes_atomic(target, marker * 2000)
+                except Exception as exc:  # noqa: BLE001
+                    errors.append(f"{type(exc).__name__}: {exc}")
+
+            threads = [
+                threading.Thread(target=writer, args=(b"X",)),
+                threading.Thread(target=writer, args=(b"Y",)),
+            ]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+            self.assertEqual(errors, [])
+            self.assertIn(target.read_bytes(), {b"X" * 2000, b"Y" * 2000})
+            self.assertEqual([p.name for p in Path(tmp).iterdir()], [target.name])
+
+    def test_atomic_writers_are_byte_identical_to_the_plain_write(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            text = "---\nid: zet_x\ntitle: t\n---\n\nbody line\n"
+            plain = Path(tmp) / "plain.md"
+            atomic = Path(tmp) / "atomic.md"
+            plain.write_text(text, encoding="utf-8")
+            archive_services.write_text_atomic(atomic, text)
+            # A no-change guard, not evidence that anything was fixed: it passes
+            # against the pre-v0.3.264 writer too, and that is the point. The temp
+            # file is opened without a newline= argument on purpose, so platform
+            # newline translation is preserved exactly.
+            self.assertEqual(atomic.read_bytes(), plain.read_bytes())
+            # Pin the translation itself, so a regression that added newline="\n"
+            # would fire on POSIX as well, where os.linesep == "\n" makes the
+            # comparison above vacuous.
+            self.assertEqual(
+                atomic.read_bytes(), text.encode("utf-8").replace(b"\n", os.linesep.encode())
+            )
+
+            raw = b"\x00\x01binary\xff\n"
+            plain_bytes = Path(tmp) / "plain.bin"
+            atomic_bytes = Path(tmp) / "atomic.bin"
+            plain_bytes.write_bytes(raw)
+            archive_services.write_bytes_atomic(atomic_bytes, raw)
+            self.assertEqual(atomic_bytes.read_bytes(), plain_bytes.read_bytes())
+            self.assertEqual(atomic_bytes.read_bytes(), raw)
+
+    def test_atomic_writers_create_missing_parents_and_leave_no_temp_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            nested = Path(tmp) / "a" / "b" / "c.md"
+            archive_services.write_text_atomic(nested, "hello\n")
+            self.assertEqual(nested.read_text(encoding="utf-8"), "hello\n")
+            self.assertEqual([p.name for p in nested.parent.iterdir()], ["c.md"])
+
+    def test_approved_edge_write_never_truncates_a_canonical_zet_in_place(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            offenders: list[str] = []
+
+            def is_canonical(path_like: object) -> bool:
+                try:
+                    candidate = Path(path_like)  # type: ignore[arg-type]
+                except TypeError:
+                    return False
+                return "zettels" in candidate.parts and candidate.suffix == ".md"
+
+            real_write_text = Path.write_text
+            real_write_bytes = Path.write_bytes
+            real_open = Path.open
+
+            # Watch every way a canonical zet could be truncated in place, not just
+            # the one the removed code happened to use. The rollback in
+            # zettel_edge_write only fires on OSError, so an interrupted in-place
+            # write has no recovery at all.
+            def guarded_write_text(self_path, *args, **kwargs):  # type: ignore[no-untyped-def]
+                if is_canonical(self_path):
+                    offenders.append(f"write_text:{self_path.name}")
+                return real_write_text(self_path, *args, **kwargs)
+
+            def guarded_write_bytes(self_path, *args, **kwargs):  # type: ignore[no-untyped-def]
+                if is_canonical(self_path):
+                    offenders.append(f"write_bytes:{self_path.name}")
+                return real_write_bytes(self_path, *args, **kwargs)
+
+            def guarded_open(self_path, mode="r", *args, **kwargs):  # type: ignore[no-untyped-def]
+                if is_canonical(self_path) and any(flag in mode for flag in ("w", "a", "+")):
+                    offenders.append(f"open({mode}):{self_path.name}")
+                return real_open(self_path, mode, *args, **kwargs)
+
+            with patch.object(Path, "write_text", guarded_write_text), patch.object(
+                Path, "write_bytes", guarded_write_bytes
+            ), patch.object(Path, "open", guarded_open):
+                code, output = self.run_cli(
+                    [
+                        "zettel-edge",
+                        str(archive_root),
+                        "--from-zettel",
+                        "zet_20240504_fake_lunch_thought",
+                        "--target",
+                        "zet_20110228_fake_school_record",
+                        "--edge-type",
+                        "semantic",
+                        "--visibility",
+                        "private",
+                        "--approve",
+                        "--reviewed-by",
+                        "person:fixture-reviewer",
+                        "--format",
+                        "json",
+                    ]
+                )
+            self.assertEqual(code, 0, output)
+            self.assertEqual(json.loads(output)["write_status"], "written")
+            self.assertEqual(offenders, [])
+            # Assert on what is actually left behind, not on one temp naming
+            # scheme: a grep for a suffix the writers no longer emit cannot fail.
+            leftovers = [
+                p.name for p in (archive_root / "zettels").iterdir() if not p.name.endswith(".md")
+            ]
+            self.assertEqual(leftovers, [])
+
     def _write_title_probe_zet(self, archive_root: Path, name: str, frontmatter: str) -> None:
         (archive_root / "zettels" / f"{name}.md").write_text(
             f"---\n{frontmatter}---\n\nbody text\n", encoding="utf-8"
