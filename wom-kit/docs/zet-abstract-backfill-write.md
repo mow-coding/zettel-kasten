@@ -90,12 +90,17 @@ A private short-lived proposal lock blocks another WOM writer using the same
 proposal during the transaction. It is advisory and does not lock external
 editors.
 
-This is an in-process transaction, not a durable filesystem transaction.
-Forced process termination, power loss, or machine failure can interrupt after
-a canonical replacement and before receipt/cleanup. v0.3.219 deliberately
-writes no body-bearing crash-recovery journal. If a `.write.lock` remains after
-a crash, do not delete it blindly: inspect the proposal hash, target file
-hashes, and deterministic receipt first.
+The automatic rollback remains an in-process transaction, not a complete
+filesystem recovery engine. Forced process termination, power loss, or machine
+failure can interrupt after a canonical replacement and before receipt/cleanup.
+v0.3.219 deliberately wrote no body-bearing crash-recovery journal. Since
+v0.3.265, approve instead publishes a private hash-only
+`.write.transaction.json` journal before the first canonical mutation. It stores
+participant ids/paths, reviewer authority, and before/after hashes but no body
+or abstract text. If that journal or its paired `.write.lock` remains, preserve
+both and run the receipt audit; do not delete either merely to clear a warning.
+The journal makes the stopped state classifiable but does not automatically
+resume, finish the receipt, or roll the batch back.
 
 ## Receipt
 

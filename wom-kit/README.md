@@ -10,10 +10,10 @@ It is not a website, SaaS app, dashboard, or visual note-taking product. The int
 
 ## Install The Command-Line Tool
 
-v0.3.264 provides a self-contained wheel on the exact GitHub release:
+v0.3.265 provides a self-contained wheel on the exact GitHub release:
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.264/wom_kit-0.3.264-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.265/wom_kit-0.3.265-py3-none-any.whl"
 archive --version
 ```
 
@@ -619,13 +619,13 @@ zet-abstract-backfill-plan --proposal .wom-scratch/abstract-backfill/<private>.j
   Validate bounded missing-abstract proposals against exact current canonical file bytes. It checks the shipped row schema, identity/status, hash, first-read absence, safe abstract shape, and a byte-preserving one-field insertion. It returns only row indexes, counts, and hashes; writes nothing and echoes no ids, paths, bodies, abstracts, or proposal filename.
 
 zet-abstract-backfill-write --proposal .wom-scratch/abstract-backfill/<private>.jsonl --expected-proposal-sha256 <sha256> --dry-run|--approve
-  Preview first. A new approved write also requires `--reviewed-by` and `--affirm-abstracts-reviewed`. It reruns the plan, revalidates every exact canonical hash, adds only `frontmatter.abstract`, and writes one hash-evidence receipt. Any runtime item/receipt failure restores all attempted canonical bytes. A matching receipt makes retries no-write `already_applied`. Per-file and batch byte limits bound rollback memory; forced termination has no crash-recovery journal.
+  Preview first. A new approved write also requires `--reviewed-by` and `--affirm-abstracts-reviewed`. It reruns the plan, revalidates every exact canonical hash, adds only `frontmatter.abstract`, and writes one hash-evidence receipt. Any runtime item/receipt failure restores all attempted canonical bytes. A matching receipt makes retries no-write `already_applied`. Per-file and batch byte limits bound rollback memory. Since v0.3.265, approve writes a private hash-only transaction journal before the first canonical change; forced termination retains the journal and lock for audit, but automatic recovery remains unimplemented.
 
 zet-abstract-backfill-revert --receipt receipts/revisions/abstract-backfill/<digest>.zet-abstract-backfill.json --expected-receipt-sha256 <sha256> --dry-run|--approve
-  Dry-run audits the immutable applied receipt, every current after/body/abstract hash, and deterministic removal back to the exact recorded before hash. A new approved revert also requires `--reviewed-by` and `--affirm-abstract-removal-reviewed`. It preserves the source receipt, writes one text-free revert receipt last, restores the applied state on runtime failure, and returns no-write `already_reverted` on a matching retry. Any later canonical edit blocks; forced termination remains outside the in-process rollback guarantee.
+  Dry-run audits the immutable applied receipt, every current after/body/abstract hash, and deterministic removal back to the exact recorded before hash. A new approved revert also requires `--reviewed-by` and `--affirm-abstract-removal-reviewed`. It preserves the source receipt, writes one text-free revert receipt last, restores the applied state on runtime failure, and returns no-write `already_reverted` on a matching retry. Any later canonical edit blocks. Since v0.3.265, approve writes the same kind of private pre-mutation journal; forced termination remains outside the in-process rollback guarantee but retains journal plus lock for audit.
 
 zet-abstract-backfill-receipt-audit --dry-run --max-receipts 5000 --max-locks 5000 --max-problems 100
-  Audit every bounded apply/revert receipt lifecycle and recognized leftover transaction lock. Healthy applied/reverted lifecycles become counts plus one audit digest; only bounded hash/index problem records are returned. Completed-lock residue is a warning, while a lock without its matching receipt blocks as an unresolved transaction. The command reads lock names but never lock content, echoes no private receipt/zet/text/reviewer/path value, and writes or deletes nothing.
+  Audit every bounded apply/revert receipt lifecycle, recognized leftover transaction lock, and private v0.3.265 transaction journal. Healthy applied/reverted lifecycles become counts plus one audit digest; only bounded hash/index problem records are returned. Completed lock/journal residue is a warning only when its final receipt fully verifies; prepared, partial, complete-without-receipt, divergent, invalid, or unverified evidence blocks. `--max-locks` independently bounds both locks and journals. The command reads lock names but never lock content; it may read private journal ids, canonical paths, and reviewer metadata plus canonical bytes for hash validation, but echoes no private receipt/zet/text/reviewer/path value and writes or deletes nothing.
 
 read-zettel
   Read one zettel by id or archive-relative path. Use `--section overview` for the compact first read; MCP `read_zettel` accepts the same section values while keeping `body` as its compatibility default. Non-redacted results include exact canonical file SHA-256 and decoded returned-body SHA-256 so a private revision proposal can bind to the version actually read; redacted hashes are suppressed.

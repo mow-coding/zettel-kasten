@@ -37862,6 +37862,10 @@ state:
             self.assertEqual(preview["status"], "ready_to_apply")
             self.assertEqual(preview["summary"]["ready_count"], 2)
             self.assertFalse(preview["receipt"]["exists"])
+            self.assertIsNone(
+                preview["transaction_journal"]["written_before_first_canonical_write"]
+            )
+            self.assertFalse(preview["transaction_journal"]["exists"])
             for path, original in fixture["originals"].items():
                 self.assertEqual(path.read_bytes(), original)
 
@@ -37889,6 +37893,10 @@ state:
             self.assertEqual(approved["summary"]["applied_count"], 2)
             self.assertEqual(approved["summary"]["canonical_files_written_this_run"], 2)
             self.assertTrue(approved["receipt"]["written_this_run"])
+            self.assertTrue(
+                approved["transaction_journal"]["written_before_first_canonical_write"]
+            )
+            self.assertFalse(approved["transaction_journal"]["exists"])
             self.assertTrue(approved["human_review"]["all_abstracts_reviewed_affirmed"])
             self.assertFalse(approved["human_review"]["reviewed_by_echoed"])
             receipt_path = archive_root / approved["receipt"]["path"]
@@ -37900,6 +37908,11 @@ state:
             self.assertEqual(receipt["item_count"], 2)
             self.assertFalse(receipt["privacy_guards"]["abstract_text_stored_in_receipt"])
             self.assertFalse(receipt["mutation_contract"]["updated_at_changed"])
+            self.assertTrue(receipt["mutation_contract"]["crash_recovery_journal_written"])
+            transaction_journal = fixture["path"].with_name(
+                f".{fixture['sha256'].removeprefix('sha256:')}.write.transaction.json"
+            )
+            self.assertFalse(transaction_journal.exists())
             for index, (path, original) in enumerate(fixture["originals"].items()):
                 before_frontmatter, before_body = archive_services.split_zettel_text(original.decode("utf-8"))
                 after_bytes = path.read_bytes()
@@ -37934,6 +37947,9 @@ state:
             self.assertEqual(repeated["summary"]["canonical_write_attempt_count"], 0)
             self.assertTrue(repeated["human_review"]["receipt_human_affirmation_verified"])
             self.assertFalse(repeated["human_review"]["all_abstracts_reviewed_affirmed"])
+            self.assertIsNone(
+                repeated["transaction_journal"]["written_before_first_canonical_write"]
+            )
             self.assertEqual(receipt_path.read_bytes(), receipt_before)
             for path, applied_bytes in canonical_after.items():
                 self.assertEqual(path.read_bytes(), applied_bytes)
@@ -38041,11 +38057,312 @@ state:
             self.assertFalse((archive_root / result["receipt"]["path"]).exists())
             self.assertFalse(any(fixture["path"].parent.glob("*.write.lock")))
 
+    def test_zet_abstract_backfill_hard_exit_retains_private_partial_transaction_journal(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            fixture = self.create_abstract_backfill_proposal(
+                archive_root,
+                count=2,
+                name="nested/private-batch/hard-exit-partial.jsonl",
+            )
+            child_code = """
+import os
+import sys
+from pathlib import Path
+from wom_kit import archive_services
+
+archive_root = Path(sys.argv[1])
+proposal_relative = sys.argv[2]
+proposal_sha256 = sys.argv[3]
+real_write = archive_services.write_bytes_atomic
+
+def write_then_hard_exit(path, value):
+    real_write(path, value)
+    os._exit(91)
+
+archive_services.write_bytes_atomic = write_then_hard_exit
+archive_services.zet_abstract_backfill_write(
+    archive_root,
+    proposal_path=proposal_relative,
+    expected_proposal_sha256=proposal_sha256,
+    max_items=2,
+    approve=True,
+    reviewed_by="person:hard-exit-reviewer",
+    affirm_abstracts_reviewed=True,
+)
+"""
+            child_env = os.environ.copy()
+            child_env["PYTHONPATH"] = str(SRC_ROOT)
+            child = subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    child_code,
+                    str(archive_root),
+                    fixture["relative"],
+                    fixture["sha256"],
+                ],
+                cwd=KIT_ROOT,
+                env=child_env,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            self.assertEqual(child.returncode, 91, child.stderr)
+
+            transaction_digest = fixture["sha256"].removeprefix("sha256:")
+            lock_root = archive_root / ".wom-scratch" / "abstract-backfill"
+            write_lock = lock_root / f".{transaction_digest}.write.lock"
+            transaction_journal = lock_root / (
+                f".{transaction_digest}.write.transaction.json"
+            )
+            self.assertTrue(write_lock.is_file())
+            self.assertTrue(transaction_journal.is_file())
+            self.assertFalse(
+                fixture["path"].with_name(f".{transaction_digest}.write.lock").exists()
+            )
+            journal = json.loads(transaction_journal.read_text(encoding="utf-8"))
+            self.assertEqual(
+                journal["schema"],
+                "wom-kit/zet-abstract-backfill-transaction-journal/v0.1",
+            )
+            self.assertEqual(journal["operation"], "apply")
+            self.assertEqual(journal["item_count"], 2)
+            self.assertFalse(journal["recovery_contract"]["automatic_resume_implemented"])
+            self.assertFalse(journal["privacy_guards"]["abstract_text_stored"])
+            journal_serialized = json.dumps(journal, ensure_ascii=False)
+            for abstract in fixture["abstracts"]:
+                self.assertNotIn(abstract, journal_serialized)
+
+            changed_count = sum(
+                path.read_bytes() != original
+                for path, original in fixture["originals"].items()
+            )
+            self.assertEqual(changed_count, 1)
+
+            audit = archive_services.zet_abstract_backfill_receipt_audit(
+                archive_root,
+                dry_run=True,
+            )
+            self.assertFalse(audit["ok"], audit)
+            self.assertEqual(audit["summary"]["partial_write_transaction"], 1)
+            self.assertEqual(audit["summary"]["unresolved_write_lock"], 1)
+            self.assertIn(
+                "one_or_more_interrupted_abstract_transactions",
+                audit["blockers"],
+            )
+            journal_problem = next(
+                item
+                for item in audit["problems"]
+                if item.get("kind") == "transaction_journal"
+            )
+            self.assertEqual(journal_problem["status"], "partially_applied")
+            self.assertEqual(journal_problem["before_count"], 1)
+            self.assertEqual(journal_problem["after_count"], 1)
+            self.assertEqual(journal_problem["divergent_count"], 0)
+            serialized_audit = json.dumps(audit, ensure_ascii=False)
+            for private_value in (
+                *fixture["abstracts"],
+                *(row["zettel_id"] for row in fixture["rows"]),
+                "person:hard-exit-reviewer",
+                str(archive_root),
+            ):
+                self.assertNotIn(private_value, serialized_audit)
+            self.assertTrue(
+                audit["privacy_guards"]["transaction_journal_private_metadata_read"]
+            )
+            self.assertFalse(
+                audit["privacy_guards"]["transaction_journal_text_echoed"]
+            )
+            self.assertNotIn("journal_digest", journal_problem)
+
+            for path, original in fixture["originals"].items():
+                path.write_bytes(original)
+            prepared = archive_services.zet_abstract_backfill_receipt_audit(
+                archive_root,
+                dry_run=True,
+            )
+            self.assertEqual(prepared["summary"]["prepared_write_transaction"], 1)
+            prepared_problem = next(
+                item
+                for item in prepared["problems"]
+                if item.get("kind") == "transaction_journal"
+            )
+            self.assertEqual(prepared_problem["status"], "prepared")
+            self.assertEqual(prepared_problem["before_count"], 2)
+            self.assertEqual(prepared_problem["after_count"], 0)
+
+            for index, (path, original) in enumerate(fixture["originals"].items()):
+                path.write_bytes(
+                    archive_services.zet_abstract_backfill_candidate_bytes(
+                        original,
+                        fixture["abstracts"][index],
+                    )
+                )
+            complete = archive_services.zet_abstract_backfill_receipt_audit(
+                archive_root,
+                dry_run=True,
+            )
+            self.assertEqual(
+                complete["summary"]["complete_write_receipt_missing"],
+                1,
+            )
+            complete_problem = next(
+                item
+                for item in complete["problems"]
+                if item.get("kind") == "transaction_journal"
+            )
+            self.assertEqual(
+                complete_problem["status"],
+                "fully_applied_receipt_missing",
+            )
+            self.assertEqual(complete_problem["before_count"], 0)
+            self.assertEqual(complete_problem["after_count"], 2)
+
+            first_path = next(iter(fixture["originals"]))
+            first_path.write_bytes(first_path.read_bytes() + b"\nDivergent fixture.\n")
+            divergent = archive_services.zet_abstract_backfill_receipt_audit(
+                archive_root,
+                dry_run=True,
+            )
+            self.assertEqual(
+                divergent["summary"]["divergent_write_transaction"],
+                1,
+            )
+            divergent_problem = next(
+                item
+                for item in divergent["problems"]
+                if item.get("kind") == "transaction_journal"
+            )
+            self.assertEqual(divergent_problem["status"], "divergent")
+            self.assertEqual(divergent_problem["divergent_count"], 1)
+
+            private_invalid_name = ".PRIVATE-JOURNAL-NAME.transaction.json"
+            invalid_name_path = transaction_journal.with_name(private_invalid_name)
+            invalid_name_path.write_bytes(transaction_journal.read_bytes())
+            invalid_name_audit = archive_services.zet_abstract_backfill_receipt_audit(
+                archive_root,
+                dry_run=True,
+            )
+            self.assertEqual(
+                invalid_name_audit["summary"]["invalid_transaction_journal"],
+                1,
+            )
+            self.assertIn(
+                "one_or_more_invalid_or_divergent_abstract_transaction_journals",
+                invalid_name_audit["blockers"],
+            )
+            self.assertNotIn(
+                private_invalid_name,
+                json.dumps(invalid_name_audit, ensure_ascii=False),
+            )
+            invalid_name_path.unlink()
+
+            wrong_receipt_journal = json.loads(json.dumps(journal))
+            wrong_receipt_journal["final_receipt_path"] = (
+                "receipts/revisions/abstract-backfill/"
+                + ("0" * 64)
+                + ".zet-abstract-backfill.json"
+            )
+            wrong_receipt_journal.pop("journal_digest")
+            wrong_receipt_journal["journal_digest"] = (
+                archive_services.sha256_json_value(wrong_receipt_journal)
+            )
+            transaction_journal.write_text(
+                json.dumps(wrong_receipt_journal, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            wrong_receipt_audit = archive_services.zet_abstract_backfill_receipt_audit(
+                archive_root,
+                dry_run=True,
+            )
+            self.assertEqual(
+                wrong_receipt_audit["summary"]["invalid_transaction_journal"],
+                1,
+            )
+
+            ambiguous_participant_journal = json.loads(json.dumps(journal))
+            ambiguous_participant_journal["items"][0]["after_file_sha256"] = (
+                ambiguous_participant_journal["items"][0]["before_file_sha256"]
+            )
+            ambiguous_participant_journal.pop("journal_digest")
+            ambiguous_participant_journal["journal_digest"] = (
+                archive_services.sha256_json_value(ambiguous_participant_journal)
+            )
+            transaction_journal.write_text(
+                json.dumps(ambiguous_participant_journal, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            ambiguous_audit = archive_services.zet_abstract_backfill_receipt_audit(
+                archive_root,
+                dry_run=True,
+            )
+            self.assertEqual(
+                ambiguous_audit["summary"]["invalid_transaction_journal"],
+                1,
+            )
+
+    def test_zet_abstract_backfill_nested_duplicate_proposals_share_one_digest_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            fixture = self.create_abstract_backfill_proposal(
+                archive_root,
+                count=2,
+                name="nested/first/reviewed.jsonl",
+            )
+            duplicate_relative = (
+                ".wom-scratch/abstract-backfill/nested/second/reviewed-copy.jsonl"
+            )
+            duplicate_path = archive_root / duplicate_relative
+            duplicate_path.parent.mkdir(parents=True, exist_ok=True)
+            duplicate_path.write_bytes(fixture["path"].read_bytes())
+            transaction_digest = fixture["sha256"].removeprefix("sha256:")
+            shared_lock = (
+                archive_root
+                / ".wom-scratch"
+                / "abstract-backfill"
+                / f".{transaction_digest}.write.lock"
+            )
+            shared_lock.write_text(fixture["sha256"] + "\n", encoding="ascii")
+
+            result = archive_services.zet_abstract_backfill_write(
+                archive_root,
+                proposal_path=duplicate_relative,
+                expected_proposal_sha256=fixture["sha256"],
+                max_items=2,
+                approve=True,
+                reviewed_by="person:duplicate-proposal-reviewer",
+                affirm_abstracts_reviewed=True,
+            )
+
+            self.assertFalse(result["ok"], result)
+            self.assertEqual(result["status"], "blocked")
+            self.assertIn("proposal_write_lock_exists", result["blockers"])
+            self.assertEqual(result["summary"]["canonical_write_attempt_count"], 0)
+            for path, original in fixture["originals"].items():
+                self.assertEqual(path.read_bytes(), original)
+            self.assertTrue(shared_lock.is_file())
+            self.assertFalse(
+                duplicate_path.with_name(f".{transaction_digest}.write.lock").exists()
+            )
+
     def test_zet_abstract_backfill_write_rolls_back_when_receipt_write_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
             fixture = self.create_abstract_backfill_proposal(archive_root, count=2, name="receipt-failure.jsonl")
-            with patch.object(archive_services, "write_json_new_file", side_effect=OSError("injected receipt failure")):
+            real_write_json_new_file = archive_services.write_json_new_file
+
+            def fail_only_final_receipt(path: Path, payload: dict[str, Any]) -> None:
+                if path.name.endswith(".transaction.json"):
+                    real_write_json_new_file(path, payload)
+                    return
+                raise OSError("injected receipt failure")
+
+            with patch.object(
+                archive_services,
+                "write_json_new_file",
+                side_effect=fail_only_final_receipt,
+            ):
                 result = archive_services.zet_abstract_backfill_write(
                     archive_root,
                     proposal_path=fixture["relative"],
@@ -38064,6 +38381,296 @@ state:
                 self.assertEqual(path.read_bytes(), original)
             self.assertFalse((archive_root / result["receipt"]["path"]).exists())
             self.assertFalse(any(fixture["path"].parent.glob("*.write.lock")))
+            self.assertFalse(
+                any(fixture["path"].parent.glob("*.write.transaction.json"))
+            )
+
+    def test_zet_abstract_backfill_incomplete_runtime_rollback_retains_transaction_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            fixture = self.create_abstract_backfill_proposal(
+                archive_root,
+                count=2,
+                name="rollback-incomplete-journal.jsonl",
+            )
+            real_write = archive_services.write_bytes_atomic
+            target_paths = {path.resolve() for path in fixture["originals"]}
+            target_write_count = 0
+
+            def fail_second_write_and_first_real_restore(
+                path: Path,
+                value: bytes,
+            ) -> None:
+                nonlocal target_write_count
+                if path.resolve() in target_paths:
+                    target_write_count += 1
+                    if target_write_count in {2, 4}:
+                        raise OSError("injected incomplete rollback")
+                real_write(path, value)
+
+            with patch.object(
+                archive_services,
+                "write_bytes_atomic",
+                side_effect=fail_second_write_and_first_real_restore,
+            ):
+                result = archive_services.zet_abstract_backfill_write(
+                    archive_root,
+                    proposal_path=fixture["relative"],
+                    expected_proposal_sha256=fixture["sha256"],
+                    max_items=2,
+                    approve=True,
+                    reviewed_by="person:incomplete-rollback-reviewer",
+                    affirm_abstracts_reviewed=True,
+                )
+            self.assertFalse(result["ok"], result)
+            self.assertEqual(result["status"], "failed_rollback_incomplete")
+            self.assertFalse(result["rollback"]["succeeded"])
+            self.assertTrue(result["rollback"]["transaction_journal_retained"])
+            transaction_digest = fixture["sha256"].removeprefix("sha256:")
+            transaction_journal = fixture["path"].with_name(
+                f".{transaction_digest}.write.transaction.json"
+            )
+            write_lock = fixture["path"].with_name(
+                f".{transaction_digest}.write.lock"
+            )
+            self.assertTrue(transaction_journal.is_file())
+            self.assertTrue(write_lock.is_file())
+            audit = archive_services.zet_abstract_backfill_receipt_audit(
+                archive_root,
+                dry_run=True,
+            )
+            self.assertEqual(audit["summary"]["partial_write_transaction"], 1)
+
+    def test_zet_abstract_backfill_write_blocks_before_mutation_when_transaction_journal_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            fixture = self.create_abstract_backfill_proposal(
+                archive_root,
+                count=2,
+                name="journal-failure.jsonl",
+            )
+            with patch.object(
+                archive_services,
+                "write_json_new_file",
+                side_effect=OSError("injected transaction journal failure"),
+            ):
+                result = archive_services.zet_abstract_backfill_write(
+                    archive_root,
+                    proposal_path=fixture["relative"],
+                    expected_proposal_sha256=fixture["sha256"],
+                    max_items=2,
+                    approve=True,
+                    reviewed_by="person:journal-failure-reviewer",
+                    affirm_abstracts_reviewed=True,
+                )
+            self.assertFalse(result["ok"], result)
+            self.assertEqual(result["status"], "blocked")
+            self.assertIn("transaction_journal_create_failed", result["blockers"])
+            self.assertEqual(result["summary"]["canonical_write_attempt_count"], 0)
+            for path, original in fixture["originals"].items():
+                self.assertEqual(path.read_bytes(), original)
+            self.assertFalse((archive_root / result["receipt"]["path"]).exists())
+            transaction_digest = fixture["sha256"].removeprefix("sha256:")
+            self.assertFalse(
+                fixture["path"].with_name(f".{transaction_digest}.write.lock").exists()
+            )
+            self.assertFalse(
+                fixture["path"]
+                .with_name(f".{transaction_digest}.write.transaction.json")
+                .exists()
+            )
+
+    def test_zet_abstract_backfill_rollback_preserves_external_final_receipt_and_transaction_evidence(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            fixture = self.create_abstract_backfill_proposal(
+                archive_root,
+                count=2,
+                name="concurrent-apply-receipt.jsonl",
+            )
+            real_write_json_new_file = archive_services.write_json_new_file
+            external_receipt = b'{"writer":"external"}\n'
+
+            def create_external_apply_receipt(
+                path: Path,
+                payload: dict[str, Any],
+            ) -> None:
+                if path.name.endswith(".transaction.json"):
+                    real_write_json_new_file(path, payload)
+                    return
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(external_receipt)
+                raise FileExistsError("injected external receipt")
+
+            with patch.object(
+                archive_services,
+                "write_json_new_file",
+                side_effect=create_external_apply_receipt,
+            ):
+                result = archive_services.zet_abstract_backfill_write(
+                    archive_root,
+                    proposal_path=fixture["relative"],
+                    expected_proposal_sha256=fixture["sha256"],
+                    max_items=2,
+                    approve=True,
+                    reviewed_by="person:external-receipt-reviewer",
+                    affirm_abstracts_reviewed=True,
+                )
+
+            self.assertEqual(result["status"], "failed_rollback_incomplete", result)
+            self.assertFalse(result["rollback"]["succeeded"])
+            self.assertFalse(result["rollback"]["receipt_removed"])
+            self.assertTrue(result["rollback"]["transaction_journal_retained"])
+            self.assertFalse(result["rollback"]["write_lock_removed"])
+            receipt_path = archive_root / result["receipt"]["path"]
+            self.assertEqual(receipt_path.read_bytes(), external_receipt)
+            self.assertTrue(result["receipt"]["exists"])
+            for path, original in fixture["originals"].items():
+                self.assertEqual(path.read_bytes(), original)
+            transaction_digest = fixture["sha256"].removeprefix("sha256:")
+            self.assertTrue(
+                fixture["path"]
+                .with_name(f".{transaction_digest}.write.transaction.json")
+                .is_file()
+            )
+            self.assertTrue(
+                fixture["path"].with_name(f".{transaction_digest}.write.lock").is_file()
+            )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            fixture = self.create_abstract_backfill_proposal(
+                archive_root,
+                count=2,
+                name="concurrent-revert-receipt.jsonl",
+            )
+            applied = archive_services.zet_abstract_backfill_write(
+                archive_root,
+                proposal_path=fixture["relative"],
+                expected_proposal_sha256=fixture["sha256"],
+                max_items=2,
+                approve=True,
+                reviewed_by="person:apply-reviewer",
+                affirm_abstracts_reviewed=True,
+            )
+            self.assertEqual(applied["status"], "applied", applied)
+            applied_canonical = {
+                path: path.read_bytes() for path in fixture["originals"]
+            }
+            real_write_json_new_file = archive_services.write_json_new_file
+            external_revert_receipt = b'{"writer":"external-revert"}\n'
+
+            def create_external_revert_receipt(
+                path: Path,
+                payload: dict[str, Any],
+            ) -> None:
+                if path.name.endswith(".transaction.json"):
+                    real_write_json_new_file(path, payload)
+                    return
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(external_revert_receipt)
+                raise FileExistsError("injected external revert receipt")
+
+            with patch.object(
+                archive_services,
+                "write_json_new_file",
+                side_effect=create_external_revert_receipt,
+            ):
+                result = archive_services.zet_abstract_backfill_revert(
+                    archive_root,
+                    receipt_path=applied["receipt"]["path"],
+                    expected_receipt_sha256=applied["receipt"]["sha256"],
+                    max_items=2,
+                    approve=True,
+                    reviewed_by="person:external-revert-receipt-reviewer",
+                    affirm_abstract_removal_reviewed=True,
+                )
+
+            self.assertEqual(result["status"], "failed_rollback_incomplete", result)
+            self.assertFalse(result["rollback"]["succeeded"])
+            self.assertFalse(result["rollback"]["revert_receipt_removed"])
+            self.assertTrue(result["rollback"]["transaction_journal_retained"])
+            self.assertFalse(result["rollback"]["write_lock_removed"])
+            revert_receipt_path = archive_root / result["revert_receipt"]["path"]
+            self.assertEqual(
+                revert_receipt_path.read_bytes(),
+                external_revert_receipt,
+            )
+            self.assertTrue(result["revert_receipt"]["exists"])
+            for path, expected in applied_canonical.items():
+                self.assertEqual(path.read_bytes(), expected)
+            lock_root = archive_root / ".wom-scratch" / "abstract-backfill"
+            source_digest = applied["receipt"]["sha256"].removeprefix("sha256:")
+            self.assertTrue(
+                (
+                    lock_root
+                    / f".{source_digest}.abstract-revert.transaction.json"
+                ).is_file()
+            )
+            self.assertTrue(
+                (lock_root / f".{source_digest}.abstract-revert.lock").is_file()
+            )
+
+    def test_zet_abstract_backfill_revert_releases_lock_when_transaction_journal_fails(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            fixture = self.create_abstract_backfill_proposal(
+                archive_root,
+                count=2,
+                name="revert-journal-failure.jsonl",
+            )
+            applied = archive_services.zet_abstract_backfill_write(
+                archive_root,
+                proposal_path=fixture["relative"],
+                expected_proposal_sha256=fixture["sha256"],
+                max_items=2,
+                approve=True,
+                reviewed_by="person:apply-reviewer",
+                affirm_abstracts_reviewed=True,
+            )
+            self.assertEqual(applied["status"], "applied", applied)
+            applied_canonical = {
+                path: path.read_bytes() for path in fixture["originals"]
+            }
+
+            with patch.object(
+                archive_services,
+                "write_json_new_file",
+                side_effect=OSError("injected revert transaction journal failure"),
+            ):
+                result = archive_services.zet_abstract_backfill_revert(
+                    archive_root,
+                    receipt_path=applied["receipt"]["path"],
+                    expected_receipt_sha256=applied["receipt"]["sha256"],
+                    max_items=2,
+                    approve=True,
+                    reviewed_by="person:revert-journal-failure-reviewer",
+                    affirm_abstract_removal_reviewed=True,
+                )
+
+            self.assertEqual(result["status"], "blocked", result)
+            self.assertIn("transaction_journal_create_failed", result["blockers"])
+            self.assertEqual(result["summary"]["canonical_write_attempt_count"], 0)
+            for path, expected in applied_canonical.items():
+                self.assertEqual(path.read_bytes(), expected)
+            self.assertFalse(
+                (archive_root / result["revert_receipt"]["path"]).exists()
+            )
+            lock_root = archive_root / ".wom-scratch" / "abstract-backfill"
+            source_digest = applied["receipt"]["sha256"].removeprefix("sha256:")
+            self.assertFalse(
+                (lock_root / f".{source_digest}.abstract-revert.lock").exists()
+            )
+            self.assertFalse(
+                (
+                    lock_root
+                    / f".{source_digest}.abstract-revert.transaction.json"
+                ).exists()
+            )
 
     def test_zet_abstract_backfill_revert_audits_then_restores_exact_originals_once(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -38102,6 +38709,9 @@ state:
             self.assertEqual(preview["status"], "ready_to_revert")
             self.assertEqual(preview["receipt_audit_state"], "source_receipt_and_applied_state_verified")
             self.assertEqual(preview["summary"]["ready_count"], 2)
+            self.assertIsNone(
+                preview["transaction_journal"]["written_before_first_canonical_write"]
+            )
             self.assertTrue(all(item["deterministic_revert_matches_before_hash"] for item in preview["items"]))
             for path, value in applied_canonical.items():
                 self.assertEqual(path.read_bytes(), value)
@@ -38133,6 +38743,10 @@ state:
             self.assertEqual(reverted["summary"]["canonical_write_attempt_count"], 2)
             self.assertTrue(reverted["source_receipt"]["preserved"])
             self.assertTrue(reverted["revert_receipt"]["written_this_run"])
+            self.assertTrue(
+                reverted["transaction_journal"]["written_before_first_canonical_write"]
+            )
+            self.assertFalse(reverted["transaction_journal"]["exists"])
             for path, original in fixture["originals"].items():
                 self.assertEqual(path.read_bytes(), original)
             self.assertEqual(source_receipt_path.read_bytes(), source_receipt_before)
@@ -38150,7 +38764,21 @@ state:
             )
             self.assertEqual(revert_receipt["human_affirmation"], "abstract_removal_reviewed")
             self.assertTrue(revert_receipt["mutation_contract"]["exact_before_file_hash_restored"])
+            self.assertTrue(
+                revert_receipt["mutation_contract"][
+                    "crash_recovery_journal_written"
+                ]
+            )
             self.assertFalse(revert_receipt["privacy_guards"]["abstract_text_stored_in_receipt"])
+            source_digest = applied["receipt"]["sha256"].removeprefix("sha256:")
+            self.assertFalse(
+                (
+                    archive_root
+                    / ".wom-scratch"
+                    / "abstract-backfill"
+                    / f".{source_digest}.abstract-revert.transaction.json"
+                ).exists()
+            )
             serialized_receipt = json.dumps(revert_receipt, ensure_ascii=False)
             serialized_output = preview_output + missing_affirm_output + approve_output
             for private_value in (
@@ -38170,6 +38798,9 @@ state:
             repeated = json.loads(repeated_output)
             self.assertEqual(repeated["status"], "already_reverted")
             self.assertEqual(repeated["summary"]["canonical_write_attempt_count"], 0)
+            self.assertIsNone(
+                repeated["transaction_journal"]["written_before_first_canonical_write"]
+            )
             self.assertEqual(revert_receipt_path.read_bytes(), revert_receipt_before)
             for path, original in fixture["originals"].items():
                 self.assertEqual(path.read_bytes(), original)
@@ -38291,6 +38922,190 @@ state:
                 self.assertEqual(path.read_bytes(), value)
             self.assertFalse((archive_root / result["revert_receipt"]["path"]).exists())
 
+    def test_zet_abstract_backfill_incomplete_revert_rollback_retains_transaction_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            fixture = self.create_abstract_backfill_proposal(
+                archive_root,
+                count=2,
+                name="revert-rollback-incomplete-journal.jsonl",
+            )
+            applied = archive_services.zet_abstract_backfill_write(
+                archive_root,
+                proposal_path=fixture["relative"],
+                expected_proposal_sha256=fixture["sha256"],
+                max_items=2,
+                approve=True,
+                reviewed_by="person:apply-before-incomplete-revert",
+                affirm_abstracts_reviewed=True,
+            )
+            self.assertEqual(applied["status"], "applied", applied)
+            applied_canonical = {
+                path.resolve(): path.read_bytes() for path in fixture["originals"]
+            }
+            real_write = archive_services.write_bytes_atomic
+            target_write_count = 0
+
+            def fail_second_revert_and_first_changed_restore(
+                path: Path,
+                value: bytes,
+            ) -> None:
+                nonlocal target_write_count
+                if path.resolve() in applied_canonical:
+                    target_write_count += 1
+                    if target_write_count in {2, 4}:
+                        raise OSError("injected incomplete revert rollback")
+                real_write(path, value)
+
+            with patch.object(
+                archive_services,
+                "write_bytes_atomic",
+                side_effect=fail_second_revert_and_first_changed_restore,
+            ):
+                result = archive_services.zet_abstract_backfill_revert(
+                    archive_root,
+                    receipt_path=applied["receipt"]["path"],
+                    expected_receipt_sha256=applied["receipt"]["sha256"],
+                    max_items=2,
+                    approve=True,
+                    reviewed_by="person:incomplete-revert-reviewer",
+                    affirm_abstract_removal_reviewed=True,
+                )
+            self.assertFalse(result["ok"], result)
+            self.assertEqual(result["status"], "failed_rollback_incomplete")
+            self.assertFalse(result["rollback"]["succeeded"])
+            self.assertTrue(result["rollback"]["transaction_journal_retained"])
+            transaction_digest = applied["receipt"]["sha256"].removeprefix(
+                "sha256:"
+            )
+            lock_root = archive_root / ".wom-scratch" / "abstract-backfill"
+            transaction_journal = lock_root / (
+                f".{transaction_digest}.abstract-revert.transaction.json"
+            )
+            revert_lock = lock_root / (
+                f".{transaction_digest}.abstract-revert.lock"
+            )
+            self.assertTrue(transaction_journal.is_file())
+            self.assertTrue(revert_lock.is_file())
+            audit = archive_services.zet_abstract_backfill_receipt_audit(
+                archive_root,
+                dry_run=True,
+            )
+            self.assertEqual(audit["summary"]["partial_revert_transaction"], 1)
+
+    def test_zet_abstract_backfill_revert_hard_exit_retains_partial_transaction_journal(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            fixture = self.create_abstract_backfill_proposal(
+                archive_root,
+                count=2,
+                name="revert-hard-exit-partial.jsonl",
+            )
+            applied = archive_services.zet_abstract_backfill_write(
+                archive_root,
+                proposal_path=fixture["relative"],
+                expected_proposal_sha256=fixture["sha256"],
+                max_items=2,
+                approve=True,
+                reviewed_by="person:apply-before-hard-exit",
+                affirm_abstracts_reviewed=True,
+            )
+            self.assertEqual(applied["status"], "applied", applied)
+            applied_canonical = {
+                path: path.read_bytes() for path in fixture["originals"]
+            }
+            child_code = """
+import os
+import sys
+from pathlib import Path
+from wom_kit import archive_services
+
+archive_root = Path(sys.argv[1])
+receipt_relative = sys.argv[2]
+receipt_sha256 = sys.argv[3]
+real_write = archive_services.write_bytes_atomic
+
+def write_then_hard_exit(path, value):
+    real_write(path, value)
+    os._exit(92)
+
+archive_services.write_bytes_atomic = write_then_hard_exit
+archive_services.zet_abstract_backfill_revert(
+    archive_root,
+    receipt_path=receipt_relative,
+    expected_receipt_sha256=receipt_sha256,
+    max_items=2,
+    approve=True,
+    reviewed_by="person:revert-hard-exit-reviewer",
+    affirm_abstract_removal_reviewed=True,
+)
+"""
+            child_env = os.environ.copy()
+            child_env["PYTHONPATH"] = str(SRC_ROOT)
+            child = subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    child_code,
+                    str(archive_root),
+                    applied["receipt"]["path"],
+                    applied["receipt"]["sha256"],
+                ],
+                cwd=KIT_ROOT,
+                env=child_env,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            self.assertEqual(child.returncode, 92, child.stderr)
+
+            transaction_digest = applied["receipt"]["sha256"].removeprefix(
+                "sha256:"
+            )
+            lock_root = archive_root / ".wom-scratch" / "abstract-backfill"
+            revert_lock = lock_root / (
+                f".{transaction_digest}.abstract-revert.lock"
+            )
+            transaction_journal = lock_root / (
+                f".{transaction_digest}.abstract-revert.transaction.json"
+            )
+            self.assertTrue(revert_lock.is_file())
+            self.assertTrue(transaction_journal.is_file())
+            journal = json.loads(transaction_journal.read_text(encoding="utf-8"))
+            self.assertEqual(journal["operation"], "revert")
+            self.assertEqual(journal["item_count"], 2)
+            self.assertFalse(journal["privacy_guards"]["abstract_text_stored"])
+            changed_count = sum(
+                path.read_bytes() != value
+                for path, value in applied_canonical.items()
+            )
+            self.assertEqual(changed_count, 1)
+
+            audit = archive_services.zet_abstract_backfill_receipt_audit(
+                archive_root,
+                dry_run=True,
+            )
+            self.assertFalse(audit["ok"], audit)
+            self.assertEqual(audit["summary"]["partial_revert_transaction"], 1)
+            journal_problem = next(
+                item
+                for item in audit["problems"]
+                if item.get("kind") == "transaction_journal"
+                and item.get("operation") == "revert"
+            )
+            self.assertEqual(journal_problem["status"], "partially_applied")
+            self.assertEqual(journal_problem["before_count"], 1)
+            self.assertEqual(journal_problem["after_count"], 1)
+            self.assertEqual(journal_problem["divergent_count"], 0)
+            serialized_audit = json.dumps(audit, ensure_ascii=False)
+            for private_value in (
+                *fixture["abstracts"],
+                *(row["zettel_id"] for row in fixture["rows"]),
+                "person:revert-hard-exit-reviewer",
+                str(archive_root),
+            ):
+                self.assertNotIn(private_value, serialized_audit)
+
     def test_zet_abstract_backfill_revert_rolls_back_when_revert_receipt_write_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
@@ -38305,7 +39120,22 @@ state:
                 affirm_abstracts_reviewed=True,
             )
             applied_canonical = {path: path.read_bytes() for path in fixture["originals"]}
-            with patch.object(archive_services, "write_json_new_file", side_effect=OSError("injected revert receipt failure")):
+            real_write_json_new_file = archive_services.write_json_new_file
+
+            def fail_only_final_revert_receipt(
+                path: Path,
+                payload: dict[str, Any],
+            ) -> None:
+                if path.name.endswith(".transaction.json"):
+                    real_write_json_new_file(path, payload)
+                    return
+                raise OSError("injected revert receipt failure")
+
+            with patch.object(
+                archive_services,
+                "write_json_new_file",
+                side_effect=fail_only_final_revert_receipt,
+            ):
                 result = archive_services.zet_abstract_backfill_revert(
                     archive_root,
                     receipt_path=applied["receipt"]["path"],
@@ -38322,6 +39152,10 @@ state:
             for path, value in applied_canonical.items():
                 self.assertEqual(path.read_bytes(), value)
             self.assertFalse((archive_root / result["revert_receipt"]["path"]).exists())
+            lock_root = archive_root / ".wom-scratch" / "abstract-backfill"
+            self.assertFalse(
+                any(lock_root.glob("*.abstract-revert.transaction.json"))
+            )
 
     def test_zet_abstract_backfill_revert_candidate_restores_bom_crlf_exact_bytes(self) -> None:
         original = (
@@ -38503,6 +39337,179 @@ state:
             self.assertEqual(orphan["summary"]["orphan_revert_receipt"], 1)
             self.assertEqual(orphan["problems"][0]["status"], "orphan_revert_receipt")
             self.assertIn("source_receipt_missing_or_invalid", orphan["problems"][0]["blocker_codes"])
+
+    def test_zet_abstract_backfill_receipt_audit_classifies_verified_completed_journals(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            fixture = self.create_abstract_backfill_proposal(
+                archive_root,
+                count=2,
+                name="stale-completed-apply-journal.jsonl",
+            )
+            real_write_json_new_file = archive_services.write_json_new_file
+            captured_journals: dict[str, bytes] = {}
+
+            def capture_apply_journal(
+                path: Path,
+                payload: dict[str, Any],
+            ) -> None:
+                real_write_json_new_file(path, payload)
+                if path.name.endswith(".transaction.json"):
+                    captured_journals[path.name] = path.read_bytes()
+
+            with patch.object(
+                archive_services,
+                "write_json_new_file",
+                side_effect=capture_apply_journal,
+            ):
+                applied = archive_services.zet_abstract_backfill_write(
+                    archive_root,
+                    proposal_path=fixture["relative"],
+                    expected_proposal_sha256=fixture["sha256"],
+                    max_items=2,
+                    approve=True,
+                    reviewed_by="person:stale-apply-reviewer",
+                    affirm_abstracts_reviewed=True,
+                )
+            self.assertEqual(applied["status"], "applied", applied)
+            transaction_digest = fixture["sha256"].removeprefix("sha256:")
+            journal_path = (
+                archive_root
+                / ".wom-scratch"
+                / "abstract-backfill"
+                / f".{transaction_digest}.write.transaction.json"
+            )
+            journal_path.write_bytes(captured_journals[journal_path.name])
+
+            audit = archive_services.zet_abstract_backfill_receipt_audit(
+                archive_root,
+                dry_run=True,
+            )
+            self.assertTrue(audit["ok"], audit)
+            self.assertEqual(audit["status"], "attention_required")
+            self.assertEqual(
+                audit["summary"]["stale_completed_write_journal"],
+                1,
+            )
+            self.assertIn(
+                "one_or_more_completed_abstract_transaction_journals_remain",
+                audit["warnings"],
+            )
+            journal_problem = next(
+                item
+                for item in audit["problems"]
+                if item["kind"] == "transaction_journal"
+            )
+            self.assertEqual(journal_problem["status"], "stale_completed")
+
+            receipt_path = archive_root / applied["receipt"]["path"]
+            receipt_path.write_bytes(b"")
+            write_lock = journal_path.with_name(
+                f".{transaction_digest}.write.lock"
+            )
+            write_lock.write_text(fixture["sha256"] + "\n", encoding="ascii")
+            invalid_audit = archive_services.zet_abstract_backfill_receipt_audit(
+                archive_root,
+                dry_run=True,
+            )
+            self.assertFalse(invalid_audit["ok"], invalid_audit)
+            self.assertEqual(
+                invalid_audit["summary"]["stale_completed_write_journal"],
+                0,
+            )
+            self.assertEqual(
+                invalid_audit["summary"]["stale_completed_write_lock"],
+                0,
+            )
+            self.assertEqual(invalid_audit["summary"]["unresolved_write_lock"], 1)
+            self.assertEqual(
+                invalid_audit["summary"]["complete_write_receipt_missing"],
+                1,
+            )
+            invalid_journal_problem = next(
+                item
+                for item in invalid_audit["problems"]
+                if item["kind"] == "transaction_journal"
+            )
+            self.assertEqual(
+                invalid_journal_problem["status"],
+                "fully_applied_receipt_missing",
+            )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            fixture = self.create_abstract_backfill_proposal(
+                archive_root,
+                count=2,
+                name="stale-completed-revert-journal.jsonl",
+            )
+            applied = archive_services.zet_abstract_backfill_write(
+                archive_root,
+                proposal_path=fixture["relative"],
+                expected_proposal_sha256=fixture["sha256"],
+                max_items=2,
+                approve=True,
+                reviewed_by="person:apply-reviewer",
+                affirm_abstracts_reviewed=True,
+            )
+            self.assertEqual(applied["status"], "applied", applied)
+            real_write_json_new_file = archive_services.write_json_new_file
+            captured_journals = {}
+
+            def capture_revert_journal(
+                path: Path,
+                payload: dict[str, Any],
+            ) -> None:
+                real_write_json_new_file(path, payload)
+                if path.name.endswith(".transaction.json"):
+                    captured_journals[path.name] = path.read_bytes()
+
+            with patch.object(
+                archive_services,
+                "write_json_new_file",
+                side_effect=capture_revert_journal,
+            ):
+                reverted = archive_services.zet_abstract_backfill_revert(
+                    archive_root,
+                    receipt_path=applied["receipt"]["path"],
+                    expected_receipt_sha256=applied["receipt"]["sha256"],
+                    max_items=2,
+                    approve=True,
+                    reviewed_by="person:stale-revert-reviewer",
+                    affirm_abstract_removal_reviewed=True,
+                )
+            self.assertEqual(reverted["status"], "reverted", reverted)
+            source_digest = applied["receipt"]["sha256"].removeprefix("sha256:")
+            journal_path = (
+                archive_root
+                / ".wom-scratch"
+                / "abstract-backfill"
+                / f".{source_digest}.abstract-revert.transaction.json"
+            )
+            journal_path.write_bytes(captured_journals[journal_path.name])
+
+            audit = archive_services.zet_abstract_backfill_receipt_audit(
+                archive_root,
+                dry_run=True,
+            )
+            self.assertTrue(audit["ok"], audit)
+            self.assertEqual(audit["status"], "attention_required")
+            self.assertEqual(
+                audit["summary"]["stale_completed_revert_journal"],
+                1,
+            )
+            self.assertIn(
+                "one_or_more_completed_abstract_transaction_journals_remain",
+                audit["warnings"],
+            )
+            journal_problem = next(
+                item
+                for item in audit["problems"]
+                if item["kind"] == "transaction_journal"
+            )
+            self.assertEqual(journal_problem["status"], "stale_completed")
 
     def test_zet_abstract_backfill_receipt_audit_distinguishes_completed_and_unresolved_locks(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

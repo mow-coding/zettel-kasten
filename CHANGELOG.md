@@ -6,6 +6,42 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.265 - 2026-07-27
+
+- **An interrupted abstract batch now leaves a durable explanation before it
+  changes the first zet.** Approved apply and revert operations create a private,
+  schema-validated transaction journal beside their existing lock. It binds the
+  exact archive, proposal or source receipt, final receipt path, reviewer
+  affirmation, and every participant's before/after/body/abstract hashes.
+- **The journal stores no body or abstract text.** It does contain private zet
+  ids and archive-relative paths, so it remains under
+  `.wom-scratch/abstract-backfill/` and none of that metadata is echoed by the
+  command or archive-wide audit.
+- **The audit can say where a killed batch stopped.**
+  `zet-abstract-backfill-receipt-audit` classifies a retained journal as
+  `prepared`, `partially_applied`, `fully_applied_receipt_missing`,
+  `divergent`, or `stale_completed` by comparing current canonical hashes with
+  the journal. Invalid names, duplicate keys, schema/digest/binding failures,
+  unsafe paths, wrong receipt pairing, and ambiguous equal before/after hashes
+  block.
+- **Evidence is removed only after a safe end.** Normal success first writes and
+  verifies the immutable receipt, then removes the journal and lock. A caught
+  runtime failure removes them only after every attempted canonical file and
+  partial receipt have been verified restored/removed. An incomplete rollback
+  retains both.
+- **Identical proposal copies share one lock.** Apply lock/journal names now live
+  in the common abstract-backfill scratch root and are keyed by proposal SHA,
+  instead of living beside whichever proposal path was supplied. Copying one
+  proposal into two nested paths can no longer bypass the concurrency brake and
+  let a losing receipt writer roll back a batch another process completed.
+- **Real hard exits are tested.** Child processes call `os._exit` immediately
+  after the first apply write and after the first revert write. Each leaves one
+  participant before and one after, plus a journal the audit reports as partial.
+- **This is the evidence rung, not automatic recovery.** The release does not
+  resume, finish, or roll back a killed batch; it never deletes retained
+  evidence. Windows still provides atomic files but not a power-loss durability
+  guarantee because directory `fsync` is unavailable there.
+
 ## v0.3.264 - 2026-07-26
 
 - **A canonical zet can no longer be left half-written.** Every zet mutation now

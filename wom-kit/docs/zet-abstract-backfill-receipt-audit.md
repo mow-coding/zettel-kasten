@@ -75,12 +75,31 @@ It reads the filename shape, never the lock file content.
 The command never deletes a lock. Confirm that no process is running, then use
 the single-receipt audit and current hashes before any manual cleanup.
 
+## Transaction Journal Classification
+
+Since v0.3.265, the audit also recognizes the paired private journal names:
+
+```text
+.<proposal-digest>.write.transaction.json
+.<source-receipt-digest>.abstract-revert.transaction.json
+```
+
+It validates at most `--max-locks` journals independently of the same limit on
+locks. Every valid journal is bound to the archive, operation basis, final
+receipt path, reviewer authority, and a bounded participant list. Current
+canonical hashes classify it as `prepared`, `partially_applied`,
+`fully_applied_receipt_missing`, or `divergent`. `stale_completed` is a warning
+only when the journal's final receipt and complete receipt lifecycle verify;
+the other states and invalid journals block. The command never resumes,
+finalizes, rolls back, deletes, or repairs a journal.
+
 ## Bounded Output
 
 Returning one healthy JSON row per receipt would recreate an AI token problem.
 The audit therefore:
 
-- scans every receipt and recognized lock inside the requested bounds;
+- scans every receipt, recognized lock, and transaction journal inside the
+  requested bounds;
 - counts `applied_verified` and `reverted_verified` lifecycles;
 - commits all outcomes to one `audit_digest`;
 - returns only bounded problem/warning rows;
@@ -95,6 +114,8 @@ outcome set produced the summary; it is not a signature or remote backup proof.
 The command may read:
 
 - private applied and revert receipt metadata;
+- private transaction-journal metadata, including zet ids, canonical paths, and
+  reviewer authority;
 - selected canonical bytes needed for file/body/abstract hash validation;
 - lock filenames.
 
@@ -106,6 +127,7 @@ It writes or deletes nothing. In particular, it does not:
 - repair a canonical zet;
 - create, edit, or delete a receipt;
 - remove a lock;
+- remove or rewrite a transaction journal;
 - recreate a proposal;
 - decide that an abstract is semantically good.
 

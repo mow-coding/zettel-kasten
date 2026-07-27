@@ -106,10 +106,14 @@ receipt rows:      at most 5,000
 A short-lived lock under `.wom-scratch/abstract-backfill/` blocks another WOM
 revert for the same source receipt. It does not lock an external editor.
 
-This is not crash recovery. Forced process termination, power loss, or machine
-failure can bypass in-process rollback. A leftover `.abstract-revert.lock` must
-be inspected against the source receipt, deterministic revert receipt, and
-current canonical hashes before manual removal.
+The automatic rollback is not complete crash recovery. Forced process
+termination, power loss, or machine failure can bypass it. Since v0.3.265,
+approve publishes a private hash-only `.abstract-revert.transaction.json`
+journal before the first canonical mutation. If that journal or its paired
+`.abstract-revert.lock` remains, preserve both and run the receipt audit against
+the source receipt, deterministic revert receipt, and current canonical hashes.
+The journal classifies the stopped state but does not automatically resume,
+finish the receipt, or restore the batch.
 
 ## Revert Receipt
 

@@ -7333,6 +7333,80 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                 self.assertIn("wom-kit/docs/python-tool-install", text)
                 self.assertIn("wom-kit/docs/runtime-skill-install", text)
 
+    def test_v03265_abstract_transaction_journal_operator_docs_match(self) -> None:
+        kit_readme_text = (KIT_ROOT / "README.md").read_text(encoding="utf-8")
+        write_text = (
+            KIT_ROOT / "docs" / "zet-abstract-backfill-write.md"
+        ).read_text(encoding="utf-8")
+        revert_text = (
+            KIT_ROOT / "docs" / "zet-abstract-backfill-revert.md"
+        ).read_text(encoding="utf-8")
+        audit_text = (
+            KIT_ROOT / "docs" / "zet-abstract-backfill-receipt-audit.md"
+        ).read_text(encoding="utf-8")
+        operator_source_text = (
+            KIT_ROOT
+            / "templates"
+            / "ai-runtime"
+            / "wom-archive"
+            / "references"
+            / "operator-contract.md"
+        ).read_text(encoding="utf-8")
+        operator_resource_text = (
+            KIT_ROOT
+            / "src"
+            / "wom_kit"
+            / "_resources"
+            / "templates"
+            / "ai-runtime"
+            / "wom-archive"
+            / "references"
+            / "operator-contract.md"
+        ).read_text(encoding="utf-8")
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        release_text = (
+            KIT_ROOT / "docs" / "releases" / "v0.3.265.md"
+        ).read_text(encoding="utf-8")
+        upgrade_text = (REPO_ROOT / "UPGRADE.md").read_text(encoding="utf-8")
+        upgrade_ko_text = (REPO_ROOT / "UPGRADE.ko.md").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("private hash-only transaction journal", kit_readme_text)
+        self.assertNotIn(
+            "forced termination has no crash-recovery journal",
+            kit_readme_text,
+        )
+        self.assertIn("`.write.transaction.json`", write_text)
+        self.assertIn("`.abstract-revert.transaction.json`", revert_text)
+        for text in (operator_source_text, operator_resource_text):
+            with self.subTest(document="runtime-operator-contract"):
+                self.assertIn(
+                    "Since v0.3.265, an approved apply publishes a private hash-only",
+                    text,
+                )
+                self.assertIn(
+                    "Since v0.3.265, approved revert also",
+                    text,
+                )
+                self.assertNotIn(
+                    "Forced termination has no automatic crash-recovery journal",
+                    text,
+                )
+        for phrase in (
+            "`stale_completed` is a warning",
+            "final receipt and complete receipt lifecycle verify",
+            "reviewer authority",
+            "`--max-locks` journals independently",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, audit_text)
+        self.assertIn("does not lock external editors", matrix_text)
+        self.assertIn("basis-scoped journals do", release_text)
+        self.assertIn("not make every cross-basis race detectable", release_text)
+        self.assertIn("one-way tool-version gate", upgrade_text)
+        self.assertIn("단방향 게이트", upgrade_ko_text)
+
 
 if __name__ == "__main__":
     unittest.main()

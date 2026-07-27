@@ -2874,6 +2874,9 @@ ZET_ABSTRACT_BACKFILL_RECEIPT_SCHEMA = "wom-kit/zet-abstract-backfill-receipt/v0
 ZET_ABSTRACT_BACKFILL_REVERT_SCHEMA = "wom-kit/zet-abstract-backfill-revert/v0.1"
 ZET_ABSTRACT_BACKFILL_REVERT_RECEIPT_SCHEMA = "wom-kit/zet-abstract-backfill-revert-receipt/v0.1"
 ZET_ABSTRACT_BACKFILL_RECEIPT_AUDIT_SCHEMA = "wom-kit/zet-abstract-backfill-receipt-audit/v0.1"
+ZET_ABSTRACT_BACKFILL_TRANSACTION_JOURNAL_SCHEMA = (
+    "wom-kit/zet-abstract-backfill-transaction-journal/v0.1"
+)
 ZET_ABSTRACT_BACKFILL_PROPOSAL_PREFIX = ".wom-scratch/abstract-backfill/"
 ZET_ABSTRACT_BACKFILL_RECEIPTS_DIR = "receipts/revisions/abstract-backfill"
 ZET_ABSTRACT_BACKFILL_REVERT_RECEIPTS_DIR = "receipts/revisions/abstract-backfill-reverts"
@@ -2885,6 +2888,7 @@ ZET_ABSTRACT_BACKFILL_MAX_LINE_BYTES = 1024 * 1024
 ZET_ABSTRACT_BACKFILL_MAX_CANONICAL_FILE_BYTES = 16 * 1024 * 1024
 ZET_ABSTRACT_BACKFILL_MAX_TOTAL_CANONICAL_BYTES = 256 * 1024 * 1024
 ZET_ABSTRACT_BACKFILL_MAX_RECEIPT_BYTES = 16 * 1024 * 1024
+ZET_ABSTRACT_BACKFILL_MAX_TRANSACTION_JOURNAL_BYTES = 16 * 1024 * 1024
 ZETTEL_OVERVIEW_FRONTMATTER_FIELDS = ("abstract", "gist", "summary", "description", "overview")
 ZET_CATALOG_SCHEMA = "wom-kit/zet-catalog/v0.8"
 ZET_CATALOG_MAX_PAGE_SIZE = 10000
@@ -15818,6 +15822,224 @@ def materialize_zet_abstract_backfill_candidates(
     return candidates, unique_preserve_order(blockers)
 
 
+def zet_abstract_backfill_transaction_journal_path(write_lock_path: Path) -> Path:
+    if not write_lock_path.name.endswith(".lock"):
+        raise ValueError("abstract_transaction_lock_path_invalid")
+    return write_lock_path.with_name(
+        write_lock_path.name.removesuffix(".lock") + ".transaction.json"
+    )
+
+
+def zet_abstract_backfill_transaction_journal_document(
+    *,
+    operation: str,
+    prepared_at: str,
+    archive_id: str,
+    transaction_basis_kind: str,
+    transaction_basis_sha256: str,
+    plan_digest: str,
+    reviewed_by: str,
+    human_affirmation: str,
+    final_receipt_path: str,
+    items: list[dict[str, Any]],
+) -> dict[str, Any]:
+    journal = {
+        "schema": ZET_ABSTRACT_BACKFILL_TRANSACTION_JOURNAL_SCHEMA,
+        "action": "zet_abstract_backfill_transaction",
+        "status": "prepared",
+        "operation": operation,
+        "prepared_at": prepared_at,
+        "archive_id": archive_id,
+        "transaction_basis": {
+            "kind": transaction_basis_kind,
+            "sha256": transaction_basis_sha256,
+        },
+        "plan_digest": plan_digest,
+        "reviewed_by": reviewed_by,
+        "human_affirmation": human_affirmation,
+        "final_receipt_path": final_receipt_path,
+        "item_count": len(items),
+        "items": json_safe(items),
+        "recovery_contract": {
+            "journal_published_before_first_canonical_write": True,
+            "current_state_inferred_from_participant_hashes": True,
+            "automatic_resume_implemented": False,
+            "automatic_rollback_after_hard_exit_implemented": False,
+        },
+        "privacy_guards": {
+            "abstract_text_stored": False,
+            "body_text_stored": False,
+            "contains_private_zettel_ids_and_paths": True,
+            "provider_api_called": False,
+            "model_called": False,
+            "secret_store_or_environment_read": False,
+        },
+    }
+    journal["journal_digest"] = sha256_json_value(journal)
+    return journal
+
+
+def read_zet_abstract_backfill_transaction_journal(
+    root: Path,
+    path: Path,
+    *,
+    archive_id: str,
+) -> tuple[bytes, dict[str, Any]]:
+    if path.is_symlink() or not is_path_within_root(path, root):
+        raise ArchiveServiceError("Abstract transaction journal path is unsafe.")
+    try:
+        if path.stat().st_size > ZET_ABSTRACT_BACKFILL_MAX_TRANSACTION_JOURNAL_BYTES:
+            raise ArchiveServiceError("Abstract transaction journal exceeds the size limit.")
+        raw = path.read_bytes()
+
+        def reject_duplicate_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+            parsed: dict[str, Any] = {}
+            for key, value in pairs:
+                if key in parsed:
+                    raise ValueError("abstract_transaction_journal_duplicate_key")
+                parsed[key] = value
+            return parsed
+
+        document = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=reject_duplicate_pairs,
+        )
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
+        raise ArchiveServiceError("Abstract transaction journal is unreadable.") from exc
+    if not isinstance(document, dict):
+        raise ArchiveServiceError("Abstract transaction journal must be an object.")
+    if validate_schema(
+        document,
+        "zet-abstract-backfill-transaction-journal.schema.json",
+    ):
+        raise ArchiveServiceError("Abstract transaction journal schema is invalid.")
+    supplied_digest = document.get("journal_digest")
+    unsigned_document = dict(document)
+    unsigned_document.pop("journal_digest", None)
+    if supplied_digest != sha256_json_value(unsigned_document):
+        raise ArchiveServiceError("Abstract transaction journal digest is invalid.")
+    if document.get("archive_id") != archive_id:
+        raise ArchiveServiceError("Abstract transaction journal archive does not match.")
+
+    operation = document.get("operation")
+    basis = document.get("transaction_basis")
+    items = document.get("items")
+    if not isinstance(basis, dict) or not isinstance(items, list):
+        raise ArchiveServiceError("Abstract transaction journal shape is invalid.")
+    basis_sha256 = basis.get("sha256")
+    expected_kind = "proposal" if operation == "apply" else "source_receipt"
+    expected_affirmation = (
+        "all_proposed_abstracts_reviewed"
+        if operation == "apply"
+        else "abstract_removal_reviewed"
+    )
+    expected_lock_kind = "write" if operation == "apply" else "abstract-revert"
+    match = re.fullmatch(
+        rf"\.(?P<digest>[0-9a-f]{{64}})\.{expected_lock_kind}\.transaction\.json",
+        path.name,
+    )
+    if (
+        basis.get("kind") != expected_kind
+        or document.get("human_affirmation") != expected_affirmation
+        or not isinstance(basis_sha256, str)
+        or match is None
+        or "sha256:" + match.group("digest") != basis_sha256
+        or document.get("item_count") != len(items)
+        or len(items) > ZET_ABSTRACT_BACKFILL_MAX_ITEMS
+        or [item.get("row_index") for item in items if isinstance(item, dict)]
+        != list(range(len(items)))
+    ):
+        raise ArchiveServiceError("Abstract transaction journal binding is invalid.")
+    canonical_paths = [
+        item.get("canonical_path")
+        for item in items
+        if isinstance(item, dict)
+    ]
+    zettel_ids = [
+        item.get("zettel_id")
+        for item in items
+        if isinstance(item, dict)
+    ]
+    if (
+        len(canonical_paths) != len(items)
+        or len(set(canonical_paths)) != len(canonical_paths)
+        or len(zettel_ids) != len(items)
+        or len(set(zettel_ids)) != len(zettel_ids)
+    ):
+        raise ArchiveServiceError("Abstract transaction journal participants are invalid.")
+    for item, canonical_relative in zip(items, canonical_paths, strict=True):
+        if (
+            not isinstance(item, dict)
+            or not isinstance(canonical_relative, str)
+            or item.get("before_file_sha256") == item.get("after_file_sha256")
+        ):
+            raise ArchiveServiceError("Abstract transaction journal participant binding is invalid.")
+        canonical_path = archive_internal_path(root, canonical_relative)
+        if (
+            archive_relative_path(canonical_path, root) != canonical_relative
+            or not canonical_relative.startswith("zettels/")
+        ):
+            raise ArchiveServiceError("Abstract transaction journal canonical path is invalid.")
+
+    final_receipt_relative = document.get("final_receipt_path")
+    if not isinstance(final_receipt_relative, str):
+        raise ArchiveServiceError("Abstract transaction journal receipt binding is invalid.")
+    expected_receipt_relative = (
+        zet_abstract_backfill_receipt_relative_path(basis_sha256)
+        if operation == "apply"
+        else zet_abstract_backfill_revert_receipt_relative_path(basis_sha256)
+    )
+    final_receipt = archive_internal_path(root, final_receipt_relative)
+    if (
+        final_receipt_relative != expected_receipt_relative
+        or archive_relative_path(final_receipt, root) != final_receipt_relative
+    ):
+        raise ArchiveServiceError("Abstract transaction journal receipt path is invalid.")
+    return raw, document
+
+
+def classify_zet_abstract_backfill_transaction_journal(
+    root: Path,
+    journal: dict[str, Any],
+) -> dict[str, Any]:
+    before_count = 0
+    after_count = 0
+    divergent_count = 0
+    missing_count = 0
+    for item in journal["items"]:
+        try:
+            path = archive_internal_path(root, item["canonical_path"])
+            if path.is_symlink() or not path.is_file():
+                missing_count += 1
+                continue
+            current = read_zet_abstract_backfill_canonical_bytes(path)
+            current_sha256 = "sha256:" + hashlib.sha256(current).hexdigest()
+        except (ArchiveServiceError, ArchivePathError, OSError, ValueError):
+            missing_count += 1
+            continue
+        if current_sha256 == item["before_file_sha256"]:
+            before_count += 1
+        elif current_sha256 == item["after_file_sha256"]:
+            after_count += 1
+        else:
+            divergent_count += 1
+    if missing_count or divergent_count:
+        status = "divergent"
+    elif after_count == 0:
+        status = "prepared"
+    elif before_count == 0:
+        status = "fully_applied_receipt_missing"
+    else:
+        status = "partially_applied"
+    return {
+        "status": status,
+        "before_count": before_count,
+        "after_count": after_count,
+        "divergent_count": divergent_count,
+        "missing_count": missing_count,
+    }
+
+
 def zet_abstract_backfill_write(
     archive_root: Path | str,
     *,
@@ -15845,6 +16067,9 @@ def zet_abstract_backfill_write(
     actual_proposal_sha256: str | None = None
     receipt_relative: str | None = None
     write_lock_path: Path | None = None
+    transaction_journal_path: Path | None = None
+    transaction_journal_written_this_run = False
+    transaction_journal_removed: bool | None = None
     receipt_sha256: str | None = None
     receipt_exists = False
     receipt_written_this_run = False
@@ -15856,6 +16081,8 @@ def zet_abstract_backfill_write(
         "succeeded": None,
         "canonical_files_restored": 0,
         "receipt_removed": None,
+        "transaction_journal_removed": None,
+        "transaction_journal_retained": None,
         "write_lock_removed": None,
     }
     write_lock_removed: bool | None = None
@@ -15889,6 +16116,19 @@ def zet_abstract_backfill_write(
                 "sha256": receipt_sha256,
                 "contains_private_zettel_ids_and_paths": True if valid_receipt else None,
                 "contains_abstract_text": False if valid_receipt else None,
+            },
+            "transaction_journal": {
+                "written_before_first_canonical_write": (
+                    True if transaction_journal_written_this_run else None
+                ),
+                "exists": bool(
+                    transaction_journal_path
+                    and transaction_journal_path.exists()
+                ),
+                "removed_after_completion": transaction_journal_removed,
+                "contains_abstract_or_body_text": False,
+                "path_echoed": False,
+                "automatic_resume_implemented": False,
             },
             "summary": {
                 "candidate_count": len(public_items),
@@ -15972,16 +16212,28 @@ def zet_abstract_backfill_write(
     if actual_proposal_sha256 and re.fullmatch(r"sha256:[0-9a-f]{64}", actual_proposal_sha256):
         receipt_relative = zet_abstract_backfill_receipt_relative_path(actual_proposal_sha256)
         lock_digest = actual_proposal_sha256.removeprefix("sha256:")
-        write_lock_path = resolved_proposal.with_name(f".{lock_digest}.write.lock")
+        write_lock_root = archive_internal_path(
+            root,
+            ZET_ABSTRACT_BACKFILL_PROPOSAL_PREFIX.rstrip("/"),
+        )
+        write_lock_path = write_lock_root / f".{lock_digest}.write.lock"
+        transaction_journal_path = (
+            zet_abstract_backfill_transaction_journal_path(write_lock_path)
+        )
     if blockers:
         return result_payload("blocked")
 
     assert receipt_relative is not None
     assert write_lock_path is not None
+    assert transaction_journal_path is not None
     receipt_path = archive_internal_path(root, receipt_relative)
     if receipt_path.exists():
         if write_lock_path.exists():
             warnings.append("matching_proposal_write_lock_remains_inspect_before_cleanup")
+        if transaction_journal_path.exists():
+            warnings.append(
+                "matching_completed_transaction_journal_remains_inspect_before_cleanup"
+            )
         receipt_exists = True
         verification = verify_zet_abstract_backfill_receipt(
             root,
@@ -16092,7 +16344,7 @@ def zet_abstract_backfill_write(
             "other_frontmatter_semantics_preserved": True,
             "updated_at_changed": False,
             "rollback_on_runtime_failure": True,
-            "crash_recovery_journal_written": False,
+            "crash_recovery_journal_written": True,
         },
         "privacy_guards": {
             "abstract_text_stored_in_receipt": False,
@@ -16104,6 +16356,37 @@ def zet_abstract_backfill_write(
     }
     if validate_schema(receipt, "zet-abstract-backfill-receipt.schema.json"):
         blockers.append("receipt_schema_validation_failed")
+        return result_payload("blocked")
+
+    transaction_journal = zet_abstract_backfill_transaction_journal_document(
+        operation="apply",
+        prepared_at=applied_at,
+        archive_id=archive_id,
+        transaction_basis_kind="proposal",
+        transaction_basis_sha256=actual_proposal_sha256,
+        plan_digest=plan_digest,
+        reviewed_by=reviewer,
+        human_affirmation="all_proposed_abstracts_reviewed",
+        final_receipt_path=receipt_relative,
+        items=[
+            {
+                "row_index": item["row_index"],
+                "zettel_id": item["zettel_id"],
+                "canonical_path": item["relative_path"],
+                "generation_mode": item["generation_mode"],
+                "before_file_sha256": item["before_file_sha256"],
+                "after_file_sha256": item["after_file_sha256"],
+                "abstract_sha256": item["abstract_sha256"],
+                "body_sha256": item["body_sha256"],
+            }
+            for item in candidates
+        ],
+    )
+    if validate_schema(
+        transaction_journal,
+        "zet-abstract-backfill-transaction-journal.schema.json",
+    ):
+        blockers.append("transaction_journal_schema_validation_failed")
         return result_payload("blocked")
 
     lock_descriptor: int | None = None
@@ -16128,6 +16411,28 @@ def zet_abstract_backfill_write(
     finally:
         if lock_descriptor is not None:
             os.close(lock_descriptor)
+
+    try:
+        write_json_new_file(transaction_journal_path, transaction_journal)
+        transaction_journal_written_this_run = True
+    except FileExistsError:
+        try:
+            write_lock_path.unlink()
+            write_lock_removed = True
+        except OSError:
+            write_lock_removed = False
+        blockers.append("transaction_journal_exists")
+        return result_payload("blocked")
+    except OSError:
+        try:
+            if write_lock_path.exists():
+                write_lock_path.unlink()
+                fsync_directory(write_lock_path.parent)
+            write_lock_removed = not write_lock_path.exists()
+        except OSError:
+            write_lock_removed = False
+        blockers.append("transaction_journal_create_failed")
+        return result_payload("blocked")
 
     attempted_candidates: list[dict[str, Any]] = []
     receipt_parent_existed = receipt_path.parent.exists()
@@ -16177,22 +16482,35 @@ def zet_abstract_backfill_write(
         receipt_written_this_run = True
         receipt_review_affirmation_verified = True
         try:
-            write_lock_path.unlink()
-            write_lock_removed = True
+            transaction_journal_path.unlink()
+            fsync_directory(transaction_journal_path.parent)
+            transaction_journal_removed = True
         except OSError:
+            transaction_journal_removed = False
+            warnings.append("completed_transaction_journal_cleanup_failed")
+        if transaction_journal_removed:
+            try:
+                write_lock_path.unlink()
+                fsync_directory(write_lock_path.parent)
+                write_lock_removed = True
+            except OSError:
+                write_lock_removed = False
+                warnings.append("temporary_write_lock_cleanup_failed")
+        else:
             write_lock_removed = False
-            warnings.append("temporary_write_lock_cleanup_failed")
+            warnings.append("write_lock_retained_with_transaction_journal")
         if progress_callback is not None:
             progress_callback("abstract-receipt", "done", None, None)
         return result_payload("applied")
     except Exception:
         rollback["attempted"] = bool(attempted_candidates or receipt_write_attempted)
-        receipt_removed = True
+        receipt_removed = not receipt_path.exists()
         if receipt_owned_this_run and receipt_path.exists():
             try:
                 receipt_path.unlink()
             except OSError:
-                receipt_removed = False
+                pass
+        receipt_removed = not receipt_path.exists()
         restored = 0
         canonical_restore_ok = True
         for item in reversed(attempted_candidates):
@@ -16203,18 +16521,43 @@ def zet_abstract_backfill_write(
                 restored += 1
             except Exception:
                 canonical_restore_ok = False
-        try:
-            if write_lock_path.exists():
-                write_lock_path.unlink()
-            write_lock_removed = True
-        except OSError:
+        if canonical_restore_ok and receipt_removed:
+            try:
+                if transaction_journal_path.exists():
+                    transaction_journal_path.unlink()
+                    fsync_directory(transaction_journal_path.parent)
+                    transaction_journal_removed = True
+                else:
+                    transaction_journal_removed = False
+            except OSError:
+                transaction_journal_removed = False
+        else:
+            transaction_journal_removed = False
+        if transaction_journal_removed:
+            try:
+                if write_lock_path.exists():
+                    write_lock_path.unlink()
+                    fsync_directory(write_lock_path.parent)
+                write_lock_removed = True
+            except OSError:
+                write_lock_removed = False
+        else:
             write_lock_removed = False
         if not receipt_parent_existed:
             cleanup_empty_archive_dirs(root, [receipt_path])
         rollback["canonical_files_restored"] = restored
         rollback["receipt_removed"] = receipt_removed
+        rollback["transaction_journal_removed"] = transaction_journal_removed
+        rollback["transaction_journal_retained"] = bool(
+            transaction_journal_path.exists()
+        )
         rollback["write_lock_removed"] = write_lock_removed
-        rollback["succeeded"] = canonical_restore_ok and receipt_removed and write_lock_removed
+        rollback["succeeded"] = bool(
+            canonical_restore_ok
+            and receipt_removed
+            and transaction_journal_removed
+            and write_lock_removed
+        )
         canonical_files_written = None if not rollback["succeeded"] else 0
         receipt_exists = receipt_path.exists()
         receipt_written_this_run = False
@@ -16551,11 +16894,16 @@ def zet_abstract_backfill_revert(
     canonical_files_written: int | None = 0
     canonical_write_attempt_count = 0
     write_lock_removed: bool | None = None
+    transaction_journal_path: Path | None = None
+    transaction_journal_written_this_run = False
+    transaction_journal_removed: bool | None = None
     rollback = {
         "attempted": False,
         "succeeded": None,
         "canonical_files_restored": 0,
         "revert_receipt_removed": None,
+        "transaction_journal_removed": None,
+        "transaction_journal_retained": None,
         "write_lock_removed": None,
     }
 
@@ -16589,6 +16937,19 @@ def zet_abstract_backfill_revert(
                 "sha256": revert_receipt_sha256,
                 "contains_private_zettel_ids_and_paths": True if valid_revert_receipt else None,
                 "contains_body_or_abstract_text": False if valid_revert_receipt else None,
+            },
+            "transaction_journal": {
+                "written_before_first_canonical_write": (
+                    True if transaction_journal_written_this_run else None
+                ),
+                "exists": bool(
+                    transaction_journal_path
+                    and transaction_journal_path.exists()
+                ),
+                "removed_after_completion": transaction_journal_removed,
+                "contains_abstract_or_body_text": False,
+                "path_echoed": False,
+                "automatic_resume_implemented": False,
             },
             "receipt_audit_state": receipt_audit_state,
             "summary": {
@@ -16698,10 +17059,17 @@ def zet_abstract_backfill_revert(
         root,
         f"{ZET_ABSTRACT_BACKFILL_PROPOSAL_PREFIX}.{lock_digest}.abstract-revert.lock",
     )
+    transaction_journal_path = (
+        zet_abstract_backfill_transaction_journal_path(write_lock_path)
+    )
     if revert_receipt_path.exists():
         revert_receipt_exists = True
         if write_lock_path.exists():
             warnings.append("matching_abstract_revert_lock_remains_inspect_before_cleanup")
+        if transaction_journal_path.exists():
+            warnings.append(
+                "matching_completed_transaction_journal_remains_inspect_before_cleanup"
+            )
         verification = verify_zet_abstract_backfill_revert_receipt(
             root,
             revert_receipt_path,
@@ -16806,7 +17174,7 @@ def zet_abstract_backfill_revert(
             "updated_at_changed": False,
             "source_receipt_preserved": True,
             "rollback_on_runtime_failure": True,
-            "crash_recovery_journal_written": False,
+            "crash_recovery_journal_written": True,
         },
         "privacy_guards": {
             "abstract_text_stored_in_receipt": False,
@@ -16818,6 +17186,38 @@ def zet_abstract_backfill_revert(
     }
     if validate_schema(revert_receipt, "zet-abstract-backfill-revert-receipt.schema.json"):
         blockers.append("revert_receipt_schema_validation_failed")
+        receipt_audit_state = "blocked"
+        return result_payload("blocked")
+
+    transaction_journal = zet_abstract_backfill_transaction_journal_document(
+        operation="revert",
+        prepared_at=reverted_at,
+        archive_id=archive_id,
+        transaction_basis_kind="source_receipt",
+        transaction_basis_sha256=source_receipt_sha256,
+        plan_digest=str(source_receipt.get("plan_digest") or ""),
+        reviewed_by=reviewer,
+        human_affirmation="abstract_removal_reviewed",
+        final_receipt_path=revert_receipt_relative,
+        items=[
+            {
+                "row_index": item["row_index"],
+                "zettel_id": item["zettel_id"],
+                "canonical_path": item["relative_path"],
+                "generation_mode": item["generation_mode"],
+                "before_file_sha256": item["applied_file_sha256"],
+                "after_file_sha256": item["reverted_file_sha256"],
+                "abstract_sha256": item["abstract_sha256"],
+                "body_sha256": item["body_sha256"],
+            }
+            for item in candidates
+        ],
+    )
+    if validate_schema(
+        transaction_journal,
+        "zet-abstract-backfill-transaction-journal.schema.json",
+    ):
+        blockers.append("transaction_journal_schema_validation_failed")
         receipt_audit_state = "blocked"
         return result_payload("blocked")
 
@@ -16849,6 +17249,33 @@ def zet_abstract_backfill_revert(
     finally:
         if lock_descriptor is not None:
             os.close(lock_descriptor)
+
+    assert transaction_journal_path is not None
+    try:
+        write_json_new_file(transaction_journal_path, transaction_journal)
+        transaction_journal_written_this_run = True
+    except FileExistsError:
+        try:
+            write_lock_path.unlink()
+            write_lock_removed = True
+        except OSError:
+            write_lock_removed = False
+        blockers.append("transaction_journal_exists")
+        receipt_audit_state = "blocked"
+        return result_payload("blocked")
+    except OSError:
+        try:
+            if write_lock_path.exists():
+                write_lock_path.unlink()
+                fsync_directory(write_lock_path.parent)
+            write_lock_removed = not write_lock_path.exists()
+            if write_lock_removed and not write_lock_parent_existed:
+                cleanup_empty_archive_dirs(root, [write_lock_path])
+        except OSError:
+            write_lock_removed = False
+        blockers.append("transaction_journal_create_failed")
+        receipt_audit_state = "blocked"
+        return result_payload("blocked")
 
     attempted_candidates: list[dict[str, Any]] = []
     revert_receipt_parent_existed = revert_receipt_path.parent.exists()
@@ -16901,25 +17328,38 @@ def zet_abstract_backfill_revert(
         revert_receipt_exists = True
         revert_receipt_written_this_run = True
         try:
-            write_lock_path.unlink()
-            write_lock_removed = True
-            if not write_lock_parent_existed:
-                cleanup_empty_archive_dirs(root, [write_lock_path])
+            transaction_journal_path.unlink()
+            fsync_directory(transaction_journal_path.parent)
+            transaction_journal_removed = True
         except OSError:
+            transaction_journal_removed = False
+            warnings.append("completed_transaction_journal_cleanup_failed")
+        if transaction_journal_removed:
+            try:
+                write_lock_path.unlink()
+                fsync_directory(write_lock_path.parent)
+                write_lock_removed = True
+                if not write_lock_parent_existed:
+                    cleanup_empty_archive_dirs(root, [write_lock_path])
+            except OSError:
+                write_lock_removed = False
+                warnings.append("temporary_abstract_revert_lock_cleanup_failed")
+        else:
             write_lock_removed = False
-            warnings.append("temporary_abstract_revert_lock_cleanup_failed")
+            warnings.append("write_lock_retained_with_transaction_journal")
         if progress_callback is not None:
             progress_callback("abstract-revert-receipt", "done", len(written_bytes), len(written_bytes))
         receipt_audit_state = "revert_receipt_and_current_state_verified"
         return result_payload("reverted")
     except Exception:
         rollback["attempted"] = bool(attempted_candidates or revert_receipt_write_attempted)
-        revert_receipt_removed = True
+        revert_receipt_removed = not revert_receipt_path.exists()
         if revert_receipt_owned_this_run and revert_receipt_path.exists():
             try:
                 revert_receipt_path.unlink()
             except OSError:
-                revert_receipt_removed = False
+                pass
+        revert_receipt_removed = not revert_receipt_path.exists()
         restored = 0
         canonical_restore_ok = True
         for item in reversed(attempted_candidates):
@@ -16930,20 +17370,45 @@ def zet_abstract_backfill_revert(
                 restored += 1
             except Exception:
                 canonical_restore_ok = False
-        try:
-            if write_lock_path.exists():
-                write_lock_path.unlink()
-            write_lock_removed = True
-            if not write_lock_parent_existed:
-                cleanup_empty_archive_dirs(root, [write_lock_path])
-        except OSError:
+        if canonical_restore_ok and revert_receipt_removed:
+            try:
+                if transaction_journal_path.exists():
+                    transaction_journal_path.unlink()
+                    fsync_directory(transaction_journal_path.parent)
+                    transaction_journal_removed = True
+                else:
+                    transaction_journal_removed = False
+            except OSError:
+                transaction_journal_removed = False
+        else:
+            transaction_journal_removed = False
+        if transaction_journal_removed:
+            try:
+                if write_lock_path.exists():
+                    write_lock_path.unlink()
+                    fsync_directory(write_lock_path.parent)
+                write_lock_removed = True
+                if not write_lock_parent_existed:
+                    cleanup_empty_archive_dirs(root, [write_lock_path])
+            except OSError:
+                write_lock_removed = False
+        else:
             write_lock_removed = False
         if not revert_receipt_parent_existed:
             cleanup_empty_archive_dirs(root, [revert_receipt_path])
         rollback["canonical_files_restored"] = restored
         rollback["revert_receipt_removed"] = revert_receipt_removed
+        rollback["transaction_journal_removed"] = transaction_journal_removed
+        rollback["transaction_journal_retained"] = bool(
+            transaction_journal_path.exists()
+        )
         rollback["write_lock_removed"] = write_lock_removed
-        rollback["succeeded"] = canonical_restore_ok and revert_receipt_removed and write_lock_removed
+        rollback["succeeded"] = bool(
+            canonical_restore_ok
+            and revert_receipt_removed
+            and transaction_journal_removed
+            and write_lock_removed
+        )
         canonical_files_written = None if not rollback["succeeded"] else 0
         revert_receipt_exists = revert_receipt_path.exists()
         revert_receipt_written_this_run = False
@@ -16992,7 +17457,19 @@ def zet_abstract_backfill_receipt_audit(
         "unresolved_write_lock": 0,
         "unresolved_revert_lock": 0,
         "unsupported_lock": 0,
+        "prepared_write_transaction": 0,
+        "partial_write_transaction": 0,
+        "complete_write_receipt_missing": 0,
+        "divergent_write_transaction": 0,
+        "prepared_revert_transaction": 0,
+        "partial_revert_transaction": 0,
+        "complete_revert_receipt_missing": 0,
+        "divergent_revert_transaction": 0,
+        "stale_completed_write_journal": 0,
+        "stale_completed_revert_journal": 0,
+        "invalid_transaction_journal": 0,
     }
+    verified_receipt_paths: set[Path] = set()
     if not dry_run:
         blockers.append("dry_run_required")
     if requested_max_receipts != effective_max_receipts:
@@ -17018,8 +17495,31 @@ def zet_abstract_backfill_receipt_audit(
     lock_name_re = re.compile(
         r"^\.(?P<digest>[0-9a-f]{64})\.(?P<kind>write|abstract-revert)\.lock$"
     )
+    journal_name_re = re.compile(
+        r"^\.(?P<digest>[0-9a-f]{64})\."
+        r"(?P<kind>write|abstract-revert)\.transaction\.json$"
+    )
     lock_paths = (
-        sorted(path for path in lock_root.glob(".*.lock") if lock_name_re.fullmatch(path.name))
+        sorted(
+            (
+                path
+                for path in lock_root.rglob(".*.lock")
+                if lock_name_re.fullmatch(path.name)
+            ),
+            key=lambda path: PurePosixPath(
+                *path.relative_to(lock_root).parts
+            ).as_posix(),
+        )
+        if lock_root.is_dir()
+        else []
+    )
+    journal_paths = (
+        sorted(
+            lock_root.rglob(".*.transaction.json"),
+            key=lambda path: PurePosixPath(
+                *path.relative_to(lock_root).parts
+            ).as_posix(),
+        )
         if lock_root.is_dir()
         else []
     )
@@ -17028,6 +17528,8 @@ def zet_abstract_backfill_receipt_audit(
         blockers.append("receipt_count_exceeds_max_receipts")
     if len(lock_paths) > effective_max_locks:
         blockers.append("lock_count_exceeds_max_locks")
+    if len(journal_paths) > effective_max_locks:
+        blockers.append("transaction_journal_count_exceeds_max_locks")
 
     def add_problem(item: dict[str, Any]) -> None:
         if len(problems) < effective_max_problems:
@@ -17080,6 +17582,8 @@ def zet_abstract_backfill_receipt_audit(
                         if verification.get("ok"):
                             state = "reverted_verified"
                             counters["reverted_verified"] += 1
+                            verified_receipt_paths.add(source_path.resolve())
+                            verified_receipt_paths.add(expected_revert_path.resolve())
                         else:
                             issue_codes.extend(str(item) for item in verification.get("blockers", []))
                     else:
@@ -17093,6 +17597,7 @@ def zet_abstract_backfill_receipt_audit(
                         if verification.get("ok"):
                             state = "applied_verified"
                             counters["applied_verified"] += 1
+                            verified_receipt_paths.add(source_path.resolve())
                         else:
                             issue_codes.extend(str(item) for item in verification.get("blockers", []))
             except (ArchiveServiceError, ArchivePathError, OSError, ValueError):
@@ -17181,7 +17686,11 @@ def zet_abstract_backfill_receipt_audit(
                     root,
                     f"{ZET_ABSTRACT_BACKFILL_RECEIPTS_DIR}/{digest}.zet-abstract-backfill.json",
                 )
-                if completed_path.is_file() and not completed_path.is_symlink():
+                if (
+                    completed_path.is_file()
+                    and not completed_path.is_symlink()
+                    and completed_path.resolve() in verified_receipt_paths
+                ):
                     status = "stale_completed_write_lock"
                     counters["stale_completed_write_lock"] += 1
                     warnings.append("one_or_more_completed_abstract_write_locks_remain")
@@ -17195,7 +17704,11 @@ def zet_abstract_backfill_receipt_audit(
                     root,
                     f"{ZET_ABSTRACT_BACKFILL_REVERT_RECEIPTS_DIR}/{digest}.zet-abstract-backfill-revert.json",
                 )
-                if completed_path.is_file() and not completed_path.is_symlink():
+                if (
+                    completed_path.is_file()
+                    and not completed_path.is_symlink()
+                    and completed_path.resolve() in verified_receipt_paths
+                ):
                     status = "stale_completed_revert_lock"
                     counters["stale_completed_revert_lock"] += 1
                     warnings.append("one_or_more_completed_abstract_revert_locks_remain")
@@ -17235,6 +17748,186 @@ def zet_abstract_backfill_receipt_audit(
                 )
         if progress_callback is not None:
             progress_callback("abstract-lock-audit", "done", len(lock_paths), len(lock_paths))
+            progress_callback(
+                "abstract-transaction-journal-audit",
+                "start",
+                0,
+                len(journal_paths),
+            )
+        for journal_index, journal_path in enumerate(journal_paths):
+            match = journal_name_re.fullmatch(journal_path.name)
+            if match is None:
+                counters["invalid_transaction_journal"] += 1
+                blockers.append(
+                    "one_or_more_invalid_or_divergent_abstract_transaction_journals"
+                )
+                add_problem(
+                    {
+                        "kind": "transaction_journal",
+                        "journal_index": journal_index,
+                        "operation": "unknown",
+                        "status": "invalid",
+                        "before_count": 0,
+                        "after_count": 0,
+                        "divergent_count": 0,
+                        "missing_count": 0,
+                        "blocker_codes": [
+                            "transaction_journal_filename_invalid"
+                        ],
+                    }
+                )
+                outcomes.append(
+                    {
+                        "kind": "transaction_journal",
+                        "index": journal_index,
+                        "operation": "unknown",
+                        "state": "invalid",
+                        "before_count": 0,
+                        "after_count": 0,
+                        "divergent_count": 0,
+                        "missing_count": 0,
+                        "issues": [
+                            "transaction_journal_filename_invalid"
+                        ],
+                    }
+                )
+                continue
+            operation = (
+                "apply" if match.group("kind") == "write" else "revert"
+            )
+            status = "invalid"
+            issue_codes: list[str] = []
+            state_counts = {
+                "before_count": 0,
+                "after_count": 0,
+                "divergent_count": 0,
+                "missing_count": 0,
+            }
+            try:
+                _journal_bytes, journal = (
+                    read_zet_abstract_backfill_transaction_journal(
+                        root,
+                        journal_path,
+                        archive_id=archive_id,
+                    )
+                )
+                operation = str(journal.get("operation") or operation)
+                state_counts = classify_zet_abstract_backfill_transaction_journal(
+                    root,
+                    journal,
+                )
+                status = str(state_counts.pop("status"))
+                final_receipt = archive_internal_path(
+                    root,
+                    str(journal.get("final_receipt_path") or ""),
+                )
+                if (
+                    final_receipt.is_file()
+                    and not final_receipt.is_symlink()
+                    and final_receipt.resolve() in verified_receipt_paths
+                ):
+                    status = "stale_completed"
+                    counter_key = (
+                        "stale_completed_write_journal"
+                        if operation == "apply"
+                        else "stale_completed_revert_journal"
+                    )
+                    counters[counter_key] += 1
+                    warnings.append(
+                        "one_or_more_completed_abstract_transaction_journals_remain"
+                    )
+                elif status == "prepared":
+                    counter_key = (
+                        "prepared_write_transaction"
+                        if operation == "apply"
+                        else "prepared_revert_transaction"
+                    )
+                    counters[counter_key] += 1
+                    issue_codes.append("transaction_prepared_receipt_missing")
+                    blockers.append(
+                        "one_or_more_interrupted_abstract_transactions"
+                    )
+                elif status == "partially_applied":
+                    counter_key = (
+                        "partial_write_transaction"
+                        if operation == "apply"
+                        else "partial_revert_transaction"
+                    )
+                    counters[counter_key] += 1
+                    issue_codes.append("transaction_partially_applied")
+                    blockers.append(
+                        "one_or_more_interrupted_abstract_transactions"
+                    )
+                elif status == "fully_applied_receipt_missing":
+                    counter_key = (
+                        "complete_write_receipt_missing"
+                        if operation == "apply"
+                        else "complete_revert_receipt_missing"
+                    )
+                    counters[counter_key] += 1
+                    issue_codes.append(
+                        "transaction_canonical_writes_complete_receipt_missing"
+                    )
+                    blockers.append(
+                        "one_or_more_interrupted_abstract_transactions"
+                    )
+                else:
+                    counter_key = (
+                        "divergent_write_transaction"
+                        if operation == "apply"
+                        else "divergent_revert_transaction"
+                    )
+                    counters[counter_key] += 1
+                    issue_codes.append(
+                        "transaction_participant_missing_or_divergent"
+                    )
+                    blockers.append(
+                        "one_or_more_invalid_or_divergent_abstract_transaction_journals"
+                    )
+            except (ArchiveServiceError, ArchivePathError, OSError, ValueError):
+                counters["invalid_transaction_journal"] += 1
+                issue_codes.append("transaction_journal_unreadable_or_invalid")
+                blockers.append(
+                    "one_or_more_invalid_or_divergent_abstract_transaction_journals"
+                )
+            add_problem(
+                {
+                    "kind": "transaction_journal",
+                    "journal_index": journal_index,
+                    "operation": operation,
+                    "status": status,
+                    **state_counts,
+                    "blocker_codes": unique_preserve_order(issue_codes),
+                }
+            )
+            outcomes.append(
+                {
+                    "kind": "transaction_journal",
+                    "index": journal_index,
+                    "operation": operation,
+                    "state": status,
+                    **state_counts,
+                    "issues": unique_preserve_order(issue_codes),
+                }
+            )
+            if progress_callback is not None and (
+                journal_index == 0
+                or journal_index + 1 == len(journal_paths)
+                or (journal_index + 1) % 100 == 0
+            ):
+                progress_callback(
+                    "abstract-transaction-journal-audit",
+                    "scanned",
+                    journal_index + 1,
+                    len(journal_paths),
+                )
+        if progress_callback is not None:
+            progress_callback(
+                "abstract-transaction-journal-audit",
+                "done",
+                len(journal_paths),
+                len(journal_paths),
+            )
             progress_callback("abstract-receipt-audit", "done", receipt_count, receipt_count)
 
     blockers = unique_preserve_order(blockers)
@@ -17248,6 +17941,7 @@ def zet_abstract_backfill_receipt_audit(
             "max_locks_out_of_range",
             "max_problems_out_of_range",
             "dry_run_required",
+            "transaction_journal_count_exceeds_max_locks",
         )
     )
     healthy_receipts = counters["applied_verified"] + counters["reverted_verified"]
@@ -17268,6 +17962,7 @@ def zet_abstract_backfill_receipt_audit(
             "healthy_receipt_lifecycle_count": healthy_receipts,
             **counters,
             "lock_count": len(lock_paths),
+            "transaction_journal_count": len(journal_paths),
             "problem_count": sum(
                 counters[key]
                 for key in (
@@ -17278,6 +17973,17 @@ def zet_abstract_backfill_receipt_audit(
                     "unresolved_write_lock",
                     "unresolved_revert_lock",
                     "unsupported_lock",
+                    "prepared_write_transaction",
+                    "partial_write_transaction",
+                    "complete_write_receipt_missing",
+                    "divergent_write_transaction",
+                    "prepared_revert_transaction",
+                    "partial_revert_transaction",
+                    "complete_revert_receipt_missing",
+                    "divergent_revert_transaction",
+                    "stale_completed_write_journal",
+                    "stale_completed_revert_journal",
+                    "invalid_transaction_journal",
                 )
             ),
             "problems_returned": len(problems),
@@ -17291,6 +17997,17 @@ def zet_abstract_backfill_receipt_audit(
                     "unresolved_write_lock",
                     "unresolved_revert_lock",
                     "unsupported_lock",
+                    "prepared_write_transaction",
+                    "partial_write_transaction",
+                    "complete_write_receipt_missing",
+                    "divergent_write_transaction",
+                    "prepared_revert_transaction",
+                    "partial_revert_transaction",
+                    "complete_revert_receipt_missing",
+                    "divergent_revert_transaction",
+                    "stale_completed_write_journal",
+                    "stale_completed_revert_journal",
+                    "invalid_transaction_journal",
                 )
             ),
             "max_receipts": effective_max_receipts,
@@ -17306,7 +18023,9 @@ def zet_abstract_backfill_receipt_audit(
             "canonical_zets_modified": False,
         },
         "privacy_guards": {
-            "canonical_body_text_read_for_hash_validation": bool(source_paths),
+            "canonical_body_text_read_for_hash_validation": bool(
+                source_paths or journal_paths
+            ),
             "canonical_body_text_echoed": False,
             "receipt_private_metadata_read": bool(source_paths or revert_paths),
             "receipt_paths_echoed": False,
@@ -17315,6 +18034,8 @@ def zet_abstract_backfill_receipt_audit(
             "abstract_text_echoed": False,
             "reviewed_by_echoed": False,
             "lock_file_content_read": False,
+            "transaction_journal_private_metadata_read": bool(journal_paths),
+            "transaction_journal_text_echoed": False,
             "absolute_local_paths_echoed": False,
             "provider_api_called": False,
             "model_called": False,
@@ -17327,6 +18048,7 @@ def zet_abstract_backfill_receipt_audit(
             if not blockers and not warnings
             else [
                 "Use each problem SHA/index with the single-receipt writer/revert audit; inspect locks before any manual deletion.",
+                "Retain every interrupted transaction journal; automatic resume and receipt finalization are not implemented in this release.",
                 "Never delete or rewrite immutable receipts to silence an audit failure.",
             ]
         ),

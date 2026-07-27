@@ -1,0 +1,150 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wom-kit/zet-abstract-backfill-transaction-journal/v0.1",
+  "title": "WOM-kit zet abstract backfill transaction journal",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "action",
+    "status",
+    "operation",
+    "prepared_at",
+    "archive_id",
+    "transaction_basis",
+    "plan_digest",
+    "reviewed_by",
+    "human_affirmation",
+    "final_receipt_path",
+    "item_count",
+    "items",
+    "recovery_contract",
+    "privacy_guards",
+    "journal_digest"
+  ],
+  "properties": {
+    "schema": {
+      "const": "wom-kit/zet-abstract-backfill-transaction-journal/v0.1"
+    },
+    "action": {"const": "zet_abstract_backfill_transaction"},
+    "status": {"const": "prepared"},
+    "operation": {"enum": ["apply", "revert"]},
+    "prepared_at": {"type": "string", "minLength": 1},
+    "archive_id": {"type": "string", "minLength": 1},
+    "transaction_basis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "sha256"],
+      "properties": {
+        "kind": {"enum": ["proposal", "source_receipt"]},
+        "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+      }
+    },
+    "plan_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "reviewed_by": {"type": "string", "minLength": 1},
+    "human_affirmation": {
+      "enum": [
+        "all_proposed_abstracts_reviewed",
+        "abstract_removal_reviewed"
+      ]
+    },
+    "final_receipt_path": {
+      "type": "string",
+      "pattern": "^receipts/revisions/abstract-backfill(?:-reverts)?/[0-9a-f]{64}\\.zet-abstract-backfill(?:-revert)?\\.json$"
+    },
+    "item_count": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 5000
+    },
+    "items": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 5000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "row_index",
+          "zettel_id",
+          "canonical_path",
+          "generation_mode",
+          "before_file_sha256",
+          "after_file_sha256",
+          "abstract_sha256",
+          "body_sha256"
+        ],
+        "properties": {
+          "row_index": {"type": "integer", "minimum": 0},
+          "zettel_id": {
+            "type": "string",
+            "pattern": "^zet_[A-Za-z0-9][A-Za-z0-9_-]{0,159}$"
+          },
+          "canonical_path": {
+            "type": "string",
+            "pattern": "^zettels/.+\\.md$"
+          },
+          "generation_mode": {
+            "enum": ["human_written", "ai_assisted"]
+          },
+          "before_file_sha256": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          },
+          "after_file_sha256": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          },
+          "abstract_sha256": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          },
+          "body_sha256": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          }
+        }
+      }
+    },
+    "recovery_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "journal_published_before_first_canonical_write",
+        "current_state_inferred_from_participant_hashes",
+        "automatic_resume_implemented",
+        "automatic_rollback_after_hard_exit_implemented"
+      ],
+      "properties": {
+        "journal_published_before_first_canonical_write": {"const": true},
+        "current_state_inferred_from_participant_hashes": {"const": true},
+        "automatic_resume_implemented": {"const": false},
+        "automatic_rollback_after_hard_exit_implemented": {"const": false}
+      }
+    },
+    "privacy_guards": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "abstract_text_stored",
+        "body_text_stored",
+        "contains_private_zettel_ids_and_paths",
+        "provider_api_called",
+        "model_called",
+        "secret_store_or_environment_read"
+      ],
+      "properties": {
+        "abstract_text_stored": {"const": false},
+        "body_text_stored": {"const": false},
+        "contains_private_zettel_ids_and_paths": {"const": true},
+        "provider_api_called": {"const": false},
+        "model_called": {"const": false},
+        "secret_store_or_environment_read": {"const": false}
+      }
+    },
+    "journal_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  }
+}

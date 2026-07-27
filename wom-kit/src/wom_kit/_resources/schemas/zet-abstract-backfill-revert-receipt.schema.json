@@ -87,7 +87,7 @@
         "updated_at_changed": {"const": false},
         "source_receipt_preserved": {"const": true},
         "rollback_on_runtime_failure": {"const": true},
-        "crash_recovery_journal_written": {"const": false}
+        "crash_recovery_journal_written": {"type": "boolean"}
       }
     },
     "privacy_guards": {
