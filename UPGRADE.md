@@ -24,6 +24,28 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.266 Read-Only Abstract Recovery Decisions
+
+No archive, zet, receipt, journal, proposal, or index migration is required.
+The release adds one read-only command:
+
+```powershell
+archive zet-abstract-backfill-recovery-plan <archive-root> --dry-run --format json
+```
+
+It reads v0.3.265 transaction journals and the existing bounded receipt/lock
+audit, then recommends cleanup, apply rollback, revert forward completion or
+receipt finalization, or manual forensic hold. It writes and deletes nothing.
+
+The result is a decision document, not permission to edit files by hand. Every
+case reports that the recovery executor is not implemented and that a fresh
+recovery approval plus immediate state revalidation will be required. Continue
+to retain interrupted journals and locks.
+
+The command is safe to run against an older archive with no journal: it returns
+`no_recovery_needed`. Older WOM-kit versions simply do not provide the new
+command because v0.3.266 creates no new archive artifact.
+
 ## v0.3.265 Durable Abstract Batch Journals
 
 No existing archive, zet, index, or receipt migration is required. The release

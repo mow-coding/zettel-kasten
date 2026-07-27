@@ -1,6 +1,6 @@
 {
   "schema": "wom-kit/package-resource-manifest/v0.1",
-  "version": "0.3.265",
+  "version": "0.3.266",
   "source_of_truth": "wom-kit source resource directories",
   "file_count": 93,
   "files": [
@@ -283,8 +283,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/references/operator-contract.md",
       "packaged": "templates/ai-runtime/wom-archive/references/operator-contract.md",
-      "bytes": 50906,
-      "sha256": "b2d21bfd059a8a2b10d2ec1ae005dfe909d9740c4eed3daf5adba22d22e9df1c"
+      "bytes": 51806,
+      "sha256": "1d0a1b3fc0d954764b03b7a7eccb01ac53ee9bb6d2966e46921bb7bd19a0e344"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/reading-memory-and-revision.md",
@@ -557,10 +557,10 @@
       "sha256": "d619dc26af3216498c8392dfe838b0fe752d4bad9da998a58ca682d668fc510c"
     },
     {
-      "source": "docs/releases/v0.3.265.md",
-      "packaged": "release-notes/v0.3.265.md",
-      "bytes": 8054,
-      "sha256": "e89b4f3d36b77402eb336b70463b3781f61e5af80fa805be838c52d84f88b2bb"
+      "source": "docs/releases/v0.3.266.md",
+      "packaged": "release-notes/v0.3.266.md",
+      "bytes": 3608,
+      "sha256": "de430913c36a8f7bb0f8e1853a28f383aeea8e8742b9589d224bb901bcd30af9"
     }
   ]
 }

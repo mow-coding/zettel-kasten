@@ -2874,6 +2874,7 @@ ZET_ABSTRACT_BACKFILL_RECEIPT_SCHEMA = "wom-kit/zet-abstract-backfill-receipt/v0
 ZET_ABSTRACT_BACKFILL_REVERT_SCHEMA = "wom-kit/zet-abstract-backfill-revert/v0.1"
 ZET_ABSTRACT_BACKFILL_REVERT_RECEIPT_SCHEMA = "wom-kit/zet-abstract-backfill-revert-receipt/v0.1"
 ZET_ABSTRACT_BACKFILL_RECEIPT_AUDIT_SCHEMA = "wom-kit/zet-abstract-backfill-receipt-audit/v0.1"
+ZET_ABSTRACT_BACKFILL_RECOVERY_PLAN_SCHEMA = "wom-kit/zet-abstract-backfill-recovery-plan/v0.1"
 ZET_ABSTRACT_BACKFILL_TRANSACTION_JOURNAL_SCHEMA = (
     "wom-kit/zet-abstract-backfill-transaction-journal/v0.1"
 )
@@ -17446,7 +17447,10 @@ def zet_abstract_backfill_receipt_audit(
     blockers: list[str] = []
     warnings: list[str] = []
     problems: list[dict[str, Any]] = []
+    transaction_journal_cases: list[dict[str, Any]] = []
     outcomes: list[dict[str, Any]] = []
+    transaction_journal_private_metadata_read_count = 0
+    transaction_journal_participant_hash_read_count = 0
     counters = {
         "applied_verified": 0,
         "reverted_verified": 0,
@@ -17534,6 +17538,10 @@ def zet_abstract_backfill_receipt_audit(
     def add_problem(item: dict[str, Any]) -> None:
         if len(problems) < effective_max_problems:
             problems.append(item)
+
+    def add_transaction_journal_case(item: dict[str, Any]) -> None:
+        if len(transaction_journal_cases) < effective_max_problems:
+            transaction_journal_cases.append(item)
 
     if not blockers:
         matched_revert_paths: set[Path] = set()
@@ -17757,6 +17765,21 @@ def zet_abstract_backfill_receipt_audit(
         for journal_index, journal_path in enumerate(journal_paths):
             match = journal_name_re.fullmatch(journal_path.name)
             if match is None:
+                invalid_case = {
+                    "case_index": journal_index,
+                    "operation": "unknown",
+                    "basis_sha256": None,
+                    "observed_state": "invalid",
+                    "before_count": 0,
+                    "after_count": 0,
+                    "divergent_count": 0,
+                    "missing_count": 0,
+                    "final_receipt_state": "unknown",
+                    "expected_lock_state": "unknown",
+                    "issue_codes": [
+                        "transaction_journal_filename_invalid"
+                    ],
+                }
                 counters["invalid_transaction_journal"] += 1
                 blockers.append(
                     "one_or_more_invalid_or_divergent_abstract_transaction_journals"
@@ -17776,6 +17799,7 @@ def zet_abstract_backfill_receipt_audit(
                         ],
                     }
                 )
+                add_transaction_journal_case(invalid_case)
                 outcomes.append(
                     {
                         "kind": "transaction_journal",
@@ -17795,7 +17819,21 @@ def zet_abstract_backfill_receipt_audit(
             operation = (
                 "apply" if match.group("kind") == "write" else "revert"
             )
+            basis_sha256 = "sha256:" + match.group("digest")
+            expected_lock = journal_path.with_name(
+                journal_path.name.removesuffix(".transaction.json") + ".lock"
+            )
+            if expected_lock.is_symlink() or (
+                expected_lock.exists()
+                and not is_path_within_root(expected_lock, root)
+            ):
+                expected_lock_state = "unsupported"
+            elif expected_lock.is_file():
+                expected_lock_state = "present"
+            else:
+                expected_lock_state = "missing"
             status = "invalid"
+            final_receipt_state = "unknown"
             issue_codes: list[str] = []
             state_counts = {
                 "before_count": 0,
@@ -17811,10 +17849,14 @@ def zet_abstract_backfill_receipt_audit(
                         archive_id=archive_id,
                     )
                 )
+                transaction_journal_private_metadata_read_count += 1
                 operation = str(journal.get("operation") or operation)
                 state_counts = classify_zet_abstract_backfill_transaction_journal(
                     root,
                     journal,
+                )
+                transaction_journal_participant_hash_read_count += int(
+                    journal.get("item_count") or 0
                 )
                 status = str(state_counts.pop("status"))
                 final_receipt = archive_internal_path(
@@ -17826,6 +17868,7 @@ def zet_abstract_backfill_receipt_audit(
                     and not final_receipt.is_symlink()
                     and final_receipt.resolve() in verified_receipt_paths
                 ):
+                    final_receipt_state = "verified"
                     status = "stale_completed"
                     counter_key = (
                         "stale_completed_write_journal"
@@ -17836,7 +17879,64 @@ def zet_abstract_backfill_receipt_audit(
                     warnings.append(
                         "one_or_more_completed_abstract_transaction_journals_remain"
                     )
+                elif final_receipt.exists() or final_receipt.is_symlink():
+                    final_receipt_state = "present_unverified"
+                    issue_codes.append(
+                        "transaction_final_receipt_present_unverified"
+                    )
+                    blockers.append(
+                        "one_or_more_transaction_final_receipts_present_unverified"
+                    )
+                    if status == "prepared":
+                        counter_key = (
+                            "prepared_write_transaction"
+                            if operation == "apply"
+                            else "prepared_revert_transaction"
+                        )
+                        counters[counter_key] += 1
+                        issue_codes.append("transaction_prepared_receipt_missing")
+                        blockers.append(
+                            "one_or_more_interrupted_abstract_transactions"
+                        )
+                    elif status == "partially_applied":
+                        counter_key = (
+                            "partial_write_transaction"
+                            if operation == "apply"
+                            else "partial_revert_transaction"
+                        )
+                        counters[counter_key] += 1
+                        issue_codes.append("transaction_partially_applied")
+                        blockers.append(
+                            "one_or_more_interrupted_abstract_transactions"
+                        )
+                    elif status == "fully_applied_receipt_missing":
+                        counter_key = (
+                            "complete_write_receipt_missing"
+                            if operation == "apply"
+                            else "complete_revert_receipt_missing"
+                        )
+                        counters[counter_key] += 1
+                        issue_codes.append(
+                            "transaction_canonical_writes_complete_receipt_missing"
+                        )
+                        blockers.append(
+                            "one_or_more_interrupted_abstract_transactions"
+                        )
+                    else:
+                        counter_key = (
+                            "divergent_write_transaction"
+                            if operation == "apply"
+                            else "divergent_revert_transaction"
+                        )
+                        counters[counter_key] += 1
+                        issue_codes.append(
+                            "transaction_participant_missing_or_divergent"
+                        )
+                        blockers.append(
+                            "one_or_more_invalid_or_divergent_abstract_transaction_journals"
+                        )
                 elif status == "prepared":
+                    final_receipt_state = "absent"
                     counter_key = (
                         "prepared_write_transaction"
                         if operation == "apply"
@@ -17848,6 +17948,7 @@ def zet_abstract_backfill_receipt_audit(
                         "one_or_more_interrupted_abstract_transactions"
                     )
                 elif status == "partially_applied":
+                    final_receipt_state = "absent"
                     counter_key = (
                         "partial_write_transaction"
                         if operation == "apply"
@@ -17859,6 +17960,7 @@ def zet_abstract_backfill_receipt_audit(
                         "one_or_more_interrupted_abstract_transactions"
                     )
                 elif status == "fully_applied_receipt_missing":
+                    final_receipt_state = "absent"
                     counter_key = (
                         "complete_write_receipt_missing"
                         if operation == "apply"
@@ -17872,6 +17974,7 @@ def zet_abstract_backfill_receipt_audit(
                         "one_or_more_interrupted_abstract_transactions"
                     )
                 else:
+                    final_receipt_state = "absent"
                     counter_key = (
                         "divergent_write_transaction"
                         if operation == "apply"
@@ -17890,23 +17993,40 @@ def zet_abstract_backfill_receipt_audit(
                 blockers.append(
                     "one_or_more_invalid_or_divergent_abstract_transaction_journals"
                 )
+            journal_case = {
+                "case_index": journal_index,
+                "operation": operation,
+                "basis_sha256": basis_sha256,
+                "observed_state": status,
+                **state_counts,
+                "final_receipt_state": final_receipt_state,
+                "expected_lock_state": expected_lock_state,
+                "issue_codes": unique_preserve_order(issue_codes),
+            }
             add_problem(
                 {
                     "kind": "transaction_journal",
                     "journal_index": journal_index,
                     "operation": operation,
+                    "basis_sha256": basis_sha256,
                     "status": status,
                     **state_counts,
+                    "final_receipt_state": final_receipt_state,
+                    "expected_lock_state": expected_lock_state,
                     "blocker_codes": unique_preserve_order(issue_codes),
                 }
             )
+            add_transaction_journal_case(journal_case)
             outcomes.append(
                 {
                     "kind": "transaction_journal",
                     "index": journal_index,
                     "operation": operation,
+                    "basis_sha256": basis_sha256,
                     "state": status,
                     **state_counts,
+                    "final_receipt_state": final_receipt_state,
+                    "expected_lock_state": expected_lock_state,
                     "issues": unique_preserve_order(issue_codes),
                 }
             )
@@ -17963,6 +18083,12 @@ def zet_abstract_backfill_receipt_audit(
             **counters,
             "lock_count": len(lock_paths),
             "transaction_journal_count": len(journal_paths),
+            "transaction_journal_cases_returned": len(
+                transaction_journal_cases
+            ),
+            "transaction_journal_cases_truncated": (
+                len(transaction_journal_cases) < len(journal_paths)
+            ),
             "problem_count": sum(
                 counters[key]
                 for key in (
@@ -18015,6 +18141,7 @@ def zet_abstract_backfill_receipt_audit(
             "max_problems": effective_max_problems,
         },
         "problems": problems,
+        "transaction_journal_cases": transaction_journal_cases,
         "write_boundary": {
             "files_written": False,
             "files_deleted": False,
@@ -18024,7 +18151,7 @@ def zet_abstract_backfill_receipt_audit(
         },
         "privacy_guards": {
             "canonical_body_text_read_for_hash_validation": bool(
-                source_paths or journal_paths
+                source_paths or transaction_journal_participant_hash_read_count
             ),
             "canonical_body_text_echoed": False,
             "receipt_private_metadata_read": bool(source_paths or revert_paths),
@@ -18034,7 +18161,9 @@ def zet_abstract_backfill_receipt_audit(
             "abstract_text_echoed": False,
             "reviewed_by_echoed": False,
             "lock_file_content_read": False,
-            "transaction_journal_private_metadata_read": bool(journal_paths),
+            "transaction_journal_private_metadata_read": bool(
+                transaction_journal_private_metadata_read_count
+            ),
             "transaction_journal_text_echoed": False,
             "absolute_local_paths_echoed": False,
             "provider_api_called": False,
@@ -18050,6 +18179,296 @@ def zet_abstract_backfill_receipt_audit(
                 "Use each problem SHA/index with the single-receipt writer/revert audit; inspect locks before any manual deletion.",
                 "Retain every interrupted transaction journal; automatic resume and receipt finalization are not implemented in this release.",
                 "Never delete or rewrite immutable receipts to silence an audit failure.",
+            ]
+        ),
+    }
+
+
+def zet_abstract_backfill_recovery_plan(
+    archive_root: Path | str,
+    *,
+    dry_run: bool = False,
+    max_receipts: int = 5000,
+    max_locks: int = 5000,
+    max_cases: int = 100,
+    progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
+) -> dict[str, Any]:
+    """Plan, but never execute, recovery for retained abstract batch journals."""
+
+    requested_max_receipts = int(max_receipts)
+    requested_max_locks = int(max_locks)
+    requested_max_cases = int(max_cases)
+    effective_max_receipts = max(1, min(requested_max_receipts, 5000))
+    effective_max_locks = max(1, min(requested_max_locks, 5000))
+    effective_max_cases = max(1, min(requested_max_cases, 500))
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if not dry_run:
+        blockers.append("dry_run_required")
+    if requested_max_receipts != effective_max_receipts:
+        blockers.append("max_receipts_out_of_range")
+    if requested_max_locks != effective_max_locks:
+        blockers.append("max_locks_out_of_range")
+    if requested_max_cases != effective_max_cases:
+        blockers.append("max_cases_out_of_range")
+
+    audit = zet_abstract_backfill_receipt_audit(
+        archive_root,
+        dry_run=bool(dry_run),
+        max_receipts=effective_max_receipts,
+        max_locks=effective_max_locks,
+        max_problems=effective_max_cases,
+        progress_callback=progress_callback,
+    )
+    audit_summary = (
+        audit.get("summary")
+        if isinstance(audit.get("summary"), dict)
+        else {}
+    )
+    raw_cases = (
+        audit.get("transaction_journal_cases")
+        if isinstance(audit.get("transaction_journal_cases"), list)
+        else []
+    )
+    if not audit_summary.get("complete"):
+        blockers.append("recovery_source_audit_incomplete")
+    if audit_summary.get("transaction_journal_cases_truncated"):
+        blockers.append("recovery_cases_truncated")
+
+    planned_cases: list[dict[str, Any]] = []
+    action_counts: dict[str, int] = {
+        "cleanup_unstarted_transaction_evidence": 0,
+        "rollback_uncommitted_apply_to_before": 0,
+        "resume_revert_forward_and_finalize_receipt": 0,
+        "finalize_revert_receipt": 0,
+        "cleanup_verified_completed_evidence": 0,
+        "manual_forensic_hold": 0,
+    }
+    for case in raw_cases:
+        if not isinstance(case, dict):
+            continue
+        operation = str(case.get("operation") or "unknown")
+        observed_state = str(case.get("observed_state") or "invalid")
+        final_receipt_state = str(
+            case.get("final_receipt_state") or "unknown"
+        )
+        expected_lock_state = str(
+            case.get("expected_lock_state") or "unknown"
+        )
+        before_count = int(case.get("before_count") or 0)
+        after_count = int(case.get("after_count") or 0)
+
+        if final_receipt_state == "present_unverified":
+            recommended_action = "manual_forensic_hold"
+            reason_code = (
+                "deterministic_final_receipt_exists_but_lifecycle_is_unverified"
+            )
+        elif observed_state == "invalid":
+            recommended_action = "manual_forensic_hold"
+            reason_code = "journal_contract_is_invalid"
+        elif observed_state == "divergent":
+            recommended_action = "manual_forensic_hold"
+            reason_code = (
+                "participant_state_is_missing_or_outside_recorded_hashes"
+            )
+        elif observed_state == "stale_completed":
+            recommended_action = "cleanup_verified_completed_evidence"
+            reason_code = (
+                "verified_receipt_committed_transaction_cleanup_did_not_finish"
+            )
+        elif observed_state == "prepared":
+            recommended_action = "cleanup_unstarted_transaction_evidence"
+            reason_code = "all_participants_remain_at_before_hash"
+        elif operation == "apply" and observed_state in {
+            "partially_applied",
+            "fully_applied_receipt_missing",
+        }:
+            recommended_action = "rollback_uncommitted_apply_to_before"
+            reason_code = (
+                "apply_has_no_verified_commit_receipt_and_before_state_is_reconstructible"
+            )
+        elif operation == "revert" and observed_state == "partially_applied":
+            recommended_action = (
+                "resume_revert_forward_and_finalize_receipt"
+            )
+            reason_code = (
+                "revert_after_state_is_reconstructible_but_removed_private_text_is_not"
+            )
+        elif (
+            operation == "revert"
+            and observed_state == "fully_applied_receipt_missing"
+        ):
+            recommended_action = "finalize_revert_receipt"
+            reason_code = (
+                "all_participants_reached_revert_after_hash_but_commit_receipt_is_missing"
+            )
+        else:
+            recommended_action = "manual_forensic_hold"
+            reason_code = "transaction_state_has_no_approved_recovery_policy"
+
+        if recommended_action == "rollback_uncommitted_apply_to_before":
+            participant_write_count = after_count
+        elif recommended_action == "resume_revert_forward_and_finalize_receipt":
+            participant_write_count = before_count
+        else:
+            participant_write_count = 0
+        receipt_write_required = recommended_action in {
+            "resume_revert_forward_and_finalize_receipt",
+            "finalize_revert_receipt",
+        }
+        evidence_cleanup_required = (
+            recommended_action != "manual_forensic_hold"
+        )
+        action_counts[recommended_action] += 1
+        planned_cases.append(
+            {
+                "case_index": int(case.get("case_index") or 0),
+                "operation": operation,
+                "basis_sha256": case.get("basis_sha256"),
+                "observed_state": observed_state,
+                "before_count": before_count,
+                "after_count": after_count,
+                "divergent_count": int(
+                    case.get("divergent_count") or 0
+                ),
+                "missing_count": int(case.get("missing_count") or 0),
+                "final_receipt_state": final_receipt_state,
+                "expected_lock_state": expected_lock_state,
+                "recommended_action": recommended_action,
+                "reason_code": reason_code,
+                "participant_write_count": participant_write_count,
+                "receipt_write_required": receipt_write_required,
+                "evidence_cleanup_required": evidence_cleanup_required,
+                "lock_reacquisition_required": bool(
+                    expected_lock_state != "present"
+                    and recommended_action != "manual_forensic_hold"
+                ),
+                "current_state_revalidation_required": True,
+                "fresh_recovery_approval_required": True,
+                "execution_implemented": False,
+                "safe_to_execute_now": False,
+                "issue_codes": [
+                    str(code)
+                    for code in case.get("issue_codes", [])
+                    if isinstance(code, str)
+                ],
+            }
+        )
+
+    if action_counts["manual_forensic_hold"]:
+        warnings.append(
+            "one_or_more_recovery_cases_require_manual_forensic_hold"
+        )
+    if planned_cases:
+        warnings.append("recovery_execution_not_implemented")
+    non_journal_problem_count = max(
+        0,
+        int(audit_summary.get("problem_count") or 0)
+        - int(audit_summary.get("transaction_journal_count") or 0),
+    )
+    if non_journal_problem_count:
+        warnings.append("one_or_more_non_journal_abstract_audit_problems_exist")
+
+    blockers = unique_preserve_order(blockers)
+    warnings = unique_preserve_order(warnings)
+    ok = not blockers
+    if not ok:
+        status = "blocked"
+    elif not planned_cases:
+        status = "no_recovery_needed"
+    elif action_counts["manual_forensic_hold"]:
+        status = "manual_forensic_hold"
+    else:
+        status = "ready_for_human_recovery_review"
+    privacy = (
+        audit.get("privacy_guards")
+        if isinstance(audit.get("privacy_guards"), dict)
+        else {}
+    )
+    return {
+        "ok": ok,
+        "dry_run": bool(dry_run),
+        "schema": ZET_ABSTRACT_BACKFILL_RECOVERY_PLAN_SCHEMA,
+        "lifecycle_action": "zet_abstract_backfill_recovery_plan",
+        "status": status,
+        "archive_id": audit.get("archive_id"),
+        "source_audit_digest": audit.get("audit_digest"),
+        "plan_digest": sha256_json_value(planned_cases),
+        "summary": {
+            "complete": ok,
+            "transaction_journal_count": int(
+                audit_summary.get("transaction_journal_count") or 0
+            ),
+            "recovery_case_count": len(planned_cases),
+            "cases_returned": len(planned_cases),
+            "cases_truncated": bool(
+                audit_summary.get("transaction_journal_cases_truncated")
+            ),
+            "manual_forensic_hold_count": action_counts[
+                "manual_forensic_hold"
+            ],
+            "participant_write_count_if_approved": sum(
+                int(case["participant_write_count"])
+                for case in planned_cases
+            ),
+            "receipt_write_count_if_approved": sum(
+                1
+                for case in planned_cases
+                if case["receipt_write_required"]
+            ),
+            "non_journal_problem_count": non_journal_problem_count,
+            "max_receipts": effective_max_receipts,
+            "max_locks": effective_max_locks,
+            "max_cases": effective_max_cases,
+            "action_counts": action_counts,
+        },
+        "cases": planned_cases,
+        "execution_boundary": {
+            "execution_implemented": False,
+            "automatic_recovery": False,
+            "fresh_recovery_approval_required": True,
+            "cross_basis_participant_serialization_implemented": False,
+        },
+        "write_boundary": {
+            "files_written": False,
+            "files_deleted": False,
+            "locks_created": False,
+            "locks_deleted": False,
+            "receipts_created": False,
+            "receipts_modified": False,
+            "canonical_zets_modified": False,
+        },
+        "privacy_guards": {
+            "canonical_body_text_read_for_hash_validation": bool(
+                privacy.get("canonical_body_text_read_for_hash_validation")
+            ),
+            "canonical_body_text_echoed": False,
+            "transaction_journal_private_metadata_read": bool(
+                privacy.get("transaction_journal_private_metadata_read")
+            ),
+            "basis_sha256_echoed_as_case_handle": True,
+            "receipt_paths_echoed": False,
+            "zettel_ids_echoed": False,
+            "zettel_paths_echoed": False,
+            "abstract_text_echoed": False,
+            "reviewed_by_echoed": False,
+            "transaction_journal_text_echoed": False,
+            "absolute_local_paths_echoed": False,
+            "provider_api_called": False,
+            "model_called": False,
+            "secret_store_or_environment_read": False,
+        },
+        "blockers": blockers,
+        "warnings": warnings,
+        "next_safe_actions": (
+            [
+                "No retained abstract transaction journal requires recovery planning."
+            ]
+            if not planned_cases and ok
+            else [
+                "Have a human review each fixed recovery decision while retaining every journal and lock.",
+                "Do not edit canonical zets or create, replace, or delete receipts from this plan; the recovery executor is not implemented.",
+                "Resolve every manual_forensic_hold case before any future approved recovery write.",
             ]
         ),
     }

@@ -34,10 +34,10 @@ not re-grow baseline ladders or tag lists here.
 Current public baseline:
 
 ```text
-v0.3.265 pre-release
+v0.3.266 pre-release
 ```
 
-Previous public baseline: v0.3.264 pre-release.
+Previous public baseline: v0.3.265 pre-release.
 
 Full release history: see [CHANGELOG.md](CHANGELOG.md) and [wom-kit/docs/releases/](wom-kit/docs/releases/).
 
@@ -55,7 +55,7 @@ future-only boundaries.
 Install the exact release wheel as an isolated command-line tool:
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.265/wom_kit-0.3.265-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.266/wom_kit-0.3.266-py3-none-any.whl"
 archive --version
 ```
 
@@ -121,7 +121,7 @@ approval-gated write, or docs-only), see the
 
 ### Retrieval & views
 
-- read-only preview layers for runtime context, profiles, source/objet intake, overview-first zet reading plus a human document view that hides raw YAML frontmatter, block headers with first-read summaries, and prompt boundaries; optional bounded `frontmatter.abstract` plus CLI/MCP `zet-catalog` enumerate every local zet with compact abstract-plus-tie reading, strict snapshot/token-budgeted zet coverage, measured item/service-result/response-envelope cost plus an opt-in envelope reserve, a required full first page followed by optional compact continuation responses that omit only repeated diagnostics, optional verified-seed connection order, and opt-in `routed_reading` explanations for each seed/tie/disconnected-component step, while separate readiness signals distinguish complete zet visitation, readable non-redacted abstracts, and unique id follow-up without requiring a generated index/map or creating persistent WOM-owned goal/loop state; non-redacted `read-zettel` supplies exact file/body hashes for the version actually read and supports opt-in Unicode character pages whose continuations are bound to the first page's complete body hash, `zet-abstract-backfill-plan` validates bounded private missing-abstract proposals, approval-gated `zet-abstract-backfill-write` applies only human-reviewed SHA-bound abstracts with a text-free receipt and whole-batch runtime rollback, receipt-bound `zet-abstract-backfill-revert` restores exact pre-backfill bytes only when no later canonical edit exists, and both batch directions publish a private text-free journal before their first canonical mutation so `zet-abstract-backfill-receipt-audit` can distinguish prepared, partial, complete-without-receipt, and divergent interrupted states without pretending to resume or repair them,
+- read-only preview layers for runtime context, profiles, source/objet intake, overview-first zet reading plus a human document view that hides raw YAML frontmatter, block headers with first-read summaries, and prompt boundaries; optional bounded `frontmatter.abstract` plus CLI/MCP `zet-catalog` enumerate every local zet with compact abstract-plus-tie reading, strict snapshot/token-budgeted zet coverage, measured item/service-result/response-envelope cost plus an opt-in envelope reserve, a required full first page followed by optional compact continuation responses that omit only repeated diagnostics, optional verified-seed connection order, and opt-in `routed_reading` explanations for each seed/tie/disconnected-component step, while separate readiness signals distinguish complete zet visitation, readable non-redacted abstracts, and unique id follow-up without requiring a generated index/map or creating persistent WOM-owned goal/loop state; non-redacted `read-zettel` supplies exact file/body hashes for the version actually read and supports opt-in Unicode character pages whose continuations are bound to the first page's complete body hash, `zet-abstract-backfill-plan` validates bounded private missing-abstract proposals, approval-gated `zet-abstract-backfill-write` applies only human-reviewed SHA-bound abstracts with a text-free receipt and whole-batch runtime rollback, receipt-bound `zet-abstract-backfill-revert` restores exact pre-backfill bytes only when no later canonical edit exists, and both batch directions publish a private text-free journal before their first canonical mutation so `zet-abstract-backfill-receipt-audit` can distinguish prepared, partial, complete-without-receipt, and divergent interrupted states; read-only `zet-abstract-backfill-recovery-plan` maps those states to evidence cleanup, apply rollback, revert forward completion/finalization, or manual hold without executing recovery,
 - generated index health checks, saved view health, facet role diagnostics, saved view recommendations,
 - read-only objet reference resolution, presigned URL planning, and zettel objet link previews for mapping `sha256:<hex>` refs to safe local/external candidates,
 
@@ -494,7 +494,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
-v0.3.265 (current checkpoint)
+v0.3.266 (current checkpoint)
 ```
 
 Public releases from `v0.2.5` onward are tagged as compatibility checkpoints.

@@ -693,6 +693,7 @@ PROGRESS_STAGE_UNITS = {
     "abstract-revert-write": "zet_reverts",
     "abstract-receipt-audit": "revision_receipts",
     "abstract-lock-audit": "transaction_locks",
+    "abstract-transaction-journal-audit": "transaction_journals",
     "source-hash": "bytes",
     "store-hash": "bytes",
     "index-zettels": "zet_files",
@@ -10082,6 +10083,68 @@ def command_zet_abstract_backfill_receipt_audit(args: argparse.Namespace) -> int
         print(f"Reverted verified: {summary.get('reverted_verified', 0)}")
         print(f"Locks: {summary.get('lock_count', 0)}")
         print(f"Problems: {summary.get('problem_count', 0)}")
+    return 0 if result.get("ok") else 1
+
+
+def command_zet_abstract_backfill_recovery_plan(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print(
+            "zet-abstract-backfill-recovery-plan is read-only and requires --dry-run.",
+            file=sys.stderr,
+        )
+        return 1
+    reporter = CommandProgressReporter(
+        bool(getattr(args, "progress", False)),
+        label="zet-abstract-backfill-recovery-plan",
+    )
+    try:
+        result = archive_services.zet_abstract_backfill_recovery_plan(
+            Path(args.archive_root),
+            dry_run=True,
+            max_receipts=int(args.max_receipts),
+            max_locks=int(args.max_locks),
+            max_cases=int(args.max_cases),
+            progress_callback=reporter.progress,
+        )
+    except archive_services.ArchiveServiceError:
+        print(
+            "zet-abstract-backfill-recovery-plan could not inspect the private archive safely.",
+            file=sys.stderr,
+        )
+        return 1
+    except (ArchivePathError, OSError, ValueError):
+        print(
+            "zet-abstract-backfill-recovery-plan failed before a privacy-safe result could be produced.",
+            file=sys.stderr,
+        )
+        return 1
+    finally:
+        reporter.close()
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        summary = (
+            result.get("summary")
+            if isinstance(result.get("summary"), dict)
+            else {}
+        )
+        print(
+            "WOM zet abstract recovery plan: "
+            f"{result.get('status') or 'unknown'}"
+        )
+        print(
+            f"Retained journals: {summary.get('transaction_journal_count', 0)}"
+        )
+        print(f"Recovery cases: {summary.get('recovery_case_count', 0)}")
+        print(
+            "Manual forensic holds: "
+            f"{summary.get('manual_forensic_hold_count', 0)}"
+        )
+        print(
+            "Execution implemented: "
+            f"{bool(result.get('execution_boundary', {}).get('execution_implemented'))}"
+        )
     return 0 if result.get("ok") else 1
 
 
@@ -20504,6 +20567,53 @@ def build_parser() -> argparse.ArgumentParser:
     )
     zet_abstract_backfill_receipt_audit.set_defaults(
         func=command_zet_abstract_backfill_receipt_audit
+    )
+
+    zet_abstract_backfill_recovery_plan = subcommands.add_parser(
+        "zet-abstract-backfill-recovery-plan",
+        aliases=["abstract-backfill-recovery-plan"],
+        help="Plan a fixed human-reviewed response for each retained abstract transaction journal without writing.",
+    )
+    zet_abstract_backfill_recovery_plan.add_argument(
+        "archive_root",
+        help="Archive root containing canonical zets and private transaction evidence.",
+    )
+    zet_abstract_backfill_recovery_plan.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Required. Reads bounded receipt, lock, journal, and canonical hash evidence; writes nothing.",
+    )
+    zet_abstract_backfill_recovery_plan.add_argument(
+        "--max-receipts",
+        type=int,
+        default=5000,
+        help="Maximum total apply/revert receipts to audit (1-5000).",
+    )
+    zet_abstract_backfill_recovery_plan.add_argument(
+        "--max-locks",
+        type=int,
+        default=5000,
+        help="Maximum recognized locks and transaction journals to audit (1-5000 each).",
+    )
+    zet_abstract_backfill_recovery_plan.add_argument(
+        "--max-cases",
+        type=int,
+        default=100,
+        help="Maximum privacy-safe recovery cases to return (1-500).",
+    )
+    zet_abstract_backfill_recovery_plan.add_argument(
+        "--progress",
+        action="store_true",
+        help="Stream content-free receipt, lock, and journal counts plus 10-second heartbeats to stderr.",
+    )
+    zet_abstract_backfill_recovery_plan.add_argument(
+        "--format",
+        choices=["text", "json"],
+        default="json",
+        help="Output format.",
+    )
+    zet_abstract_backfill_recovery_plan.set_defaults(
+        func=command_zet_abstract_backfill_recovery_plan
     )
 
     status_board = subcommands.add_parser(

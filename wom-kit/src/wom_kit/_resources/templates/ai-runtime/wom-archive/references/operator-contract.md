@@ -263,6 +263,23 @@ journals, including participant ids/paths and reviewer metadata, and compares
 canonical hashes without echoing those private values. Prepared, partial,
 complete-without-receipt, divergent, invalid, and unverified journal states
 block; completed residue warns only when the final receipt fully verifies.
+
+To turn retained journals into a fixed decision without changing the archive,
+run:
+
+```bash
+archive zet-abstract-backfill-recovery-plan <archive-root> --dry-run --max-receipts 5000 --max-locks 5000 --max-cases 100 --progress --format json
+```
+
+The plan recommends cleanup for unstarted or verified-completed evidence,
+exact rollback for an interrupted apply, and forward completion or receipt
+finalization for an interrupted revert. Revert moves forward because the
+removed private abstract text is intentionally absent from the journal and
+receipt. A divergent/invalid journal or any deterministic final receipt that
+exists but does not fully verify is a manual forensic hold. The planner never
+executes: every case requires fresh recovery approval and current-state
+revalidation, and no canonical file, receipt, journal, or lock is written or
+deleted. Do not carry out its recommendation by hand.
 `--max-locks` independently caps locks and journals. Never auto-delete a lock or
 journal, and never edit an immutable receipt to silence this audit.
 

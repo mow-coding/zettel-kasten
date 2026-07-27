@@ -75,6 +75,7 @@ Supporting philosophy and model docs:
 - [zet Abstract Backfill Write](zet-abstract-backfill-write.md)
 - [zet Abstract Backfill Revert](zet-abstract-backfill-revert.md)
 - [zet Abstract Receipt Lifecycle Audit](zet-abstract-backfill-receipt-audit.md)
+- [zet Abstract Backfill Recovery Plan](zet-abstract-backfill-recovery-plan.md)
 - [Contiguous Node Reading](zet-catalog-contiguous-reading.md)
 - [Seeded Connection Reading Order](seeded-connection-reading-order.md)
 - [Seeded Reading Route Evidence](seeded-reading-route-evidence.md)

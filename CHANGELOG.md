@@ -6,6 +6,24 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.266 - 2026-07-27
+
+- Added read-only `zet-abstract-backfill-recovery-plan` and alias
+  `abstract-backfill-recovery-plan`.
+- The planner maps every retained abstract transaction journal to a fixed
+  cleanup, apply rollback, revert forward-completion/finalization, or manual
+  forensic-hold decision without changing the archive.
+- A deterministic final receipt that exists but does not pass the complete
+  receipt lifecycle is now explicit `present_unverified` evidence and always
+  forces manual hold.
+- Recovery cases expose only a basis SHA-256 handle, operation/state/counts,
+  receipt/lock evidence states, and fixed codes. They echo no journal/receipt
+  path, zet identity/path, reviewer, proposal filename, body/abstract text,
+  journal digest, lock content, or absolute path.
+- Every case requires fresh recovery approval and current-state revalidation;
+  actual recovery, journal/lock cleanup, and cross-basis participant locking
+  remain unimplemented.
+
 ## v0.3.265 - 2026-07-27
 
 - **An interrupted abstract batch now leaves a durable explanation before it

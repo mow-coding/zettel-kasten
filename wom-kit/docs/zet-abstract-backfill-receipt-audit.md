@@ -109,6 +109,13 @@ A problem row may contain kind, sorted index, state, SHA-256 digest, and blocker
 codes. It contains no private path or content. The digest proves which audit
 outcome set produced the summary; it is not a signature or remote backup proof.
 
+Since v0.3.266, the result also carries an independently bounded
+`transaction_journal_cases` list for the read-only recovery planner. Each case
+adds only the transaction basis SHA-256, final receipt verification state, and
+expected lock state to the existing operation/state/count/fixed-code surface.
+The list has its own returned/truncated summary fields, so receipt or lock
+problem rows cannot silently consume the recovery case budget.
+
 ## Read And Write Boundary
 
 The command may read:
@@ -146,3 +153,9 @@ the result green.
 This remains local consistency evidence. It does not prove abstract truth or
 quality, safe concurrent external editing, successful remote backup, or
 forced-termination recovery.
+
+Use
+`archive zet-abstract-backfill-recovery-plan <archive-root> --dry-run` to
+translate retained journal evidence into a fixed human-reviewable next-step
+recommendation. That separate command is also read-only and does not grant
+recovery write authority.

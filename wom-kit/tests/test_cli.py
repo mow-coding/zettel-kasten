@@ -2420,6 +2420,7 @@ class ArchiveCliTests(unittest.TestCase):
         self.assertIn("zet-abstract-backfill-write", command_names)
         self.assertIn("zet-abstract-backfill-revert", command_names)
         self.assertIn("zet-abstract-backfill-receipt-audit", command_names)
+        self.assertIn("zet-abstract-backfill-recovery-plan", command_names)
         capability = next(item for item in commands if item["name"] == "capabilities")
         self.assertIn("--machine", capability["options"])
         project_update = next(item for item in commands if item["name"] == "project-version-update")
@@ -2588,6 +2589,23 @@ class ArchiveCliTests(unittest.TestCase):
             "--progress",
         ):
             self.assertIn(option, abstract_receipt_audit["options"])
+        abstract_recovery_plan = next(
+            item
+            for item in commands
+            if item["name"] == "zet-abstract-backfill-recovery-plan"
+        )
+        self.assertEqual(
+            abstract_recovery_plan["aliases"],
+            ["abstract-backfill-recovery-plan"],
+        )
+        for option in (
+            "--dry-run",
+            "--max-receipts",
+            "--max-locks",
+            "--max-cases",
+            "--progress",
+        ):
+            self.assertIn(option, abstract_recovery_plan["options"])
         serialized = json.dumps(result, ensure_ascii=False)
         self.assertNotIn(str(KIT_ROOT), serialized)
         self.assertNotIn(str(Path.home()), serialized)
@@ -39510,6 +39528,340 @@ archive_services.zet_abstract_backfill_revert(
                 if item["kind"] == "transaction_journal"
             )
             self.assertEqual(journal_problem["status"], "stale_completed")
+
+    def test_zet_abstract_backfill_recovery_plan_requires_dry_run_and_handles_empty_archive(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            blocked_code, blocked_output = self.run_cli(
+                [
+                    "zet-abstract-backfill-recovery-plan",
+                    str(archive_root),
+                ]
+            )
+            self.assertEqual(blocked_code, 1, blocked_output)
+            self.assertIn("requires --dry-run", blocked_output)
+
+            before = self.archive_tree_snapshot(archive_root)
+            code, output = self.run_cli(
+                [
+                    "abstract-backfill-recovery-plan",
+                    str(archive_root),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["status"], "no_recovery_needed")
+            self.assertEqual(result["summary"]["recovery_case_count"], 0)
+            self.assertFalse(
+                result["execution_boundary"]["execution_implemented"]
+            )
+            self.assertFalse(any(result["write_boundary"].values()))
+            self.assertEqual(before, self.archive_tree_snapshot(archive_root))
+
+    def test_zet_abstract_backfill_recovery_plan_maps_apply_states_without_private_echo(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            fixture = self.create_abstract_backfill_proposal(
+                archive_root,
+                count=2,
+                name="recovery-plan-apply.jsonl",
+            )
+            real_write_json_new_file = archive_services.write_json_new_file
+            captured_journals: dict[str, bytes] = {}
+
+            def capture_apply_journal(
+                path: Path,
+                payload: dict[str, Any],
+            ) -> None:
+                real_write_json_new_file(path, payload)
+                if path.name.endswith(".transaction.json"):
+                    captured_journals[path.name] = path.read_bytes()
+
+            with patch.object(
+                archive_services,
+                "write_json_new_file",
+                side_effect=capture_apply_journal,
+            ):
+                applied = archive_services.zet_abstract_backfill_write(
+                    archive_root,
+                    proposal_path=fixture["relative"],
+                    expected_proposal_sha256=fixture["sha256"],
+                    max_items=2,
+                    approve=True,
+                    reviewed_by="person:private-recovery-reviewer",
+                    affirm_abstracts_reviewed=True,
+                )
+            self.assertEqual(applied["status"], "applied", applied)
+            digest = fixture["sha256"].removeprefix("sha256:")
+            lock_root = (
+                archive_root / ".wom-scratch" / "abstract-backfill"
+            )
+            journal_path = (
+                lock_root / f".{digest}.write.transaction.json"
+            )
+            lock_path = lock_root / f".{digest}.write.lock"
+            receipt_path = archive_root / applied["receipt"]["path"]
+            journal_path.write_bytes(captured_journals[journal_path.name])
+            lock_path.write_text(
+                "PRIVATE LOCK CONTENT MUST NOT ECHO",
+                encoding="utf-8",
+            )
+            applied_bytes = {
+                path: path.read_bytes()
+                for path in fixture["originals"]
+            }
+
+            stale = archive_services.zet_abstract_backfill_recovery_plan(
+                archive_root,
+                dry_run=True,
+            )
+            self.assertTrue(stale["ok"], stale)
+            self.assertEqual(stale["status"], "ready_for_human_recovery_review")
+            stale_case = stale["cases"][0]
+            self.assertEqual(stale_case["observed_state"], "stale_completed")
+            self.assertEqual(stale_case["final_receipt_state"], "verified")
+            self.assertEqual(stale_case["expected_lock_state"], "present")
+            self.assertEqual(
+                stale_case["recommended_action"],
+                "cleanup_verified_completed_evidence",
+            )
+
+            receipt_path.write_bytes(b"")
+            occupied = archive_services.zet_abstract_backfill_recovery_plan(
+                archive_root,
+                dry_run=True,
+            )
+            self.assertTrue(occupied["ok"], occupied)
+            self.assertEqual(occupied["status"], "manual_forensic_hold")
+            occupied_case = occupied["cases"][0]
+            self.assertEqual(
+                occupied_case["final_receipt_state"],
+                "present_unverified",
+            )
+            self.assertEqual(
+                occupied_case["recommended_action"],
+                "manual_forensic_hold",
+            )
+            self.assertIn(
+                "transaction_final_receipt_present_unverified",
+                occupied_case["issue_codes"],
+            )
+            receipt_path.unlink()
+
+            for path, original in fixture["originals"].items():
+                path.write_bytes(original)
+            prepared = archive_services.zet_abstract_backfill_recovery_plan(
+                archive_root,
+                dry_run=True,
+            )
+            prepared_case = prepared["cases"][0]
+            self.assertEqual(prepared_case["observed_state"], "prepared")
+            self.assertEqual(
+                prepared_case["recommended_action"],
+                "cleanup_unstarted_transaction_evidence",
+            )
+            self.assertEqual(prepared_case["participant_write_count"], 0)
+
+            paths = list(fixture["originals"])
+            paths[0].write_bytes(applied_bytes[paths[0]])
+            partial = archive_services.zet_abstract_backfill_recovery_plan(
+                archive_root,
+                dry_run=True,
+            )
+            partial_case = partial["cases"][0]
+            self.assertEqual(
+                partial_case["observed_state"],
+                "partially_applied",
+            )
+            self.assertEqual(
+                partial_case["recommended_action"],
+                "rollback_uncommitted_apply_to_before",
+            )
+            self.assertEqual(partial_case["participant_write_count"], 1)
+
+            paths[1].write_bytes(applied_bytes[paths[1]])
+            complete = archive_services.zet_abstract_backfill_recovery_plan(
+                archive_root,
+                dry_run=True,
+            )
+            complete_case = complete["cases"][0]
+            self.assertEqual(
+                complete_case["observed_state"],
+                "fully_applied_receipt_missing",
+            )
+            self.assertEqual(
+                complete_case["recommended_action"],
+                "rollback_uncommitted_apply_to_before",
+            )
+            self.assertEqual(complete_case["participant_write_count"], 2)
+
+            paths[0].write_bytes(
+                paths[0].read_bytes() + b"\nDivergent recovery fixture.\n"
+            )
+            divergent = archive_services.zet_abstract_backfill_recovery_plan(
+                archive_root,
+                dry_run=True,
+            )
+            divergent_case = divergent["cases"][0]
+            self.assertEqual(divergent_case["observed_state"], "divergent")
+            self.assertEqual(
+                divergent_case["recommended_action"],
+                "manual_forensic_hold",
+            )
+            serialized = json.dumps(divergent, ensure_ascii=False)
+            for private_value in (
+                *fixture["abstracts"],
+                *(row["zettel_id"] for row in fixture["rows"]),
+                "person:private-recovery-reviewer",
+                "PRIVATE LOCK CONTENT MUST NOT ECHO",
+                str(archive_root),
+            ):
+                self.assertNotIn(private_value, serialized)
+            self.assertEqual(
+                divergent_case["basis_sha256"],
+                fixture["sha256"],
+            )
+            self.assertFalse(divergent_case["execution_implemented"])
+            self.assertFalse(divergent_case["safe_to_execute_now"])
+            self.assertFalse(any(divergent["write_boundary"].values()))
+
+            duplicate_path = (
+                lock_root
+                / f".{'0' * 64}.write.transaction.json"
+            )
+            duplicate_path.write_bytes(
+                captured_journals[journal_path.name]
+            )
+            truncated = archive_services.zet_abstract_backfill_recovery_plan(
+                archive_root,
+                dry_run=True,
+                max_cases=1,
+            )
+            self.assertFalse(truncated["ok"], truncated)
+            self.assertTrue(truncated["summary"]["cases_truncated"])
+            self.assertIn("recovery_cases_truncated", truncated["blockers"])
+
+    def test_zet_abstract_backfill_recovery_plan_moves_interrupted_revert_forward(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            fixture = self.create_abstract_backfill_proposal(
+                archive_root,
+                count=2,
+                name="recovery-plan-revert.jsonl",
+            )
+            applied = archive_services.zet_abstract_backfill_write(
+                archive_root,
+                proposal_path=fixture["relative"],
+                expected_proposal_sha256=fixture["sha256"],
+                max_items=2,
+                approve=True,
+                reviewed_by="person:apply-reviewer",
+                affirm_abstracts_reviewed=True,
+            )
+            self.assertEqual(applied["status"], "applied", applied)
+            applied_bytes = {
+                path: path.read_bytes()
+                for path in fixture["originals"]
+            }
+            real_write_json_new_file = archive_services.write_json_new_file
+            captured_journals: dict[str, bytes] = {}
+
+            def capture_revert_journal(
+                path: Path,
+                payload: dict[str, Any],
+            ) -> None:
+                real_write_json_new_file(path, payload)
+                if path.name.endswith(".transaction.json"):
+                    captured_journals[path.name] = path.read_bytes()
+
+            with patch.object(
+                archive_services,
+                "write_json_new_file",
+                side_effect=capture_revert_journal,
+            ):
+                reverted = archive_services.zet_abstract_backfill_revert(
+                    archive_root,
+                    receipt_path=applied["receipt"]["path"],
+                    expected_receipt_sha256=applied["receipt"]["sha256"],
+                    max_items=2,
+                    approve=True,
+                    reviewed_by="person:private-revert-reviewer",
+                    affirm_abstract_removal_reviewed=True,
+                )
+            self.assertEqual(reverted["status"], "reverted", reverted)
+            digest = applied["receipt"]["sha256"].removeprefix("sha256:")
+            lock_root = (
+                archive_root / ".wom-scratch" / "abstract-backfill"
+            )
+            journal_path = (
+                lock_root
+                / f".{digest}.abstract-revert.transaction.json"
+            )
+            lock_path = (
+                lock_root / f".{digest}.abstract-revert.lock"
+            )
+            journal_path.write_bytes(captured_journals[journal_path.name])
+            lock_path.write_text(applied["receipt"]["sha256"], encoding="ascii")
+            revert_receipt_path = (
+                archive_root / reverted["revert_receipt"]["path"]
+            )
+            revert_receipt_path.unlink()
+
+            paths = list(fixture["originals"])
+            paths[0].write_bytes(applied_bytes[paths[0]])
+            partial = archive_services.zet_abstract_backfill_recovery_plan(
+                archive_root,
+                dry_run=True,
+            )
+            self.assertTrue(partial["ok"], partial)
+            partial_case = partial["cases"][0]
+            self.assertEqual(partial_case["operation"], "revert")
+            self.assertEqual(
+                partial_case["observed_state"],
+                "partially_applied",
+            )
+            self.assertEqual(
+                partial_case["recommended_action"],
+                "resume_revert_forward_and_finalize_receipt",
+            )
+            self.assertEqual(partial_case["participant_write_count"], 1)
+            self.assertTrue(partial_case["receipt_write_required"])
+
+            paths[0].write_bytes(fixture["originals"][paths[0]])
+            complete = archive_services.zet_abstract_backfill_recovery_plan(
+                archive_root,
+                dry_run=True,
+            )
+            complete_case = complete["cases"][0]
+            self.assertEqual(
+                complete_case["observed_state"],
+                "fully_applied_receipt_missing",
+            )
+            self.assertEqual(
+                complete_case["recommended_action"],
+                "finalize_revert_receipt",
+            )
+            self.assertEqual(complete_case["participant_write_count"], 0)
+            self.assertTrue(complete_case["receipt_write_required"])
+            serialized = json.dumps(complete, ensure_ascii=False)
+            for private_value in (
+                *fixture["abstracts"],
+                *(row["zettel_id"] for row in fixture["rows"]),
+                "person:private-revert-reviewer",
+                str(archive_root),
+            ):
+                self.assertNotIn(private_value, serialized)
+            self.assertFalse(any(complete["write_boundary"].values()))
 
     def test_zet_abstract_backfill_receipt_audit_distinguishes_completed_and_unresolved_locks(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
