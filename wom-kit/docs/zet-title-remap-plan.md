@@ -1,6 +1,6 @@
 # Reviewed zet Title Remap Plan
 
-Status: v0.3.269 read-only title proposal validation before approved write
+Status: v0.3.270 read-only title proposal validation before approved write and evidence audit
 
 Use this command after `zet-title-readiness` finds a canonical zet whose title
 is an imported identifier:
@@ -123,6 +123,8 @@ write-plan digest in dry-run mode and then supply the separate explicit
 approval.
 
 The v0.3.269 writer adds exact prior-byte snapshots, a private receipt,
-ordinary-failure rollback, and hard-exit evidence. Archive-wide title receipt
-audit, automatic interruption recovery, and approved revert remain a later
-release track.
+ordinary-failure rollback, and hard-exit evidence. After a completed or
+interrupted write, use the separate read-only
+[zet Title Remap Receipt And Interruption Audit](zet-title-remap-receipt-audit.md).
+Automatic interruption recovery and approved revert remain a later release
+track.

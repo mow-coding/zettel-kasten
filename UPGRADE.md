@@ -24,6 +24,28 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.270 Read-Only Title Evidence Audit
+
+No archive migration is required. v0.3.270 understands the v0.3.269
+title-remap receipt, transaction journal, prior-byte snapshot, and common-lock
+evidence:
+
+```powershell
+archive zet-title-remap-receipt-audit <archive-root> --dry-run --format json
+```
+
+Run it after a completed title write, after an unexpected exit, or before
+planning any recovery. It verifies bounded receipts against current canonical
+file/title/body hashes and prior-byte object-manifest evidence, then classifies
+retained journals as `prepared`, `partially_applied`,
+`fully_applied_receipt_missing`, `divergent`, or `stale_completed`.
+
+The command writes and deletes nothing. Do not hand-edit or delete a reported
+receipt, journal, lock, canonical participant, or snapshot. v0.3.270 does not
+recover, finalize, clean up, or revert title changes. Keep v0.3.270 or newer
+when interpreting this evidence. See
+[`wom-kit/docs/zet-title-remap-receipt-audit.md`](wom-kit/docs/zet-title-remap-receipt-audit.md).
+
 ## v0.3.269 Approved Title Remap Write
 
 No archive-wide migration is required. The release adds a separate
@@ -47,10 +69,12 @@ A caught failure restores exact original bytes. A hard exit can leave a mixed
 batch plus a private transaction journal and common lock; do not delete or
 hand-edit those retained files.
 
-v0.3.269 records interruption evidence but does not yet audit, automatically
-recover, or revert title-remap batches. Older WOM-kit versions can still read
-successfully changed canonical Markdown, but they do not understand the new
-receipt/journal evidence. Keep v0.3.269 or newer for this workflow. See
+v0.3.269 records interruption evidence but does not itself audit,
+automatically recover, or revert title-remap batches. v0.3.270 adds the
+read-only audit; recovery and revert remain later work. Older WOM-kit versions
+can still read successfully changed canonical Markdown, but they do not
+understand the new receipt/journal evidence. Keep v0.3.270 or newer for this
+workflow. See
 [`wom-kit/docs/zet-title-remap-write.md`](wom-kit/docs/zet-title-remap-write.md).
 
 ## v0.3.268 Title Remap Usability

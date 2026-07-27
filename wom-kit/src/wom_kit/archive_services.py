@@ -7527,6 +7527,9 @@ ZET_TITLE_REMAP_RECEIPT_SCHEMA = "wom-kit/zet-title-remap-receipt/v0.1"
 ZET_TITLE_REMAP_TRANSACTION_JOURNAL_SCHEMA = (
     "wom-kit/zet-title-remap-transaction-journal/v0.1"
 )
+ZET_TITLE_REMAP_RECEIPT_AUDIT_SCHEMA = (
+    "wom-kit/zet-title-remap-receipt-audit/v0.1"
+)
 ZET_TITLE_REMAP_PROPOSAL_PREFIX = ".wom-scratch/title-remap/"
 ZET_TITLE_REMAP_RECEIPTS_DIR = "receipts/revisions/title-remap"
 # Where the operator says the replacement name came from. A remap is only
@@ -7539,6 +7542,9 @@ ZET_TITLE_REMAP_MAX_CANONICAL_FILE_BYTES = 16 * 1024 * 1024
 ZET_TITLE_REMAP_MAX_TOTAL_CANONICAL_BYTES = 256 * 1024 * 1024
 ZET_TITLE_REMAP_MAX_RECEIPT_BYTES = 32 * 1024 * 1024
 ZET_TITLE_REMAP_MAX_TRANSACTION_JOURNAL_BYTES = 32 * 1024 * 1024
+ZET_TITLE_REMAP_AUDIT_MAX_RECEIPTS = 5000
+ZET_TITLE_REMAP_AUDIT_MAX_JOURNALS = 100
+ZET_TITLE_REMAP_AUDIT_MAX_PROBLEMS = 500
 ZET_TITLE_REMAP_MAX_TITLE_CHARS = 2000
 ZET_TITLE_REMAP_LINE_BREAK_CHARS = frozenset(
     {"\r", "\n", "\v", "\f", "\x85", "\u2028", "\u2029"}
@@ -9228,6 +9234,8 @@ def verify_zet_title_remap_receipt(
     *,
     archive_id: str,
     proposal_sha256: str,
+    snapshot_manifest_index: dict[str, list[dict[str, Any]]] | None = None,
+    snapshot_manifest_blockers: list[str] | None = None,
 ) -> dict[str, Any]:
     blockers: list[str] = []
     public_items: list[dict[str, Any]] = []
@@ -9255,7 +9263,13 @@ def verify_zet_title_remap_receipt(
     ):
         blockers.append("existing_receipt_binding_mismatch")
     items = receipt.get("items") if isinstance(receipt.get("items"), list) else []
-    manifest_index, manifest_blockers = zet_revision_snapshot_manifest_index(root)
+    if snapshot_manifest_index is None:
+        manifest_index, manifest_blockers = (
+            zet_revision_snapshot_manifest_index(root)
+        )
+    else:
+        manifest_index = snapshot_manifest_index
+        manifest_blockers = list(snapshot_manifest_blockers or [])
     blockers.extend(manifest_blockers)
     for index, item in enumerate(items):
         item_blockers: list[str] = []
@@ -10140,6 +10154,918 @@ def zet_title_remap_write(
             if rollback["succeeded"]
             else "failed_rollback_incomplete"
         )
+
+
+def read_zet_title_remap_transaction_journal(
+    root: Path,
+    path: Path,
+    *,
+    archive_id: str,
+) -> tuple[bytes, dict[str, Any]]:
+    if (
+        path.is_symlink()
+        or zet_revision_path_has_symlink_component(root, path)
+        or not path.is_file()
+        or not is_path_within_root(path, root)
+    ):
+        raise ArchiveServiceError("Title transaction journal path is unsafe.")
+    try:
+        if (
+            path.stat().st_size
+            > ZET_TITLE_REMAP_MAX_TRANSACTION_JOURNAL_BYTES
+        ):
+            raise ArchiveServiceError(
+                "Title transaction journal exceeds the size limit."
+            )
+        raw = path.read_bytes()
+
+        def reject_duplicate_pairs(
+            pairs: list[tuple[str, Any]],
+        ) -> dict[str, Any]:
+            parsed: dict[str, Any] = {}
+            for key, value in pairs:
+                if key in parsed:
+                    raise ValueError("title_transaction_journal_duplicate_key")
+                parsed[key] = value
+            return parsed
+
+        document = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=reject_duplicate_pairs,
+        )
+    except (
+        OSError,
+        UnicodeError,
+        json.JSONDecodeError,
+        ValueError,
+    ) as exc:
+        raise ArchiveServiceError(
+            "Title transaction journal is unreadable."
+        ) from exc
+    match = re.fullmatch(
+        r"\.(?P<digest>[0-9a-f]{64})\.write\.transaction\.json",
+        path.name,
+    )
+    if (
+        not zet_title_remap_transaction_journal_document_valid(document)
+        or validate_schema(
+            document,
+            "zet-title-remap-transaction-journal.schema.json",
+        )
+        or match is None
+        or document.get("archive_id") != archive_id
+    ):
+        raise ArchiveServiceError(
+            "Title transaction journal binding is invalid."
+        )
+    proposal_sha256 = "sha256:" + match.group("digest")
+    expected_receipt = zet_title_remap_receipt_relative_path(
+        proposal_sha256
+    )
+    if (
+        document.get("proposal_sha256") != proposal_sha256
+        or document.get("final_receipt_path") != expected_receipt
+    ):
+        raise ArchiveServiceError(
+            "Title transaction journal evidence does not match its filename."
+        )
+    return raw, document
+
+
+def read_zet_title_remap_receipt_for_audit(
+    root: Path,
+    path: Path,
+    *,
+    archive_id: str,
+) -> tuple[bytes, dict[str, Any], str]:
+    if (
+        path.is_symlink()
+        or zet_revision_path_has_symlink_component(root, path)
+        or not path.is_file()
+        or not is_path_within_root(path, root)
+    ):
+        raise ArchiveServiceError("Title remap receipt path is unsafe.")
+    try:
+        if path.stat().st_size > ZET_TITLE_REMAP_MAX_RECEIPT_BYTES:
+            raise ArchiveServiceError(
+                "Title remap receipt exceeds the size limit."
+            )
+        raw = path.read_bytes()
+
+        def reject_duplicate_pairs(
+            pairs: list[tuple[str, Any]],
+        ) -> dict[str, Any]:
+            parsed: dict[str, Any] = {}
+            for key, value in pairs:
+                if key in parsed:
+                    raise ValueError("title_remap_receipt_duplicate_key")
+                parsed[key] = value
+            return parsed
+
+        document = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=reject_duplicate_pairs,
+        )
+    except (
+        OSError,
+        UnicodeError,
+        json.JSONDecodeError,
+        ValueError,
+    ) as exc:
+        raise ArchiveServiceError(
+            "Title remap receipt is unreadable."
+        ) from exc
+    match = re.fullmatch(
+        r"(?P<digest>[0-9a-f]{64})\.zet-title-remap\.json",
+        path.name,
+    )
+    if (
+        match is None
+        or not zet_title_remap_receipt_document_valid(document)
+        or document.get("archive_id") != archive_id
+    ):
+        raise ArchiveServiceError(
+            "Title remap receipt binding is invalid."
+        )
+    proposal_sha256 = "sha256:" + match.group("digest")
+    if document.get("proposal_sha256") != proposal_sha256:
+        raise ArchiveServiceError(
+            "Title remap receipt does not match its filename."
+        )
+    return raw, document, proposal_sha256
+
+
+def classify_zet_title_remap_transaction_journal(
+    root: Path,
+    journal: dict[str, Any],
+) -> dict[str, Any]:
+    before_count = 0
+    after_count = 0
+    divergent_count = 0
+    missing_count = 0
+    for item in journal["items"]:
+        try:
+            path = archive_internal_path(root, item["canonical_path"])
+            if (
+                path.is_symlink()
+                or zet_revision_path_has_symlink_component(root, path)
+                or not path.is_file()
+                or archive_relative_path(path, root)
+                != item["canonical_path"]
+            ):
+                missing_count += 1
+                continue
+            current = read_zet_title_remap_canonical_bytes(path)
+            current_sha256 = (
+                "sha256:" + hashlib.sha256(current).hexdigest()
+            )
+            current_frontmatter, _current_body = split_zettel_text(
+                current.decode("utf-8")
+            )
+            if current_frontmatter.get("id") != item["zettel_id"]:
+                divergent_count += 1
+                continue
+        except (
+            ArchiveServiceError,
+            ArchivePathError,
+            OSError,
+            UnicodeError,
+            ValueError,
+        ):
+            missing_count += 1
+            continue
+        if current_sha256 == item["before_file_sha256"]:
+            before_count += 1
+        elif current_sha256 == item["after_file_sha256"]:
+            after_count += 1
+        else:
+            divergent_count += 1
+    if missing_count or divergent_count:
+        status = "divergent"
+    elif after_count == 0:
+        status = "prepared"
+    elif before_count == 0:
+        status = "fully_applied_receipt_missing"
+    else:
+        status = "partially_applied"
+    return {
+        "status": status,
+        "before_count": before_count,
+        "after_count": after_count,
+        "divergent_count": divergent_count,
+        "missing_count": missing_count,
+    }
+
+
+def read_zet_title_remap_write_lock(
+    root: Path,
+    path: Path,
+) -> dict[str, Any]:
+    if (
+        path.is_symlink()
+        or zet_revision_path_has_symlink_component(root, path)
+        or not path.is_file()
+        or not is_path_within_root(path, root)
+    ):
+        raise ArchiveServiceError("Title write lock path is unsafe.")
+    try:
+        if path.stat().st_size > 64 * 1024:
+            raise ValueError("title_write_lock_too_large")
+
+        def reject_duplicate_pairs(
+            pairs: list[tuple[str, Any]],
+        ) -> dict[str, Any]:
+            parsed: dict[str, Any] = {}
+            for key, value in pairs:
+                if key in parsed:
+                    raise ValueError("title_write_lock_duplicate_key")
+                parsed[key] = value
+            return parsed
+
+        document = json.loads(
+            path.read_text(encoding="utf-8"),
+            object_pairs_hook=reject_duplicate_pairs,
+        )
+    except (
+        OSError,
+        UnicodeError,
+        json.JSONDecodeError,
+        ValueError,
+    ) as exc:
+        raise ArchiveServiceError("Title write lock is unreadable.") from exc
+    if not isinstance(document, dict) or set(document) != {
+        "schema",
+        "proposal_sha256",
+        "plan_digest",
+        "write_plan_digest",
+        "transaction_journal_name",
+    }:
+        raise ArchiveServiceError("Title write lock shape is invalid.")
+    if (
+        document.get("schema")
+        != "wom-kit/zet-title-remap-write-lock/v0.1"
+        or any(
+            not isinstance(document.get(field), str)
+            or not re.fullmatch(
+                r"sha256:[0-9a-f]{64}",
+                document[field],
+            )
+            for field in (
+                "proposal_sha256",
+                "plan_digest",
+                "write_plan_digest",
+            )
+        )
+        or not isinstance(document.get("transaction_journal_name"), str)
+        or not re.fullmatch(
+            r"\.[0-9a-f]{64}\.write\.transaction\.json",
+            document["transaction_journal_name"],
+        )
+    ):
+        raise ArchiveServiceError("Title write lock binding is invalid.")
+    expected_journal_name = (
+        "."
+        + document["proposal_sha256"].removeprefix("sha256:")
+        + ".write.transaction.json"
+    )
+    if document["transaction_journal_name"] != expected_journal_name:
+        raise ArchiveServiceError("Title write lock journal is invalid.")
+    return document
+
+
+def zet_title_remap_receipt_audit(
+    archive_root: Path | str,
+    *,
+    dry_run: bool = False,
+    max_receipts: int = 5000,
+    max_journals: int = 100,
+    max_problems: int = 100,
+    progress_callback: Callable[
+        [str, str, int | None, int | None], None
+    ]
+    | None = None,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    requested_max_receipts = int(max_receipts)
+    requested_max_journals = int(max_journals)
+    requested_max_problems = int(max_problems)
+    effective_max_receipts = max(
+        1,
+        min(
+            requested_max_receipts,
+            ZET_TITLE_REMAP_AUDIT_MAX_RECEIPTS,
+        ),
+    )
+    effective_max_journals = max(
+        1,
+        min(
+            requested_max_journals,
+            ZET_TITLE_REMAP_AUDIT_MAX_JOURNALS,
+        ),
+    )
+    effective_max_problems = max(
+        1,
+        min(
+            requested_max_problems,
+            ZET_TITLE_REMAP_AUDIT_MAX_PROBLEMS,
+        ),
+    )
+    blockers: list[str] = []
+    warnings: list[str] = []
+    problems: list[dict[str, Any]] = []
+    journal_cases: list[dict[str, Any]] = []
+    outcomes: list[dict[str, Any]] = []
+    problem_total = 0
+    counters = {
+        "receipt_verified": 0,
+        "receipt_invalid_or_divergent": 0,
+        "receipt_participant_count": 0,
+        "journal_prepared": 0,
+        "journal_partially_applied": 0,
+        "journal_fully_applied_receipt_missing": 0,
+        "journal_divergent": 0,
+        "journal_stale_completed": 0,
+        "journal_invalid": 0,
+        "journal_snapshot_evidence_invalid": 0,
+        "write_lock_matching": 0,
+        "write_lock_missing_for_journal": 0,
+        "write_lock_orphaned_or_invalid": 0,
+    }
+
+    if not dry_run:
+        blockers.append("dry_run_required")
+    if requested_max_receipts != effective_max_receipts:
+        blockers.append("max_receipts_out_of_range")
+    if requested_max_journals != effective_max_journals:
+        blockers.append("max_journals_out_of_range")
+    if requested_max_problems != effective_max_problems:
+        blockers.append("max_problems_out_of_range")
+
+    receipt_root = archive_internal_path(
+        root,
+        ZET_TITLE_REMAP_RECEIPTS_DIR,
+    )
+    title_remap_root = archive_internal_path(
+        root,
+        ZET_TITLE_REMAP_PROPOSAL_PREFIX.rstrip("/"),
+    )
+    if (receipt_root.exists() or receipt_root.is_symlink()) and (
+        receipt_root.is_symlink()
+        or zet_revision_path_has_symlink_component(root, receipt_root)
+        or not receipt_root.is_dir()
+    ):
+        blockers.append("title_receipt_root_unsafe")
+    if (title_remap_root.exists() or title_remap_root.is_symlink()) and (
+        title_remap_root.is_symlink()
+        or zet_revision_path_has_symlink_component(root, title_remap_root)
+        or not title_remap_root.is_dir()
+    ):
+        blockers.append("title_remap_private_root_unsafe")
+    receipt_paths = (
+        sorted(receipt_root.glob("*.zet-title-remap.json"))
+        if receipt_root.is_dir()
+        and not receipt_root.is_symlink()
+        and not zet_revision_path_has_symlink_component(root, receipt_root)
+        else []
+    )
+    journal_paths = (
+        sorted(title_remap_root.glob(".*.write.transaction.json"))
+        if title_remap_root.is_dir()
+        and not title_remap_root.is_symlink()
+        and not zet_revision_path_has_symlink_component(
+            root,
+            title_remap_root,
+        )
+        else []
+    )
+    write_lock_path = title_remap_root / ".title-remap.write.lock"
+    if len(receipt_paths) > effective_max_receipts:
+        blockers.append("receipt_count_exceeds_max_receipts")
+    if len(journal_paths) > effective_max_journals:
+        blockers.append("journal_count_exceeds_max_journals")
+
+    scan_allowed = not any(
+        blocker
+        in {
+            "dry_run_required",
+            "max_receipts_out_of_range",
+            "max_journals_out_of_range",
+            "max_problems_out_of_range",
+            "receipt_count_exceeds_max_receipts",
+            "journal_count_exceeds_max_journals",
+            "title_receipt_root_unsafe",
+            "title_remap_private_root_unsafe",
+        }
+        for blocker in blockers
+    )
+
+    def add_problem(problem: dict[str, Any]) -> None:
+        nonlocal problem_total
+        problem_total += 1
+        if len(problems) < effective_max_problems:
+            problems.append(problem)
+
+    verified_receipts: dict[str, dict[str, Any]] = {}
+    journal_records: list[dict[str, Any]] = []
+    manifest_index: dict[str, list[dict[str, Any]]] = {}
+    manifest_blockers: list[str] = []
+    if scan_allowed:
+        if receipt_paths or journal_paths:
+            manifest_index, manifest_blockers = (
+                zet_revision_snapshot_manifest_index(root)
+            )
+        if manifest_blockers:
+            blockers.append("title_snapshot_manifest_unreadable_or_invalid")
+        if progress_callback is not None:
+            progress_callback(
+                "title-remap-receipt-audit",
+                "start",
+                0,
+                len(receipt_paths),
+            )
+        for index, receipt_path in enumerate(receipt_paths):
+            issue_codes: list[str] = []
+            verification: dict[str, Any] = {}
+            proposal_sha256: str | None = None
+            receipt_evidence_sha256: str | None = None
+            try:
+                receipt_raw, receipt_document, proposal_sha256 = (
+                    read_zet_title_remap_receipt_for_audit(
+                        root,
+                        receipt_path,
+                        archive_id=archive_id,
+                    )
+                )
+                receipt_evidence_sha256 = (
+                    "sha256:" + hashlib.sha256(receipt_raw).hexdigest()
+                )
+                verification = verify_zet_title_remap_receipt(
+                    root,
+                    receipt_path,
+                    archive_id=archive_id,
+                    proposal_sha256=proposal_sha256,
+                    snapshot_manifest_index=manifest_index,
+                    snapshot_manifest_blockers=manifest_blockers,
+                )
+                issue_codes.extend(
+                    str(code)
+                    for code in verification.get("blockers", [])
+                )
+            except (
+                ArchiveServiceError,
+                ArchivePathError,
+                OSError,
+                UnicodeError,
+                ValueError,
+            ):
+                issue_codes.append(
+                    "title_receipt_unreadable_or_invalid"
+                )
+            participant_count = len(
+                verification.get("items")
+                if isinstance(verification.get("items"), list)
+                else []
+            )
+            counters["receipt_participant_count"] += participant_count
+            if (
+                not issue_codes
+                and verification.get("ok")
+                and proposal_sha256
+            ):
+                counters["receipt_verified"] += 1
+                verified_receipts[
+                    zet_title_remap_receipt_relative_path(
+                        proposal_sha256
+                    )
+                ] = receipt_document
+                status = "verified"
+            else:
+                counters["receipt_invalid_or_divergent"] += 1
+                status = "invalid_or_divergent"
+                blockers.append(
+                    "one_or_more_title_remap_receipts_invalid_or_divergent"
+                )
+                add_problem(
+                    {
+                        "kind": "receipt",
+                        "index": index,
+                        "status": status,
+                        "participant_count": participant_count,
+                        "issue_codes": unique_preserve_order(issue_codes),
+                    }
+                )
+            outcomes.append(
+                {
+                    "kind": "receipt",
+                    "index": index,
+                    "status": status,
+                    "participant_count": participant_count,
+                    "issue_codes": unique_preserve_order(issue_codes),
+                    "evidence_sha256": receipt_evidence_sha256,
+                }
+            )
+            if progress_callback is not None and (
+                index == 0
+                or index + 1 == len(receipt_paths)
+                or (index + 1) % 100 == 0
+            ):
+                progress_callback(
+                    "title-remap-receipt-audit",
+                    "scanned",
+                    index + 1,
+                    len(receipt_paths),
+                )
+        if progress_callback is not None:
+            progress_callback(
+                "title-remap-receipt-audit",
+                "done",
+                len(receipt_paths),
+                len(receipt_paths),
+            )
+            progress_callback(
+                "title-remap-journal-audit",
+                "start",
+                0,
+                len(journal_paths),
+            )
+
+        for index, journal_path in enumerate(journal_paths):
+            issue_codes: list[str] = []
+            state_counts = {
+                "before_count": 0,
+                "after_count": 0,
+                "divergent_count": 0,
+                "missing_count": 0,
+            }
+            state = "invalid"
+            final_receipt_state = "unknown"
+            case_sha256: str | None = None
+            journal: dict[str, Any] | None = None
+            raw_journal: bytes | None = None
+            try:
+                raw_journal, journal = (
+                    read_zet_title_remap_transaction_journal(
+                        root,
+                        journal_path,
+                        archive_id=archive_id,
+                    )
+                )
+                case_sha256 = (
+                    "sha256:" + hashlib.sha256(raw_journal).hexdigest()
+                )
+                classified = classify_zet_title_remap_transaction_journal(
+                    root,
+                    journal,
+                )
+                state = str(classified.pop("status"))
+                state_counts = classified
+                for item in journal["items"]:
+                    snapshot_issues = verify_zet_revision_before_snapshot(
+                        root,
+                        item.get("before_snapshot"),
+                        expected_before_sha256=item.get(
+                            "before_file_sha256"
+                        ),
+                        manifest_index=manifest_index,
+                    )
+                    if snapshot_issues:
+                        issue_codes.append(
+                            "title_transaction_before_snapshot_invalid"
+                        )
+                final_receipt_relative = journal["final_receipt_path"]
+                final_receipt = archive_internal_path(
+                    root,
+                    final_receipt_relative,
+                )
+                verified_receipt = verified_receipts.get(
+                    final_receipt_relative
+                )
+                if verified_receipt is not None:
+                    receipt_matches_journal = all(
+                        verified_receipt.get(field) == journal.get(field)
+                        for field in (
+                            "archive_id",
+                            "proposal_sha256",
+                            "plan_digest",
+                            "write_plan_digest",
+                            "reviewed_by",
+                            "human_affirmation",
+                            "item_count",
+                            "items",
+                        )
+                    ) and (
+                        verified_receipt.get("applied_at")
+                        == journal.get("prepared_at")
+                    )
+                    if receipt_matches_journal:
+                        final_receipt_state = "verified"
+                        state = "stale_completed"
+                    else:
+                        final_receipt_state = "present_unverified"
+                        state = "divergent"
+                        issue_codes.append(
+                            "title_transaction_final_receipt_binding_mismatch"
+                        )
+                elif final_receipt.exists() or final_receipt.is_symlink():
+                    final_receipt_state = "present_unverified"
+                    state = "divergent"
+                    issue_codes.append(
+                        "title_transaction_final_receipt_present_unverified"
+                    )
+                else:
+                    final_receipt_state = "absent"
+            except (
+                ArchiveServiceError,
+                ArchivePathError,
+                OSError,
+                ValueError,
+            ):
+                issue_codes.append(
+                    "title_transaction_journal_unreadable_or_invalid"
+                )
+
+            if "title_transaction_before_snapshot_invalid" in issue_codes:
+                counters["journal_snapshot_evidence_invalid"] += 1
+                blockers.append(
+                    "one_or_more_title_transaction_snapshots_invalid"
+                )
+            if state == "prepared":
+                counters["journal_prepared"] += 1
+                issue_codes.append("title_transaction_prepared")
+                blockers.append(
+                    "one_or_more_interrupted_title_transactions"
+                )
+            elif state == "partially_applied":
+                counters["journal_partially_applied"] += 1
+                issue_codes.append("title_transaction_partially_applied")
+                blockers.append(
+                    "one_or_more_interrupted_title_transactions"
+                )
+            elif state == "fully_applied_receipt_missing":
+                counters["journal_fully_applied_receipt_missing"] += 1
+                issue_codes.append(
+                    "title_transaction_canonical_writes_complete_receipt_missing"
+                )
+                blockers.append(
+                    "one_or_more_interrupted_title_transactions"
+                )
+            elif state == "divergent":
+                counters["journal_divergent"] += 1
+                issue_codes.append(
+                    "title_transaction_participant_missing_or_divergent"
+                )
+                blockers.append(
+                    "one_or_more_title_transaction_journals_invalid_or_divergent"
+                )
+            elif state == "stale_completed":
+                counters["journal_stale_completed"] += 1
+                warnings.append(
+                    "one_or_more_completed_title_transaction_journals_remain"
+                )
+            else:
+                counters["journal_invalid"] += 1
+                blockers.append(
+                    "one_or_more_title_transaction_journals_invalid_or_divergent"
+                )
+            case = {
+                "case_index": index,
+                "case_sha256": case_sha256,
+                "observed_state": state,
+                **state_counts,
+                "participant_count": (
+                    int(journal.get("item_count") or 0)
+                    if isinstance(journal, dict)
+                    else 0
+                ),
+                "final_receipt_state": final_receipt_state,
+                "write_lock_state": "unchecked",
+                "issue_codes": unique_preserve_order(issue_codes),
+            }
+            journal_cases.append(case)
+            journal_records.append(
+                {
+                    "path": journal_path,
+                    "document": journal,
+                    "case": case,
+                }
+            )
+            if progress_callback is not None and (
+                index == 0
+                or index + 1 == len(journal_paths)
+                or (index + 1) % 100 == 0
+            ):
+                progress_callback(
+                    "title-remap-journal-audit",
+                    "scanned",
+                    index + 1,
+                    len(journal_paths),
+                )
+        if progress_callback is not None:
+            progress_callback(
+                "title-remap-journal-audit",
+                "done",
+                len(journal_paths),
+                len(journal_paths),
+            )
+
+        lock_exists = write_lock_path.exists() or write_lock_path.is_symlink()
+        matching_record: dict[str, Any] | None = None
+        lock_audit_state = "absent"
+        lock_evidence_sha256: str | None = None
+        if lock_exists:
+            try:
+                lock = read_zet_title_remap_write_lock(
+                    root,
+                    write_lock_path,
+                )
+                lock_evidence_sha256 = (
+                    "sha256:" + sha256_path(write_lock_path)
+                )
+                matches = [
+                    record
+                    for record in journal_records
+                    if isinstance(record.get("document"), dict)
+                    and record["path"].name
+                    == lock["transaction_journal_name"]
+                    and record["document"].get("proposal_sha256")
+                    == lock["proposal_sha256"]
+                    and record["document"].get("plan_digest")
+                    == lock["plan_digest"]
+                    and record["document"].get("write_plan_digest")
+                    == lock["write_plan_digest"]
+                ]
+                if len(matches) == 1:
+                    matching_record = matches[0]
+                    lock_audit_state = "present_matching"
+                    counters["write_lock_matching"] += 1
+                    matching_record["case"][
+                        "write_lock_state"
+                    ] = "present_matching"
+                else:
+                    raise ArchiveServiceError(
+                        "Title write lock has no unique journal."
+                    )
+            except (
+                ArchiveServiceError,
+                ArchivePathError,
+                OSError,
+                ValueError,
+            ):
+                lock_audit_state = "orphaned_or_invalid"
+                counters["write_lock_orphaned_or_invalid"] += 1
+                blockers.append("title_remap_write_lock_orphaned_or_invalid")
+                add_problem(
+                    {
+                        "kind": "write_lock",
+                        "status": "orphaned_or_invalid",
+                        "issue_codes": [
+                            "title_remap_write_lock_orphaned_or_invalid"
+                        ],
+                    }
+                )
+        for record in journal_records:
+            if record is matching_record:
+                continue
+            if not isinstance(record.get("document"), dict):
+                record["case"]["write_lock_state"] = "not_verifiable"
+                continue
+            record["case"]["write_lock_state"] = "missing_or_mismatched"
+            counters["write_lock_missing_for_journal"] += 1
+            blockers.append(
+                "one_or_more_title_transaction_journals_missing_matching_lock"
+            )
+            record["case"]["issue_codes"] = unique_preserve_order(
+                [
+                    *record["case"]["issue_codes"],
+                    "title_transaction_matching_write_lock_missing",
+                ]
+            )
+        if lock_exists and matching_record is not None:
+            warnings.append("title_remap_write_lock_remains")
+        outcomes.append(
+            {
+                "kind": "write_lock",
+                "state": lock_audit_state,
+                "matching_case_index": (
+                    matching_record["case"]["case_index"]
+                    if matching_record is not None
+                    else None
+                ),
+                "evidence_sha256": lock_evidence_sha256,
+            }
+        )
+        for record in journal_records:
+            case = record["case"]
+            if (
+                case["observed_state"] != "stale_completed"
+                or case["issue_codes"]
+            ):
+                add_problem(
+                    {
+                        "kind": "transaction_journal",
+                        **case,
+                    }
+                )
+            outcomes.append(
+                {
+                    "kind": "transaction_journal",
+                    **case,
+                }
+            )
+
+    blockers = unique_preserve_order(blockers)
+    warnings = unique_preserve_order(warnings)
+    complete = bool(
+        scan_allowed
+        and not manifest_blockers
+        and "title_receipt_root_unsafe" not in blockers
+        and "title_remap_private_root_unsafe" not in blockers
+    )
+    return {
+        "ok": not blockers,
+        "dry_run": bool(dry_run),
+        "schema": ZET_TITLE_REMAP_RECEIPT_AUDIT_SCHEMA,
+        "lifecycle_action": "zet_title_remap_receipt_audit",
+        "status": (
+            "healthy" if not blockers and not warnings else "attention_required"
+        ),
+        "archive_id": archive_id,
+        "audit_digest": sha256_json_value(outcomes),
+        "summary": {
+            "complete": complete,
+            "receipt_count": len(receipt_paths),
+            "journal_count": len(journal_paths),
+            "write_lock_present": bool(
+                write_lock_path.exists() or write_lock_path.is_symlink()
+            ),
+            **counters,
+            "problem_count": problem_total,
+            "problems_returned": len(problems),
+            "problems_truncated": len(problems) < problem_total,
+            "journal_cases_returned": len(journal_cases),
+            "journal_cases_truncated": (
+                len(journal_cases) < len(journal_paths)
+            ),
+            "max_receipts": effective_max_receipts,
+            "max_journals": effective_max_journals,
+            "max_problems": effective_max_problems,
+        },
+        "problems": problems,
+        "transaction_journal_cases": journal_cases,
+        "write_boundary": {
+            "files_written": False,
+            "files_deleted": False,
+            "locks_deleted": False,
+            "receipts_modified": False,
+            "canonical_zets_modified": False,
+        },
+        "recovery_boundary": {
+            "recovery_planned": False,
+            "recovery_executed": False,
+            "receipt_finalized": False,
+            "automatic_cleanup_implemented": False,
+            "approved_revert_implemented": False,
+        },
+        "privacy_guards": {
+            "canonical_file_bytes_read_for_hash_validation": bool(
+                receipt_paths or journal_paths
+            ),
+            "canonical_body_text_echoed": False,
+            "old_or_new_title_text_echoed": False,
+            "title_hashes_echoed": False,
+            "title_lengths_echoed": False,
+            "receipt_private_metadata_read": bool(receipt_paths),
+            "receipt_paths_echoed": False,
+            "journal_private_metadata_read": bool(journal_paths),
+            "journal_paths_echoed": False,
+            "lock_file_content_read": bool(
+                write_lock_path.is_file()
+                and not write_lock_path.is_symlink()
+            ),
+            "lock_file_content_echoed": False,
+            "zettel_ids_echoed": False,
+            "zettel_paths_echoed": False,
+            "reviewed_by_echoed": False,
+            "proposal_sha256_echoed": False,
+            "snapshot_paths_echoed": False,
+            "absolute_local_paths_echoed": False,
+            "provider_api_called": False,
+            "model_called": False,
+            "secret_store_or_environment_read": False,
+        },
+        "blockers": blockers,
+        "warnings": warnings,
+        "next_safe_actions": (
+            ["No title-remap receipt or transaction evidence action is required."]
+            if not blockers and not warnings
+            else [
+                "Retain every title-remap receipt, transaction journal, write lock, and prior-byte snapshot.",
+                "Do not delete, rewrite, resume, roll back, or finalize title-remap evidence by hand.",
+                "Automatic recovery and approved title revert are not implemented in this release.",
+            ]
+        ),
+    }
 
 
 def first_read_readiness(
