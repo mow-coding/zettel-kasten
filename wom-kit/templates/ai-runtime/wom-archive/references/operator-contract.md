@@ -276,10 +276,33 @@ exact rollback for an interrupted apply, and forward completion or receipt
 finalization for an interrupted revert. Revert moves forward because the
 removed private abstract text is intentionally absent from the journal and
 receipt. A divergent/invalid journal or any deterministic final receipt that
-exists but does not fully verify is a manual forensic hold. The planner never
-executes: every case requires fresh recovery approval and current-state
-revalidation, and no canonical file, receipt, journal, or lock is written or
-deleted. Do not carry out its recommendation by hand.
+exists but does not fully verify is a manual forensic hold. The planner itself
+never executes and no case is immediately safe to run.
+
+For one non-forensic case, bind the exact operation, basis SHA-256, complete
+plan digest, and fixed action to the separate executor preview:
+
+```bash
+archive zet-abstract-backfill-recover <archive-root> --operation <apply|revert> --basis-sha256 <case.basis_sha256> --expected-plan-digest <plan.plan_digest> --expected-action <case.recommended_action> --dry-run --max-receipts 5000 --max-locks 5000 --max-cases 100 --progress --format json
+```
+
+Only after a human reviews that exact case, confirms the original process has
+stopped, and makes the archive quiescent may the host approve:
+
+```bash
+archive zet-abstract-backfill-recover <archive-root> --operation <apply|revert> --basis-sha256 <case.basis_sha256> --expected-plan-digest <plan.plan_digest> --expected-action <case.recommended_action> --approve --reviewed-by person:<reviewer> --affirm-recovery-reviewed --affirm-archive-quiescent --max-receipts 5000 --max-locks 5000 --max-cases 100 --progress --format json
+```
+
+The executor reruns the complete plan under a recovery-only OS advisory guard,
+reacquires a missing matching basis lock, and revalidates every participant
+hash. It never executes `manual_forensic_hold`. Failure or forced termination
+retains the journal and lock and does not reverse already completed
+safe-direction recovery writes; generate a fresh plan and obtain fresh approval
+before resuming. The guard does not lock external editors, older WOM versions,
+or ordinary different-basis writers, so never infer archive quiescence from a
+lock filename. Recovery-produced revert receipts require WOM-kit v0.3.267 or
+newer for audit because they truthfully record
+`rollback_on_runtime_failure: false`.
 `--max-locks` independently caps locks and journals. Never auto-delete a lock or
 journal, and never edit an immutable receipt to silence this audit.
 

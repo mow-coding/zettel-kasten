@@ -2,6 +2,40 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.3.267 승인 기반 초록 복구 실행기
+
+아카이브 전체를 마이그레이션할 필요는 없습니다. v0.3.265 이상에서 남은 초록
+트랜잭션 저널 한 건을 처리하는 CLI 실행기가 추가됩니다.
+
+```powershell
+archive zet-abstract-backfill-recovery-plan <archive-root> --dry-run --format json
+archive zet-abstract-backfill-recover <archive-root> --operation <apply|revert> --basis-sha256 <case.sha256> --expected-plan-digest <plan.sha256> --expected-action <action> --dry-run --format json
+```
+
+먼저 미리보기 하세요. 실제 실행에는 안전한 검수자 아이디,
+`--affirm-recovery-reviewed`, `--affirm-archive-quiescent`가 추가로 필요합니다.
+실행기는 복구 전용 OS advisory guard를 잡은 상태에서 전체 제한 검사를 다시
+실행하고, 전체 계획 digest·basis·action·영수증 상태·모든 참여 파일 해시가
+그대로일 때만 움직입니다.
+
+중단된 apply는 저널에 기록된 정확한 before 해시 쪽으로만 돌아갑니다. 중단된
+revert는 정확한 after 해시 쪽으로만 계속 진행하고, 마지막에 결정론적 revert
+영수증을 새 파일로 쓰고 검증합니다. 시작 전 상태나 검증된 완료 잔여물은 해당
+잠금과 저널만 지웁니다. 수동 포렌식 보류, 불일치, 참여 파일 누락, 위험한 잠금,
+절단된 계획, 존재하지만 검증되지 않은 최종 영수증은 실행하지 않습니다.
+
+실행기가 아카이브 정지를 자동 증명하지는 않습니다. guard는 복구 실행기끼리만
+조정하며, 외부 편집기·구버전 WOM·다른 basis의 일반 writer는 막지 못합니다.
+기존 프로세스와 모든 writer를 중지한 뒤에만 아카이브 정지를 확인하세요.
+
+복구는 나중 단계가 실패해도 이미 끝낸 안전 방향 쓰기를 반대로 되돌리지 않습니다.
+남은 저널과 잠금에서 새 계획을 만들고 새 승인을 받아 이어갑니다. 그래서 복구로
+만든 revert 영수증은 `rollback_on_runtime_failure: false`라고 사실대로
+기록합니다. v0.3.267은 기존 v0.1 스키마의 이 필드를 `const: true`에서 boolean으로
+완화합니다. 기존 `true` 영수증은 모두 계속 유효하지만, v0.3.266 이하는 새 복구
+영수증을 무효로 거부합니다. 새 복구 영수증을 만든 뒤에는 감사에 v0.3.267 이상을
+유지해야 합니다. 이는 단방향 reader 호환 게이트입니다.
+
 ## v0.3.266 읽기 전용 초록 복구 결정
 
 기존 아카이브, zet, 영수증, 저널, 제안서, 인덱스를 마이그레이션할 필요가

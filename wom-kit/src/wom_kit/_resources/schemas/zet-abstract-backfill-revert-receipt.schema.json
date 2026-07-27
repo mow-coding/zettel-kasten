@@ -86,7 +86,7 @@
         "other_frontmatter_semantics_preserved": {"const": true},
         "updated_at_changed": {"const": false},
         "source_receipt_preserved": {"const": true},
-        "rollback_on_runtime_failure": {"const": true},
+        "rollback_on_runtime_failure": {"type": "boolean"},
         "crash_recovery_journal_written": {"type": "boolean"}
       }
     },

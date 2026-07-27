@@ -24,6 +24,43 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.267 Approval-Gated Abstract Recovery Executor
+
+No bulk archive migration is required. The release adds one single-case CLI
+writer for a retained v0.3.265+ abstract transaction journal:
+
+```powershell
+archive zet-abstract-backfill-recovery-plan <archive-root> --dry-run --format json
+archive zet-abstract-backfill-recover <archive-root> --operation <apply|revert> --basis-sha256 <case.sha256> --expected-plan-digest <plan.sha256> --expected-action <action> --dry-run --format json
+```
+
+Preview first. Approval additionally requires a safe reviewer,
+`--affirm-recovery-reviewed`, and `--affirm-archive-quiescent`. The executor
+reruns the complete bounded plan under a recovery-only OS advisory guard and
+acts only when the complete plan digest, basis, action, receipt state, and every
+participant hash still agree.
+
+Interrupted apply moves only back to exact journaled before hashes. Interrupted
+revert moves only forward to exact journaled after hashes and then create-new
+writes and verifies the deterministic revert receipt. Prepared or verified
+completed residue removes only its matching lock and journal. Manual forensic
+hold, divergence, missing participants, unsafe locks, truncated plans, and an
+occupied but unverified final receipt never execute.
+
+The executor does not prove archive quiescence. Its guard coordinates recovery
+executors only; external editors, older WOM versions, and ordinary
+different-basis writers remain outside it. Stop the old process and all writers
+before affirming archive quiescence.
+
+Recovery does not reverse already completed safe-direction writes when a later
+step fails. The retained journal and lock record progress for a fresh plan and
+fresh approval. Recovery-produced revert receipts therefore truthfully record
+`rollback_on_runtime_failure: false`. v0.3.267 relaxes that v0.1 schema field
+from `const: true` to a boolean. Every older receipt with `true` remains valid,
+but v0.3.266 and older reject a new recovery-produced receipt. After creating
+one, keep WOM-kit v0.3.267 or newer for receipt audit. This is a one-way reader
+compatibility gate.
+
 ## v0.3.266 Read-Only Abstract Recovery Decisions
 
 No archive, zet, receipt, journal, proposal, or index migration is required.
