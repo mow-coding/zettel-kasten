@@ -1,8 +1,8 @@
 {
   "schema": "wom-kit/package-resource-manifest/v0.1",
-  "version": "0.3.268",
+  "version": "0.3.269",
   "source_of_truth": "wom-kit source resource directories",
-  "file_count": 93,
+  "file_count": 95,
   "files": [
     {
       "source": "schemas/anchor-metadata.schema.json",
@@ -231,6 +231,18 @@
       "packaged": "schemas/zet-title-remap-proposal.schema.json",
       "bytes": 849,
       "sha256": "eec5642515f70017370b3e6bd22aa56779683219cf1efe32e96f817bdc2a85ac"
+    },
+    {
+      "source": "schemas/zet-title-remap-receipt.schema.json",
+      "packaged": "schemas/zet-title-remap-receipt.schema.json",
+      "bytes": 4787,
+      "sha256": "c0cf5481e48c0f42bc3dc60ab0555bc5eee50f689b23c57f1a4ec8ce89805870"
+    },
+    {
+      "source": "schemas/zet-title-remap-transaction-journal.schema.json",
+      "packaged": "schemas/zet-title-remap-transaction-journal.schema.json",
+      "bytes": 3300,
+      "sha256": "050151e0985e7c92bea15c856d2bc693c82596ba796db63af99ef8d22c4f5796"
     },
     {
       "source": "schemas/zettel-frontmatter.schema.json",
@@ -557,10 +569,10 @@
       "sha256": "d619dc26af3216498c8392dfe838b0fe752d4bad9da998a58ca682d668fc510c"
     },
     {
-      "source": "docs/releases/v0.3.268.md",
-      "packaged": "release-notes/v0.3.268.md",
-      "bytes": 2637,
-      "sha256": "348a3e4b40285e4212b0956f98d052e49d0ea6ca011e20b096db299020a9e915"
+      "source": "docs/releases/v0.3.269.md",
+      "packaged": "release-notes/v0.3.269.md",
+      "bytes": 2962,
+      "sha256": "f771cbc13cf62139932d402703ba87ecf37aca8280ff942ea30c1bf5ca89ece6"
     }
   ]
 }
