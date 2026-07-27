@@ -78,6 +78,7 @@ Supporting philosophy and model docs:
 - [zet Abstract Backfill Recovery Plan](zet-abstract-backfill-recovery-plan.md)
 - [zet Abstract Backfill Recovery Executor](zet-abstract-backfill-recover.md)
 - [Reviewed zet Title Remap Plan](zet-title-remap-plan.md)
+- [Approved zet Title Remap Write](zet-title-remap-write.md)
 - [Contiguous Node Reading](zet-catalog-contiguous-reading.md)
 - [Seeded Connection Reading Order](seeded-connection-reading-order.md)
 - [Seeded Reading Route Evidence](seeded-reading-route-evidence.md)

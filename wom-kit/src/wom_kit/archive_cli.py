@@ -9304,6 +9304,84 @@ def command_first_read_readiness(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 1
 
 
+def command_zet_title_remap_write(args: argparse.Namespace) -> int:
+    reporter = CommandProgressReporter(
+        bool(getattr(args, "progress", False)),
+        label="zet-title-remap-write",
+    )
+    try:
+        result = archive_services.zet_title_remap_write(
+            Path(args.archive_root),
+            proposal_path=str(args.proposal),
+            expected_proposal_sha256=str(args.expected_proposal_sha256),
+            expected_plan_digest=str(args.expected_plan_digest),
+            expected_write_plan_digest=args.expected_write_plan_digest,
+            max_items=int(args.max_items),
+            dry_run=bool(args.dry_run),
+            approve=bool(args.approve),
+            reviewed_by=args.reviewed_by,
+            affirm_titles_reviewed=bool(args.affirm_titles_reviewed),
+            progress_callback=reporter.progress,
+        )
+    except archive_services.ZetTitleRemapInputError as exc:
+        print(
+            f"zet-title-remap-write blocked [{exc.code}]: {exc}",
+            file=sys.stderr,
+        )
+        return 1
+    except archive_services.ArchiveServiceError:
+        print(
+            "zet-title-remap-write could not validate a safe private proposal or archive target.",
+            file=sys.stderr,
+        )
+        return 1
+    except (OSError, UnicodeError, ValueError, RecursionError):
+        print(
+            "zet-title-remap-write failed before a privacy-safe result could be produced.",
+            file=sys.stderr,
+        )
+        return 1
+    except Exception:
+        print(
+            "zet-title-remap-write failed before a privacy-safe result could be produced.",
+            file=sys.stderr,
+        )
+        return 1
+    finally:
+        reporter.close()
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        print(f"WOM zet title remap write: {result.get('status') or 'unknown'}")
+        summary = result.get("summary") or {}
+        print(f"Candidates: {summary.get('candidate_count', 0)}")
+        print(
+            "Canonical files written this run: "
+            f"{summary.get('canonical_files_written_this_run')}"
+        )
+        receipt = result.get("receipt") or {}
+        print(f"Receipt exists: {'yes' if receipt.get('exists') else 'no'}")
+        snapshots = result.get("prior_byte_snapshots") or {}
+        print(
+            "Verified prior-byte snapshots: "
+            f"{snapshots.get('verified_snapshot_count', 0)}"
+        )
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+        if result.get("next_safe_actions"):
+            print("Next safe actions:")
+            for action in result["next_safe_actions"]:
+                print(f"- {action}")
+    return 0 if result.get("ok") else 1
+
+
 def command_abstract_freshness(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print("abstract-freshness is read-only and requires --dry-run.", file=sys.stderr)
@@ -19999,6 +20077,75 @@ def build_parser() -> argparse.ArgumentParser:
         help="Output format.",
     )
     zet_title_remap_plan.set_defaults(func=command_zet_title_remap_plan)
+
+    zet_title_remap_write = subcommands.add_parser(
+        "zet-title-remap-write",
+        aliases=["title-remap-write"],
+        help="Apply one unchanged reviewed title proposal with exact prior-byte snapshots and a private receipt.",
+    )
+    zet_title_remap_write.add_argument(
+        "archive_root",
+        help="Archive root containing canonical zets.",
+    )
+    zet_title_remap_write.add_argument(
+        "--proposal",
+        required=True,
+        help="Private JSONL under .wom-scratch/title-remap/; its path and values are never echoed.",
+    )
+    zet_title_remap_write.add_argument(
+        "--expected-proposal-sha256",
+        required=True,
+        help="Exact proposal SHA-256 returned by zet-title-remap-plan.",
+    )
+    zet_title_remap_write.add_argument(
+        "--expected-plan-digest",
+        required=True,
+        help="Exact complete plan digest returned by zet-title-remap-plan.",
+    )
+    zet_title_remap_write.add_argument(
+        "--expected-write-plan-digest",
+        help="Exact candidate digest returned by this command's dry-run; required for approve.",
+    )
+    zet_title_remap_write.add_argument(
+        "--max-items",
+        type=int,
+        default=500,
+        help="Maximum proposal rows to inspect and write (1-5000).",
+    )
+    mode = zet_title_remap_write.add_mutually_exclusive_group()
+    mode.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Revalidate proposal/current bytes and return the write-plan digest without writing.",
+    )
+    mode.add_argument(
+        "--approve",
+        action="store_true",
+        help="Apply only the unchanged dry-run candidate after all approval bindings pass.",
+    )
+    zet_title_remap_write.add_argument(
+        "--reviewed-by",
+        help="Safe reviewer actor id; required only with --approve and never echoed.",
+    )
+    zet_title_remap_write.add_argument(
+        "--affirm-titles-reviewed",
+        action="store_true",
+        help="Affirm that every proposed title was reviewed; required only with --approve.",
+    )
+    zet_title_remap_write.add_argument(
+        "--progress",
+        action="store_true",
+        help="Stream content-free proposal, snapshot, write, and receipt progress to stderr.",
+    )
+    zet_title_remap_write.add_argument(
+        "--format",
+        choices=["text", "json"],
+        default="json",
+        help="Output format.",
+    )
+    zet_title_remap_write.set_defaults(
+        func=command_zet_title_remap_write
+    )
 
     abstract_freshness = subcommands.add_parser(
         "abstract-freshness",
