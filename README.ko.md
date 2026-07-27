@@ -32,10 +32,10 @@ wom-kit/docs/releases/에만 쌓고, baseline 사다리와 tag 목록을 여기�
 현재 공개 기준:
 
 ```text
-v0.3.266 pre-release
+v0.3.267 pre-release
 ```
 
-이전 공개 기준: v0.3.265 pre-release.
+이전 공개 기준: v0.3.266 pre-release.
 
 전체 릴리스 이력은 [CHANGELOG.md](CHANGELOG.md)와 [wom-kit/docs/releases/](wom-kit/docs/releases/)를 보세요.
 
@@ -52,7 +52,7 @@ Roadmap 요약: `v0.1.x`는 아이디어/프로토콜 언어 라인, `v0.2.x`는
 정확한 릴리스 파일을 격리된 명령줄 도구로 설치합니다.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.266/wom_kit-0.3.266-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.267/wom_kit-0.3.267-py3-none-any.whl"
 archive --version
 ```
 
@@ -108,7 +108,7 @@ archive runtime-skill-install --dry-run --format json
 
 ### 조회와 view
 
-- runtime context, profile, source/objet intake, block header, prompt boundary를 위한 read-only preview layer. 선택형 360자 `frontmatter.abstract`와 CLI/MCP `zet-catalog`는 모든 zet를 초록+타이 compact projection으로 열거하고, strict 연속 zet 완주, snapshot/항목/전체 응답/envelope 예상 토큰 증거와 선택형 envelope 예비 공간을 제공합니다. 첫 페이지는 전체 진단을 유지하고 이후에는 항목과 완주 증거를 그대로 둔 채 반복 진단만 줄이는 선택형 compact continuation 응답을 쓸 수 있습니다. 검증된 seed의 가까운 타이부터 읽되 끊어진 모든 component까지 포함하는 연결 순서와, 각 항목이 seed인지 어떤 타이를 따라왔는지 설명하는 선택형 `routed_reading`도 제공합니다. 별도 준비 상태는 모든 zet 방문, 비공개 처리되지 않은 초록의 실제 이용 가능 여부, 후속 본문 읽기를 위한 고유 ID 상태를 구분하며, generated index/map이나 영구 WOM goal/loop 상태를 만들지 않습니다. 비공개 처리되지 않은 `read-zettel`은 AI가 실제로 읽은 파일·본문의 정확한 해시를 함께 주고, 큰 본문은 첫 페이지의 전체 본문 해시에 묶인 선택형 Unicode 글자 단위 페이지로 이어 읽을 수 있습니다. `zet-abstract-backfill-plan`은 초록 누락 후보를 현재 정본 바이트와 대조합니다. `zet-abstract-backfill-write`는 사람이 검토한 SHA 기반 초록만 반영하고, `zet-abstract-backfill-revert`는 이후 정본 수정이 없을 때만 삽입 전 바이트를 복원합니다. 두 방향 모두 첫 정본 수정 전에 비공개·텍스트 없는 저널을 남기므로, `zet-abstract-backfill-receipt-audit`은 중단 상태를 시작 전·일부 반영·전부 반영됐지만 영수증 없음·외부 변경 불일치로 구분합니다. v0.3.266의 읽기 전용 `zet-abstract-backfill-recovery-plan`은 각 상태를 증거 정리·apply 되돌리기·revert 계속 진행/영수증 마무리·수동 보류로 구분하지만 실제 복구는 실행하지 않습니다. 공개 출력에는 아이디·경로·본문·초록·검수자 값이 나오지 않습니다.
+- runtime context, profile, source/objet intake, block header, prompt boundary를 위한 read-only preview layer. 선택형 360자 `frontmatter.abstract`와 CLI/MCP `zet-catalog`는 모든 zet를 초록+타이 compact projection으로 열거하고, strict 연속 zet 완주, snapshot/항목/전체 응답/envelope 예상 토큰 증거와 선택형 envelope 예비 공간을 제공합니다. 첫 페이지는 전체 진단을 유지하고 이후에는 항목과 완주 증거를 그대로 둔 채 반복 진단만 줄이는 선택형 compact continuation 응답을 쓸 수 있습니다. 검증된 seed의 가까운 타이부터 읽되 끊어진 모든 component까지 포함하는 연결 순서와, 각 항목이 seed인지 어떤 타이를 따라왔는지 설명하는 선택형 `routed_reading`도 제공합니다. 별도 준비 상태는 모든 zet 방문, 비공개 처리되지 않은 초록의 실제 이용 가능 여부, 후속 본문 읽기를 위한 고유 ID 상태를 구분하며, generated index/map이나 영구 WOM goal/loop 상태를 만들지 않습니다. 비공개 처리되지 않은 `read-zettel`은 AI가 실제로 읽은 파일·본문의 정확한 해시를 함께 주고, 큰 본문은 첫 페이지의 전체 본문 해시에 묶인 선택형 Unicode 글자 단위 페이지로 이어 읽을 수 있습니다. `zet-abstract-backfill-plan`은 초록 누락 후보를 현재 정본 바이트와 대조합니다. `zet-abstract-backfill-write`는 사람이 검토한 SHA 기반 초록만 반영하고, `zet-abstract-backfill-revert`는 이후 정본 수정이 없을 때만 삽입 전 바이트를 복원합니다. 두 방향 모두 첫 정본 수정 전에 비공개·텍스트 없는 저널을 남기므로, `zet-abstract-backfill-receipt-audit`은 중단 상태를 시작 전·일부 반영·전부 반영됐지만 영수증 없음·외부 변경 불일치로 구분합니다. v0.3.266의 읽기 전용 `zet-abstract-backfill-recovery-plan`은 각 상태를 증거 정리·apply 되돌리기·revert 계속 진행/영수증 마무리·수동 보류로 구분합니다. v0.3.267의 승인형 `zet-abstract-backfill-recover`는 전체 계획 digest, 한 사건의 SHA/action, 새 사람 검토, 명시적 아카이브 정지 확인을 모두 받은 비포렌식 사건 한 건만 안전 방향으로 실행하거나 증거를 정리합니다. 공개 출력에는 아이디·경로·본문·초록·검수자 값이 나오지 않습니다.
 - read-only objet reference resolution 및 zettel objet link preview,
 
 ### 공유와 ZET preview
@@ -388,7 +388,7 @@ WOM, `zettel-kasten`, `zet`, `ZET`는 버전이 있는 protocol family로 관리
 Release tag는 compatibility checkpoint입니다.
 
 ```text
-v0.3.266 (현재 checkpoint)
+v0.3.267 (현재 checkpoint)
 ```
 
 `v0.2.5` 이후의 공개 릴리스에는 compatibility checkpoint tag가 붙습니다. 전체

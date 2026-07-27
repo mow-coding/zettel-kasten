@@ -1,6 +1,6 @@
 # zet Abstract Backfill Recovery Plan
 
-Status: implemented as a read-only decision surface in v0.3.266
+Status: read-only decision surface since v0.3.266; single-case executor available since v0.3.267
 
 ## Purpose
 
@@ -51,8 +51,9 @@ limits differ:
 - completing the approved revert forward remains reconstructible from any
   participants still at the journaled before state.
 
-These are policy decisions for a later executor, not proof that the executor
-already exists.
+Since v0.3.267, every non-forensic case reports that the separate single-case
+executor is implemented. The plan itself remains read-only and still grants no
+write authority.
 
 ## Receipt And Lock Evidence
 
@@ -85,11 +86,11 @@ Every case reports:
 ```text
 fresh_recovery_approval_required: true
 current_state_revalidation_required: true
-execution_implemented: false
+execution_implemented: true  # false only for manual_forensic_hold
 safe_to_execute_now: false
 ```
 
-The command never:
+The planner command never:
 
 - modifies a canonical zet;
 - creates, edits, replaces, or deletes a receipt;
@@ -98,8 +99,11 @@ The command never:
 - resumes an apply or revert automatically;
 - serializes different transaction bases that happen to share participants.
 
-Do not carry out the recommendation by hand. Retain the journal and lock for the
-later approval-gated recovery executor or for manual forensic review.
+Do not carry out the recommendation by hand. Retain the journal and lock, then
+bind one non-forensic case to the separate
+`zet-abstract-backfill-recover` command with the complete plan digest, exact
+basis SHA-256, exact action, fresh approval, and archive-quiescence
+affirmation. See [zet Abstract Backfill Recovery Executor](zet-abstract-backfill-recover.md).
 
 ## Privacy Boundary
 
@@ -130,5 +134,5 @@ network.
 
 This plan proves only that a bounded local decision was derived from current
 hash evidence. It does not prove semantic abstract quality, external-editor
-exclusion, recovery execution, remote backup, or Windows sudden-power-loss
-durability.
+exclusion, approved recovery execution, remote backup, or Windows
+sudden-power-loss durability.

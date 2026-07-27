@@ -694,6 +694,8 @@ PROGRESS_STAGE_UNITS = {
     "abstract-receipt-audit": "revision_receipts",
     "abstract-lock-audit": "transaction_locks",
     "abstract-transaction-journal-audit": "transaction_journals",
+    "abstract-recovery-write": "zet_recovery_writes",
+    "abstract-recovery-receipt": "revision_receipts",
     "source-hash": "bytes",
     "store-hash": "bytes",
     "index-zettels": "zet_files",
@@ -10144,6 +10146,80 @@ def command_zet_abstract_backfill_recovery_plan(args: argparse.Namespace) -> int
         print(
             "Execution implemented: "
             f"{bool(result.get('execution_boundary', {}).get('execution_implemented'))}"
+        )
+    return 0 if result.get("ok") else 1
+
+
+def command_zet_abstract_backfill_recover(
+    args: argparse.Namespace,
+) -> int:
+    reporter = CommandProgressReporter(
+        bool(getattr(args, "progress", False)),
+        label="zet-abstract-backfill-recover",
+    )
+    try:
+        result = archive_services.zet_abstract_backfill_recover(
+            Path(args.archive_root),
+            operation=str(args.operation),
+            basis_sha256=str(args.basis_sha256),
+            expected_plan_digest=str(args.expected_plan_digest),
+            expected_action=str(args.expected_action),
+            dry_run=bool(args.dry_run),
+            approve=bool(args.approve),
+            reviewed_by=args.reviewed_by,
+            affirm_recovery_reviewed=bool(
+                args.affirm_recovery_reviewed
+            ),
+            affirm_archive_quiescent=bool(
+                args.affirm_archive_quiescent
+            ),
+            max_receipts=int(args.max_receipts),
+            max_locks=int(args.max_locks),
+            max_cases=int(args.max_cases),
+            progress_callback=reporter.progress,
+        )
+    except archive_services.ArchiveServiceError:
+        print(
+            "zet-abstract-backfill-recover could not bind a safe private recovery case.",
+            file=sys.stderr,
+        )
+        return 1
+    except (ArchivePathError, OSError, ValueError):
+        print(
+            "zet-abstract-backfill-recover failed before a privacy-safe result could be produced.",
+            file=sys.stderr,
+        )
+        return 1
+    finally:
+        reporter.close()
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        summary = (
+            result.get("summary")
+            if isinstance(result.get("summary"), dict)
+            else {}
+        )
+        print(
+            "WOM zet abstract recovery: "
+            f"{result.get('status') or 'unknown'}"
+        )
+        print(
+            "Action: "
+            f"{result.get('expected_action') or 'unknown'}"
+        )
+        print(
+            "Canonical files written: "
+            f"{summary.get('canonical_files_written_this_run', 0)}"
+        )
+        print(
+            "Revert receipt written: "
+            f"{bool(summary.get('revert_receipt_written_this_run'))}"
+        )
+        print(
+            "Journal removed: "
+            f"{bool(summary.get('transaction_journal_removed'))}"
         )
     return 0 if result.get("ok") else 1
 
@@ -20614,6 +20690,96 @@ def build_parser() -> argparse.ArgumentParser:
     )
     zet_abstract_backfill_recovery_plan.set_defaults(
         func=command_zet_abstract_backfill_recovery_plan
+    )
+
+    zet_abstract_backfill_recover = subcommands.add_parser(
+        "zet-abstract-backfill-recover",
+        aliases=["abstract-backfill-recover"],
+        help="Preview or approve one plan-digest-bound interrupted abstract transaction recovery.",
+    )
+    zet_abstract_backfill_recover.add_argument(
+        "archive_root",
+        help="Archive root containing the retained private transaction journal.",
+    )
+    zet_abstract_backfill_recover.add_argument(
+        "--operation",
+        choices=["apply", "revert"],
+        required=True,
+        help="Journal operation selected by the reviewed recovery plan.",
+    )
+    zet_abstract_backfill_recover.add_argument(
+        "--basis-sha256",
+        required=True,
+        help="Exact privacy-safe transaction basis SHA-256 from the reviewed case.",
+    )
+    zet_abstract_backfill_recover.add_argument(
+        "--expected-plan-digest",
+        required=True,
+        help="Exact complete recovery-plan digest reviewed by the operator.",
+    )
+    zet_abstract_backfill_recover.add_argument(
+        "--expected-action",
+        choices=sorted(
+            archive_services.ZET_ABSTRACT_BACKFILL_RECOVERY_ACTIONS
+        ),
+        required=True,
+        help="Exact fixed action selected by the reviewed recovery case.",
+    )
+    zet_abstract_backfill_recover.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview the exact SHA/action-bound case without writing.",
+    )
+    zet_abstract_backfill_recover.add_argument(
+        "--approve",
+        action="store_true",
+        help="Execute one freshly revalidated recovery case.",
+    )
+    zet_abstract_backfill_recover.add_argument(
+        "--reviewed-by",
+        help="Safe reviewer id recorded only in a newly finalized revert receipt; never echoed.",
+    )
+    zet_abstract_backfill_recover.add_argument(
+        "--affirm-recovery-reviewed",
+        action="store_true",
+        help="Required with --approve: affirm the exact recovery direction and current plan were reviewed.",
+    )
+    zet_abstract_backfill_recover.add_argument(
+        "--affirm-archive-quiescent",
+        action="store_true",
+        help="Required with --approve: affirm the original process stopped and no writer/editor is active.",
+    )
+    zet_abstract_backfill_recover.add_argument(
+        "--max-receipts",
+        type=int,
+        default=5000,
+        help="Maximum total apply/revert receipts to re-audit (1-5000).",
+    )
+    zet_abstract_backfill_recover.add_argument(
+        "--max-locks",
+        type=int,
+        default=5000,
+        help="Maximum recognized locks and journals to re-audit (1-5000 each).",
+    )
+    zet_abstract_backfill_recover.add_argument(
+        "--max-cases",
+        type=int,
+        default=100,
+        help="Maximum privacy-safe recovery cases to bind (1-500).",
+    )
+    zet_abstract_backfill_recover.add_argument(
+        "--progress",
+        action="store_true",
+        help="Stream content-free audit, write, receipt, and heartbeat progress to stderr.",
+    )
+    zet_abstract_backfill_recover.add_argument(
+        "--format",
+        choices=["text", "json"],
+        default="json",
+        help="Output format.",
+    )
+    zet_abstract_backfill_recover.set_defaults(
+        func=command_zet_abstract_backfill_recover
     )
 
     status_board = subcommands.add_parser(

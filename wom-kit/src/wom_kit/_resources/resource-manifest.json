@@ -1,6 +1,6 @@
 {
   "schema": "wom-kit/package-resource-manifest/v0.1",
-  "version": "0.3.266",
+  "version": "0.3.267",
   "source_of_truth": "wom-kit source resource directories",
   "file_count": 93,
   "files": [
@@ -199,8 +199,8 @@
     {
       "source": "schemas/zet-abstract-backfill-revert-receipt.schema.json",
       "packaged": "schemas/zet-abstract-backfill-revert-receipt.schema.json",
-      "bytes": 4119,
-      "sha256": "38c4e6d77bce2c1477c1eea0928539200530df69159cdee104b246d1abd9bf3d"
+      "bytes": 4123,
+      "sha256": "e4db8b40dcb997ef72e0dc75ee064bf7d1f0819123d08db0fbb46f425afb7a9d"
     },
     {
       "source": "schemas/zet-abstract-backfill-transaction-journal.schema.json",
@@ -283,8 +283,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/references/operator-contract.md",
       "packaged": "templates/ai-runtime/wom-archive/references/operator-contract.md",
-      "bytes": 51806,
-      "sha256": "1d0a1b3fc0d954764b03b7a7eccb01ac53ee9bb6d2966e46921bb7bd19a0e344"
+      "bytes": 53334,
+      "sha256": "c6794b6247d03e3c05d60a1829593246690d2f12fe94d5b8482edd42f2f6ca6d"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/reading-memory-and-revision.md",
@@ -557,10 +557,10 @@
       "sha256": "d619dc26af3216498c8392dfe838b0fe752d4bad9da998a58ca682d668fc510c"
     },
     {
-      "source": "docs/releases/v0.3.266.md",
-      "packaged": "release-notes/v0.3.266.md",
-      "bytes": 3608,
-      "sha256": "de430913c36a8f7bb0f8e1853a28f383aeea8e8742b9589d224bb901bcd30af9"
+      "source": "docs/releases/v0.3.267.md",
+      "packaged": "release-notes/v0.3.267.md",
+      "bytes": 4341,
+      "sha256": "f597103a8de3085b5876b290670207e0ff90763e17debca16baa7b0512dc0697"
     }
   ]
 }
