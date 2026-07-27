@@ -10,10 +10,10 @@ It is not a website, SaaS app, dashboard, or visual note-taking product. The int
 
 ## Install The Command-Line Tool
 
-v0.3.265 provides a self-contained wheel on the exact GitHub release:
+v0.3.266 provides a self-contained wheel on the exact GitHub release:
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.265/wom_kit-0.3.265-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.266/wom_kit-0.3.266-py3-none-any.whl"
 archive --version
 ```
 
@@ -626,6 +626,9 @@ zet-abstract-backfill-revert --receipt receipts/revisions/abstract-backfill/<dig
 
 zet-abstract-backfill-receipt-audit --dry-run --max-receipts 5000 --max-locks 5000 --max-problems 100
   Audit every bounded apply/revert receipt lifecycle, recognized leftover transaction lock, and private v0.3.265 transaction journal. Healthy applied/reverted lifecycles become counts plus one audit digest; only bounded hash/index problem records are returned. Completed lock/journal residue is a warning only when its final receipt fully verifies; prepared, partial, complete-without-receipt, divergent, invalid, or unverified evidence blocks. `--max-locks` independently bounds both locks and journals. The command reads lock names but never lock content; it may read private journal ids, canonical paths, and reviewer metadata plus canonical bytes for hash validation, but echoes no private receipt/zet/text/reviewer/path value and writes or deletes nothing.
+
+zet-abstract-backfill-recovery-plan --dry-run --max-receipts 5000 --max-locks 5000 --max-cases 100
+  Turn each retained v0.3.265 transaction journal into one fixed, privacy-safe recovery recommendation without executing it. Prepared and verified-completed evidence plans cleanup; interrupted apply plans exact rollback; interrupted revert plans forward completion/finalization because removed private abstract text is not stored; divergent, invalid, or present-but-unverified final receipts force manual forensic hold. Every case requires fresh recovery approval and current-state revalidation, reports execution as unimplemented, and writes or deletes no canonical file, receipt, journal, or lock.
 
 read-zettel
   Read one zettel by id or archive-relative path. Use `--section overview` for the compact first read; MCP `read_zettel` accepts the same section values while keeping `body` as its compatibility default. Non-redacted results include exact canonical file SHA-256 and decoded returned-body SHA-256 so a private revision proposal can bind to the version actually read; redacted hashes are suppressed.
