@@ -1,6 +1,6 @@
 {
   "schema": "wom-kit/package-resource-manifest/v0.1",
-  "version": "0.3.267",
+  "version": "0.3.268",
   "source_of_truth": "wom-kit source resource directories",
   "file_count": 93,
   "files": [
@@ -229,8 +229,8 @@
     {
       "source": "schemas/zet-title-remap-proposal.schema.json",
       "packaged": "schemas/zet-title-remap-proposal.schema.json",
-      "bytes": 848,
-      "sha256": "f2b95f777e1188e9e02fce84de4c8165520381d7a971f6a78913561346bdfdd7"
+      "bytes": 849,
+      "sha256": "eec5642515f70017370b3e6bd22aa56779683219cf1efe32e96f817bdc2a85ac"
     },
     {
       "source": "schemas/zettel-frontmatter.schema.json",
@@ -557,10 +557,10 @@
       "sha256": "d619dc26af3216498c8392dfe838b0fe752d4bad9da998a58ca682d668fc510c"
     },
     {
-      "source": "docs/releases/v0.3.267.md",
-      "packaged": "release-notes/v0.3.267.md",
-      "bytes": 4341,
-      "sha256": "f597103a8de3085b5876b290670207e0ff90763e17debca16baa7b0512dc0697"
+      "source": "docs/releases/v0.3.268.md",
+      "packaged": "release-notes/v0.3.268.md",
+      "bytes": 2637,
+      "sha256": "348a3e4b40285e4212b0956f98d052e49d0ea6ca011e20b096db299020a9e915"
     }
   ]
 }

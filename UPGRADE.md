@@ -24,6 +24,40 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.268 Title Remap Usability
+
+`archive zet-title-remap-plan` remains a read-only proposal validator. This
+release does not authorize or perform canonical title writes.
+
+The proposal title ceiling is now 2,000 Unicode characters rather than 200.
+The schema id stays `wom-kit/zet-title-remap-proposal/v0.1`; the larger
+`maxLength` is a backward-compatible relaxation.
+
+Whitespace is never silently normalized. A title must be one line, use only
+U+0020 SPACE as whitespace, and contain no leading, trailing, or consecutive
+spaces. Line breaks report `title_contains_line_break`; tabs, NBSP, other
+Unicode whitespace, and space-placement problems report
+`title_contains_non_normalized_whitespace`.
+
+Blocked private/sensitive values now report only fixed
+`matched_safety_rules`, never the matched value:
+
+- `local_absolute_path`
+- `private_provider_url`
+- `credential_assignment_or_private_key`
+- `token_shaped_value`
+
+Ordinary public HTTP/HTTPS title URLs are allowed with
+`title_contains_public_web_url`. Bare topic words such as `password` do not
+block. Proposal-path and size mistakes expose only allowlisted fixed safe
+codes; unexpected and archive-root failures remain redacted.
+
+When no trustworthy automatic source title exists, a human may write and
+review a specific title with `basis: human_written`, refresh the expected
+canonical file SHA-256, and rerun the complete plan. WOM does not invent that
+text. See
+[`wom-kit/docs/zet-title-remap-plan.md`](wom-kit/docs/zet-title-remap-plan.md).
+
 ## v0.3.267 Approval-Gated Abstract Recovery Executor
 
 No bulk archive migration is required. The release adds one single-case CLI

@@ -1,9 +1,10 @@
 # WOM-kit Capability Matrix
 
-Status: v0.3.267 approval-gated abstract recovery executor checkpoint
+Status: v0.3.268 title remap usability checkpoint
 Date: 2026-07-28
-Version: v0.3.267, release candidate
+Version: v0.3.268, release candidate
 
+Previous checkpoint: Status: v0.3.267 approval-gated abstract recovery executor checkpoint
 Previous checkpoint: Status: v0.3.266 read-only abstract recovery decision checkpoint
 Previous checkpoint: Status: v0.3.265 durable abstract batch journal checkpoint
 Previous checkpoint: Status: v0.3.264 durable canonical write checkpoint
@@ -185,6 +186,16 @@ The v0.3.229 BOM guidance remains: `zettel_has_bom` findings build their
 redacted `remint-reconcile` dry-run from the actual validated canonical
 frontmatter id. A missing or unsafe id keeps the finding but omits the command;
 Doctor never guesses from the filename or emits an unresolved selector.
+
+The v0.3.268 title remap usability contract remains read-only and keeps
+`approval_contract.approved_write_implemented: false`. Proposal titles may
+contain up to 2,000 Unicode characters. The planner distinguishes
+`title_contains_line_break` from
+`title_contains_non_normalized_whitespace`, performs no automatic
+normalization, reports only fixed `matched_safety_rules` without matched
+values, permits an ordinary public HTTP/HTTPS URL with the content-free
+`title_contains_public_web_url` warning, and documents `basis: human_written`
+when no trustworthy automatic source title exists.
 
 The v0.3.228 result contract remains: full-Doctor handoffs retain bounded
 actionable ERROR/WARN findings and complete code counts, while current

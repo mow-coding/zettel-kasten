@@ -7508,14 +7508,6 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         release_text = (
             KIT_ROOT / "docs" / "releases" / "v0.3.267.md"
         ).read_text(encoding="utf-8")
-        packaged_release_text = (
-            KIT_ROOT
-            / "src"
-            / "wom_kit"
-            / "_resources"
-            / "release-notes"
-            / "v0.3.267.md"
-        ).read_text(encoding="utf-8")
         matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
         kit_readme_text = (KIT_ROOT / "README.md").read_text(
             encoding="utf-8"
@@ -7568,7 +7560,6 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         for text in (
             guide_text,
             release_text,
-            packaged_release_text,
             matrix_text,
             kit_readme_text,
             root_readme_text,
@@ -7611,6 +7602,94 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         ]["properties"]["rollback_on_runtime_failure"]
         self.assertEqual(rollback_schema, {"type": "boolean"})
         self.assertNotIn("automatic recovery", guide_text.lower())
+
+    def test_v03268_title_remap_docs_match_read_only_usability_contract(
+        self,
+    ) -> None:
+        guide_text = (
+            KIT_ROOT / "docs" / "zet-title-remap-plan.md"
+        ).read_text(encoding="utf-8")
+        release_text = (
+            KIT_ROOT / "docs" / "releases" / "v0.3.268.md"
+        ).read_text(encoding="utf-8")
+        packaged_release_text = (
+            KIT_ROOT
+            / "src"
+            / "wom_kit"
+            / "_resources"
+            / "release-notes"
+            / "v0.3.268.md"
+        ).read_text(encoding="utf-8")
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        root_readme_text = (REPO_ROOT / "README.md").read_text(
+            encoding="utf-8"
+        )
+        root_readme_ko_text = (REPO_ROOT / "README.ko.md").read_text(
+            encoding="utf-8"
+        )
+        kit_readme_text = (KIT_ROOT / "README.md").read_text(
+            encoding="utf-8"
+        )
+        upgrade_text = (REPO_ROOT / "UPGRADE.md").read_text(
+            encoding="utf-8"
+        )
+        upgrade_ko_text = (REPO_ROOT / "UPGRADE.ko.md").read_text(
+            encoding="utf-8"
+        )
+        public_map_text = (
+            KIT_ROOT / "docs" / "public-documentation-map.md"
+        ).read_text(encoding="utf-8")
+        public_map_ko_text = (
+            KIT_ROOT / "docs" / "public-documentation-map.ko.md"
+        ).read_text(encoding="utf-8")
+        proposal_schema = json.loads(
+            (
+                KIT_ROOT / "schemas" / "zet-title-remap-proposal.schema.json"
+            ).read_text(encoding="utf-8")
+        )
+
+        for text in (guide_text, release_text, packaged_release_text, matrix_text):
+            with self.subTest(document="title-remap-usability-contract"):
+                self.assertIn("2,000", text)
+                self.assertIn("title_contains_line_break", text)
+                self.assertIn(
+                    "title_contains_non_normalized_whitespace",
+                    text,
+                )
+                self.assertIn("matched_safety_rules", text)
+                self.assertIn("title_contains_public_web_url", text)
+                self.assertIn("human_written", text)
+
+        self.assertEqual(
+            proposal_schema["properties"]["title"]["maxLength"],
+            2000,
+        )
+        self.assertIn(
+            "approval_contract.approved_write_implemented: false",
+            matrix_text,
+        )
+        self.assertIn("does not change canonical zets", release_text)
+        self.assertIn(
+            "[Reviewed zet Title Remap Plan]",
+            public_map_text,
+        )
+        self.assertIn(
+            "[검토된 zet 제목 리맵 계획]",
+            public_map_ko_text,
+        )
+        for text in (
+            root_readme_text,
+            root_readme_ko_text,
+            kit_readme_text,
+            upgrade_text,
+            upgrade_ko_text,
+        ):
+            with self.subTest(document="public-version-surface"):
+                self.assertIn("v0.3.268", text)
+        self.assertIn(
+            "releases/download/v0.3.268/wom_kit-0.3.268-py3-none-any.whl",
+            root_readme_text,
+        )
 
 
 if __name__ == "__main__":
