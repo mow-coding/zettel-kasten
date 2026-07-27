@@ -9197,6 +9197,12 @@ def command_zet_title_remap_plan(args: argparse.Namespace) -> int:
             dry_run=True,
             progress_callback=reporter.progress,
         )
+    except archive_services.ZetTitleRemapInputError as exc:
+        print(
+            f"zet-title-remap-plan blocked [{exc.code}]: {exc}",
+            file=sys.stderr,
+        )
+        return 1
     except archive_services.ArchiveServiceError:
         print(
             "zet-title-remap-plan could not read a safe private proposal or archive target.",

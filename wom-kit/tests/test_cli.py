@@ -32148,6 +32148,305 @@ state:
             self.assertFalse(result["approval_contract"]["approved_write_implemented"])
             self.assertEqual(self.snapshot_archive_files(archive_root), before)
 
+    def test_zet_title_remap_plan_exposes_only_allowlisted_input_error_reason(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+
+            code, output = self.run_cli(
+                [
+                    "zet-title-remap-plan",
+                    str(archive_root),
+                    "--proposal",
+                    "reviewed.jsonl",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            self.assertEqual(code, 1)
+            self.assertIn(
+                "proposal_path_outside_private_scratch",
+                output,
+            )
+            self.assertIn(
+                "must be a .jsonl file under .wom-scratch/title-remap/",
+                output,
+            )
+            self.assertNotIn(str(archive_root), output)
+
+            missing_root = Path(tmp) / "PRIVATE_MISSING_ARCHIVE_ROOT"
+            missing_code, missing_output = self.run_cli(
+                [
+                    "zet-title-remap-plan",
+                    str(missing_root),
+                    "--proposal",
+                    ".wom-scratch/title-remap/reviewed.jsonl",
+                    "--dry-run",
+                ]
+            )
+            self.assertEqual(missing_code, 1)
+            self.assertIn(
+                "could not read a safe private proposal or archive target",
+                missing_output,
+            )
+            self.assertNotIn(str(missing_root), missing_output)
+
+    def test_zet_title_remap_plan_accepts_source_titles_through_2000_characters(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            accepted_prefix = "Reviewed source classification path "
+            accepted = accepted_prefix + "x" * (
+                2000 - len(accepted_prefix)
+            )
+            refused = "Reviewed source classification path " + "y" * 1965
+            self.assertEqual(len(accepted), 2000)
+            self.assertEqual(len(refused), 2001)
+            names = (
+                "zet_import_notion_long_title_ready",
+                "zet_import_notion_long_title_blocked",
+            )
+            for index, name in enumerate(names):
+                self._write_title_probe_zet(
+                    archive_root,
+                    name,
+                    f"id: {name}\ntitle: 32634f642e1b80b68144d468b836da7{index}\n"
+                    "status: canonical\nkind: note\n",
+                )
+            proposal = self._write_title_remap_proposal(
+                archive_root,
+                [
+                    {
+                        "schema": "wom-kit/zet-title-remap-proposal/v0.1",
+                        "zettel_id": names[0],
+                        "expected_file_sha256": self._canonical_sha256(
+                            archive_root, names[0]
+                        ),
+                        "title": accepted,
+                        "basis": "source_export_property",
+                    },
+                    {
+                        "schema": "wom-kit/zet-title-remap-proposal/v0.1",
+                        "zettel_id": names[1],
+                        "expected_file_sha256": self._canonical_sha256(
+                            archive_root, names[1]
+                        ),
+                        "title": refused,
+                        "basis": "source_export_property",
+                    },
+                ],
+            )
+
+            code, output = self.run_cli(
+                [
+                    "zet-title-remap-plan",
+                    str(archive_root),
+                    "--proposal",
+                    proposal,
+                    "--dry-run",
+                ]
+            )
+
+            self.assertEqual(code, 1, output)
+            result = json.loads(output)
+            self.assertEqual(
+                result["detection"]["replacement_title_max_characters"],
+                2000,
+            )
+            self.assertEqual(result["items"][0]["status"], "ready_for_review")
+            self.assertEqual(result["items"][0]["blocker_codes"], [])
+            self.assertIn("title_too_long", result["items"][1]["blocker_codes"])
+            self.assertNotIn(accepted, output)
+            self.assertNotIn(refused, output)
+
+    def test_zet_title_remap_plan_names_line_break_and_whitespace_rules_separately(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            names = [
+                "zet_import_notion_double_space",
+                "zet_import_notion_nbsp",
+                "zet_import_notion_line_break",
+            ]
+            replacements = [
+                "Manual  with an accidental double space",
+                "Tetyana\u00a0Pudrovska reviewed article",
+                "First reviewed line\nSecond reviewed line",
+            ]
+            rows: list[dict] = []
+            for index, (name, replacement) in enumerate(
+                zip(names, replacements, strict=True)
+            ):
+                self._write_title_probe_zet(
+                    archive_root,
+                    name,
+                    f"id: {name}\ntitle: 32634f642e1b80b68144d468b836da8{index}\n"
+                    "status: canonical\nkind: note\n",
+                )
+                rows.append(
+                    {
+                        "schema": "wom-kit/zet-title-remap-proposal/v0.1",
+                        "zettel_id": name,
+                        "expected_file_sha256": self._canonical_sha256(
+                            archive_root, name
+                        ),
+                        "title": replacement,
+                        "basis": "source_export_property",
+                    }
+                )
+            proposal = self._write_title_remap_proposal(archive_root, rows)
+
+            code, output = self.run_cli(
+                [
+                    "zet-title-remap-plan",
+                    str(archive_root),
+                    "--proposal",
+                    proposal,
+                    "--dry-run",
+                ]
+            )
+
+            self.assertEqual(code, 1, output)
+            result = json.loads(output)
+            self.assertIn(
+                "title_contains_non_normalized_whitespace",
+                result["items"][0]["blocker_codes"],
+            )
+            self.assertNotIn(
+                "title_contains_line_break",
+                result["items"][0]["blocker_codes"],
+            )
+            self.assertIn(
+                "title_contains_non_normalized_whitespace",
+                result["items"][1]["blocker_codes"],
+            )
+            self.assertIn(
+                "title_contains_line_break",
+                result["items"][2]["blocker_codes"],
+            )
+            self.assertNotIn(
+                "title_contains_non_normalized_whitespace",
+                result["items"][2]["blocker_codes"],
+            )
+            self.assertFalse(
+                result["normalization_contract"]["performed_automatically"]
+            )
+            self.assertEqual(
+                result["normalization_contract"][
+                    "allowed_whitespace_character"
+                ],
+                "U+0020 SPACE",
+            )
+            for replacement in replacements:
+                self.assertNotIn(replacement, output)
+
+    def test_zet_title_remap_plan_allows_public_urls_and_names_private_rules(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            names = [
+                "zet_import_notion_public_url",
+                "zet_import_notion_private_provider",
+                "zet_import_notion_local_path",
+                "zet_import_notion_token_value",
+                "zet_import_notion_credential_assignment",
+            ]
+            replacements = [
+                (
+                    "2025 04 28 ;; @essaywriter ;; Password research notes ;; "
+                    "https://example.org/post"
+                ),
+                "Private source https://www.notion.so/example-page",
+                r"Review C:\private\source.md before publishing",
+                "Incident review github_pat_" + "A" * 24,
+                "Credential handling example password=" + "Z" * 24,
+            ]
+            rows: list[dict] = []
+            for index, (name, replacement) in enumerate(
+                zip(names, replacements, strict=True)
+            ):
+                self._write_title_probe_zet(
+                    archive_root,
+                    name,
+                    f"id: {name}\ntitle: 42634f642e1b80b68144d468b836da9{index}\n"
+                    "status: canonical\nkind: note\n",
+                )
+                rows.append(
+                    {
+                        "schema": "wom-kit/zet-title-remap-proposal/v0.1",
+                        "zettel_id": name,
+                        "expected_file_sha256": self._canonical_sha256(
+                            archive_root, name
+                        ),
+                        "title": replacement,
+                        "basis": "source_export_property",
+                    }
+                )
+            proposal = self._write_title_remap_proposal(archive_root, rows)
+
+            code, output = self.run_cli(
+                [
+                    "zet-title-remap-plan",
+                    str(archive_root),
+                    "--proposal",
+                    proposal,
+                    "--dry-run",
+                ]
+            )
+
+            self.assertEqual(code, 1, output)
+            result = json.loads(output)
+            public = result["items"][0]
+            self.assertEqual(public["status"], "ready_for_review")
+            self.assertEqual(public["matched_safety_rules"], [])
+            self.assertEqual(
+                public["warning_codes"],
+                ["title_contains_public_web_url"],
+            )
+            self.assertEqual(
+                result["items"][1]["matched_safety_rules"],
+                ["private_provider_url"],
+            )
+            self.assertEqual(
+                result["items"][2]["matched_safety_rules"],
+                ["local_absolute_path"],
+            )
+            self.assertEqual(
+                result["items"][3]["matched_safety_rules"],
+                ["token_shaped_value"],
+            )
+            self.assertEqual(
+                result["items"][4]["matched_safety_rules"],
+                ["credential_assignment_or_private_key"],
+            )
+            for item in result["items"][1:]:
+                self.assertIn(
+                    "title_private_locator_or_secret_like",
+                    item["blocker_codes"],
+                )
+            self.assertTrue(
+                result["title_safety_contract"][
+                    "ordinary_public_http_https_url_allowed"
+                ]
+            )
+            self.assertFalse(
+                result["title_safety_contract"][
+                    "bare_security_topic_words_blocked"
+                ]
+            )
+            self.assertTrue(
+                result["privacy_guards"][
+                    "matched_safety_rule_names_echoed"
+                ]
+            )
+            self.assertFalse(
+                result["privacy_guards"][
+                    "matched_safety_rule_values_echoed"
+                ]
+            )
+            for replacement in replacements:
+                self.assertNotIn(replacement, output)
+            self.assertNotIn("example.org", output)
+            self.assertNotIn("C:\\private", output)
+
     def test_zet_title_remap_plan_requires_identifier_shape_not_just_a_census_signal(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")

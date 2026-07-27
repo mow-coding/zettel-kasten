@@ -6,6 +6,24 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.268 - 2026-07-28
+
+- Made `zet-title-remap-plan` proposal failures actionable without weakening
+  output privacy: allowlisted path/size failures now expose only fixed safe
+  codes and explanations, while unexpected/archive-root failures stay
+  redacted.
+- Raised the proposal-only replacement-title ceiling from 200 to 2,000 Unicode
+  characters without truncation.
+- Split line breaks from non-normalized whitespace and published the exact
+  no-auto-normalization contract.
+- Added fixed `matched_safety_rules` categories without matched values, allowed
+  ordinary public HTTP/HTTPS title URLs with a content-free warning, and kept
+  private-provider URLs, local paths, credential material, and token-shaped
+  values blocked.
+- Documented the existing `human_written` proposal basis for cases with no
+  trustworthy automatic source title. The command remains read-only; approved
+  title write, receipt, audit, recovery, and revert are still future work.
+
 ## v0.3.267 - 2026-07-28
 
 - Added approval-gated single-case `zet-abstract-backfill-recover` and alias
