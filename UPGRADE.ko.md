@@ -2,6 +2,36 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.3.269 승인 기반 제목 리맵 쓰기
+
+아카이브 전체 마이그레이션은 필요하지 않습니다. 기존의 읽기 전용 제목 계획
+뒤에 별도의 승인 기반 writer가 추가됩니다.
+
+```powershell
+archive zet-title-remap-plan <archive-root> --proposal .wom-scratch/title-remap/<private>.jsonl --max-items 5000 --dry-run --format json
+archive zet-title-remap-write <archive-root> --proposal .wom-scratch/title-remap/<private>.jsonl --expected-proposal-sha256 sha256:<proposal-digest> --expected-plan-digest sha256:<plan-digest> --max-items 5000 --dry-run --format json
+```
+
+두 번째 명령도 아직 파일을 바꾸지 않습니다. 결과를 검토한 뒤, 같은 제안을
+반환된 `--expected-write-plan-digest`, `--approve`, 안전한
+`--reviewed-by`, `--affirm-titles-reviewed`와 함께 다시 실행해야 실제로
+씁니다.
+
+첫 정본 변경 전에 WOM은 모든 참여 파일의 완전한 원본 바이트를
+content-addressed object로 보존하고 검증합니다. writer는 YAML 최상위의 단일
+`title` scalar만 바꾸고 다른 frontmatter 값과 본문 바이트를 그대로 유지하며,
+마지막에 제목/본문 텍스트가 없는 비공개 영수증을 씁니다. 일반 오류는 정확한
+원본 바이트로 되돌립니다. 강제 종료는 일부만 바뀐 batch, 비공개 transaction
+journal, 공통 lock을 남길 수 있으므로 이 증거를 삭제하거나 손으로 고치면 안
+됩니다.
+
+v0.3.269은 중단 증거를 남기지만 제목 리맵 전체 감사, 자동 복구, 되돌리기는
+아직 구현하지 않습니다. 구버전도 성공적으로 변경된 정본 Markdown은 읽을 수
+있지만 새 영수증/저널 증거를 이해하지 못합니다. 이 작업에는 v0.3.269 이상을
+유지하세요. 자세한 절차는
+[`wom-kit/docs/zet-title-remap-write.md`](wom-kit/docs/zet-title-remap-write.md)를
+참조하세요.
+
 ## v0.3.268 제목 리맵 사용성
 
 `archive zet-title-remap-plan`은 계속 읽기 전용 제안 검증기입니다. 이번

@@ -24,6 +24,35 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.269 Approved Title Remap Write
+
+No archive-wide migration is required. The release adds a separate
+approval-gated writer after the existing read-only title plan:
+
+```powershell
+archive zet-title-remap-plan <archive-root> --proposal .wom-scratch/title-remap/<private>.jsonl --max-items 5000 --dry-run --format json
+archive zet-title-remap-write <archive-root> --proposal .wom-scratch/title-remap/<private>.jsonl --expected-proposal-sha256 sha256:<proposal-digest> --expected-plan-digest sha256:<plan-digest> --max-items 5000 --dry-run --format json
+```
+
+The second command still writes nothing. Review its result, then rerun the
+unchanged candidate with the returned `--expected-write-plan-digest`,
+`--approve`, a safe `--reviewed-by`, and
+`--affirm-titles-reviewed`.
+
+Before the first canonical change, WOM preserves and verifies the complete
+original bytes of every participant as content-addressed objects. The writer
+replaces only the single top-level YAML `title` scalar, preserves every other
+frontmatter value and body byte, and writes a private text-free receipt last.
+A caught failure restores exact original bytes. A hard exit can leave a mixed
+batch plus a private transaction journal and common lock; do not delete or
+hand-edit those retained files.
+
+v0.3.269 records interruption evidence but does not yet audit, automatically
+recover, or revert title-remap batches. Older WOM-kit versions can still read
+successfully changed canonical Markdown, but they do not understand the new
+receipt/journal evidence. Keep v0.3.269 or newer for this workflow. See
+[`wom-kit/docs/zet-title-remap-write.md`](wom-kit/docs/zet-title-remap-write.md).
+
 ## v0.3.268 Title Remap Usability
 
 `archive zet-title-remap-plan` remains a read-only proposal validator. This

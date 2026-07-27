@@ -7522,7 +7522,13 @@ ZET_TITLE_HEX_RE = re.compile(r"\A[0-9a-f]+\Z")
 
 ZET_TITLE_REMAP_PROPOSAL_SCHEMA = "wom-kit/zet-title-remap-proposal/v0.1"
 ZET_TITLE_REMAP_PLAN_SCHEMA = "wom-kit/zet-title-remap-plan/v0.1"
+ZET_TITLE_REMAP_WRITE_SCHEMA = "wom-kit/zet-title-remap-write/v0.1"
+ZET_TITLE_REMAP_RECEIPT_SCHEMA = "wom-kit/zet-title-remap-receipt/v0.1"
+ZET_TITLE_REMAP_TRANSACTION_JOURNAL_SCHEMA = (
+    "wom-kit/zet-title-remap-transaction-journal/v0.1"
+)
 ZET_TITLE_REMAP_PROPOSAL_PREFIX = ".wom-scratch/title-remap/"
+ZET_TITLE_REMAP_RECEIPTS_DIR = "receipts/revisions/title-remap"
 # Where the operator says the replacement name came from. A remap is only
 # defensible if a name already existed somewhere; neither value is invented here.
 ZET_TITLE_REMAP_BASIS_VALUES = {"source_export_property", "human_written"}
@@ -7530,6 +7536,9 @@ ZET_TITLE_REMAP_MAX_ITEMS = 5000
 ZET_TITLE_REMAP_MAX_FILE_BYTES = 64 * 1024 * 1024
 ZET_TITLE_REMAP_MAX_LINE_BYTES = 1024 * 1024
 ZET_TITLE_REMAP_MAX_CANONICAL_FILE_BYTES = 16 * 1024 * 1024
+ZET_TITLE_REMAP_MAX_TOTAL_CANONICAL_BYTES = 256 * 1024 * 1024
+ZET_TITLE_REMAP_MAX_RECEIPT_BYTES = 32 * 1024 * 1024
+ZET_TITLE_REMAP_MAX_TRANSACTION_JOURNAL_BYTES = 32 * 1024 * 1024
 ZET_TITLE_REMAP_MAX_TITLE_CHARS = 2000
 ZET_TITLE_REMAP_LINE_BREAK_CHARS = frozenset(
     {"\r", "\n", "\v", "\f", "\x85", "\u2028", "\u2029"}
@@ -8323,7 +8332,8 @@ def zet_title_remap_plan(
     if ok:
         next_safe_actions.append(
             "Have a human review the ready rows against the source record that holds each name. "
-            "The approved write is not implemented in this release."
+            "Then run zet-title-remap-write in dry-run mode, bind its write-plan digest, "
+            "and use the explicit approved write."
         )
 
     # Derived from what the payload actually carries rather than asserted. A
@@ -8426,11 +8436,15 @@ def zet_title_remap_plan(
             ],
         },
         "approval_contract": {
-            "approved_write_implemented": False,
+            "approved_write_implemented": True,
+            "approved_write_command": "zet-title-remap-write",
             "human_review_required": True,
-            "future_write_must_bind_proposal_sha256": True,
-            "future_write_must_revalidate_each_canonical_sha256": True,
-            "future_write_must_record_before_after_and_title_hashes": True,
+            "write_binds_proposal_sha256": True,
+            "write_binds_plan_digest": True,
+            "write_binds_write_plan_digest": True,
+            "write_revalidates_each_canonical_sha256": True,
+            "write_records_before_after_and_title_hashes": True,
+            "write_preserves_exact_prior_bytes": True,
             "manual_canonical_edit_recommended": False,
         },
         "write_boundary": {
@@ -8466,6 +8480,1666 @@ def zet_title_remap_plan(
             "writes": False,
         },
     }
+
+
+def zet_title_remap_candidate_bytes(raw_bytes: bytes, title: str) -> bytes:
+    """Replace exactly one top-level YAML title scalar and verify the boundary."""
+
+    require_yaml()
+    try:
+        text = raw_bytes.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ArchiveServiceError("Canonical zet is not valid UTF-8.") from exc
+    has_bom = text.startswith("\ufeff")
+    payload = text[1:] if has_bom else text
+    match = FRONTMATTER_RE.match(payload)
+    if match is None:
+        raise ArchiveServiceError("Canonical zet has no supported YAML frontmatter.")
+    frontmatter_source = match.group(1)
+    try:
+        node = yaml.compose(frontmatter_source)  # type: ignore[union-attr]
+    except Exception as exc:
+        raise ArchiveServiceError("Canonical zet frontmatter YAML is unreadable.") from exc
+    title_nodes: list[Any] = []
+    if node is not None and getattr(node, "id", None) == "mapping":
+        for key_node, value_node in getattr(node, "value", []):
+            if (
+                getattr(key_node, "id", None) == "scalar"
+                and getattr(key_node, "value", None) == "title"
+            ):
+                title_nodes.append(value_node)
+    if len(title_nodes) != 1 or getattr(title_nodes[0], "id", None) != "scalar":
+        raise ArchiveServiceError("Canonical zet must contain exactly one top-level scalar title.")
+    value_node = title_nodes[0]
+    start = int(value_node.start_mark.index)
+    end = int(value_node.end_mark.index)
+    original_scalar = frontmatter_source[start:end]
+    trailing_newline = ""
+    if original_scalar.endswith("\r\n"):
+        trailing_newline = "\r\n"
+    elif original_scalar.endswith("\n"):
+        trailing_newline = "\n"
+    serialized = json.dumps(title, ensure_ascii=False)
+    candidate_frontmatter = (
+        frontmatter_source[:start]
+        + serialized
+        + trailing_newline
+        + frontmatter_source[end:]
+    )
+    candidate_payload = (
+        payload[: match.start(1)]
+        + candidate_frontmatter
+        + payload[match.end(1) :]
+    )
+    candidate_text = ("\ufeff" if has_bom else "") + candidate_payload
+
+    before_frontmatter, before_body = split_zettel_text(text)
+    after_frontmatter, after_body = split_zettel_text(candidate_text)
+    before_title = before_frontmatter.pop("title", None)
+    after_title = after_frontmatter.pop("title", None)
+    if (
+        not isinstance(before_title, str)
+        or after_title != title
+        or after_frontmatter != before_frontmatter
+        or after_body != before_body
+    ):
+        raise ArchiveServiceError(
+            "Title replacement would change canonical content beyond the title field."
+        )
+    candidate_bytes = candidate_text.encode("utf-8")
+    if candidate_bytes == raw_bytes:
+        raise ArchiveServiceError("Title replacement would not change canonical bytes.")
+    return candidate_bytes
+
+
+def materialize_zet_title_remap_candidates(
+    root: Path,
+    raw_proposal_bytes: bytes,
+    plan: dict[str, Any],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Build private write candidates and bind them to the public plan."""
+
+    candidates: list[dict[str, Any]] = []
+    blockers: list[str] = []
+    plan_items = plan.get("items") if isinstance(plan.get("items"), list) else []
+    total_canonical_bytes = 0
+    for index, raw_line in enumerate(raw_proposal_bytes.splitlines(keepends=True)):
+        try:
+            row = json.loads(raw_line.decode("utf-8"))
+            if not isinstance(row, dict):
+                raise ValueError("proposal_row_not_object")
+            zettel_id = row.get("zettel_id")
+            expected_file_sha256 = row.get("expected_file_sha256")
+            basis = row.get("basis")
+            title_blockers: list[str] = []
+            title = normalized_zet_title_candidate(row.get("title"), title_blockers)
+            if (
+                title_blockers
+                or not isinstance(zettel_id, str)
+                or not ZETTEL_EDGE_ZETTEL_ID_RE.fullmatch(zettel_id)
+                or not isinstance(expected_file_sha256, str)
+                or not re.fullmatch(r"sha256:[0-9a-f]{64}", expected_file_sha256)
+                or basis not in ZET_TITLE_REMAP_BASIS_VALUES
+                or row.get("schema") != ZET_TITLE_REMAP_PROPOSAL_SCHEMA
+                or title is None
+            ):
+                raise ValueError("proposal_row_changed_after_plan")
+            path = resolve_zettel_path(root, zettel_id=zettel_id, relative_path=None)
+            relative = archive_relative_path(path, root)
+            if path.is_symlink() or not relative.startswith("zettels/"):
+                raise ValueError("canonical_target_changed_after_plan")
+            before_bytes = read_zet_title_remap_canonical_bytes(path)
+            total_canonical_bytes += len(before_bytes)
+            if total_canonical_bytes > ZET_TITLE_REMAP_MAX_TOTAL_CANONICAL_BYTES:
+                blockers.append("canonical_batch_exceeds_write_limit")
+                break
+            before_file_sha256 = "sha256:" + hashlib.sha256(before_bytes).hexdigest()
+            if before_file_sha256 != expected_file_sha256:
+                raise ValueError("canonical_hash_changed_after_plan")
+            before_frontmatter, before_body = split_zettel_text(
+                before_bytes.decode("utf-8")
+            )
+            current_title = before_frontmatter.get("title")
+            if (
+                before_frontmatter.get("id") != zettel_id
+                or before_frontmatter.get("status") != "canonical"
+                or not isinstance(current_title, str)
+                or "title_is_identifier_shaped"
+                not in zet_title_identifier_signals(
+                    {
+                        "title": current_title,
+                        "facets": before_frontmatter.get("facets"),
+                    }
+                )
+            ):
+                raise ValueError("canonical_metadata_changed_after_plan")
+            candidate_bytes = zet_title_remap_candidate_bytes(before_bytes, title)
+            after_file_sha256 = (
+                "sha256:" + hashlib.sha256(candidate_bytes).hexdigest()
+            )
+            before_title_sha256 = (
+                "sha256:" + hashlib.sha256(current_title.encode("utf-8")).hexdigest()
+            )
+            after_title_sha256 = (
+                "sha256:" + hashlib.sha256(title.encode("utf-8")).hexdigest()
+            )
+            body_sha256 = (
+                "sha256:" + hashlib.sha256(before_body.encode("utf-8")).hexdigest()
+            )
+            plan_item = (
+                plan_items[index]
+                if index < len(plan_items) and isinstance(plan_items[index], dict)
+                else {}
+            )
+            if (
+                plan_item.get("status") != "ready_for_review"
+                or plan_item.get("basis") != basis
+                or plan_item.get("expected_file_sha256_matches") is not True
+            ):
+                raise ValueError("plan_fingerprint_changed")
+            before_snapshot = zet_revision_before_snapshot_descriptor(before_bytes)
+            candidates.append(
+                {
+                    "row_index": index,
+                    "zettel_id": zettel_id,
+                    "path": path,
+                    "relative_path": relative,
+                    "basis": basis,
+                    "before_bytes": before_bytes,
+                    "after_bytes": candidate_bytes,
+                    "before_file_sha256": before_file_sha256,
+                    "after_file_sha256": after_file_sha256,
+                    "before_title_sha256": before_title_sha256,
+                    "after_title_sha256": after_title_sha256,
+                    "body_sha256": body_sha256,
+                    "title": title,
+                    "before_snapshot": before_snapshot,
+                }
+            )
+        except (
+            ArchiveServiceError,
+            ArchivePathError,
+            OSError,
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+            ValueError,
+        ):
+            blockers.append("proposal_or_canonical_changed_after_plan")
+            break
+    if len(candidates) != len(plan_items):
+        blockers.append("materialized_candidate_count_mismatch")
+    return candidates, unique_preserve_order(blockers)
+
+
+def zet_title_remap_write_plan_digest(
+    *,
+    archive_id: str,
+    proposal_sha256: str,
+    plan_digest: str,
+    candidates: list[dict[str, Any]],
+) -> str:
+    return sha256_json_value(
+        {
+            "schema": ZET_TITLE_REMAP_WRITE_SCHEMA,
+            "archive_id": archive_id,
+            "proposal_sha256": proposal_sha256,
+            "plan_digest": plan_digest,
+            "items": [
+                {
+                    "row_index": item["row_index"],
+                    "zettel_id": item["zettel_id"],
+                    "canonical_path": item["relative_path"],
+                    "basis": item["basis"],
+                    "before_file_sha256": item["before_file_sha256"],
+                    "after_file_sha256": item["after_file_sha256"],
+                    "before_title_sha256": item["before_title_sha256"],
+                    "after_title_sha256": item["after_title_sha256"],
+                    "body_sha256": item["body_sha256"],
+                    "before_snapshot": item["before_snapshot"],
+                }
+                for item in candidates
+            ],
+        }
+    )
+
+
+def zet_title_remap_receipt_relative_path(proposal_sha256: str) -> str:
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", proposal_sha256):
+        raise ArchiveServiceError("Title remap proposal SHA-256 is invalid.")
+    digest = proposal_sha256.removeprefix("sha256:")
+    return f"{ZET_TITLE_REMAP_RECEIPTS_DIR}/{digest}.zet-title-remap.json"
+
+
+def zet_title_remap_transaction_journal_path(
+    title_remap_root: Path,
+    proposal_sha256: str,
+) -> Path:
+    digest = proposal_sha256.removeprefix("sha256:")
+    return title_remap_root / f".{digest}.write.transaction.json"
+
+
+def zet_title_remap_receipt_items(
+    candidates: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "row_index": item["row_index"],
+            "zettel_id": item["zettel_id"],
+            "canonical_path": item["relative_path"],
+            "basis": item["basis"],
+            "before_file_sha256": item["before_file_sha256"],
+            "after_file_sha256": item["after_file_sha256"],
+            "before_title_sha256": item["before_title_sha256"],
+            "after_title_sha256": item["after_title_sha256"],
+            "body_sha256": item["body_sha256"],
+            "before_snapshot": item["before_snapshot"],
+        }
+        for item in candidates
+    ]
+
+
+def zet_title_remap_private_items_valid(items: Any) -> bool:
+    if not isinstance(items, list) or not 1 <= len(items) <= ZET_TITLE_REMAP_MAX_ITEMS:
+        return False
+    expected_keys = {
+        "row_index",
+        "zettel_id",
+        "canonical_path",
+        "basis",
+        "before_file_sha256",
+        "after_file_sha256",
+        "before_title_sha256",
+        "after_title_sha256",
+        "body_sha256",
+        "before_snapshot",
+    }
+    snapshot_keys = {
+        "object_id",
+        "logical_key",
+        "size_bytes",
+        "mime",
+        "stored_sha256_verified",
+        "manifest_registered",
+    }
+    digest_fields = {
+        "before_file_sha256",
+        "after_file_sha256",
+        "before_title_sha256",
+        "after_title_sha256",
+        "body_sha256",
+    }
+    for index, item in enumerate(items):
+        if not isinstance(item, dict) or set(item) != expected_keys:
+            return False
+        zettel_id = item.get("zettel_id")
+        canonical_path = item.get("canonical_path")
+        if (
+            item.get("row_index") != index
+            or not isinstance(zettel_id, str)
+            or not ZETTEL_EDGE_ZETTEL_ID_RE.fullmatch(zettel_id)
+            or not isinstance(canonical_path, str)
+            or "\\" in canonical_path
+            or not canonical_path.startswith("zettels/")
+            or not canonical_path.endswith(".md")
+            or ".." in PurePosixPath(canonical_path).parts
+            or item.get("basis") not in ZET_TITLE_REMAP_BASIS_VALUES
+        ):
+            return False
+        if any(
+            not isinstance(item.get(field), str)
+            or not re.fullmatch(r"sha256:[0-9a-f]{64}", item[field])
+            for field in digest_fields
+        ):
+            return False
+        if item["before_file_sha256"] == item["after_file_sha256"]:
+            return False
+        snapshot = item.get("before_snapshot")
+        if not isinstance(snapshot, dict) or set(snapshot) != snapshot_keys:
+            return False
+        before_digest = item["before_file_sha256"].removeprefix("sha256:")
+        if (
+            snapshot.get("object_id") != item["before_file_sha256"]
+            or snapshot.get("logical_key")
+            != f"objects/sha256/{before_digest[:2]}/{before_digest}"
+            or isinstance(snapshot.get("size_bytes"), bool)
+            or not isinstance(snapshot.get("size_bytes"), int)
+            or not 1
+            <= snapshot["size_bytes"]
+            <= ZET_TITLE_REMAP_MAX_CANONICAL_FILE_BYTES
+            or snapshot.get("mime") != "text/markdown"
+            or snapshot.get("stored_sha256_verified") is not True
+            or snapshot.get("manifest_registered") is not True
+        ):
+            return False
+    return True
+
+
+def zet_title_remap_receipt_document_valid(receipt: Any) -> bool:
+    if not isinstance(receipt, dict) or set(receipt) != {
+        "schema",
+        "action",
+        "status",
+        "applied_at",
+        "archive_id",
+        "proposal_sha256",
+        "plan_digest",
+        "write_plan_digest",
+        "reviewed_by",
+        "human_affirmation",
+        "item_count",
+        "items",
+        "mutation_contract",
+        "privacy_guards",
+    }:
+        return False
+    digests = (
+        receipt.get("proposal_sha256"),
+        receipt.get("plan_digest"),
+        receipt.get("write_plan_digest"),
+    )
+    mutation_contract = receipt.get("mutation_contract")
+    privacy_guards = receipt.get("privacy_guards")
+    items = receipt.get("items")
+    if not isinstance(items, list):
+        return False
+    return bool(
+        receipt.get("schema") == ZET_TITLE_REMAP_RECEIPT_SCHEMA
+        and receipt.get("action") == "zet_title_remap_write"
+        and receipt.get("status") == "applied"
+        and isinstance(receipt.get("applied_at"), str)
+        and receipt["applied_at"]
+        and isinstance(receipt.get("archive_id"), str)
+        and receipt["archive_id"]
+        and all(
+            isinstance(value, str)
+            and re.fullmatch(r"sha256:[0-9a-f]{64}", value)
+            for value in digests
+        )
+        and isinstance(receipt.get("reviewed_by"), str)
+        and safe_foreign_quarantine_actor_id(receipt["reviewed_by"])
+        == receipt["reviewed_by"]
+        and receipt.get("human_affirmation")
+        == "all_proposed_titles_reviewed"
+        and receipt.get("item_count") == len(items)
+    ) and bool(
+        zet_title_remap_private_items_valid(items)
+        and mutation_contract
+        == {
+            "field_replaced": "frontmatter.title",
+            "body_bytes_preserved": True,
+            "other_frontmatter_semantics_preserved": True,
+            "updated_at_changed": False,
+            "prior_byte_snapshots_verified_before_first_canonical_write": True,
+            "rollback_on_runtime_failure": True,
+            "crash_recovery_journal_written": True,
+        }
+        and privacy_guards
+        == {
+            "old_title_text_stored_in_receipt": False,
+            "new_title_text_stored_in_receipt": False,
+            "body_text_stored_in_receipt": False,
+            "provider_api_called": False,
+            "model_called": False,
+            "secret_store_or_environment_read": False,
+        }
+    )
+
+
+def zet_title_remap_transaction_journal_document_valid(journal: Any) -> bool:
+    if not isinstance(journal, dict) or set(journal) != {
+        "schema",
+        "action",
+        "status",
+        "operation",
+        "prepared_at",
+        "archive_id",
+        "proposal_sha256",
+        "plan_digest",
+        "write_plan_digest",
+        "reviewed_by",
+        "human_affirmation",
+        "final_receipt_path",
+        "item_count",
+        "items",
+        "recovery_contract",
+        "privacy_guards",
+        "journal_digest",
+    }:
+        return False
+    items = journal.get("items")
+    digests = (
+        journal.get("proposal_sha256"),
+        journal.get("plan_digest"),
+        journal.get("write_plan_digest"),
+        journal.get("journal_digest"),
+    )
+    receipt_path = journal.get("final_receipt_path")
+    if not isinstance(items, list):
+        return False
+    digest_document = dict(journal)
+    journal_digest = digest_document.pop("journal_digest", None)
+    return bool(
+        journal.get("schema")
+        == ZET_TITLE_REMAP_TRANSACTION_JOURNAL_SCHEMA
+        and journal.get("action") == "zet_title_remap_transaction"
+        and journal.get("status") == "prepared"
+        and journal.get("operation") == "apply"
+        and isinstance(journal.get("prepared_at"), str)
+        and journal["prepared_at"]
+        and isinstance(journal.get("archive_id"), str)
+        and journal["archive_id"]
+        and all(
+            isinstance(value, str)
+            and re.fullmatch(r"sha256:[0-9a-f]{64}", value)
+            for value in digests
+        )
+        and isinstance(journal.get("reviewed_by"), str)
+        and safe_foreign_quarantine_actor_id(journal["reviewed_by"])
+        == journal["reviewed_by"]
+        and journal.get("human_affirmation")
+        == "all_proposed_titles_reviewed"
+        and isinstance(receipt_path, str)
+        and re.fullmatch(
+            r"receipts/revisions/title-remap/"
+            r"[0-9a-f]{64}\.zet-title-remap\.json",
+            receipt_path,
+        )
+        and journal.get("item_count") == len(items)
+    ) and bool(
+        zet_title_remap_private_items_valid(items)
+        and journal.get("recovery_contract")
+        == {
+            "journal_published_before_first_canonical_write": True,
+            "current_state_inferred_from_participant_hashes": True,
+            "prior_byte_snapshots_verified_before_journal": True,
+            "automatic_resume_implemented": False,
+            "automatic_rollback_after_hard_exit_implemented": False,
+        }
+        and journal.get("privacy_guards")
+        == {
+            "old_title_text_stored": False,
+            "new_title_text_stored": False,
+            "body_text_stored": False,
+            "contains_private_zettel_ids_and_paths": True,
+            "provider_api_called": False,
+            "model_called": False,
+            "secret_store_or_environment_read": False,
+        }
+        and journal_digest == sha256_json_value(digest_document)
+    )
+
+
+def append_zet_title_remap_snapshot_manifest_records_atomic(
+    manifest_path: Path,
+    records: list[dict[str, Any]],
+) -> None:
+    if not records:
+        return
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path: Path | None = None
+    descriptor: int | None = None
+    try:
+        for _ in range(8):
+            candidate = manifest_path.parent / (
+                f".{manifest_path.name}.{secrets.token_hex(8)}.title-remap-snapshot.tmp"
+            )
+            try:
+                descriptor = os.open(
+                    candidate,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    0o600,
+                )
+                temporary_path = candidate
+                break
+            except FileExistsError:
+                continue
+        if temporary_path is None or descriptor is None:
+            raise OSError("title_snapshot_manifest_temp_reservation_failed")
+        last_byte = b""
+        with os.fdopen(descriptor, "wb") as output:
+            descriptor = None
+            if manifest_path.is_file():
+                with manifest_path.open("rb") as source:
+                    while True:
+                        chunk = source.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        output.write(chunk)
+                        last_byte = chunk[-1:]
+            if last_byte and last_byte != b"\n":
+                output.write(b"\n")
+            for record in records:
+                output.write(
+                    (
+                        json.dumps(
+                            record,
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        )
+                        + "\n"
+                    ).encode("utf-8")
+                )
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary_path, manifest_path)
+        temporary_path = None
+        _objet_capture_fsync_dir(manifest_path.parent)
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        if temporary_path is not None and temporary_path.exists():
+            temporary_path.unlink(missing_ok=True)
+
+
+def write_or_verify_zet_title_remap_snapshot_bytes(
+    root: Path,
+    *,
+    canonical_bytes: bytes,
+    snapshot: dict[str, Any],
+) -> bool:
+    expected = zet_revision_before_snapshot_descriptor(canonical_bytes)
+    if snapshot != expected:
+        raise ArchiveServiceError("title_before_snapshot_binding_mismatch")
+    digest = expected["object_id"].removeprefix("sha256:")
+    snapshot_path = root.joinpath(
+        *PurePosixPath(expected["logical_key"]).parts
+    )
+    if snapshot_path.exists():
+        if (
+            snapshot_path.is_symlink()
+            or zet_revision_path_has_symlink_component(root, snapshot_path)
+            or not snapshot_path.is_file()
+            or os.lstat(snapshot_path).st_size != len(canonical_bytes)
+            or sha256_path(snapshot_path) != digest
+        ):
+            raise ArchiveServiceError("title_before_snapshot_bytes_invalid")
+        return False
+    if zet_revision_path_has_symlink_component(root, snapshot_path):
+        raise ArchiveServiceError("title_before_snapshot_path_unsafe")
+    snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = snapshot_path.parent / (
+        f".{snapshot_path.name}.{secrets.token_hex(8)}.title-remap-snapshot.tmp"
+    )
+    bytes_written = False
+    try:
+        descriptor = os.open(
+            temporary_path,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            0o600,
+        )
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(canonical_bytes)
+            handle.flush()
+            os.fsync(handle.fileno())
+        if sha256_path(temporary_path) != digest:
+            raise ArchiveServiceError("title_before_snapshot_write_verification_failed")
+        try:
+            os.link(temporary_path, snapshot_path)
+            bytes_written = True
+        except FileExistsError:
+            pass
+        except OSError:
+            final_descriptor: int | None = None
+            final_created = False
+            final_complete = False
+            try:
+                final_descriptor = os.open(
+                    snapshot_path,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    0o600,
+                )
+                final_created = True
+                with os.fdopen(final_descriptor, "wb") as final_handle:
+                    final_descriptor = None
+                    final_handle.write(canonical_bytes)
+                    final_handle.flush()
+                    os.fsync(final_handle.fileno())
+                final_complete = True
+                bytes_written = True
+            except FileExistsError:
+                final_complete = True
+            finally:
+                if final_descriptor is not None:
+                    os.close(final_descriptor)
+                if (
+                    final_created
+                    and not final_complete
+                    and snapshot_path.exists()
+                ):
+                    snapshot_path.unlink(missing_ok=True)
+        _objet_capture_fsync_dir(snapshot_path.parent)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+    if (
+        not snapshot_path.is_file()
+        or snapshot_path.is_symlink()
+        or os.lstat(snapshot_path).st_size != len(canonical_bytes)
+        or sha256_path(snapshot_path) != digest
+    ):
+        raise ArchiveServiceError("title_before_snapshot_write_verification_failed")
+    return bytes_written
+
+
+def preserve_zet_title_remap_before_snapshots(
+    root: Path,
+    *,
+    candidates: list[dict[str, Any]],
+    archive_id: str,
+    captured_at: str,
+    reviewed_by: str,
+    write_plan_digest: str,
+) -> dict[str, int]:
+    bytes_written = 0
+    records_appended = 0
+    manifest_path = archive_internal_path(root, "objects/manifests/files.jsonl")
+    with _ObjetCaptureManifestLock(root):
+        manifest_index, manifest_blockers = zet_revision_snapshot_manifest_index(root)
+        if manifest_blockers:
+            raise ArchiveServiceError(manifest_blockers[0])
+        pending_records: list[dict[str, Any]] = []
+        for item in candidates:
+            snapshot = item["before_snapshot"]
+            if write_or_verify_zet_title_remap_snapshot_bytes(
+                root,
+                canonical_bytes=item["before_bytes"],
+                snapshot=snapshot,
+            ):
+                bytes_written += 1
+            object_id = snapshot["object_id"]
+            digest = object_id.removeprefix("sha256:")
+            logical_key = snapshot["logical_key"]
+
+            def record_is_complete(record: Any) -> bool:
+                if not isinstance(record, dict):
+                    return False
+                locations = record.get("locations")
+                return bool(
+                    record.get("logical_key") == logical_key
+                    and record.get("sha256") == digest
+                    and record.get("mime") == "text/markdown"
+                    and record.get("size_bytes") == len(item["before_bytes"])
+                    and isinstance(locations, list)
+                    and any(
+                        isinstance(location, dict)
+                        and location.get("provider") == "local"
+                        and location.get("path") == logical_key
+                        and location.get("availability") == "available"
+                        for location in locations
+                    )
+                )
+
+            if any(
+                record_is_complete(record)
+                for record in manifest_index.get(object_id, [])
+            ):
+                continue
+            record = {
+                "object_id": object_id,
+                "sha256": digest,
+                "logical_key": logical_key,
+                "mime": "text/markdown",
+                "size_bytes": len(item["before_bytes"]),
+                "locations": [
+                    {
+                        "provider": "local",
+                        "path": logical_key,
+                        "availability": "available",
+                    }
+                ],
+                "provenance": {
+                    "created_in": f"archive:{archive_id}",
+                    "source": "canonical_zet_before_title_remap",
+                    "captured_at": captured_at,
+                    "captured_by": reviewed_by,
+                    "title_remap_write_plan_digest": write_plan_digest,
+                },
+            }
+            if validate_schema(record, "object-manifest-entry.schema.json"):
+                raise ArchiveServiceError("title_before_snapshot_manifest_record_invalid")
+            pending_records.append(record)
+            manifest_index.setdefault(object_id, []).append(record)
+        append_zet_title_remap_snapshot_manifest_records_atomic(
+            manifest_path,
+            pending_records,
+        )
+        records_appended = len(pending_records)
+        final_index, final_blockers = zet_revision_snapshot_manifest_index(root)
+        if final_blockers:
+            raise ArchiveServiceError(final_blockers[0])
+        for item in candidates:
+            snapshot_blockers = verify_zet_revision_before_snapshot(
+                root,
+                item["before_snapshot"],
+                expected_before_sha256=item["before_file_sha256"],
+                manifest_index=final_index,
+            )
+            if snapshot_blockers:
+                raise ArchiveServiceError(snapshot_blockers[0])
+    return {
+        "snapshot_objects_written_this_run": bytes_written,
+        "manifest_records_appended_this_run": records_appended,
+        "verified_snapshot_count": len(candidates),
+    }
+
+
+def verify_zet_title_remap_receipt(
+    root: Path,
+    receipt_path: Path,
+    *,
+    archive_id: str,
+    proposal_sha256: str,
+) -> dict[str, Any]:
+    blockers: list[str] = []
+    public_items: list[dict[str, Any]] = []
+    try:
+        if receipt_path.stat().st_size > ZET_TITLE_REMAP_MAX_RECEIPT_BYTES:
+            raise ValueError("receipt_too_large")
+        receipt_bytes = receipt_path.read_bytes()
+        receipt = json.loads(receipt_bytes.decode("utf-8"))
+        if not isinstance(receipt, dict):
+            raise ValueError("receipt_not_object")
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
+        return {
+            "ok": False,
+            "blockers": ["existing_receipt_unreadable_or_invalid"],
+            "items": [],
+        }
+    if (
+        not zet_title_remap_receipt_document_valid(receipt)
+        or validate_schema(receipt, "zet-title-remap-receipt.schema.json")
+    ):
+        blockers.append("existing_receipt_schema_invalid")
+    if (
+        receipt.get("archive_id") != archive_id
+        or receipt.get("proposal_sha256") != proposal_sha256
+    ):
+        blockers.append("existing_receipt_binding_mismatch")
+    items = receipt.get("items") if isinstance(receipt.get("items"), list) else []
+    manifest_index, manifest_blockers = zet_revision_snapshot_manifest_index(root)
+    blockers.extend(manifest_blockers)
+    for index, item in enumerate(items):
+        item_blockers: list[str] = []
+        if not isinstance(item, dict) or item.get("row_index") != index:
+            item_blockers.append("receipt_item_invalid")
+        else:
+            try:
+                path = archive_internal_path(root, item["canonical_path"])
+                if (
+                    path.is_symlink()
+                    or not path.is_file()
+                    or archive_relative_path(path, root) != item["canonical_path"]
+                ):
+                    raise ValueError("canonical_path_invalid")
+                current = read_zet_title_remap_canonical_bytes(path)
+                current_sha256 = (
+                    "sha256:" + hashlib.sha256(current).hexdigest()
+                )
+                if current_sha256 != item.get("after_file_sha256"):
+                    item_blockers.append("current_file_sha256_mismatch")
+                frontmatter, body = split_zettel_text(current.decode("utf-8"))
+                title = frontmatter.get("title")
+                if (
+                    not isinstance(title, str)
+                    or "sha256:" + hashlib.sha256(title.encode("utf-8")).hexdigest()
+                    != item.get("after_title_sha256")
+                ):
+                    item_blockers.append("current_title_sha256_mismatch")
+                if (
+                    "sha256:" + hashlib.sha256(body.encode("utf-8")).hexdigest()
+                    != item.get("body_sha256")
+                ):
+                    item_blockers.append("current_body_sha256_mismatch")
+                item_blockers.extend(
+                    verify_zet_revision_before_snapshot(
+                        root,
+                        item.get("before_snapshot"),
+                        expected_before_sha256=item.get("before_file_sha256"),
+                        manifest_index=manifest_index,
+                    )
+                )
+            except (
+                ArchiveServiceError,
+                ArchivePathError,
+                OSError,
+                UnicodeError,
+                ValueError,
+            ):
+                item_blockers.append("canonical_or_snapshot_unavailable")
+        item_blockers = unique_preserve_order(item_blockers)
+        blockers.extend(item_blockers)
+        public_items.append(
+            {
+                "row_index": index,
+                "status": "already_applied" if not item_blockers else "blocked",
+                "blocker_codes": item_blockers,
+            }
+        )
+    if receipt.get("item_count") != len(items) or not items:
+        blockers.append("existing_receipt_item_count_mismatch")
+    return {
+        "ok": not blockers,
+        "receipt_sha256": "sha256:" + hashlib.sha256(receipt_bytes).hexdigest(),
+        "plan_digest": receipt.get("plan_digest"),
+        "write_plan_digest": receipt.get("write_plan_digest"),
+        "review_affirmation_verified": (
+            receipt.get("human_affirmation") == "all_proposed_titles_reviewed"
+        ),
+        "items": public_items,
+        "blockers": unique_preserve_order(blockers),
+    }
+
+
+def zet_title_remap_write(
+    archive_root: Path | str,
+    *,
+    proposal_path: str,
+    expected_proposal_sha256: str,
+    expected_plan_digest: str,
+    expected_write_plan_digest: str | None = None,
+    max_items: int = 500,
+    dry_run: bool = False,
+    approve: bool = False,
+    reviewed_by: str | None = None,
+    affirm_titles_reviewed: bool = False,
+    progress_callback: Callable[
+        [str, str, int | None, int | None], None
+    ]
+    | None = None,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    requested_max_items = int(max_items)
+    effective_max_items = max(
+        1,
+        min(requested_max_items, ZET_TITLE_REMAP_MAX_ITEMS),
+    )
+    expected_proposal = str(expected_proposal_sha256 or "").strip()
+    expected_plan = str(expected_plan_digest or "").strip()
+    expected_write = str(expected_write_plan_digest or "").strip()
+    reviewer = safe_foreign_quarantine_actor_id(reviewed_by)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    public_items: list[dict[str, Any]] = []
+    actual_proposal_sha256: str | None = None
+    actual_plan_digest: str | None = None
+    actual_write_plan_digest: str | None = None
+    receipt_relative: str | None = None
+    receipt_sha256: str | None = None
+    receipt_exists = False
+    receipt_written_this_run = False
+    review_affirmation_verified = False
+    transaction_journal_path: Path | None = None
+    transaction_journal_written = False
+    transaction_journal_removed: bool | None = None
+    write_lock_path: Path | None = None
+    write_lock_removed: bool | None = None
+    canonical_files_written: int | None = 0
+    canonical_write_attempt_count = 0
+    snapshot_result = {
+        "snapshot_objects_written_this_run": 0,
+        "manifest_records_appended_this_run": 0,
+        "verified_snapshot_count": 0,
+    }
+    rollback = {
+        "attempted": False,
+        "succeeded": None,
+        "canonical_files_restored": 0,
+        "receipt_removed": None,
+        "transaction_journal_removed": None,
+        "transaction_journal_retained": None,
+        "write_lock_removed": None,
+    }
+
+    def result_payload(status: str) -> dict[str, Any]:
+        ok = (
+            status in {"ready_to_apply", "applied", "already_applied"}
+            and not blockers
+        )
+        return {
+            "ok": ok,
+            "schema": ZET_TITLE_REMAP_WRITE_SCHEMA,
+            "lifecycle_action": "zet_title_remap_write",
+            "status": status,
+            "dry_run": bool(dry_run),
+            "approved": bool(approve and status == "applied"),
+            "archive_id": archive_id,
+            "proposal": {
+                "sha256": actual_proposal_sha256,
+                "expected_sha256_matches": bool(
+                    actual_proposal_sha256
+                    and actual_proposal_sha256 == expected_proposal
+                ),
+                "path_echoed": False,
+                "tracking_policy": "private_ai_working_file_do_not_commit",
+            },
+            "plan_digest": actual_plan_digest,
+            "expected_plan_digest_matches": bool(
+                actual_plan_digest and actual_plan_digest == expected_plan
+            ),
+            "write_plan_digest": actual_write_plan_digest,
+            "expected_write_plan_digest_matches": (
+                bool(
+                    expected_write
+                    and actual_write_plan_digest == expected_write
+                )
+                if expected_write
+                else None
+            ),
+            "receipt": {
+                "path": receipt_relative,
+                "path_contains_only_proposal_digest": bool(receipt_relative),
+                "exists": receipt_exists,
+                "written_this_run": receipt_written_this_run,
+                "sha256": receipt_sha256,
+                "contains_private_zettel_ids_and_paths": (
+                    True
+                    if receipt_exists
+                    and status in {"applied", "already_applied"}
+                    else None
+                ),
+                "contains_title_or_body_text": (
+                    False
+                    if receipt_exists
+                    and status in {"applied", "already_applied"}
+                    else None
+                ),
+            },
+            "transaction_journal": {
+                "written_before_first_canonical_write": (
+                    True if transaction_journal_written else None
+                ),
+                "exists": bool(
+                    transaction_journal_path
+                    and transaction_journal_path.exists()
+                ),
+                "removed_after_completion": transaction_journal_removed,
+                "contains_title_or_body_text": False,
+                "path_echoed": False,
+                "automatic_resume_implemented": False,
+            },
+            "prior_byte_snapshots": {
+                **snapshot_result,
+                "content_addressed": True,
+                "exact_complete_before_file_bytes": True,
+                "paths_echoed": False,
+                "remote_backup_proven": False,
+            },
+            "summary": {
+                "candidate_count": len(public_items),
+                "ready_count": sum(
+                    1
+                    for item in public_items
+                    if item.get("status") == "ready_to_apply"
+                ),
+                "applied_count": sum(
+                    1
+                    for item in public_items
+                    if item.get("status") == "applied"
+                ),
+                "already_applied_count": sum(
+                    1
+                    for item in public_items
+                    if item.get("status") == "already_applied"
+                ),
+                "blocked_count": sum(
+                    1
+                    for item in public_items
+                    if item.get("status") == "blocked"
+                ),
+                "canonical_files_written_this_run": canonical_files_written,
+                "canonical_write_attempt_count": canonical_write_attempt_count,
+                "max_items": effective_max_items,
+                "max_canonical_file_bytes": (
+                    ZET_TITLE_REMAP_MAX_CANONICAL_FILE_BYTES
+                ),
+                "max_total_canonical_bytes": (
+                    ZET_TITLE_REMAP_MAX_TOTAL_CANONICAL_BYTES
+                ),
+            },
+            "items": public_items,
+            "human_review": {
+                "required_for_new_write": True,
+                "reviewed_by_supplied": bool(reviewer),
+                "reviewed_by_echoed": False,
+                "all_titles_reviewed_affirmed": bool(
+                    affirm_titles_reviewed
+                ),
+                "receipt_human_affirmation_verified": (
+                    review_affirmation_verified
+                ),
+            },
+            "write_boundary": {
+                "canonical_frontmatter_field_replaced": (
+                    "title" if status == "applied" else None
+                ),
+                "canonical_body_bytes_changed": (
+                    None if status == "failed_rollback_incomplete" else False
+                ),
+                "other_frontmatter_fields_changed": (
+                    None if status == "failed_rollback_incomplete" else False
+                ),
+                "updated_at_changed": (
+                    None if status == "failed_rollback_incomplete" else False
+                ),
+                "temporary_write_lock_removed": write_lock_removed,
+                "provider_state_written": False,
+                "database_rows_written": False,
+                "local_prior_byte_objects_may_be_written": bool(approve),
+            },
+            "rollback": rollback,
+            "privacy_guards": {
+                "proposal_path_echoed": False,
+                "zettel_ids_echoed": False,
+                "zettel_paths_echoed": False,
+                "old_or_new_title_values_echoed": False,
+                "title_hashes_echoed": False,
+                "title_lengths_echoed": False,
+                "zettel_body_text_echoed": False,
+                "snapshot_paths_echoed": False,
+                "reviewed_by_echoed": False,
+                "absolute_local_paths_echoed": False,
+                "provider_urls_echoed": False,
+                "provider_api_called": False,
+                "model_called": False,
+                "secret_store_or_environment_read": False,
+            },
+            "blockers": unique_preserve_order(blockers),
+            "warnings": unique_preserve_order(warnings),
+            "next_safe_actions": (
+                [
+                    "Use the private receipt as title revision evidence and keep the retained prior-byte snapshots."
+                ]
+                if status == "applied"
+                else [
+                    "No write is needed; the proposal receipt, current after hashes, and prior-byte snapshots agree."
+                ]
+                if status == "already_applied"
+                else [
+                    "Run the unchanged candidate with --approve, the expected write-plan digest, a safe reviewer id, and the explicit title-review affirmation."
+                ]
+                if status == "ready_to_apply"
+                else [
+                    "Fix blockers and rerun the read-only title plan when proposal or canonical bytes change."
+                ]
+            ),
+        }
+
+    if requested_max_items != effective_max_items:
+        blockers.append("max_items_out_of_range")
+    if bool(dry_run) == bool(approve):
+        blockers.append("choose_exactly_one_of_dry_run_or_approve")
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", expected_proposal):
+        blockers.append("expected_proposal_sha256_invalid")
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", expected_plan):
+        blockers.append("expected_plan_digest_invalid")
+    if expected_write and not re.fullmatch(
+        r"sha256:[0-9a-f]{64}",
+        expected_write,
+    ):
+        blockers.append("expected_write_plan_digest_invalid")
+    if approve and not expected_write:
+        blockers.append("expected_write_plan_digest_required_for_approve")
+
+    resolved_proposal = resolve_zet_title_remap_proposal_path(
+        root,
+        proposal_path,
+    )
+    raw_proposal_bytes, actual_proposal_sha256 = (
+        read_zet_title_remap_proposal_bytes(
+            resolved_proposal,
+            progress_callback=progress_callback,
+        )
+    )
+    if actual_proposal_sha256 != expected_proposal:
+        blockers.append("proposal_sha256_mismatch")
+    raw_line_count = len(raw_proposal_bytes.splitlines(keepends=True))
+    if raw_line_count > effective_max_items:
+        blockers.append("proposal_exceeds_max_items")
+    if not raw_line_count:
+        blockers.append("proposal_empty")
+    title_remap_root = archive_internal_path(
+        root,
+        ZET_TITLE_REMAP_PROPOSAL_PREFIX.rstrip("/"),
+    )
+    write_lock_path = title_remap_root / ".title-remap.write.lock"
+    if actual_proposal_sha256 and re.fullmatch(
+        r"sha256:[0-9a-f]{64}",
+        actual_proposal_sha256,
+    ):
+        receipt_relative = zet_title_remap_receipt_relative_path(
+            actual_proposal_sha256
+        )
+        transaction_journal_path = zet_title_remap_transaction_journal_path(
+            title_remap_root,
+            actual_proposal_sha256,
+        )
+    if blockers:
+        return result_payload("blocked")
+
+    assert receipt_relative is not None
+    assert transaction_journal_path is not None
+    receipt_path = archive_internal_path(root, receipt_relative)
+    if receipt_path.exists():
+        if write_lock_path.exists():
+            warnings.append(
+                "title_remap_write_lock_remains_inspect_before_cleanup"
+            )
+        if transaction_journal_path.exists():
+            warnings.append(
+                "completed_title_transaction_journal_remains_inspect_before_cleanup"
+            )
+        receipt_exists = True
+        verification = verify_zet_title_remap_receipt(
+            root,
+            receipt_path,
+            archive_id=archive_id,
+            proposal_sha256=actual_proposal_sha256,
+        )
+        receipt_sha256 = verification.get("receipt_sha256")
+        actual_plan_digest = verification.get("plan_digest")
+        actual_write_plan_digest = verification.get("write_plan_digest")
+        public_items = (
+            verification.get("items")
+            if isinstance(verification.get("items"), list)
+            else []
+        )
+        blockers.extend(
+            str(item) for item in verification.get("blockers", [])
+        )
+        if actual_plan_digest != expected_plan:
+            blockers.append("existing_receipt_plan_digest_mismatch")
+        if expected_write and actual_write_plan_digest != expected_write:
+            blockers.append("existing_receipt_write_plan_digest_mismatch")
+        review_affirmation_verified = bool(
+            verification.get("review_affirmation_verified")
+        )
+        return result_payload(
+            "already_applied" if verification.get("ok") else "blocked"
+        )
+
+    if approve:
+        if reviewer is None:
+            blockers.append("safe_reviewed_by_required")
+        if not affirm_titles_reviewed:
+            blockers.append("affirm_titles_reviewed_required")
+    elif reviewed_by:
+        blockers.append("reviewed_by_only_valid_with_approve")
+    elif affirm_titles_reviewed:
+        blockers.append("affirmation_only_valid_with_approve")
+    if blockers:
+        return result_payload("blocked")
+
+    def filtered_progress(
+        stage: str,
+        state: str,
+        completed: int | None,
+        total: int | None,
+    ) -> None:
+        if progress_callback is not None and stage != "title-remap-proposal":
+            progress_callback(stage, state, completed, total)
+
+    plan = zet_title_remap_plan(
+        root,
+        proposal_path=proposal_path,
+        max_items=effective_max_items,
+        dry_run=True,
+        progress_callback=filtered_progress,
+    )
+    actual_plan_digest = (
+        plan.get("plan_digest")
+        if isinstance(plan.get("plan_digest"), str)
+        else None
+    )
+    if plan.get("proposal", {}).get("sha256") != actual_proposal_sha256:
+        blockers.append("proposal_changed_during_plan")
+    if not plan.get("ok"):
+        blockers.extend(
+            f"plan:{item}" for item in plan.get("blockers", [])
+        )
+    if actual_plan_digest != expected_plan:
+        blockers.append("plan_digest_mismatch")
+    candidates, materialize_blockers = materialize_zet_title_remap_candidates(
+        root,
+        raw_proposal_bytes,
+        plan,
+    )
+    blockers.extend(materialize_blockers)
+    if not candidates:
+        blockers.append("no_write_candidates")
+    if blockers:
+        public_items = [
+            {
+                "row_index": item.get("row_index"),
+                "status": "blocked",
+                "basis": item.get("basis"),
+                "blocker_codes": list(item.get("blocker_codes") or []),
+            }
+            for item in plan.get("items", [])
+            if isinstance(item, dict)
+        ]
+        return result_payload("blocked")
+    actual_write_plan_digest = zet_title_remap_write_plan_digest(
+        archive_id=archive_id,
+        proposal_sha256=actual_proposal_sha256,
+        plan_digest=actual_plan_digest,
+        candidates=candidates,
+    )
+    if expected_write and expected_write != actual_write_plan_digest:
+        blockers.append("write_plan_digest_mismatch")
+    public_items = [
+        {
+            "row_index": item["row_index"],
+            "status": "ready_to_apply",
+            "basis": item["basis"],
+            "blocker_codes": [],
+        }
+        for item in candidates
+    ]
+    if blockers:
+        for item in public_items:
+            item["status"] = "blocked"
+        return result_payload("blocked")
+    if dry_run:
+        return result_payload("ready_to_apply")
+
+    assert reviewer is not None
+    assert actual_plan_digest is not None
+    assert actual_write_plan_digest is not None
+    applied_at = (
+        datetime.now(timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+    private_items = zet_title_remap_receipt_items(candidates)
+    receipt = {
+        "schema": ZET_TITLE_REMAP_RECEIPT_SCHEMA,
+        "action": "zet_title_remap_write",
+        "status": "applied",
+        "applied_at": applied_at,
+        "archive_id": archive_id,
+        "proposal_sha256": actual_proposal_sha256,
+        "plan_digest": actual_plan_digest,
+        "write_plan_digest": actual_write_plan_digest,
+        "reviewed_by": reviewer,
+        "human_affirmation": "all_proposed_titles_reviewed",
+        "item_count": len(private_items),
+        "items": private_items,
+        "mutation_contract": {
+            "field_replaced": "frontmatter.title",
+            "body_bytes_preserved": True,
+            "other_frontmatter_semantics_preserved": True,
+            "updated_at_changed": False,
+            "prior_byte_snapshots_verified_before_first_canonical_write": True,
+            "rollback_on_runtime_failure": True,
+            "crash_recovery_journal_written": True,
+        },
+        "privacy_guards": {
+            "old_title_text_stored_in_receipt": False,
+            "new_title_text_stored_in_receipt": False,
+            "body_text_stored_in_receipt": False,
+            "provider_api_called": False,
+            "model_called": False,
+            "secret_store_or_environment_read": False,
+        },
+    }
+    if (
+        not zet_title_remap_receipt_document_valid(receipt)
+        or validate_schema(receipt, "zet-title-remap-receipt.schema.json")
+    ):
+        blockers.append("receipt_schema_validation_failed")
+        return result_payload("blocked")
+    transaction_journal = {
+        "schema": ZET_TITLE_REMAP_TRANSACTION_JOURNAL_SCHEMA,
+        "action": "zet_title_remap_transaction",
+        "status": "prepared",
+        "operation": "apply",
+        "prepared_at": applied_at,
+        "archive_id": archive_id,
+        "proposal_sha256": actual_proposal_sha256,
+        "plan_digest": actual_plan_digest,
+        "write_plan_digest": actual_write_plan_digest,
+        "reviewed_by": reviewer,
+        "human_affirmation": "all_proposed_titles_reviewed",
+        "final_receipt_path": receipt_relative,
+        "item_count": len(private_items),
+        "items": private_items,
+        "recovery_contract": {
+            "journal_published_before_first_canonical_write": True,
+            "current_state_inferred_from_participant_hashes": True,
+            "prior_byte_snapshots_verified_before_journal": True,
+            "automatic_resume_implemented": False,
+            "automatic_rollback_after_hard_exit_implemented": False,
+        },
+        "privacy_guards": {
+            "old_title_text_stored": False,
+            "new_title_text_stored": False,
+            "body_text_stored": False,
+            "contains_private_zettel_ids_and_paths": True,
+            "provider_api_called": False,
+            "model_called": False,
+            "secret_store_or_environment_read": False,
+        },
+    }
+    transaction_journal["journal_digest"] = sha256_json_value(
+        transaction_journal
+    )
+    if (
+        not zet_title_remap_transaction_journal_document_valid(
+            transaction_journal
+        )
+        or validate_schema(
+            transaction_journal,
+            "zet-title-remap-transaction-journal.schema.json",
+        )
+    ):
+        blockers.append("transaction_journal_schema_validation_failed")
+        return result_payload("blocked")
+
+    lock_descriptor: int | None = None
+    try:
+        lock_descriptor = os.open(
+            write_lock_path,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            0o600,
+        )
+        lock_document = {
+            "schema": "wom-kit/zet-title-remap-write-lock/v0.1",
+            "proposal_sha256": actual_proposal_sha256,
+            "plan_digest": actual_plan_digest,
+            "write_plan_digest": actual_write_plan_digest,
+            "transaction_journal_name": transaction_journal_path.name,
+        }
+        with os.fdopen(lock_descriptor, "wb") as lock_handle:
+            lock_descriptor = None
+            lock_handle.write(
+                (
+                    json.dumps(
+                        lock_document,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
+                    + "\n"
+                ).encode("utf-8")
+            )
+            lock_handle.flush()
+            os.fsync(lock_handle.fileno())
+        fsync_directory(write_lock_path.parent)
+    except FileExistsError:
+        blockers.append("title_remap_write_lock_exists")
+        return result_payload("blocked")
+    except OSError:
+        try:
+            if write_lock_path.exists():
+                write_lock_path.unlink()
+        except OSError:
+            pass
+        blockers.append("title_remap_write_lock_create_failed")
+        return result_payload("blocked")
+    finally:
+        if lock_descriptor is not None:
+            os.close(lock_descriptor)
+
+    try:
+        locked_raw_bytes, locked_proposal_sha256 = (
+            read_zet_title_remap_proposal_bytes(
+                resolved_proposal,
+                progress_callback=None,
+            )
+        )
+        locked_plan = zet_title_remap_plan(
+            root,
+            proposal_path=proposal_path,
+            max_items=effective_max_items,
+            dry_run=True,
+            progress_callback=None,
+        )
+        locked_candidates, locked_blockers = (
+            materialize_zet_title_remap_candidates(
+                root,
+                locked_raw_bytes,
+                locked_plan,
+            )
+        )
+        locked_plan_digest = locked_plan.get("plan_digest")
+        locked_write_digest = (
+            zet_title_remap_write_plan_digest(
+                archive_id=archive_id,
+                proposal_sha256=locked_proposal_sha256,
+                plan_digest=locked_plan_digest,
+                candidates=locked_candidates,
+            )
+            if (
+                locked_plan.get("ok")
+                and isinstance(locked_plan_digest, str)
+                and not locked_blockers
+            )
+            else None
+        )
+        if (
+            locked_proposal_sha256 != actual_proposal_sha256
+            or locked_plan_digest != actual_plan_digest
+            or locked_write_digest != actual_write_plan_digest
+        ):
+            raise ArchiveServiceError("title_write_candidate_changed_under_lock")
+        candidates = locked_candidates
+        snapshot_result = preserve_zet_title_remap_before_snapshots(
+            root,
+            candidates=candidates,
+            archive_id=archive_id,
+            captured_at=applied_at,
+            reviewed_by=reviewer,
+            write_plan_digest=actual_write_plan_digest,
+        )
+    except Exception:
+        try:
+            if write_lock_path.exists():
+                write_lock_path.unlink()
+                fsync_directory(write_lock_path.parent)
+            write_lock_removed = not write_lock_path.exists()
+        except OSError:
+            write_lock_removed = False
+        blockers.append("title_write_preflight_or_snapshot_failed")
+        return result_payload("blocked")
+
+    try:
+        write_json_new_file(transaction_journal_path, transaction_journal)
+        transaction_journal_written = True
+    except FileExistsError:
+        try:
+            write_lock_path.unlink()
+            fsync_directory(write_lock_path.parent)
+            write_lock_removed = True
+        except OSError:
+            write_lock_removed = False
+        blockers.append("title_transaction_journal_exists")
+        return result_payload("blocked")
+    except OSError:
+        try:
+            if write_lock_path.exists():
+                write_lock_path.unlink()
+                fsync_directory(write_lock_path.parent)
+            write_lock_removed = not write_lock_path.exists()
+        except OSError:
+            write_lock_removed = False
+        blockers.append("title_transaction_journal_create_failed")
+        return result_payload("blocked")
+
+    attempted_candidates: list[dict[str, Any]] = []
+    receipt_parent_existed = receipt_path.parent.exists()
+    receipt_write_attempted = False
+    receipt_owned_this_run = False
+    try:
+        if progress_callback is not None:
+            progress_callback("title-remap-write", "start", 0, len(candidates))
+        for index, item in enumerate(candidates, start=1):
+            if (
+                read_zet_title_remap_canonical_bytes(item["path"])
+                != item["before_bytes"]
+            ):
+                raise RuntimeError("canonical_changed_immediately_before_write")
+            attempted_candidates.append(item)
+            canonical_write_attempt_count += 1
+            write_bytes_atomic(item["path"], item["after_bytes"])
+            if (
+                read_zet_title_remap_canonical_bytes(item["path"])
+                != item["after_bytes"]
+            ):
+                raise RuntimeError("canonical_write_verification_failed")
+            canonical_files_written += 1
+            public_items[index - 1]["status"] = "applied"
+            if progress_callback is not None:
+                progress_callback(
+                    "title-remap-write",
+                    "written",
+                    index,
+                    len(candidates),
+                )
+        for item in candidates:
+            current = read_zet_title_remap_canonical_bytes(item["path"])
+            if (
+                "sha256:" + hashlib.sha256(current).hexdigest()
+                != item["after_file_sha256"]
+            ):
+                raise RuntimeError("canonical_batch_revalidation_failed")
+        if progress_callback is not None:
+            progress_callback(
+                "title-remap-write",
+                "done",
+                len(candidates),
+                len(candidates),
+            )
+            progress_callback("title-remap-receipt", "start", None, None)
+        receipt_path.parent.mkdir(parents=True, exist_ok=True)
+        receipt_write_attempted = True
+        try:
+            write_json_new_file(receipt_path, receipt)
+            receipt_owned_this_run = True
+        except FileExistsError:
+            receipt_write_attempted = False
+            raise RuntimeError("receipt_created_concurrently")
+        except Exception:
+            receipt_owned_this_run = receipt_path.exists()
+            raise
+        receipt_bytes = receipt_path.read_bytes()
+        written_receipt = json.loads(receipt_bytes.decode("utf-8"))
+        if (
+            not zet_title_remap_receipt_document_valid(written_receipt)
+            or validate_schema(
+                written_receipt,
+                "zet-title-remap-receipt.schema.json",
+            )
+        ):
+            raise RuntimeError("written_receipt_schema_validation_failed")
+        receipt_sha256 = "sha256:" + hashlib.sha256(receipt_bytes).hexdigest()
+        receipt_exists = True
+        receipt_written_this_run = True
+        review_affirmation_verified = True
+        try:
+            transaction_journal_path.unlink()
+            fsync_directory(transaction_journal_path.parent)
+            transaction_journal_removed = True
+        except OSError:
+            transaction_journal_removed = False
+            warnings.append("completed_title_transaction_journal_cleanup_failed")
+        if transaction_journal_removed:
+            try:
+                write_lock_path.unlink()
+                fsync_directory(write_lock_path.parent)
+                write_lock_removed = True
+            except OSError:
+                write_lock_removed = False
+                warnings.append("temporary_title_write_lock_cleanup_failed")
+        else:
+            write_lock_removed = False
+            warnings.append("title_write_lock_retained_with_transaction_journal")
+        if progress_callback is not None:
+            progress_callback("title-remap-receipt", "done", None, None)
+        return result_payload("applied")
+    except Exception:
+        rollback["attempted"] = bool(
+            attempted_candidates or receipt_write_attempted
+        )
+        if receipt_owned_this_run and receipt_path.exists():
+            try:
+                receipt_path.unlink()
+            except OSError:
+                pass
+        receipt_removed = not receipt_path.exists()
+        restored = 0
+        canonical_restore_ok = True
+        for item in reversed(attempted_candidates):
+            try:
+                write_bytes_atomic(item["path"], item["before_bytes"])
+                if (
+                    read_zet_title_remap_canonical_bytes(item["path"])
+                    != item["before_bytes"]
+                ):
+                    raise OSError("canonical_restore_verification_failed")
+                restored += 1
+            except Exception:
+                canonical_restore_ok = False
+        if canonical_restore_ok and receipt_removed:
+            try:
+                if transaction_journal_path.exists():
+                    transaction_journal_path.unlink()
+                    fsync_directory(transaction_journal_path.parent)
+                    transaction_journal_removed = True
+                else:
+                    transaction_journal_removed = False
+            except OSError:
+                transaction_journal_removed = False
+        else:
+            transaction_journal_removed = False
+        if transaction_journal_removed:
+            try:
+                if write_lock_path.exists():
+                    write_lock_path.unlink()
+                    fsync_directory(write_lock_path.parent)
+                write_lock_removed = True
+            except OSError:
+                write_lock_removed = False
+        else:
+            write_lock_removed = False
+        if not receipt_parent_existed:
+            cleanup_empty_archive_dirs(root, [receipt_path])
+        rollback["canonical_files_restored"] = restored
+        rollback["receipt_removed"] = receipt_removed
+        rollback["transaction_journal_removed"] = (
+            transaction_journal_removed
+        )
+        rollback["transaction_journal_retained"] = bool(
+            transaction_journal_path.exists()
+        )
+        rollback["write_lock_removed"] = write_lock_removed
+        rollback["succeeded"] = bool(
+            canonical_restore_ok
+            and receipt_removed
+            and transaction_journal_removed
+            and write_lock_removed
+        )
+        canonical_files_written = None if not rollback["succeeded"] else 0
+        receipt_exists = receipt_path.exists()
+        receipt_written_this_run = False
+        attempted_rows = {
+            item["row_index"] for item in attempted_candidates
+        }
+        for item in public_items:
+            item["status"] = (
+                "rolled_back"
+                if item.get("row_index") in attempted_rows
+                else "not_attempted"
+            )
+        blockers.append(
+            "transaction_failed_and_rolled_back"
+            if rollback["succeeded"]
+            else "transaction_failed_rollback_incomplete"
+        )
+        return result_payload(
+            "failed_rolled_back"
+            if rollback["succeeded"]
+            else "failed_rollback_incomplete"
+        )
 
 
 def first_read_readiness(

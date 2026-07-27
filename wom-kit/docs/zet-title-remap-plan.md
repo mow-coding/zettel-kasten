@@ -1,6 +1,6 @@
 # Reviewed zet Title Remap Plan
 
-Status: v0.3.268 read-only title proposal validation
+Status: v0.3.269 read-only title proposal validation before approved write
 
 Use this command after `zet-title-readiness` finds a canonical zet whose title
 is an imported identifier:
@@ -34,7 +34,9 @@ Each line follows `zet-title-remap-proposal.schema.json`:
 
 Neither basis is automatic approval. The command binds the private proposal to
 the exact current canonical file bytes and reports `ready_for_review` or fixed
-blocker codes. It never writes a zet.
+blocker codes. The plan command never writes a zet. v0.3.269 provides the
+separate approval-gated `zet-title-remap-write` command only after this plan
+and its proposal remain unchanged.
 
 ## Title Length
 
@@ -111,9 +113,16 @@ including:
 Archive-root and unexpected failures keep a generic redacted message because
 their underlying exception may contain a local absolute path.
 
-## What This Does Not Do
+## Next Step
 
 The command does not read the source export, invent a title, normalize private
 text, call a provider or model, modify canonical zets, write receipts, or grant
-approval. Approved title writes, receipts, audit, interruption recovery, and
-revert are a separate later release track.
+approval. After every ready row has been reviewed, follow
+[Approved zet Title Remap Write](zet-title-remap-write.md) to obtain a
+write-plan digest in dry-run mode and then supply the separate explicit
+approval.
+
+The v0.3.269 writer adds exact prior-byte snapshots, a private receipt,
+ordinary-failure rollback, and hard-exit evidence. Archive-wide title receipt
+audit, automatic interruption recovery, and approved revert remain a later
+release track.

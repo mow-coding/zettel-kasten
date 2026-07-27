@@ -6,6 +6,31 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.269 - 2026-07-28
+
+- Added approval-gated `zet-title-remap-write` and alias
+  `title-remap-write`.
+- Bound every write to the unchanged private proposal SHA-256, read-only plan
+  digest, dry-run write-plan digest, safe reviewer id, and explicit
+  all-titles-reviewed affirmation.
+- Revalidated the complete plan and canonical bytes under one title-remap
+  writer lock, then replaced only the single top-level YAML `title` scalar
+  while preserving BOM/newlines, all other frontmatter semantics, body bytes,
+  and `updated_at`.
+- Preserved and verified every complete prior canonical file as a
+  content-addressed object before the first mutation, with one locked batch
+  manifest append.
+- Added private title-remap receipt and transaction-journal schemas. Neither
+  stores title or body text; strict runtime allowlists also reject unexpected
+  fields that the intentionally small local schema validator cannot enforce.
+- Added exact-byte rollback for ordinary failures and real hard-exit tests that
+  retain the common lock, private journal, and prior-byte snapshots for later
+  recovery.
+- Repeated completed proposals verify the immutable receipt, current after
+  hashes, and snapshots, then return `already_applied` without writing.
+- Archive-wide title receipt audit, automatic interrupted-batch recovery, and
+  approved revert remain future work.
+
 ## v0.3.268 - 2026-07-28
 
 - Made `zet-title-remap-plan` proposal failures actionable without weakening

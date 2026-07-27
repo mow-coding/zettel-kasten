@@ -7612,13 +7612,64 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         release_text = (
             KIT_ROOT / "docs" / "releases" / "v0.3.268.md"
         ).read_text(encoding="utf-8")
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        public_map_text = (
+            KIT_ROOT / "docs" / "public-documentation-map.md"
+        ).read_text(encoding="utf-8")
+        public_map_ko_text = (
+            KIT_ROOT / "docs" / "public-documentation-map.ko.md"
+        ).read_text(encoding="utf-8")
+        proposal_schema = json.loads(
+            (
+                KIT_ROOT / "schemas" / "zet-title-remap-proposal.schema.json"
+            ).read_text(encoding="utf-8")
+        )
+
+        for text in (guide_text, release_text, matrix_text):
+            with self.subTest(document="title-remap-usability-contract"):
+                self.assertIn("2,000", text)
+                self.assertIn("title_contains_line_break", text)
+                self.assertIn(
+                    "title_contains_non_normalized_whitespace",
+                    text,
+                )
+                self.assertIn("matched_safety_rules", text)
+                self.assertIn("title_contains_public_web_url", text)
+                self.assertIn("human_written", text)
+
+        self.assertEqual(
+            proposal_schema["properties"]["title"]["maxLength"],
+            2000,
+        )
+        self.assertIn("does not change canonical zets", release_text)
+        self.assertIn(
+            "[Reviewed zet Title Remap Plan]",
+            public_map_text,
+        )
+        self.assertIn(
+            "[검토된 zet 제목 리맵 계획]",
+            public_map_ko_text,
+        )
+
+    def test_v03269_title_remap_write_docs_match_approval_and_evidence_contract(
+        self,
+    ) -> None:
+        plan_text = (
+            KIT_ROOT / "docs" / "zet-title-remap-plan.md"
+        ).read_text(encoding="utf-8")
+        guide_text = (
+            KIT_ROOT / "docs" / "zet-title-remap-write.md"
+        ).read_text(encoding="utf-8")
+        release_text = (
+            KIT_ROOT / "docs" / "releases" / "v0.3.269.md"
+        ).read_text(encoding="utf-8")
         packaged_release_text = (
             KIT_ROOT
             / "src"
             / "wom_kit"
             / "_resources"
             / "release-notes"
-            / "v0.3.268.md"
+            / "v0.3.269.md"
         ).read_text(encoding="utf-8")
         matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
         root_readme_text = (REPO_ROOT / "README.md").read_text(
@@ -7642,40 +7693,66 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         public_map_ko_text = (
             KIT_ROOT / "docs" / "public-documentation-map.ko.md"
         ).read_text(encoding="utf-8")
-        proposal_schema = json.loads(
-            (
-                KIT_ROOT / "schemas" / "zet-title-remap-proposal.schema.json"
-            ).read_text(encoding="utf-8")
+        receipt_schema_path = (
+            KIT_ROOT / "schemas" / "zet-title-remap-receipt.schema.json"
+        )
+        journal_schema_path = (
+            KIT_ROOT
+            / "schemas"
+            / "zet-title-remap-transaction-journal.schema.json"
         )
 
-        for text in (guide_text, release_text, packaged_release_text, matrix_text):
-            with self.subTest(document="title-remap-usability-contract"):
-                self.assertIn("2,000", text)
-                self.assertIn("title_contains_line_break", text)
-                self.assertIn(
-                    "title_contains_non_normalized_whitespace",
-                    text,
-                )
-                self.assertIn("matched_safety_rules", text)
-                self.assertIn("title_contains_public_web_url", text)
-                self.assertIn("human_written", text)
+        for text in (
+            guide_text,
+            release_text,
+            packaged_release_text,
+            matrix_text,
+        ):
+            with self.subTest(document="title-remap-write-contract"):
+                self.assertIn("zet-title-remap-write", text)
+                self.assertIn("write-plan", text)
+                self.assertIn("prior-byte", text)
+                self.assertIn("receipt", text.lower())
+                self.assertIn("journal", text.lower())
+                self.assertIn("automatic", text.lower())
+                self.assertIn("revert", text.lower())
 
-        self.assertEqual(
-            proposal_schema["properties"]["title"]["maxLength"],
-            2000,
-        )
         self.assertIn(
-            "approval_contract.approved_write_implemented: false",
+            "approval_contract.approved_write_implemented: true",
             matrix_text,
         )
-        self.assertIn("does not change canonical zets", release_text)
+        self.assertIn("approval-gated", guide_text)
+        self.assertIn("does not automatically", guide_text)
+        self.assertIn("zet-title-remap-write", plan_text)
         self.assertIn(
-            "[Reviewed zet Title Remap Plan]",
+            "[Approved zet Title Remap Write]",
             public_map_text,
         )
         self.assertIn(
-            "[검토된 zet 제목 리맵 계획]",
+            "[승인된 zet 제목 리맵 쓰기]",
             public_map_ko_text,
+        )
+        self.assertEqual(
+            (
+                KIT_ROOT
+                / "src"
+                / "wom_kit"
+                / "_resources"
+                / "schemas"
+                / receipt_schema_path.name
+            ).read_bytes(),
+            receipt_schema_path.read_bytes(),
+        )
+        self.assertEqual(
+            (
+                KIT_ROOT
+                / "src"
+                / "wom_kit"
+                / "_resources"
+                / "schemas"
+                / journal_schema_path.name
+            ).read_bytes(),
+            journal_schema_path.read_bytes(),
         )
         for text in (
             root_readme_text,
@@ -7685,9 +7762,9 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             upgrade_ko_text,
         ):
             with self.subTest(document="public-version-surface"):
-                self.assertIn("v0.3.268", text)
+                self.assertIn("v0.3.269", text)
         self.assertIn(
-            "releases/download/v0.3.268/wom_kit-0.3.268-py3-none-any.whl",
+            "releases/download/v0.3.269/wom_kit-0.3.269-py3-none-any.whl",
             root_readme_text,
         )
 
