@@ -24,6 +24,44 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.264 Durable Canonical Writes
+
+No archive, zettel, index, receipt, or schema migration is required. No command
+changes its output shape or its success/failure result, and no file content
+changes. Two mechanical things do change: a write to a missing parent
+directory now creates it instead of failing, and a locked destination is
+retried briefly before the same error surfaces. An atomically replaced file
+is also a new inode, so hard links to a zet are not preserved and the file
+takes fresh default permissions.
+
+This release is entirely about what happens when a write is interrupted. Until
+now, every canonical zet mutation went through a helper that renamed a temp file
+into place without first forcing the data to disk, so a power loss could leave an
+empty or truncated zet where a complete one had been. Two writers to the same zet at the same
+time also collided — and not for the reason it first appeared: the contended
+thing is the destination, not the temp file, because Windows refuses to replace a
+file anyone holds open. The rename is now retried briefly before giving up, which
+also covers the commoner single-writer case where a virus scanner or search
+indexer has the zet open. Both are fixed.
+
+Nothing you run changes. There is no new command and no new flag. The bytes
+written are identical to before — a regression asserts that specifically.
+
+One housekeeping note: if a write was interrupted it may leave a hidden temp file
+next to a zet, named `.<name>.<random>.tmp`. This release does not sweep those —
+deleting files next to a canonical zet on a name pattern is a bigger decision
+than this change earns. Every write path cleans up its own temp file on the
+normal and error paths.
+
+Two limits worth knowing. The directory entry is flushed after the rename on
+Linux and macOS but not on Windows, which cannot open a directory for that
+purpose — so on Windows a power cut immediately after a successful write can
+still leave the previous content, though never a torn file. And each write now
+costs one extra disk flush; on a bulk migration over thousands of zets that is
+measurable (roughly 1-2 ms per zet on local SSD, hardware dependent, more on network storage).
+That is the price of not losing a zet, and it is paid per write rather than
+batched.
+
 ## v0.3.263 Reviewed Title Remap Plan
 
 No archive, zettel, index, receipt, or schema migration is required, and no
