@@ -2868,6 +2868,23 @@ INBOX_PIPELINE_AUDIT_MAX_FRONTMATTER_BYTES = 256 * 1024
 INBOX_PIPELINE_AUDIT_AI_CREATION_MODES = frozenset(
     {"ai_assisted", "ai_generated"}
 )
+ACTIVITY_GROUP_MEMBERSHIP_REQUEST_SCHEMA = (
+    "wom-kit/activity-group-membership-request/v0.1"
+)
+ACTIVITY_GROUP_MEMBERSHIP_PLAN_SCHEMA = (
+    "wom-kit/activity-group-membership-plan/v0.1"
+)
+ACTIVITY_GROUP_MEMBERSHIP_REQUEST_PREFIX = (
+    ".wom-scratch/private/activity-groups/"
+)
+ACTIVITY_GROUP_MEMBERSHIP_MAX_REQUEST_BYTES = 2 * 1024 * 1024
+ACTIVITY_GROUP_MEMBERSHIP_MAX_MEMBERS = 5000
+ACTIVITY_GROUP_MEMBERSHIP_MAX_CANONICAL_FILE_BYTES = 16 * 1024 * 1024
+ACTIVITY_GROUP_MEMBERSHIP_MAX_TOTAL_CANONICAL_BYTES = 256 * 1024 * 1024
+
+
+class ActivityGroupRequestDuplicateKeyError(ValueError):
+    """Static error for an ambiguous private activity-group JSON request."""
 ZET_REVISION_SYSTEM_MANAGED_FIELDS = (
     "id",
     "archive_id",
@@ -32280,6 +32297,792 @@ def inbox_pipeline_audit(
                     "If repair is needed, design a separate preview, approval, and receipt workflow.",
                 ]
             )
+        ),
+    }
+
+
+def _activity_group_request_path(
+    root: Path,
+    raw_path: str,
+    blockers: list[str],
+) -> tuple[str, Path | None]:
+    try:
+        normalized = normalize_archive_relative_path(raw_path)
+    except ArchivePathError:
+        blockers.append("request_path_not_archive_relative")
+        return "", None
+    if (
+        not normalized.startswith(ACTIVITY_GROUP_MEMBERSHIP_REQUEST_PREFIX)
+        or not normalized.lower().endswith(".json")
+    ):
+        blockers.append("request_path_outside_private_activity_group_scratch")
+        return normalized, None
+    unresolved = root.resolve()
+    for part in normalized.split("/"):
+        unresolved = unresolved / part
+        if unresolved.is_symlink():
+            blockers.append("request_path_contains_symbolic_link")
+            return normalized, None
+    try:
+        resolved = resolve_archive_relative_path(root, normalized)
+    except ArchivePathError:
+        blockers.append("request_path_not_archive_relative")
+        return normalized, None
+    if resolved.is_symlink() or not resolved.is_file():
+        blockers.append("request_file_missing_or_not_regular")
+        return normalized, None
+    return normalized, resolved
+
+
+def _read_activity_group_request(
+    path: Path,
+    blockers: list[str],
+) -> tuple[bytes, dict[str, Any] | None]:
+    try:
+        before = path.stat()
+        if before.st_size > ACTIVITY_GROUP_MEMBERSHIP_MAX_REQUEST_BYTES:
+            blockers.append("request_file_exceeds_2_mib")
+            return b"", None
+        with path.open("rb") as handle:
+            raw = handle.read(ACTIVITY_GROUP_MEMBERSHIP_MAX_REQUEST_BYTES + 1)
+        after = path.stat()
+    except OSError:
+        blockers.append("request_file_unreadable")
+        return b"", None
+    if len(raw) > ACTIVITY_GROUP_MEMBERSHIP_MAX_REQUEST_BYTES:
+        blockers.append("request_file_exceeds_2_mib")
+        return b"", None
+    if (
+        before.st_size,
+        before.st_mtime_ns,
+    ) != (
+        after.st_size,
+        after.st_mtime_ns,
+    ):
+        blockers.append("request_file_changed_during_read")
+        return b"", None
+    def reject_duplicate_pairs(
+        pairs: list[tuple[str, Any]],
+    ) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ActivityGroupRequestDuplicateKeyError(
+                    "activity_group_request_duplicate_key"
+                )
+            result[key] = value
+        return result
+
+    try:
+        payload = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=reject_duplicate_pairs,
+        )
+    except ActivityGroupRequestDuplicateKeyError:
+        blockers.append("request_json_duplicate_key")
+        return raw, None
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
+        blockers.append("request_not_valid_utf8_json")
+        return raw, None
+    if not isinstance(payload, dict):
+        blockers.append("request_not_json_object")
+        return raw, None
+    return raw, payload
+
+
+def _activity_group_event_coordinate(value: Any) -> tuple[str | None, Any | None]:
+    if isinstance(value, datetime):
+        if value.tzinfo is None or value.utcoffset() is None:
+            return None, None
+        return "date_time_with_offset", value
+    if isinstance(value, date):
+        return "date", value
+    if not isinstance(value, str) or not value.strip() or value != value.strip():
+        return None, None
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+        try:
+            return "date", date.fromisoformat(value)
+        except ValueError:
+            return None, None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None, None
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return None, None
+    return "date_time_with_offset", parsed
+
+
+def _read_activity_group_canonical_bytes(
+    path: Path,
+    *,
+    max_bytes: int = ACTIVITY_GROUP_MEMBERSHIP_MAX_CANONICAL_FILE_BYTES,
+) -> tuple[bytes, os.stat_result]:
+    if path.is_symlink():
+        raise ArchiveServiceError("canonical_target_is_symbolic_link")
+    effective_max_bytes = max(
+        0,
+        min(max_bytes, ACTIVITY_GROUP_MEMBERSHIP_MAX_CANONICAL_FILE_BYTES),
+    )
+    limit_code = (
+        "canonical_target_exceeds_16_mib"
+        if effective_max_bytes
+        == ACTIVITY_GROUP_MEMBERSHIP_MAX_CANONICAL_FILE_BYTES
+        else "canonical_target_exceeds_remaining_total_budget"
+    )
+    before = path.stat()
+    if before.st_size > effective_max_bytes:
+        raise ArchiveServiceError(limit_code)
+    with path.open("rb") as handle:
+        raw = handle.read(effective_max_bytes + 1)
+    after = path.stat()
+    if len(raw) > effective_max_bytes:
+        raise ArchiveServiceError(limit_code)
+    if (
+        before.st_size,
+        before.st_mtime_ns,
+    ) != (
+        after.st_size,
+        after.st_mtime_ns,
+    ):
+        raise ArchiveServiceError("canonical_target_changed_during_read")
+    return raw, after
+
+
+def _parse_activity_group_canonical(
+    raw: bytes,
+) -> tuple[dict[str, Any], str, str]:
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ArchiveServiceError("canonical_target_not_utf8") from exc
+    payload = text[1:] if text.startswith("\ufeff") else text
+    match = FRONTMATTER_RE.match(payload)
+    if match is None:
+        raise ArchiveServiceError("canonical_frontmatter_boundary_invalid")
+    try:
+        frontmatter = normalize_approval_json_tree(
+            load_approval_yaml_without_duplicate_keys(match.group(1))
+        )
+    except ApprovalYamlDuplicateKeyError as exc:
+        raise ArchiveServiceError(
+            "canonical_frontmatter_duplicate_key"
+        ) from exc
+    except Exception as exc:
+        raise ArchiveServiceError("canonical_frontmatter_yaml_invalid") from exc
+    if not isinstance(frontmatter, dict):
+        raise ArchiveServiceError("canonical_frontmatter_not_object")
+    return frontmatter, payload, match.group(1)
+
+
+def _activity_group_current_membership(
+    frontmatter: dict[str, Any],
+    anchor_zettel_id: str,
+) -> tuple[str, list[str]]:
+    facets = frontmatter.get("facets")
+    if not isinstance(facets, dict):
+        return "conflicting_current_shape", []
+    if "activity_group" not in facets:
+        return "ready_to_add", []
+    current = facets.get("activity_group")
+    if isinstance(current, str):
+        if not ZETTEL_EDGE_ZETTEL_ID_RE.fullmatch(current):
+            return "conflicting_current_shape", []
+        if current == anchor_zettel_id:
+            return "already_member", [current]
+        return "ready_to_add", [current]
+    if not isinstance(current, list) or not current:
+        return "conflicting_current_shape", []
+    normalized: list[str] = []
+    seen_memberships: set[str] = set()
+    for value in current:
+        if (
+            not isinstance(value, str)
+            or not ZETTEL_EDGE_ZETTEL_ID_RE.fullmatch(value)
+            or value in seen_memberships
+        ):
+            return "conflicting_current_shape", []
+        seen_memberships.add(value)
+        normalized.append(value)
+    if anchor_zettel_id in normalized:
+        return "already_member", normalized
+    return "ready_to_add", normalized
+
+
+def _activity_group_candidate_bytes(
+    raw: bytes,
+    *,
+    anchor_zettel_id: str,
+) -> bytes:
+    """Replace only the facets YAML node and verify all other content is equal."""
+
+    require_yaml()
+    frontmatter, payload, frontmatter_source = _parse_activity_group_canonical(raw)
+    facets = frontmatter.get("facets")
+    if not isinstance(facets, dict):
+        raise ArchiveServiceError("facets_not_object")
+    state, current = _activity_group_current_membership(
+        frontmatter, anchor_zettel_id
+    )
+    if state != "ready_to_add":
+        raise ArchiveServiceError("activity_group_not_ready_to_add")
+    updated_facets = copy.deepcopy(facets)
+    if not current:
+        updated_facets["activity_group"] = anchor_zettel_id
+    elif len(current) == 1 and isinstance(facets.get("activity_group"), str):
+        updated_facets["activity_group"] = [current[0], anchor_zettel_id]
+    else:
+        updated_facets["activity_group"] = [*current, anchor_zettel_id]
+
+    try:
+        node = yaml.compose(frontmatter_source)  # type: ignore[union-attr]
+    except Exception as exc:
+        raise ArchiveServiceError("canonical_frontmatter_yaml_invalid") from exc
+    facet_nodes: list[tuple[Any, Any]] = []
+    if node is not None and getattr(node, "id", None) == "mapping":
+        for key_node, value_node in getattr(node, "value", []):
+            if (
+                getattr(key_node, "id", None) == "scalar"
+                and getattr(key_node, "value", None) == "facets"
+            ):
+                facet_nodes.append((key_node, value_node))
+    if (
+        len(facet_nodes) != 1
+        or getattr(facet_nodes[0][1], "id", None) != "mapping"
+    ):
+        raise ArchiveServiceError("facets_yaml_node_not_unique_mapping")
+    key_node, value_node = facet_nodes[0]
+    start = int(key_node.start_mark.index)
+    end = int(value_node.end_mark.index)
+    line_break = "\r\n" if "\r\n" in frontmatter_source else "\n"
+    replacement = dump_yaml({"facets": updated_facets}).rstrip("\n")
+    replacement = replacement.replace("\n", line_break)
+    if not frontmatter_source[end:].startswith(("\r", "\n")):
+        replacement += line_break
+    candidate_frontmatter = (
+        frontmatter_source[:start] + replacement + frontmatter_source[end:]
+    )
+    match = FRONTMATTER_RE.match(payload)
+    if match is None:
+        raise ArchiveServiceError("canonical_frontmatter_boundary_invalid")
+    candidate_payload = (
+        payload[: match.start(1)]
+        + candidate_frontmatter
+        + payload[match.end(1) :]
+    )
+    candidate_text = ("\ufeff" if raw.startswith(b"\xef\xbb\xbf") else "")
+    candidate_text += candidate_payload
+    candidate_bytes = candidate_text.encode("utf-8")
+
+    candidate_frontmatter_doc, candidate_payload_check, _source = (
+        _parse_activity_group_canonical(candidate_bytes)
+    )
+    expected_frontmatter = copy.deepcopy(frontmatter)
+    expected_frontmatter["facets"] = updated_facets
+    if candidate_frontmatter_doc != expected_frontmatter:
+        raise ArchiveServiceError("activity_group_candidate_frontmatter_mismatch")
+    original_match = FRONTMATTER_RE.match(payload)
+    candidate_match = FRONTMATTER_RE.match(candidate_payload_check)
+    if (
+        original_match is None
+        or candidate_match is None
+        or payload[original_match.end() :]
+        != candidate_payload_check[candidate_match.end() :]
+    ):
+        raise ArchiveServiceError("activity_group_candidate_body_changed")
+    if candidate_bytes == raw:
+        raise ArchiveServiceError("activity_group_candidate_bytes_unchanged")
+    return candidate_bytes
+
+
+def activity_group_membership_plan(
+    archive_root: Path | str,
+    *,
+    request_path: str,
+    dry_run: bool = False,
+    max_members: int = ACTIVITY_GROUP_MEMBERSHIP_MAX_MEMBERS,
+    progress_callback: Callable[[str, str, int | None, int | None], None]
+    | None = None,
+) -> dict[str, Any]:
+    """Validate an explicit event anchor and member list without inferring membership."""
+
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if not dry_run:
+        blockers.append("dry_run_required")
+    requested_max_members = int(max_members)
+    effective_max_members = max(
+        1,
+        min(requested_max_members, ACTIVITY_GROUP_MEMBERSHIP_MAX_MEMBERS),
+    )
+    if requested_max_members != effective_max_members:
+        blockers.append("max_members_out_of_range")
+
+    _normalized_request_path, request_file = _activity_group_request_path(
+        root, request_path, blockers
+    )
+    request_bytes = b""
+    request_doc: dict[str, Any] | None = None
+    if request_file is not None:
+        if progress_callback is not None:
+            progress_callback(
+                "activity-group-request",
+                "start",
+                0,
+                int(request_file.stat().st_size),
+            )
+        request_bytes, request_doc = _read_activity_group_request(
+            request_file, blockers
+        )
+        if progress_callback is not None:
+            progress_callback(
+                "activity-group-request",
+                "done",
+                len(request_bytes),
+                len(request_bytes),
+            )
+
+    anchor_zettel_id: str | None = None
+    member_zettel_ids: list[str] = []
+    requested_member_count = 0
+    if request_doc is not None:
+        allowed_fields = {
+            "schema",
+            "archive_id",
+            "anchor_zettel_id",
+            "member_zettel_ids",
+        }
+        if set(request_doc) - allowed_fields:
+            blockers.append("request_contains_unsupported_fields")
+        if request_doc.get("schema") != ACTIVITY_GROUP_MEMBERSHIP_REQUEST_SCHEMA:
+            blockers.append("request_schema_unsupported")
+        if request_doc.get("archive_id") != archive_id:
+            blockers.append("request_archive_id_mismatch")
+        raw_anchor = request_doc.get("anchor_zettel_id")
+        if (
+            not isinstance(raw_anchor, str)
+            or not ZETTEL_EDGE_ZETTEL_ID_RE.fullmatch(raw_anchor)
+        ):
+            blockers.append("anchor_zettel_id_invalid")
+        else:
+            anchor_zettel_id = raw_anchor
+        raw_members = request_doc.get("member_zettel_ids")
+        if isinstance(raw_members, list):
+            requested_member_count = len(raw_members)
+        if not isinstance(raw_members, list) or not raw_members:
+            blockers.append("member_zettel_ids_must_be_nonempty_list")
+        elif len(raw_members) > effective_max_members:
+            blockers.append("request_exceeds_max_members")
+        else:
+            seen_members: set[str] = set()
+            for value in raw_members:
+                if (
+                    not isinstance(value, str)
+                    or not ZETTEL_EDGE_ZETTEL_ID_RE.fullmatch(value)
+                ):
+                    blockers.append("member_zettel_id_invalid")
+                    continue
+                if value in seen_members:
+                    blockers.append("member_zettel_id_duplicate")
+                    continue
+                seen_members.add(value)
+                member_zettel_ids.append(value)
+            if (
+                anchor_zettel_id is not None
+                and anchor_zettel_id in seen_members
+            ):
+                blockers.append("anchor_cannot_be_member")
+
+    request_sha256 = (
+        "sha256:" + hashlib.sha256(request_bytes).hexdigest()
+        if request_bytes
+        else None
+    )
+    anchor_result: dict[str, Any] = {
+        "status": "not_checked",
+        "blocker_codes": [],
+        "title_present": False,
+        "event_start_present": False,
+        "event_end_present": False,
+        "event_time_granularity": None,
+        "current_file_sha256": None,
+    }
+    total_canonical_bytes = 0
+
+    def resolve_requested_zettel(zettel_id: str) -> Path:
+        try:
+            direct = root / "zettels" / f"{zettel_id}.md"
+            if (
+                direct.is_symlink()
+                or not is_path_within_root(direct, root)
+                or not direct.is_file()
+            ):
+                raise ArchiveServiceError(
+                    "requested_zettel_missing_standard_canonical_path"
+                )
+            return direct
+        except (ArchiveServiceError, ArchivePathError, OSError) as exc:
+            # Do not fall back to an archive-wide id scan: one explicit request
+            # must read only its standard zettels/<id>.md targets. Keep the
+            # error content-free so the private requested id is never echoed.
+            raise ArchiveServiceError(
+                "requested_zettel_missing_standard_canonical_path"
+            ) from exc
+
+    if anchor_zettel_id is not None and not blockers:
+        anchor_blockers: list[str] = []
+        try:
+            anchor_path = resolve_requested_zettel(anchor_zettel_id)
+            anchor_relative = archive_relative_path(anchor_path, root)
+            if (
+                not anchor_relative.startswith("zettels/")
+                or anchor_path.is_symlink()
+            ):
+                raise ArchiveServiceError("anchor_not_plain_canonical_path")
+            anchor_bytes, _anchor_stat = _read_activity_group_canonical_bytes(
+                anchor_path
+            )
+            total_canonical_bytes += len(anchor_bytes)
+            anchor_frontmatter, _payload, _source = (
+                _parse_activity_group_canonical(anchor_bytes)
+            )
+            if anchor_frontmatter.get("id") != anchor_zettel_id:
+                anchor_blockers.append("anchor_frontmatter_identity_mismatch")
+            if anchor_frontmatter.get("status") != "canonical":
+                anchor_blockers.append("anchor_status_not_canonical")
+            if anchor_frontmatter.get("kind") != "record_note":
+                anchor_blockers.append("anchor_kind_not_record_note")
+            title = anchor_frontmatter.get("title")
+            title_present = isinstance(title, str) and bool(title.strip())
+            if not title_present:
+                anchor_blockers.append("anchor_title_missing")
+            facets = anchor_frontmatter.get("facets")
+            if not isinstance(facets, dict):
+                anchor_blockers.append("anchor_facets_not_object")
+                facets = {}
+            if facets.get("record_type") != "event":
+                anchor_blockers.append("anchor_record_type_not_event")
+            start_kind, start_value = _activity_group_event_coordinate(
+                facets.get("event_start")
+            )
+            if start_kind is None:
+                anchor_blockers.append("anchor_event_start_invalid_or_missing")
+            end_present = "event_end" in facets
+            end_kind: str | None = None
+            end_value: Any | None = None
+            if end_present:
+                end_kind, end_value = _activity_group_event_coordinate(
+                    facets.get("event_end")
+                )
+                if end_kind is None:
+                    anchor_blockers.append("anchor_event_end_invalid")
+                elif start_kind != end_kind:
+                    anchor_blockers.append(
+                        "anchor_event_start_end_granularity_mismatch"
+                    )
+                elif (
+                    start_value is not None
+                    and end_value is not None
+                    and end_value <= start_value
+                ):
+                    anchor_blockers.append(
+                        "anchor_event_end_not_after_start"
+                    )
+            anchor_result = {
+                "status": (
+                    "ready_for_review" if not anchor_blockers else "blocked"
+                ),
+                "blocker_codes": unique_preserve_order(anchor_blockers),
+                "title_present": title_present,
+                "event_start_present": start_kind is not None,
+                "event_end_present": end_present,
+                "event_time_granularity": start_kind,
+                "current_file_sha256": (
+                    "sha256:" + hashlib.sha256(anchor_bytes).hexdigest()
+                ),
+            }
+        except ArchiveServiceError as exc:
+            anchor_result = {
+                **anchor_result,
+                "status": "blocked",
+                "blocker_codes": [str(exc)],
+            }
+        except (ArchivePathError, OSError, ValueError):
+            anchor_result = {
+                **anchor_result,
+                "status": "blocked",
+                "blocker_codes": ["anchor_unavailable_or_unreadable"],
+            }
+        if anchor_result["blocker_codes"]:
+            blockers.append("anchor_validation_blocked")
+
+    item_results: list[dict[str, Any]] = []
+    plan_fingerprint_items: list[dict[str, Any]] = []
+    ready_to_add_count = 0
+    already_member_count = 0
+    blocked_member_count = 0
+    if member_zettel_ids and anchor_zettel_id is not None and not blockers:
+        if progress_callback is not None:
+            progress_callback(
+                "activity-group-members",
+                "start",
+                0,
+                len(member_zettel_ids),
+            )
+        for index, member_zettel_id in enumerate(member_zettel_ids):
+            item_blockers: list[str] = []
+            state = "blocked"
+            before_sha256: str | None = None
+            after_sha256: str | None = None
+            existing_membership_count: int | None = None
+            try:
+                member_path = resolve_requested_zettel(member_zettel_id)
+                member_relative = archive_relative_path(member_path, root)
+                if (
+                    not member_relative.startswith("zettels/")
+                    or member_path.is_symlink()
+                ):
+                    raise ArchiveServiceError(
+                        "member_not_plain_canonical_path"
+                    )
+                remaining_total_bytes = (
+                    ACTIVITY_GROUP_MEMBERSHIP_MAX_TOTAL_CANONICAL_BYTES
+                    - total_canonical_bytes
+                )
+                member_bytes, _member_stat = (
+                    _read_activity_group_canonical_bytes(
+                        member_path,
+                        max_bytes=remaining_total_bytes,
+                    )
+                )
+                total_canonical_bytes += len(member_bytes)
+                member_frontmatter, _payload, _source = (
+                    _parse_activity_group_canonical(member_bytes)
+                )
+                if member_frontmatter.get("id") != member_zettel_id:
+                    item_blockers.append(
+                        "member_frontmatter_identity_mismatch"
+                    )
+                if member_frontmatter.get("status") != "canonical":
+                    item_blockers.append("member_status_not_canonical")
+                current_state, current_memberships = (
+                    _activity_group_current_membership(
+                        member_frontmatter, anchor_zettel_id
+                    )
+                )
+                existing_membership_count = len(current_memberships)
+                before_sha256 = (
+                    "sha256:" + hashlib.sha256(member_bytes).hexdigest()
+                )
+                if current_state == "conflicting_current_shape":
+                    item_blockers.append(
+                        "activity_group_current_shape_conflicts_with_anchor_contract"
+                    )
+                elif current_state == "already_member":
+                    state = "already_member"
+                    after_sha256 = before_sha256
+                    already_member_count += 1
+                elif not item_blockers:
+                    candidate_bytes = _activity_group_candidate_bytes(
+                        member_bytes,
+                        anchor_zettel_id=anchor_zettel_id,
+                    )
+                    after_sha256 = (
+                        "sha256:"
+                        + hashlib.sha256(candidate_bytes).hexdigest()
+                    )
+                    state = "ready_to_add"
+                    ready_to_add_count += 1
+            except ArchiveServiceError as exc:
+                item_blockers.append(str(exc))
+            except (ArchivePathError, OSError, ValueError):
+                item_blockers.append("member_unavailable_or_unreadable")
+            item_blockers = unique_preserve_order(item_blockers)
+            if item_blockers:
+                state = "blocked"
+                blocked_member_count += 1
+            item_result = {
+                "row_index": index,
+                "status": state,
+                "blocker_codes": item_blockers,
+                "existing_membership_count": existing_membership_count,
+                "current_file_sha256": before_sha256,
+                "proposed_file_sha256": after_sha256,
+                "body_text_returned": False,
+            }
+            item_results.append(item_result)
+            plan_fingerprint_items.append(
+                {
+                    "row_index": index,
+                    "status": state,
+                    "blocker_codes": item_blockers,
+                    "current_file_sha256": before_sha256,
+                    "proposed_file_sha256": after_sha256,
+                }
+            )
+            if progress_callback is not None and (
+                index == 0
+                or index + 1 == len(member_zettel_ids)
+                or (index + 1) % 100 == 0
+            ):
+                progress_callback(
+                    "activity-group-members",
+                    "scanned",
+                    index + 1,
+                    len(member_zettel_ids),
+                )
+        if progress_callback is not None:
+            progress_callback(
+                "activity-group-members",
+                "done",
+                len(member_zettel_ids),
+                len(member_zettel_ids),
+            )
+
+    if blocked_member_count:
+        blockers.append("one_or_more_members_blocked")
+    blockers = unique_preserve_order(blockers)
+    warnings = unique_preserve_order(warnings)
+    ready = not blockers
+    review_plan_sha256 = sha256_json_value(
+        {
+            "schema": ACTIVITY_GROUP_MEMBERSHIP_PLAN_SCHEMA,
+            "archive_id": archive_id,
+            "request_sha256": request_sha256,
+            "anchor_current_file_sha256": anchor_result.get(
+                "current_file_sha256"
+            ),
+            "items": plan_fingerprint_items,
+        }
+    )
+    return {
+        "ok": ready,
+        "dry_run": True,
+        "schema": ACTIVITY_GROUP_MEMBERSHIP_PLAN_SCHEMA,
+        "lifecycle_action": "activity_group_membership_plan",
+        "status": "ready_for_human_review" if ready else "blocked",
+        "archive_id": archive_id,
+        "request": {
+            "schema": ACTIVITY_GROUP_MEMBERSHIP_REQUEST_SCHEMA,
+            "sha256": request_sha256,
+            "path_policy": (
+                ACTIVITY_GROUP_MEMBERSHIP_REQUEST_PREFIX + "<private>.json"
+            ),
+            "path_echoed": False,
+            "bytes_read": len(request_bytes),
+            "member_count": requested_member_count,
+            "valid_member_id_count": len(member_zettel_ids),
+            "anchor_zettel_id_echoed": False,
+            "member_zettel_ids_echoed": False,
+            "contains_private_zettel_ids": True,
+            "tracking_policy": "private_ai_working_file_do_not_commit",
+        },
+        "anchor": anchor_result,
+        "summary": {
+            "complete": ready,
+            "requested_member_count": requested_member_count,
+            "valid_member_id_count": len(member_zettel_ids),
+            "inspected_member_count": len(item_results),
+            "ready_to_add_count": ready_to_add_count,
+            "already_member_count": already_member_count,
+            "blocked_member_count": blocked_member_count,
+            "max_members": effective_max_members,
+            "canonical_bytes_read": total_canonical_bytes,
+            "max_canonical_file_bytes": (
+                ACTIVITY_GROUP_MEMBERSHIP_MAX_CANONICAL_FILE_BYTES
+            ),
+            "max_total_canonical_bytes": (
+                ACTIVITY_GROUP_MEMBERSHIP_MAX_TOTAL_CANONICAL_BYTES
+            ),
+        },
+        "items": item_results,
+        "review_plan_sha256": review_plan_sha256,
+        "event_anchor_contract": {
+            "representation": "canonical_record_note_anchor",
+            "identifier_field": "zettel.id",
+            "name_field": "zettel.title",
+            "record_type_facet": "event",
+            "start_facet": "event_start",
+            "end_facet": "event_end",
+            "start_inclusive": True,
+            "end_non_inclusive": True,
+            "accepted_time_values": [
+                "ISO_8601_date",
+                "ISO_8601_datetime_with_explicit_offset",
+            ],
+        },
+        "membership_contract": {
+            "member_field": "facets.activity_group",
+            "member_value": "event_anchor_zettel_id",
+            "multiple_memberships_supported": True,
+            "membership_is_undirected_co_membership": True,
+            "membership_implies_sequence": False,
+            "membership_implies_continuation": False,
+            "membership_implies_source_or_derivation": False,
+            "membership_was_inferred": False,
+            "request_is_explicit_human_selected_input": True,
+        },
+        "claim_boundary": {
+            "checked": (
+                "Only the explicit request ids against exact current live "
+                "canonical zettel bytes and the event-anchor shape."
+            ),
+            "not_checked": [
+                "Whether search results belong to the event.",
+                "Whether the human selected every correct member.",
+                "Any zettel id absent from the request.",
+                "Whether event membership caused or derived the zettel.",
+            ],
+        },
+        "index_evidence": {
+            "index_used": False,
+            "index_freshness": "not_checked_not_required_for_live_file_validation",
+            "live_file_bytes_are_authoritative_for_this_plan": True,
+        },
+        "write_boundary": {
+            "write_implemented": False,
+            "files_written": [],
+            "zettels_changed": 0,
+            "facets_changed": 0,
+            "receipts_written": 0,
+        },
+        "privacy_guards": {
+            "request_path_echoed": False,
+            "zettel_ids_echoed": False,
+            "zettel_paths_echoed": False,
+            "zettel_titles_echoed": False,
+            "frontmatter_values_echoed": False,
+            "body_text_read": bool(total_canonical_bytes),
+            "body_text_echoed": False,
+            "provider_urls_echoed": False,
+            "absolute_local_paths_echoed": False,
+            "account_ids_echoed": False,
+            "emails_echoed": False,
+            "tokens_echoed": False,
+            "secret_values_echoed": False,
+            "provider_api_called": False,
+            "model_called": False,
+            "network_called": False,
+            "writes": False,
+        },
+        "future_write_preview": {
+            "eligible_member_count": ready_to_add_count if ready else 0,
+            "implemented_now": False,
+        },
+        "would_change": [],
+        "blockers": blockers,
+        "warnings": warnings,
+        "next_safe_actions": (
+            [
+                "Fix only the content-free blocker codes in the private request or current canonical shapes, then rerun this read-only plan."
+            ]
+            if blockers
+            else [
+                "Review the anchor and ordered member selection with the archive owner.",
+                "Keep this review-plan digest as evidence; v0.3.280 does not implement the canonical writer.",
+            ]
         ),
     }
 
@@ -83701,6 +84504,15 @@ def runtime_context_read_action_routes() -> list[dict[str, Any]]:
             "writes": False,
         },
         {
+            "action": "plan_activity_group_membership",
+            "when": "a human has explicitly selected one canonical event anchor and an ordered set of canonical member zets",
+            "command": "archive activity-group-membership-plan <archive-root> --request .wom-scratch/private/activity-groups/<reviewed>.json --dry-run --progress --format json",
+            "authoritative_for": "the explicit request ids against exact current canonical bytes and the event-anchor contract",
+            "membership_is_inferred": False,
+            "canonical_write_implemented": False,
+            "writes": False,
+        },
+        {
             "action": "inspect_available_commands",
             "when": "the AI is unsure whether WOM already exposes an official command",
             "command": "archive capabilities --machine --format json",
@@ -83772,12 +84584,23 @@ def runtime_context_write_action_routes() -> list[dict[str, Any]]:
             "direct_file_write_allowed": False,
             "next_safe_action": "review the recommendation, then wait for a dedicated WOM saved-view writer instead of editing views/*.yml as an AI",
         },
+        {
+            "action": "write_activity_group_membership",
+            "when": "the AI wants to add or remove facets.activity_group on canonical zets",
+            "preview_command": "archive activity-group-membership-plan <archive-root> --request .wom-scratch/private/activity-groups/<reviewed>.json --dry-run --progress --format json",
+            "approved_command": None,
+            "write_implemented": False,
+            "removal_implemented": False,
+            "requires_human_approval": True,
+            "direct_file_write_allowed": False,
+            "next_safe_action": "review the explicit private selection and read-only plan, then wait for a dedicated approval-gated WOM membership writer instead of editing canonical zets directly",
+        },
     ]
 
 
 def runtime_context_action_routing() -> dict[str, Any]:
     return {
-        "schema": "wom-kit/ai-command-path-routing/v0.2",
+        "schema": "wom-kit/ai-command-path-routing/v0.3",
         "official_wom_command_required_for_archive_actions": True,
         "location_policy_alone_is_sufficient": False,
         "raw_filesystem_search_is_authoritative": False,
@@ -91966,12 +92789,15 @@ def indexed_facet_distribution(conn: sqlite3.Connection, key: str, *, limit: int
 
 
 NAVIGATION_FACET_KEYS = {
+    "activity_group",
     "area",
     "client",
     "collection",
     "course",
     "domain",
     "event",
+    "event_end",
+    "event_start",
     "institution",
     "organization",
     "period",

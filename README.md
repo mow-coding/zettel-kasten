@@ -34,10 +34,10 @@ not re-grow baseline ladders or tag lists here.
 Current public baseline:
 
 ```text
-v0.3.279 pre-release
+v0.3.280 pre-release
 ```
 
-Previous public baseline: v0.3.278 pre-release.
+Previous public baseline: v0.3.279 pre-release.
 
 Full release history: see [CHANGELOG.md](CHANGELOG.md) and [wom-kit/docs/releases/](wom-kit/docs/releases/).
 
@@ -55,7 +55,7 @@ future-only boundaries.
 Install the exact release wheel as an isolated command-line tool:
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.279/wom_kit-0.3.279-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.280/wom_kit-0.3.280-py3-none-any.whl"
 archive --version
 ```
 
@@ -85,6 +85,7 @@ approval-gated write, or docs-only), see the
 ### Archive core & lifecycle
 
 - a public WOM/zet/ZET design baseline with specs, schemas, fake archives, release notes, and work logs,
+- a bounded, privacy-safe, read-only `activity-group-membership-plan` that validates one human-selected event anchor and explicit canonical member set, models neutral many-to-one event membership without an O(N²) edge expansion, and binds exact current/proposed hashes while deferring every write to a later approval-gated release,
 - an artifact-first human-memory doctrine: time-situated local artifacts and their chronology outrank regenerable entity/graph projections; matching labels never authorize silent identity merges, `canonical` names the subject-approved current archive state rather than objective truth, and AI may re-infer context while human change remains visible; see [Product Philosophy](wom-kit/docs/concepts/product-philosophy.md) and the claim-by-claim [Philosophy Implementation Evidence](wom-kit/docs/philosophy-implementation-evidence.md),
 - a public version-line roadmap that explains how the pre-1.0 minor lines map to idea, implementation, WOM feedback, UI/control-layer, and ZET feedback phases,
 - a machine-readable local-sovereignty contract: local reviewed WOM state is canonical, GitHub backs up metadata/version history, object storage backs up objet bytes, and external databases hold regenerable map backups or replicas; runtime/start-here/recovery surfaces share the same offline, conflict, recovery, and receipt boundaries, while read-only `backup-evidence` reports only locally verifiable lane evidence and never turns local commits, declared labels, generated indexes, or receipt-time coverage into a false current-remote or whole-backup claim,
@@ -499,7 +500,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
-v0.3.279 (current checkpoint)
+v0.3.280 (current checkpoint)
 ```
 
 Public releases from `v0.2.5` onward are tagged as compatibility checkpoints.

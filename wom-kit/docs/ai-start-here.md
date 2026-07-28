@@ -43,8 +43,8 @@ satisfied sentence into `next_safe_steps`.
 
 ## Official Read And Write Paths
 
-Introduced in v0.3.278 and extended in v0.3.279, JSON output includes
-`wom-kit/ai-command-path-routing/v0.2`, and Markdown output renders
+Introduced in v0.3.278 and extended through v0.3.280, JSON output includes
+`wom-kit/ai-command-path-routing/v0.3`, and Markdown output renders
 `Official Read Command Paths` and `Official Write Command Paths`.
 
 The routes require `archive search --count-total --format json` for
@@ -55,7 +55,9 @@ states that local version inspection does not check remote release freshness
 and that saved-view recommendation has no persistent writer yet. It also
 routes historical inbox-shape review through the read-only
 `inbox-pipeline-audit`, whose classifications are not proof and trigger no
-repair. See [AI Command-Path Routing](ai-command-path-routing.md).
+repair. Explicit event-membership review routes through the read-only
+`activity-group-membership-plan`; it infers no member and has no writer.
+See [AI Command-Path Routing](ai-command-path-routing.md).
 
 ## Identity Consistency
 

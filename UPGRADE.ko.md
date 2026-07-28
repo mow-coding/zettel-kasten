@@ -2,6 +2,32 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.3.280 읽기 전용 activity-group 멤버십 계획
+
+아카이브 마이그레이션은 필요하지 않습니다. v0.3.280은 어떤 facet도 자동으로
+추가하거나 제거하지 않습니다. 사람이 canonical 이벤트 anchor 하나와 정확한
+canonical member를 선택한 뒤 비공개 request를
+`.wom-scratch/private/activity-groups/` 아래에 두고 다음을 실행하세요.
+
+```powershell
+archive activity-group-membership-plan <archive-root> `
+  --request .wom-scratch/private/activity-groups/reviewed.json `
+  --dry-run --progress --format json
+```
+
+anchor는 canonical `record_note`여야 하고 facets에 `record_type: event`와
+ISO 8601 `event_start`가 있어야 합니다. 호환되는 더 늦은 `event_end`는
+선택 사항입니다. member 목록은 명시적이며 순서가 있습니다. WOM은 검색
+결과, 제목, 날짜, 가까운 파일, 기존 edge로 멤버십을 추론하지 않습니다.
+
+`ready_to_add`, `already_member`, 내용이 없는 `blocked` row와 이들을 묶는
+`review_plan_sha256`를 검토하세요. 출력에는 request 경로, zet id, zet 경로,
+제목, facet 값, 본문이 들어가지 않습니다. 이번 릴리스에는 쓰기 모드가
+없습니다. 비공개 request를 공개 저장소에 올리거나 미래 writer를 흉내 내어
+canonical 파일을 직접 고치지 마세요.
+[`wom-kit/docs/activity-group-membership-plan.md`](wom-kit/docs/activity-group-membership-plan.md)를
+보세요.
+
 ## v0.3.279 읽기 전용 inbox 파이프라인 조사
 
 아카이브 마이그레이션은 필요하지 않습니다. AI 작성이라고 선언된 inbox

@@ -75,6 +75,11 @@ token-budget contract.
   `archive inbox-pipeline-audit <archive-root> --dry-run --format json`.
   Treat its classes as review signals, not proof, and never repair a draft
   automatically.
+- Plan event membership only from one explicit human-selected private request
+  with `archive activity-group-membership-plan <archive-root> --request
+  <private-reviewed-request> --dry-run --format json`. Never infer members
+  from search, titles, dates, nearby files, or edges; no membership writer
+  exists yet.
 - Create an AI-assisted draft only through `archive create-draft` dry-run and
   its exact reviewed replay. Never write Markdown directly into `inbox/`.
 - Before a write, show the human what will change, where it will change, and

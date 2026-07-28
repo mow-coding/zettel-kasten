@@ -645,6 +645,8 @@ facet_sets:
       - school_year
       - term
       - activity_group
+      - event_start
+      - event_end
       - subject
       - course_code
       - person

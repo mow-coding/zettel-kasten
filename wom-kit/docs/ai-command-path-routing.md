@@ -1,6 +1,6 @@
 # AI Command-Path Routing
 
-Status: implemented in v0.3.278, extended in v0.3.279
+Status: implemented in v0.3.278, extended through v0.3.280
 
 ## Purpose
 
@@ -23,6 +23,13 @@ v0.3.279 extends it additively with the official inbox pipeline audit route:
 
 ```text
 wom-kit/ai-command-path-routing/v0.2
+```
+
+v0.3.280 extends it again with the official read-only event-membership
+planning route:
+
+```text
+wom-kit/ai-command-path-routing/v0.3
 ```
 
 It is returned by:
@@ -58,6 +65,7 @@ packaged runtime skill, the fake archive, and live read-only command output.
 | Inspect installed version truth | `archive version <project-or-archive-root> --format json` | Proves local runtime/source/pin and already-fetched tag state; it does not verify remote release freshness. |
 | Inspect saved-view state | `archive view-health <archive-root> --dry-run --format json` | Follow with `view-recommendation-plan`; both are read-only. |
 | Inspect possible historical inbox pipeline bypasses | `archive inbox-pipeline-audit <archive-root> --dry-run --format json` | Structural classes are conservative signals, not proof of command execution; no automatic repair exists. |
+| Plan one explicit event membership set | `archive activity-group-membership-plan <archive-root> --request .wom-scratch/private/activity-groups/<reviewed>.json --dry-run --progress --format json` | The private request must contain one human-selected event anchor and ordered member ids. The command infers no member and writes nothing. |
 | Discover installed commands | `archive capabilities --machine --format json` | Use the installed inventory before declaring that WOM lacks a command. |
 
 ## Official Write Routes
@@ -71,7 +79,8 @@ Every write remains preview-first and human-reviewed.
 | Add a typed edge | `archive zettel-edge <archive-root> --from-zettel <id> --target <ref> --edge-type <type> --dry-run --format json` | Use the separate `--approve --reviewed-by <human-actor>` path and retain its receipt. |
 | Capture source material | `archive source-intake <archive-root> --dry-run --local-path <file> --format json` | Continue through `source-intake-record`, `objet-capture-selection`, and `objet-capture`; a source-intake preview alone grants no copy/upload authority. |
 | Update operating context | `archive operational-context <archive-root> --record workbench/operational-context.next.yml --dry-run --format json` | Use the separate `--approve --reviewed-by <human-actor>` path and retain its receipt. |
-| Create a persistent saved-view | `archive view-recommendation-plan <archive-root> --dry-run --format json` | No dedicated writer exists in v0.3.278. An AI must not edit `views/*.yml` directly. |
+| Create a persistent saved-view | `archive view-recommendation-plan <archive-root> --dry-run --format json` | No dedicated writer exists. An AI must not edit `views/*.yml` directly. |
+| Add or remove event memberships | `archive activity-group-membership-plan <archive-root> --request <private-reviewed-request> --dry-run --format json` | v0.3.280 has no membership writer or remover. Do not edit canonical zets directly. |
 
 ## Safety And Compatibility
 
@@ -91,3 +100,13 @@ v0.3.279 adds the separate conservative signal described in
 `insufficient_evidence` states.
 It still does not prove which process created a file and does not
 automatically rewrite, rename, delete, mint, promote, or repair any draft.
+
+## v0.3.280 Event-Membership Boundary
+
+v0.3.280 adds the read-only
+[Activity-Group Membership Plan](activity-group-membership-plan.md). It
+validates only the event anchor and ordered member ids already selected by a
+human in one bounded private request. Search results, titles, dates, nearby
+files, and existing edges never become membership automatically. The plan
+returns content-free row states and exact hashes without ids, paths, titles,
+facet values, or body text. It has no writer or removal mode.
