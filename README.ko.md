@@ -32,10 +32,10 @@ wom-kit/docs/releases/에만 쌓고, baseline 사다리와 tag 목록을 여기�
 현재 공개 기준:
 
 ```text
-v0.3.276 pre-release
+v0.3.277 pre-release
 ```
 
-이전 공개 기준: v0.3.274 pre-release.
+이전 공개 기준: v0.3.276 pre-release.
 
 전체 릴리스 이력은 [CHANGELOG.md](CHANGELOG.md)와 [wom-kit/docs/releases/](wom-kit/docs/releases/)를 보세요.
 
@@ -52,7 +52,7 @@ Roadmap 요약: `v0.1.x`는 아이디어/프로토콜 언어 라인, `v0.2.x`는
 정확한 릴리스 파일을 격리된 명령줄 도구로 설치합니다.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.276/wom_kit-0.3.276-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.277/wom_kit-0.3.277-py3-none-any.whl"
 archive --version
 ```
 
@@ -161,6 +161,7 @@ Notion:
 - reviewed block mirror에서 tree fixture preview를 만들고, sanitized ancestor result를 merge/replan하며, sanitized local fixture bundle로 클라이언트 nested-tree issue를 검증하고, 클라이언트 follow-up용 최소 sanitized fixture request contract를 패키징하는 local recovery tooling,
 - Notion nested recovery 인간 단계 가이드, `archive notion-recover`의 local `file:<path>` 토큰 파일 fallback(파일 경로와 토큰 값은 출력하지 않음), `archive notion-connection-plan --dry-run`의 one-click Notion connection product contract, `archive notion-oauth-connection-preflight --dry-run`의 secret-blind local OAuth runtime contract preflight,
 - Notion provider failure의 safe action category 분류와, live browser OAuth/callback/token exchange/keyring token storage는 아직 future adapter boundary라는 명확한 표시,
+- CLI 전용 읽기 전용 `notion-import-locator-loss-audit`: 현재 본문의 누락 표식 수와 이관 당시 기록 수를 대조하고 비공개 `source_page_id` 연결 키가 남았는지만 확인합니다. 본문 맥락·URL·키 값은 출력하지 않고 source mirror도 읽지 않습니다.
 
 Zettel edge write:
 
@@ -390,7 +391,7 @@ WOM, `zettel-kasten`, `zet`, `ZET`는 버전이 있는 protocol family로 관리
 Release tag는 compatibility checkpoint입니다.
 
 ```text
-v0.3.276 (현재 checkpoint)
+v0.3.277 (현재 checkpoint)
 ```
 
 `v0.2.5` 이후의 공개 릴리스에는 compatibility checkpoint tag가 붙습니다. 전체

@@ -6,6 +6,24 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.277 - 2026-07-28
+
+- Added CLI-only read-only `notion-import-locator-loss-audit` and alias
+  `notion-locator-loss-audit`.
+- Count the exact `[source locator omitted]` body marker across all
+  non-redacted imported Notion zets.
+- Compare current marker counts with recursively retained import-time omission
+  counts and report exact, body-greater, and frontmatter-greater states.
+- Verify presence without echoing private `source_page_id` values and return
+  only allowlisted import-family buckets.
+- Keep complete aggregate counting independent from bounded issue-first item
+  output.
+- Read no source mirror, source map, ledger, or object bytes; reconstruct no
+  locator; write no archive artifact; call no provider/model; expose no MCP
+  method.
+- Broaden historical Notion import detection to normalized `notion_*` source
+  labels.
+
 ## v0.3.276 - 2026-07-28
 
 - Added CLI-only `zet-title-remap-revert-recover` and alias

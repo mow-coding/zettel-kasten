@@ -2,6 +2,29 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.3.277 읽기 전용 Notion 출처 누락 조사
+
+아카이브 마이그레이션은 필요하지 않습니다. 과거 Notion 이관에서 출처 주소가
+누락 표식으로 바뀐 범위를 확인하려면 다음을 실행하세요.
+
+```powershell
+archive notion-import-locator-loss-audit <archive-root> `
+  --dry-run `
+  --format json
+```
+
+별칭 `notion-locator-loss-audit`도 같습니다. `--max-items`는 개별 zet 요약만
+제한하며, 전체 집계는 비공개 처리되지 않은 Notion 이관 zet 전체를 조사합니다.
+
+`body_marker_count`, `frontmatter_omitted_count`,
+`count_mismatch_zettel_count`, `source_page_id` 존재/누락 개수를 함께 보세요.
+개수가 같아도 URL을 복원해도 된다는 뜻은 아닙니다. v0.3.277은 source
+mirror를 읽지 않고 아무것도 쓰지 않습니다. 개수 불일치 zet와 연결 키 누락
+zet는 다음 읽기 전용 위치 정렬 계획 전에 별도 증거 검토가 필요합니다.
+자세한 내용은
+[`wom-kit/docs/notion-import-locator-loss-audit.md`](wom-kit/docs/notion-import-locator-loss-audit.md)를
+참고하세요.
+
 ## v0.3.276 승인형 제목 되돌리기 중단 복구
 
 아카이브 마이그레이션은 필요하지 않습니다.

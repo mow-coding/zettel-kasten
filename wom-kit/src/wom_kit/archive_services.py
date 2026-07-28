@@ -29513,7 +29513,13 @@ def notion_import_source_text_is_notion(value: Any) -> bool:
     text = str(value or "").strip().lower().replace("-", "_")
     if not text:
         return False
-    return text == "notion" or text.startswith("notion:") or text.endswith(":notion") or text.endswith("_notion")
+    return (
+        text == "notion"
+        or text.startswith("notion:")
+        or text.startswith("notion_")
+        or text.endswith(":notion")
+        or text.endswith("_notion")
+    )
 
 
 def notion_import_frontmatter_is_notion(frontmatter: dict[str, Any]) -> bool:
@@ -29736,6 +29742,304 @@ def notion_objet_import_clue_audit(
             "tokens_echoed": False,
             "secret_values_echoed": False,
             "provider_api_called": False,
+            "object_file_bytes_read": False,
+            "writes": False,
+        },
+        "would_change": [],
+        "next_safe_actions": unique_preserve_order(next_safe_actions),
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+    }
+
+
+NOTION_IMPORT_LOCATOR_OMISSION_MARKER = "[source locator omitted]"
+NOTION_IMPORT_LOCATOR_SOURCE_SYSTEM_BUCKETS = {
+    "notion_db1",
+    "notion_db2",
+    "notion_db3",
+    "notion_nested",
+    "notion_backup_workspace",
+}
+
+
+def notion_import_frontmatter_values_for_key(value: Any, target_key: str) -> list[Any]:
+    values: list[Any] = []
+
+    def walk(item: Any) -> None:
+        if isinstance(item, dict):
+            for key, child in item.items():
+                if notion_source_map_normalized_key(key) == target_key:
+                    values.append(child)
+                if isinstance(child, (dict, list)):
+                    walk(child)
+            return
+        if isinstance(item, list):
+            for child in item:
+                walk(child)
+
+    walk(value)
+    return values
+
+
+def notion_import_source_system_bucket(frontmatter: dict[str, Any]) -> str:
+    raw_values: list[Any] = []
+
+    def walk(value: Any) -> None:
+        if isinstance(value, dict):
+            for key, child in value.items():
+                if notion_source_map_normalized_key(key) in NOTION_IMPORT_SOURCE_KEYS:
+                    raw_values.append(child)
+                if isinstance(child, (dict, list)):
+                    walk(child)
+            return
+        if isinstance(value, list):
+            for child in value:
+                walk(child)
+
+    walk(frontmatter)
+    for raw in raw_values:
+        normalized = str(raw or "").strip().lower().replace("-", "_")
+        if normalized in NOTION_IMPORT_LOCATOR_SOURCE_SYSTEM_BUCKETS:
+            return normalized
+        if notion_import_source_text_is_notion(normalized):
+            return "other_notion"
+    return "notion_unspecified"
+
+
+def notion_import_locator_count_state(marker_count: int, declared_count: int) -> str:
+    if marker_count == declared_count:
+        return "exact"
+    if marker_count > declared_count:
+        return "body_marker_count_exceeds_frontmatter"
+    return "frontmatter_count_exceeds_body"
+
+
+def notion_import_locator_loss_audit(
+    archive_root: Path | str,
+    *,
+    dry_run: bool = True,
+    max_items: int = 200,
+    progress_callback: Callable[[str, str, int | None, int | None], None]
+    | None = None,
+) -> dict[str, Any]:
+    """Census omitted-locator markers without returning their surrounding text."""
+
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if not dry_run:
+        blockers.append("notion-import-locator-loss-audit is read-only; pass --dry-run.")
+
+    max_items = max(1, min(int(max_items), 5000))
+    scanned_zettel_count = 0
+    notion_import_zettel_count = 0
+    redacted_zettel_count = 0
+    unreadable_zettel_count = 0
+    affected: list[dict[str, Any]] = []
+    body_text_read = False
+
+    zettel_paths = iter_zettel_paths(root)
+    zettel_total = len(zettel_paths)
+    if progress_callback is not None:
+        progress_callback("notion-locator-loss", "start", 0, zettel_total)
+
+    for path_index, path in enumerate(zettel_paths, start=1):
+        scanned_zettel_count += 1
+        inspection = inspect_zettel_frontmatter_boundary(path)
+        body_text_read = body_text_read or bool(inspection["body_text_read"])
+        if not inspection["metadata_readable"]:
+            unreadable_zettel_count += 1
+        else:
+            frontmatter = inspection["frontmatter"]
+            if frontmatter.get("status") == "redacted":
+                redacted_zettel_count += 1
+            elif notion_import_frontmatter_is_notion(frontmatter):
+                notion_import_zettel_count += 1
+
+                try:
+                    text = path.read_text(encoding="utf-8-sig")
+                except (OSError, UnicodeError):
+                    unreadable_zettel_count += 1
+                else:
+                    body_text_read = True
+                    frontmatter_match = FRONTMATTER_RE.match(text)
+                    if frontmatter_match is None:
+                        unreadable_zettel_count += 1
+                    else:
+                        body = text[frontmatter_match.end() :]
+                        marker_count = body.count(
+                            NOTION_IMPORT_LOCATOR_OMISSION_MARKER
+                        )
+                        if marker_count > 0:
+                            declared_count = notion_import_locator_omitted_count(
+                                frontmatter
+                            )
+                            count_state = notion_import_locator_count_state(
+                                marker_count, declared_count
+                            )
+                            source_page_values = (
+                                notion_import_frontmatter_values_for_key(
+                                    frontmatter, "source_page_id"
+                                )
+                            )
+                            source_page_id_present = any(
+                                isinstance(value, (str, int))
+                                and not isinstance(value, bool)
+                                and bool(str(value).strip())
+                                for value in source_page_values
+                            )
+                            zettel_id = notion_source_map_safe_zettel_id(
+                                frontmatter.get("id")
+                            )
+                            zettel_path = archive_relative_path(path, root)
+                            affected.append(
+                                {
+                                    "zettel": drop_none_values(
+                                        {"id": zettel_id, "path": zettel_path}
+                                    ),
+                                    "body_marker_count": marker_count,
+                                    "frontmatter_omitted_count": declared_count,
+                                    "count_state": count_state,
+                                    "source_system_bucket": (
+                                        notion_import_source_system_bucket(
+                                            frontmatter
+                                        )
+                                    ),
+                                    "source_page_id_present": source_page_id_present,
+                                    "source_evidence_state": (
+                                        "source_page_join_key_preserved"
+                                        if source_page_id_present
+                                        else "source_page_join_key_missing"
+                                    ),
+                                }
+                            )
+        if progress_callback is not None and (
+            path_index == 1
+            or path_index == zettel_total
+            or path_index % 250 == 0
+        ):
+            progress_callback(
+                "notion-locator-loss",
+                "scanned",
+                path_index,
+                zettel_total,
+            )
+
+    if progress_callback is not None:
+        progress_callback(
+            "notion-locator-loss",
+            "done",
+            zettel_total,
+            zettel_total,
+        )
+
+    if unreadable_zettel_count:
+        blockers.append(
+            "locator-loss census is incomplete because one or more zettels were unreadable."
+        )
+
+    counts_by_state: dict[str, int] = {}
+    counts_by_source_system: dict[str, int] = {}
+    for item in affected:
+        count_state = str(item["count_state"])
+        source_system = str(item["source_system_bucket"])
+        counts_by_state[count_state] = counts_by_state.get(count_state, 0) + 1
+        counts_by_source_system[source_system] = (
+            counts_by_source_system.get(source_system, 0) + 1
+        )
+
+    body_marker_count = sum(int(item["body_marker_count"]) for item in affected)
+    frontmatter_omitted_count = sum(
+        int(item["frontmatter_omitted_count"]) for item in affected
+    )
+    source_page_id_present_count = sum(
+        1 for item in affected if item["source_page_id_present"]
+    )
+    source_page_id_missing_count = len(affected) - source_page_id_present_count
+    mismatch_count = len(affected) - counts_by_state.get("exact", 0)
+
+    priority = {
+        "source_page_join_key_missing": 0,
+        "source_page_join_key_preserved": 1,
+    }
+    ordered = sorted(
+        affected,
+        key=lambda item: (
+            priority.get(str(item["source_evidence_state"]), 2),
+            0 if item["count_state"] != "exact" else 1,
+            str(item["zettel"].get("path") or item["zettel"].get("id") or ""),
+        ),
+    )
+    returned_items = ordered[:max_items]
+
+    next_safe_actions: list[str] = []
+    if blockers:
+        next_safe_actions.append(
+            "Fix unreadable zettels before treating the locator-loss census as complete."
+        )
+    if source_page_id_present_count:
+        next_safe_actions.append(
+            "Join preserved source_page_id values to an explicitly reviewed source mirror before proposing any locator restoration."
+        )
+    if mismatch_count:
+        next_safe_actions.append(
+            "Keep count-mismatch zettels out of automatic restoration until source occurrences and current markers are aligned."
+        )
+    if source_page_id_missing_count:
+        next_safe_actions.append(
+            "Trace join-key-missing zettels through provenance and reviewed derived-from evidence; do not infer a source page from nearby titles or references."
+        )
+
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "lifecycle_action": "notion_import_locator_loss_audit",
+        "archive_id": archive_id,
+        "summary": {
+            "scanned_zettel_count": scanned_zettel_count,
+            "notion_import_zettel_count": notion_import_zettel_count,
+            "affected_zettel_count": len(affected),
+            "body_marker_count": body_marker_count,
+            "frontmatter_omitted_count": frontmatter_omitted_count,
+            "marker_frontmatter_count_delta": body_marker_count
+            - frontmatter_omitted_count,
+            "exact_count_zettel_count": counts_by_state.get("exact", 0),
+            "count_mismatch_zettel_count": mismatch_count,
+            "source_page_id_present_count": source_page_id_present_count,
+            "source_page_id_missing_count": source_page_id_missing_count,
+            "counts_by_state": dict(sorted(counts_by_state.items())),
+            "counts_by_source_system": dict(sorted(counts_by_source_system.items())),
+            "redacted_zettel_count": redacted_zettel_count,
+            "unreadable_zettel_count": unreadable_zettel_count,
+            "scan_complete": unreadable_zettel_count == 0,
+            "returned_item_count": len(returned_items),
+            "items_truncated": len(returned_items) < len(affected),
+        },
+        "items": returned_items,
+        "current_capability": {
+            "locator_loss_census_available": True,
+            "source_page_id_join_key_presence_audited": True,
+            "source_mirror_read_by_this_command": False,
+            "provider_locator_reconstruction_implemented": False,
+            "retroactive_body_write_implemented": False,
+            "approved_write_performed_by_this_command": False,
+        },
+        "privacy_guards": {
+            "zettel_body_text_read": body_text_read,
+            "zettel_body_text_echoed": False,
+            "provider_urls_echoed": False,
+            "provider_locator_text_echoed": False,
+            "source_page_id_values_echoed": False,
+            "frontmatter_values_echoed": False,
+            "page_titles_echoed": False,
+            "absolute_local_paths_echoed": False,
+            "account_ids_echoed": False,
+            "emails_echoed": False,
+            "tokens_echoed": False,
+            "secret_values_echoed": False,
+            "provider_api_called": False,
+            "source_mirror_bytes_read": False,
             "object_file_bytes_read": False,
             "writes": False,
         },
@@ -61999,6 +62303,10 @@ def ai_response_concept_guide(
                 "command": "archive notion-objet-source-map-link-plan <archive-root> --source-map source-maps/<source>.jsonl --ledger receipts/import/<ledger>.jsonl --dry-run --format json",
             },
             {
+                "human_intent": "measure current Notion locator omission markers, recorded counts, and preserved source-page join keys",
+                "command": "archive notion-import-locator-loss-audit <archive-root> --dry-run --format json",
+            },
+            {
                 "human_intent": "audit imported Notion zettels for missing material clues after provider locator omission",
                 "command": "archive notion-objet-import-clue-audit <archive-root> --source-map source-maps/<source>.jsonl --ledger receipts/import/<ledger>.jsonl --dry-run --format json",
             },
@@ -83087,6 +83395,12 @@ def runtime_context_ai_runtime_order() -> list[dict[str, Any]]:
 
 def runtime_context_material_link_routes() -> list[dict[str, Any]]:
     return [
+        {
+            "when": "the archive needs a complete census of current Notion omission markers, recorded counts, and source-page join-key presence",
+            "command": "archive notion-import-locator-loss-audit <archive-root> --dry-run --format json",
+            "writes": False,
+            "provider_api_called": False,
+        },
         {
             "when": "imported zettel bodies already omitted provider locators",
             "command": "archive notion-objet-import-clue-audit <archive-root> --source-map source-maps/<source>.jsonl --ledger receipts/import/<ledger>.jsonl --dry-run --format json",

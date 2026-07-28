@@ -5189,6 +5189,12 @@ class ArchiveCliTests(unittest.TestCase):
                 ],
             )
             material_commands = [route["command"] for route in entrypoints["material_link_routes"]]
+            self.assertTrue(
+                any(
+                    "notion-import-locator-loss-audit" in command
+                    for command in material_commands
+                )
+            )
             self.assertTrue(any("notion-objet-import-clue-audit" in command for command in material_commands))
             self.assertTrue(any("notion-objet-source-map-link-plan" in command for command in material_commands))
             self.assertTrue(any("notion-objet-link-index" in command for command in material_commands))
@@ -13533,6 +13539,12 @@ state:
             self.assertTrue(any("--topic git_infra_terms" in route["command"] for route in result["safe_routing"]))
             self.assertTrue(any("derive-text-coverage" in route["command"] for route in result["safe_routing"]))
             self.assertTrue(any("notion-objet-source-map-link-plan" in route["command"] for route in result["safe_routing"]))
+            self.assertTrue(
+                any(
+                    "notion-import-locator-loss-audit" in route["command"]
+                    for route in result["safe_routing"]
+                )
+            )
             self.assertTrue(any("notion-objet-import-clue-audit" in route["command"] for route in result["safe_routing"]))
             self.assertTrue(any("notion-objet-link-index" in route["command"] for route in result["safe_routing"]))
             self.assertTrue(any("connection-import-plan" in route["command"] for route in result["safe_routing"]))
@@ -21744,6 +21756,175 @@ state:
             self.assertEqual(self.snapshot_archive_files(archive_root), before)
 
             no_dry_code, no_dry_output = self.run_cli(["notion-objet-import-clue-audit", str(archive_root)])
+            self.assertEqual(no_dry_code, 1, no_dry_output)
+            self.assertIn("requires --dry-run", no_dry_output)
+
+    def test_notion_import_locator_loss_audit_counts_markers_without_echoing_private_values(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            exact_path = archive_root / "inbox" / "zet_notion_locator_exact.md"
+            mismatch_path = archive_root / "inbox" / "zet_notion_locator_mismatch.md"
+            missing_key_path = archive_root / "inbox" / "zet_notion_locator_missing_key.md"
+            private_exact_page = "private-db3-page-id-must-not-echo"
+            private_mismatch_page = "private-db1-page-id-must-not-echo"
+            private_body = "Private locator context and https://private.example must not echo."
+            exact_path.write_text(
+                "\n".join(
+                    [
+                        "---",
+                        "id: zet_notion_locator_exact",
+                        "status: draft",
+                        "facets:",
+                        "  source_system: notion_db3",
+                        f"  source_page_id: {private_exact_page}",
+                        "  source_locator_omitted_count: 2",
+                        "---",
+                        "",
+                        private_body,
+                        "[source locator omitted]",
+                        "middle",
+                        "[source locator omitted]",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            mismatch_path.write_text(
+                "\n".join(
+                    [
+                        "---",
+                        "id: zet_notion_locator_mismatch",
+                        "status: canonical",
+                        "facets:",
+                        "  source_system: notion-db1",
+                        f"  source_page_id: {private_mismatch_page}",
+                        "  source_locator_omitted_count: 1",
+                        "---",
+                        "",
+                        "[source locator omitted]",
+                        "[source locator omitted]",
+                        "[source locator omitted]",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            missing_key_path.write_text(
+                "\n".join(
+                    [
+                        "---",
+                        "id: zet_notion_locator_missing_key",
+                        "status: canonical",
+                        "provenance:",
+                        "  source: notion-db3-mirror-private",
+                        "  creation_mode: imported",
+                        "facets:",
+                        "  source_locator_omitted_count: 1",
+                        "---",
+                        "",
+                        "[source locator omitted]",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            before = self.snapshot_archive_files(archive_root)
+            code, output = self.run_cli(
+                [
+                    "notion-import-locator-loss-audit",
+                    str(archive_root),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            summary = result["summary"]
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(
+                result["lifecycle_action"],
+                "notion_import_locator_loss_audit",
+            )
+            self.assertEqual(summary["affected_zettel_count"], 3)
+            self.assertEqual(summary["body_marker_count"], 6)
+            self.assertEqual(summary["frontmatter_omitted_count"], 4)
+            self.assertEqual(summary["marker_frontmatter_count_delta"], 2)
+            self.assertEqual(summary["exact_count_zettel_count"], 2)
+            self.assertEqual(summary["count_mismatch_zettel_count"], 1)
+            self.assertEqual(summary["source_page_id_present_count"], 2)
+            self.assertEqual(summary["source_page_id_missing_count"], 1)
+            self.assertEqual(summary["counts_by_source_system"]["notion_db3"], 1)
+            self.assertEqual(summary["counts_by_source_system"]["notion_db1"], 1)
+            self.assertEqual(summary["counts_by_source_system"]["other_notion"], 1)
+            self.assertTrue(summary["scan_complete"])
+            self.assertTrue(result["privacy_guards"]["zettel_body_text_read"])
+            self.assertFalse(result["privacy_guards"]["zettel_body_text_echoed"])
+            self.assertFalse(result["privacy_guards"]["provider_urls_echoed"])
+            self.assertFalse(result["privacy_guards"]["source_page_id_values_echoed"])
+            self.assertFalse(result["privacy_guards"]["writes"])
+            self.assertFalse(
+                result["current_capability"]["provider_locator_reconstruction_implemented"]
+            )
+            self.assertFalse(
+                result["current_capability"]["retroactive_body_write_implemented"]
+            )
+            serialized = json.dumps(result, ensure_ascii=False)
+            for forbidden in (
+                private_exact_page,
+                private_mismatch_page,
+                private_body,
+                "https://private.example",
+                str(archive_root),
+            ):
+                with self.subTest(forbidden=forbidden):
+                    self.assertNotIn(forbidden, serialized)
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+
+            alias_code, alias_output = self.run_cli(
+                [
+                    "notion-locator-loss-audit",
+                    str(archive_root),
+                    "--dry-run",
+                    "--max-items",
+                    "1",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(alias_code, 0, alias_output)
+            alias_result = json.loads(alias_output)
+            self.assertEqual(alias_result["summary"]["returned_item_count"], 1)
+            self.assertTrue(alias_result["summary"]["items_truncated"])
+
+            progress_code, progress_output = self.run_cli(
+                [
+                    "notion-import-locator-loss-audit",
+                    str(archive_root),
+                    "--dry-run",
+                    "--progress",
+                ]
+            )
+            self.assertEqual(progress_code, 0, progress_output)
+            self.assertIn(
+                "[notion-locator-loss-audit] notion-locator-loss: 0/",
+                progress_output,
+            )
+            self.assertIn("done", progress_output)
+            for forbidden in (
+                private_exact_page,
+                private_mismatch_page,
+                private_body,
+                "https://private.example",
+                str(archive_root),
+            ):
+                with self.subTest(progress_forbidden=forbidden):
+                    self.assertNotIn(forbidden, progress_output)
+
+            no_dry_code, no_dry_output = self.run_cli(
+                ["notion-import-locator-loss-audit", str(archive_root)]
+            )
             self.assertEqual(no_dry_code, 1, no_dry_output)
             self.assertIn("requires --dry-run", no_dry_output)
 
