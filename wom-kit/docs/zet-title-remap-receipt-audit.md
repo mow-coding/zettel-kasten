@@ -1,6 +1,6 @@
 # zet Title Remap Receipt And Interruption Audit
 
-Status: v0.3.270 read-only archive-wide title-remap evidence audit
+Status: v0.3.274 read-only apply and compensation evidence audit
 
 Use this command after a completed `zet-title-remap-write`, after an
 unexpected process exit, or before planning any manual recovery:
@@ -24,8 +24,11 @@ finalizes, or reverts a title change.
 
 The audit performs bounded reads of:
 
-- title-remap receipts under `receipts/revisions/title-remap/`;
-- retained transaction journals under `.wom-scratch/title-remap/`;
+- title-remap apply receipts under `receipts/revisions/title-remap/`;
+- title-remap compensation receipts under
+  `receipts/revisions/title-remap/reverts/`;
+- retained apply or revert transaction journals under
+  `.wom-scratch/title-remap/`;
 - the one common title-remap write lock, if present;
 - the current canonical bytes of receipt or journal participants;
 - the exact prior-byte objects and their manifest records.
@@ -49,6 +52,13 @@ A healthy completed receipt is counted as `receipt_verified`. A malformed,
 misbound, drifted, or snapshot-invalid receipt is counted as
 `receipt_invalid_or_divergent` and makes the command exit non-zero.
 
+Since v0.3.274 a completed compensation receipt is also checked against its
+immutable source apply receipt, exact restored prior-byte state, separate
+filename and receipt bindings, original apply evidence, pre-revert history
+audit digest, and independently recomputed revert-plan digest. A valid
+apply/revert pair is counted separately without deleting or rewriting either
+receipt.
+
 ## Retained Transaction States
 
 A valid retained journal is compared with every participant's current whole
@@ -68,6 +78,11 @@ without its matching lock, an orphan or malformed lock, an invalid journal, or
 multiple journals that cannot all be represented by the one common lock
 requires attention. Even `stale_completed` residue is reported; the audit does
 not delete it.
+
+A retained revert journal uses the parallel states `prepared`,
+`partially_reverted`, `fully_reverted_receipt_missing`, `divergent`, and
+`stale_completed`. These states are diagnosis only in v0.3.274. They are never
+passed to the older interrupted-apply recovery executor as a safe action.
 
 ## Privacy Boundary
 
@@ -103,8 +118,10 @@ read-only recovery decision through
 `zet-title-remap-recovery-plan --dry-run`. v0.3.272 can execute one
 non-forensic-hold case only after exact case/plan/action binding, fresh review,
 and archive-quiescence approval. For a clean completed receipt, v0.3.273 can
-produce a separate exact read-only revert plan. It still cannot execute that
-completed-title revert.
+produce a separate exact read-only revert plan and v0.3.274 can execute that
+exact plan with a separate approval. A retained hard-exit revert journal stays
+on `manual_forensic_hold` until a dedicated recovery planner and executor are
+implemented.
 
 See:
 
@@ -113,3 +130,4 @@ See:
 - [zet Title Remap Recovery Plan](zet-title-remap-recovery-plan.md)
 - [zet Title Remap Recover](zet-title-remap-recover.md)
 - [zet Title Remap Completed-Receipt Revert Plan](zet-title-remap-revert-plan.md)
+- [Approved zet Title Remap Revert](zet-title-remap-revert.md)

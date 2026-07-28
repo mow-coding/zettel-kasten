@@ -2,6 +2,31 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.3.274 승인 기반 완료 제목 되돌리기
+
+아카이브 전체 마이그레이션은 필요하지 않습니다. 먼저 변경되지 않은 완료
+제목 리맵 영수증 하나에 대해 v0.3.273의 전체 계획을 새로 만들고 검토하세요.
+정확히 그 승인 작업을 먼저 미리 봅니다.
+
+```powershell
+archive zet-title-remap-revert <archive-root> --receipt receipts/revisions/title-remap/<digest>.zet-title-remap.json --expected-receipt-sha256 sha256:<reviewed-receipt-digest> --expected-plan-digest sha256:<reviewed-revert-plan-digest> --dry-run --format json
+```
+
+원래 제목 writer와 모든 editor를 멈추세요. 영수증과 계획 digest가 그대로라면
+같은 작업을 명시적으로 승인합니다.
+
+```powershell
+archive zet-title-remap-revert <archive-root> --receipt receipts/revisions/title-remap/<digest>.zet-title-remap.json --expected-receipt-sha256 sha256:<reviewed-receipt-digest> --expected-plan-digest sha256:<reviewed-revert-plan-digest> --approve --reviewed-by person:<safe-reviewer-id> --affirm-title-reversions-reviewed --affirm-archive-quiescent --format json
+```
+
+이 명령은 검증된 완전한 이전 바이트 snapshot을 그대로 복원하고, 원래 적용
+영수증은 보존한 채 별도의 불변 보상 영수증을 추가합니다. 일반 실행 실패는
+정확한 적용 후 바이트로 원복합니다. 프로세스 강제 종료나 전원 중단 뒤에는
+되돌리기 journal과 공통 lock이 남을 수 있습니다. v0.3.274는 그 상태를
+진단하지만 아직 자동 복구하지 않으므로 모든 증거를 보존하세요. 자세한 내용은
+[`wom-kit/docs/zet-title-remap-revert.md`](wom-kit/docs/zet-title-remap-revert.md)를
+참고하세요.
+
 ## v0.3.273 읽기 전용 완료 제목 되돌리기 계획
 
 아카이브 전체 마이그레이션은 필요하지 않습니다. 완료된 제목 리맵 영수증

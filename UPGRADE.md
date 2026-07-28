@@ -24,6 +24,31 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.274 Approval-Gated Completed Title Revert
+
+No archive migration is required. First rerun and review the complete
+v0.3.273 plan for one unchanged completed title-remap receipt. Preview the
+exact approved operation:
+
+```powershell
+archive zet-title-remap-revert <archive-root> --receipt receipts/revisions/title-remap/<digest>.zet-title-remap.json --expected-receipt-sha256 sha256:<reviewed-receipt-digest> --expected-plan-digest sha256:<reviewed-revert-plan-digest> --dry-run --format json
+```
+
+Stop the original title writer and every editor. If the receipt and plan
+digests still match, approve the exact same operation:
+
+```powershell
+archive zet-title-remap-revert <archive-root> --receipt receipts/revisions/title-remap/<digest>.zet-title-remap.json --expected-receipt-sha256 sha256:<reviewed-receipt-digest> --expected-plan-digest sha256:<reviewed-revert-plan-digest> --approve --reviewed-by person:<safe-reviewer-id> --affirm-title-reversions-reviewed --affirm-archive-quiescent --format json
+```
+
+The command restores each complete verified prior-byte snapshot, preserves the
+original apply receipt, and appends a separate immutable compensation receipt.
+A caught failure restores the exact applied bytes. A process kill or power
+interruption can retain a revert journal and common lock; preserve that
+evidence because v0.3.274 diagnoses but does not yet recover a hard-exit revert
+transaction. See
+[`wom-kit/docs/zet-title-remap-revert.md`](wom-kit/docs/zet-title-remap-revert.md).
+
 ## v0.3.273 Read-Only Completed Title Revert Plan
 
 No archive migration is required. Select one completed immutable title-remap

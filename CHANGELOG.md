@@ -6,6 +6,27 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.274 - 2026-07-28
+
+- Added approval-gated `zet-title-remap-revert` and alias
+  `title-remap-revert`.
+- Bind the exact immutable source-receipt SHA-256 and reviewed revert-plan
+  digest, plus a safe reviewer, all-title-reversions review, and archive
+  quiescence affirmations.
+- Recompute the complete plan under the shared title-remap write lock and
+  restore only verified complete prior-byte snapshots.
+- Preserve the original apply receipt and create one separate immutable,
+  title/body-text-free compensation receipt whose plan binding can be
+  independently recomputed.
+- Publish a private hash-only revert transaction journal before the first
+  canonical write and roll caught failures back to exact applied bytes.
+- Extend the archive-wide audit to verify completed apply/revert lifecycles
+  and classify retained revert journals as `prepared`, `partially_reverted`,
+  `fully_reverted_receipt_missing`, `divergent`, or `stale_completed`.
+- Keep retained revert hard-exit recovery planning/execution, automatic
+  recovery, MCP exposure, provider/model calls, and private-value output
+  outside this release.
+
 ## v0.3.273 - 2026-07-28
 
 - Added read-only `zet-title-remap-revert-plan` and alias
