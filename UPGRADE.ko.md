@@ -2,6 +2,38 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.3.279 읽기 전용 inbox 파이프라인 조사
+
+아카이브 마이그레이션은 필요하지 않습니다. AI 작성이라고 선언된 inbox
+초안 가운데 현재 `archive create-draft` 출력 모양과 충돌하는 파일이 있는지
+확인하려면 다음을 실행하세요.
+
+```powershell
+archive inbox-pipeline-audit <archive-root> `
+  --dry-run `
+  --format json
+```
+
+이 명령은 최상위 `inbox/*.md` frontmatter만 제한된 크기로 읽습니다. 기본
+finding에는 안정적인 순번, 경로 SHA-256, 분류, 이유 코드만 들어갑니다.
+원래 경로, zet id, 제목, 작성자, 출처 값, 본문은 출력하지 않습니다.
+
+분류는 보수적으로 해석해야 합니다.
+
+- `pipeline_shape_consistent`는 현재 모양과 맞는다는 뜻이지 공식 명령 실행을
+  증명하지 않습니다.
+- `possible_out_of_pipeline_draft`는 AI 작성 초안이 현재의 결정적 출력 사실과
+  하나 이상 충돌하여 사람 검토가 필요하다는 뜻입니다.
+- `insufficient_evidence`는 현재 메타데이터만으로 생성 경로를 정직하게
+  분류할 수 없다는 뜻입니다.
+
+전체 `archive doctor`는 가능한 사례가 있으면 집계 경고 하나를 내므로
+`doctor --strict`도 검토 전에는 실패합니다. v0.3.279는 어떤 초안도 이름
+변경, 재작성, 삭제, mint, promote, 수리하지 않습니다. 경고를 없애려고 과거
+파일을 고치지 마세요.
+[`wom-kit/docs/inbox-pipeline-audit.md`](wom-kit/docs/inbox-pipeline-audit.md)를
+보세요.
+
 ## v0.3.278 AI 공식 명령 경로 안내
 
 아카이브 마이그레이션은 필요하지 않습니다. 새 보관함 템플릿과 읽기 전용

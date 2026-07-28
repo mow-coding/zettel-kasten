@@ -26,6 +26,7 @@ Local reviewed WOM state is canonical. GitHub backs up metadata/version history,
 ## Write Policy
 
 - Search with `archive search <archive-root> <query> --count-total --format json`; raw grep and raw SQL are not authoritative WOM search results.
+- When Doctor reports a possible inbox pipeline bypass, inspect it with `archive inbox-pipeline-audit <archive-root> --dry-run --format json`; its classes are review signals, not proof, and authorize no automatic repair.
 - Create AI-generated zettel drafts only with `archive create-draft` dry-run followed by its exact human-reviewed replay. Never write Markdown directly into `inbox/`.
 - Use the official dry-run and approval routes for `mint-zet`, `zettel-edge`, source/objet intake, and operational-context updates; knowing a destination path is not write authorization.
 - Saved-view recommendations are read-only until WOM provides a dedicated writer. An AI must not directly edit persistent `views/*.yml`.

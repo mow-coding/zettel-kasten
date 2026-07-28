@@ -1,6 +1,6 @@
 # AI Command-Path Routing
 
-Status: implemented in v0.3.278
+Status: implemented in v0.3.278, extended in v0.3.279
 
 ## Purpose
 
@@ -13,10 +13,16 @@ frontmatter validation, provenance, deterministic replay, approval, and
 receipts. Likewise, raw grep or raw SQLite may be useful diagnostics but do
 not carry WOM search completeness and truncation semantics.
 
-v0.3.278 adds one read-only routing contract:
+v0.3.278 added the first read-only routing contract:
 
 ```text
 wom-kit/ai-command-path-routing/v0.1
+```
+
+v0.3.279 extends it additively with the official inbox pipeline audit route:
+
+```text
+wom-kit/ai-command-path-routing/v0.2
 ```
 
 It is returned by:
@@ -51,6 +57,7 @@ packaged runtime skill, the fake archive, and live read-only command output.
 | Search archive records | `archive search <archive-root> <query> --count-total --format json` | Inspect complete/truncated metadata. Raw grep and raw SQL are not authoritative WOM search results. |
 | Inspect installed version truth | `archive version <project-or-archive-root> --format json` | Proves local runtime/source/pin and already-fetched tag state; it does not verify remote release freshness. |
 | Inspect saved-view state | `archive view-health <archive-root> --dry-run --format json` | Follow with `view-recommendation-plan`; both are read-only. |
+| Inspect possible historical inbox pipeline bypasses | `archive inbox-pipeline-audit <archive-root> --dry-run --format json` | Structural classes are conservative signals, not proof of command execution; no automatic repair exists. |
 | Discover installed commands | `archive capabilities --machine --format json` | Use the installed inventory before declaring that WOM lacks a command. |
 
 ## Official Write Routes
@@ -76,9 +83,11 @@ Every write remains preview-first and human-reviewed.
   `ai-start-here/v0.3` response remains additively compatible.
 - Human approval is still required for every listed write route.
 
-## Remaining Boundary
+## v0.3.279 Detection Boundary
 
-v0.3.278 improves guidance but does not prove that historical drafts were
-created through the official pipeline. A later release may add a conservative,
-read-only signal for possible out-of-pipeline inbox drafts. It must not
-automatically rewrite, delete, mint, or repair those files.
+v0.3.279 adds the separate conservative signal described in
+[Inbox Pipeline Audit](inbox-pipeline-audit.md). It can distinguish current
+`pipeline_shape_consistent`, `possible_out_of_pipeline_draft`, and
+`insufficient_evidence` states.
+It still does not prove which process created a file and does not
+automatically rewrite, rename, delete, mint, promote, or repair any draft.

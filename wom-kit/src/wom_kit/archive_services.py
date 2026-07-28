@@ -2861,6 +2861,13 @@ ZET_REVISION_MAX_LOCK_BYTES = 256 * 1024
 ZET_REVISION_AUDIT_MAX_RECEIPTS = 5000
 ZET_REVISION_AUDIT_MAX_LOCKS = 5000
 ZET_REVISION_AUDIT_MAX_PROBLEMS = 500
+INBOX_PIPELINE_AUDIT_SCHEMA = "wom-kit/inbox-pipeline-audit/v0.1"
+INBOX_PIPELINE_AUDIT_MAX_DRAFTS = 5000
+INBOX_PIPELINE_AUDIT_MAX_FINDINGS = 500
+INBOX_PIPELINE_AUDIT_MAX_FRONTMATTER_BYTES = 256 * 1024
+INBOX_PIPELINE_AUDIT_AI_CREATION_MODES = frozenset(
+    {"ai_assisted", "ai_generated"}
+)
 ZET_REVISION_SYSTEM_MANAGED_FIELDS = (
     "id",
     "archive_id",
@@ -31854,6 +31861,426 @@ def create_draft_zettel(
         "warnings": unique_preserve_order(warnings),
         "created_paths": [archive_relative_path(path, root)],
         "approval_replay": approval_replay,
+    }
+
+
+def _read_bounded_inbox_draft_frontmatter(
+    path: Path,
+    *,
+    max_frontmatter_bytes: int,
+) -> dict[str, Any]:
+    """Read one bounded frontmatter block without following links or reading a valid body."""
+
+    result: dict[str, Any] = {
+        "frontmatter": {},
+        "metadata_readable": False,
+        "issue_code": None,
+        "body_text_read": False,
+        "frontmatter_bytes_read": 0,
+    }
+    if path.is_symlink():
+        result["issue_code"] = "symlink_not_followed"
+        return result
+    try:
+        if not path.is_file():
+            result["issue_code"] = "draft_file_unavailable"
+            return result
+        before = path.stat()
+        with path.open("rb") as handle:
+            first = handle.readline(max_frontmatter_bytes + 1)
+            result["frontmatter_bytes_read"] = len(first)
+            opening = first.removeprefix(b"\xef\xbb\xbf")
+            if (
+                len(first) > max_frontmatter_bytes
+                or re.fullmatch(rb"---[ \t]*\r?\n", opening) is None
+            ):
+                result["issue_code"] = (
+                    "frontmatter_limit_exceeded"
+                    if len(first) > max_frontmatter_bytes
+                    else "frontmatter_boundary_invalid"
+                )
+                result["body_text_read"] = bool(first)
+                return result
+
+            lines: list[bytes] = []
+            while True:
+                remaining = max_frontmatter_bytes - int(
+                    result["frontmatter_bytes_read"]
+                )
+                if remaining <= 0:
+                    result["issue_code"] = "frontmatter_limit_exceeded"
+                    result["body_text_read"] = bool(lines)
+                    return result
+                line = handle.readline(remaining + 1)
+                result["frontmatter_bytes_read"] = int(
+                    result["frontmatter_bytes_read"]
+                ) + len(line)
+                if not line:
+                    result["issue_code"] = "frontmatter_boundary_invalid"
+                    result["body_text_read"] = bool(lines)
+                    return result
+                if (
+                    int(result["frontmatter_bytes_read"])
+                    > max_frontmatter_bytes
+                ):
+                    result["issue_code"] = "frontmatter_limit_exceeded"
+                    result["body_text_read"] = True
+                    return result
+                if re.fullmatch(rb"---[ \t]*\r?\n", line) is not None:
+                    break
+                lines.append(line)
+        after = path.stat()
+    except UnicodeError:
+        result["issue_code"] = "frontmatter_unicode_error"
+        return result
+    except OSError:
+        result["issue_code"] = "frontmatter_io_error"
+        return result
+
+    if (
+        before.st_size,
+        before.st_mtime_ns,
+    ) != (
+        after.st_size,
+        after.st_mtime_ns,
+    ):
+        result["issue_code"] = "draft_changed_during_audit"
+        return result
+    try:
+        loaded = load_yaml(b"".join(lines).decode("utf-8"))
+    except (UnicodeError, ValueError):
+        result["issue_code"] = "frontmatter_yaml_invalid"
+        return result
+    except Exception:
+        result["issue_code"] = "frontmatter_yaml_invalid"
+        return result
+    if not isinstance(loaded, dict):
+        result["issue_code"] = "frontmatter_not_object"
+        return result
+    result["frontmatter"] = json_safe(loaded)
+    result["metadata_readable"] = True
+    return result
+
+
+def _inbox_pipeline_shape_reason_codes(
+    *,
+    relative_path: str,
+    frontmatter: dict[str, Any],
+) -> tuple[str, list[str], dict[str, Any]]:
+    provenance = (
+        frontmatter.get("provenance")
+        if isinstance(frontmatter.get("provenance"), dict)
+        else {}
+    )
+    creation_mode = provenance.get("creation_mode")
+    if creation_mode not in INBOX_PIPELINE_AUDIT_AI_CREATION_MODES:
+        return (
+            "insufficient_evidence",
+            ["creation_mode_not_ai_declared"],
+            {
+                "creation_mode_bucket": (
+                    "missing"
+                    if creation_mode is None
+                    else "not_ai_declared"
+                ),
+                "draft_creation_present": "draft_creation" in frontmatter,
+            },
+        )
+
+    shape_reasons: list[str] = []
+    optional_approval_reasons: list[str] = []
+    if frontmatter.get("status") != "draft":
+        shape_reasons.append("status_not_draft")
+
+    zettel_id = frontmatter.get("id")
+    if not isinstance(zettel_id, str) or not valid_draft_zettel_id(
+        zettel_id.strip()
+    ):
+        shape_reasons.append("id_missing_or_unsafe")
+    elif relative_path != f"inbox/{zettel_id.strip()}.md":
+        shape_reasons.append("path_not_current_create_draft_shape")
+
+    promotion = (
+        frontmatter.get("promotion")
+        if isinstance(frontmatter.get("promotion"), dict)
+        else None
+    )
+    if promotion is None:
+        shape_reasons.append("promotion_missing_or_invalid")
+    else:
+        if promotion.get("stage") != "captured":
+            shape_reasons.append("promotion_stage_not_captured")
+        if promotion.get("ready_for_promotion") is not False:
+            shape_reasons.append("ready_for_promotion_not_false")
+
+    for field in ("created_by", "created_in", "source"):
+        value = provenance.get(field)
+        if not isinstance(value, str) or not value.strip():
+            shape_reasons.append(f"provenance_{field}_missing")
+
+    assisted_by = provenance.get("assisted_by")
+    if not (
+        isinstance(assisted_by, list)
+        and any(isinstance(value, str) and value.strip() for value in assisted_by)
+    ):
+        shape_reasons.append("assisted_by_missing")
+
+    draft_creation_present = "draft_creation" in frontmatter
+    if draft_creation_present:
+        draft_creation = frontmatter.get("draft_creation")
+        if not isinstance(draft_creation, dict):
+            optional_approval_reasons.append("draft_creation_invalid")
+        else:
+            approved_by = draft_creation.get("approved_by")
+            if not isinstance(approved_by, str) or not approved_by.strip():
+                optional_approval_reasons.append(
+                    "draft_creation_approved_by_missing"
+                )
+            if draft_creation.get("approval_scope") != "inbox_draft_only":
+                optional_approval_reasons.append(
+                    "draft_creation_scope_invalid"
+                )
+            approved_body_sha256 = draft_creation.get(
+                "approved_body_sha256"
+            )
+            if not (
+                isinstance(approved_body_sha256, str)
+                and re.fullmatch(r"[0-9a-f]{64}", approved_body_sha256)
+            ):
+                optional_approval_reasons.append(
+                    "draft_creation_body_sha256_invalid"
+                )
+
+    if shape_reasons:
+        classification = "possible_out_of_pipeline_draft"
+        reasons = [*shape_reasons, *optional_approval_reasons]
+    elif optional_approval_reasons:
+        classification = "insufficient_evidence"
+        reasons = [
+            *optional_approval_reasons,
+            "optional_draft_creation_not_authoritative",
+        ]
+    else:
+        classification = "pipeline_shape_consistent"
+        reasons = []
+    return (
+        classification,
+        unique_preserve_order(reasons),
+        {
+            "creation_mode_bucket": "ai_declared",
+            "draft_creation_present": draft_creation_present,
+        },
+    )
+
+
+def inbox_pipeline_audit(
+    archive_root: Path | str,
+    *,
+    dry_run: bool = False,
+    max_drafts: int = INBOX_PIPELINE_AUDIT_MAX_DRAFTS,
+    max_findings: int = 100,
+    max_frontmatter_bytes: int = INBOX_PIPELINE_AUDIT_MAX_FRONTMATTER_BYTES,
+    progress_callback: Callable[
+        [str, str, int | None, int | None], None
+    ]
+    | None = None,
+) -> dict[str, Any]:
+    require_yaml()
+    root = require_existing_archive_root(archive_root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if not dry_run:
+        blockers.append("dry_run_required")
+    if not 1 <= max_drafts <= INBOX_PIPELINE_AUDIT_MAX_DRAFTS:
+        blockers.append("max_drafts_out_of_range")
+    if not 1 <= max_findings <= INBOX_PIPELINE_AUDIT_MAX_FINDINGS:
+        blockers.append("max_findings_out_of_range")
+    if not 1024 <= max_frontmatter_bytes <= INBOX_PIPELINE_AUDIT_MAX_FRONTMATTER_BYTES:
+        blockers.append("max_frontmatter_bytes_out_of_range")
+
+    inbox = archive_internal_path(root, "inbox")
+    draft_paths = (
+        sorted(inbox.glob("*.md"), key=lambda item: item.name)
+        if inbox.is_dir()
+        else []
+    )
+    if len(draft_paths) > max_drafts:
+        blockers.append("draft_count_exceeds_max_drafts")
+
+    outcomes: list[dict[str, Any]] = []
+    findings: list[dict[str, Any]] = []
+    counts = {
+        "pipeline_shape_consistent": 0,
+        "possible_out_of_pipeline_draft": 0,
+        "insufficient_evidence": 0,
+    }
+    body_text_may_have_been_read = False
+    frontmatter_bytes_read = 0
+    if not blockers:
+        if progress_callback is not None:
+            progress_callback(
+                "inbox-pipeline-audit", "start", 0, len(draft_paths)
+            )
+        for index, path in enumerate(draft_paths, start=1):
+            relative_path = archive_relative_path(path, root)
+            path_sha256 = "sha256:" + hashlib.sha256(
+                relative_path.encode("utf-8")
+            ).hexdigest()
+            inspection = _read_bounded_inbox_draft_frontmatter(
+                path,
+                max_frontmatter_bytes=max_frontmatter_bytes,
+            )
+            frontmatter_bytes_read += int(
+                inspection.get("frontmatter_bytes_read") or 0
+            )
+            body_text_read = bool(inspection.get("body_text_read"))
+            body_text_may_have_been_read = (
+                body_text_may_have_been_read or body_text_read
+            )
+            if inspection.get("metadata_readable"):
+                classification, reason_codes, safe_metadata = (
+                    _inbox_pipeline_shape_reason_codes(
+                        relative_path=relative_path,
+                        frontmatter=inspection["frontmatter"],
+                    )
+                )
+            else:
+                classification = "insufficient_evidence"
+                reason_codes = [
+                    str(inspection.get("issue_code") or "metadata_unreadable")
+                ]
+                safe_metadata = {
+                    "creation_mode_bucket": "unreadable",
+                    "draft_creation_present": None,
+                }
+            counts[classification] += 1
+            outcome = {
+                "draft_ref": f"inbox-draft:{index:04d}",
+                "path_sha256": path_sha256,
+                "classification": classification,
+                "reason_codes": reason_codes,
+                "metadata": {
+                    **safe_metadata,
+                    "frontmatter_readable": bool(
+                        inspection.get("metadata_readable")
+                    ),
+                    "body_text_read": body_text_read,
+                },
+            }
+            outcomes.append(outcome)
+            if classification != "pipeline_shape_consistent":
+                if len(findings) < max_findings:
+                    findings.append(outcome)
+            if progress_callback is not None and (
+                index == 1 or index == len(draft_paths) or index % 250 == 0
+            ):
+                progress_callback(
+                    "inbox-pipeline-audit",
+                    "scanned",
+                    index,
+                    len(draft_paths),
+                )
+        if progress_callback is not None:
+            progress_callback(
+                "inbox-pipeline-audit",
+                "done",
+                len(draft_paths),
+                len(draft_paths),
+            )
+
+    possible_count = counts["possible_out_of_pipeline_draft"]
+    insufficient_count = counts["insufficient_evidence"]
+    if blockers:
+        status = "blocked"
+    elif possible_count:
+        status = "review_recommended"
+        warnings.append(
+            "One or more AI-declared inbox drafts have metadata inconsistent "
+            "with the current archive create-draft output shape."
+        )
+    elif insufficient_count:
+        status = "insufficient_evidence"
+    elif draft_paths:
+        status = "pipeline_shape_consistent"
+    else:
+        status = "empty"
+
+    finding_total = possible_count + insufficient_count
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "lifecycle_action": "inbox_pipeline_audit",
+        "schema": INBOX_PIPELINE_AUDIT_SCHEMA,
+        "status": status,
+        "review_recommended": possible_count > 0,
+        "classification_is_proof_of_command_execution": False,
+        "summary": {
+            "complete": not blockers,
+            "top_level_markdown_draft_count": len(draft_paths),
+            "drafts_scanned": len(outcomes),
+            **counts,
+            "finding_count": finding_total,
+            "findings_returned": len(findings),
+            "findings_truncated": finding_total > len(findings),
+            "frontmatter_bytes_read": frontmatter_bytes_read,
+            "body_text_may_have_been_read": body_text_may_have_been_read,
+        },
+        "findings": findings,
+        "audit_digest": sha256_json_value(outcomes),
+        "scope": {
+            "included": ["inbox/*.md"],
+            "nested_paths_scanned": False,
+            "max_drafts": max_drafts,
+            "max_findings": max_findings,
+            "max_frontmatter_bytes_per_draft": max_frontmatter_bytes,
+        },
+        "redaction": {
+            "raw_paths_in_findings": False,
+            "zettel_ids_in_findings": False,
+            "titles_in_findings": False,
+            "actors_in_findings": False,
+            "source_values_in_findings": False,
+            "body_text_in_findings": False,
+            "path_fingerprints_only": True,
+        },
+        "content_access": {
+            "frontmatter_only_when_well_formed": True,
+            "body_text_returned": False,
+            "provider_api_called": False,
+            "model_called": False,
+            "network_called": False,
+            "index_or_database_read": False,
+            "secret_store_or_environment_read": False,
+        },
+        "write_boundary": {
+            "files_written": [],
+            "files_deleted": [],
+            "files_renamed": [],
+            "drafts_repaired": 0,
+            "drafts_minted": 0,
+        },
+        "complexity": {
+            "class": "O(top_level_inbox_markdown_drafts * bounded_frontmatter_bytes)",
+        },
+        "blockers": blockers,
+        "warnings": warnings,
+        "next_safe_actions": (
+            [
+                "No possible out-of-pipeline AI draft shape requires review."
+            ]
+            if not possible_count and not blockers
+            else (
+                [
+                    "Raise max_drafts only within the documented bound and rerun the read-only audit."
+                ]
+                if "draft_count_exceeds_max_drafts" in blockers
+                else [
+                    "Review the content-free reason codes and path fingerprints with the archive owner.",
+                    "Do not rewrite or delete a historical draft merely to silence this signal.",
+                    "If repair is needed, design a separate preview, approval, and receipt workflow.",
+                ]
+            )
+        ),
     }
 
 
@@ -83265,6 +83692,15 @@ def runtime_context_read_action_routes() -> list[dict[str, Any]]:
             "writes": False,
         },
         {
+            "action": "inspect_inbox_pipeline_shape",
+            "when": "the AI or archive owner needs a conservative signal for possible historical direct writes to inbox",
+            "command": "archive inbox-pipeline-audit <archive-root> --dry-run --format json",
+            "authoritative_for": "bounded privacy-safe structural classification of top-level inbox Markdown drafts",
+            "classification_is_proof_of_command_execution": False,
+            "automatic_repair_implemented": False,
+            "writes": False,
+        },
+        {
             "action": "inspect_available_commands",
             "when": "the AI is unsure whether WOM already exposes an official command",
             "command": "archive capabilities --machine --format json",
@@ -83341,7 +83777,7 @@ def runtime_context_write_action_routes() -> list[dict[str, Any]]:
 
 def runtime_context_action_routing() -> dict[str, Any]:
     return {
-        "schema": "wom-kit/ai-command-path-routing/v0.1",
+        "schema": "wom-kit/ai-command-path-routing/v0.2",
         "official_wom_command_required_for_archive_actions": True,
         "location_policy_alone_is_sufficient": False,
         "raw_filesystem_search_is_authoritative": False,

@@ -175,6 +175,56 @@ class ArchiveCliTests(unittest.TestCase):
             code = archive_cli.main(args)
         return code, stdout.getvalue(), stderr.getvalue()
 
+    def create_inbox_pipeline_audit_draft(
+        self,
+        archive_root: Path,
+        *,
+        draft_id: str,
+        title: str,
+        creation_mode: str = "ai_assisted",
+        promotion_stage: str = "captured",
+        legacy_draft_suffix: bool = False,
+    ) -> Path:
+        result = archive_services.create_draft_zettel(
+            archive_root,
+            title=title,
+            body=f"PRIVATE_BODY_{draft_id}",
+            created_by="ai_runtime:private-fixture",
+            source="private_fixture",
+            creation_mode=creation_mode,
+            assisted_by=(
+                ["ai_runtime:private-fixture"]
+                if creation_mode in {"ai_assisted", "ai_generated"}
+                else None
+            ),
+            draft_id=draft_id,
+            created_at="2026-07-29T01:02:03+09:00",
+        )
+        source_path = archive_root / result["path"]
+        if promotion_stage == "captured" and not legacy_draft_suffix:
+            return source_path
+
+        frontmatter, body = archive_services.require_readable_zettel_text(
+            source_path.read_text(encoding="utf-8")
+        )
+        frontmatter["promotion"]["stage"] = promotion_stage
+        destination = (
+            source_path.with_name(f"{draft_id}.draft.md")
+            if legacy_draft_suffix
+            else source_path
+        )
+        destination.write_text(
+            "---\n"
+            + archive_services.dump_yaml(frontmatter)
+            + "---\n\n"
+            + body.rstrip()
+            + "\n",
+            encoding="utf-8",
+        )
+        if destination != source_path:
+            source_path.unlink()
+        return destination
+
     def git_fixture_command(self, cwd: Path, *args: str) -> str:
         completed = subprocess.run(
             ["git", "-C", str(cwd), *args],
@@ -5128,7 +5178,7 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertFalse(operational_context["closed_actions"]["files_written"])
             self.assertEqual(
                 operational_context["action_routing"]["schema"],
-                "wom-kit/ai-command-path-routing/v0.1",
+                "wom-kit/ai-command-path-routing/v0.2",
             )
             entrypoints = result["canonical_entrypoints"]
             self.assertEqual(entrypoints["lifecycle_action"], "runtime_canonical_entrypoints")
@@ -5162,6 +5212,23 @@ class ArchiveCliTests(unittest.TestCase):
                 if item["action"] == "inspect_version_truth"
             )
             self.assertFalse(version_route["remote_release_freshness_checked"])
+            inbox_audit_route = next(
+                item
+                for item in action_routing["read_action_routes"]
+                if item["action"] == "inspect_inbox_pipeline_shape"
+            )
+            self.assertEqual(
+                inbox_audit_route["command"],
+                "archive inbox-pipeline-audit <archive-root> --dry-run --format json",
+            )
+            self.assertFalse(
+                inbox_audit_route[
+                    "classification_is_proof_of_command_execution"
+                ]
+            )
+            self.assertFalse(
+                inbox_audit_route["automatic_repair_implemented"]
+            )
             draft_route = next(
                 item
                 for item in action_routing["write_action_routes"]
@@ -5474,7 +5541,7 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(result["first_read"]["source_truths"]["canonical_zets"], "zettels/")
             self.assertEqual(
                 result["action_routing"]["schema"],
-                "wom-kit/ai-command-path-routing/v0.1",
+                "wom-kit/ai-command-path-routing/v0.2",
             )
             self.assertEqual(
                 result["operational_context"]["action_routing"],
@@ -5487,6 +5554,14 @@ class ArchiveCliTests(unittest.TestCase):
                     if item["action"] == "search_archive_content"
                 )["command"],
                 "archive search <archive-root> <query> --count-total --format json",
+            )
+            self.assertEqual(
+                next(
+                    item
+                    for item in result["action_routing"]["read_action_routes"]
+                    if item["action"] == "inspect_inbox_pipeline_shape"
+                )["command"],
+                "archive inbox-pipeline-audit <archive-root> --dry-run --format json",
             )
             self.assertIn(
                 "archive create-draft",
@@ -47646,6 +47721,395 @@ archive_services.zet_abstract_backfill_recover(
             result = json.loads(output)
             self.assertFalse(result["ok"])
             self.assertIn("Unsafe local path or provider locator", "; ".join(result["blockers"]))
+
+    def test_inbox_pipeline_audit_empty_archive_is_read_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "personal-archive"
+            init_code, init_output = self.init_personal_archive(
+                archive_root,
+                "archive:personal:inbox-pipeline-empty",
+            )
+            self.assertEqual(init_code, 0, init_output)
+            before = {
+                path.relative_to(archive_root).as_posix(): path.read_bytes()
+                for path in archive_root.rglob("*")
+                if path.is_file()
+            }
+
+            missing_code, missing_output = self.run_cli(
+                ["inbox-pipeline-audit", str(archive_root)]
+            )
+            self.assertEqual(missing_code, 1)
+            self.assertIn("read-only and requires --dry-run", missing_output)
+
+            code, output = self.run_cli(
+                [
+                    "inbox-pipeline-audit",
+                    str(archive_root),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["status"], "empty")
+            self.assertEqual(
+                result["schema"],
+                "wom-kit/inbox-pipeline-audit/v0.1",
+            )
+            self.assertTrue(result["summary"]["complete"])
+            self.assertEqual(
+                result["summary"]["top_level_markdown_draft_count"],
+                0,
+            )
+            self.assertEqual(result["findings"], [])
+            self.assertFalse(
+                result["classification_is_proof_of_command_execution"]
+            )
+            self.assertFalse(result["write_boundary"]["files_written"])
+            self.assertRegex(result["audit_digest"], r"^sha256:[0-9a-f]{64}$")
+
+            text_code, text_output = self.run_cli(
+                [
+                    "inbox-pipeline-audit",
+                    str(archive_root),
+                    "--dry-run",
+                    "--format",
+                    "text",
+                ]
+            )
+            self.assertEqual(text_code, 0, text_output)
+            self.assertIn("WOM inbox pipeline audit: empty", text_output)
+            self.assertIn("Audit complete: yes", text_output)
+            self.assertEqual(
+                before,
+                {
+                    path.relative_to(archive_root).as_posix(): path.read_bytes()
+                    for path in archive_root.rglob("*")
+                    if path.is_file()
+                },
+            )
+
+    def test_inbox_pipeline_audit_classifies_shape_without_private_echo(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "personal-archive"
+            init_code, init_output = self.init_personal_archive(
+                archive_root,
+                "archive:personal:inbox-pipeline-shapes",
+            )
+            self.assertEqual(init_code, 0, init_output)
+            consistent_path = self.create_inbox_pipeline_audit_draft(
+                archive_root,
+                draft_id="zet_20260729_010203_private_consistent",
+                title="PRIVATE_CONSISTENT_TITLE",
+            )
+            possible_path = self.create_inbox_pipeline_audit_draft(
+                archive_root,
+                draft_id="zet_20260729_010204_private_possible",
+                title="PRIVATE_POSSIBLE_TITLE",
+                promotion_stage="draft",
+                legacy_draft_suffix=True,
+            )
+            human_path = self.create_inbox_pipeline_audit_draft(
+                archive_root,
+                draft_id="zet_20260729_010205_private_human",
+                title="PRIVATE_HUMAN_TITLE",
+                creation_mode="human_written",
+            )
+            consistent_frontmatter = archive_services.read_zettel_frontmatter_only(
+                consistent_path,
+                strict=True,
+            )
+            self.assertNotIn("draft_creation", consistent_frontmatter)
+            before = {
+                path.relative_to(archive_root).as_posix(): path.read_bytes()
+                for path in archive_root.rglob("*")
+                if path.is_file()
+            }
+
+            code, stdout, stderr = self.run_cli_split(
+                [
+                    "inbox-pipeline-audit",
+                    str(archive_root),
+                    "--dry-run",
+                    "--progress",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, stdout + stderr)
+            result = json.loads(stdout)
+            summary = result["summary"]
+            self.assertEqual(result["status"], "review_recommended")
+            self.assertTrue(result["review_recommended"])
+            self.assertEqual(summary["pipeline_shape_consistent"], 1)
+            self.assertEqual(summary["possible_out_of_pipeline_draft"], 1)
+            self.assertEqual(summary["insufficient_evidence"], 1)
+            self.assertEqual(summary["finding_count"], 2)
+            self.assertFalse(summary["findings_truncated"])
+            self.assertFalse(summary["body_text_may_have_been_read"])
+            self.assertEqual(len(result["findings"]), 2)
+            possible = next(
+                item
+                for item in result["findings"]
+                if item["classification"]
+                == "possible_out_of_pipeline_draft"
+            )
+            self.assertIn(
+                "path_not_current_create_draft_shape",
+                possible["reason_codes"],
+            )
+            self.assertIn(
+                "promotion_stage_not_captured",
+                possible["reason_codes"],
+            )
+            self.assertTrue(
+                result["redaction"]["path_fingerprints_only"]
+            )
+            self.assertRegex(
+                possible["path_sha256"],
+                r"^sha256:[0-9a-f]{64}$",
+            )
+            combined_output = stdout + stderr
+            for private_value in (
+                consistent_path.name,
+                possible_path.name,
+                human_path.name,
+                "PRIVATE_CONSISTENT_TITLE",
+                "PRIVATE_POSSIBLE_TITLE",
+                "PRIVATE_HUMAN_TITLE",
+                "ai_runtime:private-fixture",
+                "PRIVATE_BODY",
+            ):
+                self.assertNotIn(private_value, combined_output)
+            self.assertIn("[inbox-pipeline-audit]", stderr)
+            self.assertEqual(
+                before,
+                {
+                    path.relative_to(archive_root).as_posix(): path.read_bytes()
+                    for path in archive_root.rglob("*")
+                    if path.is_file()
+                },
+            )
+
+            bounded = archive_services.inbox_pipeline_audit(
+                archive_root,
+                dry_run=True,
+                max_findings=1,
+            )
+            self.assertTrue(bounded["ok"])
+            self.assertEqual(bounded["summary"]["finding_count"], 2)
+            self.assertEqual(bounded["summary"]["findings_returned"], 1)
+            self.assertTrue(bounded["summary"]["findings_truncated"])
+
+            count_blocked = archive_services.inbox_pipeline_audit(
+                archive_root,
+                dry_run=True,
+                max_drafts=2,
+            )
+            self.assertFalse(count_blocked["ok"])
+            self.assertFalse(count_blocked["summary"]["complete"])
+            self.assertEqual(count_blocked["summary"]["drafts_scanned"], 0)
+            self.assertIn(
+                "draft_count_exceeds_max_drafts",
+                count_blocked["blockers"],
+            )
+
+    def test_inbox_pipeline_audit_treats_partial_optional_approval_as_insufficient(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "personal-archive"
+            init_code, init_output = self.init_personal_archive(
+                archive_root,
+                "archive:personal:inbox-pipeline-partial-approval",
+            )
+            self.assertEqual(init_code, 0, init_output)
+            draft_path = self.create_inbox_pipeline_audit_draft(
+                archive_root,
+                draft_id="zet_20260729_010207_private_partial_approval",
+                title="PRIVATE_PARTIAL_APPROVAL_TITLE",
+            )
+            frontmatter, body = archive_services.require_readable_zettel_text(
+                draft_path.read_text(encoding="utf-8")
+            )
+            frontmatter["draft_creation"] = {
+                "approved_by": None,
+                "approval_scope": "inbox_draft_only",
+                "approved_body_sha256": None,
+            }
+            draft_path.write_text(
+                "---\n"
+                + archive_services.dump_yaml(frontmatter)
+                + "---\n\n"
+                + body.rstrip()
+                + "\n",
+                encoding="utf-8",
+            )
+
+            result = archive_services.inbox_pipeline_audit(
+                archive_root,
+                dry_run=True,
+            )
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["status"], "insufficient_evidence")
+            self.assertEqual(
+                result["summary"]["possible_out_of_pipeline_draft"],
+                0,
+            )
+            self.assertEqual(result["summary"]["insufficient_evidence"], 1)
+            self.assertIn(
+                "optional_draft_creation_not_authoritative",
+                result["findings"][0]["reason_codes"],
+            )
+            serialized = json.dumps(result, ensure_ascii=False)
+            self.assertNotIn(draft_path.name, serialized)
+            self.assertNotIn("PRIVATE_PARTIAL_APPROVAL_TITLE", serialized)
+
+    def test_inbox_pipeline_audit_bounds_malformed_frontmatter_without_echo(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "personal-archive"
+            init_code, init_output = self.init_personal_archive(
+                archive_root,
+                "archive:personal:inbox-pipeline-malformed",
+            )
+            self.assertEqual(init_code, 0, init_output)
+            malformed = archive_root / "inbox" / "PRIVATE_MALFORMED_PATH.md"
+            malformed.write_text(
+                "---\nPRIVATE_MALFORMED_BODY_" + ("x" * 2048),
+                encoding="utf-8",
+            )
+
+            result = archive_services.inbox_pipeline_audit(
+                archive_root,
+                dry_run=True,
+                max_frontmatter_bytes=1024,
+            )
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["status"], "insufficient_evidence")
+            self.assertEqual(result["summary"]["insufficient_evidence"], 1)
+            self.assertTrue(
+                result["summary"]["body_text_may_have_been_read"]
+            )
+            self.assertEqual(
+                result["findings"][0]["reason_codes"],
+                ["frontmatter_limit_exceeded"],
+            )
+            serialized = json.dumps(result, ensure_ascii=False)
+            self.assertNotIn("PRIVATE_MALFORMED_PATH", serialized)
+            self.assertNotIn("PRIVATE_MALFORMED_BODY", serialized)
+
+            out_of_range = archive_services.inbox_pipeline_audit(
+                archive_root,
+                dry_run=True,
+                max_frontmatter_bytes=1000,
+            )
+            self.assertFalse(out_of_range["ok"])
+            self.assertIn(
+                "max_frontmatter_bytes_out_of_range",
+                out_of_range["blockers"],
+            )
+
+    def test_inbox_pipeline_audit_does_not_follow_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "personal-archive"
+            init_code, init_output = self.init_personal_archive(
+                archive_root,
+                "archive:personal:inbox-pipeline-symlink",
+            )
+            self.assertEqual(init_code, 0, init_output)
+            target = (
+                archive_root
+                / "workbench"
+                / "PRIVATE_INBOX_PIPELINE_SYMLINK_TARGET.md"
+            )
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(
+                "PRIVATE_INBOX_PIPELINE_SYMLINK_BODY",
+                encoding="utf-8",
+            )
+            target_before = target.read_bytes()
+            link = archive_root / "inbox" / "private-symlink.md"
+            try:
+                link.symlink_to(target)
+            except OSError as exc:
+                self.skipTest(f"symlink creation unavailable: {exc}")
+
+            result = archive_services.inbox_pipeline_audit(
+                archive_root,
+                dry_run=True,
+            )
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["summary"]["insufficient_evidence"], 1)
+            self.assertEqual(result["summary"]["frontmatter_bytes_read"], 0)
+            self.assertFalse(
+                result["summary"]["body_text_may_have_been_read"]
+            )
+            self.assertEqual(
+                result["findings"][0]["reason_codes"],
+                ["symlink_not_followed"],
+            )
+            serialized = json.dumps(result, ensure_ascii=False)
+            self.assertNotIn("PRIVATE_INBOX_PIPELINE_SYMLINK", serialized)
+            self.assertEqual(target_before, target.read_bytes())
+
+    def test_doctor_aggregates_possible_inbox_pipeline_bypass_signal(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "personal-archive"
+            init_code, init_output = self.init_personal_archive(
+                archive_root,
+                "archive:personal:inbox-pipeline-doctor",
+            )
+            self.assertEqual(init_code, 0, init_output)
+            private_path = self.create_inbox_pipeline_audit_draft(
+                archive_root,
+                draft_id="zet_20260729_010206_private_doctor",
+                title="PRIVATE_DOCTOR_TITLE",
+                promotion_stage="draft",
+                legacy_draft_suffix=True,
+            )
+
+            diagnostics = archive_cli.Doctor(archive_root).run()
+            signals = [
+                item
+                for item in diagnostics
+                if item.code == "possible_out_of_pipeline_inbox_draft"
+            ]
+            self.assertEqual(len(signals), 1)
+            self.assertEqual(signals[0].severity, "WARN")
+            self.assertIn("not proof", signals[0].message)
+            self.assertNotIn(private_path.name, signals[0].message)
+
+            code, output = self.run_cli(
+                [
+                    "doctor",
+                    str(archive_root),
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            self.assertIn(
+                "possible_out_of_pipeline_inbox_draft",
+                output,
+            )
+            self.assertNotIn("PRIVATE_DOCTOR_TITLE", output)
+            self.assertNotIn(private_path.name, output)
+
+            strict_code, strict_output = self.run_cli(
+                [
+                    "doctor",
+                    str(archive_root),
+                    "--strict",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(strict_code, 1, strict_output)
+            self.assertIn(
+                "possible_out_of_pipeline_inbox_draft",
+                strict_output,
+            )
 
     def test_promote_dry_run_checks_inbox_draft(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

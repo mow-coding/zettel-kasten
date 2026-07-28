@@ -1,6 +1,6 @@
 {
   "schema": "wom-kit/package-resource-manifest/v0.1",
-  "version": "0.3.278",
+  "version": "0.3.279",
   "source_of_truth": "wom-kit source resource directories",
   "file_count": 97,
   "files": [
@@ -289,8 +289,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/SKILL.md",
       "packaged": "templates/ai-runtime/wom-archive/SKILL.md",
-      "bytes": 5809,
-      "sha256": "b9afd600667e546ff7c7947322c8a4299b1d863e0b3b3497f1319ff562c3d00f"
+      "bytes": 6034,
+      "sha256": "00a22397b24688e2b59f782f15ff4a6ede5aa7b346ae5967b5aa70ffe441bd9d"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/capture-draft-and-publication.md",
@@ -313,8 +313,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/references/reading-memory-and-revision.md",
       "packaged": "templates/ai-runtime/wom-archive/references/reading-memory-and-revision.md",
-      "bytes": 4960,
-      "sha256": "7646a18c023bea22b0c87b26dcb29bd27e13dcb61b050229e6de632fe832fe50"
+      "bytes": 5382,
+      "sha256": "e4c3056cf56b9646e1c3cbf245059a676a6edbba7ed0682231a6ec07a4878952"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/safety-results-and-human-language.md",
@@ -331,8 +331,8 @@
     {
       "source": "templates/company/AGENTS.md",
       "packaged": "templates/company/AGENTS.md",
-      "bytes": 7837,
-      "sha256": "83c217255e987f067abecf783edc247bc9adaf5085502df65c8436005ee2ed61"
+      "bytes": 8058,
+      "sha256": "c8280b18b5faf0048900366bf82f2a9307e55385a8069d236f33ea3603ab60fd"
     },
     {
       "source": "templates/company/archive-identity.yml",
@@ -403,8 +403,8 @@
     {
       "source": "templates/family/AGENTS.md",
       "packaged": "templates/family/AGENTS.md",
-      "bytes": 7977,
-      "sha256": "f8f9b83c0a8ea658c23d8d682a7cf7e42e2da3cf87c8edf8d55fd64fa3d4f931"
+      "bytes": 8198,
+      "sha256": "1b6ece07e1cb4506ed52c54ad78f046bef94b839bf6ea152ec68a3d1e22ee0f1"
     },
     {
       "source": "templates/family/archive-identity.yml",
@@ -475,8 +475,8 @@
     {
       "source": "templates/personal/AGENTS.md",
       "packaged": "templates/personal/AGENTS.md",
-      "bytes": 7946,
-      "sha256": "e8507ecfc0c5cd757372155c8106c6cb96f0861fb5cdacb20ca264e58fadb125"
+      "bytes": 8167,
+      "sha256": "1602ced9ce0f2077e751de90f531d95e2bfd3ad2525582d1d7d8db7618efe4ad"
     },
     {
       "source": "templates/personal/archive-identity.yml",
@@ -581,10 +581,10 @@
       "sha256": "d619dc26af3216498c8392dfe838b0fe752d4bad9da998a58ca682d668fc510c"
     },
     {
-      "source": "docs/releases/v0.3.278.md",
-      "packaged": "release-notes/v0.3.278.md",
-      "bytes": 2062,
-      "sha256": "abe072aced5975daaa2e5c2d22b22cff2760edd83545938bc85d05740006edea"
+      "source": "docs/releases/v0.3.279.md",
+      "packaged": "release-notes/v0.3.279.md",
+      "bytes": 1929,
+      "sha256": "ebf050f119e10ddae951c22de627281b37250fb60d1868215cee3d55a7a99ee3"
     }
   ]
 }

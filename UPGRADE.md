@@ -24,6 +24,37 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.279 Read-Only Inbox Pipeline Audit
+
+No archive migration is required. To look for AI-declared inbox drafts whose
+metadata contradicts the current `archive create-draft` output shape, run:
+
+```powershell
+archive inbox-pipeline-audit <archive-root> `
+  --dry-run `
+  --format json
+```
+
+The command scans bounded top-level `inbox/*.md` frontmatter. Default findings
+contain stable ordinals, path SHA-256 values, classification, and reason codes;
+they do not contain raw paths, zettel ids, titles, actors, source values, or
+body text.
+
+Interpret the classes conservatively:
+
+- `pipeline_shape_consistent` means compatible shape, not proof that the
+  official command executed;
+- `possible_out_of_pipeline_draft` means an AI-declared draft contradicts one
+  or more current deterministic output facts and needs human review;
+- `insufficient_evidence` means WOM cannot honestly classify the creation
+  path from available metadata.
+
+Full `archive doctor` reports one aggregate warning when possible cases exist,
+so `doctor --strict` also fails until the owner reviews the signal. v0.3.279
+does not rename, rewrite, delete, mint, promote, or repair any draft. Do not
+change a historical file merely to silence the warning. See
+[`wom-kit/docs/inbox-pipeline-audit.md`](wom-kit/docs/inbox-pipeline-audit.md).
+
 ## v0.3.278 AI Command-Path Routing
 
 No archive migration is required. New archive templates and live read-only

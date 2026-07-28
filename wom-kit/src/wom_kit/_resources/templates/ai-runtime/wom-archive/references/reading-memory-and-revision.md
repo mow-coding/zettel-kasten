@@ -15,6 +15,18 @@ Inspect the complete-or-truncated metadata before claiming zero results or
 complete coverage. Raw filesystem grep and raw SQLite queries are diagnostic
 tools, not authoritative WOM search results.
 
+To inspect whether historical AI-declared inbox drafts contradict the current
+official draft shape, use:
+
+```text
+archive inbox-pipeline-audit <archive-root> --dry-run --format json
+```
+
+`pipeline_shape_consistent` is not proof that WOM wrote a file,
+`possible_out_of_pipeline_draft` is only a human-review signal, and
+`insufficient_evidence` must remain uncertain. Do not rewrite or delete a
+draft to silence the audit.
+
 ## Read Abstracts Before Full Bodies
 
 Check first-read readiness:

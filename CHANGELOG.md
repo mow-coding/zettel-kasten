@@ -6,6 +6,26 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.279 - 2026-07-29
+
+- Added CLI-only read-only `inbox-pipeline-audit` with alias
+  `draft-pipeline-audit`.
+- Classify top-level inbox Markdown drafts as pipeline-shape-consistent,
+  possible out-of-pipeline, or insufficient-evidence without claiming that
+  metadata proves command execution.
+- Bound draft counts, returned findings, and frontmatter bytes; valid files
+  stop at the closing frontmatter fence.
+- Redact raw paths, zettel ids, titles, actors, source values, and body text
+  from findings while retaining path SHA-256 and content-free reason codes.
+- Treat missing optional `draft_creation` as neutral so an official v0.3.275
+  unprofiled `create-draft` result is not falsely flagged.
+- Added one aggregate full-Doctor warning for possible cases; scoped
+  validation does not scan unrelated inbox files.
+- Extended AI command-path routing to
+  `wom-kit/ai-command-path-routing/v0.2` with the official audit route.
+- Added no repair, rename, rewrite, delete, mint, promote, provider, model,
+  network, index, database, credential-store, or archive write action.
+
 ## v0.3.278 - 2026-07-28
 
 - Added read-only `wom-kit/ai-command-path-routing/v0.1` to runtime-context,

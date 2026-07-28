@@ -40,12 +40,15 @@ To inspect only this layer, run:
 archive operational-context <archive-root> --dry-run --format json
 ```
 
-From v0.3.278, this read-only output also returns the same official
-`wom-kit/ai-command-path-routing/v0.1` object as runtime-context and
-ai-start-here. It routes search through `archive search`, AI draft creation
-through `archive create-draft`, and other writes through their dedicated
+Introduced in v0.3.278 and extended in v0.3.279, this read-only output also
+returns the same official
+`wom-kit/ai-command-path-routing/v0.2` object as runtime-context and
+ai-start-here. It routes search through `archive search`, conservative inbox
+shape review through `archive inbox-pipeline-audit`, AI draft creation through
+`archive create-draft`, and other writes through their dedicated
 preview/approval commands. A destination folder alone is never write
-authorization. See [AI Command-Path Routing](ai-command-path-routing.md).
+authorization. The inbox audit proves no writer identity and performs no
+automatic repair. See [AI Command-Path Routing](ai-command-path-routing.md).
 
 ## Update It
 

@@ -71,6 +71,10 @@ token-budget contract.
 - Search with `archive search <archive-root> <query> --count-total --format
   json`. Raw grep and raw SQL may help diagnose files or generated indexes, but
   they are not authoritative WOM search results.
+- Inspect possible historical direct inbox writes only with
+  `archive inbox-pipeline-audit <archive-root> --dry-run --format json`.
+  Treat its classes as review signals, not proof, and never repair a draft
+  automatically.
 - Create an AI-assisted draft only through `archive create-draft` dry-run and
   its exact reviewed replay. Never write Markdown directly into `inbox/`.
 - Before a write, show the human what will change, where it will change, and

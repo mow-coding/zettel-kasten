@@ -8,6 +8,7 @@ This is a sample archive for testing WOM-kit v0.1.
 - Treat `zettels/` as canonical.
 - Treat `inbox/` as AI draft space.
 - Search with `archive search <archive-root> <query> --count-total --format json`; raw grep and raw SQL are not authoritative WOM search results.
+- When Doctor reports a possible inbox pipeline bypass, inspect it with `archive inbox-pipeline-audit <archive-root> --dry-run --format json`; its classes are review signals, not proof, and authorize no automatic repair.
 - Create drafts only through `archive create-draft` dry-run and its human-reviewed replay; never write Markdown directly into `inbox/`.
 - Do not move an inbox draft into `zettels/` without a separate `archive mint-zet` preview and explicit human approval.
 - Add relationships and capture source material only through the official `zettel-edge` and source/objet intake routes.

@@ -8439,14 +8439,6 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             / "docs"
             / "archive-infra-decision-log-2026-07-28-v03278-ai-command-path-routing.md"
         ).read_text(encoding="utf-8")
-        packaged_release_text = (
-            KIT_ROOT
-            / "src"
-            / "wom_kit"
-            / "_resources"
-            / "release-notes"
-            / "v0.3.278.md"
-        ).read_text(encoding="utf-8")
         matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
         public_map_text = (
             KIT_ROOT / "docs" / "public-documentation-map.md"
@@ -8459,14 +8451,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         upgrade_text = (REPO_ROOT / "UPGRADE.md").read_text(encoding="utf-8")
         upgrade_ko_text = (REPO_ROOT / "UPGRADE.ko.md").read_text(encoding="utf-8")
         changelog_text = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-        install_text = (
-            KIT_ROOT / "docs" / "python-tool-install.md"
-        ).read_text(encoding="utf-8")
-        install_ko_text = (
-            KIT_ROOT / "docs" / "python-tool-install.ko.md"
-        ).read_text(encoding="utf-8")
-
-        for text in (guide_text, release_text, decision_text, matrix_text):
+        for text in (release_text, decision_text):
             with self.subTest(document="ai-command-path-routing-contract"):
                 self.assertIn("wom-kit/ai-command-path-routing/v0.1", text)
                 self.assertIn("archive search", text)
@@ -8475,6 +8460,10 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                 self.assertIn("raw SQL", text)
                 self.assertIn("remote release", text)
                 self.assertIn("saved-view", text)
+        for text in (guide_text, matrix_text):
+            with self.subTest(document="current-ai-command-path-routing-contract"):
+                self.assertIn("wom-kit/ai-command-path-routing/v0.2", text)
+                self.assertIn("inbox-pipeline-audit", text)
 
         for phrase in (
             "archive ai-start-here <archive-root> --dry-run --progress --format json",
@@ -8486,9 +8475,102 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, guide_text)
 
-        self.assertEqual(packaged_release_text, release_text)
         self.assertIn("[AI Command-Path Routing](ai-command-path-routing.md)", public_map_text)
         self.assertIn("[AI Command-Path Routing](ai-command-path-routing.md)", public_map_ko_text)
+        for text in (
+            root_readme_text,
+            root_readme_ko_text,
+            upgrade_text,
+            upgrade_ko_text,
+            changelog_text,
+        ):
+            with self.subTest(document="v03278-public-version-surface"):
+                self.assertIn("v0.3.278", text)
+    def test_v03279_inbox_pipeline_audit_is_public_private_and_bounded(self) -> None:
+        guide_text = (KIT_ROOT / "docs" / "inbox-pipeline-audit.md").read_text(
+            encoding="utf-8"
+        )
+        release_text = (
+            KIT_ROOT / "docs" / "releases" / "v0.3.279.md"
+        ).read_text(encoding="utf-8")
+        decision_text = (
+            KIT_ROOT
+            / "docs"
+            / "archive-infra-decision-log-2026-07-29-v03279-inbox-pipeline-audit.md"
+        ).read_text(encoding="utf-8")
+        packaged_release_text = (
+            KIT_ROOT
+            / "src"
+            / "wom_kit"
+            / "_resources"
+            / "release-notes"
+            / "v0.3.279.md"
+        ).read_text(encoding="utf-8")
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        routing_text = (
+            KIT_ROOT / "docs" / "ai-command-path-routing.md"
+        ).read_text(encoding="utf-8")
+        public_map_text = (
+            KIT_ROOT / "docs" / "public-documentation-map.md"
+        ).read_text(encoding="utf-8")
+        public_map_ko_text = (
+            KIT_ROOT / "docs" / "public-documentation-map.ko.md"
+        ).read_text(encoding="utf-8")
+        root_readme_text = (REPO_ROOT / "README.md").read_text(
+            encoding="utf-8"
+        )
+        root_readme_ko_text = (REPO_ROOT / "README.ko.md").read_text(
+            encoding="utf-8"
+        )
+        upgrade_text = (REPO_ROOT / "UPGRADE.md").read_text(encoding="utf-8")
+        upgrade_ko_text = (REPO_ROOT / "UPGRADE.ko.md").read_text(
+            encoding="utf-8"
+        )
+        changelog_text = (REPO_ROOT / "CHANGELOG.md").read_text(
+            encoding="utf-8"
+        )
+        install_text = (
+            KIT_ROOT / "docs" / "python-tool-install.md"
+        ).read_text(encoding="utf-8")
+        install_ko_text = (
+            KIT_ROOT / "docs" / "python-tool-install.ko.md"
+        ).read_text(encoding="utf-8")
+
+        for text in (
+            guide_text,
+            release_text,
+            decision_text,
+            matrix_text,
+            routing_text,
+        ):
+            with self.subTest(document="inbox-pipeline-audit-contract"):
+                self.assertIn("inbox-pipeline-audit", text)
+                self.assertIn("possible_out_of_pipeline_draft", text)
+                self.assertIn("insufficient_evidence", text)
+                self.assertIn("not proof", text.lower())
+                self.assertIn("repair", text.lower())
+        self.assertIn(
+            "wom-kit/inbox-pipeline-audit/v0.1",
+            guide_text,
+        )
+        self.assertIn(
+            "wom-kit/ai-command-path-routing/v0.2",
+            routing_text,
+        )
+        for phrase in (
+            "top-level `inbox/*.md`",
+            "5,000",
+            "256 KiB",
+            "500 findings",
+            "path SHA-256",
+            "does not return zettel ids, titles, actors, source values, or body text",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, guide_text)
+
+        self.assertEqual(packaged_release_text, release_text)
+        self.assertIn("[Inbox Pipeline Audit](inbox-pipeline-audit.md)", public_map_text)
+        self.assertIn("[Inbox Pipeline Audit](inbox-pipeline-audit.md)", public_map_ko_text)
         for text in (
             root_readme_text,
             root_readme_ko_text,
@@ -8498,10 +8580,10 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             install_text,
             install_ko_text,
         ):
-            with self.subTest(document="v03278-public-version-surface"):
-                self.assertIn("v0.3.278", text)
+            with self.subTest(document="v03279-public-version-surface"):
+                self.assertIn("v0.3.279", text)
         self.assertIn(
-            "releases/download/v0.3.278/wom_kit-0.3.278-py3-none-any.whl",
+            "releases/download/v0.3.279/wom_kit-0.3.279-py3-none-any.whl",
             root_readme_text,
         )
 

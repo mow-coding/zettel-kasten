@@ -1459,6 +1459,7 @@ class Doctor:
             ("derived-text-manifest", self._check_derived_text_manifest),
             ("source-maps", self._check_source_maps),
             ("zettels", self._check_zettels),
+            ("inbox-pipeline-audit", self._check_inbox_pipeline_audit),
             ("views", self._check_views),
             ("workpacks", self._check_workpacks),
             ("external-import-receipts", self._check_external_import_receipts),
@@ -2393,6 +2394,91 @@ class Doctor:
                 if index == 1 or index == total or index % 250 == 0:
                     self._progress("zettels", self._display_path(path) or "zettel", index, total)
                 self._check_zettel_file(path, expected_status)
+
+    def _check_inbox_pipeline_audit(self) -> None:
+        try:
+            result = archive_services.inbox_pipeline_audit(
+                self.archive_root,
+                dry_run=True,
+                progress_callback=lambda stage, message, current, total: self._progress(
+                    stage,
+                    message,
+                    current,
+                    total,
+                ),
+            )
+        except (
+            archive_services.ArchiveServiceError,
+            ArchivePathError,
+            OSError,
+            UnicodeError,
+            ValueError,
+        ):
+            self.warn(
+                "inbox_pipeline_audit_incomplete",
+                "The bounded inbox pipeline audit could not complete safely.",
+                self.archive_root / "inbox",
+                suggested_command=(
+                    "archive inbox-pipeline-audit <archive-root> "
+                    "--dry-run --format json"
+                ),
+            )
+            return
+
+        summary = (
+            result.get("summary")
+            if isinstance(result.get("summary"), dict)
+            else {}
+        )
+        if not result.get("ok") or not summary.get("complete"):
+            self.warn(
+                "inbox_pipeline_audit_incomplete",
+                "The bounded inbox pipeline audit did not complete.",
+                self.archive_root / "inbox",
+                suggested_command=(
+                    "archive inbox-pipeline-audit <archive-root> "
+                    "--dry-run --format json"
+                ),
+            )
+            return
+
+        possible_count = int(
+            summary.get("possible_out_of_pipeline_draft") or 0
+        )
+        insufficient_count = int(summary.get("insufficient_evidence") or 0)
+        if possible_count:
+            self.warn(
+                "possible_out_of_pipeline_inbox_draft",
+                (
+                    f"{possible_count} AI-declared inbox draft(s) have "
+                    "metadata inconsistent with the current create-draft "
+                    "output shape. This is a review signal, not proof of how "
+                    "the files were created."
+                ),
+                self.archive_root / "inbox",
+                suggested_command=(
+                    "archive inbox-pipeline-audit <archive-root> "
+                    "--dry-run --format json"
+                ),
+            )
+        elif insufficient_count:
+            self.info(
+                "inbox_pipeline_evidence_insufficient",
+                (
+                    f"{insufficient_count} inbox draft(s) do not carry enough "
+                    "evidence for an AI pipeline classification."
+                ),
+                self.archive_root / "inbox",
+            )
+        else:
+            self.info(
+                "inbox_pipeline_shape_check",
+                (
+                    "No AI-declared inbox draft has metadata inconsistent "
+                    "with the current create-draft output shape."
+                ),
+                self.archive_root / "inbox",
+            )
 
     def _check_zettel_file(self, path: Path, expected_status: str) -> None:
         cached = self._indexed_zettel_cache_for_path(path)
@@ -11692,6 +11778,80 @@ def command_create_draft(args: argparse.Namespace) -> int:
             for warning in result.get("warnings", []):
                 print(f"Warning: {warning}")
     return 0 if result.get("ok", True) else 1
+
+
+def command_inbox_pipeline_audit(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print(
+            "inbox-pipeline-audit is read-only and requires --dry-run.",
+            file=sys.stderr,
+        )
+        return 1
+    reporter = CommandProgressReporter(
+        bool(getattr(args, "progress", False)),
+        label="inbox-pipeline-audit",
+    )
+    try:
+        result = archive_services.inbox_pipeline_audit(
+            Path(args.archive_root),
+            dry_run=True,
+            max_drafts=int(args.max_drafts),
+            max_findings=int(args.max_findings),
+            progress_callback=reporter.progress,
+        )
+    except archive_services.ArchiveServiceError:
+        print(
+            "inbox-pipeline-audit could not inspect the archive safely.",
+            file=sys.stderr,
+        )
+        return 1
+    except (ArchivePathError, OSError, UnicodeError, ValueError):
+        print(
+            "inbox-pipeline-audit failed before a privacy-safe result could be produced.",
+            file=sys.stderr,
+        )
+        return 1
+    finally:
+        reporter.close()
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        summary = (
+            result.get("summary")
+            if isinstance(result.get("summary"), dict)
+            else {}
+        )
+        print(f"WOM inbox pipeline audit: {result.get('status') or 'unknown'}")
+        print(
+            "Possible out-of-pipeline drafts: "
+            + str(summary.get("possible_out_of_pipeline_draft", 0))
+        )
+        print(
+            "Pipeline-shape-consistent drafts: "
+            + str(summary.get("pipeline_shape_consistent", 0))
+        )
+        print(
+            "Insufficient-evidence drafts: "
+            + str(summary.get("insufficient_evidence", 0))
+        )
+        print(
+            "Audit complete: "
+            + ("yes" if summary.get("complete") else "no")
+        )
+        print(f"Audit digest: {result.get('audit_digest') or 'unavailable'}")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+        print("Next safe actions:")
+        for action in result.get("next_safe_actions", []):
+            print(f"- {action}")
+    return 0 if result.get("ok") else 1
 
 
 def command_block_header(args: argparse.Namespace) -> int:
@@ -22927,6 +23087,45 @@ def build_parser() -> argparse.ArgumentParser:
     create_draft.add_argument("--draft-approved-by", help="Human actor approving inbox draft creation.")
     create_draft.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     create_draft.set_defaults(func=command_create_draft)
+
+    inbox_pipeline_audit = subcommands.add_parser(
+        "inbox-pipeline-audit",
+        aliases=["draft-pipeline-audit"],
+        help="Classify possible out-of-pipeline AI inbox drafts from bounded frontmatter without echoing private paths or content.",
+    )
+    inbox_pipeline_audit.add_argument(
+        "archive_root",
+        help="Archive root containing inbox drafts to inspect.",
+    )
+    inbox_pipeline_audit.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Required. Read bounded frontmatter and write nothing.",
+    )
+    inbox_pipeline_audit.add_argument(
+        "--max-drafts",
+        type=int,
+        default=archive_services.INBOX_PIPELINE_AUDIT_MAX_DRAFTS,
+        help="Maximum top-level inbox Markdown drafts to inspect (1-5000).",
+    )
+    inbox_pipeline_audit.add_argument(
+        "--max-findings",
+        type=int,
+        default=100,
+        help="Maximum privacy-safe finding records to return (1-500).",
+    )
+    inbox_pipeline_audit.add_argument(
+        "--progress",
+        action="store_true",
+        help="Stream content-free draft counts to stderr.",
+    )
+    inbox_pipeline_audit.add_argument(
+        "--format",
+        choices=["text", "json"],
+        default="json",
+        help="Output format.",
+    )
+    inbox_pipeline_audit.set_defaults(func=command_inbox_pipeline_audit)
 
     promote = subcommands.add_parser("promote", help="Legacy: check whether a draft zettel can be promoted.")
     promote.add_argument("archive_root", help="Archive root to inspect.")
