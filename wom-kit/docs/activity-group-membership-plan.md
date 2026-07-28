@@ -72,6 +72,11 @@ Example shape:
 The list is an explicit human selection. Search may help a human find
 candidates, but search results are not automatically event members.
 
+Every requested id must use the standard canonical path
+`zettels/<zettel-id>.md`. The planner does not fall back to an archive-wide id
+scan when that file is absent. This keeps one explicit request from reading
+unrelated zet frontmatter.
+
 The request is private working evidence. Do not commit it to a public
 repository.
 
@@ -106,6 +111,7 @@ The plan validates:
 - a non-empty, duplicate-free ordered member list;
 - anchor kind, record type, title presence, and event time shape;
 - exact current bytes and canonical identity of every named member;
+- the standard `zettels/<zettel-id>.md` path without an archive-wide fallback;
 - current `activity_group` shape;
 - deterministic proposed file hashes for members that are ready to add.
 

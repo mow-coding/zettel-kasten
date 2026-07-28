@@ -583,8 +583,8 @@
     {
       "source": "docs/releases/v0.3.280.md",
       "packaged": "release-notes/v0.3.280.md",
-      "bytes": 2086,
-      "sha256": "f69d1f2a1169984b589015a220127796e94c171af48f30674a29ae7eebb9ec47"
+      "bytes": 2229,
+      "sha256": "21443a264a7f13f3bc6a2106a5bd0fd12f96b98a52478500c27455cea3fe3a42"
     }
   ]
 }

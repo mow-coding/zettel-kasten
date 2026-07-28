@@ -28,7 +28,9 @@ without unblocking the operator.
    member ids. Do not infer members from search, title, time, or proximity.
 7. Bind exact current and proposed hashes into `review_plan_sha256` while
    returning no ids, paths, titles, facet values, or bodies.
-8. Defer the canonical writer and member removal to separate approval-gated
+8. Require standard `zettels/<id>.md` canonical paths so one request never
+   falls back to an archive-wide frontmatter scan.
+9. Defer the canonical writer and member removal to separate approval-gated
    releases.
 
 ## Standards basis

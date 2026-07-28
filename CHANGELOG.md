@@ -23,7 +23,8 @@ This project uses semantic versioning for public compatibility checkpoints.
   evidence into `review_plan_sha256` without returning ids, paths, titles,
   facet values, or body text.
 - Bound request, member count, per-canonical bytes, and total canonical bytes;
-  use direct live files and no generated index.
+  require direct standard `zettels/<id>.md` live files, scan no unrelated
+  frontmatter as fallback, and use no generated index.
 - Extended AI command-path routing to
   `wom-kit/ai-command-path-routing/v0.3` with the official planning route and
   an explicit blocked writer/removal route that forbids direct canonical

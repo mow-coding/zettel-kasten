@@ -32676,33 +32676,26 @@ def activity_group_membership_plan(
         "event_time_granularity": None,
         "current_file_sha256": None,
     }
-    canonical_path_index: dict[str, Path] | None = None
     total_canonical_bytes = 0
 
     def resolve_requested_zettel(zettel_id: str) -> Path:
-        nonlocal canonical_path_index
         try:
             direct = root / "zettels" / f"{zettel_id}.md"
             if (
-                direct.is_file()
-                and not direct.is_symlink()
-                and is_path_within_root(direct, root)
+                direct.is_symlink()
+                or not is_path_within_root(direct, root)
+                or not direct.is_file()
             ):
-                return direct
-            if canonical_path_index is None:
-                canonical_path_index = zettel_paths_by_id(root)
-            return resolve_zettel_path(
-                root,
-                zettel_id=zettel_id,
-                relative_path=None,
-                zettel_path_index=canonical_path_index,
-            )
+                raise ArchiveServiceError(
+                    "requested_zettel_missing_standard_canonical_path"
+                )
+            return direct
         except (ArchiveServiceError, ArchivePathError, OSError) as exc:
-            # resolve_zettel_path includes the requested id in some diagnostic
-            # messages. This planner's public result must never echo ids from
-            # the private request, including on a missing-target path.
+            # Do not fall back to an archive-wide id scan: one explicit request
+            # must read only its standard zettels/<id>.md targets. Keep the
+            # error content-free so the private requested id is never echoed.
             raise ArchiveServiceError(
-                "requested_zettel_unavailable_or_unreadable"
+                "requested_zettel_missing_standard_canonical_path"
             ) from exc
 
     if anchor_zettel_id is not None and not blockers:

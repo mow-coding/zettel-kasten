@@ -48350,7 +48350,7 @@ archive_services.zet_abstract_backfill_recover(
             )
             self.assertFalse(missing_result["ok"])
             self.assertIn(
-                "requested_zettel_unavailable_or_unreadable",
+                "requested_zettel_missing_standard_canonical_path",
                 missing_result["items"][0]["blocker_codes"],
             )
             self.assertNotIn(
@@ -48655,6 +48655,37 @@ archive_services.zet_abstract_backfill_recover(
                 member_bound["blockers"],
             )
             self.assertEqual(member_bound["items"], [])
+
+            standard_member_path = (
+                archive_root / "zettels" / f"{member_id}.md"
+            )
+            nonstandard_member_path = (
+                archive_root / "zettels" / "legacy-private-member-name.md"
+            )
+            standard_member_path.rename(nonstandard_member_path)
+            nonstandard_before = nonstandard_member_path.read_bytes()
+            standard_path_required = (
+                archive_services.activity_group_membership_plan(
+                    archive_root,
+                    request_path=request_relative,
+                    dry_run=True,
+                )
+            )
+            self.assertFalse(standard_path_required["ok"])
+            self.assertIn(
+                "requested_zettel_missing_standard_canonical_path",
+                standard_path_required["items"][0]["blocker_codes"],
+            )
+            self.assertEqual(
+                nonstandard_before,
+                nonstandard_member_path.read_bytes(),
+            )
+            serialized = json.dumps(
+                standard_path_required,
+                ensure_ascii=False,
+            )
+            self.assertNotIn(member_id, serialized)
+            self.assertNotIn(nonstandard_member_path.name, serialized)
 
     def test_doctor_aggregates_possible_inbox_pipeline_bypass_signal(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
