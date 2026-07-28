@@ -98,11 +98,13 @@ In every case, check `write_boundary`: all values remain false.
 
 Preserve every receipt, journal, lock, canonical participant, and prior-byte
 snapshot. Do not hand-edit or delete transaction evidence. v0.3.270 provides
-diagnosis only. Automatic recovery, approved single-case recovery, cleanup,
-and approved revert from a completed title-remap receipt remain later release
-work.
+diagnosis only. v0.3.271 can map every complete retained case to one fixed
+read-only recovery decision through
+`zet-title-remap-recovery-plan --dry-run`, but it still cannot execute,
+clean up, or revert anything.
 
 See:
 
 - [Reviewed zet Title Remap Plan](zet-title-remap-plan.md)
 - [Approved zet Title Remap Write](zet-title-remap-write.md)
+- [zet Title Remap Recovery Plan](zet-title-remap-recovery-plan.md)

@@ -33302,6 +33302,503 @@ archive_services.zet_title_remap_write(
                 "not_verifiable",
             )
 
+    def test_zet_title_remap_recovery_plan_requires_dry_run_and_is_read_only(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            before = self.snapshot_archive_files(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "zet-title-remap-recovery-plan",
+                    str(archive_root),
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 1)
+            self.assertIn("requires --dry-run", output)
+
+            code, output = self.run_cli(
+                [
+                    "title-remap-recovery-plan",
+                    str(archive_root),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertEqual(result["status"], "no_recovery_needed")
+            self.assertEqual(
+                result["schema"],
+                "wom-kit/zet-title-remap-recovery-plan/v0.1",
+            )
+            self.assertTrue(result["summary"]["complete"])
+            self.assertEqual(
+                result["summary"]["transaction_journal_count"],
+                0,
+            )
+            self.assertEqual(result["summary"]["recovery_case_count"], 0)
+            self.assertRegex(
+                result["source_audit_digest"],
+                r"^sha256:[0-9a-f]{64}$",
+            )
+            self.assertRegex(
+                result["plan_digest"],
+                r"^sha256:[0-9a-f]{64}$",
+            )
+            self.assertFalse(
+                result["execution_boundary"]["execution_implemented"]
+            )
+            self.assertFalse(
+                result["execution_boundary"][
+                    "approved_title_revert_implemented"
+                ]
+            )
+            self.assertEqual(
+                result["write_boundary"],
+                {
+                    "files_written": False,
+                    "files_deleted": False,
+                    "locks_created": False,
+                    "locks_deleted": False,
+                    "receipts_created": False,
+                    "receipts_modified": False,
+                    "canonical_zets_modified": False,
+                },
+            )
+            self.assertEqual(
+                self.snapshot_archive_files(archive_root),
+                before,
+            )
+
+            bounded_code, bounded_output = self.run_cli(
+                [
+                    "zet-title-remap-recovery-plan",
+                    str(archive_root),
+                    "--dry-run",
+                    "--max-cases",
+                    "0",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(bounded_code, 1, bounded_output)
+            bounded = json.loads(bounded_output)
+            self.assertEqual(bounded["status"], "blocked")
+            self.assertIn("max_cases_out_of_range", bounded["blockers"])
+            self.assertEqual(
+                self.snapshot_archive_files(archive_root),
+                before,
+            )
+
+            from wom_kit import mcp_server
+
+            self.assertNotIn(
+                "zet_title_remap_recovery_plan",
+                {
+                    definition["name"]
+                    for definition in mcp_server.TOOL_DEFINITIONS
+                },
+            )
+
+    def test_zet_title_remap_recovery_plan_maps_real_retained_states_privately(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            fixture = self._create_title_remap_write_fixture(
+                archive_root,
+                count=2,
+                proposal_name="recovery-plan-hard-exit.jsonl",
+            )
+            reviewer = "person:title-recovery-plan-reviewer"
+            child_code = """
+import os
+import sys
+from pathlib import Path
+from wom_kit import archive_services
+
+archive_root = Path(sys.argv[1])
+real_write = archive_services.write_bytes_atomic
+
+def write_then_hard_exit(path, value):
+    real_write(path, value)
+    os._exit(91)
+
+archive_services.write_bytes_atomic = write_then_hard_exit
+archive_services.zet_title_remap_write(
+    archive_root,
+    proposal_path=sys.argv[2],
+    expected_proposal_sha256=sys.argv[3],
+    expected_plan_digest=sys.argv[4],
+    expected_write_plan_digest=sys.argv[5],
+    max_items=2,
+    approve=True,
+    reviewed_by=sys.argv[6],
+    affirm_titles_reviewed=True,
+)
+"""
+            child_env = os.environ.copy()
+            child_env["PYTHONPATH"] = str(SRC_ROOT)
+            child = subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    child_code,
+                    str(archive_root),
+                    fixture["relative"],
+                    fixture["proposal_sha256"],
+                    fixture["plan_digest"],
+                    fixture["write_plan_digest"],
+                    reviewer,
+                ],
+                cwd=KIT_ROOT,
+                env=child_env,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            self.assertEqual(child.returncode, 91, child.stderr)
+            title_remap_root = (
+                archive_root / ".wom-scratch" / "title-remap"
+            )
+            transaction_journal = next(
+                title_remap_root.glob(".*.write.transaction.json")
+            )
+            journal = json.loads(
+                transaction_journal.read_text(encoding="utf-8")
+            )
+            write_lock = title_remap_root / ".title-remap.write.lock"
+            write_lock_bytes = write_lock.read_bytes()
+
+            def plan() -> tuple[int, str, dict[str, Any]]:
+                before = self.snapshot_archive_files(archive_root)
+                code, output = self.run_cli(
+                    [
+                        "zet-title-remap-recovery-plan",
+                        str(archive_root),
+                        "--dry-run",
+                        "--format",
+                        "json",
+                    ]
+                )
+                self.assertEqual(
+                    self.snapshot_archive_files(archive_root),
+                    before,
+                )
+                result = json.loads(output)
+                for private_value in (
+                    fixture["proposal_sha256"],
+                    fixture["rows"][0]["zettel_id"],
+                    fixture["rows"][1]["zettel_id"],
+                    fixture["rows"][0]["title"],
+                    fixture["rows"][1]["title"],
+                    reviewer,
+                    str(transaction_journal),
+                ):
+                    self.assertNotIn(private_value, output)
+                self.assertFalse(
+                    result["execution_boundary"]["execution_implemented"]
+                )
+                self.assertFalse(result["write_boundary"]["files_written"])
+                self.assertFalse(result["write_boundary"]["files_deleted"])
+                return code, output, result
+
+            code, output, result = plan()
+            self.assertEqual(code, 0, output)
+            self.assertEqual(
+                result["status"],
+                "ready_for_human_recovery_review",
+            )
+            partial = result["cases"][0]
+            self.assertEqual(partial["observed_state"], "partially_applied")
+            self.assertEqual(
+                partial["recommended_action"],
+                "rollback_uncommitted_title_apply_to_before",
+            )
+            self.assertEqual(partial["participant_write_count"], 1)
+            self.assertFalse(partial["lock_reacquisition_required"])
+            self.assertFalse(partial["execution_implemented"])
+            self.assertRegex(
+                partial["case_sha256"],
+                r"^sha256:[0-9a-f]{64}$",
+            )
+
+            for item in journal["items"]:
+                path = archive_root.joinpath(
+                    *PurePosixPath(item["canonical_path"]).parts
+                )
+                path.write_bytes(fixture["originals"][path])
+            code, output, result = plan()
+            self.assertEqual(code, 0, output)
+            prepared = result["cases"][0]
+            self.assertEqual(prepared["observed_state"], "prepared")
+            self.assertEqual(
+                prepared["recommended_action"],
+                "cleanup_unstarted_title_transaction_evidence",
+            )
+            self.assertEqual(prepared["participant_write_count"], 0)
+
+            write_lock.unlink()
+            code, output, result = plan()
+            self.assertEqual(code, 0, output)
+            missing_lock = result["cases"][0]
+            self.assertEqual(
+                missing_lock["recommended_action"],
+                "cleanup_unstarted_title_transaction_evidence",
+            )
+            self.assertTrue(
+                missing_lock["lock_reacquisition_required"]
+            )
+            write_lock.write_bytes(write_lock_bytes)
+
+            first_snapshot = journal["items"][0]["before_snapshot"]
+            snapshot_path = archive_root.joinpath(
+                *PurePosixPath(first_snapshot["logical_key"]).parts
+            )
+            snapshot_bytes = snapshot_path.read_bytes()
+            snapshot_path.write_bytes(snapshot_bytes + b"\n")
+            code, output, result = plan()
+            self.assertEqual(code, 0, output)
+            self.assertEqual(result["status"], "manual_forensic_hold")
+            invalid_snapshot = result["cases"][0]
+            self.assertEqual(invalid_snapshot["observed_state"], "prepared")
+            self.assertEqual(
+                invalid_snapshot["recommended_action"],
+                "manual_forensic_hold",
+            )
+            self.assertEqual(
+                invalid_snapshot["reason_code"],
+                "one_or_more_prior_byte_snapshots_are_invalid",
+            )
+            snapshot_path.write_bytes(snapshot_bytes)
+
+            for item in journal["items"]:
+                path = archive_root.joinpath(
+                    *PurePosixPath(item["canonical_path"]).parts
+                )
+                row = fixture["rows"][item["row_index"]]
+                path.write_bytes(
+                    archive_services.zet_title_remap_candidate_bytes(
+                        fixture["originals"][path],
+                        row["title"],
+                    )
+                )
+            code, output, result = plan()
+            self.assertEqual(code, 0, output)
+            fully_applied = result["cases"][0]
+            self.assertEqual(
+                fully_applied["observed_state"],
+                "fully_applied_receipt_missing",
+            )
+            self.assertEqual(
+                fully_applied["recommended_action"],
+                "rollback_uncommitted_title_apply_to_before",
+            )
+            self.assertEqual(fully_applied["participant_write_count"], 2)
+
+            receipt = {
+                "schema": "wom-kit/zet-title-remap-receipt/v0.1",
+                "action": "zet_title_remap_write",
+                "status": "applied",
+                "applied_at": journal["prepared_at"],
+                "archive_id": journal["archive_id"],
+                "proposal_sha256": journal["proposal_sha256"],
+                "plan_digest": journal["plan_digest"],
+                "write_plan_digest": journal["write_plan_digest"],
+                "reviewed_by": journal["reviewed_by"],
+                "human_affirmation": journal["human_affirmation"],
+                "item_count": journal["item_count"],
+                "items": journal["items"],
+                "mutation_contract": {
+                    "field_replaced": "frontmatter.title",
+                    "body_bytes_preserved": True,
+                    "other_frontmatter_semantics_preserved": True,
+                    "updated_at_changed": False,
+                    "prior_byte_snapshots_verified_before_first_canonical_write": True,
+                    "rollback_on_runtime_failure": True,
+                    "crash_recovery_journal_written": True,
+                },
+                "privacy_guards": {
+                    "old_title_text_stored_in_receipt": False,
+                    "new_title_text_stored_in_receipt": False,
+                    "body_text_stored_in_receipt": False,
+                    "provider_api_called": False,
+                    "model_called": False,
+                    "secret_store_or_environment_read": False,
+                },
+            }
+            receipt_path = archive_root.joinpath(
+                *PurePosixPath(journal["final_receipt_path"]).parts
+            )
+            receipt_path.parent.mkdir(parents=True, exist_ok=True)
+            receipt_path.write_text(
+                json.dumps(
+                    receipt,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            code, output, result = plan()
+            self.assertEqual(code, 0, output)
+            stale = result["cases"][0]
+            self.assertEqual(stale["observed_state"], "stale_completed")
+            self.assertEqual(
+                stale["recommended_action"],
+                "cleanup_verified_completed_title_evidence",
+            )
+            self.assertEqual(stale["participant_write_count"], 0)
+
+            mismatched_receipt = dict(receipt)
+            mismatched_receipt["plan_digest"] = "sha256:" + ("0" * 64)
+            receipt_path.write_text(
+                json.dumps(
+                    mismatched_receipt,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            code, output, result = plan()
+            self.assertEqual(code, 0, output)
+            self.assertEqual(result["status"], "manual_forensic_hold")
+            divergent = result["cases"][0]
+            self.assertEqual(divergent["observed_state"], "divergent")
+            self.assertEqual(
+                divergent["final_receipt_state"],
+                "present_unverified",
+            )
+            self.assertEqual(
+                divergent["recommended_action"],
+                "manual_forensic_hold",
+            )
+            self.assertEqual(
+                divergent["reason_code"],
+                "deterministic_final_receipt_exists_but_lifecycle_is_unverified",
+            )
+            self.assertFalse(divergent["evidence_cleanup_required"])
+
+            write_lock.write_text("{}\n", encoding="utf-8")
+            code, output, result = plan()
+            self.assertEqual(code, 0, output)
+            self.assertEqual(result["status"], "manual_forensic_hold")
+            invalid_lock = result["cases"][0]
+            self.assertEqual(
+                invalid_lock["recommended_action"],
+                "manual_forensic_hold",
+            )
+            self.assertEqual(
+                invalid_lock["reason_code"],
+                "common_title_write_lock_is_orphaned_or_invalid",
+            )
+            self.assertTrue(
+                result["summary"][
+                    "common_write_lock_orphaned_or_invalid"
+                ]
+            )
+
+    def test_zet_title_remap_recovery_plan_blocks_truncated_or_incomplete_source(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            cases = [
+                {
+                    "case_index": index,
+                    "case_sha256": "sha256:" + (str(index + 1) * 64),
+                    "observed_state": "prepared",
+                    "before_count": 1,
+                    "after_count": 0,
+                    "divergent_count": 0,
+                    "missing_count": 0,
+                    "participant_count": 1,
+                    "final_receipt_state": "absent",
+                    "write_lock_state": "missing_or_mismatched",
+                    "issue_codes": [
+                        "title_transaction_prepared",
+                        "title_transaction_matching_write_lock_missing",
+                    ],
+                }
+                for index in range(2)
+            ]
+            audit = {
+                "archive_id": "archive:test",
+                "audit_digest": "sha256:" + ("a" * 64),
+                "summary": {
+                    "complete": True,
+                    "receipt_count": 0,
+                    "journal_count": 2,
+                    "journal_cases_truncated": False,
+                    "write_lock_present": False,
+                    "write_lock_orphaned_or_invalid": 0,
+                    "receipt_invalid": 0,
+                    "receipt_current_state_mismatch": 0,
+                    "receipt_snapshot_evidence_invalid": 0,
+                    "problem_count": 2,
+                },
+                "transaction_journal_cases": cases,
+                "privacy_guards": {
+                    "canonical_file_bytes_read_for_hash_validation": True,
+                    "receipt_private_metadata_read": False,
+                    "journal_private_metadata_read": True,
+                },
+            }
+            with patch.object(
+                archive_services,
+                "zet_title_remap_receipt_audit",
+                return_value=audit,
+            ):
+                truncated = (
+                    archive_services.zet_title_remap_recovery_plan(
+                        archive_root,
+                        dry_run=True,
+                        max_cases=1,
+                    )
+                )
+            self.assertFalse(truncated["ok"])
+            self.assertEqual(truncated["status"], "blocked")
+            self.assertIn(
+                "recovery_cases_truncated",
+                truncated["blockers"],
+            )
+            self.assertEqual(
+                truncated["summary"]["recovery_case_count"],
+                2,
+            )
+            self.assertEqual(truncated["summary"]["cases_returned"], 1)
+            self.assertTrue(truncated["summary"]["cases_truncated"])
+            self.assertEqual(len(truncated["cases"]), 1)
+
+            incomplete_audit = dict(audit)
+            incomplete_audit["summary"] = {
+                **audit["summary"],
+                "complete": False,
+            }
+            with patch.object(
+                archive_services,
+                "zet_title_remap_receipt_audit",
+                return_value=incomplete_audit,
+            ):
+                incomplete = (
+                    archive_services.zet_title_remap_recovery_plan(
+                        archive_root,
+                        dry_run=True,
+                    )
+                )
+            self.assertFalse(incomplete["ok"])
+            self.assertEqual(incomplete["status"], "blocked")
+            self.assertIn(
+                "recovery_source_audit_incomplete",
+                incomplete["blockers"],
+            )
+
     def test_zet_title_remap_plan_binds_reviewed_titles_without_echoing_values(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
