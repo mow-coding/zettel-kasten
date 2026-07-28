@@ -1,6 +1,6 @@
 # zet Title Remap Recovery Plan
 
-Status: v0.3.275 read-only interrupted-apply recovery decision and separate revert-recovery handoff
+Status: v0.3.276 read-only interrupted-apply recovery decision and separate revert-recovery handoff
 
 ## Command
 
@@ -80,7 +80,8 @@ revert` journal. This older planner always maps that case to
 journal into the interrupted-apply cleanup or rollback executor. Since
 v0.3.275 operators can review that case with the separate read-only
 `zet-title-remap-revert-recovery-plan --dry-run`; this older apply planner
-intentionally keeps its forensic hold.
+intentionally keeps its forensic hold even though v0.3.276 adds a separate
+executor for the revert plan's non-forensic actions.
 
 ## Executor Handoff And Revert Boundary
 
@@ -95,9 +96,9 @@ verified prior bytes, or clean exactly verified stale-completed residue. It
 cannot execute `manual_forensic_hold`, resume an apply, create/finalize a
 receipt, delete snapshots, or process a retained revert journal. v0.3.273
 handles the separate read-only planning step for a clean completed receipt and
-v0.3.274 adds its separate approval-gated writer. v0.3.275 adds only the
-dedicated read-only hard-exit revert recovery decision; execution remains a
-later, dedicated boundary.
+v0.3.274 adds its separate approval-gated writer. v0.3.275 adds the dedicated
+read-only hard-exit revert recovery decision, and v0.3.276 adds its separate
+approval-gated executor without changing this interrupted-apply planner.
 
 See also:
 

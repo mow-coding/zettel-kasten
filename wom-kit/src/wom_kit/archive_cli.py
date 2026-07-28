@@ -9941,6 +9941,96 @@ def command_zet_title_remap_recover(
     return 0 if result.get("ok") else 1
 
 
+def command_zet_title_remap_revert_recover(
+    args: argparse.Namespace,
+) -> int:
+    reporter = CommandProgressReporter(
+        bool(getattr(args, "progress", False)),
+        label="zet-title-remap-revert-recover",
+        stage_order=(
+            "title-remap-receipt-audit",
+            "title-remap-journal-audit",
+            "title-revert-recovery-write",
+        ),
+    )
+    try:
+        result = archive_services.zet_title_remap_revert_recover(
+            Path(args.archive_root),
+            case_sha256=str(args.case_sha256),
+            expected_plan_digest=str(args.expected_plan_digest),
+            expected_action=str(args.expected_action),
+            dry_run=bool(args.dry_run),
+            approve=bool(args.approve),
+            reviewed_by=args.reviewed_by,
+            affirm_recovery_reviewed=bool(
+                args.affirm_recovery_reviewed
+            ),
+            affirm_archive_quiescent=bool(
+                args.affirm_archive_quiescent
+            ),
+            max_receipts=int(args.max_receipts),
+            max_journals=int(args.max_journals),
+            max_cases=int(args.max_cases),
+            progress_callback=reporter.progress,
+        )
+    except archive_services.ArchiveServiceError:
+        print(
+            "zet-title-remap-revert-recover could not bind a safe private title-revert recovery case.",
+            file=sys.stderr,
+        )
+        return 1
+    except (
+        ArchivePathError,
+        OSError,
+        UnicodeError,
+        ValueError,
+        RecursionError,
+    ):
+        print(
+            "zet-title-remap-revert-recover failed before a privacy-safe result could be produced.",
+            file=sys.stderr,
+        )
+        return 1
+    except Exception:
+        print(
+            "zet-title-remap-revert-recover failed before a privacy-safe result could be produced.",
+            file=sys.stderr,
+        )
+        return 1
+    finally:
+        reporter.close()
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        summary = (
+            result.get("summary")
+            if isinstance(result.get("summary"), dict)
+            else {}
+        )
+        print(
+            "WOM zet title remap revert recovery: "
+            f"{result.get('status') or 'unknown'}"
+        )
+        print(
+            "Canonical files restored this run: "
+            f"{summary.get('canonical_files_written_this_run', 0)}"
+        )
+        print(
+            "Revert receipt written this run: "
+            f"{summary.get('revert_receipt_written_this_run')}"
+        )
+        print(
+            "Common write lock removed: "
+            f"{summary.get('write_lock_removed')}"
+        )
+        print(
+            "Transaction journal removed: "
+            f"{summary.get('transaction_journal_removed')}"
+        )
+    return 0 if result.get("ok") else 1
+
+
 def command_abstract_freshness(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print("abstract-freshness is read-only and requires --dry-run.", file=sys.stderr)
@@ -20992,6 +21082,99 @@ def build_parser() -> argparse.ArgumentParser:
     )
     zet_title_remap_revert_recovery_plan.set_defaults(
         func=command_zet_title_remap_revert_recovery_plan
+    )
+
+    zet_title_remap_revert_recover = subcommands.add_parser(
+        "zet-title-remap-revert-recover",
+        aliases=["title-remap-revert-recover"],
+        help="Preview or approve one case-SHA and plan-digest-bound interrupted title-revert recovery.",
+    )
+    zet_title_remap_revert_recover.add_argument(
+        "archive_root",
+        help="Archive root containing the retained private title-revert transaction journal.",
+    )
+    zet_title_remap_revert_recover.add_argument(
+        "--case-sha256",
+        required=True,
+        help="Exact privacy-safe revert-journal SHA-256 from the reviewed recovery case.",
+    )
+    zet_title_remap_revert_recover.add_argument(
+        "--expected-plan-digest",
+        required=True,
+        help="Exact complete title-revert recovery-plan digest reviewed by the operator.",
+    )
+    zet_title_remap_revert_recover.add_argument(
+        "--expected-action",
+        choices=sorted(
+            archive_services.ZET_TITLE_REMAP_REVERT_RECOVERY_ACTIONS
+        ),
+        required=True,
+        help="Exact fixed action selected by the reviewed title-revert recovery case.",
+    )
+    zet_title_remap_revert_recover.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview the exact case-SHA, plan, and action binding without writing.",
+    )
+    zet_title_remap_revert_recover.add_argument(
+        "--approve",
+        action="store_true",
+        help="Execute one freshly revalidated safe-direction title-revert recovery case.",
+    )
+    zet_title_remap_revert_recover.add_argument(
+        "--reviewed-by",
+        help="Safe recovery reviewer id required for approval and never echoed.",
+    )
+    zet_title_remap_revert_recover.add_argument(
+        "--affirm-recovery-reviewed",
+        action="store_true",
+        help="Required with --approve: affirm the exact recovery direction and current plan were reviewed.",
+    )
+    zet_title_remap_revert_recover.add_argument(
+        "--affirm-archive-quiescent",
+        action="store_true",
+        help="Required with --approve: affirm the original revert process stopped and no editor or title writer is active.",
+    )
+    zet_title_remap_revert_recover.add_argument(
+        "--max-receipts",
+        type=int,
+        default=archive_services.ZET_TITLE_REMAP_AUDIT_MAX_RECEIPTS,
+        help=(
+            "Maximum title-remap receipts to re-audit "
+            f"(1-{archive_services.ZET_TITLE_REMAP_AUDIT_MAX_RECEIPTS})."
+        ),
+    )
+    zet_title_remap_revert_recover.add_argument(
+        "--max-journals",
+        type=int,
+        default=archive_services.ZET_TITLE_REMAP_AUDIT_MAX_JOURNALS,
+        help=(
+            "Maximum retained title-remap journals to re-audit "
+            f"(1-{archive_services.ZET_TITLE_REMAP_AUDIT_MAX_JOURNALS})."
+        ),
+    )
+    zet_title_remap_revert_recover.add_argument(
+        "--max-cases",
+        type=int,
+        default=100,
+        help=(
+            "Maximum privacy-safe revert recovery cases to bind "
+            f"(1-{archive_services.ZET_TITLE_REMAP_AUDIT_MAX_PROBLEMS})."
+        ),
+    )
+    zet_title_remap_revert_recover.add_argument(
+        "--progress",
+        action="store_true",
+        help="Stream content-free audit, restore, receipt, cleanup, and heartbeat progress to stderr.",
+    )
+    zet_title_remap_revert_recover.add_argument(
+        "--format",
+        choices=["text", "json"],
+        default="json",
+        help="Output format.",
+    )
+    zet_title_remap_revert_recover.set_defaults(
+        func=command_zet_title_remap_revert_recover
     )
 
     zet_title_remap_recover = subcommands.add_parser(

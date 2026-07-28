@@ -83,6 +83,7 @@
 - [zet 제목 리맵 완료 영수증 되돌리기 계획](zet-title-remap-revert-plan.md)
 - [zet 제목 리맵 승인형 완료 영수증 되돌리기](zet-title-remap-revert.md)
 - [zet 제목 리맵 되돌리기 중단 복구 계획](zet-title-remap-revert-recovery-plan.md)
+- [zet 제목 리맵 되돌리기 중단 복구 실행기](zet-title-remap-revert-recover.md)
 - [연속 Node 읽기](zet-catalog-contiguous-reading.md)
 - [Seed 기반 연결 읽기 순서](seeded-connection-reading-order.md)
 - [Seed 기반 읽기 경로 근거](seeded-reading-route-evidence.md)
