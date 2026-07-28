@@ -30,16 +30,20 @@ without unblocking the operator.
    returning no ids, paths, titles, facet values, or bodies.
 8. Require standard `zettels/<id>.md` canonical paths so one request never
    falls back to an archive-wide frontmatter scan.
-9. Defer the canonical writer and member removal to separate approval-gated
+9. Reject duplicate JSON request keys and duplicate YAML frontmatter mapping
+   keys instead of choosing one ambiguous value.
+10. Defer the canonical writer and member removal to separate approval-gated
    releases.
 
 ## Standards basis
 
-- RFC 5545 `VEVENT` supplies the stable identifier, summary, inclusive start,
-  and non-inclusive end boundary.
-- Schema.org `Event` confirms the identifier/name/start/end shape.
-- W3C PROV `wasGeneratedBy` is not reused because generation is stronger than
-  neutral event membership.
+- [RFC 5545](https://www.rfc-editor.org/rfc/rfc5545.html) `VEVENT` supplies
+  the stable identifier, summary, inclusive start, and non-inclusive end
+  boundary.
+- [Schema.org `Event`](https://schema.org/Event) confirms the
+  identifier/name/start/end shape.
+- [W3C PROV-O](https://www.w3.org/TR/prov-o/) `wasGeneratedBy` is not reused
+  because generation is stronger than neutral event membership.
 
 ## Consequences
 

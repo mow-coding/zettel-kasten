@@ -25,6 +25,8 @@ This project uses semantic versioning for public compatibility checkpoints.
 - Bound request, member count, per-canonical bytes, and total canonical bytes;
   require direct standard `zettels/<id>.md` live files, scan no unrelated
   frontmatter as fallback, and use no generated index.
+- Reject duplicate JSON request keys and duplicate YAML frontmatter mapping
+  keys instead of treating one ambiguous value as review evidence.
 - Extended AI command-path routing to
   `wom-kit/ai-command-path-routing/v0.3` with the official planning route and
   an explicit blocked writer/removal route that forbids direct canonical

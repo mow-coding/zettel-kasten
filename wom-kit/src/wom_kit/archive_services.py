@@ -2881,6 +2881,10 @@ ACTIVITY_GROUP_MEMBERSHIP_MAX_REQUEST_BYTES = 2 * 1024 * 1024
 ACTIVITY_GROUP_MEMBERSHIP_MAX_MEMBERS = 5000
 ACTIVITY_GROUP_MEMBERSHIP_MAX_CANONICAL_FILE_BYTES = 16 * 1024 * 1024
 ACTIVITY_GROUP_MEMBERSHIP_MAX_TOTAL_CANONICAL_BYTES = 256 * 1024 * 1024
+
+
+class ActivityGroupRequestDuplicateKeyError(ValueError):
+    """Static error for an ambiguous private activity-group JSON request."""
 ZET_REVISION_SYSTEM_MANAGED_FIELDS = (
     "id",
     "archive_id",
@@ -32357,8 +32361,26 @@ def _read_activity_group_request(
     ):
         blockers.append("request_file_changed_during_read")
         return b"", None
+    def reject_duplicate_pairs(
+        pairs: list[tuple[str, Any]],
+    ) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ActivityGroupRequestDuplicateKeyError(
+                    "activity_group_request_duplicate_key"
+                )
+            result[key] = value
+        return result
+
     try:
-        payload = json.loads(raw.decode("utf-8"))
+        payload = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=reject_duplicate_pairs,
+        )
+    except ActivityGroupRequestDuplicateKeyError:
+        blockers.append("request_json_duplicate_key")
+        return raw, None
     except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
         blockers.append("request_not_valid_utf8_json")
         return raw, None
@@ -32439,7 +32461,13 @@ def _parse_activity_group_canonical(
     if match is None:
         raise ArchiveServiceError("canonical_frontmatter_boundary_invalid")
     try:
-        frontmatter = load_yaml(match.group(1))
+        frontmatter = normalize_approval_json_tree(
+            load_approval_yaml_without_duplicate_keys(match.group(1))
+        )
+    except ApprovalYamlDuplicateKeyError as exc:
+        raise ArchiveServiceError(
+            "canonical_frontmatter_duplicate_key"
+        ) from exc
     except Exception as exc:
         raise ArchiveServiceError("canonical_frontmatter_yaml_invalid") from exc
     if not isinstance(frontmatter, dict):

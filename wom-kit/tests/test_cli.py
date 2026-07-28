@@ -48461,6 +48461,34 @@ archive_services.zet_abstract_backfill_recover(
                 member_blocked["blockers"],
             )
 
+            anchor_text = anchor_path.read_text(encoding="utf-8")
+            event_start_line = (
+                "  event_start: '2022-08-26T12:00:00+09:00'\n"
+            )
+            self.assertIn(event_start_line, anchor_text)
+            anchor_path.write_text(
+                anchor_text.replace(
+                    event_start_line,
+                    event_start_line
+                    + "  event_start: '2022-08-27T12:00:00+09:00'\n",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            duplicate_anchor = (
+                archive_services.activity_group_membership_plan(
+                    archive_root,
+                    request_path=request_relative,
+                    dry_run=True,
+                )
+            )
+            self.assertFalse(duplicate_anchor["ok"])
+            self.assertIn(
+                "canonical_frontmatter_duplicate_key",
+                duplicate_anchor["anchor"]["blocker_codes"],
+            )
+            self.assertEqual(duplicate_anchor["items"], [])
+
     def test_activity_group_membership_plan_rejects_untrusted_request_shape(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = Path(tmp) / "personal-archive"
@@ -48527,6 +48555,47 @@ archive_services.zet_abstract_backfill_recover(
             self.assertNotIn("PRIVATE_UNSUPPORTED_FIELD", serialized)
             self.assertNotIn("PRIVATE_SECRET_VALUE", serialized)
             self.assertNotIn(request_path.name, serialized)
+
+            request_path.write_text(
+                (
+                    "{"
+                    '"schema":"wom-kit/activity-group-membership-request/v0.1",'
+                    '"schema":"PRIVATE_DUPLICATE_SCHEMA",'
+                    '"archive_id":"archive:personal:activity-group-request-boundary",'
+                    '"anchor_zettel_id":"zet_private_duplicate_anchor",'
+                    '"member_zettel_ids":["zet_private_duplicate_member"]'
+                    "}"
+                ),
+                encoding="utf-8",
+            )
+            duplicate_request = (
+                archive_services.activity_group_membership_plan(
+                    archive_root,
+                    request_path=request_relative,
+                    dry_run=True,
+                )
+            )
+            self.assertFalse(duplicate_request["ok"])
+            self.assertIn(
+                "request_json_duplicate_key",
+                duplicate_request["blockers"],
+            )
+            duplicate_serialized = json.dumps(
+                duplicate_request,
+                ensure_ascii=False,
+            )
+            self.assertNotIn(
+                "PRIVATE_DUPLICATE_SCHEMA",
+                duplicate_serialized,
+            )
+            self.assertNotIn(
+                "zet_private_duplicate_anchor",
+                duplicate_serialized,
+            )
+            self.assertNotIn(
+                "zet_private_duplicate_member",
+                duplicate_serialized,
+            )
 
     def test_activity_group_membership_plan_enforces_byte_and_member_bounds(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

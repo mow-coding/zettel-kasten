@@ -80,6 +80,10 @@ unrelated zet frontmatter.
 The request is private working evidence. Do not commit it to a public
 repository.
 
+Duplicate JSON keys are ambiguous and block the request. Duplicate YAML mapping
+keys anywhere in anchor or member frontmatter also block the plan. WOM never
+chooses the first or last duplicate value as approval evidence.
+
 ## Command
 
 ```powershell
