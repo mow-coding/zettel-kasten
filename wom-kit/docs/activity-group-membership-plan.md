@@ -127,6 +127,10 @@ Member states:
 
 The result includes `review_plan_sha256`. That digest binds the request file,
 anchor hash, ordered member states, current hashes, and proposed hashes.
+`requested_member_count` always reports the original list length, while
+`valid_member_id_count` separately reports how many entries passed id and
+duplicate validation. An invalid list is never misleadingly summarized as an
+empty request.
 
 ## Bounds
 

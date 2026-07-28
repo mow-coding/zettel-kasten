@@ -32494,13 +32494,15 @@ def _activity_group_current_membership(
     if not isinstance(current, list) or not current:
         return "conflicting_current_shape", []
     normalized: list[str] = []
+    seen_memberships: set[str] = set()
     for value in current:
         if (
             not isinstance(value, str)
             or not ZETTEL_EDGE_ZETTEL_ID_RE.fullmatch(value)
-            or value in normalized
+            or value in seen_memberships
         ):
             return "conflicting_current_shape", []
+        seen_memberships.add(value)
         normalized.append(value)
     if anchor_zettel_id in normalized:
         return "already_member", normalized
@@ -32618,7 +32620,7 @@ def activity_group_membership_plan(
     if requested_max_members != effective_max_members:
         blockers.append("max_members_out_of_range")
 
-    normalized_request_path, request_file = _activity_group_request_path(
+    _normalized_request_path, request_file = _activity_group_request_path(
         root, request_path, blockers
     )
     request_bytes = b""
@@ -32644,6 +32646,7 @@ def activity_group_membership_plan(
 
     anchor_zettel_id: str | None = None
     member_zettel_ids: list[str] = []
+    requested_member_count = 0
     if request_doc is not None:
         allowed_fields = {
             "schema",
@@ -32666,6 +32669,8 @@ def activity_group_membership_plan(
         else:
             anchor_zettel_id = raw_anchor
         raw_members = request_doc.get("member_zettel_ids")
+        if isinstance(raw_members, list):
+            requested_member_count = len(raw_members)
         if not isinstance(raw_members, list) or not raw_members:
             blockers.append("member_zettel_ids_must_be_nonempty_list")
         elif len(raw_members) > effective_max_members:
@@ -32967,7 +32972,8 @@ def activity_group_membership_plan(
             ),
             "path_echoed": False,
             "bytes_read": len(request_bytes),
-            "member_count": len(member_zettel_ids),
+            "member_count": requested_member_count,
+            "valid_member_id_count": len(member_zettel_ids),
             "anchor_zettel_id_echoed": False,
             "member_zettel_ids_echoed": False,
             "contains_private_zettel_ids": True,
@@ -32976,7 +32982,8 @@ def activity_group_membership_plan(
         "anchor": anchor_result,
         "summary": {
             "complete": ready,
-            "requested_member_count": len(member_zettel_ids),
+            "requested_member_count": requested_member_count,
+            "valid_member_id_count": len(member_zettel_ids),
             "inspected_member_count": len(item_results),
             "ready_to_add_count": ready_to_add_count,
             "already_member_count": already_member_count,

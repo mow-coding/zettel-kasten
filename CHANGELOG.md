@@ -27,6 +27,8 @@ This project uses semantic versioning for public compatibility checkpoints.
   frontmatter as fallback, and use no generated index.
 - Reject duplicate JSON request keys and duplicate YAML frontmatter mapping
   keys instead of treating one ambiguous value as review evidence.
+- Report original requested-row and valid-id counts separately, and validate
+  existing membership-list duplicates in O(N).
 - Extended AI command-path routing to
   `wom-kit/ai-command-path-routing/v0.3` with the official planning route and
   an explicit blocked writer/removal route that forbids direct canonical

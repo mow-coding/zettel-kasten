@@ -49,6 +49,9 @@ without unblocking the operator.
 
 - N members need one anchor plus N facet values rather than N² pairwise edges.
 - One zet may belong to multiple events through a list value.
+- Existing list membership validation uses a set-backed O(N) duplicate check.
+- Original requested row count and valid-id count remain separate even on a
+  blocked request.
 - The plan is useful before a writer exists because it finds stale ids, invalid
   anchors, conflicting current shapes, byte drift, and privacy boundary
   failures.

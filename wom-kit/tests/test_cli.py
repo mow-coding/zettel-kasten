@@ -48254,6 +48254,9 @@ archive_services.zet_abstract_backfill_recover(
             )
             self.assertEqual(result["status"], "ready_for_human_review")
             self.assertEqual(result["summary"]["requested_member_count"], 3)
+            self.assertEqual(result["summary"]["valid_member_id_count"], 3)
+            self.assertEqual(result["request"]["member_count"], 3)
+            self.assertEqual(result["request"]["valid_member_id_count"], 3)
             self.assertEqual(result["summary"]["ready_to_add_count"], 2)
             self.assertEqual(result["summary"]["already_member_count"], 1)
             self.assertEqual(result["summary"]["blocked_member_count"], 0)
@@ -48551,6 +48554,16 @@ archive_services.zet_abstract_backfill_recover(
             self.assertIn("request_archive_id_mismatch", invalid["blockers"])
             self.assertIn("anchor_zettel_id_invalid", invalid["blockers"])
             self.assertIn("member_zettel_id_duplicate", invalid["blockers"])
+            self.assertEqual(invalid["request"]["member_count"], 2)
+            self.assertEqual(
+                invalid["request"]["valid_member_id_count"],
+                1,
+            )
+            self.assertEqual(invalid["summary"]["requested_member_count"], 2)
+            self.assertEqual(
+                invalid["summary"]["valid_member_id_count"],
+                1,
+            )
             serialized = json.dumps(invalid, ensure_ascii=False)
             self.assertNotIn("PRIVATE_UNSUPPORTED_FIELD", serialized)
             self.assertNotIn("PRIVATE_SECRET_VALUE", serialized)
