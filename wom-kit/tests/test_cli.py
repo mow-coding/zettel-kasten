@@ -33522,7 +33522,79 @@ archive_services.zet_title_remap_revert(
             self.assertFalse(
                 recovery_plan["cases"][0]["execution_implemented"]
             )
-            serialized = json.dumps(audit, ensure_ascii=False)
+            revert_recovery_plan = (
+                archive_services.zet_title_remap_revert_recovery_plan(
+                    archive_root,
+                    dry_run=True,
+                )
+            )
+            self.assertTrue(
+                revert_recovery_plan["ok"],
+                revert_recovery_plan,
+            )
+            self.assertEqual(
+                revert_recovery_plan["status"],
+                "ready_for_human_recovery_review",
+                revert_recovery_plan,
+            )
+            self.assertEqual(
+                revert_recovery_plan["schema"],
+                "wom-kit/zet-title-remap-revert-recovery-plan/v0.1",
+            )
+            self.assertEqual(
+                revert_recovery_plan["summary"][
+                    "revert_recovery_case_count"
+                ],
+                1,
+            )
+            self.assertEqual(
+                revert_recovery_plan["summary"][
+                    "participant_write_count_if_later_approved"
+                ],
+                1,
+            )
+            self.assertEqual(
+                revert_recovery_plan["summary"][
+                    "receipt_write_count_if_later_approved"
+                ],
+                1,
+            )
+            revert_case = revert_recovery_plan["cases"][0]
+            self.assertEqual(revert_case["operation"], "revert")
+            self.assertEqual(
+                revert_case["observed_state"],
+                "partially_reverted",
+            )
+            self.assertEqual(
+                revert_case["recommended_action"],
+                "resume_title_revert_forward_and_finalize_receipt",
+            )
+            self.assertTrue(revert_case["receipt_write_required"])
+            self.assertFalse(revert_case["execution_implemented"])
+            self.assertFalse(
+                revert_recovery_plan["execution_boundary"][
+                    "execution_implemented"
+                ]
+            )
+            self.assertEqual(
+                revert_recovery_plan["write_boundary"],
+                {
+                    "files_written": False,
+                    "files_deleted": False,
+                    "locks_created": False,
+                    "locks_deleted": False,
+                    "receipts_created": False,
+                    "receipts_modified": False,
+                    "canonical_zets_modified": False,
+                },
+            )
+            serialized = json.dumps(
+                {
+                    "audit": audit,
+                    "revert_recovery_plan": revert_recovery_plan,
+                },
+                ensure_ascii=False,
+            )
             for private_value in (
                 fixture["proposal_sha256"],
                 receipt_relative,
@@ -33536,6 +33608,401 @@ archive_services.zet_title_remap_revert(
                 ),
             ):
                 self.assertNotIn(private_value, serialized)
+
+    def test_zet_title_remap_revert_recovery_decision_maps_fixed_actions(
+        self,
+    ) -> None:
+        base_case = {
+            "operation": "revert",
+            "final_receipt_state": "absent",
+            "write_lock_state": "present_matching",
+            "issue_codes": [],
+        }
+        expected = {
+            "prepared": (
+                "cleanup_unstarted_title_revert_transaction_evidence",
+                "all_participants_remain_at_applied_hash",
+            ),
+            "partially_reverted": (
+                "resume_title_revert_forward_and_finalize_receipt",
+                "reviewed_revert_is_partially_complete_and_remaining_prior_bytes_are_reconstructible",
+            ),
+            "fully_reverted_receipt_missing": (
+                "finalize_title_revert_receipt",
+                "all_participants_reached_prior_hash_but_compensation_receipt_is_missing",
+            ),
+            "stale_completed": (
+                "cleanup_verified_completed_title_revert_evidence",
+                "verified_revert_receipt_committed_transaction_cleanup_did_not_finish",
+            ),
+            "divergent": (
+                "manual_forensic_hold",
+                "participant_or_source_receipt_state_is_missing_or_outside_recorded_hashes",
+            ),
+            "invalid": (
+                "manual_forensic_hold",
+                "revert_journal_contract_is_invalid",
+            ),
+        }
+        for state, expected_decision in expected.items():
+            with self.subTest(state=state):
+                self.assertEqual(
+                    archive_services.zet_title_remap_revert_recovery_decision(
+                        {**base_case, "observed_state": state}
+                    ),
+                    expected_decision,
+                )
+
+        self.assertEqual(
+            archive_services.zet_title_remap_revert_recovery_decision(
+                {
+                    **base_case,
+                    "observed_state": "fully_reverted_receipt_missing",
+                    "final_receipt_state": "present_unverified",
+                }
+            ),
+            (
+                "manual_forensic_hold",
+                "deterministic_revert_receipt_exists_but_lifecycle_is_unverified",
+            ),
+        )
+        self.assertEqual(
+            archive_services.zet_title_remap_revert_recovery_decision(
+                {
+                    **base_case,
+                    "observed_state": "partially_reverted",
+                    "issue_codes": [
+                        "title_transaction_before_snapshot_invalid"
+                    ],
+                }
+            ),
+            (
+                "manual_forensic_hold",
+                "one_or_more_prior_byte_snapshots_are_invalid",
+            ),
+        )
+        self.assertEqual(
+            archive_services.zet_title_remap_revert_recovery_decision(
+                {**base_case, "observed_state": "prepared"},
+                common_lock_invalid=True,
+            ),
+            (
+                "manual_forensic_hold",
+                "common_title_write_lock_is_orphaned_or_invalid",
+            ),
+        )
+        self.assertEqual(
+            archive_services.zet_title_remap_revert_recovery_decision(
+                {
+                    **base_case,
+                    "operation": "apply",
+                    "observed_state": "prepared",
+                }
+            ),
+            (
+                "manual_forensic_hold",
+                "case_is_not_a_title_revert_transaction",
+            ),
+        )
+
+    def test_zet_title_remap_revert_recovery_plan_maps_retained_lifecycle_states(
+        self,
+    ) -> None:
+        scenarios = {
+            "prepared": {
+                "exit_code": 94,
+                "action": (
+                    "cleanup_unstarted_title_revert_transaction_evidence"
+                ),
+                "participant_writes": 0,
+                "receipt_write": False,
+            },
+            "fully_reverted_receipt_missing": {
+                "exit_code": 95,
+                "action": "finalize_title_revert_receipt",
+                "participant_writes": 0,
+                "receipt_write": True,
+            },
+            "stale_completed": {
+                "exit_code": 96,
+                "action": (
+                    "cleanup_verified_completed_title_revert_evidence"
+                ),
+                "participant_writes": 0,
+                "receipt_write": False,
+            },
+        }
+        child_code = """
+import os
+import sys
+from pathlib import Path
+from wom_kit import archive_services
+
+mode = sys.argv[6]
+exit_code = int(sys.argv[7])
+real_write = archive_services.write_bytes_atomic
+real_json_write = archive_services.write_json_new_file
+real_unlink = Path.unlink
+
+if mode == "prepared":
+    def exit_before_first_canonical_write(path, value):
+        os._exit(exit_code)
+    archive_services.write_bytes_atomic = exit_before_first_canonical_write
+elif mode == "fully_reverted_receipt_missing":
+    def exit_before_revert_receipt(path, value):
+        if path.name.endswith(".zet-title-remap-revert.json"):
+            os._exit(exit_code)
+        return real_json_write(path, value)
+    archive_services.write_json_new_file = exit_before_revert_receipt
+elif mode == "stale_completed":
+    def exit_before_journal_cleanup(self, *args, **kwargs):
+        if self.name.endswith(".revert.transaction.json"):
+            os._exit(exit_code)
+        return real_unlink(self, *args, **kwargs)
+    Path.unlink = exit_before_journal_cleanup
+else:
+    raise RuntimeError("unsupported test mode")
+
+archive_services.zet_title_remap_revert(
+    Path(sys.argv[1]),
+    receipt_path=sys.argv[2],
+    expected_receipt_sha256=sys.argv[3],
+    expected_plan_digest=sys.argv[4],
+    max_items=2,
+    approve=True,
+    reviewed_by=sys.argv[5],
+    affirm_title_reversions_reviewed=True,
+    affirm_archive_quiescent=True,
+)
+"""
+        for mode, expected in scenarios.items():
+            with self.subTest(mode=mode):
+                with tempfile.TemporaryDirectory() as tmp:
+                    archive_root = self.copy_fake_archive(
+                        Path(tmp) / "archive"
+                    )
+                    fixture = self._create_title_remap_write_fixture(
+                        archive_root,
+                        count=2,
+                        proposal_name=f"revert-recovery-{mode}.jsonl",
+                    )
+                    applied = archive_services.zet_title_remap_write(
+                        archive_root,
+                        proposal_path=fixture["relative"],
+                        expected_proposal_sha256=fixture[
+                            "proposal_sha256"
+                        ],
+                        expected_plan_digest=fixture["plan_digest"],
+                        expected_write_plan_digest=fixture[
+                            "write_plan_digest"
+                        ],
+                        max_items=2,
+                        approve=True,
+                        reviewed_by="person:revert-recovery-source",
+                        affirm_titles_reviewed=True,
+                    )
+                    receipt_relative = applied["receipt"]["path"]
+                    receipt_path = archive_root.joinpath(
+                        *PurePosixPath(receipt_relative).parts
+                    )
+                    receipt_sha256 = (
+                        "sha256:"
+                        + hashlib.sha256(
+                            receipt_path.read_bytes()
+                        ).hexdigest()
+                    )
+                    revert_plan = (
+                        archive_services.zet_title_remap_revert_plan(
+                            archive_root,
+                            receipt_path=receipt_relative,
+                            expected_receipt_sha256=receipt_sha256,
+                            max_items=2,
+                            dry_run=True,
+                        )
+                    )
+                    child_env = os.environ.copy()
+                    child_env["PYTHONPATH"] = str(SRC_ROOT)
+                    child = subprocess.run(
+                        [
+                            sys.executable,
+                            "-c",
+                            child_code,
+                            str(archive_root),
+                            receipt_relative,
+                            receipt_sha256,
+                            revert_plan["plan_digest"],
+                            "person:revert-recovery-reviewer",
+                            mode,
+                            str(expected["exit_code"]),
+                        ],
+                        cwd=KIT_ROOT,
+                        env=child_env,
+                        capture_output=True,
+                        text=True,
+                        timeout=30,
+                    )
+                    self.assertEqual(
+                        child.returncode,
+                        expected["exit_code"],
+                        child.stderr,
+                    )
+                    plan = (
+                        archive_services.zet_title_remap_revert_recovery_plan(
+                            archive_root,
+                            dry_run=True,
+                        )
+                    )
+                    self.assertTrue(plan["ok"], plan)
+                    self.assertEqual(
+                        plan["status"],
+                        "ready_for_human_recovery_review",
+                        plan,
+                    )
+                    self.assertEqual(len(plan["cases"]), 1, plan)
+                    case = plan["cases"][0]
+                    self.assertEqual(case["operation"], "revert")
+                    self.assertEqual(
+                        case["observed_state"],
+                        mode,
+                    )
+                    self.assertEqual(
+                        case["recommended_action"],
+                        expected["action"],
+                    )
+                    self.assertEqual(
+                        case["participant_write_count"],
+                        expected["participant_writes"],
+                    )
+                    self.assertEqual(
+                        case["receipt_write_required"],
+                        expected["receipt_write"],
+                    )
+                    self.assertFalse(case["execution_implemented"])
+                    self.assertFalse(
+                        plan["execution_boundary"][
+                            "execution_implemented"
+                        ]
+                    )
+                    old_plan = (
+                        archive_services.zet_title_remap_recovery_plan(
+                            archive_root,
+                            dry_run=True,
+                        )
+                    )
+                    self.assertEqual(
+                        old_plan["cases"][0]["recommended_action"],
+                        "manual_forensic_hold",
+                    )
+                    if mode == "prepared":
+                        write_lock = (
+                            archive_root
+                            / ".wom-scratch"
+                            / "title-remap"
+                            / ".title-remap.write.lock"
+                        )
+                        write_lock.unlink()
+                        missing_lock_plan = (
+                            archive_services.zet_title_remap_revert_recovery_plan(
+                                archive_root,
+                                dry_run=True,
+                            )
+                        )
+                        self.assertTrue(
+                            missing_lock_plan["ok"],
+                            missing_lock_plan,
+                        )
+                        self.assertEqual(
+                            missing_lock_plan["cases"][0][
+                                "recommended_action"
+                            ],
+                            expected["action"],
+                        )
+                        self.assertTrue(
+                            missing_lock_plan["cases"][0][
+                                "lock_reacquisition_required"
+                            ]
+                        )
+                        self.assertFalse(write_lock.exists())
+                    serialized = json.dumps(
+                        plan,
+                        ensure_ascii=False,
+                    )
+                    for private_value in (
+                        fixture["proposal_sha256"],
+                        receipt_relative,
+                        *(
+                            str(row["zettel_id"])
+                            for row in fixture["rows"]
+                        ),
+                        *(
+                            str(row["title"])
+                            for row in fixture["rows"]
+                        ),
+                    ):
+                        self.assertNotIn(private_value, serialized)
+
+    def test_zet_title_remap_revert_recovery_plan_requires_dry_run_and_is_read_only(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            before = self.snapshot_archive_files(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "zet-title-remap-revert-recovery-plan",
+                    str(archive_root),
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 1)
+            self.assertIn("requires --dry-run", output)
+
+            code, output = self.run_cli(
+                [
+                    "title-remap-revert-recovery-plan",
+                    str(archive_root),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["status"], "no_recovery_needed")
+            self.assertEqual(
+                result["schema"],
+                "wom-kit/zet-title-remap-revert-recovery-plan/v0.1",
+            )
+            self.assertEqual(
+                result["summary"]["revert_recovery_case_count"],
+                0,
+            )
+            self.assertEqual(
+                result["summary"]["apply_recovery_case_count"],
+                0,
+            )
+            self.assertRegex(
+                result["source_audit_digest"],
+                r"^sha256:[0-9a-f]{64}$",
+            )
+            self.assertRegex(
+                result["plan_digest"],
+                r"^sha256:[0-9a-f]{64}$",
+            )
+            self.assertFalse(
+                result["execution_boundary"]["execution_implemented"]
+            )
+            self.assertEqual(
+                result["write_boundary"]["files_written"],
+                False,
+            )
+            self.assertEqual(
+                self.snapshot_archive_files(archive_root),
+                before,
+            )
 
     def test_zet_title_remap_write_requires_every_approval_binding_before_snapshots(
         self,

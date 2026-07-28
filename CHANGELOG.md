@@ -6,6 +6,24 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.275 - 2026-07-28
+
+- Added read-only `zet-title-remap-revert-recovery-plan` and alias
+  `title-remap-revert-recovery-plan`.
+- Reuse the complete bounded title apply/revert receipt, journal, snapshot,
+  canonical-hash, and common-lock audit.
+- Map retained revert journals to one fixed decision: clean an unstarted
+  transaction, continue a partial reviewed compensation toward verified prior
+  bytes and later finalize its receipt, finalize a missing receipt after all
+  prior bytes are restored, clean exact verified completed residue, or hold
+  unsafe evidence for manual forensics.
+- Return only content-free case and complete-plan digests, counts, fixed
+  codes, and boolean future requirements.
+- Keep every action non-executable and keep the older interrupted-apply
+  recovery planner/executor closed to revert journals.
+- Write or delete no canonical zet, receipt, journal, lock, snapshot, or
+  manifest; call no provider/model and expose no MCP method.
+
 ## v0.3.274 - 2026-07-28
 
 - Added approval-gated `zet-title-remap-revert` and alias

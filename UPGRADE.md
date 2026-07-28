@@ -24,6 +24,31 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.275 Read-Only Title Revert Recovery Plan
+
+No archive migration is required. If a v0.3.274 or later title compensation
+was interrupted by a process kill, shutdown, or power loss, preserve its
+private revert journal, common lock, canonical participants, source and revert
+receipts, and every prior-byte snapshot. Then run:
+
+```powershell
+archive zet-title-remap-revert-recovery-plan <archive-root> --dry-run --format json
+```
+
+The command reruns the complete bounded title evidence audit and maps only
+revert journals to one fixed decision: clean unstarted evidence, continue the
+already reviewed compensation direction and finalize its receipt, finalize a
+missing receipt after every participant reached its prior bytes, clean exact
+verified completed residue, or `manual_forensic_hold`.
+
+This command writes and deletes nothing. Every returned case has
+`execution_implemented: false` and `safe_to_execute_now: false`. Do not pass a
+revert case to the older interrupted-apply recovery executor. A missing common
+lock is only reported as a later reacquisition requirement; it is not silently
+created. v0.3.275 does not restore bytes, finalize a receipt, or clean
+evidence. See
+[`wom-kit/docs/zet-title-remap-revert-recovery-plan.md`](wom-kit/docs/zet-title-remap-revert-recovery-plan.md).
+
 ## v0.3.274 Approval-Gated Completed Title Revert
 
 No archive migration is required. First rerun and review the complete

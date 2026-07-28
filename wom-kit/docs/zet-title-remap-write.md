@@ -1,6 +1,6 @@
 # Approved zet Title Remap Write
 
-Status: v0.3.269 approval-gated title-only write
+Status: v0.3.275 approval-gated title-only write and recovery boundary
 
 Use this command only after `zet-title-remap-plan` reports every row as ready
 and a human has compared every proposed title with its source record.
@@ -130,7 +130,9 @@ POSIX, so this is not a claim of power-loss-proof storage.
 ## Current Boundary
 
 The v0.3.269 writer, v0.3.270 auditor, v0.3.271 recovery planner, v0.3.272
-single-case executor, and v0.3.273 completed-receipt revert planner implement:
+single-case executor, v0.3.273 completed-receipt revert planner, v0.3.274
+approved revert writer, and v0.3.275 read-only revert recovery planner
+implement:
 
 - read-only title proposal planning;
 - approval-gated title-only batch write;
@@ -154,11 +156,14 @@ completed-receipt compensation:
 - caught-failure rollback to exact applied bytes;
 - retained revert journal diagnosis after a hard exit.
 
-It does not yet implement automatic recovery for a revert transaction left by
-a process kill or power interruption.
+v0.3.275 maps a complete retained revert transaction to one fixed read-only
+decision. It does not yet implement automatic or approval-gated execution of
+that decision.
 
 See [zet Title Remap Receipt And Interruption Audit](zet-title-remap-receipt-audit.md)
 and [zet Title Remap Recover](zet-title-remap-recover.md).
 For the completed-receipt review boundary, see
 [zet Title Remap Completed-Receipt Revert Plan](zet-title-remap-revert-plan.md)
-and [Approved zet Title Remap Revert](zet-title-remap-revert.md).
+and [Approved zet Title Remap Revert](zet-title-remap-revert.md), then use the
+[zet Title Remap Revert Recovery Plan](zet-title-remap-revert-recovery-plan.md)
+only for retained hard-exit revert evidence.

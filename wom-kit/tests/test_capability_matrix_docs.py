@@ -8080,14 +8080,6 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         release_text = (
             KIT_ROOT / "docs" / "releases" / "v0.3.274.md"
         ).read_text(encoding="utf-8")
-        packaged_release_text = (
-            KIT_ROOT
-            / "src"
-            / "wom_kit"
-            / "_resources"
-            / "release-notes"
-            / "v0.3.274.md"
-        ).read_text(encoding="utf-8")
         decision_text = (
             KIT_ROOT
             / "docs"
@@ -8179,7 +8171,6 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "title_revert_hard_exit_recovery_not_implemented",
             recovery_plan_text,
         )
-        self.assertEqual(packaged_release_text, release_text)
         self.assertIn(
             "[Approved zet Title Remap Revert]",
             public_map_text,
@@ -8191,14 +8182,111 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         for text in (
             root_readme_text,
             root_readme_ko_text,
-            kit_readme_text,
             upgrade_text,
             upgrade_ko_text,
         ):
             with self.subTest(document="public-version-surface"):
                 self.assertIn("v0.3.274", text)
+
+    def test_v03275_title_remap_revert_recovery_plan_docs_match_read_only_contract(
+        self,
+    ) -> None:
+        guide_text = (
+            KIT_ROOT / "docs" / "zet-title-remap-revert-recovery-plan.md"
+        ).read_text(encoding="utf-8")
+        release_text = (
+            KIT_ROOT / "docs" / "releases" / "v0.3.275.md"
+        ).read_text(encoding="utf-8")
+        packaged_release_text = (
+            KIT_ROOT
+            / "src"
+            / "wom_kit"
+            / "_resources"
+            / "release-notes"
+            / "v0.3.275.md"
+        ).read_text(encoding="utf-8")
+        decision_text = (
+            KIT_ROOT
+            / "docs"
+            / "archive-infra-decision-log-2026-07-28-v03275-title-remap-revert-recovery-plan.md"
+        ).read_text(encoding="utf-8")
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        apply_plan_text = (
+            KIT_ROOT / "docs" / "zet-title-remap-recovery-plan.md"
+        ).read_text(encoding="utf-8")
+        apply_executor_text = (
+            KIT_ROOT / "docs" / "zet-title-remap-recover.md"
+        ).read_text(encoding="utf-8")
+        root_readme_text = (REPO_ROOT / "README.md").read_text(
+            encoding="utf-8"
+        )
+        root_readme_ko_text = (REPO_ROOT / "README.ko.md").read_text(
+            encoding="utf-8"
+        )
+        kit_readme_text = (KIT_ROOT / "README.md").read_text(
+            encoding="utf-8"
+        )
+        upgrade_text = (REPO_ROOT / "UPGRADE.md").read_text(
+            encoding="utf-8"
+        )
+        upgrade_ko_text = (REPO_ROOT / "UPGRADE.ko.md").read_text(
+            encoding="utf-8"
+        )
+        public_map_text = (
+            KIT_ROOT / "docs" / "public-documentation-map.md"
+        ).read_text(encoding="utf-8")
+        public_map_ko_text = (
+            KIT_ROOT / "docs" / "public-documentation-map.ko.md"
+        ).read_text(encoding="utf-8")
+
+        for text in (guide_text, release_text, decision_text, matrix_text):
+            with self.subTest(document="revert-recovery-plan-contract"):
+                self.assertIn(
+                    "zet-title-remap-revert-recovery-plan",
+                    text,
+                )
+                self.assertIn("--dry-run", text)
+                self.assertIn("manual_forensic_hold", text)
+                self.assertIn("execution_implemented", text)
+                self.assertIn("safe_to_execute_now", text)
+                self.assertTrue(
+                    "read-only" in text.lower()
+                    or "writes/deletes nothing" in text.lower()
+                )
+
+        for action in (
+            "cleanup_unstarted_title_revert_transaction_evidence",
+            "resume_title_revert_forward_and_finalize_receipt",
+            "finalize_title_revert_receipt",
+            "cleanup_verified_completed_title_revert_evidence",
+        ):
+            with self.subTest(action=action):
+                self.assertIn(action, guide_text)
+                self.assertIn(action, release_text)
+                self.assertIn(action, matrix_text)
+
+        self.assertIn("title_revert_hard_exit_recovery_not_implemented", apply_plan_text)
+        self.assertIn("never executes or cleans a retained revert journal", apply_executor_text)
         self.assertIn(
-            "releases/download/v0.3.274/wom_kit-0.3.274-py3-none-any.whl",
+            "[zet Title Remap Revert Recovery Plan]",
+            public_map_text,
+        )
+        self.assertIn(
+            "(zet-title-remap-revert-recovery-plan.md)",
+            public_map_ko_text,
+        )
+        self.assertEqual(packaged_release_text, release_text)
+        for text in (
+            root_readme_text,
+            root_readme_ko_text,
+            kit_readme_text,
+            upgrade_text,
+            upgrade_ko_text,
+        ):
+            with self.subTest(document="v03275-public-version-surface"):
+                self.assertIn("v0.3.275", text)
+        self.assertIn(
+            "releases/download/v0.3.275/wom_kit-0.3.275-py3-none-any.whl",
             root_readme_text,
         )
 
