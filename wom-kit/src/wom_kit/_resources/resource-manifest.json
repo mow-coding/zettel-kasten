@@ -1,6 +1,6 @@
 {
   "schema": "wom-kit/package-resource-manifest/v0.1",
-  "version": "0.3.279",
+  "version": "0.3.280",
   "source_of_truth": "wom-kit source resource directories",
   "file_count": 97,
   "files": [
@@ -289,8 +289,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/SKILL.md",
       "packaged": "templates/ai-runtime/wom-archive/SKILL.md",
-      "bytes": 6034,
-      "sha256": "00a22397b24688e2b59f782f15ff4a6ede5aa7b346ae5967b5aa70ffe441bd9d"
+      "bytes": 6348,
+      "sha256": "3ade297da83fa3e768ddc95a1a7b7d8f2046367cc81354b31688bf6d38aec86f"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/capture-draft-and-publication.md",
@@ -313,8 +313,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/references/reading-memory-and-revision.md",
       "packaged": "templates/ai-runtime/wom-archive/references/reading-memory-and-revision.md",
-      "bytes": 5382,
-      "sha256": "e4c3056cf56b9646e1c3cbf245059a676a6edbba7ed0682231a6ec07a4878952"
+      "bytes": 6045,
+      "sha256": "015c3f9fd8e360786dacf1d16e3e1cb6762aa83f2cb423d94c6a7006b493291f"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/safety-results-and-human-language.md",
@@ -571,8 +571,8 @@
     {
       "source": "zettel-kasten/types.yml",
       "packaged": "zettel-kasten/types.yml",
-      "bytes": 15129,
-      "sha256": "2c6acb7b5eaa7c26c0811f7f019f578bcc502b30a36ad83a17022984eb2e49cf"
+      "bytes": 15167,
+      "sha256": "b70dd2d494278e52760f973e9b7a856e5982c0dd03b4338619b7f2309ef6c9e1"
     },
     {
       "source": "zettel-kasten/zettel-rules.yml",
@@ -581,10 +581,10 @@
       "sha256": "d619dc26af3216498c8392dfe838b0fe752d4bad9da998a58ca682d668fc510c"
     },
     {
-      "source": "docs/releases/v0.3.279.md",
-      "packaged": "release-notes/v0.3.279.md",
-      "bytes": 1929,
-      "sha256": "ebf050f119e10ddae951c22de627281b37250fb60d1868215cee3d55a7a99ee3"
+      "source": "docs/releases/v0.3.280.md",
+      "packaged": "release-notes/v0.3.280.md",
+      "bytes": 2355,
+      "sha256": "04d6ce246e1aa07f4aa6693b917fd4692c6df335872866a77ce6ebd1b874e9f3"
     }
   ]
 }

@@ -11854,6 +11854,82 @@ def command_inbox_pipeline_audit(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 1
 
 
+def command_activity_group_membership_plan(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print(
+            "activity-group-membership-plan is read-only and requires --dry-run.",
+            file=sys.stderr,
+        )
+        return 1
+    reporter = CommandProgressReporter(
+        bool(getattr(args, "progress", False)),
+        label="activity-group-membership-plan",
+    )
+    try:
+        result = archive_services.activity_group_membership_plan(
+            Path(args.archive_root),
+            request_path=args.request,
+            dry_run=True,
+            max_members=int(args.max_members),
+            progress_callback=reporter.progress,
+        )
+    except archive_services.ArchiveServiceError:
+        print(
+            "activity-group-membership-plan could not inspect the archive safely.",
+            file=sys.stderr,
+        )
+        return 1
+    except (ArchivePathError, OSError, UnicodeError, ValueError):
+        print(
+            "activity-group-membership-plan failed before a privacy-safe result could be produced.",
+            file=sys.stderr,
+        )
+        return 1
+    finally:
+        reporter.close()
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        summary = (
+            result.get("summary")
+            if isinstance(result.get("summary"), dict)
+            else {}
+        )
+        print(
+            "WOM activity-group membership plan: "
+            + str(result.get("status") or "unknown")
+        )
+        print(
+            "Members ready to add: "
+            + str(summary.get("ready_to_add_count", 0))
+        )
+        print(
+            "Members already present: "
+            + str(summary.get("already_member_count", 0))
+        )
+        print(
+            "Blocked members: "
+            + str(summary.get("blocked_member_count", 0))
+        )
+        print(
+            "Review plan SHA-256: "
+            + str(result.get("review_plan_sha256") or "unavailable")
+        )
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+        print("Next safe actions:")
+        for action in result.get("next_safe_actions", []):
+            print(f"- {action}")
+    return 0 if result.get("ok") else 1
+
+
 def command_block_header(args: argparse.Namespace) -> int:
     try:
         result = archive_services.block_header_preview(
@@ -23126,6 +23202,52 @@ def build_parser() -> argparse.ArgumentParser:
         help="Output format.",
     )
     inbox_pipeline_audit.set_defaults(func=command_inbox_pipeline_audit)
+
+    activity_group_membership_plan = subcommands.add_parser(
+        "activity-group-membership-plan",
+        aliases=["event-group-membership-plan"],
+        help=(
+            "Validate an explicit private event anchor and canonical member "
+            "list without inferring membership or writing zettels."
+        ),
+    )
+    activity_group_membership_plan.add_argument(
+        "archive_root",
+        help="Archive root containing the exact canonical anchor and members.",
+    )
+    activity_group_membership_plan.add_argument(
+        "--request",
+        required=True,
+        help=(
+            "Archive-relative JSON request under "
+            ".wom-scratch/private/activity-groups/."
+        ),
+    )
+    activity_group_membership_plan.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Required. Validate exact live canonical bytes and write nothing.",
+    )
+    activity_group_membership_plan.add_argument(
+        "--max-members",
+        type=int,
+        default=archive_services.ACTIVITY_GROUP_MEMBERSHIP_MAX_MEMBERS,
+        help="Maximum explicit member ids to validate (1-5000).",
+    )
+    activity_group_membership_plan.add_argument(
+        "--progress",
+        action="store_true",
+        help="Stream content-free request/member counts to stderr.",
+    )
+    activity_group_membership_plan.add_argument(
+        "--format",
+        choices=["text", "json"],
+        default="json",
+        help="Output format.",
+    )
+    activity_group_membership_plan.set_defaults(
+        func=command_activity_group_membership_plan
+    )
 
     promote = subcommands.add_parser("promote", help="Legacy: check whether a draft zettel can be promoted.")
     promote.add_argument("archive_root", help="Archive root to inspect.")

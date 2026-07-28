@@ -27,6 +27,20 @@ archive inbox-pipeline-audit <archive-root> --dry-run --format json
 `insufficient_evidence` must remain uncertain. Do not rewrite or delete a
 draft to silence the audit.
 
+To validate one human-selected event anchor and exact member set before any
+future write, use:
+
+```text
+archive activity-group-membership-plan <archive-root> --request .wom-scratch/private/activity-groups/<reviewed>.json --dry-run --progress --format json
+```
+
+The request is private review evidence. Search can help a human find
+candidates, but the command must not convert search results, titles, dates,
+nearby files, or existing edges into membership. Treat `activity_group` as
+neutral co-membership, not sequence, source, derivation, continuation, or
+containment. v0.3.280 has no writer or member-removal mode; never hand-edit
+canonical zets to imitate one.
+
 ## Read Abstracts Before Full Bodies
 
 Check first-read readiness:

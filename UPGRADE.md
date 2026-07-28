@@ -24,6 +24,31 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.280 Read-Only Activity-Group Membership Plan
+
+No archive migration is required. v0.3.280 does not automatically add or
+remove any facet. After a human has selected one canonical event anchor and
+its exact canonical members, store the private request under
+`.wom-scratch/private/activity-groups/` and run:
+
+```powershell
+archive activity-group-membership-plan <archive-root> `
+  --request .wom-scratch/private/activity-groups/reviewed.json `
+  --dry-run --progress --format json
+```
+
+The anchor must be a canonical `record_note` whose facets include
+`record_type: event` and an ISO 8601 `event_start`; a compatible later
+`event_end` is optional. The member list is explicit and ordered. WOM does not
+infer membership from search results, titles, dates, nearby files, or edges.
+
+Review `ready_to_add`, `already_member`, and content-free `blocked` rows plus
+the bound `review_plan_sha256`. Output omits request paths, zettel ids, zettel
+paths, titles, facet values, and body text. This release has no write mode.
+Keep the private request out of the public repository and do not manually
+rewrite canonical files to imitate a future writer. See
+[`wom-kit/docs/activity-group-membership-plan.md`](wom-kit/docs/activity-group-membership-plan.md).
+
 ## v0.3.279 Read-Only Inbox Pipeline Audit
 
 No archive migration is required. To look for AI-declared inbox drafts whose

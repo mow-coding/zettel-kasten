@@ -6,6 +6,38 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.280 - 2026-07-29
+
+- Added CLI-only read-only `activity-group-membership-plan` with alias
+  `event-group-membership-plan`.
+- Accept only one bounded private request containing an explicit human-selected
+  event anchor and ordered canonical member ids; infer no member from search,
+  title, time, proximity, or existing edges.
+- Validate an event `record_note` anchor with `record_type: event`, title,
+  inclusive ISO 8601 `event_start`, and optional compatible non-inclusive
+  `event_end`.
+- Model neutral many-to-one membership through `facets.activity_group`, with a
+  list permitted for zets that belong to multiple events and no source,
+  derivation, continuation, sequence, or containment implication.
+- Bind exact request, anchor, member-state, current-hash, and proposed-hash
+  evidence into `review_plan_sha256` without returning ids, paths, titles,
+  facet values, or body text.
+- Bound request, member count, per-canonical bytes, and total canonical bytes;
+  require direct standard `zettels/<id>.md` live files, scan no unrelated
+  frontmatter as fallback, and use no generated index.
+- Reject duplicate JSON request keys and duplicate YAML frontmatter mapping
+  keys instead of treating one ambiguous value as review evidence.
+- Report original requested-row and valid-id counts separately, and validate
+  existing membership-list duplicates in O(N).
+- Extended AI command-path routing to
+  `wom-kit/ai-command-path-routing/v0.3` with the official planning route and
+  an explicit blocked writer/removal route that forbids direct canonical
+  edits.
+- Added `event_start` and `event_end` to the facet vocabulary and classified
+  event membership fields as navigation facets.
+- Added no writer, removal, archive mutation, provider/model/network/index/
+  database/credential-store call, or MCP surface.
+
 ## v0.3.279 - 2026-07-29
 
 - Added CLI-only read-only `inbox-pipeline-audit` with alias
