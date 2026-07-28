@@ -6,6 +6,23 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.271 - 2026-07-28
+
+- Added read-only `zet-title-remap-recovery-plan` and alias
+  `title-remap-recovery-plan`.
+- Reuse the complete bounded title receipt/journal/lock audit and block if the
+  source audit or recovery case set is incomplete.
+- Map prepared transactions to unstarted-evidence cleanup, uncommitted partial
+  or fully applied transactions to prior-byte rollback, verified completed
+  residue to evidence cleanup, and invalid/divergent evidence to a forensic
+  hold.
+- Return only content-free case handles, counts, fixed action/reason codes,
+  source audit digest, and complete plan digest.
+- Distinguish an absent common lock that a later approved executor must
+  reacquire from an invalid present lock that must be preserved.
+- Plan calls write and delete nothing, call no provider/model, expose no MCP
+  method, and do not execute recovery or revert completed title changes.
+
 ## v0.3.270 - 2026-07-28
 
 - Added read-only `zet-title-remap-receipt-audit` and alias

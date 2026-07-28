@@ -1,6 +1,6 @@
 # Reviewed zet Title Remap Plan
 
-Status: v0.3.270 read-only title proposal validation before approved write and evidence audit
+Status: v0.3.271 read-only title proposal validation before approved write, evidence audit, and recovery decision
 
 Use this command after `zet-title-readiness` finds a canonical zet whose title
 is an imported identifier:
