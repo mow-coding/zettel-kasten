@@ -24,6 +24,38 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.276 Approval-Gated Title Revert Recovery
+
+No archive migration is required. If
+`zet-title-remap-revert-recovery-plan --dry-run` reports a complete
+non-forensic case, first rerun the new executor with the exact case SHA-256,
+complete plan digest, fixed action, and `--dry-run`.
+
+Approve only after the original revert process has stopped, all title writers
+and editors are quiescent, and a human has reviewed the fresh state:
+
+```powershell
+archive zet-title-remap-revert-recover <archive-root> `
+  --case-sha256 sha256:<case> `
+  --expected-plan-digest sha256:<plan> `
+  --expected-action <action> `
+  --approve `
+  --reviewed-by person:<reviewer> `
+  --affirm-recovery-reviewed `
+  --affirm-archive-quiescent `
+  --format json
+```
+
+Do not pass a revert case to the older `zet-title-remap-recover`, hand-edit
+the private journal, or delete snapshots to clear a warning. After any
+incomplete run, generate a new plan and approval; a stale plan is intentionally
+rejected. `manual_forensic_hold` remains non-executable.
+
+The deterministic compensation receipt preserves the original revert
+authorization. v0.3.276 does not persist the new recovery approval in a second
+receipt. See
+[`wom-kit/docs/zet-title-remap-revert-recover.md`](wom-kit/docs/zet-title-remap-revert-recover.md).
+
 ## v0.3.275 Read-Only Title Revert Recovery Plan
 
 No archive migration is required. If a v0.3.274 or later title compensation

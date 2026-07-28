@@ -19,8 +19,9 @@ It does not:
 
 Since v0.3.274 completed-title revert is a separate command. This interrupted
 apply executor still never executes or cleans a retained revert journal.
-v0.3.275 adds a separate read-only decision plan for those journals, not new
-authority for this executor.
+v0.3.275 adds a separate read-only decision plan for those journals and
+v0.3.276 adds a separate revert recovery executor. Neither adds revert
+authority to this interrupted-apply executor.
 
 ## Preview
 
