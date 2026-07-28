@@ -1,6 +1,6 @@
 # zet Title Remap Completed-Receipt Revert Plan
 
-Status: v0.3.273 read-only completed-title compensation planning
+Status: v0.3.275 read-only completed-title compensation planning and recovery-plan handoff
 
 ## Command
 
@@ -86,12 +86,15 @@ private transaction journal, restores only verified prior bytes, preserves the
 source receipt, and creates a separate immutable text-free revert receipt.
 
 See [Approved zet Title Remap Revert](zet-title-remap-revert.md) for the
-approval command. v0.3.274 diagnoses but does not recover a revert transaction
-left by a process kill or power interruption.
+approval command. Since v0.3.275 a separate read-only
+[zet Title Remap Revert Recovery Plan](zet-title-remap-revert-recovery-plan.md)
+maps a complete transaction left by a process kill or power interruption to
+one fixed non-executable decision.
 
 See also:
 
 - [Approved zet Title Remap Write](zet-title-remap-write.md)
 - [Approved zet Title Remap Revert](zet-title-remap-revert.md)
+- [zet Title Remap Revert Recovery Plan](zet-title-remap-revert-recovery-plan.md)
 - [zet Title Remap Receipt And Interruption Audit](zet-title-remap-receipt-audit.md)
 - [zet Title Remap Recover](zet-title-remap-recover.md)

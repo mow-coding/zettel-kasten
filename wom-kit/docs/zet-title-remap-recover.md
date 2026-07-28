@@ -19,6 +19,8 @@ It does not:
 
 Since v0.3.274 completed-title revert is a separate command. This interrupted
 apply executor still never executes or cleans a retained revert journal.
+v0.3.275 adds a separate read-only decision plan for those journals, not new
+authority for this executor.
 
 ## Preview
 
@@ -122,3 +124,4 @@ See also:
 - [zet Title Remap Write](zet-title-remap-write.md)
 - [zet Title Remap Completed-Receipt Revert Plan](zet-title-remap-revert-plan.md)
 - [Approved zet Title Remap Revert](zet-title-remap-revert.md)
+- [zet Title Remap Revert Recovery Plan](zet-title-remap-revert-recovery-plan.md)
