@@ -24,6 +24,28 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.271 Read-Only Title Recovery Plan
+
+No archive migration is required. After running the v0.3.270 evidence audit,
+use the new read-only plan for retained title-remap transaction journals:
+
+```powershell
+archive zet-title-remap-recovery-plan <archive-root> --dry-run --format json
+```
+
+The plan maps each complete retained case to one fixed action: cleanup of an
+unstarted transaction, rollback of an uncommitted partial or fully applied
+title batch to verified prior bytes, cleanup of exact verified completed
+residue, or `manual_forensic_hold`. It blocks if the source audit or returned
+case set is incomplete.
+
+The command writes and deletes nothing. Its action is a review decision, not
+authority to edit the archive. Preserve every receipt, journal, common lock,
+and prior-byte snapshot. v0.3.271 does not execute recovery and does not revert
+a completed title receipt. Keep v0.3.271 or newer when reviewing this plan.
+See
+[`wom-kit/docs/zet-title-remap-recovery-plan.md`](wom-kit/docs/zet-title-remap-recovery-plan.md).
+
 ## v0.3.270 Read-Only Title Evidence Audit
 
 No archive migration is required. v0.3.270 understands the v0.3.269
@@ -71,9 +93,10 @@ hand-edit those retained files.
 
 v0.3.269 records interruption evidence but does not itself audit,
 automatically recover, or revert title-remap batches. v0.3.270 adds the
-read-only audit; recovery and revert remain later work. Older WOM-kit versions
+read-only audit and v0.3.271 adds a read-only fixed recovery decision; recovery
+execution and completed-title revert remain later work. Older WOM-kit versions
 can still read successfully changed canonical Markdown, but they do not
-understand the new receipt/journal evidence. Keep v0.3.270 or newer for this
+understand the new receipt/journal evidence. Keep v0.3.271 or newer for this
 workflow. See
 [`wom-kit/docs/zet-title-remap-write.md`](wom-kit/docs/zet-title-remap-write.md).
 

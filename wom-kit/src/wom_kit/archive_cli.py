@@ -9481,6 +9481,92 @@ def command_zet_title_remap_receipt_audit(
     return 0 if result.get("ok") else 1
 
 
+def command_zet_title_remap_recovery_plan(
+    args: argparse.Namespace,
+) -> int:
+    if not args.dry_run:
+        print(
+            "zet-title-remap-recovery-plan is read-only and requires --dry-run.",
+            file=sys.stderr,
+        )
+        return 1
+    reporter = CommandProgressReporter(
+        bool(getattr(args, "progress", False)),
+        label="zet-title-remap-recovery-plan",
+        stage_order=(
+            "title-remap-receipt-audit",
+            "title-remap-journal-audit",
+        ),
+    )
+    try:
+        result = archive_services.zet_title_remap_recovery_plan(
+            Path(args.archive_root),
+            dry_run=True,
+            max_receipts=int(args.max_receipts),
+            max_journals=int(args.max_journals),
+            max_cases=int(args.max_cases),
+            progress_callback=reporter.progress,
+        )
+    except archive_services.ArchiveServiceError:
+        print(
+            "zet-title-remap-recovery-plan could not inspect the private title recovery evidence safely.",
+            file=sys.stderr,
+        )
+        return 1
+    except (
+        ArchivePathError,
+        OSError,
+        UnicodeError,
+        ValueError,
+        RecursionError,
+    ):
+        print(
+            "zet-title-remap-recovery-plan failed before a privacy-safe result could be produced.",
+            file=sys.stderr,
+        )
+        return 1
+    except Exception:
+        print(
+            "zet-title-remap-recovery-plan failed before a privacy-safe result could be produced.",
+            file=sys.stderr,
+        )
+        return 1
+    finally:
+        reporter.close()
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        summary = (
+            result.get("summary")
+            if isinstance(result.get("summary"), dict)
+            else {}
+        )
+        print(
+            "WOM zet title remap recovery plan: "
+            f"{result.get('status') or 'unknown'}"
+        )
+        print(
+            "Retained journals: "
+            f"{summary.get('transaction_journal_count', 0)}"
+        )
+        print(f"Recovery cases: {summary.get('recovery_case_count', 0)}")
+        print(
+            "Manual forensic holds: "
+            f"{summary.get('manual_forensic_hold_count', 0)}"
+        )
+        print(
+            "Participant writes if later approved: "
+            f"{summary.get('participant_write_count_if_approved', 0)}"
+        )
+        print(
+            "Execution implemented: "
+            f"{bool(result.get('execution_boundary', {}).get('execution_implemented'))}"
+        )
+        print("Writes: none")
+    return 0 if result.get("ok") else 1
+
+
 def command_abstract_freshness(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print("abstract-freshness is read-only and requires --dry-run.", file=sys.stderr)
@@ -20300,6 +20386,62 @@ def build_parser() -> argparse.ArgumentParser:
     )
     zet_title_remap_receipt_audit.set_defaults(
         func=command_zet_title_remap_receipt_audit
+    )
+
+    zet_title_remap_recovery_plan = subcommands.add_parser(
+        "zet-title-remap-recovery-plan",
+        aliases=["title-remap-recovery-plan"],
+        help="Plan one fixed human-reviewed response for each retained title-remap transaction journal without writing.",
+    )
+    zet_title_remap_recovery_plan.add_argument(
+        "archive_root",
+        help="Archive root containing canonical zets and private title-remap transaction evidence.",
+    )
+    zet_title_remap_recovery_plan.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Required. Reads bounded receipt, journal, lock, snapshot, and canonical hash evidence; writes nothing.",
+    )
+    zet_title_remap_recovery_plan.add_argument(
+        "--max-receipts",
+        type=int,
+        default=archive_services.ZET_TITLE_REMAP_AUDIT_MAX_RECEIPTS,
+        help=(
+            "Maximum title-remap receipts to audit "
+            f"(1-{archive_services.ZET_TITLE_REMAP_AUDIT_MAX_RECEIPTS})."
+        ),
+    )
+    zet_title_remap_recovery_plan.add_argument(
+        "--max-journals",
+        type=int,
+        default=archive_services.ZET_TITLE_REMAP_AUDIT_MAX_JOURNALS,
+        help=(
+            "Maximum retained title-remap transaction journals to audit "
+            f"(1-{archive_services.ZET_TITLE_REMAP_AUDIT_MAX_JOURNALS})."
+        ),
+    )
+    zet_title_remap_recovery_plan.add_argument(
+        "--max-cases",
+        type=int,
+        default=100,
+        help=(
+            "Maximum privacy-safe recovery cases to return "
+            f"(1-{archive_services.ZET_TITLE_REMAP_AUDIT_MAX_PROBLEMS})."
+        ),
+    )
+    zet_title_remap_recovery_plan.add_argument(
+        "--progress",
+        action="store_true",
+        help="Stream content-free receipt and journal counts plus 10-second heartbeats to stderr.",
+    )
+    zet_title_remap_recovery_plan.add_argument(
+        "--format",
+        choices=["text", "json"],
+        default="json",
+        help="Output format.",
+    )
+    zet_title_remap_recovery_plan.set_defaults(
+        func=command_zet_title_remap_recovery_plan
     )
 
     abstract_freshness = subcommands.add_parser(

@@ -115,9 +115,11 @@ leave:
 - no final receipt.
 
 Do not delete or hand-edit those retained files. v0.3.270 can inspect them
-with the read-only `zet-title-remap-receipt-audit --dry-run` command, but it
-does not resume, roll back, finalize, clean up, or revert that state. Those
-mutations remain a later release track.
+with the read-only `zet-title-remap-receipt-audit --dry-run` command, and
+v0.3.271 can map a complete retained case to one fixed read-only recovery
+decision with `zet-title-remap-recovery-plan --dry-run`. Neither command
+changes that state. The v0.3.271 planner does not resume, roll back, finalize,
+clean up, or revert it. Those mutations remain a later release track.
 
 On Windows the implementation uses atomic replacement and flushes file
 contents. Windows does not provide the same directory `fsync` guarantee as
@@ -125,7 +127,7 @@ POSIX, so this is not a claim of power-loss-proof storage.
 
 ## Current Boundary
 
-The v0.3.269 writer plus the v0.3.270 auditor implement:
+The v0.3.269 writer, v0.3.270 auditor, and v0.3.271 recovery planner implement:
 
 - read-only title proposal planning;
 - approval-gated title-only batch write;
@@ -133,11 +135,13 @@ The v0.3.269 writer plus the v0.3.270 auditor implement:
 - private final receipts;
 - ordinary-failure rollback;
 - hard-exit transaction evidence;
-- archive-wide completed-receipt and retained-transaction diagnosis.
+- archive-wide completed-receipt and retained-transaction diagnosis;
+- one fixed privacy-safe recovery decision per complete retained case.
 
 It does not yet implement:
 
 - automatic hard-exit recovery;
 - approved revert from a completed title-remap receipt.
 
-See [zet Title Remap Receipt And Interruption Audit](zet-title-remap-receipt-audit.md).
+See [zet Title Remap Receipt And Interruption Audit](zet-title-remap-receipt-audit.md)
+and [zet Title Remap Recovery Plan](zet-title-remap-recovery-plan.md).

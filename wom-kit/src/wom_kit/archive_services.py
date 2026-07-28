@@ -7530,6 +7530,9 @@ ZET_TITLE_REMAP_TRANSACTION_JOURNAL_SCHEMA = (
 ZET_TITLE_REMAP_RECEIPT_AUDIT_SCHEMA = (
     "wom-kit/zet-title-remap-receipt-audit/v0.1"
 )
+ZET_TITLE_REMAP_RECOVERY_PLAN_SCHEMA = (
+    "wom-kit/zet-title-remap-recovery-plan/v0.1"
+)
 ZET_TITLE_REMAP_PROPOSAL_PREFIX = ".wom-scratch/title-remap/"
 ZET_TITLE_REMAP_RECEIPTS_DIR = "receipts/revisions/title-remap"
 # Where the operator says the replacement name came from. A remap is only
@@ -11063,6 +11066,366 @@ def zet_title_remap_receipt_audit(
                 "Retain every title-remap receipt, transaction journal, write lock, and prior-byte snapshot.",
                 "Do not delete, rewrite, resume, roll back, or finalize title-remap evidence by hand.",
                 "Automatic recovery and approved title revert are not implemented in this release.",
+            ]
+        ),
+    }
+
+
+def zet_title_remap_recovery_decision(
+    case: dict[str, Any],
+    *,
+    common_lock_invalid: bool = False,
+) -> tuple[str, str]:
+    observed_state = str(case.get("observed_state") or "invalid")
+    final_receipt_state = str(
+        case.get("final_receipt_state") or "unknown"
+    )
+    write_lock_state = str(case.get("write_lock_state") or "unchecked")
+    issue_codes = {
+        str(code)
+        for code in case.get("issue_codes", [])
+        if isinstance(code, str)
+    }
+    if common_lock_invalid:
+        return (
+            "manual_forensic_hold",
+            "common_title_write_lock_is_orphaned_or_invalid",
+        )
+    if final_receipt_state == "present_unverified":
+        return (
+            "manual_forensic_hold",
+            "deterministic_final_receipt_exists_but_lifecycle_is_unverified",
+        )
+    if "title_transaction_before_snapshot_invalid" in issue_codes:
+        return (
+            "manual_forensic_hold",
+            "one_or_more_prior_byte_snapshots_are_invalid",
+        )
+    if observed_state == "invalid":
+        return "manual_forensic_hold", "journal_contract_is_invalid"
+    if observed_state == "divergent":
+        return (
+            "manual_forensic_hold",
+            "participant_state_is_missing_or_outside_recorded_hashes",
+        )
+    if write_lock_state == "not_verifiable":
+        return (
+            "manual_forensic_hold",
+            "journal_lock_binding_cannot_be_verified",
+        )
+    if observed_state == "stale_completed":
+        return (
+            "cleanup_verified_completed_title_evidence",
+            "verified_receipt_committed_transaction_cleanup_did_not_finish",
+        )
+    if observed_state == "prepared":
+        return (
+            "cleanup_unstarted_title_transaction_evidence",
+            "all_participants_remain_at_before_hash",
+        )
+    if observed_state in {
+        "partially_applied",
+        "fully_applied_receipt_missing",
+    }:
+        return (
+            "rollback_uncommitted_title_apply_to_before",
+            "title_apply_has_no_verified_commit_receipt_and_prior_bytes_are_reconstructible",
+        )
+    return (
+        "manual_forensic_hold",
+        "transaction_state_has_no_approved_recovery_policy",
+    )
+
+
+def zet_title_remap_recovery_plan(
+    archive_root: Path | str,
+    *,
+    dry_run: bool = False,
+    max_receipts: int = ZET_TITLE_REMAP_AUDIT_MAX_RECEIPTS,
+    max_journals: int = ZET_TITLE_REMAP_AUDIT_MAX_JOURNALS,
+    max_cases: int = 100,
+    progress_callback: Callable[
+        [str, str, int | None, int | None], None
+    ]
+    | None = None,
+) -> dict[str, Any]:
+    """Plan, but never execute, recovery for retained title-remap journals."""
+
+    requested_max_receipts = int(max_receipts)
+    requested_max_journals = int(max_journals)
+    requested_max_cases = int(max_cases)
+    effective_max_receipts = max(
+        1,
+        min(
+            requested_max_receipts,
+            ZET_TITLE_REMAP_AUDIT_MAX_RECEIPTS,
+        ),
+    )
+    effective_max_journals = max(
+        1,
+        min(
+            requested_max_journals,
+            ZET_TITLE_REMAP_AUDIT_MAX_JOURNALS,
+        ),
+    )
+    effective_max_cases = max(
+        1,
+        min(
+            requested_max_cases,
+            ZET_TITLE_REMAP_AUDIT_MAX_PROBLEMS,
+        ),
+    )
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if not dry_run:
+        blockers.append("dry_run_required")
+    if requested_max_receipts != effective_max_receipts:
+        blockers.append("max_receipts_out_of_range")
+    if requested_max_journals != effective_max_journals:
+        blockers.append("max_journals_out_of_range")
+    if requested_max_cases != effective_max_cases:
+        blockers.append("max_cases_out_of_range")
+
+    audit = zet_title_remap_receipt_audit(
+        archive_root,
+        dry_run=bool(dry_run),
+        max_receipts=effective_max_receipts,
+        max_journals=effective_max_journals,
+        max_problems=effective_max_cases,
+        progress_callback=progress_callback,
+    )
+    audit_summary = (
+        audit.get("summary")
+        if isinstance(audit.get("summary"), dict)
+        else {}
+    )
+    raw_cases = (
+        audit.get("transaction_journal_cases")
+        if isinstance(audit.get("transaction_journal_cases"), list)
+        else []
+    )
+    if not audit_summary.get("complete"):
+        blockers.append("recovery_source_audit_incomplete")
+    if (
+        audit_summary.get("journal_cases_truncated")
+        or len(raw_cases) > effective_max_cases
+    ):
+        blockers.append("recovery_cases_truncated")
+
+    common_lock_invalid = bool(
+        int(audit_summary.get("write_lock_orphaned_or_invalid") or 0)
+    )
+    planned_cases: list[dict[str, Any]] = []
+    action_counts = {
+        "cleanup_unstarted_title_transaction_evidence": 0,
+        "rollback_uncommitted_title_apply_to_before": 0,
+        "cleanup_verified_completed_title_evidence": 0,
+        "manual_forensic_hold": 0,
+    }
+    for case in raw_cases:
+        if not isinstance(case, dict):
+            continue
+        observed_state = str(case.get("observed_state") or "invalid")
+        final_receipt_state = str(
+            case.get("final_receipt_state") or "unknown"
+        )
+        write_lock_state = str(
+            case.get("write_lock_state") or "unchecked"
+        )
+        before_count = int(case.get("before_count") or 0)
+        after_count = int(case.get("after_count") or 0)
+        recommended_action, reason_code = (
+            zet_title_remap_recovery_decision(
+                case,
+                common_lock_invalid=common_lock_invalid,
+            )
+        )
+        participant_write_count = (
+            after_count
+            if recommended_action
+            == "rollback_uncommitted_title_apply_to_before"
+            else 0
+        )
+        evidence_cleanup_required = (
+            recommended_action != "manual_forensic_hold"
+        )
+        action_counts[recommended_action] += 1
+        planned_cases.append(
+            {
+                "case_index": int(case.get("case_index") or 0),
+                "case_sha256": case.get("case_sha256"),
+                "observed_state": observed_state,
+                "before_count": before_count,
+                "after_count": after_count,
+                "divergent_count": int(
+                    case.get("divergent_count") or 0
+                ),
+                "missing_count": int(case.get("missing_count") or 0),
+                "participant_count": int(
+                    case.get("participant_count") or 0
+                ),
+                "final_receipt_state": final_receipt_state,
+                "write_lock_state": write_lock_state,
+                "recommended_action": recommended_action,
+                "reason_code": reason_code,
+                "participant_write_count": participant_write_count,
+                "receipt_write_required": False,
+                "evidence_cleanup_required": evidence_cleanup_required,
+                "lock_reacquisition_required": bool(
+                    write_lock_state != "present_matching"
+                    and recommended_action != "manual_forensic_hold"
+                ),
+                "current_state_revalidation_required": True,
+                "prior_byte_snapshot_revalidation_required": True,
+                "fresh_recovery_approval_required": True,
+                "archive_quiescence_affirmation_required": True,
+                "execution_implemented": False,
+                "safe_to_execute_now": False,
+                "issue_codes": [
+                    str(code)
+                    for code in case.get("issue_codes", [])
+                    if isinstance(code, str)
+                ],
+            }
+        )
+
+    if action_counts["manual_forensic_hold"]:
+        warnings.append(
+            "one_or_more_title_recovery_cases_require_manual_forensic_hold"
+        )
+    if common_lock_invalid and not planned_cases:
+        warnings.append(
+            "title_recovery_common_lock_requires_manual_forensic_hold"
+        )
+    receipt_problem_count = int(
+        audit_summary.get("receipt_invalid_or_divergent") or 0
+    )
+    if receipt_problem_count:
+        warnings.append(
+            "one_or_more_non_journal_title_receipt_problems_exist"
+        )
+
+    blockers = unique_preserve_order(blockers)
+    warnings = unique_preserve_order(warnings)
+    complete_cases = planned_cases[:effective_max_cases]
+    ok = not blockers
+    if not ok:
+        status = "blocked"
+    elif action_counts["manual_forensic_hold"] or common_lock_invalid:
+        status = "manual_forensic_hold"
+    elif not planned_cases:
+        status = "no_recovery_needed"
+    else:
+        status = "ready_for_human_recovery_review"
+    privacy = (
+        audit.get("privacy_guards")
+        if isinstance(audit.get("privacy_guards"), dict)
+        else {}
+    )
+    return {
+        "ok": ok,
+        "dry_run": bool(dry_run),
+        "schema": ZET_TITLE_REMAP_RECOVERY_PLAN_SCHEMA,
+        "lifecycle_action": "zet_title_remap_recovery_plan",
+        "status": status,
+        "archive_id": audit.get("archive_id"),
+        "source_audit_digest": audit.get("audit_digest"),
+        "plan_digest": sha256_json_value(planned_cases),
+        "summary": {
+            "complete": ok,
+            "receipt_count": int(audit_summary.get("receipt_count") or 0),
+            "transaction_journal_count": int(
+                audit_summary.get("journal_count") or 0
+            ),
+            "recovery_case_count": len(planned_cases),
+            "cases_returned": len(complete_cases),
+            "cases_truncated": len(complete_cases) < len(planned_cases),
+            "manual_forensic_hold_count": action_counts[
+                "manual_forensic_hold"
+            ],
+            "participant_write_count_if_approved": sum(
+                int(case["participant_write_count"])
+                for case in planned_cases
+            ),
+            "receipt_write_count_if_approved": 0,
+            "evidence_cleanup_count_if_approved": sum(
+                1
+                for case in planned_cases
+                if case["evidence_cleanup_required"]
+            ),
+            "source_audit_problem_count": int(
+                audit_summary.get("problem_count") or 0
+            ),
+            "common_write_lock_present": bool(
+                audit_summary.get("write_lock_present")
+            ),
+            "common_write_lock_orphaned_or_invalid": (
+                common_lock_invalid
+            ),
+            "max_receipts": effective_max_receipts,
+            "max_journals": effective_max_journals,
+            "max_cases": effective_max_cases,
+            "action_counts": action_counts,
+        },
+        "cases": complete_cases,
+        "execution_boundary": {
+            "execution_implemented": False,
+            "automatic_recovery": False,
+            "fresh_recovery_approval_required": True,
+            "archive_quiescence_affirmation_required": True,
+            "single_case_sha_and_plan_bound_execution_required": True,
+            "common_write_lock_reacquisition_required_when_absent": True,
+            "approved_title_revert_implemented": False,
+        },
+        "write_boundary": {
+            "files_written": False,
+            "files_deleted": False,
+            "locks_created": False,
+            "locks_deleted": False,
+            "receipts_created": False,
+            "receipts_modified": False,
+            "canonical_zets_modified": False,
+        },
+        "privacy_guards": {
+            "canonical_file_bytes_read_for_hash_validation": bool(
+                privacy.get(
+                    "canonical_file_bytes_read_for_hash_validation"
+                )
+            ),
+            "receipt_private_metadata_read": bool(
+                privacy.get("receipt_private_metadata_read")
+            ),
+            "journal_private_metadata_read": bool(
+                privacy.get("journal_private_metadata_read")
+            ),
+            "case_sha256_echoed_as_handle": True,
+            "canonical_body_text_echoed": False,
+            "old_or_new_title_text_echoed": False,
+            "title_hashes_echoed": False,
+            "title_lengths_echoed": False,
+            "receipt_paths_echoed": False,
+            "journal_paths_echoed": False,
+            "zettel_ids_echoed": False,
+            "zettel_paths_echoed": False,
+            "reviewed_by_echoed": False,
+            "proposal_sha256_echoed": False,
+            "snapshot_paths_echoed": False,
+            "absolute_local_paths_echoed": False,
+            "provider_api_called": False,
+            "model_called": False,
+            "secret_store_or_environment_read": False,
+        },
+        "blockers": blockers,
+        "warnings": warnings,
+        "next_safe_actions": (
+            [
+                "No retained title-remap transaction journal requires recovery planning."
+            ]
+            if not planned_cases and ok and not common_lock_invalid
+            else [
+                "Retain every title-remap receipt, transaction journal, common write lock, and prior-byte snapshot.",
+                "Have a human review each fixed recovery decision; do not execute, delete, resume, roll back, finalize, or revert title evidence by hand.",
+                "A later single-case executor must bind this complete plan digest and case SHA-256 after fresh state and snapshot revalidation.",
             ]
         ),
     }
