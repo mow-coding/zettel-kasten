@@ -11349,6 +11349,78 @@ def command_notion_objet_import_clue_audit(args: argparse.Namespace) -> int:
     return 0 if result.get("ok", True) else 1
 
 
+def command_notion_import_locator_loss_audit(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print(
+            "notion-import-locator-loss-audit is read-only and requires --dry-run.",
+            file=sys.stderr,
+        )
+        return 1
+    progress_callback = make_stage_progress_callback(
+        bool(getattr(args, "progress", False)),
+        label="notion-locator-loss-audit",
+        detail="compact",
+    )
+    try:
+        result = archive_services.notion_import_locator_loss_audit(
+            Path(args.archive_root),
+            dry_run=True,
+            max_items=args.max_items,
+            progress_callback=progress_callback,
+        )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+        print("Notion import locator-loss audit:")
+        print(f"- affected zettels: {summary.get('affected_zettel_count', 0)}")
+        print(f"- body omission markers: {summary.get('body_marker_count', 0)}")
+        print(
+            f"- frontmatter omitted count: "
+            f"{summary.get('frontmatter_omitted_count', 0)}"
+        )
+        print(
+            f"- marker/frontmatter delta: "
+            f"{summary.get('marker_frontmatter_count_delta', 0)}"
+        )
+        print(
+            f"- count-mismatch zettels: "
+            f"{summary.get('count_mismatch_zettel_count', 0)}"
+        )
+        print(
+            f"- source_page_id present/missing: "
+            f"{summary.get('source_page_id_present_count', 0)}/"
+            f"{summary.get('source_page_id_missing_count', 0)}"
+        )
+        for item in result.get("items", []):
+            if not isinstance(item, dict):
+                continue
+            zettel = item.get("zettel") if isinstance(item.get("zettel"), dict) else {}
+            print(
+                f"* {zettel.get('id') or zettel.get('path') or '-'}: "
+                f"{item.get('count_state') or '-'}, "
+                f"{item.get('source_evidence_state') or '-'}"
+            )
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+        if result.get("next_safe_actions"):
+            print("Next safe actions:")
+            for action in result["next_safe_actions"]:
+                print(f"- {action}")
+        print("Writes: none")
+    return 0 if result.get("ok", True) else 1
+
+
 def command_notion_objet_link_rewrite_plan(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print("notion-objet-link-rewrite-plan is read-only and requires --dry-run.", file=sys.stderr)
@@ -22205,6 +22277,41 @@ def build_parser() -> argparse.ArgumentParser:
     notion_objet_import_clue_audit.add_argument("--max-candidates", type=int, default=1000, help="Maximum source-map candidates to consider.")
     notion_objet_import_clue_audit.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     notion_objet_import_clue_audit.set_defaults(func=command_notion_objet_import_clue_audit)
+
+    notion_import_locator_loss_audit = subcommands.add_parser(
+        "notion-import-locator-loss-audit",
+        aliases=["notion-locator-loss-audit"],
+        help="Census omitted Notion locator markers, recorded counts, and preserved source-page join keys.",
+    )
+    notion_import_locator_loss_audit.add_argument(
+        "archive_root",
+        help="Archive root to inspect.",
+    )
+    notion_import_locator_loss_audit.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Required. Read zettel bodies for marker counts; write nothing.",
+    )
+    notion_import_locator_loss_audit.add_argument(
+        "--max-items",
+        type=int,
+        default=200,
+        help="Maximum content-free affected-zettel summaries to return.",
+    )
+    notion_import_locator_loss_audit.add_argument(
+        "--progress",
+        action="store_true",
+        help="Print content-free scan progress to stderr.",
+    )
+    notion_import_locator_loss_audit.add_argument(
+        "--format",
+        choices=["text", "json"],
+        default="text",
+        help="Output format.",
+    )
+    notion_import_locator_loss_audit.set_defaults(
+        func=command_notion_import_locator_loss_audit
+    )
 
     notion_objet_link_rewrite_plan = subcommands.add_parser(
         "notion-objet-link-rewrite-plan",

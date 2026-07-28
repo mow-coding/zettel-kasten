@@ -24,6 +24,29 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.277 Read-Only Notion Locator-Loss Census
+
+No archive migration is required. To measure historical Notion provider
+locators that were replaced by omission markers, run:
+
+```powershell
+archive notion-import-locator-loss-audit <archive-root> `
+  --dry-run `
+  --format json
+```
+
+The alias `notion-locator-loss-audit` is equivalent. The command scans the
+complete non-redacted Notion-import population while `--max-items` only bounds
+returned per-zet summaries.
+
+Compare `body_marker_count`, `frontmatter_omitted_count`,
+`count_mismatch_zettel_count`, and the presence/missing counts for
+`source_page_id`. Do not treat count agreement as permission to restore URLs.
+v0.3.277 reads no source mirror and writes nothing. Count-mismatch zets and
+missing join keys need separate evidence review before a later read-only
+occurrence-alignment plan. See
+[`wom-kit/docs/notion-import-locator-loss-audit.md`](wom-kit/docs/notion-import-locator-loss-audit.md).
+
 ## v0.3.276 Approval-Gated Title Revert Recovery
 
 No archive migration is required. If
