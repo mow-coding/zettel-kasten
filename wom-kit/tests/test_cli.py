@@ -32759,6 +32759,784 @@ archive_services.zet_title_remap_write(
             )
             self.assertEqual(self.snapshot_archive_files(archive_root), before)
 
+    def test_zet_title_remap_revert_restores_exact_prior_bytes_and_is_idempotent(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            fixture = self._create_title_remap_write_fixture(
+                archive_root,
+                count=2,
+                proposal_name="approved-completed-revert.jsonl",
+            )
+            source_reviewer = "person:title-source-reviewer"
+            applied = archive_services.zet_title_remap_write(
+                archive_root,
+                proposal_path=fixture["relative"],
+                expected_proposal_sha256=fixture["proposal_sha256"],
+                expected_plan_digest=fixture["plan_digest"],
+                expected_write_plan_digest=fixture[
+                    "write_plan_digest"
+                ],
+                max_items=2,
+                approve=True,
+                reviewed_by=source_reviewer,
+                affirm_titles_reviewed=True,
+            )
+            self.assertEqual(applied["status"], "applied", applied)
+            receipt_relative = applied["receipt"]["path"]
+            receipt_path = archive_root.joinpath(
+                *PurePosixPath(receipt_relative).parts
+            )
+            source_receipt_bytes = receipt_path.read_bytes()
+            source_receipt_sha256 = (
+                "sha256:"
+                + hashlib.sha256(source_receipt_bytes).hexdigest()
+            )
+            applied_snapshot = self.snapshot_archive_files(archive_root)
+            plan = archive_services.zet_title_remap_revert_plan(
+                archive_root,
+                receipt_path=receipt_relative,
+                expected_receipt_sha256=source_receipt_sha256,
+                max_items=2,
+                dry_run=True,
+            )
+            self.assertEqual(
+                plan["status"],
+                "ready_for_human_review",
+                plan,
+            )
+
+            preview_code, preview_output = self.run_cli(
+                [
+                    "title-remap-revert",
+                    str(archive_root),
+                    "--receipt",
+                    receipt_relative,
+                    "--expected-receipt-sha256",
+                    source_receipt_sha256,
+                    "--expected-plan-digest",
+                    plan["plan_digest"],
+                    "--max-items",
+                    "2",
+                    "--dry-run",
+                ]
+            )
+            self.assertEqual(preview_code, 0, preview_output)
+            preview = json.loads(preview_output)
+            self.assertEqual(preview["status"], "ready_to_revert")
+            self.assertEqual(
+                self.snapshot_archive_files(archive_root),
+                applied_snapshot,
+            )
+
+            revert_reviewer = "person:title-revert-reviewer"
+            code, output = self.run_cli(
+                [
+                    "zet-title-remap-revert",
+                    str(archive_root),
+                    "--receipt",
+                    receipt_relative,
+                    "--expected-receipt-sha256",
+                    source_receipt_sha256,
+                    "--expected-plan-digest",
+                    plan["plan_digest"],
+                    "--max-items",
+                    "2",
+                    "--approve",
+                    "--reviewed-by",
+                    revert_reviewer,
+                    "--affirm-title-reversions-reviewed",
+                    "--affirm-archive-quiescent",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertEqual(result["status"], "reverted")
+            self.assertEqual(result["summary"]["reverted_count"], 2)
+            self.assertTrue(
+                result["transaction_journal"][
+                    "written_before_first_canonical_write"
+                ]
+            )
+            self.assertTrue(
+                result["transaction_journal"][
+                    "removed_after_completion"
+                ]
+            )
+            self.assertTrue(
+                result["write_boundary"][
+                    "exact_prior_file_bytes_restored"
+                ]
+            )
+            for path, original in fixture["originals"].items():
+                self.assertEqual(path.read_bytes(), original)
+            self.assertEqual(receipt_path.read_bytes(), source_receipt_bytes)
+            revert_relative = (
+                archive_services.zet_title_remap_revert_receipt_relative_path(
+                    source_receipt_sha256
+                )
+            )
+            revert_path = archive_root.joinpath(
+                *PurePosixPath(revert_relative).parts
+            )
+            self.assertTrue(revert_path.is_file())
+            title_remap_root = (
+                archive_root / ".wom-scratch" / "title-remap"
+            )
+            self.assertFalse(
+                (title_remap_root / ".title-remap.write.lock").exists()
+            )
+            self.assertEqual(
+                list(
+                    title_remap_root.glob(
+                        ".*.revert.transaction.json"
+                    )
+                ),
+                [],
+            )
+            audit = archive_services.zet_title_remap_receipt_audit(
+                archive_root,
+                dry_run=True,
+            )
+            self.assertTrue(audit["ok"], audit)
+            self.assertEqual(audit["status"], "healthy")
+            self.assertEqual(
+                audit["summary"]["revert_receipt_verified"],
+                1,
+            )
+            self.assertEqual(
+                audit["summary"]["revert_receipt_count"],
+                1,
+            )
+
+            before_replay = self.snapshot_archive_files(archive_root)
+            replay = archive_services.zet_title_remap_revert(
+                archive_root,
+                receipt_path=receipt_relative,
+                expected_receipt_sha256=source_receipt_sha256,
+                expected_plan_digest=plan["plan_digest"],
+                max_items=2,
+                approve=True,
+                reviewed_by=revert_reviewer,
+                affirm_title_reversions_reviewed=True,
+                affirm_archive_quiescent=True,
+            )
+            self.assertEqual(
+                replay["status"],
+                "already_reverted",
+                replay,
+            )
+            self.assertEqual(
+                self.snapshot_archive_files(archive_root),
+                before_replay,
+            )
+            serialized = json.dumps(result, ensure_ascii=False)
+            for private_value in (
+                fixture["proposal_sha256"],
+                receipt_relative,
+                revert_relative,
+                source_reviewer,
+                revert_reviewer,
+                *(
+                    str(row["zettel_id"])
+                    for row in fixture["rows"]
+                ),
+                *(
+                    str(row["title"])
+                    for row in fixture["rows"]
+                ),
+            ):
+                self.assertNotIn(private_value, serialized)
+            self.assertNotIn("before_title_sha256", serialized)
+            self.assertNotIn("after_title_sha256", serialized)
+
+    def test_zet_title_remap_revert_requires_every_approval_binding_without_writing(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            fixture = self._create_title_remap_write_fixture(
+                archive_root,
+                count=1,
+                proposal_name="revert-approval-boundaries.jsonl",
+            )
+            applied = archive_services.zet_title_remap_write(
+                archive_root,
+                proposal_path=fixture["relative"],
+                expected_proposal_sha256=fixture["proposal_sha256"],
+                expected_plan_digest=fixture["plan_digest"],
+                expected_write_plan_digest=fixture[
+                    "write_plan_digest"
+                ],
+                max_items=1,
+                approve=True,
+                reviewed_by="person:source-title-reviewer",
+                affirm_titles_reviewed=True,
+            )
+            receipt_relative = applied["receipt"]["path"]
+            receipt_path = archive_root.joinpath(
+                *PurePosixPath(receipt_relative).parts
+            )
+            receipt_sha256 = (
+                "sha256:"
+                + hashlib.sha256(receipt_path.read_bytes()).hexdigest()
+            )
+            plan = archive_services.zet_title_remap_revert_plan(
+                archive_root,
+                receipt_path=receipt_relative,
+                expected_receipt_sha256=receipt_sha256,
+                max_items=1,
+                dry_run=True,
+            )
+            common = {
+                "archive_root": archive_root,
+                "receipt_path": receipt_relative,
+                "expected_receipt_sha256": receipt_sha256,
+                "expected_plan_digest": plan["plan_digest"],
+                "max_items": 1,
+                "approve": True,
+                "reviewed_by": "person:revert-boundary-reviewer",
+                "affirm_title_reversions_reviewed": True,
+                "affirm_archive_quiescent": True,
+            }
+            cases = [
+                (
+                    {
+                        **common,
+                        "expected_receipt_sha256": "sha256:"
+                        + ("0" * 64),
+                    },
+                    "source_receipt_sha256_mismatch",
+                ),
+                (
+                    {
+                        **common,
+                        "expected_plan_digest": "sha256:" + ("0" * 64),
+                    },
+                    "revert_plan_digest_mismatch",
+                ),
+                (
+                    {**common, "reviewed_by": None},
+                    "safe_reviewed_by_required",
+                ),
+                (
+                    {
+                        **common,
+                        "affirm_title_reversions_reviewed": False,
+                    },
+                    "affirm_title_reversions_reviewed_required",
+                ),
+                (
+                    {
+                        **common,
+                        "affirm_archive_quiescent": False,
+                    },
+                    "affirm_archive_quiescent_required",
+                ),
+            ]
+            before = self.snapshot_archive_files(archive_root)
+            for kwargs, blocker in cases:
+                with self.subTest(blocker=blocker):
+                    result = archive_services.zet_title_remap_revert(
+                        **kwargs,
+                    )
+                    self.assertFalse(result["ok"], result)
+                    self.assertEqual(result["status"], "blocked")
+                    self.assertIn(blocker, result["blockers"])
+                    self.assertEqual(
+                        self.snapshot_archive_files(archive_root),
+                        before,
+                    )
+            title_remap_root = (
+                archive_root / ".wom-scratch" / "title-remap"
+            )
+            self.assertFalse(
+                (title_remap_root / ".title-remap.write.lock").exists()
+            )
+            self.assertEqual(
+                list(
+                    title_remap_root.glob(
+                        ".*.revert.transaction.json"
+                    )
+                ),
+                [],
+            )
+
+    def test_zet_title_remap_revert_runtime_failure_restores_applied_bytes(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            fixture = self._create_title_remap_write_fixture(
+                archive_root,
+                count=2,
+                proposal_name="revert-runtime-rollback.jsonl",
+            )
+            applied = archive_services.zet_title_remap_write(
+                archive_root,
+                proposal_path=fixture["relative"],
+                expected_proposal_sha256=fixture["proposal_sha256"],
+                expected_plan_digest=fixture["plan_digest"],
+                expected_write_plan_digest=fixture[
+                    "write_plan_digest"
+                ],
+                max_items=2,
+                approve=True,
+                reviewed_by="person:source-runtime-reviewer",
+                affirm_titles_reviewed=True,
+            )
+            receipt_relative = applied["receipt"]["path"]
+            receipt_path = archive_root.joinpath(
+                *PurePosixPath(receipt_relative).parts
+            )
+            receipt_sha256 = (
+                "sha256:"
+                + hashlib.sha256(receipt_path.read_bytes()).hexdigest()
+            )
+            plan = archive_services.zet_title_remap_revert_plan(
+                archive_root,
+                receipt_path=receipt_relative,
+                expected_receipt_sha256=receipt_sha256,
+                max_items=2,
+                dry_run=True,
+            )
+            applied_bytes = {
+                path: path.read_bytes()
+                for path in fixture["originals"]
+            }
+            real_write = archive_services.write_bytes_atomic
+            revert_write_count = 0
+
+            def fail_second_revert(
+                path: Path,
+                value: bytes,
+            ) -> None:
+                nonlocal revert_write_count
+                revert_write_count += 1
+                if revert_write_count == 2:
+                    raise OSError("synthetic second revert failure")
+                real_write(path, value)
+
+            with patch.object(
+                archive_services,
+                "write_bytes_atomic",
+                side_effect=fail_second_revert,
+            ):
+                result = archive_services.zet_title_remap_revert(
+                    archive_root,
+                    receipt_path=receipt_relative,
+                    expected_receipt_sha256=receipt_sha256,
+                    expected_plan_digest=plan["plan_digest"],
+                    max_items=2,
+                    approve=True,
+                    reviewed_by="person:runtime-revert-reviewer",
+                    affirm_title_reversions_reviewed=True,
+                    affirm_archive_quiescent=True,
+                )
+            self.assertEqual(
+                result["status"],
+                "failed_rolled_back",
+                result,
+            )
+            self.assertTrue(result["rollback"]["attempted"])
+            self.assertTrue(result["rollback"]["succeeded"])
+            self.assertEqual(
+                result["rollback"]["canonical_files_restored"],
+                2,
+            )
+            for path, value in applied_bytes.items():
+                self.assertEqual(path.read_bytes(), value)
+            title_remap_root = (
+                archive_root / ".wom-scratch" / "title-remap"
+            )
+            self.assertFalse(
+                (title_remap_root / ".title-remap.write.lock").exists()
+            )
+            self.assertEqual(
+                list(
+                    title_remap_root.glob(
+                        ".*.revert.transaction.json"
+                    )
+                ),
+                [],
+            )
+            revert_path = archive_root.joinpath(
+                *PurePosixPath(
+                    archive_services.zet_title_remap_revert_receipt_relative_path(
+                        receipt_sha256
+                    )
+                ).parts
+            )
+            self.assertFalse(revert_path.exists())
+
+    def test_zet_title_remap_revert_receipt_failure_rolls_back_complete_batch(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            fixture = self._create_title_remap_write_fixture(
+                archive_root,
+                count=2,
+                proposal_name="revert-receipt-failure.jsonl",
+            )
+            applied = archive_services.zet_title_remap_write(
+                archive_root,
+                proposal_path=fixture["relative"],
+                expected_proposal_sha256=fixture["proposal_sha256"],
+                expected_plan_digest=fixture["plan_digest"],
+                expected_write_plan_digest=fixture[
+                    "write_plan_digest"
+                ],
+                max_items=2,
+                approve=True,
+                reviewed_by="person:receipt-failure-source",
+                affirm_titles_reviewed=True,
+            )
+            receipt_relative = applied["receipt"]["path"]
+            receipt_path = archive_root.joinpath(
+                *PurePosixPath(receipt_relative).parts
+            )
+            receipt_sha256 = (
+                "sha256:"
+                + hashlib.sha256(receipt_path.read_bytes()).hexdigest()
+            )
+            plan = archive_services.zet_title_remap_revert_plan(
+                archive_root,
+                receipt_path=receipt_relative,
+                expected_receipt_sha256=receipt_sha256,
+                max_items=2,
+                dry_run=True,
+            )
+            applied_bytes = {
+                path: path.read_bytes()
+                for path in fixture["originals"]
+            }
+            real_write_json = archive_services.write_json_new_file
+
+            def fail_revert_receipt(
+                path: Path,
+                document: dict[str, Any],
+            ) -> None:
+                if path.name.endswith(
+                    ".zet-title-remap-revert.json"
+                ):
+                    raise OSError("synthetic revert receipt failure")
+                real_write_json(path, document)
+
+            with patch.object(
+                archive_services,
+                "write_json_new_file",
+                side_effect=fail_revert_receipt,
+            ):
+                result = archive_services.zet_title_remap_revert(
+                    archive_root,
+                    receipt_path=receipt_relative,
+                    expected_receipt_sha256=receipt_sha256,
+                    expected_plan_digest=plan["plan_digest"],
+                    max_items=2,
+                    approve=True,
+                    reviewed_by="person:receipt-failure-revert",
+                    affirm_title_reversions_reviewed=True,
+                    affirm_archive_quiescent=True,
+                )
+            self.assertEqual(
+                result["status"],
+                "failed_rolled_back",
+                result,
+            )
+            self.assertTrue(result["rollback"]["succeeded"])
+            self.assertEqual(
+                result["rollback"]["canonical_files_restored"],
+                2,
+            )
+            for path, value in applied_bytes.items():
+                self.assertEqual(path.read_bytes(), value)
+            title_remap_root = (
+                archive_root / ".wom-scratch" / "title-remap"
+            )
+            self.assertFalse(
+                (title_remap_root / ".title-remap.write.lock").exists()
+            )
+            self.assertEqual(
+                list(
+                    title_remap_root.glob(
+                        ".*.revert.transaction.json"
+                    )
+                ),
+                [],
+            )
+
+    def test_zet_title_remap_audit_recomputes_revert_plan_binding(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            fixture = self._create_title_remap_write_fixture(
+                archive_root,
+                count=1,
+                proposal_name="revert-plan-audit-binding.jsonl",
+            )
+            applied = archive_services.zet_title_remap_write(
+                archive_root,
+                proposal_path=fixture["relative"],
+                expected_proposal_sha256=fixture["proposal_sha256"],
+                expected_plan_digest=fixture["plan_digest"],
+                expected_write_plan_digest=fixture[
+                    "write_plan_digest"
+                ],
+                max_items=1,
+                approve=True,
+                reviewed_by="person:audit-binding-source",
+                affirm_titles_reviewed=True,
+            )
+            receipt_relative = applied["receipt"]["path"]
+            receipt_path = archive_root.joinpath(
+                *PurePosixPath(receipt_relative).parts
+            )
+            receipt_sha256 = (
+                "sha256:"
+                + hashlib.sha256(receipt_path.read_bytes()).hexdigest()
+            )
+            plan = archive_services.zet_title_remap_revert_plan(
+                archive_root,
+                receipt_path=receipt_relative,
+                expected_receipt_sha256=receipt_sha256,
+                max_items=1,
+                dry_run=True,
+            )
+            reverted = archive_services.zet_title_remap_revert(
+                archive_root,
+                receipt_path=receipt_relative,
+                expected_receipt_sha256=receipt_sha256,
+                expected_plan_digest=plan["plan_digest"],
+                max_items=1,
+                approve=True,
+                reviewed_by="person:audit-binding-revert",
+                affirm_title_reversions_reviewed=True,
+                affirm_archive_quiescent=True,
+            )
+            self.assertEqual(reverted["status"], "reverted", reverted)
+            revert_path = archive_root.joinpath(
+                *PurePosixPath(
+                    archive_services.zet_title_remap_revert_receipt_relative_path(
+                        receipt_sha256
+                    )
+                ).parts
+            )
+            document = json.loads(
+                revert_path.read_text(encoding="utf-8")
+            )
+            document["source_history_audit_digest"] = (
+                "sha256:" + ("0" * 64)
+            )
+            revert_path.write_text(
+                json.dumps(
+                    document,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            audit = archive_services.zet_title_remap_receipt_audit(
+                archive_root,
+                dry_run=True,
+            )
+            self.assertFalse(audit["ok"], audit)
+            self.assertEqual(
+                audit["summary"][
+                    "revert_receipt_invalid_or_divergent"
+                ],
+                1,
+            )
+            problem_codes = {
+                code
+                for problem in audit["problems"]
+                for code in problem.get("issue_codes", [])
+            }
+            self.assertIn(
+                "title_revert_receipt_plan_digest_mismatch",
+                problem_codes,
+            )
+            serialized = json.dumps(audit, ensure_ascii=False)
+            self.assertNotIn(fixture["proposal_sha256"], serialized)
+            self.assertNotIn(
+                str(fixture["rows"][0]["zettel_id"]),
+                serialized,
+            )
+            self.assertNotIn(
+                str(fixture["rows"][0]["title"]),
+                serialized,
+            )
+
+    def test_zet_title_remap_revert_hard_exit_retains_partial_private_journal(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            fixture = self._create_title_remap_write_fixture(
+                archive_root,
+                count=2,
+                proposal_name="revert-hard-exit.jsonl",
+            )
+            applied = archive_services.zet_title_remap_write(
+                archive_root,
+                proposal_path=fixture["relative"],
+                expected_proposal_sha256=fixture["proposal_sha256"],
+                expected_plan_digest=fixture["plan_digest"],
+                expected_write_plan_digest=fixture[
+                    "write_plan_digest"
+                ],
+                max_items=2,
+                approve=True,
+                reviewed_by="person:hard-exit-source-reviewer",
+                affirm_titles_reviewed=True,
+            )
+            receipt_relative = applied["receipt"]["path"]
+            receipt_path = archive_root.joinpath(
+                *PurePosixPath(receipt_relative).parts
+            )
+            receipt_sha256 = (
+                "sha256:"
+                + hashlib.sha256(receipt_path.read_bytes()).hexdigest()
+            )
+            plan = archive_services.zet_title_remap_revert_plan(
+                archive_root,
+                receipt_path=receipt_relative,
+                expected_receipt_sha256=receipt_sha256,
+                max_items=2,
+                dry_run=True,
+            )
+            child_code = """
+import os
+import sys
+from pathlib import Path
+from wom_kit import archive_services
+
+real_write = archive_services.write_bytes_atomic
+
+def write_then_exit(path, value):
+    real_write(path, value)
+    os._exit(93)
+
+archive_services.write_bytes_atomic = write_then_exit
+archive_services.zet_title_remap_revert(
+    Path(sys.argv[1]),
+    receipt_path=sys.argv[2],
+    expected_receipt_sha256=sys.argv[3],
+    expected_plan_digest=sys.argv[4],
+    max_items=2,
+    approve=True,
+    reviewed_by=sys.argv[5],
+    affirm_title_reversions_reviewed=True,
+    affirm_archive_quiescent=True,
+)
+"""
+            child_env = os.environ.copy()
+            child_env["PYTHONPATH"] = str(SRC_ROOT)
+            child = subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    child_code,
+                    str(archive_root),
+                    receipt_relative,
+                    receipt_sha256,
+                    plan["plan_digest"],
+                    "person:hard-exit-revert-reviewer",
+                ],
+                cwd=KIT_ROOT,
+                env=child_env,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            self.assertEqual(child.returncode, 93, child.stderr)
+            title_remap_root = (
+                archive_root / ".wom-scratch" / "title-remap"
+            )
+            journals = list(
+                title_remap_root.glob(
+                    ".*.revert.transaction.json"
+                )
+            )
+            self.assertEqual(len(journals), 1)
+            self.assertTrue(
+                (title_remap_root / ".title-remap.write.lock").is_file()
+            )
+            journal_text = journals[0].read_text(encoding="utf-8")
+            self.assertNotIn(
+                str(fixture["rows"][0]["title"]),
+                journal_text,
+            )
+            audit = archive_services.zet_title_remap_receipt_audit(
+                archive_root,
+                dry_run=True,
+            )
+            self.assertFalse(audit["ok"], audit)
+            self.assertEqual(
+                audit["summary"][
+                    "revert_journal_partially_reverted"
+                ],
+                1,
+                audit,
+            )
+            self.assertEqual(
+                audit["summary"]["write_lock_matching"],
+                1,
+            )
+            self.assertEqual(
+                audit["transaction_journal_cases"][0]["operation"],
+                "revert",
+            )
+            self.assertEqual(
+                audit["transaction_journal_cases"][0][
+                    "observed_state"
+                ],
+                "partially_reverted",
+            )
+            recovery_plan = (
+                archive_services.zet_title_remap_recovery_plan(
+                    archive_root,
+                    dry_run=True,
+                )
+            )
+            self.assertEqual(
+                recovery_plan["status"],
+                "manual_forensic_hold",
+                recovery_plan,
+            )
+            self.assertEqual(
+                recovery_plan["cases"][0]["operation"],
+                "revert",
+            )
+            self.assertEqual(
+                recovery_plan["cases"][0]["recommended_action"],
+                "manual_forensic_hold",
+            )
+            self.assertEqual(
+                recovery_plan["cases"][0]["reason_code"],
+                "title_revert_hard_exit_recovery_not_implemented",
+            )
+            self.assertFalse(
+                recovery_plan["cases"][0]["execution_implemented"]
+            )
+            serialized = json.dumps(audit, ensure_ascii=False)
+            for private_value in (
+                fixture["proposal_sha256"],
+                receipt_relative,
+                *(
+                    str(row["zettel_id"])
+                    for row in fixture["rows"]
+                ),
+                *(
+                    str(row["title"])
+                    for row in fixture["rows"]
+                ),
+            ):
+                self.assertNotIn(private_value, serialized)
+
     def test_zet_title_remap_write_requires_every_approval_binding_before_snapshots(
         self,
     ) -> None:
@@ -33679,9 +34457,14 @@ archive_services.zet_title_remap_write(
             self.assertTrue(
                 result["execution_boundary"]["execution_implemented"]
             )
-            self.assertFalse(
+            self.assertTrue(
                 result["execution_boundary"][
                     "approved_title_revert_implemented"
+                ]
+            )
+            self.assertFalse(
+                result["execution_boundary"][
+                    "revert_hard_exit_recovery_implemented"
                 ]
             )
             self.assertEqual(

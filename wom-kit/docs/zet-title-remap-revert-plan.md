@@ -77,18 +77,21 @@ No provider or model is called. The command has no MCP method.
 
 ## Current Write Boundary
 
-v0.3.273 does not implement the approved revert writer. A ready plan is review
-evidence, not write authority. Do not copy the snapshot over a canonical zet by
-hand.
+A ready plan remains review evidence, not write authority. Do not copy a
+snapshot over a canonical zet by hand. Since v0.3.274 the separate CLI-only
+`zet-title-remap-revert` command can execute this exact plan only after it
+rebinds the unchanged source-receipt SHA-256 and plan digest, takes the common
+title lock, requires explicit human review and archive quiescence, publishes a
+private transaction journal, restores only verified prior bytes, preserves the
+source receipt, and creates a separate immutable text-free revert receipt.
 
-A later writer must rerun the complete plan, bind the unchanged source-receipt
-SHA-256 and plan digest, serialize with the title writer, require explicit
-human review and archive quiescence, publish a crash-recovery journal before
-the first canonical write, restore only verified prior bytes, preserve the
-source receipt, and create a new immutable text-free revert receipt.
+See [Approved zet Title Remap Revert](zet-title-remap-revert.md) for the
+approval command. v0.3.274 diagnoses but does not recover a revert transaction
+left by a process kill or power interruption.
 
 See also:
 
 - [Approved zet Title Remap Write](zet-title-remap-write.md)
+- [Approved zet Title Remap Revert](zet-title-remap-revert.md)
 - [zet Title Remap Receipt And Interruption Audit](zet-title-remap-receipt-audit.md)
 - [zet Title Remap Recover](zet-title-remap-recover.md)

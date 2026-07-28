@@ -145,12 +145,20 @@ single-case executor, and v0.3.273 completed-receipt revert planner implement:
 - read-only exact prior-byte compensation planning for one clean completed
   receipt.
 
-It does not yet implement:
+v0.3.274 additionally implements the separately reviewed, approval-gated
+completed-receipt compensation:
 
-- automatic recovery of any interrupted title transaction;
-- approved revert from a completed title-remap receipt.
+- exact prior-byte restoration for one clean completed receipt;
+- preservation of the original apply receipt;
+- a separate immutable compensation receipt;
+- caught-failure rollback to exact applied bytes;
+- retained revert journal diagnosis after a hard exit.
+
+It does not yet implement automatic recovery for a revert transaction left by
+a process kill or power interruption.
 
 See [zet Title Remap Receipt And Interruption Audit](zet-title-remap-receipt-audit.md)
 and [zet Title Remap Recover](zet-title-remap-recover.md).
 For the completed-receipt review boundary, see
-[zet Title Remap Completed-Receipt Revert Plan](zet-title-remap-revert-plan.md).
+[zet Title Remap Completed-Receipt Revert Plan](zet-title-remap-revert-plan.md)
+and [Approved zet Title Remap Revert](zet-title-remap-revert.md).

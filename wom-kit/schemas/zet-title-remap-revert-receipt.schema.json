@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wom-kit/zet-title-remap-revert-receipt/v0.1",
+  "title": "WOM-kit zet title remap revert receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "action",
+    "status",
+    "reverted_at",
+    "archive_id",
+    "source_receipt_path",
+    "source_receipt_sha256",
+    "source_proposal_sha256",
+    "source_plan_digest",
+    "source_write_plan_digest",
+    "planner_wom_kit_version",
+    "source_history_audit_digest",
+    "revert_plan_digest",
+    "reviewed_by",
+    "human_affirmations",
+    "item_count",
+    "items",
+    "mutation_contract",
+    "privacy_guards"
+  ],
+  "properties": {
+    "schema": {"const": "wom-kit/zet-title-remap-revert-receipt/v0.1"},
+    "action": {"const": "zet_title_remap_revert"},
+    "status": {"const": "reverted"},
+    "reverted_at": {"type": "string", "minLength": 1},
+    "archive_id": {"type": "string", "minLength": 1},
+    "source_receipt_path": {
+      "type": "string",
+      "pattern": "^receipts/revisions/title-remap/[0-9a-f]{64}\\.zet-title-remap\\.json$"
+    },
+    "source_receipt_sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "source_proposal_sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "source_plan_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "source_write_plan_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "planner_wom_kit_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "source_history_audit_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "revert_plan_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "reviewed_by": {"type": "string", "minLength": 1},
+    "human_affirmations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "all_title_reversions_reviewed",
+        "archive_quiescence_confirmed"
+      ],
+      "properties": {
+        "all_title_reversions_reviewed": {"const": true},
+        "archive_quiescence_confirmed": {"const": true}
+      }
+    },
+    "item_count": {"type": "integer", "minimum": 1, "maximum": 5000},
+    "items": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 5000,
+      "items": {
+        "$ref": "zet-title-remap-receipt.schema.json#/$defs/item"
+      }
+    },
+    "mutation_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "field_restored",
+        "exact_prior_file_bytes_restored",
+        "body_bytes_preserved",
+        "other_frontmatter_semantics_restored",
+        "updated_at_changed",
+        "source_receipt_preserved",
+        "rollback_on_runtime_failure",
+        "crash_recovery_journal_written"
+      ],
+      "properties": {
+        "field_restored": {"const": "frontmatter.title"},
+        "exact_prior_file_bytes_restored": {"const": true},
+        "body_bytes_preserved": {"const": true},
+        "other_frontmatter_semantics_restored": {"const": true},
+        "updated_at_changed": {"const": false},
+        "source_receipt_preserved": {"const": true},
+        "rollback_on_runtime_failure": {"const": true},
+        "crash_recovery_journal_written": {"const": true}
+      }
+    },
+    "privacy_guards": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "old_title_text_stored_in_receipt",
+        "new_title_text_stored_in_receipt",
+        "body_text_stored_in_receipt",
+        "contains_private_zettel_ids_and_paths",
+        "provider_api_called",
+        "model_called",
+        "secret_store_or_environment_read"
+      ],
+      "properties": {
+        "old_title_text_stored_in_receipt": {"const": false},
+        "new_title_text_stored_in_receipt": {"const": false},
+        "body_text_stored_in_receipt": {"const": false},
+        "contains_private_zettel_ids_and_paths": {"const": true},
+        "provider_api_called": {"const": false},
+        "model_called": {"const": false},
+        "secret_store_or_environment_read": {"const": false}
+      }
+    }
+  }
+}

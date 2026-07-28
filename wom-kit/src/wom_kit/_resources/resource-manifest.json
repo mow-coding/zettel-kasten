@@ -1,8 +1,8 @@
 {
   "schema": "wom-kit/package-resource-manifest/v0.1",
-  "version": "0.3.273",
+  "version": "0.3.274",
   "source_of_truth": "wom-kit source resource directories",
-  "file_count": 95,
+  "file_count": 97,
   "files": [
     {
       "source": "schemas/anchor-metadata.schema.json",
@@ -237,6 +237,18 @@
       "packaged": "schemas/zet-title-remap-receipt.schema.json",
       "bytes": 4787,
       "sha256": "c0cf5481e48c0f42bc3dc60ab0555bc5eee50f689b23c57f1a4ec8ce89805870"
+    },
+    {
+      "source": "schemas/zet-title-remap-revert-receipt.schema.json",
+      "packaged": "schemas/zet-title-remap-revert-receipt.schema.json",
+      "bytes": 4106,
+      "sha256": "ad3149bf4ed21884bdfb9b38d8e576409fa139c127119b3f5df33f4c52fe2f54"
+    },
+    {
+      "source": "schemas/zet-title-remap-revert-transaction-journal.schema.json",
+      "packaged": "schemas/zet-title-remap-revert-transaction-journal.schema.json",
+      "bytes": 3972,
+      "sha256": "ce85367587a132984f6c7fd35057ce434893300bbafb3060141c3bfaad2f1ba5"
     },
     {
       "source": "schemas/zet-title-remap-transaction-journal.schema.json",
@@ -569,10 +581,10 @@
       "sha256": "d619dc26af3216498c8392dfe838b0fe752d4bad9da998a58ca682d668fc510c"
     },
     {
-      "source": "docs/releases/v0.3.273.md",
-      "packaged": "release-notes/v0.3.273.md",
-      "bytes": 2057,
-      "sha256": "871ffb539ff9a9c9accbf42c5bc4500389df2696c95647685144f3f34db36f86"
+      "source": "docs/releases/v0.3.274.md",
+      "packaged": "release-notes/v0.3.274.md",
+      "bytes": 2319,
+      "sha256": "da4bd917294f4018a31fdd210ccf97aace9e7cd95798a287ec481bebe02fc38d"
     }
   ]
 }
