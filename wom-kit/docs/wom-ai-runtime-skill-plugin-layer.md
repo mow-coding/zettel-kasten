@@ -160,15 +160,17 @@ MCP clients must not request `redact_local_paths: false` unless trusted local de
 
 ## AI Command-Path Routing
 
-From v0.3.278, runtime-context, ai-start-here, operational-context, and
+Introduced in v0.3.278 and extended in v0.3.279, runtime-context,
+ai-start-here, operational-context, and
 canonical entrypoint metadata return
-`wom-kit/ai-command-path-routing/v0.1`.
+`wom-kit/ai-command-path-routing/v0.2`.
 
 The routing object names official WOM commands for search, local version
-truth, saved-view inspection, command discovery, draft creation, minting,
-typed edges, source/objet intake, and operational-context updates. It marks raw
-grep and raw SQL as non-authoritative search surfaces and forbids direct AI
-Markdown writes to `inbox/`.
+truth, saved-view inspection, conservative inbox pipeline-shape review,
+command discovery, draft creation, minting, typed edges, source/objet intake,
+and operational-context updates. It marks raw grep and raw SQL as
+non-authoritative search surfaces and forbids direct AI Markdown writes to
+`inbox/`. The inbox audit proves no writer identity and performs no repair.
 
 Generated AGENTS templates now start with:
 
