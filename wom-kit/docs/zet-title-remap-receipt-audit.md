@@ -100,11 +100,14 @@ Preserve every receipt, journal, lock, canonical participant, and prior-byte
 snapshot. Do not hand-edit or delete transaction evidence. v0.3.270 provides
 diagnosis only. v0.3.271 can map every complete retained case to one fixed
 read-only recovery decision through
-`zet-title-remap-recovery-plan --dry-run`, but it still cannot execute,
-clean up, or revert anything.
+`zet-title-remap-recovery-plan --dry-run`. v0.3.272 can execute one
+non-forensic-hold case only after exact case/plan/action binding, fresh review,
+and archive-quiescence approval. It still cannot revert a completed title
+change.
 
 See:
 
 - [Reviewed zet Title Remap Plan](zet-title-remap-plan.md)
 - [Approved zet Title Remap Write](zet-title-remap-write.md)
 - [zet Title Remap Recovery Plan](zet-title-remap-recovery-plan.md)
+- [zet Title Remap Recover](zet-title-remap-recover.md)

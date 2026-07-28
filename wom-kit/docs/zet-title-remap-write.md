@@ -117,9 +117,11 @@ leave:
 Do not delete or hand-edit those retained files. v0.3.270 can inspect them
 with the read-only `zet-title-remap-receipt-audit --dry-run` command, and
 v0.3.271 can map a complete retained case to one fixed read-only recovery
-decision with `zet-title-remap-recovery-plan --dry-run`. Neither command
-changes that state. The v0.3.271 planner does not resume, roll back, finalize,
-clean up, or revert it. Those mutations remain a later release track.
+decision with `zet-title-remap-recovery-plan --dry-run`. v0.3.272 can
+execute one reviewed safe action with `zet-title-remap-recover`; it restores
+uncommitted writes only toward verified prior bytes or cleans verified
+transaction residue. It does not resume, finalize, or revert a completed title
+change.
 
 On Windows the implementation uses atomic replacement and flushes file
 contents. Windows does not provide the same directory `fsync` guarantee as
@@ -127,7 +129,8 @@ POSIX, so this is not a claim of power-loss-proof storage.
 
 ## Current Boundary
 
-The v0.3.269 writer, v0.3.270 auditor, and v0.3.271 recovery planner implement:
+The v0.3.269 writer, v0.3.270 auditor, v0.3.271 recovery planner, and v0.3.272
+single-case executor implement:
 
 - read-only title proposal planning;
 - approval-gated title-only batch write;
@@ -137,11 +140,13 @@ The v0.3.269 writer, v0.3.270 auditor, and v0.3.271 recovery planner implement:
 - hard-exit transaction evidence;
 - archive-wide completed-receipt and retained-transaction diagnosis;
 - one fixed privacy-safe recovery decision per complete retained case.
+- approval-gated safe-direction rollback or verified residue cleanup for one
+  freshly rebound interrupted case.
 
 It does not yet implement:
 
-- automatic hard-exit recovery;
+- automatic recovery of any interrupted title transaction;
 - approved revert from a completed title-remap receipt.
 
 See [zet Title Remap Receipt And Interruption Audit](zet-title-remap-receipt-audit.md)
-and [zet Title Remap Recovery Plan](zet-title-remap-recovery-plan.md).
+and [zet Title Remap Recover](zet-title-remap-recover.md).
