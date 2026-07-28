@@ -8280,14 +8280,6 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         release_text = (
             KIT_ROOT / "docs" / "releases" / "v0.3.276.md"
         ).read_text(encoding="utf-8")
-        packaged_release_text = (
-            KIT_ROOT
-            / "src"
-            / "wom_kit"
-            / "_resources"
-            / "release-notes"
-            / "v0.3.276.md"
-        ).read_text(encoding="utf-8")
         decision_text = (
             KIT_ROOT
             / "docs"
@@ -8371,6 +8363,90 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "(zet-title-remap-revert-recover.md)",
             public_map_ko_text,
         )
+
+    def test_v03277_notion_locator_loss_docs_match_read_only_census_contract(
+        self,
+    ) -> None:
+        guide_text = (
+            KIT_ROOT / "docs" / "notion-import-locator-loss-audit.md"
+        ).read_text(encoding="utf-8")
+        release_text = (
+            KIT_ROOT / "docs" / "releases" / "v0.3.277.md"
+        ).read_text(encoding="utf-8")
+        packaged_release_text = (
+            KIT_ROOT
+            / "src"
+            / "wom_kit"
+            / "_resources"
+            / "release-notes"
+            / "v0.3.277.md"
+        ).read_text(encoding="utf-8")
+        decision_text = (
+            KIT_ROOT
+            / "docs"
+            / "archive-infra-decision-log-2026-07-28-v03277-notion-locator-loss-audit.md"
+        ).read_text(encoding="utf-8")
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        public_map_text = (
+            KIT_ROOT / "docs" / "public-documentation-map.md"
+        ).read_text(encoding="utf-8")
+        public_map_ko_text = (
+            KIT_ROOT / "docs" / "public-documentation-map.ko.md"
+        ).read_text(encoding="utf-8")
+        root_readme_text = (REPO_ROOT / "README.md").read_text(
+            encoding="utf-8"
+        )
+        root_readme_ko_text = (REPO_ROOT / "README.ko.md").read_text(
+            encoding="utf-8"
+        )
+        kit_readme_text = (KIT_ROOT / "README.md").read_text(
+            encoding="utf-8"
+        )
+        upgrade_text = (REPO_ROOT / "UPGRADE.md").read_text(
+            encoding="utf-8"
+        )
+        upgrade_ko_text = (REPO_ROOT / "UPGRADE.ko.md").read_text(
+            encoding="utf-8"
+        )
+        install_text = (
+            KIT_ROOT / "docs" / "python-tool-install.md"
+        ).read_text(encoding="utf-8")
+        install_ko_text = (
+            KIT_ROOT / "docs" / "python-tool-install.ko.md"
+        ).read_text(encoding="utf-8")
+
+        for text in (
+            guide_text,
+            release_text,
+            decision_text,
+            matrix_text,
+        ):
+            with self.subTest(document="notion-locator-loss-contract"):
+                self.assertIn("notion-import-locator-loss-audit", text)
+                self.assertIn("source_page_id", text)
+                self.assertIn("read-only", text.lower())
+                self.assertIn("source mirror", text.lower())
+                self.assertIn("write", text.lower())
+
+        for phrase in (
+            "[source locator omitted]",
+            "body_marker_count",
+            "frontmatter_omitted_count",
+            "count_mismatch_zettel_count",
+            "source_page_id_present_count",
+            "source_page_id_missing_count",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, guide_text)
+
+        self.assertIn(
+            "[Notion Import Locator-Loss Audit]",
+            public_map_text,
+        )
+        self.assertIn(
+            "(notion-import-locator-loss-audit.md)",
+            public_map_ko_text,
+        )
         self.assertEqual(packaged_release_text, release_text)
         for text in (
             root_readme_text,
@@ -8378,11 +8454,13 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             kit_readme_text,
             upgrade_text,
             upgrade_ko_text,
+            install_text,
+            install_ko_text,
         ):
-            with self.subTest(document="v03276-public-version-surface"):
-                self.assertIn("v0.3.276", text)
+            with self.subTest(document="v03277-public-version-surface"):
+                self.assertIn("v0.3.277", text)
         self.assertIn(
-            "releases/download/v0.3.276/wom_kit-0.3.276-py3-none-any.whl",
+            "releases/download/v0.3.277/wom_kit-0.3.277-py3-none-any.whl",
             root_readme_text,
         )
 

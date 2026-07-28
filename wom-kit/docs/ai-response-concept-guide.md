@@ -419,6 +419,9 @@ draft human zets from already registered evidence?
 
 Then route safely:
 
+- Census current omission markers, import-time counts, and private source-page
+  join-key presence before promising source-locator recovery: use
+  `notion-import-locator-loss-audit`.
 - Recover Notion zet-to-objet material candidates after imported zettel bodies
   no longer contain provider locators: use
   `notion-objet-source-map-link-plan` with source maps and optional
@@ -525,6 +528,7 @@ This guide rephrases existing model documents for AI-human conversation:
 - [Connection Edge Intelligence Plan](connection-edge-intelligence-plan.md)
 - [Zettel Edge Batch](zettel-edge-batch.md)
 - [Notion Objet Import Clue Audit](notion-objet-import-clue-audit.md)
+- [Notion Import Locator-Loss Audit](notion-import-locator-loss-audit.md)
 - [Notion Objet Source Map Link Plan](notion-objet-source-map-link-plan.md)
 - [Notion Nested Tree Plan](notion-nested-tree-plan.md)
 - [Notion Ancestor Crawl Plan](notion-ancestor-crawl-plan.md)
