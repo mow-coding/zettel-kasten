@@ -1,6 +1,6 @@
 # zet Title Remap Revert Recovery Plan
 
-Status: v0.3.275 read-only hard-exit title-revert recovery decision
+Status: v0.3.276 read-only hard-exit title-revert recovery decision and approved-executor handoff
 
 Use this command when v0.3.274 or later leaves a private
 `.revert.transaction.json` and the common title-remap lock after a process
@@ -40,8 +40,10 @@ remaining applied participants would later be restored from complete verified
 prior-byte snapshots. It never rolls already restored participants back to the
 applied title merely to recreate the pre-revert batch.
 
-This plan does not grant that later write authority. Every case reports
-`execution_implemented: false` and `safe_to_execute_now: false`.
+This plan does not itself grant write authority. Since v0.3.276 every
+non-forensic fixed action reports `execution_implemented: true`, while
+`safe_to_execute_now` remains false until the separate executor rebinds the
+complete plan, exact case, action, and fresh human approval.
 
 ## Apply/Reverse Separation
 
@@ -78,9 +80,10 @@ evidence to make the audit green.
 
 If the source audit or returned case set is incomplete, the plan is blocked.
 The complete `plan_digest` binds every returned content-free case and its fixed
-decision. A later executor must rerun the complete audit and plan, bind one
-exact case SHA-256 plus this plan digest and action, require fresh human review
-and archive quiescence, and revalidate all private evidence before writing.
+decision. The v0.3.276 executor reruns the complete audit and plan, binds one
+exact case SHA-256 plus this plan digest and action, requires fresh human
+review and archive quiescence, and revalidates all private evidence before
+writing.
 
 ## Privacy Boundary
 
@@ -95,9 +98,14 @@ credential, and has no MCP method.
 
 ## Current Execution Boundary
 
-v0.3.275 implements only this read-only decision layer. A dedicated
-approval-gated title-revert hard-exit recovery executor remains a later
-release. Do not pass these cases to `zet-title-remap-recover`.
+Since v0.3.276, pass one reviewed non-forensic case to the separate
+`zet-title-remap-revert-recover` command. Do not pass these cases to the older
+`zet-title-remap-recover`, which remains dedicated to interrupted apply
+transactions.
+
+The approved revert recovery executor can continue only toward verified prior
+bytes, finalize the deterministic compensation receipt, or clean exact
+transaction residue. `manual_forensic_hold` remains non-executable.
 
 See also:
 
@@ -105,3 +113,4 @@ See also:
 - [zet Title Remap Receipt And Interruption Audit](zet-title-remap-receipt-audit.md)
 - [zet Title Remap Recovery Plan](zet-title-remap-recovery-plan.md)
 - [zet Title Remap Recover](zet-title-remap-recover.md)
+- [zet Title Remap Revert Recover](zet-title-remap-revert-recover.md)

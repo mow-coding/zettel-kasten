@@ -1,6 +1,6 @@
 # Approved zet Title Remap Revert
 
-Status: v0.3.275 approval-gated completed-title compensation and read-only hard-exit recovery decision
+Status: v0.3.276 approval-gated completed-title compensation and hard-exit recovery
 
 Use this command only for one clean, immutable title-remap receipt whose exact
 prior-byte compensation has been reviewed.
@@ -98,8 +98,9 @@ A process kill or power interruption may leave:
 `partially_reverted`, `fully_reverted_receipt_missing`, `divergent`, or
 `stale_completed`. Preserve all evidence. Since v0.3.275 the separate
 read-only `zet-title-remap-revert-recovery-plan --dry-run` command maps a
-complete retained revert case to one fixed decision. It does not execute that
-decision; a dedicated approval-gated executor remains a later release.
+complete retained revert case to one fixed decision. Since v0.3.276 the
+separate `zet-title-remap-revert-recover` command can execute its non-forensic
+actions after fresh review; `manual_forensic_hold` remains non-executable.
 
 ## Privacy Boundary
 

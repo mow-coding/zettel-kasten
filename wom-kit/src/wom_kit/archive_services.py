@@ -7547,6 +7547,22 @@ ZET_TITLE_REMAP_REVERT_TRANSACTION_JOURNAL_SCHEMA = (
 ZET_TITLE_REMAP_REVERT_RECOVERY_PLAN_SCHEMA = (
     "wom-kit/zet-title-remap-revert-recovery-plan/v0.1"
 )
+ZET_TITLE_REMAP_REVERT_RECOVER_SCHEMA = (
+    "wom-kit/zet-title-remap-revert-recover/v0.1"
+)
+ZET_TITLE_REMAP_REVERT_RECOVERY_ACTIONS = frozenset(
+    {
+        "cleanup_unstarted_title_revert_transaction_evidence",
+        "resume_title_revert_forward_and_finalize_receipt",
+        "finalize_title_revert_receipt",
+        "cleanup_verified_completed_title_revert_evidence",
+        "manual_forensic_hold",
+    }
+)
+ZET_TITLE_REMAP_EXECUTABLE_REVERT_RECOVERY_ACTIONS = (
+    ZET_TITLE_REMAP_REVERT_RECOVERY_ACTIONS
+    - {"manual_forensic_hold"}
+)
 ZET_TITLE_REMAP_RECOVERY_ACTIONS = frozenset(
     {
         "cleanup_unstarted_title_transaction_evidence",
@@ -14300,7 +14316,10 @@ def zet_title_remap_revert_recovery_plan(
                 "source_receipt_revalidation_required": True,
                 "fresh_recovery_approval_required": True,
                 "archive_quiescence_affirmation_required": True,
-                "execution_implemented": False,
+                "execution_implemented": (
+                    recommended_action
+                    in ZET_TITLE_REMAP_EXECUTABLE_REVERT_RECOVERY_ACTIONS
+                ),
                 "safe_to_execute_now": False,
                 "issue_codes": [
                     str(code)
@@ -14407,8 +14426,9 @@ def zet_title_remap_revert_recovery_plan(
         },
         "cases": complete_cases,
         "execution_boundary": {
-            "execution_implemented": False,
+            "execution_implemented": True,
             "automatic_recovery": False,
+            "approval_gated_single_case_executor_implemented": True,
             "fresh_recovery_approval_required": True,
             "archive_quiescence_affirmation_required": True,
             "single_case_sha_and_plan_bound_execution_required": True,
@@ -14462,8 +14482,8 @@ def zet_title_remap_revert_recovery_plan(
             if not planned_cases and not apply_case_count and ok
             else [
                 "Retain every title-remap apply/revert receipt, transaction journal, common write lock, and prior-byte snapshot.",
-                "Have a human review each fixed title-revert recovery decision; this command grants no write or cleanup authority.",
-                "Do not pass a title-revert case to zet-title-remap-recover; a dedicated approval-gated title-revert recovery executor is not implemented in this release.",
+                "Have a human review each fixed title-revert recovery decision; this plan command itself grants no write or cleanup authority.",
+                "Use zet-title-remap-revert-recover only for one reviewed executable action bound to this complete plan digest and case SHA-256 after fresh state and snapshot revalidation.",
             ]
         ),
     }
@@ -15428,6 +15448,1070 @@ def zet_title_remap_recover(
                 canonical_files_written
                 or write_lock_reacquired
                 or cleanup_attempted
+            )
+            else "blocked"
+        )
+
+
+def find_zet_title_remap_revert_recovery_journal(
+    root: Path,
+    *,
+    archive_id: str,
+    case_sha256: str,
+    max_journals: int,
+) -> tuple[Path, bytes, dict[str, Any]]:
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", case_sha256):
+        raise ArchiveServiceError(
+            "Title revert recovery case SHA-256 is invalid."
+        )
+    title_remap_root = archive_internal_path(
+        root,
+        ZET_TITLE_REMAP_PROPOSAL_PREFIX.rstrip("/"),
+    )
+    if (
+        title_remap_root.is_symlink()
+        or zet_revision_path_has_symlink_component(
+            root,
+            title_remap_root,
+        )
+        or not title_remap_root.is_dir()
+    ):
+        raise ArchiveServiceError(
+            "Title revert recovery journal root is unsafe."
+        )
+    journal_paths = sorted(
+        title_remap_root.glob(".*.revert.transaction.json")
+    )
+    if len(journal_paths) > int(max_journals):
+        raise ArchiveServiceError(
+            "Title revert recovery journal scan is incomplete."
+        )
+    matches: list[tuple[Path, bytes, dict[str, Any]]] = []
+    for journal_path in journal_paths:
+        try:
+            raw, journal = (
+                read_zet_title_remap_revert_transaction_journal(
+                    root,
+                    journal_path,
+                    archive_id=archive_id,
+                )
+            )
+        except ArchiveServiceError:
+            continue
+        actual_case_sha256 = (
+            "sha256:" + hashlib.sha256(raw).hexdigest()
+        )
+        if actual_case_sha256 == case_sha256:
+            matches.append((journal_path, raw, journal))
+    if len(matches) != 1:
+        raise ArchiveServiceError(
+            "Title revert recovery journal is missing or ambiguous."
+        )
+    return matches[0]
+
+
+def zet_title_remap_revert_write_lock_document(
+    journal_path: Path,
+    journal: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "schema": "wom-kit/zet-title-remap-write-lock/v0.2",
+        "operation": "revert",
+        "source_receipt_sha256": journal[
+            "source_receipt_sha256"
+        ],
+        "revert_plan_digest": journal["revert_plan_digest"],
+        "transaction_journal_name": journal_path.name,
+    }
+
+
+def ensure_zet_title_remap_revert_recovery_write_lock(
+    root: Path,
+    *,
+    lock_path: Path,
+    journal_path: Path,
+    journal: dict[str, Any],
+) -> bool:
+    expected = zet_title_remap_revert_write_lock_document(
+        journal_path,
+        journal,
+    )
+    if lock_path.is_symlink() or (
+        lock_path.exists() and not lock_path.is_file()
+    ):
+        raise ArchiveServiceError(
+            "Title revert recovery common write lock path is unsafe."
+        )
+    if lock_path.is_file():
+        existing = read_zet_title_remap_write_lock(root, lock_path)
+        if existing != expected:
+            raise ArchiveServiceError(
+                "Title revert recovery common write lock belongs to another case."
+            )
+        return False
+
+    descriptor: int | None = None
+    created = False
+    try:
+        descriptor = os.open(
+            lock_path,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            0o600,
+        )
+        created = True
+        with os.fdopen(descriptor, "wb") as handle:
+            descriptor = None
+            handle.write(
+                (
+                    json.dumps(
+                        expected,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
+                    + "\n"
+                ).encode("utf-8")
+            )
+            handle.flush()
+            os.fsync(handle.fileno())
+        fsync_directory(lock_path.parent)
+        if read_zet_title_remap_write_lock(
+            root,
+            lock_path,
+        ) != expected:
+            raise ArchiveServiceError(
+                "Title revert recovery common write lock verification failed."
+            )
+        return True
+    except FileExistsError as exc:
+        raise ArchiveServiceError(
+            "Title revert recovery common write lock was created concurrently."
+        ) from exc
+    except (ArchiveServiceError, OSError) as exc:
+        if descriptor is not None:
+            os.close(descriptor)
+        if created:
+            try:
+                lock_path.unlink()
+                fsync_directory(lock_path.parent)
+            except OSError:
+                pass
+        if isinstance(exc, ArchiveServiceError):
+            raise
+        raise ArchiveServiceError(
+            "Title revert recovery common write lock could not be acquired."
+        ) from exc
+
+
+def zet_title_remap_revert_receipt_from_journal(
+    journal: dict[str, Any],
+    source_receipt: dict[str, Any],
+    *,
+    source_receipt_path: str,
+    source_receipt_sha256: str,
+) -> dict[str, Any]:
+    if (
+        journal.get("source_receipt_path") != source_receipt_path
+        or journal.get("source_receipt_sha256")
+        != source_receipt_sha256
+        or journal.get("items") != source_receipt.get("items")
+        or journal.get("item_count") != source_receipt.get("item_count")
+    ):
+        raise ArchiveServiceError(
+            "Title revert recovery source receipt binding changed."
+        )
+    return {
+        "schema": ZET_TITLE_REMAP_REVERT_RECEIPT_SCHEMA,
+        "action": "zet_title_remap_revert",
+        "status": "reverted",
+        "reverted_at": journal["prepared_at"],
+        "archive_id": journal["archive_id"],
+        "source_receipt_path": journal["source_receipt_path"],
+        "source_receipt_sha256": journal[
+            "source_receipt_sha256"
+        ],
+        "source_proposal_sha256": source_receipt[
+            "proposal_sha256"
+        ],
+        "source_plan_digest": source_receipt["plan_digest"],
+        "source_write_plan_digest": source_receipt[
+            "write_plan_digest"
+        ],
+        "planner_wom_kit_version": journal[
+            "planner_wom_kit_version"
+        ],
+        "source_history_audit_digest": journal[
+            "source_history_audit_digest"
+        ],
+        "revert_plan_digest": journal["revert_plan_digest"],
+        "reviewed_by": journal["reviewed_by"],
+        "human_affirmations": journal["human_affirmations"],
+        "item_count": journal["item_count"],
+        "items": journal["items"],
+        "mutation_contract": {
+            "field_restored": "frontmatter.title",
+            "exact_prior_file_bytes_restored": True,
+            "body_bytes_preserved": True,
+            "other_frontmatter_semantics_restored": True,
+            "updated_at_changed": False,
+            "source_receipt_preserved": True,
+            "rollback_on_runtime_failure": True,
+            "crash_recovery_journal_written": True,
+        },
+        "privacy_guards": {
+            "old_title_text_stored_in_receipt": False,
+            "new_title_text_stored_in_receipt": False,
+            "body_text_stored_in_receipt": False,
+            "contains_private_zettel_ids_and_paths": True,
+            "provider_api_called": False,
+            "model_called": False,
+            "secret_store_or_environment_read": False,
+        },
+    }
+
+
+def zet_title_remap_revert_recover(
+    archive_root: Path | str,
+    *,
+    case_sha256: str,
+    expected_plan_digest: str,
+    expected_action: str,
+    dry_run: bool = False,
+    approve: bool = False,
+    reviewed_by: str | None = None,
+    affirm_recovery_reviewed: bool = False,
+    affirm_archive_quiescent: bool = False,
+    max_receipts: int = ZET_TITLE_REMAP_AUDIT_MAX_RECEIPTS,
+    max_journals: int = ZET_TITLE_REMAP_AUDIT_MAX_JOURNALS,
+    max_cases: int = 100,
+    progress_callback: Callable[
+        [str, str, int | None, int | None],
+        None,
+    ]
+    | None = None,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    case_sha256 = str(case_sha256 or "").strip()
+    expected_plan_digest = str(
+        expected_plan_digest or ""
+    ).strip()
+    expected_action = str(expected_action or "").strip()
+    reviewer = safe_foreign_quarantine_actor_id(reviewed_by)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    selected_case: dict[str, Any] | None = None
+    actual_plan_digest: str | None = None
+    recovery_guard_acquired = False
+    recovery_guard_file_created = False
+    private_journal_read = False
+    source_receipt_read = False
+    prior_snapshot_bytes_read = False
+    canonical_files_written = 0
+    canonical_write_attempt_count = 0
+    receipt_written_this_run = False
+    receipt_preserved = False
+    write_lock_reacquired = False
+    write_lock_removed: bool | None = None
+    transaction_journal_removed: bool | None = None
+    cleanup_attempted = False
+    execution_started = False
+    journal_path: Path | None = None
+    lock_path: Path | None = None
+    revert_receipt_path: Path | None = None
+
+    def result_payload(status: str) -> dict[str, Any]:
+        ok = (
+            status in {"ready_to_recover", "recovered"}
+            and not blockers
+        )
+        evidence_retained = bool(
+            journal_path is not None and journal_path.exists()
+        )
+        case_payload = (
+            {
+                "case_sha256": selected_case.get("case_sha256"),
+                "operation": selected_case.get("operation"),
+                "observed_state": selected_case.get(
+                    "observed_state"
+                ),
+                "final_receipt_state": selected_case.get(
+                    "final_receipt_state"
+                ),
+                "write_lock_state": selected_case.get(
+                    "write_lock_state"
+                ),
+                "recommended_action": selected_case.get(
+                    "recommended_action"
+                ),
+                "participant_write_count": selected_case.get(
+                    "participant_write_count"
+                ),
+                "receipt_write_required": selected_case.get(
+                    "receipt_write_required"
+                ),
+                "evidence_cleanup_required": selected_case.get(
+                    "evidence_cleanup_required"
+                ),
+            }
+            if selected_case is not None
+            else None
+        )
+        return {
+            "ok": ok,
+            "schema": ZET_TITLE_REMAP_REVERT_RECOVER_SCHEMA,
+            "lifecycle_action": "zet_title_remap_revert_recover",
+            "status": status,
+            "dry_run": bool(dry_run),
+            "approved": bool(approve and status == "recovered"),
+            "archive_id": archive_id,
+            "case_sha256": (
+                case_sha256
+                if re.fullmatch(
+                    r"sha256:[0-9a-f]{64}",
+                    case_sha256,
+                )
+                else None
+            ),
+            "expected_plan_digest": (
+                expected_plan_digest
+                if re.fullmatch(
+                    r"sha256:[0-9a-f]{64}",
+                    expected_plan_digest,
+                )
+                else None
+            ),
+            "actual_plan_digest": actual_plan_digest,
+            "expected_plan_digest_matches": bool(
+                actual_plan_digest
+                and actual_plan_digest == expected_plan_digest
+            ),
+            "expected_action": (
+                expected_action
+                if expected_action
+                in ZET_TITLE_REMAP_REVERT_RECOVERY_ACTIONS
+                else None
+            ),
+            "case": case_payload,
+            "summary": {
+                "canonical_files_written_this_run": (
+                    canonical_files_written
+                ),
+                "canonical_write_attempt_count": (
+                    canonical_write_attempt_count
+                ),
+                "revert_receipt_written_this_run": (
+                    receipt_written_this_run
+                ),
+                "verified_revert_receipt_preserved": (
+                    receipt_preserved
+                ),
+                "write_lock_reacquired": write_lock_reacquired,
+                "write_lock_removed": write_lock_removed,
+                "transaction_journal_removed": (
+                    transaction_journal_removed
+                ),
+            },
+            "approval_contract": {
+                "fresh_recovery_approval_required": True,
+                "reviewed_by_supplied": bool(reviewer),
+                "reviewed_by_echoed": False,
+                "recovery_reviewed_affirmed": bool(
+                    affirm_recovery_reviewed
+                ),
+                "archive_quiescent_affirmed": bool(
+                    affirm_archive_quiescent
+                ),
+                "plan_digest_case_and_action_bound": bool(
+                    selected_case is not None
+                    and actual_plan_digest == expected_plan_digest
+                    and selected_case.get("case_sha256")
+                    == case_sha256
+                    and selected_case.get("recommended_action")
+                    == expected_action
+                ),
+                "original_revert_authorization_preserved": True,
+                "new_recovery_approval_persisted_in_separate_receipt": (
+                    False
+                ),
+            },
+            "recovery_guard": {
+                "acquired": recovery_guard_acquired,
+                "guard_file_created_this_run": (
+                    recovery_guard_file_created
+                ),
+                "automatically_released": (
+                    True if recovery_guard_acquired else None
+                ),
+                "path_echoed": False,
+                "serializes_apply_and_revert_recovery_executors": True,
+            },
+            "write_boundary": {
+                "canonical_zets_modified": (
+                    canonical_files_written > 0
+                ),
+                "canonical_files_restored_to_prior_bytes": (
+                    canonical_files_written
+                ),
+                "canonical_files_moved_back_to_applied_bytes": 0,
+                "source_apply_receipt_modified_or_deleted": False,
+                "revert_receipt_created": receipt_written_this_run,
+                "verified_revert_receipt_modified_or_deleted": False,
+                "common_write_lock_created": write_lock_reacquired,
+                "common_write_lock_deleted": bool(
+                    write_lock_removed
+                ),
+                "transaction_journal_deleted": bool(
+                    transaction_journal_removed
+                ),
+                "prior_byte_snapshots_modified_or_deleted": False,
+                "recovery_guard_file_created": (
+                    recovery_guard_file_created
+                ),
+                "provider_state_written": False,
+                "objet_bytes_written": False,
+                "database_rows_written": False,
+            },
+            "retry_contract": {
+                "safe_direction_only": True,
+                "successful_prior_byte_restores_reapplied_on_failure": (
+                    False
+                ),
+                "journal_retained_on_incomplete_recovery": (
+                    evidence_retained
+                ),
+                "fresh_plan_and_approval_required_after_incomplete_recovery": (
+                    True
+                ),
+            },
+            "privacy_guards": {
+                "journal_private_metadata_read": private_journal_read,
+                "source_receipt_private_metadata_read": (
+                    source_receipt_read
+                ),
+                "prior_snapshot_bytes_read": prior_snapshot_bytes_read,
+                "journal_receipt_lock_or_snapshot_paths_echoed": False,
+                "zettel_ids_echoed": False,
+                "zettel_paths_echoed": False,
+                "old_or_new_title_values_echoed": False,
+                "title_hashes_echoed": False,
+                "title_lengths_echoed": False,
+                "zettel_body_text_echoed": False,
+                "reviewed_by_echoed": False,
+                "proposal_sha256_echoed": False,
+                "absolute_local_paths_echoed": False,
+                "provider_api_called": False,
+                "model_called": False,
+                "secret_store_or_environment_read": False,
+            },
+            "blockers": unique_preserve_order(blockers),
+            "warnings": unique_preserve_order(warnings),
+            "next_safe_actions": (
+                [
+                    "Run this exact revert case SHA, complete plan digest, and fixed action with --approve only after fresh recovery review and archive-quiescence confirmation."
+                ]
+                if status == "ready_to_recover"
+                else [
+                    "Title-revert recovery completed in the reviewed compensation direction; preserve the immutable source and revert receipts plus prior-byte snapshots."
+                ]
+                if status == "recovered"
+                else [
+                    "Retain every source/revert receipt, journal, lock, canonical participant, and prior-byte snapshot; generate a fresh plan before another approved attempt."
+                ]
+            ),
+        }
+
+    if bool(dry_run) == bool(approve):
+        blockers.append("choose_exactly_one_of_dry_run_or_approve")
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", case_sha256):
+        blockers.append("revert_recovery_case_sha256_invalid")
+    if not re.fullmatch(
+        r"sha256:[0-9a-f]{64}",
+        expected_plan_digest,
+    ):
+        blockers.append(
+            "expected_revert_recovery_plan_digest_invalid"
+        )
+    if (
+        expected_action
+        not in ZET_TITLE_REMAP_REVERT_RECOVERY_ACTIONS
+    ):
+        blockers.append("expected_revert_recovery_action_invalid")
+    if approve:
+        if reviewer is None:
+            blockers.append("safe_reviewed_by_required")
+        if not affirm_recovery_reviewed:
+            blockers.append("affirm_recovery_reviewed_required")
+        if not affirm_archive_quiescent:
+            blockers.append("affirm_archive_quiescent_required")
+    elif (
+        reviewed_by
+        or affirm_recovery_reviewed
+        or affirm_archive_quiescent
+    ):
+        blockers.append("approval_fields_only_valid_with_approve")
+    if blockers:
+        return result_payload("blocked")
+
+    def fresh_plan() -> dict[str, Any]:
+        return zet_title_remap_revert_recovery_plan(
+            root,
+            dry_run=True,
+            max_receipts=max_receipts,
+            max_journals=max_journals,
+            max_cases=max_cases,
+            progress_callback=progress_callback,
+        )
+
+    def select_case(
+        plan: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        matches = [
+            case
+            for case in plan.get("cases", [])
+            if isinstance(case, dict)
+            and case.get("case_sha256") == case_sha256
+        ]
+        return matches[0] if len(matches) == 1 else None
+
+    plan = fresh_plan()
+    actual_plan_digest = (
+        plan.get("plan_digest")
+        if isinstance(plan.get("plan_digest"), str)
+        else None
+    )
+    if not plan.get("ok"):
+        blockers.extend(
+            f"plan:{code}" for code in plan.get("blockers", [])
+        )
+    if actual_plan_digest != expected_plan_digest:
+        blockers.append("revert_recovery_plan_digest_mismatch")
+    selected_case = select_case(plan)
+    if selected_case is None:
+        blockers.append(
+            "revert_recovery_case_not_found_or_ambiguous"
+        )
+    elif selected_case.get("operation") != "revert":
+        blockers.append("selected_case_is_not_revert")
+    elif selected_case.get("recommended_action") != expected_action:
+        blockers.append("revert_recovery_expected_action_mismatch")
+    elif expected_action == "manual_forensic_hold":
+        blockers.append("manual_forensic_hold_not_executable")
+    elif (
+        expected_action
+        not in ZET_TITLE_REMAP_EXECUTABLE_REVERT_RECOVERY_ACTIONS
+    ):
+        blockers.append("revert_recovery_action_not_implemented")
+    if blockers:
+        return result_payload("blocked")
+    if dry_run:
+        return result_payload("ready_to_recover")
+
+    assert reviewer is not None
+    try:
+        with zet_title_remap_recovery_guard(root) as guard:
+            recovery_guard_acquired = bool(guard.get("acquired"))
+            recovery_guard_file_created = bool(
+                guard.get("guard_file_created_this_run")
+            )
+            plan = fresh_plan()
+            actual_plan_digest = (
+                plan.get("plan_digest")
+                if isinstance(plan.get("plan_digest"), str)
+                else None
+            )
+            fresh_case = select_case(plan)
+            if (
+                not plan.get("ok")
+                or actual_plan_digest != expected_plan_digest
+                or fresh_case is None
+                or fresh_case.get("recommended_action")
+                != expected_action
+            ):
+                blockers.append(
+                    "revert_recovery_case_changed_before_execution"
+                )
+                return result_payload("blocked")
+            selected_case = fresh_case
+
+            journal_path, journal_raw, journal = (
+                find_zet_title_remap_revert_recovery_journal(
+                    root,
+                    archive_id=archive_id,
+                    case_sha256=case_sha256,
+                    max_journals=int(max_journals),
+                )
+            )
+            private_journal_read = True
+            title_remap_root = archive_internal_path(
+                root,
+                ZET_TITLE_REMAP_PROPOSAL_PREFIX.rstrip("/"),
+            )
+            lock_path = title_remap_root / ".title-remap.write.lock"
+            source_receipt_path = archive_internal_path(
+                root,
+                journal["source_receipt_path"],
+            )
+            source_raw, source_receipt, source_proposal_sha256 = (
+                read_zet_title_remap_receipt_for_audit(
+                    root,
+                    source_receipt_path,
+                    archive_id=archive_id,
+                )
+            )
+            source_receipt_read = True
+            if (
+                "sha256:"
+                + hashlib.sha256(source_raw).hexdigest()
+                != journal["source_receipt_sha256"]
+                or source_proposal_sha256
+                != source_receipt.get("proposal_sha256")
+                or source_receipt.get("items")
+                != journal.get("items")
+                or source_receipt.get("item_count")
+                != journal.get("item_count")
+            ):
+                blockers.append(
+                    "revert_recovery_source_receipt_binding_changed"
+                )
+                return result_payload("blocked")
+            expected_revert_receipt = (
+                zet_title_remap_revert_receipt_from_journal(
+                    journal,
+                    source_receipt,
+                    source_receipt_path=journal["source_receipt_path"],
+                    source_receipt_sha256=journal[
+                        "source_receipt_sha256"
+                    ],
+                )
+            )
+            if (
+                not zet_title_remap_revert_receipt_document_valid(
+                    expected_revert_receipt
+                )
+                or validate_schema(
+                    expected_revert_receipt,
+                    "zet-title-remap-revert-receipt.schema.json",
+                )
+            ):
+                blockers.append(
+                    "revert_recovery_receipt_reconstruction_invalid"
+                )
+                return result_payload("blocked")
+            revert_receipt_path = archive_internal_path(
+                root,
+                journal["final_receipt_path"],
+            )
+            if (
+                archive_relative_path(revert_receipt_path, root)
+                != journal["final_receipt_path"]
+                or journal["final_receipt_path"]
+                != zet_title_remap_revert_receipt_relative_path(
+                    journal["source_receipt_sha256"]
+                )
+                or zet_revision_path_has_symlink_component(
+                    root,
+                    revert_receipt_path,
+                )
+                or revert_receipt_path.is_symlink()
+            ):
+                blockers.append(
+                    "revert_recovery_receipt_path_unsafe"
+                )
+                return result_payload("blocked")
+
+            state = (
+                classify_zet_title_remap_revert_transaction_journal(
+                    root,
+                    journal,
+                )
+            )
+            observed_state = str(state.get("status") or "invalid")
+            planned_state = str(
+                fresh_case.get("observed_state") or "invalid"
+            )
+            state_matches_case = (
+                observed_state == planned_state
+                or (
+                    planned_state == "stale_completed"
+                    and observed_state
+                    == "fully_reverted_receipt_missing"
+                )
+            )
+            if (
+                not state_matches_case
+                or any(
+                    int(state.get(key) or 0)
+                    != int(fresh_case.get(key) or 0)
+                    for key in (
+                        "before_count",
+                        "after_count",
+                        "divergent_count",
+                        "missing_count",
+                    )
+                )
+            ):
+                blockers.append(
+                    "revert_recovery_participant_state_changed_after_plan"
+                )
+                return result_payload("blocked")
+
+            manifest_index, manifest_blockers = (
+                zet_revision_snapshot_manifest_index(root)
+            )
+            if manifest_blockers:
+                blockers.append(
+                    "revert_recovery_snapshot_manifest_invalid"
+                )
+                return result_payload("blocked")
+            existing_revert_receipt_bytes: bytes | None = None
+            if expected_action == (
+                "cleanup_verified_completed_title_revert_evidence"
+            ):
+                (
+                    existing_revert_receipt_bytes,
+                    existing_revert_receipt,
+                    _existing_revert_receipt_sha256,
+                ) = read_zet_title_remap_revert_receipt(
+                    root,
+                    revert_receipt_path,
+                    archive_id=archive_id,
+                    source_receipt_sha256=journal[
+                        "source_receipt_sha256"
+                    ],
+                )
+                verification = verify_zet_title_remap_revert_receipt(
+                    root,
+                    revert_receipt_path,
+                    archive_id=archive_id,
+                    source_receipt_path=journal[
+                        "source_receipt_path"
+                    ],
+                    source_receipt_sha256=journal[
+                        "source_receipt_sha256"
+                    ],
+                    source_receipt=source_receipt,
+                    manifest_index=manifest_index,
+                )
+                if (
+                    existing_revert_receipt
+                    != expected_revert_receipt
+                    or not verification.get("ok")
+                ):
+                    blockers.append(
+                        "revert_recovery_verified_receipt_binding_changed"
+                    )
+                    return result_payload("blocked")
+                receipt_preserved = True
+            elif (
+                revert_receipt_path.exists()
+                or revert_receipt_path.is_symlink()
+            ):
+                blockers.append(
+                    "revert_recovery_receipt_became_occupied"
+                )
+                return result_payload("blocked")
+
+            write_lock_reacquired = (
+                ensure_zet_title_remap_revert_recovery_write_lock(
+                    root,
+                    lock_path=lock_path,
+                    journal_path=journal_path,
+                    journal=journal,
+                )
+            )
+            locked_raw, locked_journal = (
+                read_zet_title_remap_revert_transaction_journal(
+                    root,
+                    journal_path,
+                    archive_id=archive_id,
+                )
+            )
+            if (
+                locked_raw != journal_raw
+                or "sha256:"
+                + hashlib.sha256(locked_raw).hexdigest()
+                != case_sha256
+                or locked_journal != journal
+                or read_zet_title_remap_write_lock(root, lock_path)
+                != zet_title_remap_revert_write_lock_document(
+                    journal_path,
+                    journal,
+                )
+            ):
+                blockers.append(
+                    "revert_recovery_journal_or_lock_binding_changed"
+                )
+                return result_payload("blocked")
+            execution_started = True
+
+            safe_direction_candidates = (
+                materialize_zet_title_remap_recovery_writes(
+                    root,
+                    journal,
+                    rollback_to_before=True,
+                )
+            )
+            prior_snapshot_bytes_read = True
+            if expected_action == (
+                "resume_title_revert_forward_and_finalize_receipt"
+            ):
+                participant_writes = safe_direction_candidates
+                expected_write_count = int(
+                    fresh_case.get("participant_write_count") or 0
+                )
+            else:
+                participant_writes = []
+                expected_write_count = 0
+            if len(participant_writes) != expected_write_count:
+                blockers.append(
+                    "revert_recovery_participant_write_set_changed"
+                )
+                return result_payload("blocked")
+            if participant_writes and progress_callback is not None:
+                progress_callback(
+                    "title-revert-recovery-write",
+                    "start",
+                    0,
+                    len(participant_writes),
+                )
+            for index, item in enumerate(
+                participant_writes,
+                start=1,
+            ):
+                if (
+                    read_zet_title_remap_canonical_bytes(item["path"])
+                    != item["source_bytes"]
+                ):
+                    raise ArchiveServiceError(
+                        "Title revert recovery participant changed immediately before write."
+                    )
+                canonical_write_attempt_count += 1
+                write_bytes_atomic(
+                    item["path"],
+                    item["target_bytes"],
+                )
+                written_bytes = (
+                    read_zet_title_remap_canonical_bytes(item["path"])
+                )
+                if (
+                    written_bytes != item["target_bytes"]
+                    or "sha256:"
+                    + hashlib.sha256(written_bytes).hexdigest()
+                    != item["target_sha256"]
+                ):
+                    raise ArchiveServiceError(
+                        "Title revert recovery canonical write verification failed."
+                    )
+                canonical_files_written += 1
+                if progress_callback is not None:
+                    progress_callback(
+                        "title-revert-recovery-write",
+                        "written",
+                        index,
+                        len(participant_writes),
+                    )
+            if participant_writes and progress_callback is not None:
+                progress_callback(
+                    "title-revert-recovery-write",
+                    "done",
+                    len(participant_writes),
+                    len(participant_writes),
+                )
+
+            final_state = (
+                classify_zet_title_remap_revert_transaction_journal(
+                    root,
+                    journal,
+                )
+            )
+            if expected_action == (
+                "cleanup_unstarted_title_revert_transaction_evidence"
+            ):
+                expected_final_state = "prepared"
+            elif expected_action == (
+                "cleanup_verified_completed_title_revert_evidence"
+            ):
+                expected_final_state = (
+                    "fully_reverted_receipt_missing"
+                )
+            else:
+                expected_final_state = (
+                    "fully_reverted_receipt_missing"
+                )
+            if (
+                final_state.get("status") != expected_final_state
+                or (
+                    expected_final_state == "prepared"
+                    and int(final_state.get("after_count") or 0)
+                    != int(journal["item_count"])
+                )
+                or (
+                    expected_final_state
+                    == "fully_reverted_receipt_missing"
+                    and int(final_state.get("before_count") or 0)
+                    != int(journal["item_count"])
+                )
+            ):
+                raise ArchiveServiceError(
+                    "Title revert recovery final participant state did not verify."
+                )
+
+            must_write_receipt = expected_action in {
+                "resume_title_revert_forward_and_finalize_receipt",
+                "finalize_title_revert_receipt",
+            }
+            if must_write_receipt:
+                revert_receipt_path.parent.mkdir(
+                    parents=True,
+                    exist_ok=True,
+                )
+                write_json_new_file(
+                    revert_receipt_path,
+                    expected_revert_receipt,
+                )
+                receipt_written_this_run = True
+                verification = verify_zet_title_remap_revert_receipt(
+                    root,
+                    revert_receipt_path,
+                    archive_id=archive_id,
+                    source_receipt_path=journal[
+                        "source_receipt_path"
+                    ],
+                    source_receipt_sha256=journal[
+                        "source_receipt_sha256"
+                    ],
+                    source_receipt=source_receipt,
+                    manifest_index=manifest_index,
+                )
+                if not verification.get("ok"):
+                    raise ArchiveServiceError(
+                        "Title revert recovery receipt verification failed."
+                    )
+                receipt_preserved = True
+            elif existing_revert_receipt_bytes is not None:
+                if (
+                    not revert_receipt_path.is_file()
+                    or revert_receipt_path.is_symlink()
+                    or revert_receipt_path.read_bytes()
+                    != existing_revert_receipt_bytes
+                ):
+                    raise ArchiveServiceError(
+                        "Title revert recovery verified receipt changed."
+                    )
+                receipt_preserved = True
+            elif (
+                revert_receipt_path.exists()
+                or revert_receipt_path.is_symlink()
+            ):
+                raise ArchiveServiceError(
+                    "Title revert recovery receipt became occupied."
+                )
+
+            if source_receipt_path.read_bytes() != source_raw:
+                raise ArchiveServiceError(
+                    "Title revert recovery source receipt changed."
+                )
+            if (
+                read_zet_title_remap_write_lock(root, lock_path)
+                != zet_title_remap_revert_write_lock_document(
+                    journal_path,
+                    journal,
+                )
+            ):
+                raise ArchiveServiceError(
+                    "Title revert recovery common write lock changed."
+                )
+            cleanup_attempted = True
+            try:
+                write_lock_removed = (
+                    remove_zet_title_remap_recovery_evidence(
+                        lock_path
+                    )
+                )
+            except OSError:
+                write_lock_removed = False
+            if not write_lock_removed:
+                blockers.append(
+                    "revert_recovery_completed_but_write_lock_cleanup_failed"
+                )
+                return result_payload(
+                    "recovery_incomplete_evidence_retained"
+                )
+
+            current_journal_raw, _current_journal = (
+                read_zet_title_remap_revert_transaction_journal(
+                    root,
+                    journal_path,
+                    archive_id=archive_id,
+                )
+            )
+            if current_journal_raw != journal_raw:
+                blockers.append(
+                    "revert_recovery_journal_changed_before_cleanup"
+                )
+                return result_payload(
+                    "recovery_incomplete_evidence_retained"
+                )
+            try:
+                transaction_journal_removed = (
+                    remove_zet_title_remap_recovery_evidence(
+                        journal_path
+                    )
+                )
+            except OSError:
+                transaction_journal_removed = False
+            if not transaction_journal_removed:
+                blockers.append(
+                    "revert_recovery_completed_but_journal_cleanup_failed"
+                )
+                return result_payload(
+                    "recovery_incomplete_evidence_retained"
+                )
+            if receipt_preserved:
+                final_receipt_raw, final_receipt, _digest = (
+                    read_zet_title_remap_revert_receipt(
+                        root,
+                        revert_receipt_path,
+                        archive_id=archive_id,
+                        source_receipt_sha256=journal[
+                            "source_receipt_sha256"
+                        ],
+                    )
+                )
+                receipt_preserved = bool(
+                    final_receipt == expected_revert_receipt
+                    and final_receipt_raw
+                )
+                if not receipt_preserved:
+                    blockers.append(
+                        "revert_recovery_completed_but_receipt_changed"
+                    )
+                    return result_payload(
+                        "recovery_incomplete_evidence_retained"
+                    )
+            return result_payload("recovered")
+    except (
+        ArchiveServiceError,
+        ArchivePathError,
+        OSError,
+        UnicodeDecodeError,
+        ValueError,
+    ):
+        blockers.append(
+            "revert_recovery_execution_failed_evidence_retained"
+        )
+        if lock_path is not None:
+            write_lock_removed = not lock_path.exists()
+        if journal_path is not None:
+            transaction_journal_removed = not journal_path.exists()
+        return result_payload(
+            "recovery_incomplete_evidence_retained"
+            if (
+                canonical_files_written
+                or receipt_written_this_run
+                or write_lock_reacquired
+                or cleanup_attempted
+                or execution_started
             )
             else "blocked"
         )

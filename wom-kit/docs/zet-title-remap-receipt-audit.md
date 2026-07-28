@@ -1,6 +1,6 @@
 # zet Title Remap Receipt And Interruption Audit
 
-Status: v0.3.275 read-only apply and compensation evidence audit
+Status: v0.3.276 read-only apply and compensation evidence audit with separate recovery executors
 
 Use this command after a completed `zet-title-remap-write`, after an
 unexpected process exit, or before planning any manual recovery:
@@ -83,7 +83,9 @@ A retained revert journal uses the parallel states `prepared`,
 `partially_reverted`, `fully_reverted_receipt_missing`, `divergent`, and
 `stale_completed`. They are never passed to the older interrupted-apply
 recovery executor as a safe action. Since v0.3.275 the dedicated read-only
-revert recovery plan maps complete cases to fixed non-executable decisions.
+revert recovery plan maps complete cases to fixed decisions; since v0.3.276
+its non-forensic decisions can be executed only by the separate approved
+revert recovery command.
 
 ## Privacy Boundary
 
@@ -122,8 +124,10 @@ and archive-quiescence approval. For a clean completed receipt, v0.3.273 can
 produce a separate exact read-only revert plan and v0.3.274 can execute that
 exact plan with a separate approval. Since v0.3.275 a retained hard-exit
 revert journal can be reviewed through the dedicated read-only
-`zet-title-remap-revert-recovery-plan --dry-run`; every decision remains
-non-executable until a separate approval-gated executor is implemented.
+`zet-title-remap-revert-recovery-plan --dry-run`. Since v0.3.276 its
+non-forensic actions can be rebound and freshly approved through
+`zet-title-remap-revert-recover`; `manual_forensic_hold` remains
+non-executable.
 
 See:
 

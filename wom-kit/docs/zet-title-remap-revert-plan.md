@@ -1,6 +1,6 @@
 # zet Title Remap Completed-Receipt Revert Plan
 
-Status: v0.3.275 read-only completed-title compensation planning and recovery-plan handoff
+Status: v0.3.276 read-only completed-title compensation planning and recovery handoff
 
 ## Command
 
@@ -89,7 +89,9 @@ See [Approved zet Title Remap Revert](zet-title-remap-revert.md) for the
 approval command. Since v0.3.275 a separate read-only
 [zet Title Remap Revert Recovery Plan](zet-title-remap-revert-recovery-plan.md)
 maps a complete transaction left by a process kill or power interruption to
-one fixed non-executable decision.
+one fixed decision. Since v0.3.276 the separate
+[zet Title Remap Revert Recover](zet-title-remap-revert-recover.md) can execute
+its non-forensic actions after fresh review.
 
 See also:
 

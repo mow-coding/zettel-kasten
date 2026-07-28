@@ -2,6 +2,38 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.3.276 승인형 제목 되돌리기 중단 복구
+
+아카이브 마이그레이션은 필요하지 않습니다.
+`zet-title-remap-revert-recovery-plan --dry-run`이 완전한 비포렌식 사건을
+보고하면, 새 실행기에 정확한 사건 SHA-256, 전체 계획 digest, 고정 행동을
+넘겨 먼저 `--dry-run`으로 다시 확인하세요.
+
+원래 되돌리기 프로세스가 완전히 멈췄고, 제목 writer와 편집기가 모두 멈춘
+상태이며, 사람이 최신 상태를 검토한 뒤에만 다음과 같이 승인하세요.
+
+```powershell
+archive zet-title-remap-revert-recover <archive-root> `
+  --case-sha256 sha256:<case> `
+  --expected-plan-digest sha256:<plan> `
+  --expected-action <action> `
+  --approve `
+  --reviewed-by person:<reviewer> `
+  --affirm-recovery-reviewed `
+  --affirm-archive-quiescent `
+  --format json
+```
+
+되돌리기 사건을 기존 `zet-title-remap-recover`에 넘기거나, 비공개 journal을
+손으로 고치거나, 경고를 없애려고 snapshot을 지우지 마세요. 복구가 중간에
+끝나면 새 계획과 새 승인이 필요하며 오래된 계획은 의도적으로 거부됩니다.
+`manual_forensic_hold`는 실행할 수 없습니다.
+
+결정론적 보상 영수증에는 원래 되돌리기 승인이 보존됩니다. v0.3.276은 새
+복구 승인을 두 번째 영수증으로 보존하지 않습니다. 자세한 내용은
+[`wom-kit/docs/zet-title-remap-revert-recover.md`](wom-kit/docs/zet-title-remap-revert-recover.md)를
+참조하세요.
+
 ## v0.3.275 읽기 전용 제목 되돌리기 중단 복구 계획
 
 아카이브 마이그레이션은 필요하지 않습니다. v0.3.274 이상에서 시작한 제목
