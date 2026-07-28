@@ -83,6 +83,7 @@ Supporting philosophy and model docs:
 - [zet Title Remap Recovery Plan](zet-title-remap-recovery-plan.md)
 - [zet Title Remap Recover](zet-title-remap-recover.md)
 - [zet Title Remap Completed-Receipt Revert Plan](zet-title-remap-revert-plan.md)
+- [Approved zet Title Remap Revert](zet-title-remap-revert.md)
 - [Contiguous Node Reading](zet-catalog-contiguous-reading.md)
 - [Seeded Connection Reading Order](seeded-connection-reading-order.md)
 - [Seeded Reading Route Evidence](seeded-reading-route-evidence.md)

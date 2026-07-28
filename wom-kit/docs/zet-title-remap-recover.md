@@ -17,7 +17,8 @@ It does not:
 - delete prior-byte snapshots;
 - revert a completed title change.
 
-Completed-title revert remains a separate later release.
+Since v0.3.274 completed-title revert is a separate command. This interrupted
+apply executor still never executes or cleans a retained revert journal.
 
 ## Preview
 
@@ -120,3 +121,4 @@ See also:
 - [zet Title Remap Receipt And Interruption Audit](zet-title-remap-receipt-audit.md)
 - [zet Title Remap Write](zet-title-remap-write.md)
 - [zet Title Remap Completed-Receipt Revert Plan](zet-title-remap-revert-plan.md)
+- [Approved zet Title Remap Revert](zet-title-remap-revert.md)
