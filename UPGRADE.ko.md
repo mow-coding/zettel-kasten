@@ -2,6 +2,32 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.3.275 읽기 전용 제목 되돌리기 중단 복구 계획
+
+아카이브 마이그레이션은 필요하지 않습니다. v0.3.274 이상에서 시작한 제목
+되돌리기가 프로세스 강제 종료, 시스템 종료, 전원 중단으로 멈췄다면 비공개
+되돌리기 journal, 공통 lock, 현재 정본 참여 파일, 원본·되돌리기 영수증, 모든
+이전 바이트 snapshot을 그대로 보존하세요. 그다음 실행합니다.
+
+```powershell
+archive zet-title-remap-revert-recovery-plan <archive-root> --dry-run --format json
+```
+
+이 명령은 제한된 전체 제목 증거 감사를 다시 실행하고, 되돌리기 journal만
+선택해 하나의 고정 판단을 내립니다. 시작 전 증거 정리, 이미 검토한 보상
+방향으로 계속 진행한 뒤 영수증 완성, 모든 파일이 이전 바이트에 도달한 경우
+누락 영수증 완성, 정확히 검증된 완료 잔여 증거 정리, 또는
+`manual_forensic_hold`입니다.
+
+이 명령은 어떤 파일도 쓰거나 지우지 않습니다. 모든 사건은
+`execution_implemented: false`와 `safe_to_execute_now: false`를 보고합니다.
+되돌리기 사건을 기존의 중단된 apply 복구 실행기에 넘기지 마세요. 공통 lock이
+없어도 이 명령이 몰래 만들지 않고, 나중에 다시 획득해야 한다고만 보고합니다.
+v0.3.275는 바이트 복원, 영수증 완성, 증거 정리를 실행하지 않습니다. 자세한
+내용은
+[`wom-kit/docs/zet-title-remap-revert-recovery-plan.md`](wom-kit/docs/zet-title-remap-revert-recovery-plan.md)를
+참고하세요.
+
 ## v0.3.274 승인 기반 완료 제목 되돌리기
 
 아카이브 전체 마이그레이션은 필요하지 않습니다. 먼저 변경되지 않은 완료
