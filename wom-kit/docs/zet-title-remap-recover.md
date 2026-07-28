@@ -119,3 +119,4 @@ See also:
 - [zet Title Remap Recovery Plan](zet-title-remap-recovery-plan.md)
 - [zet Title Remap Receipt And Interruption Audit](zet-title-remap-receipt-audit.md)
 - [zet Title Remap Write](zet-title-remap-write.md)
+- [zet Title Remap Completed-Receipt Revert Plan](zet-title-remap-revert-plan.md)

@@ -6,6 +6,24 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.273 - 2026-07-28
+
+- Added read-only `zet-title-remap-revert-plan` and alias
+  `title-remap-revert-plan`.
+- Bind one completed title-remap receipt by exact reviewed SHA-256 while
+  withholding its private path and metadata.
+- Require the complete title evidence audit to be healthy, complete, and free
+  of retained transaction journals or a common lock.
+- Verify current applied whole-file/title/body hashes, content-addressed
+  prior-byte snapshots, object-manifest evidence, and exact title-only inverse
+  transitions.
+- Return one content-free complete plan digest and fixed status codes without
+  echoing title text/hash/length, body text, zet id/path, proposal SHA,
+  reviewer, evidence paths, provider values, or absolute local paths.
+- Preserve the original receipt and snapshots; write and delete nothing.
+  Approved revert, its compensation receipt, and hard-exit recovery remain the
+  next release boundary.
+
 ## v0.3.272 - 2026-07-28
 
 - Added CLI-only approval-gated `zet-title-remap-recover` and alias
