@@ -158,6 +158,31 @@ Local absolute paths are redacted by default.
 
 MCP clients must not request `redact_local_paths: false` unless trusted local debugging has been explicitly authorized. The stdio MCP server keeps local paths redacted unless `AI_ARCHIVE_MCP_ALLOW_LOCAL_PATHS=1` is set in the MCP server environment.
 
+## AI Command-Path Routing
+
+From v0.3.278, runtime-context, ai-start-here, operational-context, and
+canonical entrypoint metadata return
+`wom-kit/ai-command-path-routing/v0.1`.
+
+The routing object names official WOM commands for search, local version
+truth, saved-view inspection, command discovery, draft creation, minting,
+typed edges, source/objet intake, and operational-context updates. It marks raw
+grep and raw SQL as non-authoritative search surfaces and forbids direct AI
+Markdown writes to `inbox/`.
+
+Generated AGENTS templates now start with:
+
+```bash
+archive ai-start-here <archive-root> --dry-run --progress --format json
+```
+
+Existing archive AGENTS files are not rewritten. `archive version` remains
+local truth only and does not verify remote release freshness. Persistent
+saved-view creation remains recommendation-only because no dedicated writer
+exists in this release.
+
+See [AI Command-Path Routing](ai-command-path-routing.md).
+
 ## Draft Creation Dry-Run
 
 CLI:

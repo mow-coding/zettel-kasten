@@ -4,7 +4,7 @@ Status: quick/default and explicit full-Doctor contract implemented in v0.3.222;
 safe full-Doctor receipt phase and callback coalescing added in v0.3.223;
 no-repeat runtime-context handoff added in v0.3.224; identity consistency and
 review routing added in v0.3.226; aggregate edge-receipt progress added in
-v0.3.227
+v0.3.227; official AI command-path routing added in v0.3.278
 
 ## Purpose
 
@@ -40,6 +40,20 @@ Markdown output separates `Already Included` from `Next Commands`.
 The source operational-context record remains unchanged. If its default next
 list says `Run runtime-context first.`, start-here does not copy that already
 satisfied sentence into `next_safe_steps`.
+
+## Official Read And Write Paths
+
+From v0.3.278, JSON output includes
+`wom-kit/ai-command-path-routing/v0.1`, and Markdown output renders
+`Official Read Command Paths` and `Official Write Command Paths`.
+
+The routes require `archive search --count-total --format json` for
+authoritative WOM search and `archive create-draft` preview plus reviewed
+replay for AI-assisted inbox drafts. Raw grep/SQL do not prove a WOM search
+result, and direct Markdown writes to `inbox/` are forbidden. The same object
+states that local version inspection does not check remote release freshness
+and that saved-view recommendation has no persistent writer yet. See
+[AI Command-Path Routing](ai-command-path-routing.md).
 
 ## Identity Consistency
 

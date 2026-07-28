@@ -40,7 +40,9 @@ archive create-draft <archive-root> --dry-run --source-intake-plan <source-intak
 ```
 
 Do not manually copy local paths or unsafe source excerpts into frontmatter.
-Draft approval writes only to `inbox/`; it does not approve minting.
+Never write Markdown directly into `inbox/`; a location policy is not a write
+route. Draft approval writes only to `inbox/` through `archive create-draft`;
+it does not approve minting.
 
 ## Mint Only A Complete Reviewed zet
 

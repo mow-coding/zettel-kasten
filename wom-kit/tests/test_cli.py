@@ -5126,6 +5126,10 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertIn("Run runtime-context first.", operational_context["session_start_injection"]["next"])
             self.assertTrue(operational_context["closed_actions"]["file_body_read"])
             self.assertFalse(operational_context["closed_actions"]["files_written"])
+            self.assertEqual(
+                operational_context["action_routing"]["schema"],
+                "wom-kit/ai-command-path-routing/v0.1",
+            )
             entrypoints = result["canonical_entrypoints"]
             self.assertEqual(entrypoints["lifecycle_action"], "runtime_canonical_entrypoints")
             self.assertEqual(entrypoints["start_here"], "archive.yml")
@@ -5134,6 +5138,45 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(entrypoints["source_truths"]["draft_inbox"], "inbox/")
             self.assertEqual(entrypoints["source_truths"]["objet_manifest"], "objects/manifests/files.jsonl")
             self.assertEqual(entrypoints["source_truths"]["operational_context"], "ops/operational-context.yml")
+            self.assertEqual(result["action_routing"], entrypoints["action_routing"])
+            action_routing = result["action_routing"]
+            self.assertTrue(action_routing["official_wom_command_required_for_archive_actions"])
+            self.assertFalse(action_routing["location_policy_alone_is_sufficient"])
+            self.assertFalse(action_routing["raw_filesystem_search_is_authoritative"])
+            self.assertFalse(action_routing["raw_sql_is_authoritative"])
+            self.assertFalse(action_routing["direct_ai_file_writes_to_inbox_allowed"])
+            search_route = next(
+                item
+                for item in action_routing["read_action_routes"]
+                if item["action"] == "search_archive_content"
+            )
+            self.assertEqual(
+                search_route["command"],
+                "archive search <archive-root> <query> --count-total --format json",
+            )
+            self.assertFalse(search_route["raw_filesystem_search_is_authoritative"])
+            self.assertFalse(search_route["raw_sql_is_authoritative"])
+            version_route = next(
+                item
+                for item in action_routing["read_action_routes"]
+                if item["action"] == "inspect_version_truth"
+            )
+            self.assertFalse(version_route["remote_release_freshness_checked"])
+            draft_route = next(
+                item
+                for item in action_routing["write_action_routes"]
+                if item["action"] == "create_ai_draft"
+            )
+            self.assertIn("archive create-draft", draft_route["preview_command"])
+            self.assertFalse(draft_route["direct_file_write_allowed"])
+            self.assertTrue(draft_route["separate_mint_approval_required"])
+            view_route = next(
+                item
+                for item in action_routing["write_action_routes"]
+                if item["action"] == "create_saved_view"
+            )
+            self.assertFalse(view_route["write_implemented"])
+            self.assertIsNone(view_route["approved_command"])
             self.assertEqual(
                 entrypoints["recommended_first_commands"][0]["command"],
                 "archive runtime-context <archive-root> --format json",
@@ -5226,7 +5269,14 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertIn("run ai-response-concept-guide dry-run", result["available_safe_actions"])
             self.assertIn("run operational-context dry-run", result["available_safe_actions"])
             self.assertIn("run operator-feedback-plan dry-run", result["available_safe_actions"])
-            self.assertIn("create draft in inbox", result["available_safe_actions"])
+            self.assertIn(
+                "search archive content through archive search with explicit truncation handling",
+                result["available_safe_actions"],
+            )
+            self.assertIn(
+                "create draft through archive create-draft dry-run and reviewed replay",
+                result["available_safe_actions"],
+            )
             self.assertIn("mint only through CLI approve path", result["available_safe_actions"])
 
     def test_runtime_context_quick_default_does_not_construct_doctor_or_read_zets(self) -> None:
@@ -5422,6 +5472,30 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(result["operational_context"]["record_path"], "ops/operational-context.yml")
             self.assertEqual(result["first_read"]["start_here"], "archive.yml")
             self.assertEqual(result["first_read"]["source_truths"]["canonical_zets"], "zettels/")
+            self.assertEqual(
+                result["action_routing"]["schema"],
+                "wom-kit/ai-command-path-routing/v0.1",
+            )
+            self.assertEqual(
+                result["operational_context"]["action_routing"],
+                result["action_routing"],
+            )
+            self.assertEqual(
+                next(
+                    item
+                    for item in result["action_routing"]["read_action_routes"]
+                    if item["action"] == "search_archive_content"
+                )["command"],
+                "archive search <archive-root> <query> --count-total --format json",
+            )
+            self.assertIn(
+                "archive create-draft",
+                next(
+                    item
+                    for item in result["action_routing"]["write_action_routes"]
+                    if item["action"] == "create_ai_draft"
+                )["preview_command"],
+            )
             self.assertEqual(result["storage_authority"]["canonical_authority"], "local_wom")
             self.assertEqual(
                 result["storage_authority"]["plain_summary"]["external_database"],
@@ -5447,6 +5521,8 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(result["remaining_ai_runtime_order"][0]["action"], "read_operational_context")
             self.assertNotIn("Run runtime-context first.", result["next_safe_steps"])
             self.assertIn("Read AGENTS.md", " ".join(result["next_safe_steps"]))
+            self.assertIn("raw grep and raw SQL are not authoritative", " ".join(result["next_safe_steps"]))
+            self.assertIn("never write Markdown directly into inbox/", " ".join(result["next_safe_steps"]))
             self.assertIn("Run zet-catalog", " ".join(result["next_safe_steps"]))
             self.assertEqual(
                 result["first_commands"][2]["command"],
@@ -5484,11 +5560,88 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertIn("`archive.yml`", markdown_output)
             self.assertIn("## Already Included", markdown_output)
             self.assertIn("## Next Commands", markdown_output)
+            self.assertIn("## Official Read Command Paths", markdown_output)
+            self.assertIn("`search_archive_content`", markdown_output)
+            self.assertIn("archive search <archive-root> <query> --count-total --format json", markdown_output)
+            self.assertIn("## Official Write Command Paths", markdown_output)
+            self.assertIn("`create_ai_draft` preview", markdown_output)
+            self.assertIn("archive create-draft", markdown_output)
+            self.assertIn("Persistent write command: not implemented", markdown_output)
             self.assertIn("do not run again before using this map", markdown_output)
             self.assertIn("## Storage Authority", markdown_output)
             self.assertIn("metadata_and_version_history_backup", markdown_output)
             self.assertIn("Files written: no", markdown_output)
             self.assertNotIn(str(archive_root), markdown_output)
+
+    def test_ai_command_path_routing_is_present_in_runtime_guidance_and_templates(self) -> None:
+        first_command = (
+            "archive ai-start-here <archive-root> --dry-run --progress --format json"
+        )
+        search_command = (
+            "archive search <archive-root> <query> --count-total --format json"
+        )
+        for profile in ("personal", "family", "company"):
+            source_path = KIT_ROOT / "templates" / profile / "AGENTS.md"
+            packaged_path = (
+                KIT_ROOT
+                / "src"
+                / "wom_kit"
+                / "_resources"
+                / "templates"
+                / profile
+                / "AGENTS.md"
+            )
+            source_text = source_path.read_text(encoding="utf-8")
+            packaged_text = packaged_path.read_text(encoding="utf-8")
+            with self.subTest(profile=profile):
+                self.assertEqual(source_text, packaged_text)
+                self.assertIn(f"1. Run `{first_command}`", source_text)
+                self.assertIn("Read the returned `action_routing`", source_text)
+                self.assertIn(search_command, source_text)
+                self.assertIn("raw grep and raw SQL are not authoritative", source_text)
+                self.assertIn("Never write Markdown directly into `inbox/`", source_text)
+                self.assertIn("Saved-view recommendations are read-only", source_text)
+                self.assertIn("remote release surface separately", source_text)
+
+        fake_agents = (
+            KIT_ROOT / "examples" / "fake-life-archive" / "AGENTS.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn(first_command, fake_agents)
+        self.assertIn(search_command, fake_agents)
+        self.assertIn("never write Markdown directly into `inbox/`", fake_agents)
+
+        runtime_skill = (
+            KIT_ROOT / "templates" / "ai-runtime" / "wom-archive" / "SKILL.md"
+        ).read_text(encoding="utf-8")
+        reading_reference = (
+            KIT_ROOT
+            / "templates"
+            / "ai-runtime"
+            / "wom-archive"
+            / "references"
+            / "reading-memory-and-revision.md"
+        ).read_text(encoding="utf-8")
+        capture_reference = (
+            KIT_ROOT
+            / "templates"
+            / "ai-runtime"
+            / "wom-archive"
+            / "references"
+            / "capture-draft-and-publication.md"
+        ).read_text(encoding="utf-8")
+        startup_reference = (
+            KIT_ROOT
+            / "templates"
+            / "ai-runtime"
+            / "wom-archive"
+            / "references"
+            / "startup-and-update.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn("`action_routing`", runtime_skill)
+        self.assertIn(search_command, reading_reference)
+        self.assertIn("not authoritative WOM search results", reading_reference)
+        self.assertIn("Never write Markdown directly into `inbox/`", capture_reference)
+        self.assertIn("authoritative remote release service", startup_reference)
 
     def test_ai_start_here_quick_path_does_not_construct_doctor_or_read_zets(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -2,6 +2,9 @@
 
 Status: v0.3.117 AI operational context rehydration checkpoint
 
+v0.3.278 extension: read-only AI command-path routing is included in the same
+operational-context surface.
+
 WOM archives preserve zets, receipts, manifests, and source maps. An AI runtime
 also needs one small operating-memory record so it can recover the current
 mission after a session reset or context compression.
@@ -28,6 +31,7 @@ The result includes:
 ```text
 operational_context.record
 operational_context.session_start_injection
+operational_context.action_routing
 ```
 
 To inspect only this layer, run:
@@ -35,6 +39,13 @@ To inspect only this layer, run:
 ```powershell
 archive operational-context <archive-root> --dry-run --format json
 ```
+
+From v0.3.278, this read-only output also returns the same official
+`wom-kit/ai-command-path-routing/v0.1` object as runtime-context and
+ai-start-here. It routes search through `archive search`, AI draft creation
+through `archive create-draft`, and other writes through their dedicated
+preview/approval commands. A destination folder alone is never write
+authorization. See [AI Command-Path Routing](ai-command-path-routing.md).
 
 ## Update It
 

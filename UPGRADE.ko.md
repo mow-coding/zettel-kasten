@@ -2,6 +2,37 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.3.278 AI 공식 명령 경로 안내
+
+아카이브 마이그레이션은 필요하지 않습니다. 새 보관함 템플릿과 읽기 전용
+runtime 안내는 이제 다음 명령으로 시작합니다.
+
+```powershell
+archive ai-start-here <archive-root> --dry-run --progress --format json
+```
+
+보관함 명령을 고르기 전에 반환된 `action_routing`을 읽으세요. 검색은 다음
+공식 경로를 사용합니다.
+
+```powershell
+archive search <archive-root> <query> --count-total --format json
+```
+
+raw grep와 raw SQL은 WOM의 권위 있는 검색 결과가 아닙니다. AI 보조 초안은
+`archive create-draft` 미리보기와 정확한 사람 검토 재실행으로만 만드세요.
+`inbox/`에 Markdown을 직접 쓰면 안 됩니다. 초안 생성 승인은 `mint-zet`
+승인이 아닙니다.
+
+`archive version`은 로컬 runtime/source/pin과 이미 가져온 tag 상태만
+확인합니다. 더 최신 원격 릴리스가 없다고 말하기 전에는 권위 있는 원격
+릴리스 화면을 따로 확인해야 합니다. 영구 saved-view writer가 아직 없으므로
+saved-view 추천도 읽기 전용입니다.
+
+기존 보관함의 `AGENTS.md`는 자동으로 다시 쓰지 않습니다. 소유자가 새
+템플릿 계약을 검토한 뒤 별도로 반영할 수 있습니다.
+[`wom-kit/docs/ai-command-path-routing.md`](wom-kit/docs/ai-command-path-routing.md)를
+보세요.
+
 ## v0.3.277 읽기 전용 Notion 출처 누락 조사
 
 아카이브 마이그레이션은 필요하지 않습니다. 과거 Notion 이관에서 출처 주소가

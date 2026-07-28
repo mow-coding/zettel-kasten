@@ -5,25 +5,30 @@ Local reviewed WOM state is canonical. GitHub backs up metadata/version history,
 
 ## Read Order
 
-1. Read `archive.yml`.
-2. Read relevant `views/*.yml`.
-3. Run `archive first-read-readiness <archive-root> --dry-run --progress --format json`; do not claim memory reconstruction readiness until every non-redacted canonical zet has an explicit abstract and every selected id is uniquely resolvable.
-4. Run `archive abstract-freshness <archive-root> --dry-run --progress --format json`; treat `stale`, `unverified`, or `missing` as a human review queue, never permission to auto-rewrite an abstract or body.
-5. For archive-wide understanding in a terminal, run one `archive zet-catalog-pass <archive-root> --status canonical --projection reading --output .wom-scratch/diagnostics/<new-name>.jsonl --dry-run --progress --format json`; it scans once, revalidates before completion, and prints no zet items to stdout.
-6. Require `archive_wide_coverage_claim_ready: true`, read the private JSONL page records incrementally, never commit it, and delete it after use. For MCP or manual pages, keep using `zet-catalog` with the same snapshot and continuation token until complete.
-7. Check `archive_wide_abstract_reading_claim_ready` before saying every required abstract was available and read. Report `abstract_coverage` gaps without inventing or auto-writing replacements.
-8. Check `archive_wide_followup_resolution_ready` before relying on id-only body reads; duplicate or unreadable ids require repair or an explicitly reviewed path.
-9. Inspect item and compact response-envelope estimates. Use `max_estimated_tokens` and, when budgeting the whole service result, an explicit `response_envelope_reserve_tokens`; never replace complete coverage with top-k search.
-10. Keep the cursor-zero response profile full. On later strict pages, `response_profile=continuation` may omit repeated diagnostics, but it must retain items, readiness, snapshot, token, and chain evidence.
-11. If the host goal already provides verified zet ids, use `--order seeded_connection_walk` with repeated `--start-zettel-id`; never invent a seed, and still read every disconnected component.
-12. Keep `projection=reading` for compact coverage. Use `routed_reading` with seeded order only when the human or host needs each item's seed/tie/component reason and can afford the larger payload.
-13. Use the returned abstracts, ties, and edges to choose a useful body-reading order. A search result or one truncated page is never full coverage.
-14. Read selected zet bodies with `read-zettel --section overview` first, then `--section document|body` when the host task needs the body. For a large body, use bounded pages and bind every continuation to the first page's complete body SHA-256.
-15. Read `objects/manifests/files.jsonl` only when original file metadata is needed.
+1. Run `archive ai-start-here <archive-root> --dry-run --progress --format json` before searching, reading broadly, or proposing a write.
+2. Read the returned `action_routing`; use its official command for each archive action instead of guessing from folder locations.
+3. Read `archive.yml`.
+4. Read relevant `views/*.yml`.
+5. Run `archive first-read-readiness <archive-root> --dry-run --progress --format json`; do not claim memory reconstruction readiness until every non-redacted canonical zet has an explicit abstract and every selected id is uniquely resolvable.
+6. Run `archive abstract-freshness <archive-root> --dry-run --progress --format json`; treat `stale`, `unverified`, or `missing` as a human review queue, never permission to auto-rewrite an abstract or body.
+7. For archive-wide understanding in a terminal, run one `archive zet-catalog-pass <archive-root> --status canonical --projection reading --output .wom-scratch/diagnostics/<new-name>.jsonl --dry-run --progress --format json`; it scans once, revalidates before completion, and prints no zet items to stdout.
+8. Require `archive_wide_coverage_claim_ready: true`, read the private JSONL page records incrementally, never commit it, and delete it after use. For MCP or manual pages, keep using `zet-catalog` with the same snapshot and continuation token until complete.
+9. Check `archive_wide_abstract_reading_claim_ready` before saying every required abstract was available and read. Report `abstract_coverage` gaps without inventing or auto-writing replacements.
+10. Check `archive_wide_followup_resolution_ready` before relying on id-only body reads; duplicate or unreadable ids require repair or an explicitly reviewed path.
+11. Inspect item and compact response-envelope estimates. Use `max_estimated_tokens` and, when budgeting the whole service result, an explicit `response_envelope_reserve_tokens`; never replace complete coverage with top-k search.
+12. Keep the cursor-zero response profile full. On later strict pages, `response_profile=continuation` may omit repeated diagnostics, but it must retain items, readiness, snapshot, token, and chain evidence.
+13. If the host goal already provides verified zet ids, use `--order seeded_connection_walk` with repeated `--start-zettel-id`; never invent a seed, and still read every disconnected component.
+14. Keep `projection=reading` for compact coverage. Use `routed_reading` with seeded order only when the human or host needs each item's seed/tie/component reason and can afford the larger payload.
+15. Use the returned abstracts, ties, and edges to choose a useful body-reading order. A search result or one truncated page is never full coverage.
+16. Read selected zet bodies with `read-zettel --section overview` first, then `--section document|body` when the host task needs the body. For a large body, use bounded pages and bind every continuation to the first page's complete body SHA-256.
+17. Read `objects/manifests/files.jsonl` only when original file metadata is needed.
 
 ## Write Policy
 
-- Write AI-generated zettel drafts only to `inbox/`.
+- Search with `archive search <archive-root> <query> --count-total --format json`; raw grep and raw SQL are not authoritative WOM search results.
+- Create AI-generated zettel drafts only with `archive create-draft` dry-run followed by its exact human-reviewed replay. Never write Markdown directly into `inbox/`.
+- Use the official dry-run and approval routes for `mint-zet`, `zettel-edge`, source/objet intake, and operational-context updates; knowing a destination path is not write authorization.
+- Saved-view recommendations are read-only until WOM provides a dedicated writer. An AI must not directly edit persistent `views/*.yml`.
 - A draft may be incomplete, but before `mint-zet`, `mint-zettel`, or `promote`, require one human-reviewed explicit `frontmatter.abstract`; compatibility fields do not authorize canonical publication.
 - Do not edit `zettels/` unless the user explicitly asks to promote or modify a canonical zettel.
 - Do not store provider URLs in zettels.
@@ -33,6 +38,7 @@ Local reviewed WOM state is canonical. GitHub backs up metadata/version history,
 
 - When available, use `project-version-update --dry-run` and then explicit human-reviewed `--approve`; do not hand-edit the source checkout or installed-version pins.
 - After `updated_restart_required`, start a new process and require `archive version` import/source/pin/tag agreement before claiming the new runtime is active. Never bypass a dirty-state, tag, metadata, lock, or rollback blocker.
+- `archive version` proves local runtime/source/pin and already-fetched tag state only. Check an authoritative remote release surface separately before claiming that no newer release exists.
 
 ## AI Intake Protocol
 
