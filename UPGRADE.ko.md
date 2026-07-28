@@ -2,6 +2,33 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.3.272 승인 기반 중단 제목 복구
+
+아카이브 전체 마이그레이션은 필요하지 않습니다. 먼저 v0.3.271의 읽기 전용
+복구 계획을 새로 만들고 검토하세요. 실행할 사건 하나를 다음처럼 미리 봅니다.
+
+```powershell
+archive zet-title-remap-recover <archive-root> --case-sha256 sha256:<case-digest> --expected-plan-digest sha256:<complete-plan-digest> --expected-action <fixed-action> --dry-run --format json
+```
+
+사건 SHA, 전체 계획 digest, 고정 action이 그대로라면 원래 writer와 모든
+editor를 멈추고 복구 방향을 검토한 뒤 승인합니다.
+
+```powershell
+archive zet-title-remap-recover <archive-root> --case-sha256 sha256:<case-digest> --expected-plan-digest sha256:<complete-plan-digest> --expected-action <fixed-action> --approve --reviewed-by person:<safe-reviewer-id> --affirm-recovery-reviewed --affirm-archive-quiescent --format json
+```
+
+이 명령은 시작하지 않은 거래 증거를 정리하거나, 영수증 없이 중단된 제목
+쓰기를 검증된 완전한 이전 바이트로 복원하거나, 정확히 검증된 완료 잔여
+증거만 정리할 수 있습니다. `manual_forensic_hold`는 실행할 수 없습니다.
+
+실패하거나 강제 종료된 뒤에는 이전 승인을 재사용하지 마세요. 이미 성공한
+복원은 이전 바이트 상태로 남고, 남은 journal과 lock이 다음 상태를 설명합니다.
+새 복구 계획을 만들고 다시 검토·승인해야 합니다. v0.3.272는 완료된 제목
+변경을 되돌리지 않습니다. 자세한 내용은
+[`wom-kit/docs/zet-title-remap-recover.md`](wom-kit/docs/zet-title-remap-recover.md)를
+보세요.
+
 ## v0.3.271 읽기 전용 제목 복구 판단
 
 보관함 마이그레이션은 필요하지 않습니다. v0.3.270 증거 감사를 실행한
@@ -71,12 +98,12 @@ content-addressed object로 보존하고 검증합니다. writer는 YAML 최상�
 journal, 공통 lock을 남길 수 있으므로 이 증거를 삭제하거나 손으로 고치면 안
 됩니다.
 
-v0.3.269은 중단 증거를 남기지만 그 버전 자체로는 제목 리맵 전체 감사, 자동
-복구, 되돌리기를 수행하지 않습니다. v0.3.270은 읽기 전용 감사를 추가했으며
-v0.3.271은 읽기 전용 고정 복구 판단을 추가합니다. 복구 실행과 완료된 제목
-되돌리기는 여전히 이후 작업입니다. 구버전도 성공적으로 변경된 정본 Markdown은
-읽을 수 있지만 새 영수증/저널 증거를 이해하지 못합니다. 이 작업에는
-v0.3.271 이상을 유지하세요. 자세한 절차는
+v0.3.269은 중단 증거를 남기지만 그 버전 자체로는 제목 리맵 전체 감사나
+완료된 제목 되돌리기를 수행하지 않습니다. v0.3.270은 읽기 전용 감사를,
+v0.3.271은 읽기 전용 고정 복구 판단을, v0.3.272는 승인형 단일 사건 중단
+복구 실행기를 추가합니다. 완료된 제목 되돌리기는 여전히 이후 작업입니다.
+구버전도 성공적으로 변경된 정본 Markdown은 읽을 수 있지만 새 영수증/저널
+증거를 이해하지 못합니다. 이 작업에는 v0.3.272 이상을 유지하세요. 자세한 절차는
 [`wom-kit/docs/zet-title-remap-write.md`](wom-kit/docs/zet-title-remap-write.md)를
 참조하세요.
 

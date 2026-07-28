@@ -1,6 +1,6 @@
 # zet Title Remap Recovery Plan
 
-Status: v0.3.271 read-only interrupted-title recovery decision
+Status: v0.3.272 read-only interrupted-title recovery decision and executor handoff
 
 ## Command
 
@@ -34,8 +34,8 @@ audit and writes or deletes nothing.
 
 The two rollback cases are uncommitted because no verified final receipt marks
 the apply as committed. Their complete original canonical bytes already exist
-as verified prior-byte snapshots. v0.3.271 only reports that fixed decision; it
-does not restore those bytes.
+as verified prior-byte snapshots. This plan remains read-only; v0.3.272 can
+execute one reviewed case through the separate approval-gated command.
 
 ## Common Lock
 
@@ -73,23 +73,21 @@ Invalid snapshots, unverified final receipts, divergent participants, invalid
 journals, and orphaned or invalid common locks are
 `manual_forensic_hold`. Preserve all evidence.
 
-## No Executor Or Revert
+## Executor Handoff And Revert Boundary
 
-v0.3.271 cannot:
+v0.3.272 implements the separate CLI-only
+`zet-title-remap-recover` executor. It reruns the complete plan, binds the
+reviewed plan digest, case SHA-256, and exact action, revalidates every
+participant and snapshot, and requires fresh approval plus an
+archive-quiescence affirmation.
 
-- create, replace, or delete a common lock;
-- restore canonical bytes;
-- resume a title apply;
-- create or finalize a receipt;
-- delete a transaction journal;
-- revert a completed title-remap receipt.
-
-A later single-case executor must rerun the complete plan, bind the reviewed
-plan digest and case SHA-256, revalidate every participant and snapshot,
-require fresh approval plus an archive-quiescence affirmation, and preserve all
-evidence on any uncertain result.
+The executor can clean prepared residue, roll an uncommitted apply back to
+verified prior bytes, or clean exactly verified stale-completed residue. It
+cannot execute `manual_forensic_hold`, resume an apply, create/finalize a
+receipt, delete snapshots, or revert a completed title-remap receipt.
 
 See also:
 
 - [zet Title Remap Write](zet-title-remap-write.md)
 - [zet Title Remap Receipt And Interruption Audit](zet-title-remap-receipt-audit.md)
+- [zet Title Remap Recover](zet-title-remap-recover.md)
