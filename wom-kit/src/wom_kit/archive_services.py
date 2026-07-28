@@ -995,8 +995,11 @@ RUNTIME_CONTEXT_SAFE_ACTIONS = [
     "run operational-context dry-run",
     "run operator-feedback-plan dry-run",
     "run identity-reconcile dry-run",
-    "create draft in inbox",
-    "run mint dry-run",
+    "search archive content through archive search with explicit truncation handling",
+    "create draft through archive create-draft dry-run and reviewed replay",
+    "run mint-zet dry-run before any approved canonical write",
+    "run zettel-edge dry-run before any approved edge write",
+    "run source-intake dry-run before any objet capture workflow",
     "run check-safe-html dry-run",
     "run doctor",
     "mint only through CLI approve path",
@@ -80527,6 +80530,7 @@ def operational_context(
             "ok": not blockers,
             "dry_run": bool(dry_run),
             "lifecycle_action": "operational_context",
+            "action_routing": runtime_context_action_routing(),
             "archive_id": archive_id,
             "record_path": target_relative,
             "source_record_path": source_relative,
@@ -80639,6 +80643,7 @@ def runtime_context_operational_context(root: Path) -> dict[str, Any]:
         return {
             "ok": True,
             "lifecycle_action": "operational_context",
+            "action_routing": runtime_context_action_routing(),
             "record_path": OPERATIONAL_CONTEXT_RELATIVE_PATH,
             "status": "missing_optional",
             "record": None,
@@ -80663,6 +80668,7 @@ def runtime_context_operational_context(root: Path) -> dict[str, Any]:
     return {
         "ok": not blockers,
         "lifecycle_action": "operational_context",
+        "action_routing": runtime_context_action_routing(),
         "record_path": OPERATIONAL_CONTEXT_RELATIVE_PATH,
         "status": "present" if not blockers else "blocked",
         "record": record if not blockers else None,
@@ -80888,6 +80894,22 @@ def operational_context_recommended_commands() -> list[dict[str, str]]:
         {
             "command": "archive operational-context <archive-root> --record workbench/operational-context.next.yml --approve --reviewed-by <actor> --format json",
             "purpose": "write a reviewed operational context update and receipt after human approval",
+        },
+        {
+            "command": "archive create-draft <archive-root> --title <title> --body-file <private-body-file> --creation-mode ai_assisted --created-by <ai-actor> --dry-run --format json",
+            "purpose": "preview an AI-assisted inbox draft through the official command path; never write inbox Markdown directly",
+        },
+        {
+            "command": "archive mint-zet <archive-root> --zettel-id <draft-id> --dry-run --format json",
+            "purpose": "preview canonical publication after separate human review; create-draft approval never authorizes minting",
+        },
+        {
+            "command": "archive zettel-edge <archive-root> --from-zettel <id> --target <ref> --edge-type <type> --dry-run --format json",
+            "purpose": "preview a typed edge and its receipt before a separate approved edge write",
+        },
+        {
+            "command": "archive source-intake <archive-root> --dry-run --local-path <file> --format json",
+            "purpose": "start the official objet/source intake route before any capture, copy, or upload",
         },
     ]
 
@@ -81848,6 +81870,7 @@ def runtime_context(
         "storage_authority": local_sovereignty_authority_model(),
         "operational_context": operational_context_summary,
         "canonical_entrypoints": canonical_entrypoints,
+        "action_routing": canonical_entrypoints["action_routing"],
         "handoff": {
             "runtime_context_included": True,
             "runtime_context_rerun_required": False,
@@ -82808,6 +82831,11 @@ def ai_start_here(
         if isinstance(entrypoints.get("remaining_ai_runtime_order"), list)
         else []
     )
+    action_routing = (
+        context.get("action_routing")
+        if isinstance(context.get("action_routing"), dict)
+        else runtime_context_action_routing()
+    )
 
     next_lines: list[str] = []
     if session_start_summary and isinstance(session_start_summary.get("next"), list):
@@ -82891,10 +82919,14 @@ def ai_start_here(
         "next_commands": next_commands,
         "ai_runtime_order": ai_runtime_order,
         "remaining_ai_runtime_order": remaining_ai_runtime_order,
+        "action_routing": action_routing,
         "operational_context": {
             "status": operational_context.get("status") or "unknown",
             "record_path": operational_context.get("record_path"),
             "session_start": session_start_summary,
+            "action_routing": operational_context.get("action_routing")
+            if isinstance(operational_context.get("action_routing"), dict)
+            else action_routing,
             "recommended_commands": operational_context.get("recommended_commands")
             if isinstance(operational_context.get("recommended_commands"), list)
             else [],
@@ -82927,6 +82959,8 @@ def ai_start_here(
                     else "Full Doctor completed for this start-here result; inspect its blocker and warning counts before broad work."
                 ),
                 "Read AGENTS.md when canonical_entrypoints marks it present.",
+                "Search zets and indexed records through archive search <archive-root> <query> --count-total --format json; raw grep and raw SQL are not authoritative WOM search results.",
+                "Create AI-assisted drafts only through archive create-draft dry-run and its reviewed replay; never write Markdown directly into inbox/.",
                 "Run first-read-readiness before the exhaustive catalog pass; treat a non-ready result as an explicit abstract or unique-id repair queue, not as permission to invent or auto-write missing memory.",
                 "Run abstract-freshness after first-read-readiness; treat stale or unverified rows as a human review queue and never auto-rewrite an abstract or body.",
                 "Run zet-catalog with projection=reading and coverage_mode=strict, keep the first response_profile full, inspect item and compact response-envelope estimates, set a host-appropriate max_estimated_tokens plus an explicit response_envelope_reserve_tokens when needed, then optionally use response_profile=continuation on later pages while following every continuation token before claiming archive-wide zet coverage.",
@@ -83196,6 +83230,131 @@ def runtime_context_paths(root: Path, archive_config: dict[str, Any], warnings: 
     }
 
 
+def runtime_context_read_action_routes() -> list[dict[str, Any]]:
+    return [
+        {
+            "action": "start_archive_session",
+            "when": "an AI enters or resumes work in a WOM archive",
+            "command": "archive ai-start-here <archive-root> --dry-run --progress --format json",
+            "authoritative_for": "archive identity, entrypoints, operational context, and official action routing",
+            "writes": False,
+        },
+        {
+            "action": "search_archive_content",
+            "when": "the AI needs zets or indexed archive records matching a query",
+            "command": "archive search <archive-root> <query> --count-total --format json",
+            "authoritative_for": "WOM search result and explicit complete-or-truncated result metadata",
+            "raw_filesystem_search_is_authoritative": False,
+            "raw_sql_is_authoritative": False,
+            "writes": False,
+        },
+        {
+            "action": "inspect_version_truth",
+            "when": "the AI needs the running version, project pin, source mirror, exact local tag, or latest fetched tag",
+            "command": "archive version <project-or-archive-root> --format json",
+            "authoritative_for": "current local runtime, source mirror, pin, and already-fetched tag agreement",
+            "remote_release_freshness_checked": False,
+            "writes": False,
+        },
+        {
+            "action": "inspect_saved_view_health",
+            "when": "the AI needs to judge existing saved views or plan possible navigation views",
+            "command": "archive view-health <archive-root> --dry-run --format json",
+            "next_command": "archive view-recommendation-plan <archive-root> --dry-run --format json",
+            "authoritative_for": "current saved-view health and read-only recommendations",
+            "writes": False,
+        },
+        {
+            "action": "inspect_available_commands",
+            "when": "the AI is unsure whether WOM already exposes an official command",
+            "command": "archive capabilities --machine --format json",
+            "authoritative_for": "installed WOM CLI command and option inventory",
+            "writes": False,
+        },
+    ]
+
+
+def runtime_context_write_action_routes() -> list[dict[str, Any]]:
+    return [
+        {
+            "action": "create_ai_draft",
+            "when": "the AI needs to preserve a new zettel draft",
+            "preview_command": "archive create-draft <archive-root> --title <title> --body-file <private-body-file> --creation-mode ai_assisted --created-by <ai-actor> --dry-run --format json",
+            "approved_command": "rerun archive create-draft with the preview's --draft-id, --created-at, and --expected-body-sha256 plus --draft-approved-by <human-actor>",
+            "writes_when_approved": ["inbox/<draft>.md"],
+            "requires_human_approval": True,
+            "direct_file_write_allowed": False,
+            "separate_mint_approval_required": True,
+        },
+        {
+            "action": "mint_reviewed_draft",
+            "when": "a human-reviewed inbox draft may be ready for canonical publication",
+            "preview_command": "archive mint-zet <archive-root> --zettel-id <draft-id> --dry-run --format json",
+            "approved_command": "archive mint-zet <archive-root> --zettel-id <draft-id> --approve --reviewed-by <human-actor> --format json",
+            "requires_human_approval": True,
+            "direct_file_write_allowed": False,
+            "create_draft_approval_is_sufficient": False,
+        },
+        {
+            "action": "write_typed_edge",
+            "when": "a reviewed relationship must be added between a zet and a zet or manifested objet",
+            "preview_command": "archive zettel-edge <archive-root> --from-zettel <id> --target <ref> --edge-type <type> --dry-run --format json",
+            "approved_command": "archive zettel-edge <archive-root> --from-zettel <id> --target <ref> --edge-type <type> --approve --reviewed-by <human-actor> --format json",
+            "requires_human_approval": True,
+            "direct_file_write_allowed": False,
+            "receipt_required": True,
+        },
+        {
+            "action": "capture_objet_or_source",
+            "when": "a local file or reviewed external material must enter WOM",
+            "preview_command": "archive source-intake <archive-root> --dry-run --local-path <file> --format json",
+            "approved_workflow": [
+                "archive source-intake-record",
+                "archive objet-capture-selection",
+                "archive objet-capture",
+            ],
+            "requires_human_approval": True,
+            "direct_file_write_allowed": False,
+            "receipt_required": True,
+        },
+        {
+            "action": "update_operational_context",
+            "when": "the current mission, state, gotchas, or next actions need a durable reviewed update",
+            "preview_command": "archive operational-context <archive-root> --record workbench/operational-context.next.yml --dry-run --format json",
+            "approved_command": "archive operational-context <archive-root> --record workbench/operational-context.next.yml --approve --reviewed-by <human-actor> --format json",
+            "requires_human_approval": True,
+            "direct_file_write_allowed": False,
+            "receipt_required": True,
+        },
+        {
+            "action": "create_saved_view",
+            "when": "the AI wants a new persistent views/*.yml entry",
+            "preview_command": "archive view-recommendation-plan <archive-root> --dry-run --format json",
+            "approved_command": None,
+            "write_implemented": False,
+            "requires_human_approval": True,
+            "direct_file_write_allowed": False,
+            "next_safe_action": "review the recommendation, then wait for a dedicated WOM saved-view writer instead of editing views/*.yml as an AI",
+        },
+    ]
+
+
+def runtime_context_action_routing() -> dict[str, Any]:
+    return {
+        "schema": "wom-kit/ai-command-path-routing/v0.1",
+        "official_wom_command_required_for_archive_actions": True,
+        "location_policy_alone_is_sufficient": False,
+        "raw_filesystem_search_is_authoritative": False,
+        "raw_sql_is_authoritative": False,
+        "direct_ai_file_writes_to_inbox_allowed": False,
+        "direct_ai_file_writes_to_canonical_zets_allowed": False,
+        "human_approval_still_required_for_writes": True,
+        "existing_archive_agents_auto_rewritten": False,
+        "read_action_routes": runtime_context_read_action_routes(),
+        "write_action_routes": runtime_context_write_action_routes(),
+    }
+
+
 def runtime_context_canonical_entrypoints(
     root: Path,
     archive_config: dict[str, Any],
@@ -83263,6 +83422,7 @@ def runtime_context_canonical_entrypoints(
         "read_order": read_order,
         "ai_runtime_order": runtime_context_ai_runtime_order(),
         "recommended_first_commands": runtime_context_recommended_first_commands(),
+        "action_routing": runtime_context_action_routing(),
         "material_link_routes": runtime_context_material_link_routes(),
         "source_truths": {
             "archive_identity_and_policy": "archive.yml",

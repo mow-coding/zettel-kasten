@@ -18,8 +18,9 @@ current chat is temporary working memory.
 archive ai-start-here <archive-root> --dry-run --progress --format json
 ```
 
-4. Read the returned summary and `next_safe_actions` before choosing a deeper
-   command.
+4. Read the returned summary, `action_routing`, and `next_safe_steps` before
+   choosing a deeper command. The route table, not a remembered folder
+   location, selects the official WOM command for an archive action.
 5. Run the full Doctor only when the quick result requests it, the human asks
    for it, or a write workflow requires it:
 
@@ -67,6 +68,11 @@ token-budget contract.
   changed meanings with their provenance for human review.
 - Prefer read-only inspection and `--dry-run`. A successful preview is not
   approval to write.
+- Search with `archive search <archive-root> <query> --count-total --format
+  json`. Raw grep and raw SQL may help diagnose files or generated indexes, but
+  they are not authoritative WOM search results.
+- Create an AI-assisted draft only through `archive create-draft` dry-run and
+  its exact reviewed replay. Never write Markdown directly into `inbox/`.
 - Before a write, show the human what will change, where it will change, and
   what will remain unchanged. Write only through the command's explicit
   `--approve` path and record `--reviewed-by` when required.
