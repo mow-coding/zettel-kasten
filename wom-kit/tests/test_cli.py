@@ -32169,6 +32169,145 @@ state:
             "rows": rows,
         }
 
+    def _create_interrupted_title_remap_case(
+        self,
+        archive_root: Path,
+        *,
+        proposal_name: str,
+        exit_code: int = 91,
+    ) -> dict[str, Any]:
+        fixture = self._create_title_remap_write_fixture(
+            archive_root,
+            count=2,
+            proposal_name=proposal_name,
+        )
+        reviewer = "person:private-title-source-reviewer"
+        child_code = """
+import os
+import sys
+from pathlib import Path
+from wom_kit import archive_services
+
+archive_root = Path(sys.argv[1])
+real_write = archive_services.write_bytes_atomic
+
+def write_then_hard_exit(path, value):
+    real_write(path, value)
+    os._exit(int(sys.argv[7]))
+
+archive_services.write_bytes_atomic = write_then_hard_exit
+archive_services.zet_title_remap_write(
+    archive_root,
+    proposal_path=sys.argv[2],
+    expected_proposal_sha256=sys.argv[3],
+    expected_plan_digest=sys.argv[4],
+    expected_write_plan_digest=sys.argv[5],
+    max_items=2,
+    approve=True,
+    reviewed_by=sys.argv[6],
+    affirm_titles_reviewed=True,
+)
+"""
+        child_env = os.environ.copy()
+        child_env["PYTHONPATH"] = str(SRC_ROOT)
+        child = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                child_code,
+                str(archive_root),
+                fixture["relative"],
+                fixture["proposal_sha256"],
+                fixture["plan_digest"],
+                fixture["write_plan_digest"],
+                reviewer,
+                str(exit_code),
+            ],
+            cwd=KIT_ROOT,
+            env=child_env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(child.returncode, exit_code, child.stderr)
+        title_remap_root = (
+            archive_root / ".wom-scratch" / "title-remap"
+        )
+        journal_path = next(
+            title_remap_root.glob(".*.write.transaction.json")
+        )
+        journal = json.loads(
+            journal_path.read_text(encoding="utf-8")
+        )
+        lock_path = title_remap_root / ".title-remap.write.lock"
+        self.assertTrue(lock_path.is_file())
+        plan = archive_services.zet_title_remap_recovery_plan(
+            archive_root,
+            dry_run=True,
+        )
+        self.assertTrue(plan["ok"], plan)
+        self.assertEqual(len(plan["cases"]), 1, plan)
+        return {
+            **fixture,
+            "reviewer": reviewer,
+            "journal_path": journal_path,
+            "journal": journal,
+            "lock_path": lock_path,
+            "recovery_plan": plan,
+            "recovery_case": plan["cases"][0],
+        }
+
+    def _write_verified_title_remap_receipt_from_journal(
+        self,
+        archive_root: Path,
+        journal: dict[str, Any],
+    ) -> Path:
+        receipt = {
+            "schema": "wom-kit/zet-title-remap-receipt/v0.1",
+            "action": "zet_title_remap_write",
+            "status": "applied",
+            "applied_at": journal["prepared_at"],
+            "archive_id": journal["archive_id"],
+            "proposal_sha256": journal["proposal_sha256"],
+            "plan_digest": journal["plan_digest"],
+            "write_plan_digest": journal["write_plan_digest"],
+            "reviewed_by": journal["reviewed_by"],
+            "human_affirmation": journal["human_affirmation"],
+            "item_count": journal["item_count"],
+            "items": journal["items"],
+            "mutation_contract": {
+                "field_replaced": "frontmatter.title",
+                "body_bytes_preserved": True,
+                "other_frontmatter_semantics_preserved": True,
+                "updated_at_changed": False,
+                "prior_byte_snapshots_verified_before_first_canonical_write": True,
+                "rollback_on_runtime_failure": True,
+                "crash_recovery_journal_written": True,
+            },
+            "privacy_guards": {
+                "old_title_text_stored_in_receipt": False,
+                "new_title_text_stored_in_receipt": False,
+                "body_text_stored_in_receipt": False,
+                "provider_api_called": False,
+                "model_called": False,
+                "secret_store_or_environment_read": False,
+            },
+        }
+        receipt_path = archive_root.joinpath(
+            *PurePosixPath(journal["final_receipt_path"]).parts
+        )
+        receipt_path.parent.mkdir(parents=True, exist_ok=True)
+        receipt_path.write_text(
+            json.dumps(
+                receipt,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        return receipt_path
+
     def test_zet_title_remap_candidate_replaces_exact_scalar_and_rejects_duplicates(
         self,
     ) -> None:
@@ -33350,7 +33489,7 @@ archive_services.zet_title_remap_write(
                 result["plan_digest"],
                 r"^sha256:[0-9a-f]{64}$",
             )
-            self.assertFalse(
+            self.assertTrue(
                 result["execution_boundary"]["execution_implemented"]
             )
             self.assertFalse(
@@ -33501,7 +33640,7 @@ archive_services.zet_title_remap_write(
                     str(transaction_journal),
                 ):
                     self.assertNotIn(private_value, output)
-                self.assertFalse(
+                self.assertTrue(
                     result["execution_boundary"]["execution_implemented"]
                 )
                 self.assertFalse(result["write_boundary"]["files_written"])
@@ -33522,7 +33661,7 @@ archive_services.zet_title_remap_write(
             )
             self.assertEqual(partial["participant_write_count"], 1)
             self.assertFalse(partial["lock_reacquisition_required"])
-            self.assertFalse(partial["execution_implemented"])
+            self.assertTrue(partial["execution_implemented"])
             self.assertRegex(
                 partial["case_sha256"],
                 r"^sha256:[0-9a-f]{64}$",
@@ -33798,6 +33937,715 @@ archive_services.zet_title_remap_write(
                 "recovery_source_audit_incomplete",
                 incomplete["blockers"],
             )
+
+    def test_zet_title_remap_recover_cli_previews_then_rolls_partial_apply_back_privately(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            fixture = self._create_interrupted_title_remap_case(
+                archive_root,
+                proposal_name="recover-cli-partial.jsonl",
+            )
+            case = fixture["recovery_case"]
+            plan = fixture["recovery_plan"]
+            self.assertEqual(case["observed_state"], "partially_applied")
+            self.assertEqual(
+                case["recommended_action"],
+                "rollback_uncommitted_title_apply_to_before",
+            )
+            self.assertTrue(case["execution_implemented"])
+            command = [
+                "title-remap-recover",
+                str(archive_root),
+                "--case-sha256",
+                case["case_sha256"],
+                "--expected-plan-digest",
+                plan["plan_digest"],
+                "--expected-action",
+                case["recommended_action"],
+                "--format",
+                "json",
+            ]
+            before_preview = self.snapshot_archive_files(archive_root)
+            preview_code, preview_output = self.run_cli(
+                [*command, "--dry-run"]
+            )
+            self.assertEqual(preview_code, 0, preview_output)
+            preview = json.loads(preview_output)
+            self.assertEqual(preview["status"], "ready_to_recover")
+            self.assertEqual(
+                preview["schema"],
+                "wom-kit/zet-title-remap-recover/v0.1",
+            )
+            self.assertEqual(
+                preview["summary"][
+                    "canonical_files_written_this_run"
+                ],
+                0,
+            )
+            self.assertEqual(
+                self.snapshot_archive_files(archive_root),
+                before_preview,
+            )
+
+            blocked_code, blocked_output = self.run_cli(
+                [
+                    *command,
+                    "--approve",
+                    "--reviewed-by",
+                    "person:private-title-recovery-reviewer",
+                    "--affirm-recovery-reviewed",
+                ]
+            )
+            self.assertEqual(blocked_code, 1, blocked_output)
+            blocked = json.loads(blocked_output)
+            self.assertIn(
+                "affirm_archive_quiescent_required",
+                blocked["blockers"],
+            )
+            self.assertTrue(fixture["journal_path"].is_file())
+            self.assertTrue(fixture["lock_path"].is_file())
+
+            approved_code, approved_output = self.run_cli(
+                [
+                    *command,
+                    "--approve",
+                    "--reviewed-by",
+                    "person:private-title-recovery-reviewer",
+                    "--affirm-recovery-reviewed",
+                    "--affirm-archive-quiescent",
+                ]
+            )
+            self.assertEqual(approved_code, 0, approved_output)
+            approved = json.loads(approved_output)
+            self.assertEqual(approved["status"], "recovered")
+            self.assertEqual(
+                approved["summary"][
+                    "canonical_files_written_this_run"
+                ],
+                1,
+            )
+            self.assertTrue(approved["summary"]["write_lock_removed"])
+            self.assertTrue(
+                approved["summary"]["transaction_journal_removed"]
+            )
+            self.assertFalse(fixture["journal_path"].exists())
+            self.assertFalse(fixture["lock_path"].exists())
+            for path, original in fixture["originals"].items():
+                self.assertEqual(path.read_bytes(), original)
+            self.assertTrue(
+                (
+                    archive_root
+                    / ".wom-scratch"
+                    / "title-remap"
+                    / ".recovery-executor.guard"
+                ).is_file()
+            )
+            serialized = (
+                preview_output + blocked_output + approved_output
+            )
+            for private_value in (
+                fixture["proposal_sha256"],
+                fixture["reviewer"],
+                "person:private-title-recovery-reviewer",
+                *(row["zettel_id"] for row in fixture["rows"]),
+                *(row["title"] for row in fixture["rows"]),
+                str(fixture["journal_path"]),
+                str(archive_root),
+            ):
+                self.assertNotIn(private_value, serialized)
+
+            from wom_kit import mcp_server
+
+            self.assertNotIn(
+                "zet_title_remap_recover",
+                {
+                    definition["name"]
+                    for definition in mcp_server.TOOL_DEFINITIONS
+                },
+            )
+
+    def test_zet_title_remap_recover_cleans_prepared_case_and_reacquires_missing_lock(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            fixture = self._create_interrupted_title_remap_case(
+                archive_root,
+                proposal_name="recover-prepared.jsonl",
+            )
+            for path, original in fixture["originals"].items():
+                path.write_bytes(original)
+            fixture["lock_path"].unlink()
+            plan = archive_services.zet_title_remap_recovery_plan(
+                archive_root,
+                dry_run=True,
+            )
+            case = plan["cases"][0]
+            self.assertEqual(case["observed_state"], "prepared")
+            self.assertEqual(
+                case["recommended_action"],
+                "cleanup_unstarted_title_transaction_evidence",
+            )
+            self.assertTrue(case["lock_reacquisition_required"])
+
+            result = archive_services.zet_title_remap_recover(
+                archive_root,
+                case_sha256=case["case_sha256"],
+                expected_plan_digest=plan["plan_digest"],
+                expected_action=case["recommended_action"],
+                approve=True,
+                reviewed_by="person:prepared-recovery-reviewer",
+                affirm_recovery_reviewed=True,
+                affirm_archive_quiescent=True,
+            )
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["status"], "recovered")
+            self.assertEqual(
+                result["summary"][
+                    "canonical_files_written_this_run"
+                ],
+                0,
+            )
+            self.assertTrue(result["summary"]["write_lock_reacquired"])
+            self.assertTrue(result["summary"]["write_lock_removed"])
+            self.assertTrue(
+                result["summary"]["transaction_journal_removed"]
+            )
+            self.assertFalse(fixture["journal_path"].exists())
+            self.assertFalse(fixture["lock_path"].exists())
+            for path, original in fixture["originals"].items():
+                self.assertEqual(path.read_bytes(), original)
+            serialized = json.dumps(result, ensure_ascii=False)
+            self.assertNotIn(
+                "person:prepared-recovery-reviewer",
+                serialized,
+            )
+            self.assertNotIn(fixture["proposal_sha256"], serialized)
+
+    def test_zet_title_remap_recover_blocks_while_another_executor_holds_the_guard(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            fixture = self._create_interrupted_title_remap_case(
+                archive_root,
+                proposal_name="recover-guard-contention.jsonl",
+            )
+            plan = archive_services.zet_title_remap_recovery_plan(
+                archive_root,
+                dry_run=True,
+            )
+            case = plan["cases"][0]
+            journal_bytes = fixture["journal_path"].read_bytes()
+            lock_bytes = fixture["lock_path"].read_bytes()
+            participant_bytes = {
+                path: path.read_bytes()
+                for path in fixture["originals"]
+            }
+
+            with archive_services.zet_title_remap_recovery_guard(
+                archive_services.require_existing_archive_root(
+                    archive_root
+                )
+            ):
+                blocked = archive_services.zet_title_remap_recover(
+                    archive_root,
+                    case_sha256=case["case_sha256"],
+                    expected_plan_digest=plan["plan_digest"],
+                    expected_action=case["recommended_action"],
+                    approve=True,
+                    reviewed_by="person:guard-contention-reviewer",
+                    affirm_recovery_reviewed=True,
+                    affirm_archive_quiescent=True,
+                )
+
+            self.assertFalse(blocked["ok"], blocked)
+            self.assertEqual(blocked["status"], "blocked")
+            self.assertIn(
+                "recovery_execution_failed_evidence_retained",
+                blocked["blockers"],
+            )
+            self.assertFalse(blocked["recovery_guard"]["acquired"])
+            self.assertEqual(
+                fixture["journal_path"].read_bytes(),
+                journal_bytes,
+            )
+            self.assertEqual(
+                fixture["lock_path"].read_bytes(),
+                lock_bytes,
+            )
+            for path, value in participant_bytes.items():
+                self.assertEqual(path.read_bytes(), value)
+            self.assertNotIn(
+                "person:guard-contention-reviewer",
+                json.dumps(blocked, ensure_ascii=False),
+            )
+
+    def test_zet_title_remap_recover_rolls_fully_applied_without_receipt_back_and_cleans_stale_completed(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(
+                Path(tmp) / "fully-applied"
+            )
+            fixture = self._create_interrupted_title_remap_case(
+                archive_root,
+                proposal_name="recover-fully-applied.jsonl",
+            )
+            for item in fixture["journal"]["items"]:
+                path = archive_root.joinpath(
+                    *PurePosixPath(item["canonical_path"]).parts
+                )
+                row = fixture["rows"][item["row_index"]]
+                path.write_bytes(
+                    archive_services.zet_title_remap_candidate_bytes(
+                        fixture["originals"][path],
+                        row["title"],
+                    )
+                )
+            plan = archive_services.zet_title_remap_recovery_plan(
+                archive_root,
+                dry_run=True,
+            )
+            case = plan["cases"][0]
+            self.assertEqual(
+                case["observed_state"],
+                "fully_applied_receipt_missing",
+            )
+            self.assertEqual(case["participant_write_count"], 2)
+            result = archive_services.zet_title_remap_recover(
+                archive_root,
+                case_sha256=case["case_sha256"],
+                expected_plan_digest=plan["plan_digest"],
+                expected_action=case["recommended_action"],
+                approve=True,
+                reviewed_by="person:full-recovery-reviewer",
+                affirm_recovery_reviewed=True,
+                affirm_archive_quiescent=True,
+            )
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(
+                result["summary"][
+                    "canonical_files_written_this_run"
+                ],
+                2,
+            )
+            for path, original in fixture["originals"].items():
+                self.assertEqual(path.read_bytes(), original)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(
+                Path(tmp) / "stale-completed"
+            )
+            fixture = self._create_interrupted_title_remap_case(
+                archive_root,
+                proposal_name="recover-stale-completed.jsonl",
+            )
+            for item in fixture["journal"]["items"]:
+                path = archive_root.joinpath(
+                    *PurePosixPath(item["canonical_path"]).parts
+                )
+                row = fixture["rows"][item["row_index"]]
+                path.write_bytes(
+                    archive_services.zet_title_remap_candidate_bytes(
+                        fixture["originals"][path],
+                        row["title"],
+                    )
+                )
+            receipt_path = (
+                self._write_verified_title_remap_receipt_from_journal(
+                    archive_root,
+                    fixture["journal"],
+                )
+            )
+            receipt_bytes = receipt_path.read_bytes()
+            plan = archive_services.zet_title_remap_recovery_plan(
+                archive_root,
+                dry_run=True,
+            )
+            case = plan["cases"][0]
+            self.assertEqual(case["observed_state"], "stale_completed")
+            self.assertEqual(
+                case["recommended_action"],
+                "cleanup_verified_completed_title_evidence",
+            )
+            result = archive_services.zet_title_remap_recover(
+                archive_root,
+                case_sha256=case["case_sha256"],
+                expected_plan_digest=plan["plan_digest"],
+                expected_action=case["recommended_action"],
+                approve=True,
+                reviewed_by="person:stale-cleanup-reviewer",
+                affirm_recovery_reviewed=True,
+                affirm_archive_quiescent=True,
+            )
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(
+                result["summary"][
+                    "canonical_files_written_this_run"
+                ],
+                0,
+            )
+            self.assertTrue(
+                result["summary"][
+                    "verified_completed_receipt_preserved"
+                ]
+            )
+            self.assertEqual(receipt_path.read_bytes(), receipt_bytes)
+            self.assertFalse(fixture["journal_path"].exists())
+            self.assertFalse(fixture["lock_path"].exists())
+
+    def test_zet_title_remap_recover_retains_evidence_after_write_failure_and_rejects_stale_plan(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            fixture = self._create_interrupted_title_remap_case(
+                archive_root,
+                proposal_name="recover-write-failure.jsonl",
+            )
+            for item in fixture["journal"]["items"]:
+                path = archive_root.joinpath(
+                    *PurePosixPath(item["canonical_path"]).parts
+                )
+                row = fixture["rows"][item["row_index"]]
+                path.write_bytes(
+                    archive_services.zet_title_remap_candidate_bytes(
+                        fixture["originals"][path],
+                        row["title"],
+                    )
+                )
+            original_plan = archive_services.zet_title_remap_recovery_plan(
+                archive_root,
+                dry_run=True,
+            )
+            original_case = original_plan["cases"][0]
+            real_write = archive_services.write_bytes_atomic
+            call_count = 0
+
+            def write_one_then_fail(path: Path, value: bytes) -> None:
+                nonlocal call_count
+                call_count += 1
+                if call_count == 2:
+                    raise OSError("simulated_second_restore_failure")
+                real_write(path, value)
+
+            with patch.object(
+                archive_services,
+                "write_bytes_atomic",
+                side_effect=write_one_then_fail,
+            ):
+                failed = archive_services.zet_title_remap_recover(
+                    archive_root,
+                    case_sha256=original_case["case_sha256"],
+                    expected_plan_digest=original_plan["plan_digest"],
+                    expected_action=original_case[
+                        "recommended_action"
+                    ],
+                    approve=True,
+                    reviewed_by="person:failure-recovery-reviewer",
+                    affirm_recovery_reviewed=True,
+                    affirm_archive_quiescent=True,
+                )
+            self.assertFalse(failed["ok"], failed)
+            self.assertEqual(
+                failed["status"],
+                "recovery_incomplete_evidence_retained",
+            )
+            self.assertEqual(
+                failed["summary"][
+                    "canonical_files_written_this_run"
+                ],
+                1,
+            )
+            self.assertTrue(fixture["journal_path"].is_file())
+            self.assertTrue(fixture["lock_path"].is_file())
+            current_plan = archive_services.zet_title_remap_recovery_plan(
+                archive_root,
+                dry_run=True,
+            )
+            self.assertNotEqual(
+                current_plan["plan_digest"],
+                original_plan["plan_digest"],
+            )
+            stale = archive_services.zet_title_remap_recover(
+                archive_root,
+                case_sha256=original_case["case_sha256"],
+                expected_plan_digest=original_plan["plan_digest"],
+                expected_action=original_case["recommended_action"],
+                approve=True,
+                reviewed_by="person:failure-recovery-reviewer",
+                affirm_recovery_reviewed=True,
+                affirm_archive_quiescent=True,
+            )
+            self.assertFalse(stale["ok"], stale)
+            self.assertIn(
+                "recovery_plan_digest_mismatch",
+                stale["blockers"],
+            )
+            self.assertTrue(fixture["journal_path"].is_file())
+            self.assertTrue(fixture["lock_path"].is_file())
+
+    def test_zet_title_remap_recover_hard_exit_releases_guard_and_resumes_from_new_plan(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            fixture = self._create_interrupted_title_remap_case(
+                archive_root,
+                proposal_name="recover-hard-exit.jsonl",
+            )
+            for item in fixture["journal"]["items"]:
+                path = archive_root.joinpath(
+                    *PurePosixPath(item["canonical_path"]).parts
+                )
+                row = fixture["rows"][item["row_index"]]
+                path.write_bytes(
+                    archive_services.zet_title_remap_candidate_bytes(
+                        fixture["originals"][path],
+                        row["title"],
+                    )
+                )
+            plan = archive_services.zet_title_remap_recovery_plan(
+                archive_root,
+                dry_run=True,
+            )
+            case = plan["cases"][0]
+            child_code = """
+import os
+import sys
+from pathlib import Path
+from wom_kit import archive_services
+
+archive_root = Path(sys.argv[1])
+real_write = archive_services.write_bytes_atomic
+
+def write_then_hard_exit(path, value):
+    real_write(path, value)
+    os._exit(92)
+
+archive_services.write_bytes_atomic = write_then_hard_exit
+archive_services.zet_title_remap_recover(
+    archive_root,
+    case_sha256=sys.argv[2],
+    expected_plan_digest=sys.argv[3],
+    expected_action=sys.argv[4],
+    approve=True,
+    reviewed_by="person:hard-exit-recovery-reviewer",
+    affirm_recovery_reviewed=True,
+    affirm_archive_quiescent=True,
+)
+"""
+            child_env = os.environ.copy()
+            child_env["PYTHONPATH"] = str(SRC_ROOT)
+            child = subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    child_code,
+                    str(archive_root),
+                    case["case_sha256"],
+                    plan["plan_digest"],
+                    case["recommended_action"],
+                ],
+                cwd=KIT_ROOT,
+                env=child_env,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            self.assertEqual(child.returncode, 92, child.stderr)
+            self.assertTrue(fixture["journal_path"].is_file())
+            self.assertTrue(fixture["lock_path"].is_file())
+            self.assertTrue(
+                (
+                    archive_root
+                    / ".wom-scratch"
+                    / "title-remap"
+                    / ".recovery-executor.guard"
+                ).is_file()
+            )
+            restored_count = sum(
+                path.read_bytes() == original
+                for path, original in fixture["originals"].items()
+            )
+            self.assertEqual(restored_count, 1)
+
+            resumed_plan = (
+                archive_services.zet_title_remap_recovery_plan(
+                    archive_root,
+                    dry_run=True,
+                )
+            )
+            self.assertNotEqual(
+                resumed_plan["plan_digest"],
+                plan["plan_digest"],
+            )
+            resumed_case = resumed_plan["cases"][0]
+            resumed = archive_services.zet_title_remap_recover(
+                archive_root,
+                case_sha256=resumed_case["case_sha256"],
+                expected_plan_digest=resumed_plan["plan_digest"],
+                expected_action=resumed_case["recommended_action"],
+                approve=True,
+                reviewed_by="person:resume-recovery-reviewer",
+                affirm_recovery_reviewed=True,
+                affirm_archive_quiescent=True,
+            )
+            self.assertTrue(resumed["ok"], resumed)
+            for path, original in fixture["originals"].items():
+                self.assertEqual(path.read_bytes(), original)
+            self.assertFalse(fixture["journal_path"].exists())
+            self.assertFalse(fixture["lock_path"].exists())
+
+    def test_zet_title_remap_recover_retains_journal_when_cleanup_fails_then_retries(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            fixture = self._create_interrupted_title_remap_case(
+                archive_root,
+                proposal_name="recover-cleanup-failure.jsonl",
+            )
+            for path, original in fixture["originals"].items():
+                path.write_bytes(original)
+            plan = archive_services.zet_title_remap_recovery_plan(
+                archive_root,
+                dry_run=True,
+            )
+            case = plan["cases"][0]
+            real_remove = (
+                archive_services.remove_zet_title_remap_recovery_evidence
+            )
+
+            def fail_selected_journal_unlink(path: Path) -> bool:
+                if path.name.endswith(".write.transaction.json"):
+                    raise OSError("simulated_journal_cleanup_failure")
+                return real_remove(path)
+
+            with patch.object(
+                archive_services,
+                "remove_zet_title_remap_recovery_evidence",
+                side_effect=fail_selected_journal_unlink,
+            ):
+                failed = archive_services.zet_title_remap_recover(
+                    archive_root,
+                    case_sha256=case["case_sha256"],
+                    expected_plan_digest=plan["plan_digest"],
+                    expected_action=case["recommended_action"],
+                    approve=True,
+                    reviewed_by="person:cleanup-failure-reviewer",
+                    affirm_recovery_reviewed=True,
+                    affirm_archive_quiescent=True,
+                )
+            self.assertFalse(failed["ok"], failed)
+            self.assertEqual(
+                failed["status"],
+                "recovery_incomplete_evidence_retained",
+            )
+            self.assertTrue(failed["summary"]["write_lock_removed"])
+            self.assertFalse(
+                failed["summary"]["transaction_journal_removed"]
+            )
+            self.assertTrue(fixture["journal_path"].is_file())
+            self.assertFalse(fixture["lock_path"].exists())
+
+            retry_plan = archive_services.zet_title_remap_recovery_plan(
+                archive_root,
+                dry_run=True,
+            )
+            retry_case = retry_plan["cases"][0]
+            self.assertTrue(retry_case["lock_reacquisition_required"])
+            retried = archive_services.zet_title_remap_recover(
+                archive_root,
+                case_sha256=retry_case["case_sha256"],
+                expected_plan_digest=retry_plan["plan_digest"],
+                expected_action=retry_case["recommended_action"],
+                approve=True,
+                reviewed_by="person:cleanup-retry-reviewer",
+                affirm_recovery_reviewed=True,
+                affirm_archive_quiescent=True,
+            )
+            self.assertTrue(retried["ok"], retried)
+            self.assertTrue(retried["summary"]["write_lock_reacquired"])
+            self.assertFalse(fixture["journal_path"].exists())
+            self.assertFalse(fixture["lock_path"].exists())
+
+    def test_zet_title_remap_recover_refuses_invalid_handles_and_forensic_hold_without_echo(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            fixture = self._create_interrupted_title_remap_case(
+                archive_root,
+                proposal_name="recover-blockers.jsonl",
+            )
+            private_case = "PRIVATE CASE HANDLE / local path"
+            private_plan = "PRIVATE PLAN HANDLE / local path"
+            private_action = "PRIVATE ACTION VALUE"
+            before_invalid = self.snapshot_archive_files(archive_root)
+            invalid = archive_services.zet_title_remap_recover(
+                archive_root,
+                case_sha256=private_case,
+                expected_plan_digest=private_plan,
+                expected_action=private_action,
+                dry_run=True,
+            )
+            self.assertFalse(invalid["ok"], invalid)
+            self.assertIsNone(invalid["case_sha256"])
+            self.assertIsNone(invalid["expected_plan_digest"])
+            self.assertIsNone(invalid["expected_action"])
+            invalid_serialized = json.dumps(
+                invalid,
+                ensure_ascii=False,
+            )
+            self.assertNotIn(private_case, invalid_serialized)
+            self.assertNotIn(private_plan, invalid_serialized)
+            self.assertNotIn(private_action, invalid_serialized)
+            self.assertEqual(
+                self.snapshot_archive_files(archive_root),
+                before_invalid,
+            )
+
+            fixture["lock_path"].write_text(
+                "PRIVATE INVALID TITLE LOCK CONTENT\n",
+                encoding="utf-8",
+            )
+            hold_plan = archive_services.zet_title_remap_recovery_plan(
+                archive_root,
+                dry_run=True,
+            )
+            hold_case = hold_plan["cases"][0]
+            self.assertEqual(
+                hold_case["recommended_action"],
+                "manual_forensic_hold",
+            )
+            before_hold = self.snapshot_archive_files(archive_root)
+            held = archive_services.zet_title_remap_recover(
+                archive_root,
+                case_sha256=hold_case["case_sha256"],
+                expected_plan_digest=hold_plan["plan_digest"],
+                expected_action=hold_case["recommended_action"],
+                dry_run=True,
+            )
+            self.assertFalse(held["ok"], held)
+            self.assertIn(
+                "manual_forensic_hold_not_executable",
+                held["blockers"],
+            )
+            self.assertEqual(
+                self.snapshot_archive_files(archive_root),
+                before_hold,
+            )
+            held_serialized = json.dumps(held, ensure_ascii=False)
+            self.assertNotIn(
+                "PRIVATE INVALID TITLE LOCK CONTENT",
+                held_serialized,
+            )
+            self.assertNotIn(fixture["proposal_sha256"], held_serialized)
+            self.assertNotIn(fixture["reviewer"], held_serialized)
 
     def test_zet_title_remap_plan_binds_reviewed_titles_without_echoing_values(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

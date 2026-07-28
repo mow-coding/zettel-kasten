@@ -24,6 +24,34 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.272 Approval-Gated Interrupted Title Recovery
+
+No archive-wide migration is required. First generate and review the complete
+read-only v0.3.271 recovery plan. Preview one exact executable case:
+
+```powershell
+archive zet-title-remap-recover <archive-root> --case-sha256 sha256:<case-digest> --expected-plan-digest sha256:<complete-plan-digest> --expected-action <fixed-action> --dry-run --format json
+```
+
+If the case, plan digest, and action are still exact, stop the original writer
+and every editor, review the fixed recovery direction, then approve:
+
+```powershell
+archive zet-title-remap-recover <archive-root> --case-sha256 sha256:<case-digest> --expected-plan-digest sha256:<complete-plan-digest> --expected-action <fixed-action> --approve --reviewed-by person:<safe-reviewer-id> --affirm-recovery-reviewed --affirm-archive-quiescent --format json
+```
+
+The command can clean a prepared transaction, restore an uncommitted partial
+or fully applied title batch to verified complete prior bytes, or clean exact
+verified completed residue while preserving its immutable receipt.
+`manual_forensic_hold` is never executable.
+
+Do not reuse approval after a failed or interrupted run. Generate a new plan:
+successful prior-byte restores stay restored, remaining evidence is retained,
+and the previous plan digest becomes stale. v0.3.272 does not resume an apply,
+create/finalize a receipt, delete prior-byte snapshots, or revert a completed
+title change. See
+[`wom-kit/docs/zet-title-remap-recover.md`](wom-kit/docs/zet-title-remap-recover.md).
+
 ## v0.3.271 Read-Only Title Recovery Plan
 
 No archive migration is required. After running the v0.3.270 evidence audit,
@@ -91,12 +119,12 @@ A caught failure restores exact original bytes. A hard exit can leave a mixed
 batch plus a private transaction journal and common lock; do not delete or
 hand-edit those retained files.
 
-v0.3.269 records interruption evidence but does not itself audit,
-automatically recover, or revert title-remap batches. v0.3.270 adds the
-read-only audit and v0.3.271 adds a read-only fixed recovery decision; recovery
-execution and completed-title revert remain later work. Older WOM-kit versions
-can still read successfully changed canonical Markdown, but they do not
-understand the new receipt/journal evidence. Keep v0.3.271 or newer for this
+v0.3.269 records interruption evidence but does not itself audit or revert
+title-remap batches. v0.3.270 adds the read-only audit, v0.3.271 adds a
+read-only fixed recovery decision, and v0.3.272 adds one approval-gated
+interrupted-case executor. Completed-title revert remains later work. Older
+WOM-kit versions can still read successfully changed canonical Markdown, but
+they do not understand the new receipt/journal evidence. Keep v0.3.272 or newer for this
 workflow. See
 [`wom-kit/docs/zet-title-remap-write.md`](wom-kit/docs/zet-title-remap-write.md).
 

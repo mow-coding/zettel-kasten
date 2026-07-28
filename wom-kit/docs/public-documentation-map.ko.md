@@ -79,6 +79,7 @@
 - [승인된 zet 제목 리맵 쓰기](zet-title-remap-write.md)
 - [zet 제목 리맵 영수증·중단 감사](zet-title-remap-receipt-audit.md)
 - [zet 제목 리맵 읽기 전용 복구 판단](zet-title-remap-recovery-plan.md)
+- [zet 제목 리맵 승인형 단일 사건 복구](zet-title-remap-recover.md)
 - [연속 Node 읽기](zet-catalog-contiguous-reading.md)
 - [Seed 기반 연결 읽기 순서](seeded-connection-reading-order.md)
 - [Seed 기반 읽기 경로 근거](seeded-reading-route-evidence.md)

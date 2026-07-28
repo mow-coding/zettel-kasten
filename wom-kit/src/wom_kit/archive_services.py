@@ -7533,6 +7533,18 @@ ZET_TITLE_REMAP_RECEIPT_AUDIT_SCHEMA = (
 ZET_TITLE_REMAP_RECOVERY_PLAN_SCHEMA = (
     "wom-kit/zet-title-remap-recovery-plan/v0.1"
 )
+ZET_TITLE_REMAP_RECOVER_SCHEMA = "wom-kit/zet-title-remap-recover/v0.1"
+ZET_TITLE_REMAP_RECOVERY_ACTIONS = frozenset(
+    {
+        "cleanup_unstarted_title_transaction_evidence",
+        "rollback_uncommitted_title_apply_to_before",
+        "cleanup_verified_completed_title_evidence",
+        "manual_forensic_hold",
+    }
+)
+ZET_TITLE_REMAP_EXECUTABLE_RECOVERY_ACTIONS = (
+    ZET_TITLE_REMAP_RECOVERY_ACTIONS - {"manual_forensic_hold"}
+)
 ZET_TITLE_REMAP_PROPOSAL_PREFIX = ".wom-scratch/title-remap/"
 ZET_TITLE_REMAP_RECEIPTS_DIR = "receipts/revisions/title-remap"
 # Where the operator says the replacement name came from. A remap is only
@@ -11279,7 +11291,10 @@ def zet_title_remap_recovery_plan(
                 "prior_byte_snapshot_revalidation_required": True,
                 "fresh_recovery_approval_required": True,
                 "archive_quiescence_affirmation_required": True,
-                "execution_implemented": False,
+                "execution_implemented": (
+                    recommended_action
+                    in ZET_TITLE_REMAP_EXECUTABLE_RECOVERY_ACTIONS
+                ),
                 "safe_to_execute_now": False,
                 "issue_codes": [
                     str(code)
@@ -11369,12 +11384,13 @@ def zet_title_remap_recovery_plan(
         },
         "cases": complete_cases,
         "execution_boundary": {
-            "execution_implemented": False,
+            "execution_implemented": True,
             "automatic_recovery": False,
             "fresh_recovery_approval_required": True,
             "archive_quiescence_affirmation_required": True,
             "single_case_sha_and_plan_bound_execution_required": True,
             "common_write_lock_reacquisition_required_when_absent": True,
+            "recovery_executor_serialization_implemented": True,
             "approved_title_revert_implemented": False,
         },
         "write_boundary": {
@@ -11425,10 +11441,974 @@ def zet_title_remap_recovery_plan(
             else [
                 "Retain every title-remap receipt, transaction journal, common write lock, and prior-byte snapshot.",
                 "Have a human review each fixed recovery decision; do not execute, delete, resume, roll back, finalize, or revert title evidence by hand.",
-                "A later single-case executor must bind this complete plan digest and case SHA-256 after fresh state and snapshot revalidation.",
+                "Use zet-title-remap-recover only for one reviewed executable action, bound to this complete plan digest and case SHA-256, after fresh state and snapshot revalidation.",
             ]
         ),
     }
+
+
+@contextmanager
+def zet_title_remap_recovery_guard(
+    root: Path,
+) -> Iterable[dict[str, bool]]:
+    guard_root = archive_internal_path(
+        root,
+        ZET_TITLE_REMAP_PROPOSAL_PREFIX.rstrip("/"),
+    )
+    if (guard_root.exists() or guard_root.is_symlink()) and (
+        guard_root.is_symlink()
+        or zet_revision_path_has_symlink_component(root, guard_root)
+        or not guard_root.is_dir()
+    ):
+        raise ArchiveServiceError("Title recovery guard root is unsafe.")
+    guard_root.mkdir(parents=True, exist_ok=True)
+    guard_path = guard_root / ".recovery-executor.guard"
+    if guard_path.is_symlink() or (
+        guard_path.exists() and not guard_path.is_file()
+    ):
+        raise ArchiveServiceError("Title recovery guard path is unsafe.")
+    created_this_run = not guard_path.exists()
+    handle = guard_path.open("a+b")
+    locked = False
+    try:
+        handle.seek(0, os.SEEK_END)
+        if handle.tell() == 0:
+            handle.write(b"\0")
+            handle.flush()
+            os.fsync(handle.fileno())
+        handle.seek(0)
+        try:
+            if os.name == "nt":
+                import msvcrt
+
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(
+                    handle.fileno(),
+                    fcntl.LOCK_EX | fcntl.LOCK_NB,
+                )
+            locked = True
+        except (BlockingIOError, OSError) as exc:
+            raise ArchiveServiceError(
+                "Another title recovery executor is active."
+            ) from exc
+        yield {
+            "acquired": True,
+            "guard_file_created_this_run": created_this_run,
+        }
+    finally:
+        if locked:
+            try:
+                handle.seek(0)
+                if os.name == "nt":
+                    import msvcrt
+
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            except OSError:
+                pass
+        handle.close()
+
+
+def find_zet_title_remap_recovery_journal(
+    root: Path,
+    *,
+    archive_id: str,
+    case_sha256: str,
+    max_journals: int,
+) -> tuple[Path, bytes, dict[str, Any]]:
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", case_sha256):
+        raise ArchiveServiceError("Title recovery case SHA-256 is invalid.")
+    title_remap_root = archive_internal_path(
+        root,
+        ZET_TITLE_REMAP_PROPOSAL_PREFIX.rstrip("/"),
+    )
+    if (
+        title_remap_root.is_symlink()
+        or zet_revision_path_has_symlink_component(root, title_remap_root)
+        or not title_remap_root.is_dir()
+    ):
+        raise ArchiveServiceError("Title recovery journal root is unsafe.")
+    journal_paths = sorted(
+        title_remap_root.glob(".*.write.transaction.json")
+    )
+    if len(journal_paths) > int(max_journals):
+        raise ArchiveServiceError(
+            "Title recovery journal scan is incomplete."
+        )
+    matches: list[tuple[Path, bytes, dict[str, Any]]] = []
+    for journal_path in journal_paths:
+        try:
+            raw, journal = read_zet_title_remap_transaction_journal(
+                root,
+                journal_path,
+                archive_id=archive_id,
+            )
+        except ArchiveServiceError:
+            continue
+        actual_case_sha256 = (
+            "sha256:" + hashlib.sha256(raw).hexdigest()
+        )
+        if actual_case_sha256 == case_sha256:
+            matches.append((journal_path, raw, journal))
+    if len(matches) != 1:
+        raise ArchiveServiceError(
+            "Title recovery journal is missing or ambiguous."
+        )
+    return matches[0]
+
+
+def zet_title_remap_write_lock_document(
+    journal_path: Path,
+    journal: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "schema": "wom-kit/zet-title-remap-write-lock/v0.1",
+        "proposal_sha256": journal["proposal_sha256"],
+        "plan_digest": journal["plan_digest"],
+        "write_plan_digest": journal["write_plan_digest"],
+        "transaction_journal_name": journal_path.name,
+    }
+
+
+def ensure_zet_title_remap_recovery_write_lock(
+    root: Path,
+    *,
+    lock_path: Path,
+    journal_path: Path,
+    journal: dict[str, Any],
+) -> bool:
+    expected = zet_title_remap_write_lock_document(
+        journal_path,
+        journal,
+    )
+    if lock_path.is_symlink() or (
+        lock_path.exists() and not lock_path.is_file()
+    ):
+        raise ArchiveServiceError(
+            "Title recovery common write lock path is unsafe."
+        )
+    if lock_path.is_file():
+        existing = read_zet_title_remap_write_lock(root, lock_path)
+        if existing != expected:
+            raise ArchiveServiceError(
+                "Title recovery common write lock belongs to another case."
+            )
+        return False
+
+    descriptor: int | None = None
+    created = False
+    try:
+        descriptor = os.open(
+            lock_path,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            0o600,
+        )
+        created = True
+        with os.fdopen(descriptor, "wb") as handle:
+            descriptor = None
+            handle.write(
+                (
+                    json.dumps(
+                        expected,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
+                    + "\n"
+                ).encode("utf-8")
+            )
+            handle.flush()
+            os.fsync(handle.fileno())
+        fsync_directory(lock_path.parent)
+        if read_zet_title_remap_write_lock(root, lock_path) != expected:
+            raise ArchiveServiceError(
+                "Title recovery common write lock verification failed."
+            )
+        return True
+    except FileExistsError as exc:
+        raise ArchiveServiceError(
+            "Title recovery common write lock was created concurrently."
+        ) from exc
+    except (ArchiveServiceError, OSError) as exc:
+        if descriptor is not None:
+            os.close(descriptor)
+        if created:
+            try:
+                lock_path.unlink()
+                fsync_directory(lock_path.parent)
+            except OSError:
+                pass
+        if isinstance(exc, ArchiveServiceError):
+            raise
+        raise ArchiveServiceError(
+            "Title recovery common write lock could not be acquired."
+        ) from exc
+
+
+def read_zet_title_remap_recovery_snapshot_bytes(
+    root: Path,
+    item: dict[str, Any],
+) -> bytes:
+    snapshot = item["before_snapshot"]
+    snapshot_path = archive_internal_path(
+        root,
+        snapshot["logical_key"],
+    )
+    if (
+        snapshot_path.is_symlink()
+        or zet_revision_path_has_symlink_component(root, snapshot_path)
+        or not snapshot_path.is_file()
+        or not is_path_within_root(snapshot_path, root)
+    ):
+        raise ArchiveServiceError(
+            "Title recovery prior-byte snapshot is unsafe."
+        )
+    try:
+        if snapshot_path.stat().st_size != snapshot["size_bytes"]:
+            raise ArchiveServiceError(
+                "Title recovery prior-byte snapshot size changed."
+            )
+        snapshot_bytes = snapshot_path.read_bytes()
+    except OSError as exc:
+        raise ArchiveServiceError(
+            "Title recovery prior-byte snapshot is unreadable."
+        ) from exc
+    actual_sha256 = (
+        "sha256:" + hashlib.sha256(snapshot_bytes).hexdigest()
+    )
+    if (
+        actual_sha256 != item["before_file_sha256"]
+        or actual_sha256 != snapshot["object_id"]
+        or len(snapshot_bytes) != snapshot["size_bytes"]
+    ):
+        raise ArchiveServiceError(
+            "Title recovery prior-byte snapshot binding changed."
+        )
+    return snapshot_bytes
+
+
+def materialize_zet_title_remap_recovery_writes(
+    root: Path,
+    journal: dict[str, Any],
+    *,
+    rollback_to_before: bool,
+) -> list[dict[str, Any]]:
+    writes: list[dict[str, Any]] = []
+    total_bytes = 0
+    for item in journal["items"]:
+        canonical_path = archive_internal_path(
+            root,
+            item["canonical_path"],
+        )
+        if (
+            canonical_path.is_symlink()
+            or zet_revision_path_has_symlink_component(
+                root,
+                canonical_path,
+            )
+            or not canonical_path.is_file()
+            or archive_relative_path(canonical_path, root)
+            != item["canonical_path"]
+        ):
+            raise ArchiveServiceError(
+                "Title recovery participant is unavailable."
+            )
+        current_bytes = read_zet_title_remap_canonical_bytes(
+            canonical_path
+        )
+        snapshot_bytes = read_zet_title_remap_recovery_snapshot_bytes(
+            root,
+            item,
+        )
+        total_bytes += len(snapshot_bytes)
+        if total_bytes > ZET_TITLE_REMAP_MAX_TOTAL_CANONICAL_BYTES:
+            raise ArchiveServiceError(
+                "Title recovery participants exceed the total byte limit."
+            )
+        current_sha256 = (
+            "sha256:" + hashlib.sha256(current_bytes).hexdigest()
+        )
+        if current_sha256 not in {
+            item["before_file_sha256"],
+            item["after_file_sha256"],
+        }:
+            raise ArchiveServiceError(
+                "Title recovery participant hash changed."
+            )
+        if (
+            rollback_to_before
+            and current_sha256 == item["after_file_sha256"]
+        ):
+            writes.append(
+                {
+                    "row_index": item["row_index"],
+                    "path": canonical_path,
+                    "source_bytes": current_bytes,
+                    "target_bytes": snapshot_bytes,
+                    "target_sha256": item["before_file_sha256"],
+                }
+            )
+    return writes
+
+
+def remove_zet_title_remap_recovery_evidence(path: Path) -> bool:
+    path.unlink()
+    fsync_directory(path.parent)
+    return not path.exists()
+
+
+def zet_title_remap_recover(
+    archive_root: Path | str,
+    *,
+    case_sha256: str,
+    expected_plan_digest: str,
+    expected_action: str,
+    dry_run: bool = False,
+    approve: bool = False,
+    reviewed_by: str | None = None,
+    affirm_recovery_reviewed: bool = False,
+    affirm_archive_quiescent: bool = False,
+    max_receipts: int = ZET_TITLE_REMAP_AUDIT_MAX_RECEIPTS,
+    max_journals: int = ZET_TITLE_REMAP_AUDIT_MAX_JOURNALS,
+    max_cases: int = 100,
+    progress_callback: Callable[
+        [str, str, int | None, int | None],
+        None,
+    ]
+    | None = None,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    case_sha256 = str(case_sha256 or "").strip()
+    expected_plan_digest = str(expected_plan_digest or "").strip()
+    expected_action = str(expected_action or "").strip()
+    reviewer = safe_foreign_quarantine_actor_id(reviewed_by)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    selected_case: dict[str, Any] | None = None
+    actual_plan_digest: str | None = None
+    canonical_files_written = 0
+    canonical_write_attempt_count = 0
+    write_lock_reacquired = False
+    write_lock_removed: bool | None = None
+    transaction_journal_removed: bool | None = None
+    verified_receipt_preserved: bool | None = None
+    recovery_guard_acquired = False
+    recovery_guard_file_created = False
+    cleanup_attempted = False
+    private_journal_read = False
+    prior_snapshot_bytes_read = False
+    lock_path: Path | None = None
+    journal_path: Path | None = None
+
+    def result_payload(status: str) -> dict[str, Any]:
+        ok = status in {"ready_to_recover", "recovered"} and not blockers
+        case_payload = (
+            {
+                "case_sha256": selected_case.get("case_sha256"),
+                "observed_state": selected_case.get("observed_state"),
+                "final_receipt_state": selected_case.get(
+                    "final_receipt_state"
+                ),
+                "write_lock_state": selected_case.get(
+                    "write_lock_state"
+                ),
+                "recommended_action": selected_case.get(
+                    "recommended_action"
+                ),
+                "participant_write_count": selected_case.get(
+                    "participant_write_count"
+                ),
+                "receipt_write_required": selected_case.get(
+                    "receipt_write_required"
+                ),
+            }
+            if selected_case is not None
+            else None
+        )
+        evidence_retained = bool(
+            journal_path is not None and journal_path.exists()
+        )
+        return {
+            "ok": ok,
+            "schema": ZET_TITLE_REMAP_RECOVER_SCHEMA,
+            "lifecycle_action": "zet_title_remap_recover",
+            "status": status,
+            "dry_run": bool(dry_run),
+            "approved": bool(approve and status == "recovered"),
+            "archive_id": archive_id,
+            "case_sha256": (
+                case_sha256
+                if re.fullmatch(r"sha256:[0-9a-f]{64}", case_sha256)
+                else None
+            ),
+            "expected_plan_digest": (
+                expected_plan_digest
+                if re.fullmatch(
+                    r"sha256:[0-9a-f]{64}",
+                    expected_plan_digest,
+                )
+                else None
+            ),
+            "actual_plan_digest": actual_plan_digest,
+            "expected_plan_digest_matches": bool(
+                actual_plan_digest
+                and actual_plan_digest == expected_plan_digest
+            ),
+            "expected_action": (
+                expected_action
+                if expected_action in ZET_TITLE_REMAP_RECOVERY_ACTIONS
+                else None
+            ),
+            "case": case_payload,
+            "summary": {
+                "canonical_files_written_this_run": (
+                    canonical_files_written
+                ),
+                "canonical_write_attempt_count": (
+                    canonical_write_attempt_count
+                ),
+                "receipt_written_this_run": False,
+                "verified_completed_receipt_preserved": (
+                    verified_receipt_preserved
+                ),
+                "write_lock_reacquired": write_lock_reacquired,
+                "write_lock_removed": write_lock_removed,
+                "transaction_journal_removed": (
+                    transaction_journal_removed
+                ),
+            },
+            "approval_contract": {
+                "fresh_recovery_approval_required": True,
+                "reviewed_by_supplied": bool(reviewer),
+                "reviewed_by_echoed": False,
+                "recovery_reviewed_affirmed": bool(
+                    affirm_recovery_reviewed
+                ),
+                "archive_quiescent_affirmed": bool(
+                    affirm_archive_quiescent
+                ),
+                "plan_digest_case_and_action_bound": bool(
+                    selected_case is not None
+                    and actual_plan_digest == expected_plan_digest
+                    and selected_case.get("case_sha256")
+                    == case_sha256
+                    and selected_case.get("recommended_action")
+                    == expected_action
+                ),
+            },
+            "recovery_guard": {
+                "acquired": recovery_guard_acquired,
+                "guard_file_created_this_run": (
+                    recovery_guard_file_created
+                ),
+                "automatically_released": (
+                    True if recovery_guard_acquired else None
+                ),
+                "path_echoed": False,
+                "serializes_recovery_executors_only": True,
+            },
+            "write_boundary": {
+                "canonical_zets_modified": (
+                    canonical_files_written > 0
+                ),
+                "canonical_files_restored_to_prior_bytes": (
+                    canonical_files_written
+                ),
+                "canonical_body_bytes_restored_from_snapshot": bool(
+                    canonical_files_written
+                ),
+                "other_frontmatter_fields_restored_from_snapshot": bool(
+                    canonical_files_written
+                ),
+                "updated_at_changed": False,
+                "receipts_created_modified_or_deleted": False,
+                "common_write_lock_created": write_lock_reacquired,
+                "common_write_lock_deleted": bool(write_lock_removed),
+                "transaction_journal_deleted": bool(
+                    transaction_journal_removed
+                ),
+                "prior_byte_snapshots_modified_or_deleted": False,
+                "recovery_guard_file_created": (
+                    recovery_guard_file_created
+                ),
+                "provider_state_written": False,
+                "objet_bytes_written": False,
+                "database_rows_written": False,
+            },
+            "retry_contract": {
+                "safe_direction_only": True,
+                "successful_restores_rolled_back_on_later_failure": False,
+                "journal_retained_on_incomplete_recovery": (
+                    evidence_retained
+                ),
+                "fresh_plan_and_approval_required_after_incomplete_recovery": (
+                    True
+                ),
+            },
+            "privacy_guards": {
+                "journal_private_metadata_read": private_journal_read,
+                "prior_snapshot_bytes_read": prior_snapshot_bytes_read,
+                "journal_receipt_or_snapshot_paths_echoed": False,
+                "zettel_ids_echoed": False,
+                "zettel_paths_echoed": False,
+                "old_or_new_title_values_echoed": False,
+                "title_hashes_echoed": False,
+                "title_lengths_echoed": False,
+                "zettel_body_text_echoed": False,
+                "reviewed_by_echoed": False,
+                "proposal_sha256_echoed": False,
+                "lock_content_echoed": False,
+                "absolute_local_paths_echoed": False,
+                "provider_api_called": False,
+                "model_called": False,
+                "secret_store_or_environment_read": False,
+            },
+            "blockers": unique_preserve_order(blockers),
+            "warnings": unique_preserve_order(warnings),
+            "next_safe_actions": (
+                [
+                    "Run this exact case SHA, plan digest, and action with --approve only after recovery review and archive-quiescence confirmation."
+                ]
+                if status == "ready_to_recover"
+                else [
+                    "Recovery completed; matching transaction residue was removed and retained snapshots were preserved."
+                ]
+                if status == "recovered"
+                else [
+                    "Retain every journal, lock, receipt, and prior-byte snapshot; generate a fresh plan before another approved attempt."
+                ]
+            ),
+        }
+
+    if bool(dry_run) == bool(approve):
+        blockers.append("choose_exactly_one_of_dry_run_or_approve")
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", case_sha256):
+        blockers.append("recovery_case_sha256_invalid")
+    if not re.fullmatch(
+        r"sha256:[0-9a-f]{64}",
+        expected_plan_digest,
+    ):
+        blockers.append("expected_recovery_plan_digest_invalid")
+    if expected_action not in ZET_TITLE_REMAP_RECOVERY_ACTIONS:
+        blockers.append("expected_recovery_action_invalid")
+    if approve:
+        if reviewer is None:
+            blockers.append("safe_reviewed_by_required")
+        if not affirm_recovery_reviewed:
+            blockers.append("affirm_recovery_reviewed_required")
+        if not affirm_archive_quiescent:
+            blockers.append("affirm_archive_quiescent_required")
+    elif (
+        reviewed_by
+        or affirm_recovery_reviewed
+        or affirm_archive_quiescent
+    ):
+        blockers.append("approval_fields_only_valid_with_approve")
+    if blockers:
+        return result_payload("blocked")
+
+    def fresh_plan() -> dict[str, Any]:
+        return zet_title_remap_recovery_plan(
+            root,
+            dry_run=True,
+            max_receipts=max_receipts,
+            max_journals=max_journals,
+            max_cases=max_cases,
+            progress_callback=progress_callback,
+        )
+
+    def select_case(plan: dict[str, Any]) -> dict[str, Any] | None:
+        matches = [
+            case
+            for case in plan.get("cases", [])
+            if isinstance(case, dict)
+            and case.get("case_sha256") == case_sha256
+        ]
+        return matches[0] if len(matches) == 1 else None
+
+    plan = fresh_plan()
+    actual_plan_digest = (
+        plan.get("plan_digest")
+        if isinstance(plan.get("plan_digest"), str)
+        else None
+    )
+    if not plan.get("ok"):
+        blockers.extend(
+            f"plan:{code}" for code in plan.get("blockers", [])
+        )
+    if actual_plan_digest != expected_plan_digest:
+        blockers.append("recovery_plan_digest_mismatch")
+    selected_case = select_case(plan)
+    if selected_case is None:
+        blockers.append("recovery_case_not_found_or_ambiguous")
+    elif selected_case.get("recommended_action") != expected_action:
+        blockers.append("recovery_expected_action_mismatch")
+    elif expected_action == "manual_forensic_hold":
+        blockers.append("manual_forensic_hold_not_executable")
+    elif not selected_case.get("execution_implemented"):
+        blockers.append("recovery_action_not_implemented")
+    if blockers:
+        return result_payload("blocked")
+    if dry_run:
+        return result_payload("ready_to_recover")
+
+    assert reviewer is not None
+    try:
+        with zet_title_remap_recovery_guard(root) as guard:
+            recovery_guard_acquired = bool(guard.get("acquired"))
+            recovery_guard_file_created = bool(
+                guard.get("guard_file_created_this_run")
+            )
+            plan = fresh_plan()
+            actual_plan_digest = (
+                plan.get("plan_digest")
+                if isinstance(plan.get("plan_digest"), str)
+                else None
+            )
+            fresh_case = select_case(plan)
+            if (
+                not plan.get("ok")
+                or actual_plan_digest != expected_plan_digest
+                or fresh_case is None
+                or fresh_case.get("recommended_action")
+                != expected_action
+            ):
+                blockers.append(
+                    "recovery_case_changed_before_execution"
+                )
+                return result_payload("blocked")
+            selected_case = fresh_case
+
+            journal_path, journal_raw, journal = (
+                find_zet_title_remap_recovery_journal(
+                    root,
+                    archive_id=archive_id,
+                    case_sha256=case_sha256,
+                    max_journals=int(max_journals),
+                )
+            )
+            private_journal_read = True
+            title_remap_root = archive_internal_path(
+                root,
+                ZET_TITLE_REMAP_PROPOSAL_PREFIX.rstrip("/"),
+            )
+            lock_path = title_remap_root / ".title-remap.write.lock"
+            receipt_path = archive_internal_path(
+                root,
+                journal["final_receipt_path"],
+            )
+
+            state = classify_zet_title_remap_transaction_journal(
+                root,
+                journal,
+            )
+            observed_state = str(state.get("status") or "invalid")
+            planned_state = str(
+                fresh_case.get("observed_state") or "invalid"
+            )
+            state_matches_case = (
+                observed_state == planned_state
+                or (
+                    planned_state == "stale_completed"
+                    and observed_state
+                    == "fully_applied_receipt_missing"
+                )
+            )
+            if (
+                not state_matches_case
+                or any(
+                    int(state.get(key) or 0)
+                    != int(fresh_case.get(key) or 0)
+                    for key in (
+                        "before_count",
+                        "after_count",
+                        "divergent_count",
+                        "missing_count",
+                    )
+                )
+            ):
+                blockers.append(
+                    "recovery_participant_state_changed_after_plan"
+                )
+                return result_payload("blocked")
+
+            verified_receipt_bytes: bytes | None = None
+            if (
+                expected_action
+                == "cleanup_verified_completed_title_evidence"
+            ):
+                (
+                    verified_receipt_bytes,
+                    verified_receipt,
+                    receipt_proposal_sha256,
+                ) = read_zet_title_remap_receipt_for_audit(
+                    root,
+                    receipt_path,
+                    archive_id=archive_id,
+                )
+                if (
+                    receipt_proposal_sha256
+                    != journal["proposal_sha256"]
+                    or any(
+                        verified_receipt.get(field)
+                        != journal.get(field)
+                        for field in (
+                            "archive_id",
+                            "proposal_sha256",
+                            "plan_digest",
+                            "write_plan_digest",
+                            "reviewed_by",
+                            "human_affirmation",
+                            "item_count",
+                            "items",
+                        )
+                    )
+                    or verified_receipt.get("applied_at")
+                    != journal.get("prepared_at")
+                ):
+                    blockers.append(
+                        "recovery_verified_receipt_binding_changed"
+                    )
+                    return result_payload("blocked")
+                verified_receipt_preserved = True
+            elif receipt_path.exists() or receipt_path.is_symlink():
+                blockers.append(
+                    "recovery_final_receipt_became_occupied"
+                )
+                return result_payload("blocked")
+
+            write_lock_reacquired = (
+                ensure_zet_title_remap_recovery_write_lock(
+                    root,
+                    lock_path=lock_path,
+                    journal_path=journal_path,
+                    journal=journal,
+                )
+            )
+            locked_raw, locked_journal = (
+                read_zet_title_remap_transaction_journal(
+                    root,
+                    journal_path,
+                    archive_id=archive_id,
+                )
+            )
+            if (
+                locked_raw != journal_raw
+                or "sha256:" + hashlib.sha256(locked_raw).hexdigest()
+                != case_sha256
+                or locked_journal != journal
+            ):
+                blockers.append("recovery_journal_binding_changed")
+                return result_payload("blocked")
+
+            participant_writes = (
+                materialize_zet_title_remap_recovery_writes(
+                    root,
+                    journal,
+                    rollback_to_before=(
+                        expected_action
+                        == "rollback_uncommitted_title_apply_to_before"
+                    ),
+                )
+            )
+            prior_snapshot_bytes_read = True
+            if len(participant_writes) != int(
+                fresh_case.get("participant_write_count") or 0
+            ):
+                blockers.append(
+                    "recovery_participant_write_set_changed"
+                )
+                return result_payload("blocked")
+            if participant_writes and progress_callback is not None:
+                progress_callback(
+                    "title-remap-recovery-write",
+                    "start",
+                    0,
+                    len(participant_writes),
+                )
+            for index, item in enumerate(participant_writes, start=1):
+                if (
+                    read_zet_title_remap_canonical_bytes(item["path"])
+                    != item["source_bytes"]
+                ):
+                    raise ArchiveServiceError(
+                        "Title recovery participant changed immediately before write."
+                    )
+                canonical_write_attempt_count += 1
+                write_bytes_atomic(
+                    item["path"],
+                    item["target_bytes"],
+                )
+                written_bytes = read_zet_title_remap_canonical_bytes(
+                    item["path"]
+                )
+                if (
+                    written_bytes != item["target_bytes"]
+                    or "sha256:"
+                    + hashlib.sha256(written_bytes).hexdigest()
+                    != item["target_sha256"]
+                ):
+                    raise ArchiveServiceError(
+                        "Title recovery canonical write verification failed."
+                    )
+                canonical_files_written += 1
+                if progress_callback is not None:
+                    progress_callback(
+                        "title-remap-recovery-write",
+                        "written",
+                        index,
+                        len(participant_writes),
+                    )
+            if participant_writes and progress_callback is not None:
+                progress_callback(
+                    "title-remap-recovery-write",
+                    "done",
+                    len(participant_writes),
+                    len(participant_writes),
+                )
+
+            final_state = classify_zet_title_remap_transaction_journal(
+                root,
+                journal,
+            )
+            expected_final_state = (
+                "fully_applied_receipt_missing"
+                if expected_action
+                == "cleanup_verified_completed_title_evidence"
+                else "prepared"
+            )
+            if (
+                final_state.get("status") != expected_final_state
+                or (
+                    expected_final_state == "prepared"
+                    and int(final_state.get("before_count") or 0)
+                    != int(journal["item_count"])
+                )
+                or (
+                    expected_final_state
+                    == "fully_applied_receipt_missing"
+                    and int(final_state.get("after_count") or 0)
+                    != int(journal["item_count"])
+                )
+            ):
+                raise ArchiveServiceError(
+                    "Title recovery final participant state did not verify."
+                )
+            if verified_receipt_bytes is not None:
+                if (
+                    not receipt_path.is_file()
+                    or receipt_path.is_symlink()
+                    or receipt_path.read_bytes()
+                    != verified_receipt_bytes
+                ):
+                    raise ArchiveServiceError(
+                        "Title recovery verified receipt changed."
+                    )
+                verified_receipt_preserved = True
+            elif receipt_path.exists() or receipt_path.is_symlink():
+                raise ArchiveServiceError(
+                    "Title recovery final receipt became occupied."
+                )
+
+            expected_lock = zet_title_remap_write_lock_document(
+                journal_path,
+                journal,
+            )
+            if (
+                read_zet_title_remap_write_lock(root, lock_path)
+                != expected_lock
+            ):
+                raise ArchiveServiceError(
+                    "Title recovery common write lock changed."
+                )
+            cleanup_attempted = True
+            try:
+                write_lock_removed = (
+                    remove_zet_title_remap_recovery_evidence(
+                        lock_path
+                    )
+                )
+            except OSError:
+                write_lock_removed = False
+            if not write_lock_removed:
+                blockers.append(
+                    "recovery_completed_but_write_lock_cleanup_failed"
+                )
+                return result_payload(
+                    "recovery_incomplete_evidence_retained"
+                )
+
+            current_journal_raw, _current_journal = (
+                read_zet_title_remap_transaction_journal(
+                    root,
+                    journal_path,
+                    archive_id=archive_id,
+                )
+            )
+            if current_journal_raw != journal_raw:
+                blockers.append(
+                    "recovery_journal_changed_before_cleanup"
+                )
+                return result_payload(
+                    "recovery_incomplete_evidence_retained"
+                )
+            try:
+                transaction_journal_removed = (
+                    remove_zet_title_remap_recovery_evidence(
+                        journal_path
+                    )
+                )
+            except OSError:
+                transaction_journal_removed = False
+            if not transaction_journal_removed:
+                blockers.append(
+                    "recovery_completed_but_journal_cleanup_failed"
+                )
+                return result_payload(
+                    "recovery_incomplete_evidence_retained"
+                )
+            if verified_receipt_bytes is not None:
+                verified_receipt_preserved = bool(
+                    receipt_path.is_file()
+                    and not receipt_path.is_symlink()
+                    and receipt_path.read_bytes()
+                    == verified_receipt_bytes
+                )
+                if not verified_receipt_preserved:
+                    blockers.append(
+                        "recovery_completed_but_verified_receipt_changed"
+                    )
+                    return result_payload(
+                        "recovery_incomplete_evidence_retained"
+                    )
+            return result_payload("recovered")
+    except (
+        ArchiveServiceError,
+        ArchivePathError,
+        OSError,
+        UnicodeDecodeError,
+        ValueError,
+    ):
+        blockers.append("recovery_execution_failed_evidence_retained")
+        if lock_path is not None:
+            write_lock_removed = not lock_path.exists()
+        if journal_path is not None:
+            transaction_journal_removed = not journal_path.exists()
+        return result_payload(
+            "recovery_incomplete_evidence_retained"
+            if (
+                canonical_files_written
+                or write_lock_reacquired
+                or cleanup_attempted
+            )
+            else "blocked"
+        )
 
 
 def first_read_readiness(

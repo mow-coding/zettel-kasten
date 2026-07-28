@@ -6,6 +6,28 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.272 - 2026-07-28
+
+- Added CLI-only approval-gated `zet-title-remap-recover` and alias
+  `title-remap-recover`.
+- Bind one content-free journal-byte case SHA-256, the complete current
+  recovery-plan digest, and the exact fixed action; approval also requires a
+  safe reviewer, recovery-reviewed affirmation, and archive-quiescence
+  affirmation.
+- Serialize executors with a non-blocking cross-platform recovery guard,
+  regenerate the plan under that guard, and create the common title write lock
+  only when genuinely absent.
+- Clean prepared residue without canonical writes, restore uncommitted
+  after-hash participants only from verified complete prior-byte snapshots, or
+  clean exact stale-completed residue while preserving its receipt byte-for-byte.
+- Verify each source/target and the whole final state before removing the
+  matching common lock and transaction journal.
+- Preserve remaining evidence and require a fresh plan and approval after
+  write, cleanup, or hard-exit interruption.
+- Keep forensic holds, apply resume, receipt creation/finalization, snapshot
+  deletion, completed-title revert, MCP exposure, provider/model calls, and
+  private-value output outside this release.
+
 ## v0.3.271 - 2026-07-28
 
 - Added read-only `zet-title-remap-recovery-plan` and alias
