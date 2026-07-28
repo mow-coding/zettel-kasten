@@ -129,8 +129,8 @@ POSIX, so this is not a claim of power-loss-proof storage.
 
 ## Current Boundary
 
-The v0.3.269 writer, v0.3.270 auditor, v0.3.271 recovery planner, and v0.3.272
-single-case executor implement:
+The v0.3.269 writer, v0.3.270 auditor, v0.3.271 recovery planner, v0.3.272
+single-case executor, and v0.3.273 completed-receipt revert planner implement:
 
 - read-only title proposal planning;
 - approval-gated title-only batch write;
@@ -142,6 +142,8 @@ single-case executor implement:
 - one fixed privacy-safe recovery decision per complete retained case.
 - approval-gated safe-direction rollback or verified residue cleanup for one
   freshly rebound interrupted case.
+- read-only exact prior-byte compensation planning for one clean completed
+  receipt.
 
 It does not yet implement:
 
@@ -150,3 +152,5 @@ It does not yet implement:
 
 See [zet Title Remap Receipt And Interruption Audit](zet-title-remap-receipt-audit.md)
 and [zet Title Remap Recover](zet-title-remap-recover.md).
+For the completed-receipt review boundary, see
+[zet Title Remap Completed-Receipt Revert Plan](zet-title-remap-revert-plan.md).

@@ -1,6 +1,6 @@
 # zet Title Remap Recovery Plan
 
-Status: v0.3.272 read-only interrupted-title recovery decision and executor handoff
+Status: v0.3.273 read-only interrupted-title recovery decision and executor handoff
 
 ## Command
 
@@ -84,10 +84,13 @@ archive-quiescence affirmation.
 The executor can clean prepared residue, roll an uncommitted apply back to
 verified prior bytes, or clean exactly verified stale-completed residue. It
 cannot execute `manual_forensic_hold`, resume an apply, create/finalize a
-receipt, delete snapshots, or revert a completed title-remap receipt.
+receipt, delete snapshots, or revert a completed title-remap receipt. v0.3.273
+handles only the separate read-only planning step for a clean completed
+receipt.
 
 See also:
 
 - [zet Title Remap Write](zet-title-remap-write.md)
 - [zet Title Remap Receipt And Interruption Audit](zet-title-remap-receipt-audit.md)
 - [zet Title Remap Recover](zet-title-remap-recover.md)
+- [zet Title Remap Completed-Receipt Revert Plan](zet-title-remap-revert-plan.md)

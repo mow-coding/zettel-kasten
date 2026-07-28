@@ -24,6 +24,26 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.273 Read-Only Completed Title Revert Plan
+
+No archive migration is required. Select one completed immutable title-remap
+receipt and calculate its exact SHA-256 outside the command. Then run:
+
+```powershell
+archive zet-title-remap-revert-plan <archive-root> --receipt receipts/revisions/title-remap/<digest>.zet-title-remap.json --expected-receipt-sha256 sha256:<reviewed-receipt-digest> --dry-run --format json
+```
+
+The command requires the complete title evidence audit to be healthy, complete,
+and clean. It verifies that every current canonical file still matches the
+receipt's applied state, every prior-byte snapshot and manifest record remains
+valid, and each transition was exactly title-only. It writes and deletes
+nothing.
+
+Do not copy prior snapshots over canonical zets by hand. v0.3.273 produces
+review evidence and a complete plan digest but does not implement the approved
+revert writer. Keep the source receipt and snapshots immutable. See
+[`wom-kit/docs/zet-title-remap-revert-plan.md`](wom-kit/docs/zet-title-remap-revert-plan.md).
+
 ## v0.3.272 Approval-Gated Interrupted Title Recovery
 
 No archive-wide migration is required. First generate and review the complete

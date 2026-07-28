@@ -7907,14 +7907,6 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         release_text = (
             KIT_ROOT / "docs" / "releases" / "v0.3.272.md"
         ).read_text(encoding="utf-8")
-        packaged_release_text = (
-            KIT_ROOT
-            / "src"
-            / "wom_kit"
-            / "_resources"
-            / "release-notes"
-            / "v0.3.272.md"
-        ).read_text(encoding="utf-8")
         matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
         decision_text = (
             KIT_ROOT
@@ -7969,7 +7961,6 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                 self.assertIn("fresh", text.lower())
                 self.assertIn("revert", text.lower())
 
-        self.assertEqual(packaged_release_text, release_text)
         self.assertIn("zet-title-remap-recover", plan_text)
         self.assertIn(
             "[zet Title Remap Recover]",
@@ -7982,14 +7973,106 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         for text in (
             root_readme_text,
             root_readme_ko_text,
-            kit_readme_text,
             upgrade_text,
             upgrade_ko_text,
         ):
             with self.subTest(document="public-version-surface"):
                 self.assertIn("v0.3.272", text)
+    def test_v03273_title_remap_revert_plan_docs_match_read_only_contract(
+        self,
+    ) -> None:
+        guide_text = (
+            KIT_ROOT / "docs" / "zet-title-remap-revert-plan.md"
+        ).read_text(encoding="utf-8")
+        release_text = (
+            KIT_ROOT / "docs" / "releases" / "v0.3.273.md"
+        ).read_text(encoding="utf-8")
+        packaged_release_text = (
+            KIT_ROOT
+            / "src"
+            / "wom_kit"
+            / "_resources"
+            / "release-notes"
+            / "v0.3.273.md"
+        ).read_text(encoding="utf-8")
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        decision_text = (
+            KIT_ROOT
+            / "docs"
+            / "archive-infra-decision-log-2026-07-28-v03273-title-remap-revert-plan.md"
+        ).read_text(encoding="utf-8")
+        root_readme_text = (REPO_ROOT / "README.md").read_text(
+            encoding="utf-8"
+        )
+        root_readme_ko_text = (REPO_ROOT / "README.ko.md").read_text(
+            encoding="utf-8"
+        )
+        kit_readme_text = (KIT_ROOT / "README.md").read_text(
+            encoding="utf-8"
+        )
+        upgrade_text = (REPO_ROOT / "UPGRADE.md").read_text(
+            encoding="utf-8"
+        )
+        upgrade_ko_text = (REPO_ROOT / "UPGRADE.ko.md").read_text(
+            encoding="utf-8"
+        )
+        public_map_text = (
+            KIT_ROOT / "docs" / "public-documentation-map.md"
+        ).read_text(encoding="utf-8")
+        public_map_ko_text = (
+            KIT_ROOT / "docs" / "public-documentation-map.ko.md"
+        ).read_text(encoding="utf-8")
+
+        for text in (
+            guide_text,
+            release_text,
+            matrix_text,
+            decision_text,
+        ):
+            with self.subTest(document="title-remap-revert-plan-contract"):
+                self.assertIn("zet-title-remap-revert-plan", text)
+                self.assertIn("read-only", text.lower())
+                self.assertIn("prior-byte", text)
+                self.assertIn("source receipt", text.lower())
+                self.assertIn("current", text.lower())
+                self.assertIn("plan digest", text.lower())
+                self.assertIn("immutable", text.lower())
+                self.assertIn("approved", text.lower())
+
+        for phrase in (
+            "--receipt",
+            "--expected-receipt-sha256",
+            "--dry-run",
+            "writes and deletes nothing",
+            "title-only",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, guide_text)
+                self.assertIn(phrase, release_text)
         self.assertIn(
-            "releases/download/v0.3.272/wom_kit-0.3.272-py3-none-any.whl",
+            "does not implement the approved revert writer",
+            matrix_text,
+        )
+        self.assertEqual(packaged_release_text, release_text)
+        self.assertIn(
+            "[zet Title Remap Completed-Receipt Revert Plan]",
+            public_map_text,
+        )
+        self.assertIn(
+            "(zet-title-remap-revert-plan.md)",
+            public_map_ko_text,
+        )
+        for text in (
+            root_readme_text,
+            root_readme_ko_text,
+            kit_readme_text,
+            upgrade_text,
+            upgrade_ko_text,
+        ):
+            with self.subTest(document="public-version-surface"):
+                self.assertIn("v0.3.273", text)
+        self.assertIn(
+            "releases/download/v0.3.273/wom_kit-0.3.273-py3-none-any.whl",
             root_readme_text,
         )
 

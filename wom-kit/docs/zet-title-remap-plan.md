@@ -1,6 +1,6 @@
 # Reviewed zet Title Remap Plan
 
-Status: v0.3.272 read-only title proposal validation before approved write, evidence audit, recovery decision, and approved interrupted-case recovery
+Status: v0.3.273 read-only title proposal validation before approved write, evidence audit, interrupted-case recovery, and completed-receipt revert planning
 
 Use this command after `zet-title-readiness` finds a canonical zet whose title
 is an imported identifier:
@@ -129,4 +129,6 @@ interrupted write, use the separate read-only
 Use [zet Title Remap Recovery Plan](zet-title-remap-recovery-plan.md) and the
 separate approval-gated [zet Title Remap Recover](zet-title-remap-recover.md)
 for a retained interrupted transaction. Approved completed-title revert
-remains a later release track.
+starts with the separate read-only
+[zet Title Remap Completed-Receipt Revert Plan](zet-title-remap-revert-plan.md);
+the approval-gated revert writer remains a later release.
