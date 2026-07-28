@@ -9481,6 +9481,98 @@ def command_zet_title_remap_receipt_audit(
     return 0 if result.get("ok") else 1
 
 
+def command_zet_title_remap_revert_plan(
+    args: argparse.Namespace,
+) -> int:
+    if not args.dry_run:
+        print(
+            "zet-title-remap-revert-plan is read-only and requires --dry-run.",
+            file=sys.stderr,
+        )
+        return 1
+    reporter = CommandProgressReporter(
+        bool(getattr(args, "progress", False)),
+        label="zet-title-remap-revert-plan",
+        stage_order=(
+            "title-revert-receipt",
+            "title-remap-receipt-audit",
+            "title-remap-journal-audit",
+            "title-revert-history-audit",
+            "title-revert-participants",
+        ),
+    )
+    try:
+        result = archive_services.zet_title_remap_revert_plan(
+            Path(args.archive_root),
+            receipt_path=str(args.receipt),
+            expected_receipt_sha256=str(
+                args.expected_receipt_sha256
+            ),
+            max_items=int(args.max_items),
+            dry_run=True,
+            progress_callback=reporter.progress,
+        )
+    except archive_services.ArchiveServiceError:
+        print(
+            "zet-title-remap-revert-plan could not inspect the private completed-title evidence safely.",
+            file=sys.stderr,
+        )
+        return 1
+    except (
+        ArchivePathError,
+        OSError,
+        UnicodeError,
+        ValueError,
+        RecursionError,
+    ):
+        print(
+            "zet-title-remap-revert-plan failed before a privacy-safe result could be produced.",
+            file=sys.stderr,
+        )
+        return 1
+    except Exception:
+        print(
+            "zet-title-remap-revert-plan failed before a privacy-safe result could be produced.",
+            file=sys.stderr,
+        )
+        return 1
+    finally:
+        reporter.close()
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        summary = (
+            result.get("summary")
+            if isinstance(result.get("summary"), dict)
+            else {}
+        )
+        print(
+            "WOM zet title remap revert plan: "
+            f"{result.get('status') or 'unknown'}"
+        )
+        print(f"Candidates: {summary.get('candidate_count', 0)}")
+        print(
+            "Ready for review: "
+            f"{summary.get('ready_for_review_count', 0)}"
+        )
+        print(f"Blocked: {summary.get('blocked_count', 0)}")
+        print(
+            "Verified prior-byte snapshots: "
+            f"{summary.get('prior_byte_snapshots_verified', 0)}"
+        )
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+        print("Writes: none")
+    return 0 if result.get("ok") else 1
+
+
 def command_zet_title_remap_recovery_plan(
     args: argparse.Namespace,
 ) -> int:
@@ -20472,6 +20564,54 @@ def build_parser() -> argparse.ArgumentParser:
     )
     zet_title_remap_receipt_audit.set_defaults(
         func=command_zet_title_remap_receipt_audit
+    )
+
+    zet_title_remap_revert_plan = subcommands.add_parser(
+        "zet-title-remap-revert-plan",
+        aliases=["title-remap-revert-plan"],
+        help="Plan an exact prior-byte compensation for one completed title-remap receipt without writing.",
+    )
+    zet_title_remap_revert_plan.add_argument(
+        "archive_root",
+        help="Archive root containing canonical zets and the completed title-remap receipt.",
+    )
+    zet_title_remap_revert_plan.add_argument(
+        "--receipt",
+        required=True,
+        help="Archive-relative immutable source receipt under receipts/revisions/title-remap/; its path is never echoed.",
+    )
+    zet_title_remap_revert_plan.add_argument(
+        "--expected-receipt-sha256",
+        required=True,
+        help="Exact SHA-256 of the reviewed completed title-remap receipt.",
+    )
+    zet_title_remap_revert_plan.add_argument(
+        "--max-items",
+        type=int,
+        default=500,
+        help=(
+            "Maximum source-receipt participants to inspect "
+            f"(1-{archive_services.ZET_TITLE_REMAP_MAX_ITEMS})."
+        ),
+    )
+    zet_title_remap_revert_plan.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Required. Re-audits current hashes and prior-byte snapshots; writes nothing.",
+    )
+    zet_title_remap_revert_plan.add_argument(
+        "--progress",
+        action="store_true",
+        help="Stream content-free receipt, audit, and snapshot progress to stderr.",
+    )
+    zet_title_remap_revert_plan.add_argument(
+        "--format",
+        choices=["text", "json"],
+        default="json",
+        help="Output format.",
+    )
+    zet_title_remap_revert_plan.set_defaults(
+        func=command_zet_title_remap_revert_plan
     )
 
     zet_title_remap_recovery_plan = subcommands.add_parser(
