@@ -1,6 +1,6 @@
 # Runtime Canonical Entry Points
 
-Status: v0.3.279 installed-wheel resource, quick start, session handoff, local backup evidence, and philosophy implementation traceability checkpoint
+Status: v0.3.280 installed-wheel resource, quick start, session handoff, local backup evidence, and activity-group membership planning checkpoint
 
 When an AI runtime enters a WOM archive, it needs a small, explicit "start
 here" map. The archive may contain zets, source bindings, provider metadata,
@@ -33,11 +33,12 @@ them.
 
 ## Official Action Routing
 
-Introduced in v0.3.278 and extended in v0.3.279, `action_routing` uses
-`wom-kit/ai-command-path-routing/v0.2`. It tells an AI which official command
+Introduced in v0.3.278 and extended through v0.3.280, `action_routing` uses
+`wom-kit/ai-command-path-routing/v0.3`. It tells an AI which official command
 handles session entry, search, local version truth, saved-view inspection,
-inbox pipeline-shape review, command discovery, draft creation, minting, typed
-edges, source capture, and operational-context updates.
+inbox pipeline-shape review, explicit event-membership planning, command
+discovery, draft creation, minting, typed edges, source capture, and
+operational-context updates.
 
 Search uses `archive search <archive-root> <query> --count-total --format
 json`; raw grep and raw SQL are not authoritative WOM search. AI drafts use
@@ -45,7 +46,8 @@ json`; raw grep and raw SQL are not authoritative WOM search. AI drafts use
 write into `inbox/` is forbidden. `archive version` does not verify remote
 release freshness. `archive inbox-pipeline-audit --dry-run` returns
 conservative structural signals, not proof or automatic repair. Saved-view
-writing remains unavailable because no dedicated writer exists. See
+writing and event-membership writing remain unavailable because no dedicated
+writer exists. See
 [AI Command-Path Routing](ai-command-path-routing.md).
 
 ## AI Runtime Order

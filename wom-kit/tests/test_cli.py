@@ -225,6 +225,48 @@ class ArchiveCliTests(unittest.TestCase):
             source_path.unlink()
         return destination
 
+    def create_activity_group_canonical(
+        self,
+        archive_root: Path,
+        *,
+        zettel_id: str,
+        title: str,
+        kind: str = "record_note",
+        facets: dict[str, Any] | None = None,
+        body: str | None = None,
+    ) -> Path:
+        path = archive_root / "zettels" / f"{zettel_id}.md"
+        frontmatter = {
+            "id": zettel_id,
+            "title": title,
+            "created_at": "2026-07-29T01:02:03+09:00",
+            "updated_at": "2026-07-29T01:02:03+09:00",
+            "archive_id": archive_services.read_archive_id(archive_root),
+            "status": "canonical",
+            "kind": kind,
+            "facets": facets or {"record_type": "memory"},
+            "assets": [],
+            "edges": [],
+            "provenance": {
+                "created_by": "person:test",
+                "created_in": archive_services.read_archive_id(archive_root),
+                "source": "test_fixture",
+            },
+            "visibility": {
+                "scope": "private",
+                "source_visibility": "private",
+            },
+        }
+        path.write_text(
+            "---\n"
+            + archive_services.dump_yaml(frontmatter)
+            + "---\n\n"
+            + (body or f"PRIVATE_ACTIVITY_GROUP_BODY_{zettel_id}")
+            + "\n",
+            encoding="utf-8",
+        )
+        return path
+
     def git_fixture_command(self, cwd: Path, *args: str) -> str:
         completed = subprocess.run(
             ["git", "-C", str(cwd), *args],
@@ -5178,7 +5220,7 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertFalse(operational_context["closed_actions"]["files_written"])
             self.assertEqual(
                 operational_context["action_routing"]["schema"],
-                "wom-kit/ai-command-path-routing/v0.2",
+                "wom-kit/ai-command-path-routing/v0.3",
             )
             entrypoints = result["canonical_entrypoints"]
             self.assertEqual(entrypoints["lifecycle_action"], "runtime_canonical_entrypoints")
@@ -5229,6 +5271,19 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertFalse(
                 inbox_audit_route["automatic_repair_implemented"]
             )
+            activity_group_route = next(
+                item
+                for item in action_routing["read_action_routes"]
+                if item["action"] == "plan_activity_group_membership"
+            )
+            self.assertIn(
+                "archive activity-group-membership-plan",
+                activity_group_route["command"],
+            )
+            self.assertFalse(activity_group_route["membership_is_inferred"])
+            self.assertFalse(
+                activity_group_route["canonical_write_implemented"]
+            )
             draft_route = next(
                 item
                 for item in action_routing["write_action_routes"]
@@ -5244,6 +5299,27 @@ class ArchiveCliTests(unittest.TestCase):
             )
             self.assertFalse(view_route["write_implemented"])
             self.assertIsNone(view_route["approved_command"])
+            activity_group_write_route = next(
+                item
+                for item in action_routing["write_action_routes"]
+                if item["action"] == "write_activity_group_membership"
+            )
+            self.assertIn(
+                "archive activity-group-membership-plan",
+                activity_group_write_route["preview_command"],
+            )
+            self.assertFalse(
+                activity_group_write_route["write_implemented"]
+            )
+            self.assertFalse(
+                activity_group_write_route["removal_implemented"]
+            )
+            self.assertIsNone(
+                activity_group_write_route["approved_command"]
+            )
+            self.assertFalse(
+                activity_group_write_route["direct_file_write_allowed"]
+            )
             self.assertEqual(
                 entrypoints["recommended_first_commands"][0]["command"],
                 "archive runtime-context <archive-root> --format json",
@@ -5541,7 +5617,7 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(result["first_read"]["source_truths"]["canonical_zets"], "zettels/")
             self.assertEqual(
                 result["action_routing"]["schema"],
-                "wom-kit/ai-command-path-routing/v0.2",
+                "wom-kit/ai-command-path-routing/v0.3",
             )
             self.assertEqual(
                 result["operational_context"]["action_routing"],
@@ -5564,12 +5640,30 @@ class ArchiveCliTests(unittest.TestCase):
                 "archive inbox-pipeline-audit <archive-root> --dry-run --format json",
             )
             self.assertIn(
+                "archive activity-group-membership-plan",
+                next(
+                    item
+                    for item in result["action_routing"]["read_action_routes"]
+                    if item["action"] == "plan_activity_group_membership"
+                )["command"],
+            )
+            self.assertIn(
                 "archive create-draft",
                 next(
                     item
                     for item in result["action_routing"]["write_action_routes"]
                     if item["action"] == "create_ai_draft"
                 )["preview_command"],
+            )
+            self.assertFalse(
+                next(
+                    item
+                    for item in result["action_routing"][
+                        "write_action_routes"
+                    ]
+                    if item["action"]
+                    == "write_activity_group_membership"
+                )["write_implemented"]
             )
             self.assertEqual(result["storage_authority"]["canonical_authority"], "local_wom")
             self.assertEqual(
@@ -48052,6 +48146,515 @@ archive_services.zet_abstract_backfill_recover(
             serialized = json.dumps(result, ensure_ascii=False)
             self.assertNotIn("PRIVATE_INBOX_PIPELINE_SYMLINK", serialized)
             self.assertEqual(target_before, target.read_bytes())
+
+    def test_activity_group_membership_plan_validates_explicit_members_without_writes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "personal-archive"
+            archive_id = "archive:personal:activity-group-plan"
+            init_code, init_output = self.init_personal_archive(
+                archive_root, archive_id
+            )
+            self.assertEqual(init_code, 0, init_output)
+            anchor_id = "zet_20260729_020000_private_event_anchor"
+            other_anchor_id = "zet_20260729_015959_other_event_anchor"
+            member_ids = [
+                "zet_20260729_020001_private_member_one",
+                "zet_20260729_020002_private_member_two",
+                "zet_20260729_020003_private_member_three",
+            ]
+            self.create_activity_group_canonical(
+                archive_root,
+                zettel_id=anchor_id,
+                title="PRIVATE_EVENT_ANCHOR_TITLE",
+                facets={
+                    "record_type": "event",
+                    "event_start": "2022-08-26",
+                    "event_end": "2022-08-27",
+                    "location": "PRIVATE_EVENT_LOCATION",
+                },
+            )
+            self.create_activity_group_canonical(
+                archive_root,
+                zettel_id=member_ids[0],
+                title="PRIVATE_MEMBER_ONE_TITLE",
+            )
+            self.create_activity_group_canonical(
+                archive_root,
+                zettel_id=member_ids[1],
+                title="PRIVATE_MEMBER_TWO_TITLE",
+                facets={
+                    "record_type": "memory",
+                    "activity_group": other_anchor_id,
+                },
+            )
+            self.create_activity_group_canonical(
+                archive_root,
+                zettel_id=member_ids[2],
+                title="PRIVATE_MEMBER_THREE_TITLE",
+                facets={
+                    "record_type": "memory",
+                    "activity_group": anchor_id,
+                },
+            )
+            request_relative = (
+                ".wom-scratch/private/activity-groups/"
+                "PRIVATE_EVENT_REQUEST.json"
+            )
+            request_path = archive_root / request_relative
+            request_path.parent.mkdir(parents=True, exist_ok=True)
+            request_path.write_text(
+                json.dumps(
+                    {
+                        "schema": (
+                            "wom-kit/activity-group-membership-request/v0.1"
+                        ),
+                        "archive_id": archive_id,
+                        "anchor_zettel_id": anchor_id,
+                        "member_zettel_ids": member_ids,
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            before = {
+                path.relative_to(archive_root).as_posix(): path.read_bytes()
+                for path in archive_root.rglob("*")
+                if path.is_file()
+            }
+
+            missing_code, missing_output = self.run_cli(
+                [
+                    "activity-group-membership-plan",
+                    str(archive_root),
+                    "--request",
+                    request_relative,
+                ]
+            )
+            self.assertEqual(missing_code, 1)
+            self.assertIn("read-only and requires --dry-run", missing_output)
+
+            code, stdout, stderr = self.run_cli_split(
+                [
+                    "event-group-membership-plan",
+                    str(archive_root),
+                    "--request",
+                    request_relative,
+                    "--dry-run",
+                    "--progress",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, stdout + stderr)
+            result = json.loads(stdout)
+            self.assertTrue(result["ok"])
+            self.assertEqual(
+                result["schema"],
+                "wom-kit/activity-group-membership-plan/v0.1",
+            )
+            self.assertEqual(result["status"], "ready_for_human_review")
+            self.assertEqual(result["summary"]["requested_member_count"], 3)
+            self.assertEqual(result["summary"]["ready_to_add_count"], 2)
+            self.assertEqual(result["summary"]["already_member_count"], 1)
+            self.assertEqual(result["summary"]["blocked_member_count"], 0)
+            self.assertEqual(
+                [item["status"] for item in result["items"]],
+                ["ready_to_add", "ready_to_add", "already_member"],
+            )
+            self.assertNotEqual(
+                result["items"][0]["current_file_sha256"],
+                result["items"][0]["proposed_file_sha256"],
+            )
+            self.assertNotEqual(
+                result["items"][1]["current_file_sha256"],
+                result["items"][1]["proposed_file_sha256"],
+            )
+            self.assertEqual(
+                result["items"][2]["current_file_sha256"],
+                result["items"][2]["proposed_file_sha256"],
+            )
+            self.assertRegex(
+                result["review_plan_sha256"], r"^sha256:[0-9a-f]{64}$"
+            )
+            self.assertFalse(
+                result["membership_contract"]["membership_was_inferred"]
+            )
+            self.assertFalse(result["index_evidence"]["index_used"])
+            self.assertFalse(result["write_boundary"]["write_implemented"])
+            self.assertEqual(result["write_boundary"]["files_written"], [])
+            self.assertIn("[activity-group-membership-plan]", stderr)
+
+            combined_output = stdout + stderr
+            for private_value in (
+                request_path.name,
+                anchor_id,
+                other_anchor_id,
+                *member_ids,
+                "PRIVATE_EVENT_ANCHOR_TITLE",
+                "PRIVATE_MEMBER_ONE_TITLE",
+                "PRIVATE_MEMBER_TWO_TITLE",
+                "PRIVATE_MEMBER_THREE_TITLE",
+                "PRIVATE_EVENT_LOCATION",
+                "PRIVATE_ACTIVITY_GROUP_BODY",
+            ):
+                self.assertNotIn(private_value, combined_output)
+            self.assertEqual(
+                before,
+                {
+                    path.relative_to(archive_root).as_posix(): path.read_bytes()
+                    for path in archive_root.rglob("*")
+                    if path.is_file()
+                },
+            )
+
+            text_code, text_output = self.run_cli(
+                [
+                    "activity-group-membership-plan",
+                    str(archive_root),
+                    "--request",
+                    request_relative,
+                    "--dry-run",
+                    "--format",
+                    "text",
+                ]
+            )
+            self.assertEqual(text_code, 0, text_output)
+            self.assertIn(
+                "WOM activity-group membership plan: ready_for_human_review",
+                text_output,
+            )
+            self.assertIn("Members ready to add: 2", text_output)
+
+            missing_member_id = (
+                "zet_20260729_029999_private_missing_member"
+            )
+            request_path.write_text(
+                json.dumps(
+                    {
+                        "schema": (
+                            "wom-kit/activity-group-membership-request/v0.1"
+                        ),
+                        "archive_id": archive_id,
+                        "anchor_zettel_id": anchor_id,
+                        "member_zettel_ids": [missing_member_id],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            missing_result = (
+                archive_services.activity_group_membership_plan(
+                    archive_root,
+                    request_path=request_relative,
+                    dry_run=True,
+                )
+            )
+            self.assertFalse(missing_result["ok"])
+            self.assertIn(
+                "requested_zettel_unavailable_or_unreadable",
+                missing_result["items"][0]["blocker_codes"],
+            )
+            self.assertNotIn(
+                missing_member_id,
+                json.dumps(missing_result, ensure_ascii=False),
+            )
+
+    def test_activity_group_membership_plan_blocks_invalid_anchor_and_member_shape(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "personal-archive"
+            archive_id = "archive:personal:activity-group-blocked"
+            init_code, init_output = self.init_personal_archive(
+                archive_root, archive_id
+            )
+            self.assertEqual(init_code, 0, init_output)
+            anchor_id = "zet_20260729_021000_private_bad_anchor"
+            member_id = "zet_20260729_021001_private_bad_member"
+            self.create_activity_group_canonical(
+                archive_root,
+                zettel_id=anchor_id,
+                title="PRIVATE_BAD_ANCHOR_TITLE",
+                facets={
+                    "record_type": "event",
+                    "event_start": "2022-08-26T12:00:00",
+                },
+            )
+            self.create_activity_group_canonical(
+                archive_root,
+                zettel_id=member_id,
+                title="PRIVATE_BAD_MEMBER_TITLE",
+                facets={
+                    "record_type": "memory",
+                    "activity_group": {"unsafe": "PRIVATE_BAD_SHAPE"},
+                },
+            )
+            request_relative = (
+                ".wom-scratch/private/activity-groups/private-blocked.json"
+            )
+            request_path = archive_root / request_relative
+            request_path.parent.mkdir(parents=True, exist_ok=True)
+            request_path.write_text(
+                json.dumps(
+                    {
+                        "schema": (
+                            "wom-kit/activity-group-membership-request/v0.1"
+                        ),
+                        "archive_id": archive_id,
+                        "anchor_zettel_id": anchor_id,
+                        "member_zettel_ids": [member_id],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = archive_services.activity_group_membership_plan(
+                archive_root,
+                request_path=request_relative,
+                dry_run=True,
+            )
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["status"], "blocked")
+            self.assertIn(
+                "anchor_event_start_invalid_or_missing",
+                result["anchor"]["blocker_codes"],
+            )
+            self.assertIn("anchor_validation_blocked", result["blockers"])
+            self.assertEqual(result["items"], [])
+            serialized = json.dumps(result, ensure_ascii=False)
+            for private_value in (
+                anchor_id,
+                member_id,
+                "PRIVATE_BAD_ANCHOR_TITLE",
+                "PRIVATE_BAD_MEMBER_TITLE",
+                "PRIVATE_BAD_SHAPE",
+            ):
+                self.assertNotIn(private_value, serialized)
+
+            anchor_path = archive_root / "zettels" / f"{anchor_id}.md"
+            frontmatter, body = archive_services.require_readable_zettel_text(
+                anchor_path.read_text(encoding="utf-8")
+            )
+            frontmatter["facets"]["event_start"] = (
+                "2022-08-26T12:00:00+09:00"
+            )
+            anchor_path.write_text(
+                "---\n"
+                + archive_services.dump_yaml(frontmatter)
+                + "---\n\n"
+                + body.rstrip()
+                + "\n",
+                encoding="utf-8",
+            )
+            member_blocked = archive_services.activity_group_membership_plan(
+                archive_root,
+                request_path=request_relative,
+                dry_run=True,
+            )
+            self.assertFalse(member_blocked["ok"])
+            self.assertEqual(
+                member_blocked["summary"]["blocked_member_count"], 1
+            )
+            self.assertIn(
+                "activity_group_current_shape_conflicts_with_anchor_contract",
+                member_blocked["items"][0]["blocker_codes"],
+            )
+            self.assertIn(
+                "one_or_more_members_blocked",
+                member_blocked["blockers"],
+            )
+
+    def test_activity_group_membership_plan_rejects_untrusted_request_shape(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "personal-archive"
+            init_code, init_output = self.init_personal_archive(
+                archive_root,
+                "archive:personal:activity-group-request-boundary",
+            )
+            self.assertEqual(init_code, 0, init_output)
+            outside = archive_root / "workbench" / "PRIVATE_OUTSIDE.json"
+            outside.parent.mkdir(parents=True, exist_ok=True)
+            outside.write_text("{}", encoding="utf-8")
+
+            outside_result = (
+                archive_services.activity_group_membership_plan(
+                    archive_root,
+                    request_path="workbench/PRIVATE_OUTSIDE.json",
+                    dry_run=True,
+                )
+            )
+            self.assertFalse(outside_result["ok"])
+            self.assertIn(
+                "request_path_outside_private_activity_group_scratch",
+                outside_result["blockers"],
+            )
+            self.assertNotIn(
+                "PRIVATE_OUTSIDE",
+                json.dumps(outside_result, ensure_ascii=False),
+            )
+
+            request_relative = (
+                ".wom-scratch/private/activity-groups/private-invalid.json"
+            )
+            request_path = archive_root / request_relative
+            request_path.parent.mkdir(parents=True, exist_ok=True)
+            request_path.write_text(
+                json.dumps(
+                    {
+                        "schema": "wrong-schema",
+                        "archive_id": "wrong-archive",
+                        "anchor_zettel_id": "unsafe/id",
+                        "member_zettel_ids": [
+                            "zet_duplicate",
+                            "zet_duplicate",
+                        ],
+                        "PRIVATE_UNSUPPORTED_FIELD": "PRIVATE_SECRET_VALUE",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            invalid = archive_services.activity_group_membership_plan(
+                archive_root,
+                request_path=request_relative,
+                dry_run=True,
+            )
+            self.assertFalse(invalid["ok"])
+            self.assertIn(
+                "request_contains_unsupported_fields", invalid["blockers"]
+            )
+            self.assertIn("request_schema_unsupported", invalid["blockers"])
+            self.assertIn("request_archive_id_mismatch", invalid["blockers"])
+            self.assertIn("anchor_zettel_id_invalid", invalid["blockers"])
+            self.assertIn("member_zettel_id_duplicate", invalid["blockers"])
+            serialized = json.dumps(invalid, ensure_ascii=False)
+            self.assertNotIn("PRIVATE_UNSUPPORTED_FIELD", serialized)
+            self.assertNotIn("PRIVATE_SECRET_VALUE", serialized)
+            self.assertNotIn(request_path.name, serialized)
+
+    def test_activity_group_membership_plan_enforces_byte_and_member_bounds(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "personal-archive"
+            archive_id = "archive:personal:activity-group-bounds"
+            init_code, init_output = self.init_personal_archive(
+                archive_root,
+                archive_id,
+            )
+            self.assertEqual(init_code, 0, init_output)
+            anchor_id = "zet_20260729_023000_private_bound_anchor"
+            member_id = "zet_20260729_023001_private_bound_member"
+            self.create_activity_group_canonical(
+                archive_root,
+                zettel_id=anchor_id,
+                title="PRIVATE_BOUND_ANCHOR_TITLE",
+                facets={
+                    "record_type": "event",
+                    "event_start": "2022-08-26",
+                },
+            )
+            self.create_activity_group_canonical(
+                archive_root,
+                zettel_id=member_id,
+                title="PRIVATE_BOUND_MEMBER_TITLE",
+                body="PRIVATE_BOUND_MEMBER_BODY_" + ("x" * 512),
+            )
+            request_relative = (
+                ".wom-scratch/private/activity-groups/private-bounds.json"
+            )
+            request_path = archive_root / request_relative
+            request_path.parent.mkdir(parents=True, exist_ok=True)
+            request_doc = {
+                "schema": (
+                    "wom-kit/activity-group-membership-request/v0.1"
+                ),
+                "archive_id": archive_id,
+                "anchor_zettel_id": anchor_id,
+                "member_zettel_ids": [member_id],
+            }
+            request_path.write_text(
+                json.dumps(request_doc),
+                encoding="utf-8",
+            )
+            anchor_bytes = (
+                archive_root / "zettels" / f"{anchor_id}.md"
+            ).read_bytes()
+            member_bytes = (
+                archive_root / "zettels" / f"{member_id}.md"
+            ).read_bytes()
+
+            with patch.object(
+                archive_services,
+                "ACTIVITY_GROUP_MEMBERSHIP_MAX_TOTAL_CANONICAL_BYTES",
+                len(anchor_bytes) + len(member_bytes) - 1,
+            ):
+                total_bound = (
+                    archive_services.activity_group_membership_plan(
+                        archive_root,
+                        request_path=request_relative,
+                        dry_run=True,
+                    )
+                )
+            self.assertFalse(total_bound["ok"])
+            self.assertIn(
+                "canonical_target_exceeds_remaining_total_budget",
+                total_bound["items"][0]["blocker_codes"],
+            )
+            self.assertNotIn(
+                member_id,
+                json.dumps(total_bound, ensure_ascii=False),
+            )
+
+            with self.assertRaisesRegex(
+                archive_services.ArchiveServiceError,
+                "^canonical_target_exceeds_remaining_total_budget$",
+            ):
+                archive_services._read_activity_group_canonical_bytes(
+                    archive_root / "zettels" / f"{member_id}.md",
+                    max_bytes=len(member_bytes) - 1,
+                )
+
+            oversized_payload = {
+                **request_doc,
+                "padding": "PRIVATE_BOUND_REQUEST_PADDING",
+            }
+            request_path.write_text(
+                json.dumps(oversized_payload),
+                encoding="utf-8",
+            )
+            with patch.object(
+                archive_services,
+                "ACTIVITY_GROUP_MEMBERSHIP_MAX_REQUEST_BYTES",
+                64,
+            ):
+                request_bound = (
+                    archive_services.activity_group_membership_plan(
+                        archive_root,
+                        request_path=request_relative,
+                        dry_run=True,
+                    )
+                )
+            self.assertFalse(request_bound["ok"])
+            self.assertIn(
+                "request_file_exceeds_2_mib",
+                request_bound["blockers"],
+            )
+            self.assertNotIn(
+                "PRIVATE_BOUND_REQUEST_PADDING",
+                json.dumps(request_bound, ensure_ascii=False),
+            )
+
+            request_path.write_text(
+                json.dumps(request_doc),
+                encoding="utf-8",
+            )
+            member_bound = archive_services.activity_group_membership_plan(
+                archive_root,
+                request_path=request_relative,
+                dry_run=True,
+                max_members=0,
+            )
+            self.assertFalse(member_bound["ok"])
+            self.assertIn(
+                "max_members_out_of_range",
+                member_bound["blockers"],
+            )
+            self.assertEqual(member_bound["items"], [])
 
     def test_doctor_aggregates_possible_inbox_pipeline_bypass_signal(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
