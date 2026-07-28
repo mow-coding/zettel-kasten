@@ -36,9 +36,11 @@ Use the bounded quick entry for ordinary sessions:
 archive ai-start-here <archive-root> --dry-run --progress --format json
 ```
 
-It should return identity, version, first-read readiness, freshness signals,
-important archive counts, and bounded next actions without running every
-expensive check.
+It should return identity, version, official read/write `action_routing`,
+first-read readiness, freshness signals, important archive counts, and bounded
+next actions without running every expensive check. Follow the returned route
+for every archive action; a destination folder alone never authorizes an AI
+write.
 
 Run the deeper surface only when justified:
 
@@ -76,6 +78,11 @@ version markers or packaged runtime resources by hand.
 After an update, rerun `archive version --format json` and quick
 `ai-start-here`. A package install succeeding does not prove that the intended
 archive or runtime entry point is active.
+
+`archive version` is authoritative for the current local runtime, source
+mirror, project pin, and tags that are already fetched locally. It does not
+contact an authoritative remote release service, so check that service
+separately before claiming that no newer release exists.
 
 For exact historical flags and output-field boundaries, search
 [operator-contract.md](operator-contract.md) for `First Step` or

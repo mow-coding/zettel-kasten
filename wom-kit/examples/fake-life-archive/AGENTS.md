@@ -4,10 +4,15 @@ This is a sample archive for testing WOM-kit v0.1.
 
 ## Rules
 
+- Start every archive session with `archive ai-start-here <archive-root> --dry-run --progress --format json`, then follow the returned `action_routing`.
 - Treat `zettels/` as canonical.
 - Treat `inbox/` as AI draft space.
-- Do not move an inbox draft into `zettels/` without explicit human promotion.
+- Search with `archive search <archive-root> <query> --count-total --format json`; raw grep and raw SQL are not authoritative WOM search results.
+- Create drafts only through `archive create-draft` dry-run and its human-reviewed replay; never write Markdown directly into `inbox/`.
+- Do not move an inbox draft into `zettels/` without a separate `archive mint-zet` preview and explicit human approval.
+- Add relationships and capture source material only through the official `zettel-edge` and source/objet intake routes.
 - Use `views/homebase.yml` as the default AI context lens.
+- Treat saved-view recommendations as read-only; there is no dedicated persistent saved-view writer yet, so an AI must not edit `views/*.yml` directly.
 - Resolve original files through `objects/manifests/files.jsonl`.
 - Do not infer provider storage locations from zettels.
 

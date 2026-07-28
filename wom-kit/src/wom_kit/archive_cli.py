@@ -4965,6 +4965,17 @@ def render_ai_start_here_markdown(result: dict[str, Any]) -> str:
     warnings = result.get("warnings") if isinstance(result.get("warnings"), list) else []
     storage_authority = result.get("storage_authority") if isinstance(result.get("storage_authority"), dict) else {}
     inspection = result.get("inspection") if isinstance(result.get("inspection"), dict) else {}
+    action_routing = result.get("action_routing") if isinstance(result.get("action_routing"), dict) else {}
+    read_routes = (
+        action_routing.get("read_action_routes")
+        if isinstance(action_routing.get("read_action_routes"), list)
+        else []
+    )
+    write_routes = (
+        action_routing.get("write_action_routes")
+        if isinstance(action_routing.get("write_action_routes"), list)
+        else []
+    )
     identity_consistency = (
         result.get("identity_consistency")
         if isinstance(result.get("identity_consistency"), dict)
@@ -5019,6 +5030,30 @@ def render_ai_start_here_markdown(result: dict[str, Any]) -> str:
             lines.append(f"   Purpose: {purpose}")
     if not commands:
         lines.append("1. Read `AGENTS.md` when the entrypoint map marks it present.")
+    lines.extend(["", "## Official Read Command Paths", ""])
+    for item in read_routes:
+        if isinstance(item, dict):
+            action = item.get("action") or "-"
+            command = item.get("command") or "-"
+            lines.append(f"- `{action}`: `{command}`")
+            next_command = item.get("next_command")
+            if isinstance(next_command, str):
+                lines.append(f"  Then: `{next_command}`")
+    if not read_routes:
+        lines.append("- No official read command paths were reported.")
+    lines.extend(["", "## Official Write Command Paths", ""])
+    for item in write_routes:
+        if isinstance(item, dict):
+            action = item.get("action") or "-"
+            preview_command = item.get("preview_command") or "-"
+            lines.append(f"- `{action}` preview: `{preview_command}`")
+            approved_command = item.get("approved_command")
+            if isinstance(approved_command, str):
+                lines.append(f"  Approved replay: `{approved_command}`")
+            elif item.get("write_implemented") is False:
+                lines.append("  Persistent write command: not implemented; do not edit the target file directly as an AI.")
+    if not write_routes:
+        lines.append("- No official write command paths were reported.")
     lines.extend(["", "## Storage Authority", ""])
     lines.append(f"- Local: `{authority_summary.get('local') or 'canonical_working_and_recovery_state'}`")
     lines.append(f"- GitHub: `{authority_summary.get('github') or 'metadata_and_version_history_backup'}`")

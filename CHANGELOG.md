@@ -6,6 +6,26 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.278 - 2026-07-28
+
+- Added read-only `wom-kit/ai-command-path-routing/v0.1` to runtime-context,
+  ai-start-here, operational-context, and canonical entrypoint output.
+- Routed WOM search through `archive search --count-total --format json` and
+  explicitly marked raw grep/SQL as non-authoritative search surfaces.
+- Routed AI draft writes through `archive create-draft` dry-run and reviewed
+  replay; direct Markdown writes to `inbox/` are forbidden and mint approval
+  remains separate.
+- Added official routes for local version truth, command discovery, saved-view
+  inspection, minting, typed edges, source capture, and operational-context
+  updates.
+- Added Markdown start-here read/write route sections and made new-archive
+  AGENTS templates start with `ai-start-here`.
+- Updated the packaged WOM Agent Skill and focused references with the same
+  routing, remote-version, and saved-view-writer boundaries.
+- Kept existing archive AGENTS files untouched and performed no archive,
+  provider, model, network, database, credential-store, zettel-body, or objet-
+  byte action solely to produce routing guidance.
+
 ## v0.3.277 - 2026-07-28
 
 - Added CLI-only read-only `notion-import-locator-loss-audit` and alias

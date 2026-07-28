@@ -3,6 +3,18 @@
 Use this reference when the human asks what the archive knows, whether a zet is
 fresh, what changed, or whether earlier canonical bytes can be recovered.
 
+## Search Through WOM
+
+For a bounded archive search, use:
+
+```text
+archive search <archive-root> <query> --count-total --format json
+```
+
+Inspect the complete-or-truncated metadata before claiming zero results or
+complete coverage. Raw filesystem grep and raw SQLite queries are diagnostic
+tools, not authoritative WOM search results.
+
 ## Read Abstracts Before Full Bodies
 
 Check first-read readiness:

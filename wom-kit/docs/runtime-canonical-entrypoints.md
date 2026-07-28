@@ -1,6 +1,6 @@
 # Runtime Canonical Entry Points
 
-Status: v0.3.277 installed-wheel resource, quick start, session handoff, local backup evidence, and philosophy implementation traceability checkpoint
+Status: v0.3.278 installed-wheel resource, quick start, session handoff, local backup evidence, and philosophy implementation traceability checkpoint
 
 When an AI runtime enters a WOM archive, it needs a small, explicit "start
 here" map. The archive may contain zets, source bindings, provider metadata,
@@ -26,9 +26,26 @@ result includes `canonical_entrypoints`. From v0.3.117, it also includes
 `operational_context`, a read-only view of `ops/operational-context.yml` for
 AI-facing mission, scope, state, gotchas, and reviewed decisions. The
 `canonical_entrypoints` object includes machine-readable `ai_runtime_order`,
-`recommended_first_commands`, and `material_link_routes` so a terminal-capable
-AI can discover both the operational handoff and the guide handoff without
-waiting for the human to mention them.
+`recommended_first_commands`, `action_routing`, and `material_link_routes` so
+a terminal-capable AI can discover both the operational handoff and the
+official read/write command paths without waiting for the human to mention
+them.
+
+## Official Action Routing
+
+From v0.3.278, `action_routing` uses
+`wom-kit/ai-command-path-routing/v0.1`. It tells an AI which official command
+handles session entry, search, local version truth, saved-view inspection,
+command discovery, draft creation, minting, typed edges, source capture, and
+operational-context updates.
+
+Search uses `archive search <archive-root> <query> --count-total --format
+json`; raw grep and raw SQL are not authoritative WOM search. AI drafts use
+`archive create-draft` preview and exact reviewed replay; a direct Markdown
+write into `inbox/` is forbidden. `archive version` does not verify remote
+release freshness, and saved-view writing remains unavailable because no
+dedicated writer exists. See
+[AI Command-Path Routing](ai-command-path-routing.md).
 
 ## AI Runtime Order
 
@@ -142,7 +159,10 @@ canonical_entrypoints.recommended_first_commands
 canonical_entrypoints.completed_commands
 canonical_entrypoints.next_commands
 canonical_entrypoints.remaining_ai_runtime_order
+canonical_entrypoints.action_routing
 canonical_entrypoints.material_link_routes
+action_routing
+operational_context.action_routing
 operational_context.session_start_injection
 ```
 

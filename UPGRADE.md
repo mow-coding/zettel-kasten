@@ -24,6 +24,36 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.278 AI Command-Path Routing
+
+No archive migration is required. New archive templates and live read-only
+runtime guidance now begin with:
+
+```powershell
+archive ai-start-here <archive-root> --dry-run --progress --format json
+```
+
+Read the returned `action_routing` before choosing an archive command.
+Search through:
+
+```powershell
+archive search <archive-root> <query> --count-total --format json
+```
+
+Raw grep and raw SQL are not authoritative WOM search results. Create
+AI-assisted drafts only through `archive create-draft` dry-run and the exact
+human-reviewed replay; never write Markdown directly into `inbox/`. Draft
+approval does not authorize `mint-zet`.
+
+`archive version` still reports local runtime/source/pin and already-fetched
+tag truth only. Check an authoritative remote release surface separately
+before claiming that no newer release exists. Saved-view recommendations
+remain read-only because a persistent saved-view writer is not implemented.
+
+Existing archive `AGENTS.md` files are not rewritten. Owners may review the
+new template contract and adopt it separately. See
+[`wom-kit/docs/ai-command-path-routing.md`](wom-kit/docs/ai-command-path-routing.md).
+
 ## v0.3.277 Read-Only Notion Locator-Loss Census
 
 No archive migration is required. To measure historical Notion provider

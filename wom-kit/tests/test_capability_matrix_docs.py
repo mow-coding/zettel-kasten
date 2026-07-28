@@ -8373,14 +8373,6 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         release_text = (
             KIT_ROOT / "docs" / "releases" / "v0.3.277.md"
         ).read_text(encoding="utf-8")
-        packaged_release_text = (
-            KIT_ROOT
-            / "src"
-            / "wom_kit"
-            / "_resources"
-            / "release-notes"
-            / "v0.3.277.md"
-        ).read_text(encoding="utf-8")
         decision_text = (
             KIT_ROOT
             / "docs"
@@ -8393,27 +8385,12 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         public_map_ko_text = (
             KIT_ROOT / "docs" / "public-documentation-map.ko.md"
         ).read_text(encoding="utf-8")
-        root_readme_text = (REPO_ROOT / "README.md").read_text(
-            encoding="utf-8"
-        )
-        root_readme_ko_text = (REPO_ROOT / "README.ko.md").read_text(
-            encoding="utf-8"
-        )
-        kit_readme_text = (KIT_ROOT / "README.md").read_text(
-            encoding="utf-8"
-        )
         upgrade_text = (REPO_ROOT / "UPGRADE.md").read_text(
             encoding="utf-8"
         )
         upgrade_ko_text = (REPO_ROOT / "UPGRADE.ko.md").read_text(
             encoding="utf-8"
         )
-        install_text = (
-            KIT_ROOT / "docs" / "python-tool-install.md"
-        ).read_text(encoding="utf-8")
-        install_ko_text = (
-            KIT_ROOT / "docs" / "python-tool-install.ko.md"
-        ).read_text(encoding="utf-8")
 
         for text in (
             guide_text,
@@ -8447,20 +8424,84 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "(notion-import-locator-loss-audit.md)",
             public_map_ko_text,
         )
+        self.assertIn("v0.3.277", upgrade_text)
+        self.assertIn("v0.3.277", upgrade_ko_text)
+
+    def test_v03278_ai_command_path_routing_is_public_and_bounded(self) -> None:
+        guide_text = (KIT_ROOT / "docs" / "ai-command-path-routing.md").read_text(
+            encoding="utf-8"
+        )
+        release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.278.md").read_text(
+            encoding="utf-8"
+        )
+        decision_text = (
+            KIT_ROOT
+            / "docs"
+            / "archive-infra-decision-log-2026-07-28-v03278-ai-command-path-routing.md"
+        ).read_text(encoding="utf-8")
+        packaged_release_text = (
+            KIT_ROOT
+            / "src"
+            / "wom_kit"
+            / "_resources"
+            / "release-notes"
+            / "v0.3.278.md"
+        ).read_text(encoding="utf-8")
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        public_map_text = (
+            KIT_ROOT / "docs" / "public-documentation-map.md"
+        ).read_text(encoding="utf-8")
+        public_map_ko_text = (
+            KIT_ROOT / "docs" / "public-documentation-map.ko.md"
+        ).read_text(encoding="utf-8")
+        root_readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        root_readme_ko_text = (REPO_ROOT / "README.ko.md").read_text(encoding="utf-8")
+        upgrade_text = (REPO_ROOT / "UPGRADE.md").read_text(encoding="utf-8")
+        upgrade_ko_text = (REPO_ROOT / "UPGRADE.ko.md").read_text(encoding="utf-8")
+        changelog_text = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+        install_text = (
+            KIT_ROOT / "docs" / "python-tool-install.md"
+        ).read_text(encoding="utf-8")
+        install_ko_text = (
+            KIT_ROOT / "docs" / "python-tool-install.ko.md"
+        ).read_text(encoding="utf-8")
+
+        for text in (guide_text, release_text, decision_text, matrix_text):
+            with self.subTest(document="ai-command-path-routing-contract"):
+                self.assertIn("wom-kit/ai-command-path-routing/v0.1", text)
+                self.assertIn("archive search", text)
+                self.assertIn("create-draft", text)
+                self.assertIn("raw grep", text)
+                self.assertIn("raw SQL", text)
+                self.assertIn("remote release", text)
+                self.assertIn("saved-view", text)
+
+        for phrase in (
+            "archive ai-start-here <archive-root> --dry-run --progress --format json",
+            "archive search <archive-root> <query> --count-total --format json",
+            "Never write Markdown directly into `inbox/`",
+            "Existing archives are not silently rewritten",
+            "No dedicated writer exists in v0.3.278",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, guide_text)
+
         self.assertEqual(packaged_release_text, release_text)
+        self.assertIn("[AI Command-Path Routing](ai-command-path-routing.md)", public_map_text)
+        self.assertIn("[AI Command-Path Routing](ai-command-path-routing.md)", public_map_ko_text)
         for text in (
             root_readme_text,
             root_readme_ko_text,
-            kit_readme_text,
             upgrade_text,
             upgrade_ko_text,
+            changelog_text,
             install_text,
             install_ko_text,
         ):
-            with self.subTest(document="v03277-public-version-surface"):
-                self.assertIn("v0.3.277", text)
+            with self.subTest(document="v03278-public-version-surface"):
+                self.assertIn("v0.3.278", text)
         self.assertIn(
-            "releases/download/v0.3.277/wom_kit-0.3.277-py3-none-any.whl",
+            "releases/download/v0.3.278/wom_kit-0.3.278-py3-none-any.whl",
             root_readme_text,
         )
 
