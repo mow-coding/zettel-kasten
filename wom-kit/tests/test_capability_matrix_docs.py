@@ -8462,7 +8462,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                 self.assertIn("saved-view", text)
         for text in (guide_text, matrix_text):
             with self.subTest(document="current-ai-command-path-routing-contract"):
-                self.assertIn("wom-kit/ai-command-path-routing/v0.3", text)
+                self.assertIn("wom-kit/ai-command-path-routing/v0.4", text)
                 self.assertIn("inbox-pipeline-audit", text)
                 self.assertIn("activity-group-membership-plan", text)
 
@@ -8562,8 +8562,8 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         self.assertIn("[Inbox Pipeline Audit](inbox-pipeline-audit.md)", public_map_text)
         self.assertIn("[Inbox Pipeline Audit](inbox-pipeline-audit.md)", public_map_ko_text)
         for text in (
-            root_readme_text,
-            root_readme_ko_text,
+            release_text,
+            decision_text,
             upgrade_text,
             upgrade_ko_text,
             changelog_text,
@@ -8583,14 +8583,6 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             KIT_ROOT
             / "docs"
             / "archive-infra-decision-log-2026-07-29-v03280-activity-group-membership-plan.md"
-        ).read_text(encoding="utf-8")
-        packaged_release_text = (
-            KIT_ROOT
-            / "src"
-            / "wom_kit"
-            / "_resources"
-            / "release-notes"
-            / "v0.3.280.md"
         ).read_text(encoding="utf-8")
         matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
         routing_text = (
@@ -8633,8 +8625,8 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(document="activity-group-command-contract"):
                 self.assertIn("activity-group-membership-plan", text)
         self.assertIn(
-            "no writer",
-            (guide_text + matrix_text + routing_text).lower(),
+            "does not write or remove memberships",
+            (release_text + decision_text).lower(),
         )
 
         for phrase in (
@@ -8655,7 +8647,6 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "wom-kit/ai-command-path-routing/v0.3",
             routing_text,
         )
-        self.assertEqual(packaged_release_text, release_text)
         self.assertIn(
             "[Activity-Group Membership Plan](activity-group-membership-plan.md)",
             public_map_text,
@@ -8670,13 +8661,112 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             upgrade_text,
             upgrade_ko_text,
             changelog_text,
-            install_text,
-            install_ko_text,
         ):
             with self.subTest(document="v03280-public-version-surface"):
                 self.assertIn("v0.3.280", text)
+
+    def test_v03281_activity_group_membership_write_is_public_and_recoverable(
+        self,
+    ) -> None:
+        guide_text = (
+            KIT_ROOT / "docs" / "activity-group-membership-write.md"
+        ).read_text(encoding="utf-8")
+        release_text = (
+            KIT_ROOT / "docs" / "releases" / "v0.3.281.md"
+        ).read_text(encoding="utf-8")
+        decision_text = (
+            KIT_ROOT
+            / "docs"
+            / "archive-infra-decision-log-2026-07-29-v03281-activity-group-membership-write.md"
+        ).read_text(encoding="utf-8")
+        packaged_release_text = (
+            KIT_ROOT
+            / "src"
+            / "wom_kit"
+            / "_resources"
+            / "release-notes"
+            / "v0.3.281.md"
+        ).read_text(encoding="utf-8")
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        routing_text = (
+            KIT_ROOT / "docs" / "ai-command-path-routing.md"
+        ).read_text(encoding="utf-8")
+        public_map_text = (
+            KIT_ROOT / "docs" / "public-documentation-map.md"
+        ).read_text(encoding="utf-8")
+        public_map_ko_text = (
+            KIT_ROOT / "docs" / "public-documentation-map.ko.md"
+        ).read_text(encoding="utf-8")
+        root_readme_text = (REPO_ROOT / "README.md").read_text(
+            encoding="utf-8"
+        )
+        root_readme_ko_text = (REPO_ROOT / "README.ko.md").read_text(
+            encoding="utf-8"
+        )
+        upgrade_text = (REPO_ROOT / "UPGRADE.md").read_text(
+            encoding="utf-8"
+        )
+        upgrade_ko_text = (REPO_ROOT / "UPGRADE.ko.md").read_text(
+            encoding="utf-8"
+        )
+        changelog_text = (REPO_ROOT / "CHANGELOG.md").read_text(
+            encoding="utf-8"
+        )
+        install_text = (
+            KIT_ROOT / "docs" / "python-tool-install.md"
+        ).read_text(encoding="utf-8")
+        install_ko_text = (
+            KIT_ROOT / "docs" / "python-tool-install.ko.md"
+        ).read_text(encoding="utf-8")
+
+        for text in (guide_text, release_text, decision_text, matrix_text):
+            with self.subTest(document="activity-group-write-contract"):
+                self.assertIn("activity-group-membership-write", text)
+                self.assertIn("journal", text.lower())
+                self.assertIn("receipt", text.lower())
+                self.assertIn("recovery", text.lower())
+                self.assertIn("remov", text.lower())
+        for phrase in (
+            "--expected-request-sha256",
+            "--expected-review-plan-sha256",
+            "--affirm-memberships-reviewed",
+            "activity-group-membership-recovery-plan",
+            "--expected-recovery-plan-sha256",
+            "--affirm-recovery-reviewed",
+            "manual_forensic_hold",
+            "confirm that the interrupted writer process is no longer running",
+            "16 MiB",
+            "256 MiB",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, guide_text)
+
         self.assertIn(
-            "releases/download/v0.3.280/wom_kit-0.3.280-py3-none-any.whl",
+            "wom-kit/ai-command-path-routing/v0.4",
+            routing_text,
+        )
+        self.assertEqual(packaged_release_text, release_text)
+        self.assertIn(
+            "[Activity-Group Membership Write And Recovery](activity-group-membership-write.md)",
+            public_map_text,
+        )
+        self.assertIn(
+            "[Activity-Group Membership Write And Recovery](activity-group-membership-write.md)",
+            public_map_ko_text,
+        )
+        for text in (
+            root_readme_text,
+            root_readme_ko_text,
+            upgrade_text,
+            upgrade_ko_text,
+            changelog_text,
+            install_text,
+            install_ko_text,
+        ):
+            with self.subTest(document="v03281-public-version-surface"):
+                self.assertIn("v0.3.281", text)
+        self.assertIn(
+            "releases/download/v0.3.281/wom_kit-0.3.281-py3-none-any.whl",
             root_readme_text,
         )
 

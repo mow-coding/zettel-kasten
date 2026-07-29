@@ -2874,13 +2874,47 @@ ACTIVITY_GROUP_MEMBERSHIP_REQUEST_SCHEMA = (
 ACTIVITY_GROUP_MEMBERSHIP_PLAN_SCHEMA = (
     "wom-kit/activity-group-membership-plan/v0.1"
 )
+ACTIVITY_GROUP_MEMBERSHIP_WRITE_SCHEMA = (
+    "wom-kit/activity-group-membership-write/v0.1"
+)
+ACTIVITY_GROUP_MEMBERSHIP_RECEIPT_SCHEMA = (
+    "wom-kit/activity-group-membership-receipt/v0.1"
+)
+ACTIVITY_GROUP_MEMBERSHIP_TRANSACTION_JOURNAL_SCHEMA = (
+    "wom-kit/activity-group-membership-transaction-journal/v0.1"
+)
+ACTIVITY_GROUP_MEMBERSHIP_RECOVERY_PLAN_SCHEMA = (
+    "wom-kit/activity-group-membership-recovery-plan/v0.1"
+)
+ACTIVITY_GROUP_MEMBERSHIP_RECOVER_SCHEMA = (
+    "wom-kit/activity-group-membership-recover/v0.1"
+)
 ACTIVITY_GROUP_MEMBERSHIP_REQUEST_PREFIX = (
     ".wom-scratch/private/activity-groups/"
+)
+ACTIVITY_GROUP_MEMBERSHIP_RECEIPTS_DIR = "receipts/activity-groups"
+ACTIVITY_GROUP_MEMBERSHIP_WRITE_LOCK_NAME = (
+    ".activity-group-membership.write.lock"
+)
+ACTIVITY_GROUP_MEMBERSHIP_RECOVERY_GUARD_NAME = (
+    ".activity-group-membership.recovery.lock"
 )
 ACTIVITY_GROUP_MEMBERSHIP_MAX_REQUEST_BYTES = 2 * 1024 * 1024
 ACTIVITY_GROUP_MEMBERSHIP_MAX_MEMBERS = 5000
 ACTIVITY_GROUP_MEMBERSHIP_MAX_CANONICAL_FILE_BYTES = 16 * 1024 * 1024
 ACTIVITY_GROUP_MEMBERSHIP_MAX_TOTAL_CANONICAL_BYTES = 256 * 1024 * 1024
+ACTIVITY_GROUP_MEMBERSHIP_MAX_RECEIPT_BYTES = 16 * 1024 * 1024
+ACTIVITY_GROUP_MEMBERSHIP_MAX_TRANSACTION_JOURNAL_BYTES = 16 * 1024 * 1024
+ACTIVITY_GROUP_MEMBERSHIP_MAX_LOCK_BYTES = 256 * 1024
+ACTIVITY_GROUP_MEMBERSHIP_RECOVERY_ACTIONS = frozenset(
+    {
+        "cleanup_unstarted_lock",
+        "cleanup_unstarted_transaction_evidence",
+        "rollback_uncommitted_memberships_to_before",
+        "cleanup_verified_completed_evidence",
+        "manual_forensic_hold",
+    }
+)
 
 
 class ActivityGroupRequestDuplicateKeyError(ValueError):
@@ -33069,7 +33103,8 @@ def activity_group_membership_plan(
         },
         "future_write_preview": {
             "eligible_member_count": ready_to_add_count if ready else 0,
-            "implemented_now": False,
+            "implemented_now": True,
+            "official_command": "archive activity-group-membership-write",
         },
         "would_change": [],
         "blockers": blockers,
@@ -33081,10 +33116,2513 @@ def activity_group_membership_plan(
             if blockers
             else [
                 "Review the anchor and ordered member selection with the archive owner.",
-                "Keep this review-plan digest as evidence; v0.3.280 does not implement the canonical writer.",
+                "Keep this request and review-plan digest as evidence, then preview the dedicated approval-gated activity-group-membership-write command.",
             ]
         ),
     }
+
+
+def _activity_group_private_root(root: Path) -> Path:
+    return archive_internal_path(
+        root,
+        ACTIVITY_GROUP_MEMBERSHIP_REQUEST_PREFIX.rstrip("/"),
+    )
+
+
+def activity_group_membership_receipt_relative_path(
+    request_sha256: str,
+) -> str:
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", request_sha256):
+        raise ValueError("activity_group_request_sha256_invalid")
+    digest = request_sha256.removeprefix("sha256:")
+    return (
+        f"{ACTIVITY_GROUP_MEMBERSHIP_RECEIPTS_DIR}/"
+        f"{digest}.activity-group-membership.json"
+    )
+
+
+def activity_group_membership_transaction_journal_path(
+    root: Path,
+    request_sha256: str,
+) -> Path:
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", request_sha256):
+        raise ValueError("activity_group_request_sha256_invalid")
+    digest = request_sha256.removeprefix("sha256:")
+    return _activity_group_private_root(root) / (
+        f".{digest}.activity-group-membership.transaction.json"
+    )
+
+
+def _activity_group_private_request(
+    root: Path,
+    request_path: str,
+) -> tuple[bytes, dict[str, Any]]:
+    blockers: list[str] = []
+    _normalized, path = _activity_group_request_path(
+        root,
+        request_path,
+        blockers,
+    )
+    raw = b""
+    document: dict[str, Any] | None = None
+    if path is not None:
+        raw, document = _read_activity_group_request(path, blockers)
+    if blockers or document is None:
+        raise ArchiveServiceError(
+            blockers[0] if blockers else "activity_group_request_unavailable"
+        )
+    return raw, document
+
+
+def _activity_group_standard_canonical_path(
+    root: Path,
+    zettel_id: str,
+) -> Path:
+    path = root / "zettels" / f"{zettel_id}.md"
+    try:
+        if (
+            path.is_symlink()
+            or not is_path_within_root(path, root)
+            or not path.is_file()
+            or archive_relative_path(path, root)
+            != f"zettels/{zettel_id}.md"
+        ):
+            raise ArchiveServiceError(
+                "requested_zettel_missing_standard_canonical_path"
+            )
+    except (ArchivePathError, OSError) as exc:
+        raise ArchiveServiceError(
+            "requested_zettel_missing_standard_canonical_path"
+        ) from exc
+    return path
+
+
+def materialize_activity_group_membership_candidates(
+    root: Path,
+    *,
+    request_bytes: bytes,
+    request_document: dict[str, Any],
+    plan: dict[str, Any],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    blockers: list[str] = []
+    candidates: list[dict[str, Any]] = []
+    request_sha256 = (
+        "sha256:" + hashlib.sha256(request_bytes).hexdigest()
+    )
+    plan_request = (
+        plan.get("request") if isinstance(plan.get("request"), dict) else {}
+    )
+    if (
+        not plan.get("ok")
+        or plan_request.get("sha256") != request_sha256
+    ):
+        return [], ["activity_group_plan_request_binding_invalid"]
+    anchor_zettel_id = request_document.get("anchor_zettel_id")
+    member_zettel_ids = request_document.get("member_zettel_ids")
+    plan_items = plan.get("items")
+    if (
+        not isinstance(anchor_zettel_id, str)
+        or not ZETTEL_EDGE_ZETTEL_ID_RE.fullmatch(anchor_zettel_id)
+        or not isinstance(member_zettel_ids, list)
+        or not isinstance(plan_items, list)
+        or len(member_zettel_ids) != len(plan_items)
+    ):
+        return [], ["activity_group_plan_shape_invalid"]
+
+    total_bytes = 0
+    for row_index, (member_zettel_id, plan_item) in enumerate(
+        zip(member_zettel_ids, plan_items, strict=True)
+    ):
+        if (
+            not isinstance(member_zettel_id, str)
+            or not ZETTEL_EDGE_ZETTEL_ID_RE.fullmatch(member_zettel_id)
+            or not isinstance(plan_item, dict)
+            or plan_item.get("row_index") != row_index
+        ):
+            blockers.append("activity_group_plan_row_binding_invalid")
+            continue
+        status = plan_item.get("status")
+        if status == "already_member":
+            continue
+        if status != "ready_to_add":
+            blockers.append("activity_group_plan_contains_nonwritable_row")
+            continue
+        try:
+            path = _activity_group_standard_canonical_path(
+                root,
+                member_zettel_id,
+            )
+            remaining = (
+                ACTIVITY_GROUP_MEMBERSHIP_MAX_TOTAL_CANONICAL_BYTES
+                - total_bytes
+            )
+            before_bytes, _stat = _read_activity_group_canonical_bytes(
+                path,
+                max_bytes=remaining,
+            )
+            total_bytes += len(before_bytes)
+            before_sha256 = (
+                "sha256:" + hashlib.sha256(before_bytes).hexdigest()
+            )
+            if before_sha256 != plan_item.get("current_file_sha256"):
+                raise ArchiveServiceError(
+                    "activity_group_member_changed_after_plan"
+                )
+            frontmatter, _payload, _source = (
+                _parse_activity_group_canonical(before_bytes)
+            )
+            if frontmatter.get("id") != member_zettel_id:
+                raise ArchiveServiceError(
+                    "member_frontmatter_identity_mismatch"
+                )
+            after_bytes = _activity_group_candidate_bytes(
+                before_bytes,
+                anchor_zettel_id=anchor_zettel_id,
+            )
+            after_sha256 = (
+                "sha256:" + hashlib.sha256(after_bytes).hexdigest()
+            )
+            if after_sha256 != plan_item.get("proposed_file_sha256"):
+                raise ArchiveServiceError(
+                    "activity_group_candidate_changed_after_plan"
+                )
+            candidates.append(
+                {
+                    "row_index": row_index,
+                    "zettel_id": member_zettel_id,
+                    "path": path,
+                    "relative_path": f"zettels/{member_zettel_id}.md",
+                    "before_bytes": before_bytes,
+                    "after_bytes": after_bytes,
+                    "before_file_sha256": before_sha256,
+                    "after_file_sha256": after_sha256,
+                    "before_snapshot": (
+                        zet_revision_before_snapshot_descriptor(before_bytes)
+                    ),
+                }
+            )
+        except ArchiveServiceError as exc:
+            blockers.append(str(exc))
+        except (ArchivePathError, OSError, ValueError):
+            blockers.append("activity_group_candidate_unavailable")
+    return candidates, unique_preserve_order(blockers)
+
+
+def activity_group_membership_write_plan_sha256(
+    *,
+    archive_id: str,
+    request_sha256: str,
+    review_plan_sha256: str,
+    anchor_current_file_sha256: str,
+    candidates: list[dict[str, Any]],
+) -> str:
+    return sha256_json_value(
+        {
+            "schema": ACTIVITY_GROUP_MEMBERSHIP_WRITE_SCHEMA,
+            "archive_id": archive_id,
+            "request_sha256": request_sha256,
+            "review_plan_sha256": review_plan_sha256,
+            "anchor_current_file_sha256": anchor_current_file_sha256,
+            "items": [
+                {
+                    "row_index": item["row_index"],
+                    "before_file_sha256": item["before_file_sha256"],
+                    "after_file_sha256": item["after_file_sha256"],
+                    "before_snapshot": item["before_snapshot"],
+                }
+                for item in candidates
+            ],
+        }
+    )
+
+
+def activity_group_membership_private_items(
+    candidates: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "row_index": item["row_index"],
+            "zettel_id": item["zettel_id"],
+            "canonical_path": item["relative_path"],
+            "before_file_sha256": item["before_file_sha256"],
+            "after_file_sha256": item["after_file_sha256"],
+            "before_snapshot": item["before_snapshot"],
+        }
+        for item in candidates
+    ]
+
+
+def preserve_activity_group_membership_before_snapshots(
+    root: Path,
+    *,
+    candidates: list[dict[str, Any]],
+    archive_id: str,
+    captured_at: str,
+    reviewed_by: str,
+    write_plan_sha256: str,
+) -> dict[str, int]:
+    bytes_written = 0
+    records_appended = 0
+    manifest_path = archive_internal_path(
+        root,
+        "objects/manifests/files.jsonl",
+    )
+    with _ObjetCaptureManifestLock(root):
+        manifest_index, manifest_blockers = (
+            zet_revision_snapshot_manifest_index(root)
+        )
+        if manifest_blockers:
+            raise ArchiveServiceError(manifest_blockers[0])
+        pending_records: list[dict[str, Any]] = []
+        for item in candidates:
+            snapshot = item["before_snapshot"]
+            if write_or_verify_zet_title_remap_snapshot_bytes(
+                root,
+                canonical_bytes=item["before_bytes"],
+                snapshot=snapshot,
+            ):
+                bytes_written += 1
+            object_id = snapshot["object_id"]
+            digest = object_id.removeprefix("sha256:")
+            logical_key = snapshot["logical_key"]
+
+            def record_is_complete(record: Any) -> bool:
+                if not isinstance(record, dict):
+                    return False
+                locations = record.get("locations")
+                return bool(
+                    record.get("logical_key") == logical_key
+                    and record.get("sha256") == digest
+                    and record.get("mime") == "text/markdown"
+                    and record.get("size_bytes")
+                    == len(item["before_bytes"])
+                    and isinstance(locations, list)
+                    and any(
+                        isinstance(location, dict)
+                        and location.get("provider") == "local"
+                        and location.get("path") == logical_key
+                        and location.get("availability") == "available"
+                        for location in locations
+                    )
+                )
+
+            if any(
+                record_is_complete(record)
+                for record in manifest_index.get(object_id, [])
+            ):
+                continue
+            record = {
+                "object_id": object_id,
+                "sha256": digest,
+                "logical_key": logical_key,
+                "mime": "text/markdown",
+                "size_bytes": len(item["before_bytes"]),
+                "locations": [
+                    {
+                        "provider": "local",
+                        "path": logical_key,
+                        "availability": "available",
+                    }
+                ],
+                "provenance": {
+                    "created_in": f"archive:{archive_id}",
+                    "source": (
+                        "canonical_zet_before_activity_group_membership"
+                    ),
+                    "captured_at": captured_at,
+                    "captured_by": reviewed_by,
+                    "activity_group_membership_write_plan_sha256": (
+                        write_plan_sha256
+                    ),
+                },
+            }
+            if validate_schema(
+                record,
+                "object-manifest-entry.schema.json",
+            ):
+                raise ArchiveServiceError(
+                    "activity_group_before_snapshot_manifest_record_invalid"
+                )
+            pending_records.append(record)
+            manifest_index.setdefault(object_id, []).append(record)
+        append_zet_title_remap_snapshot_manifest_records_atomic(
+            manifest_path,
+            pending_records,
+        )
+        records_appended = len(pending_records)
+        final_index, final_blockers = (
+            zet_revision_snapshot_manifest_index(root)
+        )
+        if final_blockers:
+            raise ArchiveServiceError(final_blockers[0])
+        for item in candidates:
+            snapshot_blockers = verify_zet_revision_before_snapshot(
+                root,
+                item["before_snapshot"],
+                expected_before_sha256=item["before_file_sha256"],
+                manifest_index=final_index,
+            )
+            if snapshot_blockers:
+                raise ArchiveServiceError(snapshot_blockers[0])
+    return {
+        "snapshot_objects_written_this_run": bytes_written,
+        "manifest_records_appended_this_run": records_appended,
+        "verified_snapshot_count": len(candidates),
+    }
+
+
+def _read_activity_group_evidence_json(
+    root: Path,
+    path: Path,
+    *,
+    max_bytes: int,
+    unreadable_code: str,
+) -> tuple[bytes, dict[str, Any]]:
+    if (
+        path.is_symlink()
+        or not is_path_within_root(path, root)
+        or zet_revision_path_has_symlink_component(root, path)
+        or not path.is_file()
+    ):
+        raise ArchiveServiceError(unreadable_code)
+    try:
+        if path.stat().st_size > max_bytes:
+            raise ArchiveServiceError(unreadable_code)
+        with path.open("rb") as handle:
+            raw = handle.read(max_bytes + 1)
+        if len(raw) > max_bytes:
+            raise ArchiveServiceError(unreadable_code)
+
+        def reject_duplicate_pairs(
+            pairs: list[tuple[str, Any]],
+        ) -> dict[str, Any]:
+            result: dict[str, Any] = {}
+            for key, value in pairs:
+                if key in result:
+                    raise ValueError("duplicate_key")
+                result[key] = value
+            return result
+
+        document = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=reject_duplicate_pairs,
+        )
+    except ArchiveServiceError:
+        raise
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
+        raise ArchiveServiceError(unreadable_code) from exc
+    if not isinstance(document, dict):
+        raise ArchiveServiceError(unreadable_code)
+    return raw, document
+
+
+def verify_activity_group_membership_receipt(
+    root: Path,
+    receipt_path: Path,
+    *,
+    archive_id: str,
+    request_sha256: str,
+) -> dict[str, Any]:
+    blockers: list[str] = []
+    try:
+        receipt_bytes, receipt = _read_activity_group_evidence_json(
+            root,
+            receipt_path,
+            max_bytes=ACTIVITY_GROUP_MEMBERSHIP_MAX_RECEIPT_BYTES,
+            unreadable_code="activity_group_receipt_unreadable",
+        )
+    except ArchiveServiceError as exc:
+        return {
+            "ok": False,
+            "blockers": [str(exc)],
+            "items": [],
+            "receipt_sha256": None,
+        }
+    if validate_schema(
+        receipt,
+        "activity-group-membership-receipt.schema.json",
+    ):
+        blockers.append("activity_group_receipt_schema_invalid")
+    expected_relative = (
+        activity_group_membership_receipt_relative_path(request_sha256)
+    )
+    try:
+        actual_relative = archive_relative_path(receipt_path, root)
+    except ArchivePathError:
+        actual_relative = ""
+    if (
+        receipt.get("archive_id") != archive_id
+        or receipt.get("request_sha256") != request_sha256
+        or actual_relative != expected_relative
+    ):
+        blockers.append("activity_group_receipt_binding_invalid")
+    anchor_zettel_id = receipt.get("anchor_zettel_id")
+    items = receipt.get("items")
+    if (
+        not isinstance(anchor_zettel_id, str)
+        or not ZETTEL_EDGE_ZETTEL_ID_RE.fullmatch(anchor_zettel_id)
+        or not isinstance(items, list)
+        or receipt.get("item_count") != len(items)
+    ):
+        blockers.append("activity_group_receipt_shape_invalid")
+        items = []
+    public_items: list[dict[str, Any]] = []
+    seen_rows: set[int] = set()
+    seen_ids: set[str] = set()
+    for item in items:
+        item_blockers: list[str] = []
+        row_index = item.get("row_index") if isinstance(item, dict) else None
+        zettel_id = item.get("zettel_id") if isinstance(item, dict) else None
+        canonical_relative = (
+            item.get("canonical_path") if isinstance(item, dict) else None
+        )
+        if (
+            not isinstance(row_index, int)
+            or row_index < 0
+            or row_index in seen_rows
+            or not isinstance(zettel_id, str)
+            or not ZETTEL_EDGE_ZETTEL_ID_RE.fullmatch(zettel_id)
+            or zettel_id in seen_ids
+            or canonical_relative != f"zettels/{zettel_id}.md"
+            or zettel_id == anchor_zettel_id
+        ):
+            item_blockers.append(
+                "activity_group_receipt_item_binding_invalid"
+            )
+        else:
+            seen_rows.add(row_index)
+            seen_ids.add(zettel_id)
+            try:
+                path = _activity_group_standard_canonical_path(
+                    root,
+                    zettel_id,
+                )
+                current_bytes, _stat = (
+                    _read_activity_group_canonical_bytes(path)
+                )
+                frontmatter, _payload, _source = (
+                    _parse_activity_group_canonical(current_bytes)
+                )
+                if frontmatter.get("id") != zettel_id:
+                    raise ArchiveServiceError(
+                        "member_frontmatter_identity_mismatch"
+                    )
+                state, current = _activity_group_current_membership(
+                    frontmatter,
+                    anchor_zettel_id,
+                )
+                if state != "already_member" or anchor_zettel_id not in current:
+                    raise ArchiveServiceError(
+                        "activity_group_receipt_membership_missing"
+                    )
+            except ArchiveServiceError as exc:
+                item_blockers.append(str(exc))
+            except (ArchivePathError, OSError, ValueError):
+                item_blockers.append(
+                    "activity_group_receipt_member_unavailable"
+                )
+        item_blockers = unique_preserve_order(item_blockers)
+        public_items.append(
+            {
+                "row_index": row_index,
+                "status": (
+                    "verified_applied" if not item_blockers else "blocked"
+                ),
+                "blocker_codes": item_blockers,
+            }
+        )
+        blockers.extend(item_blockers)
+    blockers = unique_preserve_order(blockers)
+    return {
+        "ok": not blockers,
+        "blockers": blockers,
+        "items": public_items,
+        "receipt_sha256": (
+            "sha256:" + hashlib.sha256(receipt_bytes).hexdigest()
+        ),
+        "review_plan_sha256": receipt.get("review_plan_sha256"),
+        "write_plan_sha256": receipt.get("write_plan_sha256"),
+        "review_affirmation_verified": (
+            receipt.get("human_affirmation")
+            == "all_activity_group_memberships_reviewed"
+        ),
+    }
+
+
+def activity_group_membership_write(
+    archive_root: Path | str,
+    *,
+    request_path: str,
+    expected_request_sha256: str,
+    expected_review_plan_sha256: str,
+    dry_run: bool = False,
+    approve: bool = False,
+    reviewed_by: str | None = None,
+    affirm_memberships_reviewed: bool = False,
+    max_members: int = ACTIVITY_GROUP_MEMBERSHIP_MAX_MEMBERS,
+    progress_callback: Callable[
+        [str, str, int | None, int | None], None
+    ]
+    | None = None,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    expected_request = str(expected_request_sha256 or "").strip()
+    expected_review_plan = str(
+        expected_review_plan_sha256 or ""
+    ).strip()
+    reviewer = safe_foreign_quarantine_actor_id(reviewed_by)
+    requested_max_members = int(max_members)
+    effective_max_members = max(
+        1,
+        min(
+            requested_max_members,
+            ACTIVITY_GROUP_MEMBERSHIP_MAX_MEMBERS,
+        ),
+    )
+    blockers: list[str] = []
+    warnings: list[str] = []
+    actual_request_sha256: str | None = None
+    actual_review_plan_sha256: str | None = None
+    actual_write_plan_sha256: str | None = None
+    receipt_relative: str | None = None
+    receipt_sha256: str | None = None
+    receipt_exists = False
+    receipt_written_this_run = False
+    transaction_journal_path: Path | None = None
+    transaction_journal_written = False
+    transaction_journal_removed: bool | None = None
+    write_lock_path = (
+        _activity_group_private_root(root)
+        / ACTIVITY_GROUP_MEMBERSHIP_WRITE_LOCK_NAME
+    )
+    recovery_guard_path = (
+        _activity_group_private_root(root)
+        / ACTIVITY_GROUP_MEMBERSHIP_RECOVERY_GUARD_NAME
+    )
+    write_lock_removed: bool | None = None
+    canonical_files_written: int | None = 0
+    canonical_write_attempt_count = 0
+    public_items: list[dict[str, Any]] = []
+    snapshot_result = {
+        "snapshot_objects_written_this_run": 0,
+        "manifest_records_appended_this_run": 0,
+        "verified_snapshot_count": 0,
+    }
+    rollback: dict[str, Any] = {
+        "attempted": False,
+        "succeeded": None,
+        "canonical_files_restored": 0,
+        "receipt_removed": None,
+        "transaction_journal_removed": None,
+        "transaction_journal_retained": None,
+        "write_lock_removed": None,
+    }
+    ready_to_add_count = 0
+    already_member_count = 0
+    requested_member_count = 0
+
+    def result_payload(status: str) -> dict[str, Any]:
+        return {
+            "ok": (
+                status
+                in {
+                    "ready_to_apply",
+                    "applied",
+                    "already_applied",
+                    "already_satisfied",
+                }
+                and not blockers
+            ),
+            "schema": ACTIVITY_GROUP_MEMBERSHIP_WRITE_SCHEMA,
+            "lifecycle_action": "activity_group_membership_write",
+            "status": status,
+            "dry_run": bool(dry_run),
+            "approved": bool(approve and status == "applied"),
+            "archive_id": archive_id,
+            "request": {
+                "sha256": actual_request_sha256,
+                "expected_sha256_matches": bool(
+                    actual_request_sha256
+                    and actual_request_sha256 == expected_request
+                ),
+                "path_echoed": False,
+                "tracking_policy": "private_ai_working_file_do_not_commit",
+            },
+            "review_plan_sha256": actual_review_plan_sha256,
+            "expected_review_plan_sha256_matches": bool(
+                actual_review_plan_sha256
+                and actual_review_plan_sha256 == expected_review_plan
+            ),
+            "write_plan_sha256": actual_write_plan_sha256,
+            "summary": {
+                "requested_member_count": requested_member_count,
+                "ready_to_add_count": ready_to_add_count,
+                "already_member_count": already_member_count,
+                "canonical_files_written_this_run": (
+                    canonical_files_written
+                ),
+                "canonical_write_attempt_count": (
+                    canonical_write_attempt_count
+                ),
+                "max_members": effective_max_members,
+            },
+            "items": public_items,
+            "human_review": {
+                "required_for_new_write": True,
+                "reviewed_by_supplied": bool(reviewer),
+                "reviewed_by_echoed": False,
+                "all_memberships_reviewed_affirmed": bool(
+                    affirm_memberships_reviewed
+                ),
+            },
+            "receipt": {
+                "path": receipt_relative,
+                "path_contains_only_request_digest": bool(receipt_relative),
+                "exists": receipt_exists,
+                "written_this_run": receipt_written_this_run,
+                "sha256": receipt_sha256,
+                "contains_private_zettel_ids_and_paths": (
+                    True if receipt_exists else None
+                ),
+                "contains_title_or_body_text": (
+                    False if receipt_exists else None
+                ),
+            },
+            "transaction_journal": {
+                "written_before_first_canonical_write": (
+                    True if transaction_journal_written else None
+                ),
+                "exists": bool(
+                    transaction_journal_path
+                    and transaction_journal_path.exists()
+                ),
+                "removed_after_completion": (
+                    transaction_journal_removed
+                ),
+                "contains_private_zettel_ids_and_paths": (
+                    True if transaction_journal_written else None
+                ),
+                "contains_title_or_body_text": False,
+                "path_echoed": False,
+            },
+            "prior_byte_snapshots": {
+                **snapshot_result,
+                "content_addressed": True,
+                "exact_complete_before_file_bytes": True,
+                "paths_echoed": False,
+                "remote_backup_proven": False,
+            },
+            "write_boundary": {
+                "field_changed": "frontmatter.facets.activity_group",
+                "event_anchor_changed": False,
+                "body_bytes_changed": (
+                    None
+                    if status == "failed_rollback_incomplete"
+                    else False
+                ),
+                "other_frontmatter_semantics_changed": (
+                    None
+                    if status == "failed_rollback_incomplete"
+                    else False
+                ),
+                "updated_at_changed": (
+                    None
+                    if status == "failed_rollback_incomplete"
+                    else False
+                ),
+                "membership_inferred": False,
+                "membership_removal_implemented": False,
+                "temporary_write_lock_removed": write_lock_removed,
+                "provider_state_written": False,
+                "database_rows_written": False,
+            },
+            "rollback": rollback,
+            "privacy_guards": {
+                "request_path_echoed": False,
+                "zettel_ids_echoed": False,
+                "zettel_paths_echoed": False,
+                "zettel_titles_echoed": False,
+                "facet_values_echoed": False,
+                "body_text_echoed": False,
+                "reviewed_by_echoed": False,
+                "absolute_local_paths_echoed": False,
+                "provider_urls_echoed": False,
+                "provider_api_called": False,
+                "model_called": False,
+                "network_called": False,
+                "secret_store_or_environment_read": False,
+            },
+            "blockers": unique_preserve_order(blockers),
+            "warnings": unique_preserve_order(warnings),
+            "next_safe_actions": (
+                [
+                    "Use the immutable private receipt as membership evidence and retain the prior-byte snapshots."
+                ]
+                if status == "applied"
+                else [
+                    "No write is needed; the private receipt verifies and every recorded membership remains present."
+                ]
+                if status == "already_applied"
+                else [
+                    "No write is needed; every explicitly requested membership is already present."
+                ]
+                if status == "already_satisfied"
+                else [
+                    "Run the unchanged request with --approve, the exact request and review-plan digests, a safe reviewer id, and the explicit membership-review affirmation."
+                ]
+                if status == "ready_to_apply"
+                else [
+                    "Fix content-free blockers and rerun the read-only membership plan before approving any write."
+                ]
+            ),
+        }
+
+    if bool(dry_run) == bool(approve):
+        blockers.append("choose_exactly_one_of_dry_run_or_approve")
+    if requested_max_members != effective_max_members:
+        blockers.append("max_members_out_of_range")
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", expected_request):
+        blockers.append("expected_request_sha256_invalid")
+    if not re.fullmatch(
+        r"sha256:[0-9a-f]{64}",
+        expected_review_plan,
+    ):
+        blockers.append("expected_review_plan_sha256_invalid")
+
+    try:
+        request_bytes, request_document = (
+            _activity_group_private_request(root, request_path)
+        )
+    except ArchiveServiceError as exc:
+        blockers.append(str(exc))
+        return result_payload("blocked")
+    actual_request_sha256 = (
+        "sha256:" + hashlib.sha256(request_bytes).hexdigest()
+    )
+    request_members = request_document.get("member_zettel_ids")
+    requested_member_count = (
+        len(request_members) if isinstance(request_members, list) else 0
+    )
+    if actual_request_sha256 != expected_request:
+        blockers.append("request_sha256_mismatch")
+    try:
+        receipt_relative = (
+            activity_group_membership_receipt_relative_path(
+                actual_request_sha256
+            )
+        )
+        transaction_journal_path = (
+            activity_group_membership_transaction_journal_path(
+                root,
+                actual_request_sha256,
+            )
+        )
+    except ValueError:
+        blockers.append("request_sha256_invalid")
+        return result_payload("blocked")
+    if blockers:
+        return result_payload("blocked")
+
+    receipt_path = archive_internal_path(root, receipt_relative)
+    if receipt_path.exists():
+        receipt_exists = True
+        if write_lock_path.exists():
+            warnings.append(
+                "activity_group_write_lock_remains_inspect_before_cleanup"
+            )
+        if (
+            transaction_journal_path is not None
+            and transaction_journal_path.exists()
+        ):
+            warnings.append(
+                "completed_activity_group_transaction_journal_remains"
+            )
+        verification = verify_activity_group_membership_receipt(
+            root,
+            receipt_path,
+            archive_id=archive_id,
+            request_sha256=actual_request_sha256,
+        )
+        receipt_sha256 = verification.get("receipt_sha256")
+        actual_review_plan_sha256 = verification.get(
+            "review_plan_sha256"
+        )
+        actual_write_plan_sha256 = verification.get(
+            "write_plan_sha256"
+        )
+        blockers.extend(
+            str(item) for item in verification.get("blockers", [])
+        )
+        if actual_review_plan_sha256 != expected_review_plan:
+            blockers.append(
+                "existing_receipt_review_plan_sha256_mismatch"
+            )
+        current_plan = activity_group_membership_plan(
+            root,
+            request_path=request_path,
+            dry_run=True,
+            max_members=effective_max_members,
+            progress_callback=None,
+        )
+        current_plan_items = (
+            current_plan.get("items")
+            if isinstance(current_plan.get("items"), list)
+            else []
+        )
+        if (
+            not current_plan.get("ok")
+            or len(current_plan_items) != requested_member_count
+            or any(
+                not isinstance(item, dict)
+                or item.get("status") != "already_member"
+                for item in current_plan_items
+            )
+        ):
+            blockers.append(
+                "existing_receipt_requested_membership_state_invalid"
+            )
+        public_items = [
+            {
+                "row_index": item.get("row_index"),
+                "status": (
+                    "verified_applied"
+                    if item.get("status") == "already_member"
+                    else "blocked"
+                ),
+                "current_file_sha256": item.get(
+                    "current_file_sha256"
+                ),
+                "proposed_file_sha256": item.get(
+                    "proposed_file_sha256"
+                ),
+                "blocker_codes": list(
+                    item.get("blocker_codes") or []
+                ),
+            }
+            for item in current_plan_items
+            if isinstance(item, dict)
+        ]
+        ready_to_add_count = 0
+        already_member_count = sum(
+            1
+            for item in current_plan_items
+            if isinstance(item, dict)
+            and item.get("status") == "already_member"
+        )
+        return result_payload(
+            "already_applied" if not blockers else "blocked"
+        )
+
+    if approve:
+        if reviewer is None:
+            blockers.append("safe_reviewed_by_required")
+        if not affirm_memberships_reviewed:
+            blockers.append("affirm_memberships_reviewed_required")
+    elif reviewed_by:
+        blockers.append("reviewed_by_only_valid_with_approve")
+    elif affirm_memberships_reviewed:
+        blockers.append("affirmation_only_valid_with_approve")
+    if blockers:
+        return result_payload("blocked")
+
+    plan = activity_group_membership_plan(
+        root,
+        request_path=request_path,
+        dry_run=True,
+        max_members=effective_max_members,
+        progress_callback=progress_callback,
+    )
+    actual_review_plan_sha256 = (
+        plan.get("review_plan_sha256")
+        if isinstance(plan.get("review_plan_sha256"), str)
+        else None
+    )
+    if plan.get("request", {}).get("sha256") != actual_request_sha256:
+        blockers.append("request_changed_during_plan")
+    if not plan.get("ok"):
+        blockers.extend(
+            f"plan:{item}" for item in plan.get("blockers", [])
+        )
+    if actual_review_plan_sha256 != expected_review_plan:
+        blockers.append("review_plan_sha256_mismatch")
+    plan_items = (
+        plan.get("items") if isinstance(plan.get("items"), list) else []
+    )
+    public_items = [
+        {
+            "row_index": item.get("row_index"),
+            "status": (
+                "ready_to_apply"
+                if item.get("status") == "ready_to_add"
+                else item.get("status")
+            ),
+            "current_file_sha256": item.get("current_file_sha256"),
+            "proposed_file_sha256": item.get("proposed_file_sha256"),
+            "blocker_codes": list(item.get("blocker_codes") or []),
+        }
+        for item in plan_items
+        if isinstance(item, dict)
+    ]
+    ready_to_add_count = int(
+        plan.get("summary", {}).get("ready_to_add_count") or 0
+    )
+    already_member_count = int(
+        plan.get("summary", {}).get("already_member_count") or 0
+    )
+    if blockers:
+        for item in public_items:
+            if item.get("status") == "ready_to_apply":
+                item["status"] = "blocked"
+        return result_payload("blocked")
+
+    candidates, materialize_blockers = (
+        materialize_activity_group_membership_candidates(
+            root,
+            request_bytes=request_bytes,
+            request_document=request_document,
+            plan=plan,
+        )
+    )
+    blockers.extend(materialize_blockers)
+    if ready_to_add_count != len(candidates):
+        blockers.append("activity_group_candidate_count_mismatch")
+    if not candidates and already_member_count:
+        return result_payload(
+            "already_satisfied" if not blockers else "blocked"
+        )
+    if not candidates:
+        blockers.append("no_activity_group_write_candidates")
+    anchor_sha256 = plan.get("anchor", {}).get(
+        "current_file_sha256"
+    )
+    if not isinstance(anchor_sha256, str):
+        blockers.append("anchor_sha256_unavailable")
+    if blockers:
+        return result_payload("blocked")
+    assert actual_review_plan_sha256 is not None
+    assert isinstance(anchor_sha256, str)
+    actual_write_plan_sha256 = (
+        activity_group_membership_write_plan_sha256(
+            archive_id=archive_id,
+            request_sha256=actual_request_sha256,
+            review_plan_sha256=actual_review_plan_sha256,
+            anchor_current_file_sha256=anchor_sha256,
+            candidates=candidates,
+        )
+    )
+    if dry_run:
+        return result_payload("ready_to_apply")
+
+    assert reviewer is not None
+    assert transaction_journal_path is not None
+    applied_at = (
+        datetime.now(timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+    private_items = activity_group_membership_private_items(candidates)
+    anchor_zettel_id = request_document["anchor_zettel_id"]
+    mutation_contract = {
+        "field_changed": "frontmatter.facets.activity_group",
+        "anchor_changed": False,
+        "body_bytes_preserved": True,
+        "other_frontmatter_semantics_preserved": True,
+        "updated_at_changed": False,
+        "prior_byte_snapshots_verified_before_first_canonical_write": True,
+        "rollback_on_runtime_failure": True,
+        "crash_recovery_journal_written": True,
+        "membership_inferred": False,
+        "membership_removal_implemented": False,
+    }
+    private_privacy_guards = {
+        "request_path_stored": False,
+        "title_text_stored": False,
+        "body_text_stored": False,
+        "contains_private_zettel_ids_and_paths": True,
+        "provider_api_called": False,
+        "model_called": False,
+        "network_called": False,
+        "secret_store_or_environment_read": False,
+    }
+    receipt = {
+        "schema": ACTIVITY_GROUP_MEMBERSHIP_RECEIPT_SCHEMA,
+        "action": "activity_group_membership_write",
+        "status": "applied",
+        "applied_at": applied_at,
+        "archive_id": archive_id,
+        "request_sha256": actual_request_sha256,
+        "review_plan_sha256": actual_review_plan_sha256,
+        "write_plan_sha256": actual_write_plan_sha256,
+        "anchor_zettel_id": anchor_zettel_id,
+        "reviewed_by": reviewer,
+        "human_affirmation": (
+            "all_activity_group_memberships_reviewed"
+        ),
+        "item_count": len(private_items),
+        "items": private_items,
+        "mutation_contract": mutation_contract,
+        "privacy_guards": private_privacy_guards,
+    }
+    if validate_schema(
+        receipt,
+        "activity-group-membership-receipt.schema.json",
+    ):
+        blockers.append("activity_group_receipt_schema_validation_failed")
+        return result_payload("blocked")
+    journal = {
+        "schema": (
+            ACTIVITY_GROUP_MEMBERSHIP_TRANSACTION_JOURNAL_SCHEMA
+        ),
+        "action": "activity_group_membership_transaction",
+        "status": "prepared",
+        "operation": "apply",
+        "prepared_at": applied_at,
+        "archive_id": archive_id,
+        "request_sha256": actual_request_sha256,
+        "review_plan_sha256": actual_review_plan_sha256,
+        "write_plan_sha256": actual_write_plan_sha256,
+        "anchor_zettel_id": anchor_zettel_id,
+        "reviewed_by": reviewer,
+        "human_affirmation": (
+            "all_activity_group_memberships_reviewed"
+        ),
+        "final_receipt_path": receipt_relative,
+        "item_count": len(private_items),
+        "items": private_items,
+        "recovery_contract": {
+            "journal_published_before_first_canonical_write": True,
+            "current_state_inferred_from_participant_hashes": True,
+            "prior_byte_snapshots_verified_before_journal": True,
+            "automatic_resume_implemented": False,
+            "automatic_rollback_after_runtime_failure": True,
+            "approved_recovery_command_required_after_hard_exit": True,
+        },
+        "privacy_guards": private_privacy_guards,
+    }
+    journal["journal_digest"] = sha256_json_value(journal)
+    if validate_schema(
+        journal,
+        "activity-group-membership-transaction-journal.schema.json",
+    ):
+        blockers.append(
+            "activity_group_transaction_journal_schema_validation_failed"
+        )
+        return result_payload("blocked")
+
+    lock_descriptor: int | None = None
+    if recovery_guard_path.exists():
+        blockers.append("activity_group_recovery_guard_exists")
+        return result_payload("blocked")
+    try:
+        write_lock_path.parent.mkdir(parents=True, exist_ok=True)
+        lock_descriptor = os.open(
+            write_lock_path,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            0o600,
+        )
+        lock_document = {
+            "schema": "wom-kit/activity-group-membership-write-lock/v0.1",
+            "request_sha256": actual_request_sha256,
+            "review_plan_sha256": actual_review_plan_sha256,
+            "write_plan_sha256": actual_write_plan_sha256,
+            "transaction_journal_name": transaction_journal_path.name,
+        }
+        with os.fdopen(lock_descriptor, "wb") as lock_handle:
+            lock_descriptor = None
+            lock_handle.write(
+                (
+                    json.dumps(
+                        lock_document,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
+                    + "\n"
+                ).encode("utf-8")
+            )
+            lock_handle.flush()
+            os.fsync(lock_handle.fileno())
+        fsync_directory(write_lock_path.parent)
+        if recovery_guard_path.exists():
+            try:
+                write_lock_path.unlink()
+                fsync_directory(write_lock_path.parent)
+                write_lock_removed = True
+            except OSError:
+                write_lock_removed = False
+            blockers.append("activity_group_recovery_guard_exists")
+            return result_payload("blocked")
+    except FileExistsError:
+        blockers.append("activity_group_write_lock_exists")
+        return result_payload("blocked")
+    except OSError:
+        try:
+            if write_lock_path.exists():
+                write_lock_path.unlink()
+        except OSError:
+            pass
+        blockers.append("activity_group_write_lock_create_failed")
+        return result_payload("blocked")
+    finally:
+        if lock_descriptor is not None:
+            os.close(lock_descriptor)
+
+    try:
+        locked_request_bytes, locked_request_document = (
+            _activity_group_private_request(root, request_path)
+        )
+        locked_request_sha256 = (
+            "sha256:"
+            + hashlib.sha256(locked_request_bytes).hexdigest()
+        )
+        locked_plan = activity_group_membership_plan(
+            root,
+            request_path=request_path,
+            dry_run=True,
+            max_members=effective_max_members,
+            progress_callback=None,
+        )
+        locked_review_plan_sha256 = locked_plan.get(
+            "review_plan_sha256"
+        )
+        locked_candidates, locked_blockers = (
+            materialize_activity_group_membership_candidates(
+                root,
+                request_bytes=locked_request_bytes,
+                request_document=locked_request_document,
+                plan=locked_plan,
+            )
+        )
+        locked_anchor_sha256 = locked_plan.get("anchor", {}).get(
+            "current_file_sha256"
+        )
+        locked_write_plan_sha256 = (
+            activity_group_membership_write_plan_sha256(
+                archive_id=archive_id,
+                request_sha256=locked_request_sha256,
+                review_plan_sha256=locked_review_plan_sha256,
+                anchor_current_file_sha256=locked_anchor_sha256,
+                candidates=locked_candidates,
+            )
+            if (
+                locked_plan.get("ok")
+                and isinstance(locked_review_plan_sha256, str)
+                and isinstance(locked_anchor_sha256, str)
+                and not locked_blockers
+            )
+            else None
+        )
+        if (
+            locked_request_sha256 != actual_request_sha256
+            or locked_review_plan_sha256
+            != actual_review_plan_sha256
+            or locked_write_plan_sha256
+            != actual_write_plan_sha256
+        ):
+            raise ArchiveServiceError(
+                "activity_group_candidate_changed_under_lock"
+            )
+        candidates = locked_candidates
+        snapshot_result = (
+            preserve_activity_group_membership_before_snapshots(
+                root,
+                candidates=candidates,
+                archive_id=archive_id,
+                captured_at=applied_at,
+                reviewed_by=reviewer,
+                write_plan_sha256=actual_write_plan_sha256,
+            )
+        )
+    except Exception:
+        try:
+            if write_lock_path.exists():
+                write_lock_path.unlink()
+                fsync_directory(write_lock_path.parent)
+            write_lock_removed = not write_lock_path.exists()
+        except OSError:
+            write_lock_removed = False
+        blockers.append(
+            "activity_group_write_preflight_or_snapshot_failed"
+        )
+        return result_payload("blocked")
+
+    try:
+        write_json_new_file(transaction_journal_path, journal)
+        transaction_journal_written = True
+    except FileExistsError:
+        try:
+            write_lock_path.unlink()
+            fsync_directory(write_lock_path.parent)
+            write_lock_removed = True
+        except OSError:
+            write_lock_removed = False
+        blockers.append("activity_group_transaction_journal_exists")
+        return result_payload("blocked")
+    except OSError:
+        try:
+            if write_lock_path.exists():
+                write_lock_path.unlink()
+                fsync_directory(write_lock_path.parent)
+            write_lock_removed = not write_lock_path.exists()
+        except OSError:
+            write_lock_removed = False
+        blockers.append(
+            "activity_group_transaction_journal_create_failed"
+        )
+        return result_payload("blocked")
+
+    attempted_candidates: list[dict[str, Any]] = []
+    receipt_parent_existed = receipt_path.parent.exists()
+    receipt_write_attempted = False
+    receipt_owned_this_run = False
+    try:
+        if progress_callback is not None:
+            progress_callback(
+                "activity-group-membership-write",
+                "start",
+                0,
+                len(candidates),
+            )
+        for index, item in enumerate(candidates, start=1):
+            current_bytes, _stat = (
+                _read_activity_group_canonical_bytes(item["path"])
+            )
+            if current_bytes != item["before_bytes"]:
+                raise RuntimeError(
+                    "canonical_changed_immediately_before_write"
+                )
+            attempted_candidates.append(item)
+            canonical_write_attempt_count += 1
+            write_bytes_atomic(item["path"], item["after_bytes"])
+            written_bytes, _written_stat = (
+                _read_activity_group_canonical_bytes(item["path"])
+            )
+            if written_bytes != item["after_bytes"]:
+                raise RuntimeError(
+                    "canonical_write_verification_failed"
+                )
+            canonical_files_written += 1
+            public_items[item["row_index"]]["status"] = "applied"
+            if progress_callback is not None:
+                progress_callback(
+                    "activity-group-membership-write",
+                    "written",
+                    index,
+                    len(candidates),
+                )
+        for item in candidates:
+            current_bytes, _stat = (
+                _read_activity_group_canonical_bytes(item["path"])
+            )
+            current_sha256 = (
+                "sha256:" + hashlib.sha256(current_bytes).hexdigest()
+            )
+            if current_sha256 != item["after_file_sha256"]:
+                raise RuntimeError(
+                    "canonical_batch_revalidation_failed"
+                )
+        if progress_callback is not None:
+            progress_callback(
+                "activity-group-membership-write",
+                "done",
+                len(candidates),
+                len(candidates),
+            )
+            progress_callback(
+                "activity-group-membership-receipt",
+                "start",
+                None,
+                None,
+            )
+        receipt_path.parent.mkdir(parents=True, exist_ok=True)
+        receipt_write_attempted = True
+        try:
+            write_json_new_file(receipt_path, receipt)
+            receipt_owned_this_run = True
+        except FileExistsError:
+            receipt_write_attempted = False
+            raise RuntimeError("receipt_created_concurrently")
+        except Exception:
+            receipt_owned_this_run = receipt_path.exists()
+            raise
+        verification = verify_activity_group_membership_receipt(
+            root,
+            receipt_path,
+            archive_id=archive_id,
+            request_sha256=actual_request_sha256,
+        )
+        if not verification.get("ok"):
+            raise RuntimeError("written_receipt_verification_failed")
+        receipt_exists = True
+        receipt_written_this_run = True
+        receipt_sha256 = verification.get("receipt_sha256")
+        try:
+            transaction_journal_path.unlink()
+            fsync_directory(transaction_journal_path.parent)
+            transaction_journal_removed = True
+        except OSError:
+            transaction_journal_removed = False
+            warnings.append(
+                "completed_activity_group_transaction_journal_cleanup_failed"
+            )
+        if transaction_journal_removed:
+            try:
+                write_lock_path.unlink()
+                fsync_directory(write_lock_path.parent)
+                write_lock_removed = True
+            except OSError:
+                write_lock_removed = False
+                warnings.append(
+                    "activity_group_write_lock_cleanup_failed"
+                )
+        else:
+            write_lock_removed = False
+            warnings.append(
+                "activity_group_write_lock_retained_with_journal"
+            )
+        if progress_callback is not None:
+            progress_callback(
+                "activity-group-membership-receipt",
+                "done",
+                None,
+                None,
+            )
+        return result_payload("applied")
+    except Exception:
+        rollback["attempted"] = bool(
+            attempted_candidates or receipt_write_attempted
+        )
+        if receipt_owned_this_run and receipt_path.exists():
+            try:
+                receipt_path.unlink()
+                fsync_directory(receipt_path.parent)
+            except OSError:
+                pass
+        receipt_removed = not receipt_path.exists()
+        restored = 0
+        canonical_restore_ok = True
+        for item in reversed(attempted_candidates):
+            try:
+                write_bytes_atomic(item["path"], item["before_bytes"])
+                restored_bytes, _restored_stat = (
+                    _read_activity_group_canonical_bytes(item["path"])
+                )
+                if restored_bytes != item["before_bytes"]:
+                    raise OSError(
+                        "canonical_restore_verification_failed"
+                    )
+                restored += 1
+            except Exception:
+                canonical_restore_ok = False
+        if canonical_restore_ok and receipt_removed:
+            try:
+                if transaction_journal_path.exists():
+                    transaction_journal_path.unlink()
+                    fsync_directory(transaction_journal_path.parent)
+                    transaction_journal_removed = True
+                else:
+                    transaction_journal_removed = False
+            except OSError:
+                transaction_journal_removed = False
+        else:
+            transaction_journal_removed = False
+        if transaction_journal_removed:
+            try:
+                if write_lock_path.exists():
+                    write_lock_path.unlink()
+                    fsync_directory(write_lock_path.parent)
+                write_lock_removed = True
+            except OSError:
+                write_lock_removed = False
+        else:
+            write_lock_removed = False
+        if not receipt_parent_existed:
+            cleanup_empty_archive_dirs(root, [receipt_path])
+        rollback["canonical_files_restored"] = restored
+        rollback["receipt_removed"] = receipt_removed
+        rollback["transaction_journal_removed"] = (
+            transaction_journal_removed
+        )
+        rollback["transaction_journal_retained"] = bool(
+            transaction_journal_path.exists()
+        )
+        rollback["write_lock_removed"] = write_lock_removed
+        rollback["succeeded"] = bool(
+            canonical_restore_ok
+            and receipt_removed
+            and transaction_journal_removed
+            and write_lock_removed
+        )
+        canonical_files_written = (
+            0 if rollback["succeeded"] else None
+        )
+        receipt_exists = receipt_path.exists()
+        receipt_written_this_run = False
+        attempted_rows = {
+            item["row_index"] for item in attempted_candidates
+        }
+        for item in public_items:
+            if item.get("row_index") in attempted_rows:
+                item["status"] = (
+                    "rolled_back"
+                    if rollback["succeeded"]
+                    else "recovery_required"
+                )
+            elif item.get("status") == "ready_to_apply":
+                item["status"] = "not_attempted"
+        blockers.append(
+            "activity_group_transaction_failed_and_rolled_back"
+            if rollback["succeeded"]
+            else "activity_group_transaction_failed_recovery_required"
+        )
+        return result_payload(
+            "failed_rolled_back"
+            if rollback["succeeded"]
+            else "failed_rollback_incomplete"
+        )
+
+
+def read_activity_group_membership_write_lock(
+    root: Path,
+    path: Path,
+    *,
+    request_sha256: str,
+) -> tuple[bytes, dict[str, Any]]:
+    raw, document = _read_activity_group_evidence_json(
+        root,
+        path,
+        max_bytes=ACTIVITY_GROUP_MEMBERSHIP_MAX_LOCK_BYTES,
+        unreadable_code="activity_group_write_lock_unreadable",
+    )
+    expected_journal = (
+        activity_group_membership_transaction_journal_path(
+            root,
+            request_sha256,
+        ).name
+    )
+    if (
+        set(document)
+        != {
+            "schema",
+            "request_sha256",
+            "review_plan_sha256",
+            "write_plan_sha256",
+            "transaction_journal_name",
+        }
+        or document.get("schema")
+        != "wom-kit/activity-group-membership-write-lock/v0.1"
+        or document.get("request_sha256") != request_sha256
+        or not re.fullmatch(
+            r"sha256:[0-9a-f]{64}",
+            str(document.get("review_plan_sha256") or ""),
+        )
+        or not re.fullmatch(
+            r"sha256:[0-9a-f]{64}",
+            str(document.get("write_plan_sha256") or ""),
+        )
+        or document.get("transaction_journal_name")
+        != expected_journal
+    ):
+        raise ArchiveServiceError(
+            "activity_group_write_lock_binding_invalid"
+        )
+    return raw, document
+
+
+def read_activity_group_membership_transaction_journal(
+    root: Path,
+    path: Path,
+    *,
+    archive_id: str,
+    request_sha256: str,
+) -> tuple[bytes, dict[str, Any]]:
+    raw, journal = _read_activity_group_evidence_json(
+        root,
+        path,
+        max_bytes=(
+            ACTIVITY_GROUP_MEMBERSHIP_MAX_TRANSACTION_JOURNAL_BYTES
+        ),
+        unreadable_code="activity_group_transaction_journal_unreadable",
+    )
+    if validate_schema(
+        journal,
+        "activity-group-membership-transaction-journal.schema.json",
+    ):
+        raise ArchiveServiceError(
+            "activity_group_transaction_journal_schema_invalid"
+        )
+    supplied_digest = journal.get("journal_digest")
+    unsigned_journal = dict(journal)
+    unsigned_journal.pop("journal_digest", None)
+    if supplied_digest != sha256_json_value(unsigned_journal):
+        raise ArchiveServiceError(
+            "activity_group_transaction_journal_digest_invalid"
+        )
+    expected_path = (
+        activity_group_membership_transaction_journal_path(
+            root,
+            request_sha256,
+        )
+    )
+    try:
+        actual_relative = archive_relative_path(path, root)
+        expected_relative = archive_relative_path(expected_path, root)
+    except ArchivePathError as exc:
+        raise ArchiveServiceError(
+            "activity_group_transaction_journal_path_invalid"
+        ) from exc
+    expected_receipt = (
+        activity_group_membership_receipt_relative_path(
+            request_sha256
+        )
+    )
+    items = journal.get("items")
+    anchor_zettel_id = journal.get("anchor_zettel_id")
+    if (
+        actual_relative != expected_relative
+        or journal.get("archive_id") != archive_id
+        or journal.get("request_sha256") != request_sha256
+        or journal.get("final_receipt_path") != expected_receipt
+        or not isinstance(items, list)
+        or journal.get("item_count") != len(items)
+        or not isinstance(anchor_zettel_id, str)
+        or not ZETTEL_EDGE_ZETTEL_ID_RE.fullmatch(anchor_zettel_id)
+    ):
+        raise ArchiveServiceError(
+            "activity_group_transaction_journal_binding_invalid"
+        )
+    seen_rows: set[int] = set()
+    seen_ids: set[str] = set()
+    for item in items:
+        if not isinstance(item, dict):
+            raise ArchiveServiceError(
+                "activity_group_transaction_participant_invalid"
+            )
+        row_index = item.get("row_index")
+        zettel_id = item.get("zettel_id")
+        canonical_relative = item.get("canonical_path")
+        before_sha256 = item.get("before_file_sha256")
+        after_sha256 = item.get("after_file_sha256")
+        snapshot = item.get("before_snapshot")
+        expected_snapshot = (
+            {
+                "object_id": before_sha256,
+                "logical_key": (
+                    "objects/sha256/"
+                    + str(before_sha256)[7:9]
+                    + "/"
+                    + str(before_sha256)[7:]
+                ),
+                "size_bytes": (
+                    snapshot.get("size_bytes")
+                    if isinstance(snapshot, dict)
+                    else None
+                ),
+                "mime": "text/markdown",
+                "stored_sha256_verified": True,
+                "manifest_registered": True,
+            }
+            if isinstance(before_sha256, str)
+            else None
+        )
+        if (
+            not isinstance(row_index, int)
+            or row_index < 0
+            or row_index in seen_rows
+            or not isinstance(zettel_id, str)
+            or not ZETTEL_EDGE_ZETTEL_ID_RE.fullmatch(zettel_id)
+            or zettel_id in seen_ids
+            or zettel_id == anchor_zettel_id
+            or canonical_relative != f"zettels/{zettel_id}.md"
+            or not re.fullmatch(
+                r"sha256:[0-9a-f]{64}",
+                str(before_sha256 or ""),
+            )
+            or not re.fullmatch(
+                r"sha256:[0-9a-f]{64}",
+                str(after_sha256 or ""),
+            )
+            or before_sha256 == after_sha256
+            or snapshot != expected_snapshot
+        ):
+            raise ArchiveServiceError(
+                "activity_group_transaction_participant_invalid"
+            )
+        seen_rows.add(row_index)
+        seen_ids.add(zettel_id)
+    return raw, journal
+
+
+def classify_activity_group_membership_transaction(
+    root: Path,
+    journal: dict[str, Any],
+) -> dict[str, Any]:
+    blockers: list[str] = []
+    participants: list[dict[str, Any]] = []
+    manifest_index, manifest_blockers = (
+        zet_revision_snapshot_manifest_index(root)
+    )
+    blockers.extend(manifest_blockers)
+    items = (
+        journal.get("items")
+        if isinstance(journal.get("items"), list)
+        else []
+    )
+    before_count = 0
+    after_count = 0
+    unknown_count = 0
+    for item in items:
+        row_index = item.get("row_index")
+        participant_state = "unknown"
+        item_blockers: list[str] = []
+        try:
+            path = _activity_group_standard_canonical_path(
+                root,
+                item["zettel_id"],
+            )
+            current_bytes, _stat = (
+                _read_activity_group_canonical_bytes(path)
+            )
+            current_sha256 = (
+                "sha256:" + hashlib.sha256(current_bytes).hexdigest()
+            )
+            if current_sha256 == item.get("before_file_sha256"):
+                participant_state = "before"
+                before_count += 1
+            elif current_sha256 == item.get("after_file_sha256"):
+                participant_state = "after"
+                after_count += 1
+            else:
+                unknown_count += 1
+            snapshot_blockers = verify_zet_revision_before_snapshot(
+                root,
+                item["before_snapshot"],
+                expected_before_sha256=item["before_file_sha256"],
+                manifest_index=manifest_index,
+            )
+            item_blockers.extend(snapshot_blockers)
+        except (ArchiveServiceError, ArchivePathError, OSError, ValueError):
+            unknown_count += 1
+            item_blockers.append(
+                "activity_group_recovery_participant_unavailable"
+            )
+        item_blockers = unique_preserve_order(item_blockers)
+        blockers.extend(item_blockers)
+        participants.append(
+            {
+                "row_index": row_index,
+                "state": participant_state,
+                "blocker_codes": item_blockers,
+            }
+        )
+
+    receipt_relative = journal.get("final_receipt_path")
+    receipt_path = (
+        archive_internal_path(root, receipt_relative)
+        if isinstance(receipt_relative, str)
+        else None
+    )
+    receipt_exists = bool(receipt_path and receipt_path.exists())
+    receipt_verification: dict[str, Any] | None = None
+    if receipt_exists and receipt_path is not None:
+        receipt_verification = (
+            verify_activity_group_membership_receipt(
+                root,
+                receipt_path,
+                archive_id=journal["archive_id"],
+                request_sha256=journal["request_sha256"],
+            )
+        )
+        if not receipt_verification.get("ok"):
+            blockers.extend(
+                str(item)
+                for item in receipt_verification.get("blockers", [])
+            )
+
+    state = "unknown_or_drifted"
+    if not blockers and receipt_exists:
+        state = "verified_completed_residue"
+    elif (
+        not blockers
+        and not receipt_exists
+        and unknown_count == 0
+        and before_count == len(items)
+    ):
+        state = "prepared_not_started"
+    elif (
+        not blockers
+        and not receipt_exists
+        and unknown_count == 0
+        and after_count == len(items)
+    ):
+        state = "fully_applied_without_receipt"
+    elif (
+        not blockers
+        and not receipt_exists
+        and unknown_count == 0
+        and before_count + after_count == len(items)
+    ):
+        state = "partially_applied_without_receipt"
+    elif unknown_count:
+        blockers.append("activity_group_recovery_participant_drifted")
+    blockers = unique_preserve_order(blockers)
+    return {
+        "state": state,
+        "participants": participants,
+        "summary": {
+            "participant_count": len(items),
+            "before_count": before_count,
+            "after_count": after_count,
+            "unknown_count": unknown_count,
+        },
+        "receipt_exists": receipt_exists,
+        "receipt_verified": bool(
+            receipt_verification and receipt_verification.get("ok")
+        ),
+        "blockers": blockers,
+    }
+
+
+def activity_group_membership_recovery_plan(
+    archive_root: Path | str,
+    *,
+    expected_request_sha256: str,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    request_sha256 = str(expected_request_sha256 or "").strip()
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if not dry_run:
+        blockers.append("dry_run_required")
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", request_sha256):
+        blockers.append("expected_request_sha256_invalid")
+
+    private_root = _activity_group_private_root(root)
+    write_lock_path = (
+        private_root / ACTIVITY_GROUP_MEMBERSHIP_WRITE_LOCK_NAME
+    )
+    journal_path: Path | None = None
+    receipt_path: Path | None = None
+    if not blockers:
+        journal_path = (
+            activity_group_membership_transaction_journal_path(
+                root,
+                request_sha256,
+            )
+        )
+        receipt_path = archive_internal_path(
+            root,
+            activity_group_membership_receipt_relative_path(
+                request_sha256
+            ),
+        )
+
+    evidence_sha256: str | None = None
+    journal_digest: str | None = None
+    transaction_state = "no_recovery_evidence"
+    recovery_action: str | None = None
+    participants: list[dict[str, Any]] = []
+    summary = {
+        "participant_count": 0,
+        "before_count": 0,
+        "after_count": 0,
+        "unknown_count": 0,
+    }
+    receipt_exists = bool(receipt_path and receipt_path.exists())
+    receipt_verified = False
+    write_lock_exists = write_lock_path.exists()
+    write_lock_sha256: str | None = None
+    if not blockers and journal_path is not None and journal_path.exists():
+        try:
+            journal_bytes, journal = (
+                read_activity_group_membership_transaction_journal(
+                    root,
+                    journal_path,
+                    archive_id=archive_id,
+                    request_sha256=request_sha256,
+                )
+            )
+            evidence_sha256 = (
+                "sha256:" + hashlib.sha256(journal_bytes).hexdigest()
+            )
+            journal_digest = journal.get("journal_digest")
+            classification = (
+                classify_activity_group_membership_transaction(
+                    root,
+                    journal,
+                )
+            )
+            transaction_state = classification["state"]
+            participants = classification["participants"]
+            summary = classification["summary"]
+            receipt_exists = classification["receipt_exists"]
+            receipt_verified = classification["receipt_verified"]
+            blockers.extend(classification["blockers"])
+            if write_lock_exists:
+                lock_bytes, lock_document = (
+                    read_activity_group_membership_write_lock(
+                        root,
+                        write_lock_path,
+                        request_sha256=request_sha256,
+                    )
+                )
+                write_lock_sha256 = (
+                    "sha256:" + hashlib.sha256(lock_bytes).hexdigest()
+                )
+                if (
+                    lock_document.get("review_plan_sha256")
+                    != journal.get("review_plan_sha256")
+                    or lock_document.get("write_plan_sha256")
+                    != journal.get("write_plan_sha256")
+                ):
+                    blockers.append(
+                        "activity_group_write_lock_journal_binding_invalid"
+                    )
+        except ArchiveServiceError as exc:
+            blockers.append(str(exc))
+            transaction_state = "unknown_or_drifted"
+    elif not blockers and write_lock_exists:
+        try:
+            lock_bytes, _lock_document = (
+                read_activity_group_membership_write_lock(
+                    root,
+                    write_lock_path,
+                    request_sha256=request_sha256,
+                )
+            )
+            evidence_sha256 = (
+                "sha256:" + hashlib.sha256(lock_bytes).hexdigest()
+            )
+            write_lock_sha256 = evidence_sha256
+            if receipt_exists and receipt_path is not None:
+                verification = verify_activity_group_membership_receipt(
+                    root,
+                    receipt_path,
+                    archive_id=archive_id,
+                    request_sha256=request_sha256,
+                )
+                receipt_verified = bool(verification.get("ok"))
+                if receipt_verified:
+                    transaction_state = (
+                        "verified_completed_lock_residue"
+                    )
+                else:
+                    blockers.extend(
+                        str(item)
+                        for item in verification.get("blockers", [])
+                    )
+                    transaction_state = "unknown_or_drifted"
+            else:
+                transaction_state = "lock_only_before_journal"
+        except ArchiveServiceError as exc:
+            blockers.append(str(exc))
+            transaction_state = "unknown_or_drifted"
+    elif not blockers:
+        blockers.append("activity_group_recovery_evidence_missing")
+
+    action_by_state = {
+        "lock_only_before_journal": "cleanup_unstarted_lock",
+        "prepared_not_started": (
+            "cleanup_unstarted_transaction_evidence"
+        ),
+        "partially_applied_without_receipt": (
+            "rollback_uncommitted_memberships_to_before"
+        ),
+        "fully_applied_without_receipt": (
+            "rollback_uncommitted_memberships_to_before"
+        ),
+        "verified_completed_residue": (
+            "cleanup_verified_completed_evidence"
+        ),
+        "verified_completed_lock_residue": (
+            "cleanup_verified_completed_evidence"
+        ),
+        "unknown_or_drifted": "manual_forensic_hold",
+    }
+    recovery_action = action_by_state.get(transaction_state)
+    if journal_path is not None and journal_path.exists() and not write_lock_path.exists():
+        warnings.append("activity_group_write_lock_missing")
+    if recovery_action == "manual_forensic_hold":
+        blockers.append("activity_group_recovery_manual_forensic_hold")
+    blockers = unique_preserve_order(blockers)
+    warnings = unique_preserve_order(warnings)
+    recovery_plan_sha256 = sha256_json_value(
+        {
+            "schema": ACTIVITY_GROUP_MEMBERSHIP_RECOVERY_PLAN_SCHEMA,
+            "archive_id": archive_id,
+            "request_sha256": request_sha256,
+            "evidence_sha256": evidence_sha256,
+            "journal_digest": journal_digest,
+            "transaction_state": transaction_state,
+            "recovery_action": recovery_action,
+            "participants": participants,
+            "receipt_exists": receipt_exists,
+            "receipt_verified": receipt_verified,
+            "write_lock_exists": write_lock_exists,
+            "write_lock_sha256": write_lock_sha256,
+        }
+    )
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "schema": ACTIVITY_GROUP_MEMBERSHIP_RECOVERY_PLAN_SCHEMA,
+        "lifecycle_action": (
+            "activity_group_membership_recovery_plan"
+        ),
+        "status": (
+            "recovery_ready" if not blockers else "blocked"
+        ),
+        "archive_id": archive_id,
+        "request_sha256": request_sha256,
+        "transaction_state": transaction_state,
+        "recovery_action": recovery_action,
+        "recovery_plan_sha256": recovery_plan_sha256,
+        "evidence": {
+            "write_lock_exists": write_lock_exists,
+            "write_lock_sha256": write_lock_sha256,
+            "transaction_journal_exists": bool(
+                journal_path and journal_path.exists()
+            ),
+            "receipt_exists": receipt_exists,
+            "receipt_verified": receipt_verified,
+            "evidence_sha256": evidence_sha256,
+            "journal_digest": journal_digest,
+            "paths_echoed": False,
+        },
+        "summary": summary,
+        "participants": participants,
+        "approval_boundary": {
+            "recovery_write_implemented": True,
+            "explicit_approval_required": True,
+            "expected_recovery_plan_sha256_required": True,
+            "reviewer_required": True,
+            "affirmation_required": True,
+            "manual_forensic_hold_executable": False,
+        },
+        "privacy_guards": {
+            "request_path_echoed": False,
+            "zettel_ids_echoed": False,
+            "zettel_paths_echoed": False,
+            "zettel_titles_echoed": False,
+            "facet_values_echoed": False,
+            "body_text_echoed": False,
+            "reviewed_by_echoed": False,
+            "absolute_local_paths_echoed": False,
+            "provider_urls_echoed": False,
+            "provider_api_called": False,
+            "model_called": False,
+            "network_called": False,
+            "secret_store_or_environment_read": False,
+            "writes": False,
+        },
+        "would_change": [],
+        "blockers": blockers,
+        "warnings": warnings,
+        "next_safe_actions": (
+            [
+                "Run the approved recovery command with this exact recovery-plan digest after confirming the interrupted writer is no longer running."
+            ]
+            if not blockers
+            else [
+                "Keep the private lock, journal, receipt, and snapshots unchanged for forensic review."
+            ]
+        ),
+    }
+
+
+def activity_group_membership_recover(
+    archive_root: Path | str,
+    *,
+    expected_request_sha256: str,
+    expected_recovery_plan_sha256: str,
+    approve: bool = False,
+    reviewed_by: str | None = None,
+    affirm_recovery_reviewed: bool = False,
+    progress_callback: Callable[
+        [str, str, int | None, int | None], None
+    ]
+    | None = None,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    request_sha256 = str(expected_request_sha256 or "").strip()
+    expected_plan = str(
+        expected_recovery_plan_sha256 or ""
+    ).strip()
+    reviewer = safe_foreign_quarantine_actor_id(reviewed_by)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    action: str | None = None
+    actual_plan_sha256: str | None = None
+    transaction_state: str | None = None
+    files_restored_this_run = 0
+    journal_removed: bool | None = None
+    write_lock_removed: bool | None = None
+    recovery_guard_removed: bool | None = None
+    private_root = _activity_group_private_root(root)
+    write_lock_path = (
+        private_root / ACTIVITY_GROUP_MEMBERSHIP_WRITE_LOCK_NAME
+    )
+    recovery_guard_path = (
+        private_root / ACTIVITY_GROUP_MEMBERSHIP_RECOVERY_GUARD_NAME
+    )
+
+    def result_payload(status: str) -> dict[str, Any]:
+        return {
+            "ok": status in {"recovered", "cleanup_completed"}
+            and not blockers,
+            "schema": ACTIVITY_GROUP_MEMBERSHIP_RECOVER_SCHEMA,
+            "lifecycle_action": "activity_group_membership_recover",
+            "status": status,
+            "approved": bool(
+                approve and status in {"recovered", "cleanup_completed"}
+            ),
+            "archive_id": archive_id,
+            "request_sha256": request_sha256,
+            "recovery_plan_sha256": actual_plan_sha256,
+            "expected_recovery_plan_sha256_matches": bool(
+                actual_plan_sha256
+                and actual_plan_sha256 == expected_plan
+            ),
+            "transaction_state": transaction_state,
+            "recovery_action": action,
+            "summary": {
+                "canonical_files_restored_this_run": (
+                    files_restored_this_run
+                ),
+                "transaction_journal_removed": journal_removed,
+                "write_lock_removed": write_lock_removed,
+                "recovery_guard_removed": recovery_guard_removed,
+            },
+            "human_review": {
+                "required": True,
+                "reviewed_by_supplied": bool(reviewer),
+                "reviewed_by_echoed": False,
+                "recovery_reviewed_affirmed": bool(
+                    affirm_recovery_reviewed
+                ),
+            },
+            "safety_boundary": {
+                "only_bound_transaction_evidence_changed": True,
+                "successful_receipt_removed": False,
+                "membership_removal_feature_used": False,
+                "unknown_state_written": False,
+                "provider_state_written": False,
+                "database_rows_written": False,
+            },
+            "privacy_guards": {
+                "request_path_echoed": False,
+                "zettel_ids_echoed": False,
+                "zettel_paths_echoed": False,
+                "zettel_titles_echoed": False,
+                "facet_values_echoed": False,
+                "body_text_echoed": False,
+                "reviewed_by_echoed": False,
+                "absolute_local_paths_echoed": False,
+                "provider_urls_echoed": False,
+                "provider_api_called": False,
+                "model_called": False,
+                "network_called": False,
+                "secret_store_or_environment_read": False,
+            },
+            "blockers": unique_preserve_order(blockers),
+            "warnings": unique_preserve_order(warnings),
+            "next_safe_actions": (
+                [
+                    "Rerun the read-only recovery plan; it should now report no matching recovery evidence."
+                ]
+                if status in {"recovered", "cleanup_completed"}
+                else [
+                    "Keep all private recovery evidence and rerun the read-only plan before another approved attempt."
+                ]
+            ),
+        }
+
+    if not approve:
+        blockers.append("approve_required")
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", request_sha256):
+        blockers.append("expected_request_sha256_invalid")
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", expected_plan):
+        blockers.append("expected_recovery_plan_sha256_invalid")
+    if reviewer is None:
+        blockers.append("safe_reviewed_by_required")
+    if not affirm_recovery_reviewed:
+        blockers.append("affirm_recovery_reviewed_required")
+    if blockers:
+        return result_payload("blocked")
+
+    preview = activity_group_membership_recovery_plan(
+        root,
+        expected_request_sha256=request_sha256,
+        dry_run=True,
+    )
+    actual_plan_sha256 = preview.get("recovery_plan_sha256")
+    transaction_state = preview.get("transaction_state")
+    action = preview.get("recovery_action")
+    if not preview.get("ok"):
+        blockers.extend(
+            f"plan:{item}" for item in preview.get("blockers", [])
+        )
+    if actual_plan_sha256 != expected_plan:
+        blockers.append("recovery_plan_sha256_mismatch")
+    if action not in (
+        ACTIVITY_GROUP_MEMBERSHIP_RECOVERY_ACTIONS
+        - {"manual_forensic_hold"}
+    ):
+        blockers.append("recovery_action_not_executable")
+    if blockers:
+        return result_payload("blocked")
+
+    guard_descriptor: int | None = None
+    try:
+        private_root.mkdir(parents=True, exist_ok=True)
+        guard_descriptor = os.open(
+            recovery_guard_path,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            0o600,
+        )
+        guard_document = {
+            "schema": (
+                "wom-kit/activity-group-membership-recovery-guard/v0.1"
+            ),
+            "request_sha256": request_sha256,
+            "recovery_plan_sha256": actual_plan_sha256,
+        }
+        with os.fdopen(guard_descriptor, "wb") as guard_handle:
+            guard_descriptor = None
+            guard_handle.write(
+                (
+                    json.dumps(
+                        guard_document,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
+                    + "\n"
+                ).encode("utf-8")
+            )
+            guard_handle.flush()
+            os.fsync(guard_handle.fileno())
+        fsync_directory(recovery_guard_path.parent)
+    except FileExistsError:
+        blockers.append("activity_group_recovery_guard_exists")
+        return result_payload("blocked")
+    except OSError:
+        try:
+            if recovery_guard_path.exists():
+                recovery_guard_path.unlink()
+        except OSError:
+            pass
+        blockers.append("activity_group_recovery_guard_create_failed")
+        return result_payload("blocked")
+    finally:
+        if guard_descriptor is not None:
+            os.close(guard_descriptor)
+
+    try:
+        locked_plan = activity_group_membership_recovery_plan(
+            root,
+            expected_request_sha256=request_sha256,
+            dry_run=True,
+        )
+        if (
+            not locked_plan.get("ok")
+            or locked_plan.get("recovery_plan_sha256")
+            != actual_plan_sha256
+            or locked_plan.get("transaction_state")
+            != transaction_state
+            or locked_plan.get("recovery_action") != action
+        ):
+            raise ArchiveServiceError(
+                "activity_group_recovery_state_changed_under_guard"
+            )
+        journal_path = (
+            activity_group_membership_transaction_journal_path(
+                root,
+                request_sha256,
+            )
+        )
+        locked_evidence = (
+            locked_plan.get("evidence")
+            if isinstance(locked_plan.get("evidence"), dict)
+            else {}
+        )
+        if not locked_evidence.get("write_lock_exists"):
+            _claim_journal_bytes, claim_journal = (
+                read_activity_group_membership_transaction_journal(
+                    root,
+                    journal_path,
+                    archive_id=archive_id,
+                    request_sha256=request_sha256,
+                )
+            )
+            claim_descriptor: int | None = None
+            claim_path_created = False
+            try:
+                claim_descriptor = os.open(
+                    write_lock_path,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    0o600,
+                )
+                claim_path_created = True
+                claim_document = {
+                    "schema": (
+                        "wom-kit/activity-group-membership-write-lock/v0.1"
+                    ),
+                    "request_sha256": request_sha256,
+                    "review_plan_sha256": claim_journal[
+                        "review_plan_sha256"
+                    ],
+                    "write_plan_sha256": claim_journal[
+                        "write_plan_sha256"
+                    ],
+                    "transaction_journal_name": journal_path.name,
+                }
+                with os.fdopen(claim_descriptor, "wb") as claim_handle:
+                    claim_descriptor = None
+                    claim_handle.write(
+                        (
+                            json.dumps(
+                                claim_document,
+                                ensure_ascii=False,
+                                separators=(",", ":"),
+                            )
+                            + "\n"
+                        ).encode("utf-8")
+                    )
+                    claim_handle.flush()
+                    os.fsync(claim_handle.fileno())
+                fsync_directory(write_lock_path.parent)
+            except FileExistsError as exc:
+                raise ArchiveServiceError(
+                    "activity_group_write_lock_changed_before_recovery_claim"
+                ) from exc
+            except OSError as exc:
+                try:
+                    if claim_path_created and write_lock_path.exists():
+                        write_lock_path.unlink()
+                        fsync_directory(write_lock_path.parent)
+                except OSError:
+                    pass
+                raise ArchiveServiceError(
+                    "activity_group_recovery_write_lock_claim_failed"
+                ) from exc
+            finally:
+                if claim_descriptor is not None:
+                    os.close(claim_descriptor)
+        if action == "cleanup_unstarted_lock":
+            if not write_lock_path.exists():
+                raise ArchiveServiceError(
+                    "activity_group_write_lock_missing_under_guard"
+                )
+        elif action in {
+            "cleanup_unstarted_transaction_evidence",
+            "rollback_uncommitted_memberships_to_before",
+        }:
+            _journal_bytes, journal = (
+                read_activity_group_membership_transaction_journal(
+                    root,
+                    journal_path,
+                    archive_id=archive_id,
+                    request_sha256=request_sha256,
+                )
+            )
+            classification = (
+                classify_activity_group_membership_transaction(
+                    root,
+                    journal,
+                )
+            )
+            if classification.get("state") != transaction_state:
+                raise ArchiveServiceError(
+                    "activity_group_recovery_classification_changed"
+                )
+            if action == "rollback_uncommitted_memberships_to_before":
+                items = journal["items"]
+                if progress_callback is not None:
+                    progress_callback(
+                        "activity-group-membership-recovery",
+                        "start",
+                        0,
+                        len(items),
+                    )
+                for index, item in enumerate(items, start=1):
+                    snapshot_path = root.joinpath(
+                        *PurePosixPath(
+                            item["before_snapshot"]["logical_key"]
+                        ).parts
+                    )
+                    if (
+                        snapshot_path.is_symlink()
+                        or not is_path_within_root(snapshot_path, root)
+                        or zet_revision_path_has_symlink_component(
+                            root,
+                            snapshot_path,
+                        )
+                        or not snapshot_path.is_file()
+                        or snapshot_path.stat().st_size
+                        != item["before_snapshot"]["size_bytes"]
+                    ):
+                        raise ArchiveServiceError(
+                            "activity_group_recovery_snapshot_unreadable"
+                        )
+                    with snapshot_path.open("rb") as snapshot_handle:
+                        before_bytes = snapshot_handle.read(
+                            ACTIVITY_GROUP_MEMBERSHIP_MAX_CANONICAL_FILE_BYTES
+                            + 1
+                        )
+                    if (
+                        len(before_bytes)
+                        > ACTIVITY_GROUP_MEMBERSHIP_MAX_CANONICAL_FILE_BYTES
+                    ):
+                        raise ArchiveServiceError(
+                            "activity_group_recovery_snapshot_unreadable"
+                        )
+                    if (
+                        "sha256:"
+                        + hashlib.sha256(before_bytes).hexdigest()
+                        != item["before_file_sha256"]
+                    ):
+                        raise ArchiveServiceError(
+                            "activity_group_recovery_snapshot_hash_mismatch"
+                        )
+                    canonical_path = (
+                        _activity_group_standard_canonical_path(
+                            root,
+                            item["zettel_id"],
+                        )
+                    )
+                    current_bytes, _stat = (
+                        _read_activity_group_canonical_bytes(
+                            canonical_path
+                        )
+                    )
+                    current_sha256 = (
+                        "sha256:"
+                        + hashlib.sha256(current_bytes).hexdigest()
+                    )
+                    if current_sha256 == item["before_file_sha256"]:
+                        pass
+                    elif current_sha256 == item["after_file_sha256"]:
+                        write_bytes_atomic(
+                            canonical_path,
+                            before_bytes,
+                        )
+                        restored_bytes, _restored_stat = (
+                            _read_activity_group_canonical_bytes(
+                                canonical_path
+                            )
+                        )
+                        if restored_bytes != before_bytes:
+                            raise ArchiveServiceError(
+                                "activity_group_recovery_restore_verification_failed"
+                            )
+                        files_restored_this_run += 1
+                    else:
+                        raise ArchiveServiceError(
+                            "activity_group_recovery_participant_drifted"
+                        )
+                    if progress_callback is not None:
+                        progress_callback(
+                            "activity-group-membership-recovery",
+                            "restored",
+                            index,
+                            len(items),
+                        )
+                if progress_callback is not None:
+                    progress_callback(
+                        "activity-group-membership-recovery",
+                        "done",
+                        len(items),
+                        len(items),
+                    )
+                final_classification = (
+                    classify_activity_group_membership_transaction(
+                        root,
+                        journal,
+                    )
+                )
+                if (
+                    final_classification.get("state")
+                    != "prepared_not_started"
+                ):
+                    raise ArchiveServiceError(
+                        "activity_group_recovery_final_before_state_invalid"
+                    )
+        elif action == "cleanup_verified_completed_evidence":
+            receipt_path = archive_internal_path(
+                root,
+                activity_group_membership_receipt_relative_path(
+                    request_sha256
+                ),
+            )
+            verification = verify_activity_group_membership_receipt(
+                root,
+                receipt_path,
+                archive_id=archive_id,
+                request_sha256=request_sha256,
+            )
+            if not verification.get("ok"):
+                raise ArchiveServiceError(
+                    "activity_group_recovery_receipt_not_verified"
+                )
+        else:
+            raise ArchiveServiceError(
+                "activity_group_recovery_action_not_supported"
+            )
+
+        if action != "cleanup_unstarted_lock":
+            if journal_path.exists():
+                journal_path.unlink()
+                fsync_directory(journal_path.parent)
+            journal_removed = not journal_path.exists()
+            if not journal_removed:
+                raise ArchiveServiceError(
+                    "activity_group_recovery_journal_cleanup_failed"
+                )
+        else:
+            journal_removed = None
+        if write_lock_path.exists():
+            write_lock_path.unlink()
+            fsync_directory(write_lock_path.parent)
+        write_lock_removed = not write_lock_path.exists()
+        if not write_lock_removed:
+            raise ArchiveServiceError(
+                "activity_group_recovery_write_lock_cleanup_failed"
+            )
+        status = (
+            "recovered"
+            if action
+            == "rollback_uncommitted_memberships_to_before"
+            else "cleanup_completed"
+        )
+    except (
+        ArchiveServiceError,
+        ArchivePathError,
+        OSError,
+        UnicodeError,
+        ValueError,
+    ):
+        blockers.append("activity_group_recovery_execution_failed")
+        status = "failed_recovery_evidence_retained"
+    finally:
+        try:
+            if recovery_guard_path.exists():
+                recovery_guard_path.unlink()
+                fsync_directory(recovery_guard_path.parent)
+            recovery_guard_removed = not recovery_guard_path.exists()
+        except OSError:
+            recovery_guard_removed = False
+            warnings.append(
+                "activity_group_recovery_guard_cleanup_failed"
+            )
+    if not recovery_guard_removed:
+        blockers.append("activity_group_recovery_guard_retained")
+        if status in {"recovered", "cleanup_completed"}:
+            status = "failed_recovery_evidence_retained"
+    return result_payload(status)
 
 
 def promote_zettel_dry_run(
@@ -84507,9 +87045,11 @@ def runtime_context_read_action_routes() -> list[dict[str, Any]]:
             "action": "plan_activity_group_membership",
             "when": "a human has explicitly selected one canonical event anchor and an ordered set of canonical member zets",
             "command": "archive activity-group-membership-plan <archive-root> --request .wom-scratch/private/activity-groups/<reviewed>.json --dry-run --progress --format json",
+            "next_command": "archive activity-group-membership-write <archive-root> --request .wom-scratch/private/activity-groups/<reviewed>.json --expected-request-sha256 <sha256> --expected-review-plan-sha256 <sha256> --dry-run --progress --format json",
             "authoritative_for": "the explicit request ids against exact current canonical bytes and the event-anchor contract",
             "membership_is_inferred": False,
-            "canonical_write_implemented": False,
+            "canonical_add_write_implemented": True,
+            "canonical_removal_implemented": False,
             "writes": False,
         },
         {
@@ -84586,21 +87126,27 @@ def runtime_context_write_action_routes() -> list[dict[str, Any]]:
         },
         {
             "action": "write_activity_group_membership",
-            "when": "the AI wants to add or remove facets.activity_group on canonical zets",
-            "preview_command": "archive activity-group-membership-plan <archive-root> --request .wom-scratch/private/activity-groups/<reviewed>.json --dry-run --progress --format json",
-            "approved_command": None,
-            "write_implemented": False,
+            "when": "a human-reviewed private request may add one exact event anchor to explicitly selected canonical zets",
+            "review_command": "archive activity-group-membership-plan <archive-root> --request .wom-scratch/private/activity-groups/<reviewed>.json --dry-run --progress --format json",
+            "preview_command": "archive activity-group-membership-write <archive-root> --request .wom-scratch/private/activity-groups/<reviewed>.json --expected-request-sha256 <sha256> --expected-review-plan-sha256 <sha256> --dry-run --progress --format json",
+            "approved_command": "archive activity-group-membership-write <archive-root> --request .wom-scratch/private/activity-groups/<reviewed>.json --expected-request-sha256 <sha256> --expected-review-plan-sha256 <sha256> --approve --reviewed-by <human-actor> --affirm-memberships-reviewed --progress --format json",
+            "write_implemented": True,
             "removal_implemented": False,
+            "membership_is_inferred": False,
             "requires_human_approval": True,
             "direct_file_write_allowed": False,
-            "next_safe_action": "review the explicit private selection and read-only plan, then wait for a dedicated approval-gated WOM membership writer instead of editing canonical zets directly",
+            "receipt_required": True,
+            "transaction_recovery_implemented": True,
+            "recovery_plan_command": "archive activity-group-membership-recovery-plan <archive-root> --expected-request-sha256 <sha256> --dry-run --format json",
+            "approved_recovery_command": "archive activity-group-membership-recover <archive-root> --expected-request-sha256 <sha256> --expected-recovery-plan-sha256 <sha256> --approve --reviewed-by <human-actor> --affirm-recovery-reviewed --progress --format json",
+            "next_safe_action": "use the digest-bound WOM writer for additions; use its recovery plan only after confirming an interrupted writer is no longer running; do not remove memberships or edit canonical zets directly",
         },
     ]
 
 
 def runtime_context_action_routing() -> dict[str, Any]:
     return {
-        "schema": "wom-kit/ai-command-path-routing/v0.3",
+        "schema": "wom-kit/ai-command-path-routing/v0.4",
         "official_wom_command_required_for_archive_actions": True,
         "location_policy_alone_is_sufficient": False,
         "raw_filesystem_search_is_authoritative": False,

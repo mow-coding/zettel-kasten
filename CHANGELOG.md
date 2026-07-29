@@ -6,6 +6,37 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.281 - 2026-07-29
+
+- Added CLI-only approval-gated `activity-group-membership-write`, alias
+  `event-group-membership-write`, for exact human-selected membership
+  additions.
+- Require the exact private request and read-only review-plan SHA-256 values,
+  a safe human reviewer, and explicit membership-review affirmation.
+- Rebuild the exact write candidate set before and after an exclusive
+  archive-local writer lock; changed evidence blocks before mutation.
+- Preserve verified content-addressed before-snapshots and publish a private
+  prepared transaction journal before the first canonical write.
+- Change only `frontmatter.facets.activity_group`, preserve event-anchor/body/
+  other-frontmatter/`updated_at` semantics, use atomic replacement, and verify
+  every final hash.
+- Publish one immutable private-participant receipt last; replay requires the
+  current request members to remain present and returns no private participant
+  details.
+- Roll back handled runtime failures to exact before bytes and retain journal,
+  lock, and snapshots after a hard interruption.
+- Added read-only `activity-group-membership-recovery-plan` and separately
+  approved `activity-group-membership-recover`, with `event-group-*` aliases.
+- Classify lock-only, unstarted, partial, fully applied, completed-residue, and
+  unknown-drift states from bounded evidence; unknown drift is a manual
+  forensic hold.
+- Extended AI command-path routing to
+  `wom-kit/ai-command-path-routing/v0.4` with the implemented writer and
+  recovery routes.
+- Added no membership removal or inference, general facet editor, MCP writer,
+  provider/model/network/index/database/credential-store call, or direct
+  canonical edit permission.
+
 ## v0.3.280 - 2026-07-29
 
 - Added CLI-only read-only `activity-group-membership-plan` with alias

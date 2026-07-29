@@ -267,6 +267,78 @@ class ArchiveCliTests(unittest.TestCase):
         )
         return path
 
+    def create_activity_group_write_fixture(
+        self,
+        archive_root: Path,
+        *,
+        archive_id: str,
+        suffix: str,
+        member_count: int = 2,
+    ) -> dict[str, Any]:
+        init_code, init_output = self.init_personal_archive(
+            archive_root,
+            archive_id,
+        )
+        self.assertEqual(init_code, 0, init_output)
+        anchor_id = f"zet_20260729_04{suffix}00_private_event_anchor"
+        member_ids = [
+            f"zet_20260729_04{suffix}{index + 1:02d}_private_member"
+            for index in range(member_count)
+        ]
+        self.create_activity_group_canonical(
+            archive_root,
+            zettel_id=anchor_id,
+            title=f"PRIVATE_RECOVERY_EVENT_{suffix}",
+            facets={
+                "record_type": "event",
+                "event_start": "2022-08-26",
+            },
+        )
+        member_paths = [
+            self.create_activity_group_canonical(
+                archive_root,
+                zettel_id=member_id,
+                title=f"PRIVATE_RECOVERY_MEMBER_{suffix}_{index}",
+                body=f"PRIVATE_RECOVERY_BODY_{suffix}_{index}",
+            )
+            for index, member_id in enumerate(member_ids)
+        ]
+        request_relative = (
+            ".wom-scratch/private/activity-groups/"
+            f"private-recovery-{suffix}.json"
+        )
+        request_path = archive_root / request_relative
+        request_path.parent.mkdir(parents=True, exist_ok=True)
+        request_path.write_text(
+            json.dumps(
+                {
+                    "schema": (
+                        "wom-kit/activity-group-membership-request/v0.1"
+                    ),
+                    "archive_id": archive_id,
+                    "anchor_zettel_id": anchor_id,
+                    "member_zettel_ids": member_ids,
+                }
+            ),
+            encoding="utf-8",
+        )
+        plan = archive_services.activity_group_membership_plan(
+            archive_root,
+            request_path=request_relative,
+            dry_run=True,
+        )
+        self.assertTrue(plan["ok"])
+        return {
+            "anchor_id": anchor_id,
+            "member_ids": member_ids,
+            "member_paths": member_paths,
+            "request_relative": request_relative,
+            "request_path": request_path,
+            "request_sha256": plan["request"]["sha256"],
+            "review_plan_sha256": plan["review_plan_sha256"],
+            "plan": plan,
+        }
+
     def git_fixture_command(self, cwd: Path, *args: str) -> str:
         completed = subprocess.run(
             ["git", "-C", str(cwd), *args],
@@ -5220,7 +5292,7 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertFalse(operational_context["closed_actions"]["files_written"])
             self.assertEqual(
                 operational_context["action_routing"]["schema"],
-                "wom-kit/ai-command-path-routing/v0.3",
+                "wom-kit/ai-command-path-routing/v0.4",
             )
             entrypoints = result["canonical_entrypoints"]
             self.assertEqual(entrypoints["lifecycle_action"], "runtime_canonical_entrypoints")
@@ -5281,8 +5353,15 @@ class ArchiveCliTests(unittest.TestCase):
                 activity_group_route["command"],
             )
             self.assertFalse(activity_group_route["membership_is_inferred"])
+            self.assertTrue(
+                activity_group_route["canonical_add_write_implemented"]
+            )
             self.assertFalse(
-                activity_group_route["canonical_write_implemented"]
+                activity_group_route["canonical_removal_implemented"]
+            )
+            self.assertIn(
+                "archive activity-group-membership-write",
+                activity_group_route["next_command"],
             )
             draft_route = next(
                 item
@@ -5305,20 +5384,30 @@ class ArchiveCliTests(unittest.TestCase):
                 if item["action"] == "write_activity_group_membership"
             )
             self.assertIn(
-                "archive activity-group-membership-plan",
+                "archive activity-group-membership-write",
                 activity_group_write_route["preview_command"],
             )
-            self.assertFalse(
+            self.assertTrue(
                 activity_group_write_route["write_implemented"]
             )
             self.assertFalse(
                 activity_group_write_route["removal_implemented"]
             )
-            self.assertIsNone(
-                activity_group_write_route["approved_command"]
+            self.assertIn(
+                "--affirm-memberships-reviewed",
+                activity_group_write_route["approved_command"],
             )
             self.assertFalse(
                 activity_group_write_route["direct_file_write_allowed"]
+            )
+            self.assertTrue(
+                activity_group_write_route[
+                    "transaction_recovery_implemented"
+                ]
+            )
+            self.assertIn(
+                "activity-group-membership-recovery-plan",
+                activity_group_write_route["recovery_plan_command"],
             )
             self.assertEqual(
                 entrypoints["recommended_first_commands"][0]["command"],
@@ -5617,7 +5706,7 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(result["first_read"]["source_truths"]["canonical_zets"], "zettels/")
             self.assertEqual(
                 result["action_routing"]["schema"],
-                "wom-kit/ai-command-path-routing/v0.3",
+                "wom-kit/ai-command-path-routing/v0.4",
             )
             self.assertEqual(
                 result["operational_context"]["action_routing"],
@@ -5655,7 +5744,7 @@ class ArchiveCliTests(unittest.TestCase):
                     if item["action"] == "create_ai_draft"
                 )["preview_command"],
             )
-            self.assertFalse(
+            self.assertTrue(
                 next(
                     item
                     for item in result["action_routing"][
@@ -48359,6 +48448,1835 @@ archive_services.zet_abstract_backfill_recover(
             self.assertNotIn(
                 missing_member_id,
                 json.dumps(missing_result, ensure_ascii=False),
+            )
+
+    def test_activity_group_membership_write_requires_review_and_applies_once(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "personal-archive"
+            archive_id = "archive:personal:activity-group-write"
+            init_code, init_output = self.init_personal_archive(
+                archive_root,
+                archive_id,
+            )
+            self.assertEqual(init_code, 0, init_output)
+            anchor_id = "zet_20260729_030000_private_event_anchor"
+            other_anchor_id = (
+                "zet_20260729_025959_private_other_event_anchor"
+            )
+            member_ids = [
+                "zet_20260729_030001_private_member_one",
+                "zet_20260729_030002_private_member_two",
+                "zet_20260729_030003_private_member_existing",
+            ]
+            self.create_activity_group_canonical(
+                archive_root,
+                zettel_id=anchor_id,
+                title="PRIVATE_WRITE_EVENT_TITLE",
+                facets={
+                    "record_type": "event",
+                    "event_start": "2022-08-26",
+                    "event_end": "2022-08-27",
+                },
+            )
+            member_paths = [
+                self.create_activity_group_canonical(
+                    archive_root,
+                    zettel_id=member_ids[0],
+                    title="PRIVATE_WRITE_MEMBER_ONE",
+                    body="PRIVATE_WRITE_BODY_ONE",
+                ),
+                self.create_activity_group_canonical(
+                    archive_root,
+                    zettel_id=member_ids[1],
+                    title="PRIVATE_WRITE_MEMBER_TWO",
+                    facets={
+                        "record_type": "memory",
+                        "activity_group": other_anchor_id,
+                    },
+                    body="PRIVATE_WRITE_BODY_TWO",
+                ),
+                self.create_activity_group_canonical(
+                    archive_root,
+                    zettel_id=member_ids[2],
+                    title="PRIVATE_WRITE_MEMBER_EXISTING",
+                    facets={
+                        "record_type": "memory",
+                        "activity_group": anchor_id,
+                    },
+                    body="PRIVATE_WRITE_BODY_EXISTING",
+                ),
+            ]
+            request_relative = (
+                ".wom-scratch/private/activity-groups/"
+                "PRIVATE_WRITE_REQUEST.json"
+            )
+            request_path = archive_root / request_relative
+            request_path.parent.mkdir(parents=True, exist_ok=True)
+            request_path.write_text(
+                json.dumps(
+                    {
+                        "schema": (
+                            "wom-kit/activity-group-membership-request/v0.1"
+                        ),
+                        "archive_id": archive_id,
+                        "anchor_zettel_id": anchor_id,
+                        "member_zettel_ids": member_ids,
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            canonical_before = [path.read_bytes() for path in member_paths]
+            plan = archive_services.activity_group_membership_plan(
+                archive_root,
+                request_path=request_relative,
+                dry_run=True,
+            )
+            self.assertTrue(plan["ok"])
+            request_sha256 = plan["request"]["sha256"]
+            review_plan_sha256 = plan["review_plan_sha256"]
+
+            preview_code, preview_stdout, preview_stderr = (
+                self.run_cli_split(
+                    [
+                        "event-group-membership-write",
+                        str(archive_root),
+                        "--request",
+                        request_relative,
+                        "--expected-request-sha256",
+                        request_sha256,
+                        "--expected-review-plan-sha256",
+                        review_plan_sha256,
+                        "--dry-run",
+                        "--progress",
+                        "--format",
+                        "json",
+                    ]
+                )
+            )
+            self.assertEqual(
+                preview_code,
+                0,
+                preview_stdout + preview_stderr,
+            )
+            preview = json.loads(preview_stdout)
+            self.assertEqual(preview["status"], "ready_to_apply")
+            self.assertEqual(preview["summary"]["ready_to_add_count"], 2)
+            self.assertEqual(preview["summary"]["already_member_count"], 1)
+            self.assertEqual(
+                preview["summary"]["canonical_files_written_this_run"],
+                0,
+            )
+            self.assertRegex(
+                preview["write_plan_sha256"],
+                r"^sha256:[0-9a-f]{64}$",
+            )
+            self.assertFalse(preview["approved"])
+            self.assertFalse(preview["receipt"]["exists"])
+            self.assertEqual(
+                canonical_before,
+                [path.read_bytes() for path in member_paths],
+            )
+
+            approve_code, approve_stdout, approve_stderr = (
+                self.run_cli_split(
+                    [
+                        "activity-group-membership-write",
+                        str(archive_root),
+                        "--request",
+                        request_relative,
+                        "--expected-request-sha256",
+                        request_sha256,
+                        "--expected-review-plan-sha256",
+                        review_plan_sha256,
+                        "--approve",
+                        "--reviewed-by",
+                        "person:activity-group-reviewer",
+                        "--affirm-memberships-reviewed",
+                        "--progress",
+                        "--format",
+                        "json",
+                    ]
+                )
+            )
+            self.assertEqual(
+                approve_code,
+                0,
+                approve_stdout + approve_stderr,
+            )
+            applied = json.loads(approve_stdout)
+            self.assertTrue(applied["ok"])
+            self.assertTrue(applied["approved"])
+            self.assertEqual(applied["status"], "applied")
+            self.assertEqual(
+                applied["schema"],
+                "wom-kit/activity-group-membership-write/v0.1",
+            )
+            self.assertEqual(
+                applied["summary"]["canonical_files_written_this_run"],
+                2,
+            )
+            self.assertTrue(applied["receipt"]["exists"])
+            self.assertTrue(applied["receipt"]["written_this_run"])
+            self.assertTrue(
+                applied["transaction_journal"][
+                    "written_before_first_canonical_write"
+                ]
+            )
+            self.assertTrue(
+                applied["transaction_journal"][
+                    "removed_after_completion"
+                ]
+            )
+            self.assertTrue(
+                applied["write_boundary"][
+                    "temporary_write_lock_removed"
+                ]
+            )
+            self.assertFalse(
+                applied["write_boundary"]["membership_inferred"]
+            )
+            self.assertFalse(
+                applied["write_boundary"][
+                    "membership_removal_implemented"
+                ]
+            )
+            self.assertEqual(
+                applied["prior_byte_snapshots"][
+                    "verified_snapshot_count"
+                ],
+                2,
+            )
+
+            first_frontmatter, first_payload, _source = (
+                archive_services._parse_activity_group_canonical(
+                    member_paths[0].read_bytes()
+                )
+            )
+            second_frontmatter, second_payload, _source = (
+                archive_services._parse_activity_group_canonical(
+                    member_paths[1].read_bytes()
+                )
+            )
+            self.assertEqual(
+                first_frontmatter["facets"]["activity_group"],
+                anchor_id,
+            )
+            self.assertEqual(
+                second_frontmatter["facets"]["activity_group"],
+                [other_anchor_id, anchor_id],
+            )
+            self.assertIn("PRIVATE_WRITE_BODY_ONE", first_payload)
+            self.assertIn("PRIVATE_WRITE_BODY_TWO", second_payload)
+            self.assertEqual(
+                canonical_before[2],
+                member_paths[2].read_bytes(),
+            )
+
+            receipt_path = archive_root / (
+                archive_services
+                .activity_group_membership_receipt_relative_path(
+                    request_sha256
+                )
+            )
+            self.assertTrue(receipt_path.is_file())
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            self.assertEqual(receipt["item_count"], 2)
+            self.assertEqual(
+                receipt["human_affirmation"],
+                "all_activity_group_memberships_reviewed",
+            )
+            self.assertFalse(
+                (
+                    archive_root
+                    / ".wom-scratch"
+                    / "private"
+                    / "activity-groups"
+                    / archive_services
+                    .ACTIVITY_GROUP_MEMBERSHIP_WRITE_LOCK_NAME
+                ).exists()
+            )
+            self.assertFalse(
+                archive_services
+                .activity_group_membership_transaction_journal_path(
+                    archive_root,
+                    request_sha256,
+                )
+                .exists()
+            )
+
+            replay = archive_services.activity_group_membership_write(
+                archive_root,
+                request_path=request_relative,
+                expected_request_sha256=request_sha256,
+                expected_review_plan_sha256=review_plan_sha256,
+                approve=True,
+                reviewed_by="person:activity-group-reviewer",
+                affirm_memberships_reviewed=True,
+            )
+            self.assertTrue(replay["ok"])
+            self.assertEqual(replay["status"], "already_applied")
+            self.assertEqual(
+                replay["summary"]["canonical_files_written_this_run"],
+                0,
+            )
+            self.assertFalse(replay["receipt"]["written_this_run"])
+
+            combined_output = (
+                preview_stdout
+                + preview_stderr
+                + approve_stdout
+                + approve_stderr
+                + json.dumps(replay, ensure_ascii=False)
+            )
+            for private_value in (
+                request_path.name,
+                anchor_id,
+                other_anchor_id,
+                *member_ids,
+                "PRIVATE_WRITE_EVENT_TITLE",
+                "PRIVATE_WRITE_MEMBER_ONE",
+                "PRIVATE_WRITE_MEMBER_TWO",
+                "PRIVATE_WRITE_MEMBER_EXISTING",
+                "PRIVATE_WRITE_BODY_ONE",
+                "PRIVATE_WRITE_BODY_TWO",
+                "person:activity-group-reviewer",
+                str(archive_root),
+            ):
+                self.assertNotIn(private_value, combined_output)
+
+    def test_activity_group_membership_write_blocks_before_mutation_when_bindings_or_journal_fail(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "personal-archive"
+            archive_id = "archive:personal:activity-group-write-block"
+            init_code, init_output = self.init_personal_archive(
+                archive_root,
+                archive_id,
+            )
+            self.assertEqual(init_code, 0, init_output)
+            anchor_id = "zet_20260729_031000_private_event_anchor"
+            member_id = "zet_20260729_031001_private_member"
+            self.create_activity_group_canonical(
+                archive_root,
+                zettel_id=anchor_id,
+                title="PRIVATE_BLOCK_EVENT",
+                facets={
+                    "record_type": "event",
+                    "event_start": "2022-08-26",
+                },
+            )
+            member_path = self.create_activity_group_canonical(
+                archive_root,
+                zettel_id=member_id,
+                title="PRIVATE_BLOCK_MEMBER",
+            )
+            request_relative = (
+                ".wom-scratch/private/activity-groups/private-block.json"
+            )
+            request_path = archive_root / request_relative
+            request_path.parent.mkdir(parents=True, exist_ok=True)
+            request_path.write_text(
+                json.dumps(
+                    {
+                        "schema": (
+                            "wom-kit/activity-group-membership-request/v0.1"
+                        ),
+                        "archive_id": archive_id,
+                        "anchor_zettel_id": anchor_id,
+                        "member_zettel_ids": [member_id],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            plan = archive_services.activity_group_membership_plan(
+                archive_root,
+                request_path=request_relative,
+                dry_run=True,
+            )
+            request_sha256 = plan["request"]["sha256"]
+            review_plan_sha256 = plan["review_plan_sha256"]
+            member_before = member_path.read_bytes()
+            files_before = {
+                path.relative_to(archive_root).as_posix(): path.read_bytes()
+                for path in archive_root.rglob("*")
+                if path.is_file()
+            }
+
+            missing_review = (
+                archive_services.activity_group_membership_write(
+                    archive_root,
+                    request_path=request_relative,
+                    expected_request_sha256=request_sha256,
+                    expected_review_plan_sha256=review_plan_sha256,
+                    approve=True,
+                    reviewed_by=None,
+                    affirm_memberships_reviewed=False,
+                )
+            )
+            self.assertFalse(missing_review["ok"])
+            self.assertIn(
+                "safe_reviewed_by_required",
+                missing_review["blockers"],
+            )
+            self.assertIn(
+                "affirm_memberships_reviewed_required",
+                missing_review["blockers"],
+            )
+            wrong_request = (
+                archive_services.activity_group_membership_write(
+                    archive_root,
+                    request_path=request_relative,
+                    expected_request_sha256="sha256:" + "0" * 64,
+                    expected_review_plan_sha256=review_plan_sha256,
+                    dry_run=True,
+                )
+            )
+            self.assertFalse(wrong_request["ok"])
+            self.assertIn(
+                "request_sha256_mismatch",
+                wrong_request["blockers"],
+            )
+            wrong_plan = archive_services.activity_group_membership_write(
+                archive_root,
+                request_path=request_relative,
+                expected_request_sha256=request_sha256,
+                expected_review_plan_sha256="sha256:" + "1" * 64,
+                dry_run=True,
+            )
+            self.assertFalse(wrong_plan["ok"])
+            self.assertIn(
+                "review_plan_sha256_mismatch",
+                wrong_plan["blockers"],
+            )
+            self.assertEqual(member_before, member_path.read_bytes())
+            self.assertEqual(
+                files_before,
+                {
+                    path.relative_to(archive_root).as_posix(): path.read_bytes()
+                    for path in archive_root.rglob("*")
+                    if path.is_file()
+                },
+            )
+
+            original_write_json_new_file = (
+                archive_services.write_json_new_file
+            )
+
+            def fail_journal(
+                path: Path,
+                payload: dict[str, Any],
+            ) -> None:
+                if (
+                    payload.get("schema")
+                    == archive_services
+                    .ACTIVITY_GROUP_MEMBERSHIP_TRANSACTION_JOURNAL_SCHEMA
+                ):
+                    raise OSError("PRIVATE_JOURNAL_FAILURE")
+                original_write_json_new_file(path, payload)
+
+            with patch.object(
+                archive_services,
+                "write_json_new_file",
+                side_effect=fail_journal,
+            ):
+                failed = (
+                    archive_services.activity_group_membership_write(
+                        archive_root,
+                        request_path=request_relative,
+                        expected_request_sha256=request_sha256,
+                        expected_review_plan_sha256=(
+                            review_plan_sha256
+                        ),
+                        approve=True,
+                        reviewed_by="person:activity-group-reviewer",
+                        affirm_memberships_reviewed=True,
+                    )
+                )
+            self.assertFalse(failed["ok"])
+            self.assertEqual(failed["status"], "blocked")
+            self.assertIn(
+                "activity_group_transaction_journal_create_failed",
+                failed["blockers"],
+            )
+            self.assertEqual(
+                failed["summary"]["canonical_write_attempt_count"],
+                0,
+            )
+            self.assertEqual(member_before, member_path.read_bytes())
+            self.assertFalse(
+                (
+                    archive_root
+                    / ".wom-scratch"
+                    / "private"
+                    / "activity-groups"
+                    / archive_services
+                    .ACTIVITY_GROUP_MEMBERSHIP_WRITE_LOCK_NAME
+                ).exists()
+            )
+            self.assertNotIn(
+                "PRIVATE_JOURNAL_FAILURE",
+                json.dumps(failed, ensure_ascii=False),
+            )
+
+    def test_activity_group_membership_write_rolls_back_runtime_failure_and_retains_hard_exit_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            rollback_root = root / "rollback-archive"
+            rollback_fixture = self.create_activity_group_write_fixture(
+                rollback_root,
+                archive_id="archive:personal:activity-group-rollback",
+                suffix="10",
+            )
+            rollback_before = [
+                path.read_bytes()
+                for path in rollback_fixture["member_paths"]
+            ]
+            original_write_bytes_atomic = (
+                archive_services.write_bytes_atomic
+            )
+            rollback_member_names = {
+                path.name for path in rollback_fixture["member_paths"]
+            }
+            canonical_attempts = 0
+            failure_injected = False
+
+            def fail_second_canonical_once(
+                path: Path,
+                value: bytes,
+            ) -> None:
+                nonlocal canonical_attempts, failure_injected
+                if path.name in rollback_member_names:
+                    canonical_attempts += 1
+                    if canonical_attempts == 2 and not failure_injected:
+                        failure_injected = True
+                        raise OSError("PRIVATE_SECOND_WRITE_FAILURE")
+                original_write_bytes_atomic(path, value)
+
+            with patch.object(
+                archive_services,
+                "write_bytes_atomic",
+                side_effect=fail_second_canonical_once,
+            ):
+                rolled_back = (
+                    archive_services.activity_group_membership_write(
+                        rollback_root,
+                        request_path=rollback_fixture[
+                            "request_relative"
+                        ],
+                        expected_request_sha256=rollback_fixture[
+                            "request_sha256"
+                        ],
+                        expected_review_plan_sha256=rollback_fixture[
+                            "review_plan_sha256"
+                        ],
+                        approve=True,
+                        reviewed_by="person:activity-group-reviewer",
+                        affirm_memberships_reviewed=True,
+                    )
+                )
+            self.assertFalse(rolled_back["ok"])
+            self.assertEqual(
+                rolled_back["status"],
+                "failed_rolled_back",
+            )
+            self.assertTrue(rolled_back["rollback"]["attempted"])
+            self.assertTrue(rolled_back["rollback"]["succeeded"])
+            self.assertEqual(
+                rollback_before,
+                [
+                    path.read_bytes()
+                    for path in rollback_fixture["member_paths"]
+                ],
+            )
+            self.assertEqual(
+                rolled_back["summary"][
+                    "canonical_files_written_this_run"
+                ],
+                0,
+            )
+            self.assertFalse(
+                archive_services
+                .activity_group_membership_transaction_journal_path(
+                    rollback_root,
+                    rollback_fixture["request_sha256"],
+                )
+                .exists()
+            )
+            self.assertFalse(
+                (
+                    rollback_root
+                    / ".wom-scratch"
+                    / "private"
+                    / "activity-groups"
+                    / archive_services
+                    .ACTIVITY_GROUP_MEMBERSHIP_WRITE_LOCK_NAME
+                ).exists()
+            )
+            self.assertNotIn(
+                "PRIVATE_SECOND_WRITE_FAILURE",
+                json.dumps(rolled_back, ensure_ascii=False),
+            )
+
+            hard_exit_root = root / "hard-exit-archive"
+            hard_exit_fixture = (
+                self.create_activity_group_write_fixture(
+                    hard_exit_root,
+                    archive_id=(
+                        "archive:personal:activity-group-hard-exit"
+                    ),
+                    suffix="20",
+                )
+            )
+            hard_exit_before = [
+                path.read_bytes()
+                for path in hard_exit_fixture["member_paths"]
+            ]
+            hard_exit_member_names = {
+                path.name for path in hard_exit_fixture["member_paths"]
+            }
+            hard_exit_attempts = 0
+
+            def interrupt_second_canonical(
+                path: Path,
+                value: bytes,
+            ) -> None:
+                nonlocal hard_exit_attempts
+                if path.name in hard_exit_member_names:
+                    hard_exit_attempts += 1
+                    if hard_exit_attempts == 2:
+                        raise KeyboardInterrupt(
+                            "PRIVATE_HARD_EXIT_AFTER_FIRST_WRITE"
+                        )
+                original_write_bytes_atomic(path, value)
+
+            with patch.object(
+                archive_services,
+                "write_bytes_atomic",
+                side_effect=interrupt_second_canonical,
+            ):
+                with self.assertRaises(KeyboardInterrupt):
+                    archive_services.activity_group_membership_write(
+                        hard_exit_root,
+                        request_path=hard_exit_fixture[
+                            "request_relative"
+                        ],
+                        expected_request_sha256=hard_exit_fixture[
+                            "request_sha256"
+                        ],
+                        expected_review_plan_sha256=hard_exit_fixture[
+                            "review_plan_sha256"
+                        ],
+                        approve=True,
+                        reviewed_by="person:activity-group-reviewer",
+                        affirm_memberships_reviewed=True,
+                    )
+            self.assertNotEqual(
+                hard_exit_before[0],
+                hard_exit_fixture["member_paths"][0].read_bytes(),
+            )
+            self.assertEqual(
+                hard_exit_before[1],
+                hard_exit_fixture["member_paths"][1].read_bytes(),
+            )
+            hard_exit_journal = (
+                archive_services
+                .activity_group_membership_transaction_journal_path(
+                    hard_exit_root,
+                    hard_exit_fixture["request_sha256"],
+                )
+            )
+            hard_exit_lock = (
+                hard_exit_root
+                / ".wom-scratch"
+                / "private"
+                / "activity-groups"
+                / archive_services
+                .ACTIVITY_GROUP_MEMBERSHIP_WRITE_LOCK_NAME
+            )
+            hard_exit_receipt = hard_exit_root / (
+                archive_services
+                .activity_group_membership_receipt_relative_path(
+                    hard_exit_fixture["request_sha256"]
+                )
+            )
+            self.assertTrue(hard_exit_journal.is_file())
+            self.assertTrue(hard_exit_lock.is_file())
+            self.assertFalse(hard_exit_receipt.exists())
+            journal = json.loads(
+                hard_exit_journal.read_text(encoding="utf-8")
+            )
+            self.assertEqual(journal["item_count"], 2)
+            for item in journal["items"]:
+                snapshot = hard_exit_root.joinpath(
+                    *PurePosixPath(
+                        item["before_snapshot"]["logical_key"]
+                    ).parts
+                )
+                self.assertTrue(snapshot.is_file())
+                self.assertEqual(
+                    item["before_file_sha256"],
+                    "sha256:"
+                    + hashlib.sha256(snapshot.read_bytes()).hexdigest(),
+                )
+
+    def test_activity_group_membership_recovery_plan_rolls_partial_hard_exit_back(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "personal-archive"
+            fixture = self.create_activity_group_write_fixture(
+                archive_root,
+                archive_id="archive:personal:activity-group-recovery",
+                suffix="30",
+            )
+            before_bytes = [
+                path.read_bytes() for path in fixture["member_paths"]
+            ]
+            original_write_bytes_atomic = (
+                archive_services.write_bytes_atomic
+            )
+            member_names = {
+                path.name for path in fixture["member_paths"]
+            }
+            attempts = 0
+
+            def interrupt_second(
+                path: Path,
+                value: bytes,
+            ) -> None:
+                nonlocal attempts
+                if path.name in member_names:
+                    attempts += 1
+                    if attempts == 2:
+                        raise KeyboardInterrupt(
+                            "PRIVATE_RECOVERY_HARD_EXIT"
+                        )
+                original_write_bytes_atomic(path, value)
+
+            with patch.object(
+                archive_services,
+                "write_bytes_atomic",
+                side_effect=interrupt_second,
+            ):
+                with self.assertRaises(KeyboardInterrupt):
+                    archive_services.activity_group_membership_write(
+                        archive_root,
+                        request_path=fixture["request_relative"],
+                        expected_request_sha256=fixture[
+                            "request_sha256"
+                        ],
+                        expected_review_plan_sha256=fixture[
+                            "review_plan_sha256"
+                        ],
+                        approve=True,
+                        reviewed_by="person:activity-group-reviewer",
+                        affirm_memberships_reviewed=True,
+                    )
+
+            journal_path = (
+                archive_services
+                .activity_group_membership_transaction_journal_path(
+                    archive_root,
+                    fixture["request_sha256"],
+                )
+            )
+            write_lock_path = (
+                archive_root
+                / ".wom-scratch"
+                / "private"
+                / "activity-groups"
+                / archive_services
+                .ACTIVITY_GROUP_MEMBERSHIP_WRITE_LOCK_NAME
+            )
+            self.assertTrue(journal_path.is_file())
+            self.assertTrue(write_lock_path.is_file())
+            first_after_hard_exit = fixture["member_paths"][0].read_bytes()
+            second_after_hard_exit = fixture["member_paths"][1].read_bytes()
+            self.assertNotEqual(before_bytes[0], first_after_hard_exit)
+            self.assertEqual(before_bytes[1], second_after_hard_exit)
+
+            plan_code, plan_stdout, plan_stderr = self.run_cli_split(
+                [
+                    "event-group-membership-recovery-plan",
+                    str(archive_root),
+                    "--expected-request-sha256",
+                    fixture["request_sha256"],
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(plan_code, 0, plan_stdout + plan_stderr)
+            recovery_plan = json.loads(plan_stdout)
+            self.assertTrue(recovery_plan["ok"])
+            self.assertEqual(
+                recovery_plan["transaction_state"],
+                "partially_applied_without_receipt",
+            )
+            self.assertEqual(
+                recovery_plan["recovery_action"],
+                "rollback_uncommitted_memberships_to_before",
+            )
+            self.assertEqual(
+                recovery_plan["summary"]["before_count"],
+                1,
+            )
+            self.assertEqual(
+                recovery_plan["summary"]["after_count"],
+                1,
+            )
+            self.assertRegex(
+                recovery_plan["recovery_plan_sha256"],
+                r"^sha256:[0-9a-f]{64}$",
+            )
+            self.assertEqual(
+                first_after_hard_exit,
+                fixture["member_paths"][0].read_bytes(),
+            )
+            self.assertTrue(journal_path.is_file())
+            self.assertTrue(write_lock_path.is_file())
+
+            wrong = archive_services.activity_group_membership_recover(
+                archive_root,
+                expected_request_sha256=fixture["request_sha256"],
+                expected_recovery_plan_sha256="sha256:" + "0" * 64,
+                approve=True,
+                reviewed_by="person:activity-group-reviewer",
+                affirm_recovery_reviewed=True,
+            )
+            self.assertFalse(wrong["ok"])
+            self.assertIn(
+                "recovery_plan_sha256_mismatch",
+                wrong["blockers"],
+            )
+            self.assertEqual(
+                first_after_hard_exit,
+                fixture["member_paths"][0].read_bytes(),
+            )
+
+            recover_code, recover_stdout, recover_stderr = (
+                self.run_cli_split(
+                    [
+                        "activity-group-membership-recover",
+                        str(archive_root),
+                        "--expected-request-sha256",
+                        fixture["request_sha256"],
+                        "--expected-recovery-plan-sha256",
+                        recovery_plan["recovery_plan_sha256"],
+                        "--approve",
+                        "--reviewed-by",
+                        "person:activity-group-reviewer",
+                        "--affirm-recovery-reviewed",
+                        "--progress",
+                        "--format",
+                        "json",
+                    ]
+                )
+            )
+            self.assertEqual(
+                recover_code,
+                0,
+                recover_stdout + recover_stderr,
+            )
+            recovered = json.loads(recover_stdout)
+            self.assertTrue(recovered["ok"])
+            self.assertEqual(recovered["status"], "recovered")
+            self.assertEqual(
+                recovered["summary"][
+                    "canonical_files_restored_this_run"
+                ],
+                1,
+            )
+            self.assertTrue(
+                recovered["summary"]["transaction_journal_removed"]
+            )
+            self.assertTrue(
+                recovered["summary"]["write_lock_removed"]
+            )
+            self.assertTrue(
+                recovered["summary"]["recovery_guard_removed"]
+            )
+            self.assertEqual(
+                before_bytes,
+                [
+                    path.read_bytes()
+                    for path in fixture["member_paths"]
+                ],
+            )
+            self.assertFalse(journal_path.exists())
+            self.assertFalse(write_lock_path.exists())
+            self.assertFalse(
+                (
+                    archive_root
+                    / ".wom-scratch"
+                    / "private"
+                    / "activity-groups"
+                    / archive_services
+                    .ACTIVITY_GROUP_MEMBERSHIP_RECOVERY_GUARD_NAME
+                ).exists()
+            )
+            self.assertFalse(
+                (
+                    archive_root
+                    / archive_services
+                    .activity_group_membership_receipt_relative_path(
+                        fixture["request_sha256"]
+                    )
+                ).exists()
+            )
+
+            combined = plan_stdout + plan_stderr + recover_stdout + recover_stderr
+            for private_value in (
+                fixture["request_path"].name,
+                fixture["anchor_id"],
+                *fixture["member_ids"],
+                "PRIVATE_RECOVERY_HARD_EXIT",
+                "person:activity-group-reviewer",
+                str(archive_root),
+            ):
+                self.assertNotIn(private_value, combined)
+
+    def test_activity_group_membership_recovery_claims_missing_writer_lock(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "personal-archive"
+            fixture = self.create_activity_group_write_fixture(
+                archive_root,
+                archive_id=(
+                    "archive:personal:activity-group-recovery-claim"
+                ),
+                suffix="31",
+            )
+            before_bytes = [
+                path.read_bytes() for path in fixture["member_paths"]
+            ]
+            original_write_bytes_atomic = (
+                archive_services.write_bytes_atomic
+            )
+            member_names = {
+                path.name for path in fixture["member_paths"]
+            }
+            attempts = 0
+
+            def interrupt_second(
+                path: Path,
+                value: bytes,
+            ) -> None:
+                nonlocal attempts
+                if path.name in member_names:
+                    attempts += 1
+                    if attempts == 2:
+                        raise KeyboardInterrupt(
+                            "PRIVATE_RECOVERY_LOCK_CLAIM_HARD_EXIT"
+                        )
+                original_write_bytes_atomic(path, value)
+
+            with patch.object(
+                archive_services,
+                "write_bytes_atomic",
+                side_effect=interrupt_second,
+            ):
+                with self.assertRaises(KeyboardInterrupt):
+                    archive_services.activity_group_membership_write(
+                        archive_root,
+                        request_path=fixture["request_relative"],
+                        expected_request_sha256=fixture[
+                            "request_sha256"
+                        ],
+                        expected_review_plan_sha256=fixture[
+                            "review_plan_sha256"
+                        ],
+                        approve=True,
+                        reviewed_by="person:activity-group-reviewer",
+                        affirm_memberships_reviewed=True,
+                    )
+
+            journal_path = (
+                archive_services
+                .activity_group_membership_transaction_journal_path(
+                    archive_root,
+                    fixture["request_sha256"],
+                )
+            )
+            write_lock_path = (
+                archive_root
+                / ".wom-scratch"
+                / "private"
+                / "activity-groups"
+                / archive_services
+                .ACTIVITY_GROUP_MEMBERSHIP_WRITE_LOCK_NAME
+            )
+            self.assertTrue(journal_path.is_file())
+            self.assertTrue(write_lock_path.is_file())
+            write_lock_path.unlink()
+
+            plan = (
+                archive_services
+                .activity_group_membership_recovery_plan(
+                    archive_root,
+                    expected_request_sha256=fixture[
+                        "request_sha256"
+                    ],
+                    dry_run=True,
+                )
+            )
+            self.assertTrue(plan["ok"])
+            self.assertFalse(plan["evidence"]["write_lock_exists"])
+            self.assertIsNone(
+                plan["evidence"]["write_lock_sha256"]
+            )
+            self.assertIn(
+                "activity_group_write_lock_missing",
+                plan["warnings"],
+            )
+            recovered = (
+                archive_services.activity_group_membership_recover(
+                    archive_root,
+                    expected_request_sha256=fixture[
+                        "request_sha256"
+                    ],
+                    expected_recovery_plan_sha256=plan[
+                        "recovery_plan_sha256"
+                    ],
+                    approve=True,
+                    reviewed_by="person:activity-group-reviewer",
+                    affirm_recovery_reviewed=True,
+                )
+            )
+            self.assertTrue(recovered["ok"])
+            self.assertEqual(recovered["status"], "recovered")
+            self.assertEqual(
+                recovered["summary"][
+                    "canonical_files_restored_this_run"
+                ],
+                1,
+            )
+            self.assertEqual(
+                before_bytes,
+                [
+                    path.read_bytes()
+                    for path in fixture["member_paths"]
+                ],
+            )
+            self.assertFalse(journal_path.exists())
+            self.assertFalse(write_lock_path.exists())
+            combined = json.dumps(
+                {"plan": plan, "recovered": recovered},
+                ensure_ascii=False,
+            )
+            for private_value in (
+                fixture["request_path"].name,
+                fixture["anchor_id"],
+                *fixture["member_ids"],
+                "PRIVATE_RECOVERY_LOCK_CLAIM_HARD_EXIT",
+                "person:activity-group-reviewer",
+                str(archive_root),
+            ):
+                self.assertNotIn(private_value, combined)
+
+    def test_activity_group_membership_recovery_cleans_lock_only_and_completed_residue(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            lock_only_root = root / "lock-only-archive"
+            lock_fixture = self.create_activity_group_write_fixture(
+                lock_only_root,
+                archive_id="archive:personal:activity-group-lock-only",
+                suffix="40",
+            )
+            lock_before = [
+                path.read_bytes()
+                for path in lock_fixture["member_paths"]
+            ]
+            with patch.object(
+                archive_services,
+                "preserve_activity_group_membership_before_snapshots",
+                side_effect=KeyboardInterrupt(
+                    "PRIVATE_EXIT_BEFORE_JOURNAL"
+                ),
+            ):
+                with self.assertRaises(KeyboardInterrupt):
+                    archive_services.activity_group_membership_write(
+                        lock_only_root,
+                        request_path=lock_fixture["request_relative"],
+                        expected_request_sha256=lock_fixture[
+                            "request_sha256"
+                        ],
+                        expected_review_plan_sha256=lock_fixture[
+                            "review_plan_sha256"
+                        ],
+                        approve=True,
+                        reviewed_by="person:activity-group-reviewer",
+                        affirm_memberships_reviewed=True,
+                    )
+            lock_path = (
+                lock_only_root
+                / ".wom-scratch"
+                / "private"
+                / "activity-groups"
+                / archive_services
+                .ACTIVITY_GROUP_MEMBERSHIP_WRITE_LOCK_NAME
+            )
+            self.assertTrue(lock_path.is_file())
+            self.assertFalse(
+                archive_services
+                .activity_group_membership_transaction_journal_path(
+                    lock_only_root,
+                    lock_fixture["request_sha256"],
+                )
+                .exists()
+            )
+            lock_plan = (
+                archive_services
+                .activity_group_membership_recovery_plan(
+                    lock_only_root,
+                    expected_request_sha256=lock_fixture[
+                        "request_sha256"
+                    ],
+                    dry_run=True,
+                )
+            )
+            self.assertTrue(lock_plan["ok"])
+            self.assertEqual(
+                lock_plan["transaction_state"],
+                "lock_only_before_journal",
+            )
+            self.assertEqual(
+                lock_plan["recovery_action"],
+                "cleanup_unstarted_lock",
+            )
+            lock_cleanup = (
+                archive_services.activity_group_membership_recover(
+                    lock_only_root,
+                    expected_request_sha256=lock_fixture[
+                        "request_sha256"
+                    ],
+                    expected_recovery_plan_sha256=lock_plan[
+                        "recovery_plan_sha256"
+                    ],
+                    approve=True,
+                    reviewed_by="person:activity-group-reviewer",
+                    affirm_recovery_reviewed=True,
+                )
+            )
+            self.assertTrue(lock_cleanup["ok"])
+            self.assertEqual(
+                lock_cleanup["status"],
+                "cleanup_completed",
+            )
+            self.assertFalse(lock_path.exists())
+            self.assertEqual(
+                lock_before,
+                [
+                    path.read_bytes()
+                    for path in lock_fixture["member_paths"]
+                ],
+            )
+
+            completed_root = root / "completed-residue-archive"
+            completed_fixture = (
+                self.create_activity_group_write_fixture(
+                    completed_root,
+                    archive_id=(
+                        "archive:personal:activity-group-completed-residue"
+                    ),
+                    suffix="50",
+                )
+            )
+            journal_path = (
+                archive_services
+                .activity_group_membership_transaction_journal_path(
+                    completed_root,
+                    completed_fixture["request_sha256"],
+                )
+            )
+            original_unlink = Path.unlink
+            journal_cleanup_failed = False
+
+            def fail_completed_journal_cleanup(
+                path: Path,
+                *args: Any,
+                **kwargs: Any,
+            ) -> None:
+                nonlocal journal_cleanup_failed
+                if (
+                    path == journal_path
+                    and not journal_cleanup_failed
+                ):
+                    journal_cleanup_failed = True
+                    raise OSError(
+                        "PRIVATE_COMPLETED_JOURNAL_CLEANUP_FAILURE"
+                    )
+                original_unlink(path, *args, **kwargs)
+
+            with patch.object(
+                Path,
+                "unlink",
+                new=fail_completed_journal_cleanup,
+            ):
+                applied = (
+                    archive_services.activity_group_membership_write(
+                        completed_root,
+                        request_path=completed_fixture[
+                            "request_relative"
+                        ],
+                        expected_request_sha256=completed_fixture[
+                            "request_sha256"
+                        ],
+                        expected_review_plan_sha256=completed_fixture[
+                            "review_plan_sha256"
+                        ],
+                        approve=True,
+                        reviewed_by="person:activity-group-reviewer",
+                        affirm_memberships_reviewed=True,
+                    )
+                )
+            self.assertTrue(applied["ok"])
+            self.assertEqual(applied["status"], "applied")
+            self.assertFalse(
+                applied["transaction_journal"][
+                    "removed_after_completion"
+                ]
+            )
+            self.assertTrue(journal_path.is_file())
+            completed_lock = (
+                completed_root
+                / ".wom-scratch"
+                / "private"
+                / "activity-groups"
+                / archive_services
+                .ACTIVITY_GROUP_MEMBERSHIP_WRITE_LOCK_NAME
+            )
+            self.assertTrue(completed_lock.is_file())
+            receipt_path = completed_root / (
+                archive_services
+                .activity_group_membership_receipt_relative_path(
+                    completed_fixture["request_sha256"]
+                )
+            )
+            self.assertTrue(receipt_path.is_file())
+            completed_bytes = [
+                path.read_bytes()
+                for path in completed_fixture["member_paths"]
+            ]
+            completed_plan = (
+                archive_services
+                .activity_group_membership_recovery_plan(
+                    completed_root,
+                    expected_request_sha256=completed_fixture[
+                        "request_sha256"
+                    ],
+                    dry_run=True,
+                )
+            )
+            self.assertTrue(completed_plan["ok"])
+            self.assertEqual(
+                completed_plan["transaction_state"],
+                "verified_completed_residue",
+            )
+            self.assertEqual(
+                completed_plan["recovery_action"],
+                "cleanup_verified_completed_evidence",
+            )
+            cleaned = (
+                archive_services.activity_group_membership_recover(
+                    completed_root,
+                    expected_request_sha256=completed_fixture[
+                        "request_sha256"
+                    ],
+                    expected_recovery_plan_sha256=completed_plan[
+                        "recovery_plan_sha256"
+                    ],
+                    approve=True,
+                    reviewed_by="person:activity-group-reviewer",
+                    affirm_recovery_reviewed=True,
+                )
+            )
+            self.assertTrue(cleaned["ok"])
+            self.assertEqual(cleaned["status"], "cleanup_completed")
+            self.assertEqual(
+                cleaned["summary"][
+                    "canonical_files_restored_this_run"
+                ],
+                0,
+            )
+            self.assertFalse(journal_path.exists())
+            self.assertFalse(completed_lock.exists())
+            self.assertTrue(receipt_path.is_file())
+            self.assertEqual(
+                completed_bytes,
+                [
+                    path.read_bytes()
+                    for path in completed_fixture["member_paths"]
+                ],
+            )
+            self.assertNotIn(
+                "PRIVATE_COMPLETED_JOURNAL_CLEANUP_FAILURE",
+                json.dumps(cleaned, ensure_ascii=False),
+            )
+
+    def test_activity_group_membership_recovery_blocks_concurrent_guard_and_unknown_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "personal-archive"
+            fixture = self.create_activity_group_write_fixture(
+                archive_root,
+                archive_id=(
+                    "archive:personal:activity-group-recovery-drift"
+                ),
+                suffix="60",
+            )
+            original_write_bytes_atomic = (
+                archive_services.write_bytes_atomic
+            )
+            member_names = {
+                path.name for path in fixture["member_paths"]
+            }
+            attempts = 0
+
+            def interrupt_second(
+                path: Path,
+                value: bytes,
+            ) -> None:
+                nonlocal attempts
+                if path.name in member_names:
+                    attempts += 1
+                    if attempts == 2:
+                        raise KeyboardInterrupt(
+                            "PRIVATE_DRIFT_HARD_EXIT"
+                        )
+                original_write_bytes_atomic(path, value)
+
+            with patch.object(
+                archive_services,
+                "write_bytes_atomic",
+                side_effect=interrupt_second,
+            ):
+                with self.assertRaises(KeyboardInterrupt):
+                    archive_services.activity_group_membership_write(
+                        archive_root,
+                        request_path=fixture["request_relative"],
+                        expected_request_sha256=fixture[
+                            "request_sha256"
+                        ],
+                        expected_review_plan_sha256=fixture[
+                            "review_plan_sha256"
+                        ],
+                        approve=True,
+                        reviewed_by="person:activity-group-reviewer",
+                        affirm_memberships_reviewed=True,
+                    )
+
+            valid_plan = (
+                archive_services
+                .activity_group_membership_recovery_plan(
+                    archive_root,
+                    expected_request_sha256=fixture[
+                        "request_sha256"
+                    ],
+                    dry_run=True,
+                )
+            )
+            self.assertTrue(valid_plan["ok"])
+            guard_path = (
+                archive_root
+                / ".wom-scratch"
+                / "private"
+                / "activity-groups"
+                / archive_services
+                .ACTIVITY_GROUP_MEMBERSHIP_RECOVERY_GUARD_NAME
+            )
+            guard_path.write_text(
+                "PRIVATE_CONCURRENT_RECOVERY_GUARD",
+                encoding="utf-8",
+            )
+            before_guarded_attempt = [
+                path.read_bytes() for path in fixture["member_paths"]
+            ]
+            guarded = archive_services.activity_group_membership_recover(
+                archive_root,
+                expected_request_sha256=fixture["request_sha256"],
+                expected_recovery_plan_sha256=valid_plan[
+                    "recovery_plan_sha256"
+                ],
+                approve=True,
+                reviewed_by="person:activity-group-reviewer",
+                affirm_recovery_reviewed=True,
+            )
+            self.assertFalse(guarded["ok"])
+            self.assertIn(
+                "activity_group_recovery_guard_exists",
+                guarded["blockers"],
+            )
+            self.assertEqual(
+                before_guarded_attempt,
+                [
+                    path.read_bytes()
+                    for path in fixture["member_paths"]
+                ],
+            )
+            guard_path.unlink()
+
+            drift_path = fixture["member_paths"][1]
+            drift_bytes = (
+                drift_path.read_bytes()
+                + b"\nPRIVATE_UNKNOWN_EXTERNAL_DRIFT\n"
+            )
+            drift_path.write_bytes(drift_bytes)
+            forensic = (
+                archive_services
+                .activity_group_membership_recovery_plan(
+                    archive_root,
+                    expected_request_sha256=fixture[
+                        "request_sha256"
+                    ],
+                    dry_run=True,
+                )
+            )
+            self.assertFalse(forensic["ok"])
+            self.assertEqual(
+                forensic["transaction_state"],
+                "unknown_or_drifted",
+            )
+            self.assertEqual(
+                forensic["recovery_action"],
+                "manual_forensic_hold",
+            )
+            self.assertEqual(
+                forensic["summary"]["unknown_count"],
+                1,
+            )
+            self.assertIn(
+                "activity_group_recovery_manual_forensic_hold",
+                forensic["blockers"],
+            )
+            self.assertFalse(forensic["privacy_guards"]["writes"])
+            blocked_recover = (
+                archive_services.activity_group_membership_recover(
+                    archive_root,
+                    expected_request_sha256=fixture[
+                        "request_sha256"
+                    ],
+                    expected_recovery_plan_sha256=forensic[
+                        "recovery_plan_sha256"
+                    ],
+                    approve=True,
+                    reviewed_by="person:activity-group-reviewer",
+                    affirm_recovery_reviewed=True,
+                )
+            )
+            self.assertFalse(blocked_recover["ok"])
+            self.assertIn(
+                "recovery_action_not_executable",
+                blocked_recover["blockers"],
+            )
+            self.assertEqual(drift_bytes, drift_path.read_bytes())
+            combined = json.dumps(
+                {
+                    "guarded": guarded,
+                    "forensic": forensic,
+                    "blocked_recover": blocked_recover,
+                },
+                ensure_ascii=False,
+            )
+            for private_value in (
+                fixture["request_path"].name,
+                fixture["anchor_id"],
+                *fixture["member_ids"],
+                "PRIVATE_CONCURRENT_RECOVERY_GUARD",
+                "PRIVATE_UNKNOWN_EXTERNAL_DRIFT",
+                "person:activity-group-reviewer",
+                str(archive_root),
+            ):
+                self.assertNotIn(private_value, combined)
+
+    def test_activity_group_membership_write_receipt_failures_preserve_transaction_truth(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            receipt_failure_root = root / "receipt-failure-archive"
+            failure_fixture = self.create_activity_group_write_fixture(
+                receipt_failure_root,
+                archive_id=(
+                    "archive:personal:activity-group-receipt-failure"
+                ),
+                suffix="70",
+            )
+            failure_before = [
+                path.read_bytes()
+                for path in failure_fixture["member_paths"]
+            ]
+            original_write_json_new_file = (
+                archive_services.write_json_new_file
+            )
+
+            def fail_receipt(
+                path: Path,
+                payload: dict[str, Any],
+            ) -> None:
+                if (
+                    payload.get("schema")
+                    == archive_services
+                    .ACTIVITY_GROUP_MEMBERSHIP_RECEIPT_SCHEMA
+                ):
+                    raise OSError("PRIVATE_RECEIPT_WRITE_FAILURE")
+                original_write_json_new_file(path, payload)
+
+            with patch.object(
+                archive_services,
+                "write_json_new_file",
+                side_effect=fail_receipt,
+            ):
+                failed = (
+                    archive_services.activity_group_membership_write(
+                        receipt_failure_root,
+                        request_path=failure_fixture[
+                            "request_relative"
+                        ],
+                        expected_request_sha256=failure_fixture[
+                            "request_sha256"
+                        ],
+                        expected_review_plan_sha256=failure_fixture[
+                            "review_plan_sha256"
+                        ],
+                        approve=True,
+                        reviewed_by="person:activity-group-reviewer",
+                        affirm_memberships_reviewed=True,
+                    )
+                )
+            self.assertFalse(failed["ok"])
+            self.assertEqual(failed["status"], "failed_rolled_back")
+            self.assertTrue(failed["rollback"]["succeeded"])
+            self.assertEqual(
+                failure_before,
+                [
+                    path.read_bytes()
+                    for path in failure_fixture["member_paths"]
+                ],
+            )
+            failure_receipt = receipt_failure_root / (
+                archive_services
+                .activity_group_membership_receipt_relative_path(
+                    failure_fixture["request_sha256"]
+                )
+            )
+            failure_journal = (
+                archive_services
+                .activity_group_membership_transaction_journal_path(
+                    receipt_failure_root,
+                    failure_fixture["request_sha256"],
+                )
+            )
+            failure_lock = (
+                receipt_failure_root
+                / ".wom-scratch"
+                / "private"
+                / "activity-groups"
+                / archive_services
+                .ACTIVITY_GROUP_MEMBERSHIP_WRITE_LOCK_NAME
+            )
+            self.assertFalse(failure_receipt.exists())
+            self.assertFalse(failure_journal.exists())
+            self.assertFalse(failure_lock.exists())
+            self.assertNotIn(
+                "PRIVATE_RECEIPT_WRITE_FAILURE",
+                json.dumps(failed, ensure_ascii=False),
+            )
+
+            concurrent_root = root / "concurrent-receipt-archive"
+            concurrent_fixture = (
+                self.create_activity_group_write_fixture(
+                    concurrent_root,
+                    archive_id=(
+                        "archive:personal:activity-group-concurrent-receipt"
+                    ),
+                    suffix="80",
+                )
+            )
+            concurrent_before = [
+                path.read_bytes()
+                for path in concurrent_fixture["member_paths"]
+            ]
+            concurrent_receipt_created = False
+
+            def create_concurrent_receipt(
+                path: Path,
+                payload: dict[str, Any],
+            ) -> None:
+                nonlocal concurrent_receipt_created
+                if (
+                    payload.get("schema")
+                    == archive_services
+                    .ACTIVITY_GROUP_MEMBERSHIP_RECEIPT_SCHEMA
+                    and not concurrent_receipt_created
+                ):
+                    original_write_json_new_file(path, payload)
+                    concurrent_receipt_created = True
+                    raise FileExistsError(
+                        "PRIVATE_CONCURRENT_RECEIPT_CREATED"
+                    )
+                original_write_json_new_file(path, payload)
+
+            with patch.object(
+                archive_services,
+                "write_json_new_file",
+                side_effect=create_concurrent_receipt,
+            ):
+                concurrent = (
+                    archive_services.activity_group_membership_write(
+                        concurrent_root,
+                        request_path=concurrent_fixture[
+                            "request_relative"
+                        ],
+                        expected_request_sha256=concurrent_fixture[
+                            "request_sha256"
+                        ],
+                        expected_review_plan_sha256=concurrent_fixture[
+                            "review_plan_sha256"
+                        ],
+                        approve=True,
+                        reviewed_by="person:activity-group-reviewer",
+                        affirm_memberships_reviewed=True,
+                    )
+                )
+            self.assertFalse(concurrent["ok"])
+            self.assertEqual(
+                concurrent["status"],
+                "failed_rollback_incomplete",
+            )
+            self.assertFalse(concurrent["rollback"]["receipt_removed"])
+            self.assertTrue(
+                concurrent["rollback"][
+                    "transaction_journal_retained"
+                ]
+            )
+            self.assertEqual(
+                concurrent_before,
+                [
+                    path.read_bytes()
+                    for path in concurrent_fixture["member_paths"]
+                ],
+            )
+            concurrent_receipt = concurrent_root / (
+                archive_services
+                .activity_group_membership_receipt_relative_path(
+                    concurrent_fixture["request_sha256"]
+                )
+            )
+            concurrent_journal = (
+                archive_services
+                .activity_group_membership_transaction_journal_path(
+                    concurrent_root,
+                    concurrent_fixture["request_sha256"],
+                )
+            )
+            concurrent_lock = (
+                concurrent_root
+                / ".wom-scratch"
+                / "private"
+                / "activity-groups"
+                / archive_services
+                .ACTIVITY_GROUP_MEMBERSHIP_WRITE_LOCK_NAME
+            )
+            self.assertTrue(concurrent_receipt.is_file())
+            self.assertTrue(concurrent_journal.is_file())
+            self.assertTrue(concurrent_lock.is_file())
+            self.assertNotIn(
+                "PRIVATE_CONCURRENT_RECEIPT_CREATED",
+                json.dumps(concurrent, ensure_ascii=False),
+            )
+
+    def test_activity_group_membership_write_global_lock_and_under_lock_request_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            locked_root = root / "locked-archive"
+            locked_fixture = self.create_activity_group_write_fixture(
+                locked_root,
+                archive_id="archive:personal:activity-group-locked",
+                suffix="90",
+            )
+            locked_before = [
+                path.read_bytes()
+                for path in locked_fixture["member_paths"]
+            ]
+            write_lock = (
+                locked_root
+                / ".wom-scratch"
+                / "private"
+                / "activity-groups"
+                / archive_services
+                .ACTIVITY_GROUP_MEMBERSHIP_WRITE_LOCK_NAME
+            )
+            write_lock.write_text(
+                "PRIVATE_ACTIVE_WRITER_LOCK",
+                encoding="utf-8",
+            )
+            blocked = archive_services.activity_group_membership_write(
+                locked_root,
+                request_path=locked_fixture["request_relative"],
+                expected_request_sha256=locked_fixture[
+                    "request_sha256"
+                ],
+                expected_review_plan_sha256=locked_fixture[
+                    "review_plan_sha256"
+                ],
+                approve=True,
+                reviewed_by="person:activity-group-reviewer",
+                affirm_memberships_reviewed=True,
+            )
+            self.assertFalse(blocked["ok"])
+            self.assertIn(
+                "activity_group_write_lock_exists",
+                blocked["blockers"],
+            )
+            self.assertEqual(
+                blocked["summary"]["canonical_write_attempt_count"],
+                0,
+            )
+            self.assertEqual(
+                locked_before,
+                [
+                    path.read_bytes()
+                    for path in locked_fixture["member_paths"]
+                ],
+            )
+            self.assertNotIn(
+                "PRIVATE_ACTIVE_WRITER_LOCK",
+                json.dumps(blocked, ensure_ascii=False),
+            )
+            write_lock.unlink()
+            recovery_guard = (
+                locked_root
+                / ".wom-scratch"
+                / "private"
+                / "activity-groups"
+                / archive_services
+                .ACTIVITY_GROUP_MEMBERSHIP_RECOVERY_GUARD_NAME
+            )
+            recovery_guard.write_text(
+                "PRIVATE_ACTIVE_RECOVERY_GUARD",
+                encoding="utf-8",
+            )
+            recovery_blocked = (
+                archive_services.activity_group_membership_write(
+                    locked_root,
+                    request_path=locked_fixture["request_relative"],
+                    expected_request_sha256=locked_fixture[
+                        "request_sha256"
+                    ],
+                    expected_review_plan_sha256=locked_fixture[
+                        "review_plan_sha256"
+                    ],
+                    approve=True,
+                    reviewed_by="person:activity-group-reviewer",
+                    affirm_memberships_reviewed=True,
+                )
+            )
+            self.assertFalse(recovery_blocked["ok"])
+            self.assertIn(
+                "activity_group_recovery_guard_exists",
+                recovery_blocked["blockers"],
+            )
+            self.assertEqual(
+                recovery_blocked["summary"][
+                    "canonical_write_attempt_count"
+                ],
+                0,
+            )
+            self.assertNotIn(
+                "PRIVATE_ACTIVE_RECOVERY_GUARD",
+                json.dumps(recovery_blocked, ensure_ascii=False),
+            )
+            recovery_guard.unlink()
+
+            drift_root = root / "request-drift-archive"
+            drift_fixture = self.create_activity_group_write_fixture(
+                drift_root,
+                archive_id=(
+                    "archive:personal:activity-group-request-drift"
+                ),
+                suffix="91",
+            )
+            drift_before = [
+                path.read_bytes()
+                for path in drift_fixture["member_paths"]
+            ]
+            original_private_request = (
+                archive_services._activity_group_private_request
+            )
+            request_reads = 0
+
+            def drift_request_under_lock(
+                archive_root: Path,
+                request_path: str,
+            ) -> tuple[bytes, dict[str, Any]]:
+                nonlocal request_reads
+                request_reads += 1
+                if request_reads == 2:
+                    drift_fixture["request_path"].write_text(
+                        drift_fixture["request_path"].read_text(
+                            encoding="utf-8"
+                        )
+                        + "\n",
+                        encoding="utf-8",
+                    )
+                return original_private_request(
+                    archive_root,
+                    request_path,
+                )
+
+            with patch.object(
+                archive_services,
+                "_activity_group_private_request",
+                side_effect=drift_request_under_lock,
+            ):
+                drifted = (
+                    archive_services.activity_group_membership_write(
+                        drift_root,
+                        request_path=drift_fixture[
+                            "request_relative"
+                        ],
+                        expected_request_sha256=drift_fixture[
+                            "request_sha256"
+                        ],
+                        expected_review_plan_sha256=drift_fixture[
+                            "review_plan_sha256"
+                        ],
+                        approve=True,
+                        reviewed_by="person:activity-group-reviewer",
+                        affirm_memberships_reviewed=True,
+                    )
+                )
+            self.assertFalse(drifted["ok"])
+            self.assertEqual(drifted["status"], "blocked")
+            self.assertIn(
+                "activity_group_write_preflight_or_snapshot_failed",
+                drifted["blockers"],
+            )
+            self.assertEqual(
+                drifted["summary"]["canonical_write_attempt_count"],
+                0,
+            )
+            self.assertEqual(
+                drift_before,
+                [
+                    path.read_bytes()
+                    for path in drift_fixture["member_paths"]
+                ],
+            )
+            self.assertFalse(
+                (
+                    drift_root
+                    / ".wom-scratch"
+                    / "private"
+                    / "activity-groups"
+                    / archive_services
+                    .ACTIVITY_GROUP_MEMBERSHIP_WRITE_LOCK_NAME
+                ).exists()
+            )
+            self.assertFalse(
+                archive_services
+                .activity_group_membership_transaction_journal_path(
+                    drift_root,
+                    drift_fixture["request_sha256"],
+                )
+                .exists()
             )
 
     def test_activity_group_membership_plan_blocks_invalid_anchor_and_member_shape(self) -> None:

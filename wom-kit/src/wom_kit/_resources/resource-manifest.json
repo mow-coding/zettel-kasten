@@ -1,9 +1,21 @@
 {
   "schema": "wom-kit/package-resource-manifest/v0.1",
-  "version": "0.3.280",
+  "version": "0.3.281",
   "source_of_truth": "wom-kit source resource directories",
-  "file_count": 97,
+  "file_count": 99,
   "files": [
+    {
+      "source": "schemas/activity-group-membership-receipt.schema.json",
+      "packaged": "schemas/activity-group-membership-receipt.schema.json",
+      "bytes": 4951,
+      "sha256": "050c30c7952a2f2c7769180b44320f22968e5efc22eed255e9c78ddebe0e1a02"
+    },
+    {
+      "source": "schemas/activity-group-membership-transaction-journal.schema.json",
+      "packaged": "schemas/activity-group-membership-transaction-journal.schema.json",
+      "bytes": 3683,
+      "sha256": "384e5cd1ecd80f83c640035adc74b511d2d3f7429dc07592565e9f62c89f3870"
+    },
     {
       "source": "schemas/anchor-metadata.schema.json",
       "packaged": "schemas/anchor-metadata.schema.json",
@@ -289,8 +301,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/SKILL.md",
       "packaged": "templates/ai-runtime/wom-archive/SKILL.md",
-      "bytes": 6348,
-      "sha256": "3ade297da83fa3e768ddc95a1a7b7d8f2046367cc81354b31688bf6d38aec86f"
+      "bytes": 6676,
+      "sha256": "987ef6d87c04812f0fd26ae713f22b05e671e4c1a82e1bfe18912dcc7c15952e"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/capture-draft-and-publication.md",
@@ -313,8 +325,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/references/reading-memory-and-revision.md",
       "packaged": "templates/ai-runtime/wom-archive/references/reading-memory-and-revision.md",
-      "bytes": 6045,
-      "sha256": "015c3f9fd8e360786dacf1d16e3e1cb6762aa83f2cb423d94c6a7006b493291f"
+      "bytes": 6515,
+      "sha256": "44c65a1577f554f13d5e04382a0fe5d803680cf4883dc97a9abea5aab8edcbf2"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/safety-results-and-human-language.md",
@@ -581,10 +593,10 @@
       "sha256": "d619dc26af3216498c8392dfe838b0fe752d4bad9da998a58ca682d668fc510c"
     },
     {
-      "source": "docs/releases/v0.3.280.md",
-      "packaged": "release-notes/v0.3.280.md",
-      "bytes": 2355,
-      "sha256": "04d6ce246e1aa07f4aa6693b917fd4692c6df335872866a77ce6ebd1b874e9f3"
+      "source": "docs/releases/v0.3.281.md",
+      "packaged": "release-notes/v0.3.281.md",
+      "bytes": 2311,
+      "sha256": "47ae29646801292602926bfaa5a3eb99e86c4ada04e8cf8f813e0147809fdc48"
     }
   ]
 }

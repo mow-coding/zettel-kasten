@@ -10,6 +10,11 @@ v0.3.0 opens the first narrow receiver-side write boundary: an approval-gated sh
 
 v0.3.1 adds a read-only shared update route preview. It points to an existing candidate route surface and writes nothing. See `wom-kit/docs/shared-update-route-preview.md`.
 
+v0.3.281 adds CLI-only approval-gated activity-group membership additions plus
+read-only interruption classification and separately approved recovery. It
+never infers or removes members and exposes no MCP writer. See
+`wom-kit/docs/activity-group-membership-write.md`.
+
 For a beginner-friendly full walkthrough, see:
 
 ```text

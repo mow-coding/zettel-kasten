@@ -24,6 +24,38 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.281 Approval-Gated Activity-Group Membership Write
+
+No archive migration is required. v0.3.281 does not scan for or automatically
+add members. Continue from the exact private request and
+`review_plan_sha256` produced by v0.3.280:
+
+```powershell
+archive activity-group-membership-write <archive-root> `
+  --request .wom-scratch/private/activity-groups/reviewed.json `
+  --expected-request-sha256 sha256:<request-digest> `
+  --expected-review-plan-sha256 sha256:<review-plan-digest> `
+  --dry-run --progress --format json
+```
+
+After a human reviews every membership, replace `--dry-run` with `--approve`
+and add a safe `--reviewed-by` value plus
+`--affirm-memberships-reviewed`. WOM revalidates the request and all
+participant bytes under an exclusive lock, preserves verified before-state
+snapshots, writes a private transaction journal before the first canonical
+change, and publishes an immutable receipt last.
+
+If a process or machine stopped during the transaction, first confirm the old
+writer is no longer running. Then use
+`activity-group-membership-recovery-plan --dry-run` and approve only the exact
+returned recovery-plan digest through `activity-group-membership-recover`.
+Unknown or conflicting bytes are never guessed; they enter a manual forensic
+hold.
+
+Membership removal remains unavailable. Do not edit canonical zets directly.
+See
+[`wom-kit/docs/activity-group-membership-write.md`](wom-kit/docs/activity-group-membership-write.md).
+
 ## v0.3.280 Read-Only Activity-Group Membership Plan
 
 No archive migration is required. v0.3.280 does not automatically add or

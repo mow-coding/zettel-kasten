@@ -1,6 +1,6 @@
 # AI Command-Path Routing
 
-Status: implemented in v0.3.278, extended through v0.3.280
+Status: implemented in v0.3.278, extended through v0.3.281
 
 ## Purpose
 
@@ -30,6 +30,12 @@ planning route:
 
 ```text
 wom-kit/ai-command-path-routing/v0.3
+```
+
+v0.3.281 completes the matching approved-add and interruption-recovery route:
+
+```text
+wom-kit/ai-command-path-routing/v0.4
 ```
 
 It is returned by:
@@ -80,7 +86,8 @@ Every write remains preview-first and human-reviewed.
 | Capture source material | `archive source-intake <archive-root> --dry-run --local-path <file> --format json` | Continue through `source-intake-record`, `objet-capture-selection`, and `objet-capture`; a source-intake preview alone grants no copy/upload authority. |
 | Update operating context | `archive operational-context <archive-root> --record workbench/operational-context.next.yml --dry-run --format json` | Use the separate `--approve --reviewed-by <human-actor>` path and retain its receipt. |
 | Create a persistent saved-view | `archive view-recommendation-plan <archive-root> --dry-run --format json` | No dedicated writer exists. An AI must not edit `views/*.yml` directly. |
-| Add or remove event memberships | `archive activity-group-membership-plan <archive-root> --request <private-reviewed-request> --dry-run --format json` | v0.3.280 has no membership writer or remover. Do not edit canonical zets directly. |
+| Add reviewed event memberships | Run `activity-group-membership-plan`, then preview `archive activity-group-membership-write <archive-root> --request <private-reviewed-request> --expected-request-sha256 <sha256> --expected-review-plan-sha256 <sha256> --dry-run --progress --format json` | Approve the same digest-bound writer with `--approve --reviewed-by <human-actor> --affirm-memberships-reviewed`. It writes a journal and receipt; it does not infer or remove memberships. |
+| Recover an interrupted event-membership write | `archive activity-group-membership-recovery-plan <archive-root> --expected-request-sha256 <sha256> --dry-run --format json` | First confirm the old writer is no longer running. Approve only the exact recovery-plan digest with `activity-group-membership-recover`; unknown drift remains a manual forensic hold. |
 
 ## Safety And Compatibility
 
@@ -110,3 +117,14 @@ human in one bounded private request. Search results, titles, dates, nearby
 files, and existing edges never become membership automatically. The plan
 returns content-free row states and exact hashes without ids, paths, titles,
 facet values, or body text. It has no writer or removal mode.
+
+## v0.3.281 Event-Membership Write Boundary
+
+v0.3.281 adds the separate
+[Activity-Group Membership Write And Recovery](activity-group-membership-write.md).
+The writer accepts additions only after exact request/review hashes and human
+approval. It revalidates under a lock, preserves before-state snapshots,
+publishes a journal before mutation, and publishes a receipt last. Recovery is
+a second digest-bound human approval and never guesses through unknown drift.
+Membership discovery, membership removal, direct canonical editing, and an MCP
+writer remain unavailable.

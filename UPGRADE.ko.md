@@ -2,6 +2,40 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.3.281 승인형 activity-group 멤버십 쓰기
+
+아카이브 마이그레이션은 필요하지 않습니다. v0.3.281은 멤버를 검색하거나
+자동으로 추가하지 않습니다. v0.3.280의 읽기 전용 계획에서 받은 비공개
+request와 `review_plan_sha256`을 그대로 사용해 먼저 쓰기 미리보기를
+실행하세요.
+
+```powershell
+archive activity-group-membership-write <archive-root> `
+  --request .wom-scratch/private/activity-groups/reviewed.json `
+  --expected-request-sha256 sha256:<request-digest> `
+  --expected-review-plan-sha256 sha256:<review-plan-digest> `
+  --dry-run --progress --format json
+```
+
+사람이 모든 멤버십을 확인한 뒤에만 `--dry-run`을 `--approve`로 바꾸고,
+안전한 `--reviewed-by` 값과 `--affirm-memberships-reviewed`를
+추가하세요. WOM은 잠금을 잡은 뒤 요청과 모든 참여 zet 바이트를 다시
+확인하고, 첫 정본 변경 전에 검증된 이전 상태 snapshot과 비공개
+transaction journal을 남기며, 모든 최종 hash를 확인한 뒤 불변 영수증을
+마지막에 씁니다.
+
+작업 도중 process나 컴퓨터가 멈췄다면 기존 writer가 더 이상 실행 중이
+아님을 먼저 확인하세요. 그다음
+`activity-group-membership-recovery-plan --dry-run`으로 상태를 확인하고,
+정확히 그 복구 계획 hash만 `activity-group-membership-recover`로
+승인하세요. 알 수 없는 바이트 차이는 추측하지 않고 수동 조사 보류로
+멈춥니다.
+
+멤버십 제거는 아직 제공하지 않습니다. 정본 zet을 직접 고치지 마세요.
+자세한 내용은
+[`wom-kit/docs/activity-group-membership-write.md`](wom-kit/docs/activity-group-membership-write.md)를
+보세요.
+
 ## v0.3.280 읽기 전용 activity-group 멤버십 계획
 
 아카이브 마이그레이션은 필요하지 않습니다. v0.3.280은 어떤 facet도 자동으로

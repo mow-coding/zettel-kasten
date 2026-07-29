@@ -11930,6 +11930,230 @@ def command_activity_group_membership_plan(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 1
 
 
+def command_activity_group_membership_write(args: argparse.Namespace) -> int:
+    if bool(args.dry_run) == bool(args.approve):
+        print(
+            "activity-group-membership-write requires exactly one of --dry-run or --approve.",
+            file=sys.stderr,
+        )
+        return 1
+    reporter = CommandProgressReporter(
+        bool(getattr(args, "progress", False)),
+        label="activity-group-membership-write",
+    )
+    try:
+        result = archive_services.activity_group_membership_write(
+            Path(args.archive_root),
+            request_path=args.request,
+            expected_request_sha256=args.expected_request_sha256,
+            expected_review_plan_sha256=(
+                args.expected_review_plan_sha256
+            ),
+            dry_run=bool(args.dry_run),
+            approve=bool(args.approve),
+            reviewed_by=args.reviewed_by,
+            affirm_memberships_reviewed=bool(
+                args.affirm_memberships_reviewed
+            ),
+            max_members=int(args.max_members),
+            progress_callback=reporter.progress,
+        )
+    except archive_services.ArchiveServiceError:
+        print(
+            "activity-group-membership-write could not bind a safe private request or archive target.",
+            file=sys.stderr,
+        )
+        return 1
+    except (ArchivePathError, OSError, UnicodeError, ValueError):
+        print(
+            "activity-group-membership-write failed before a privacy-safe result could be produced.",
+            file=sys.stderr,
+        )
+        return 1
+    finally:
+        reporter.close()
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        summary = (
+            result.get("summary")
+            if isinstance(result.get("summary"), dict)
+            else {}
+        )
+        print(
+            "WOM activity-group membership write: "
+            + str(result.get("status") or "unknown")
+        )
+        print(
+            "Members ready to add: "
+            + str(summary.get("ready_to_add_count", 0))
+        )
+        print(
+            "Members already present: "
+            + str(summary.get("already_member_count", 0))
+        )
+        print(
+            "Canonical files written this run: "
+            + str(
+                summary.get("canonical_files_written_this_run", 0)
+            )
+        )
+        print(
+            "Write-plan SHA-256: "
+            + str(result.get("write_plan_sha256") or "unavailable")
+        )
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+        print("Next safe actions:")
+        for action in result.get("next_safe_actions", []):
+            print(f"- {action}")
+    return 0 if result.get("ok") else 1
+
+
+def command_activity_group_membership_recovery_plan(
+    args: argparse.Namespace,
+) -> int:
+    if not args.dry_run:
+        print(
+            "activity-group-membership-recovery-plan is read-only and requires --dry-run.",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        result = (
+            archive_services.activity_group_membership_recovery_plan(
+                Path(args.archive_root),
+                expected_request_sha256=args.expected_request_sha256,
+                dry_run=True,
+            )
+        )
+    except archive_services.ArchiveServiceError:
+        print(
+            "activity-group-membership-recovery-plan could not inspect private transaction evidence safely.",
+            file=sys.stderr,
+        )
+        return 1
+    except (ArchivePathError, OSError, UnicodeError, ValueError):
+        print(
+            "activity-group-membership-recovery-plan failed before a privacy-safe result could be produced.",
+            file=sys.stderr,
+        )
+        return 1
+    if args.format == "json":
+        print_json(result)
+    else:
+        print(
+            "WOM activity-group membership recovery plan: "
+            + str(result.get("status") or "unknown")
+        )
+        print(
+            "Transaction state: "
+            + str(result.get("transaction_state") or "unknown")
+        )
+        print(
+            "Recovery action: "
+            + str(result.get("recovery_action") or "none")
+        )
+        print(
+            "Recovery-plan SHA-256: "
+            + str(result.get("recovery_plan_sha256") or "unavailable")
+        )
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+        print("Next safe actions:")
+        for action in result.get("next_safe_actions", []):
+            print(f"- {action}")
+    return 0 if result.get("ok") else 1
+
+
+def command_activity_group_membership_recover(
+    args: argparse.Namespace,
+) -> int:
+    if not args.approve:
+        print(
+            "activity-group-membership-recover requires --approve.",
+            file=sys.stderr,
+        )
+        return 1
+    reporter = CommandProgressReporter(
+        bool(getattr(args, "progress", False)),
+        label="activity-group-membership-recover",
+    )
+    try:
+        result = archive_services.activity_group_membership_recover(
+            Path(args.archive_root),
+            expected_request_sha256=args.expected_request_sha256,
+            expected_recovery_plan_sha256=(
+                args.expected_recovery_plan_sha256
+            ),
+            approve=True,
+            reviewed_by=args.reviewed_by,
+            affirm_recovery_reviewed=bool(
+                args.affirm_recovery_reviewed
+            ),
+            progress_callback=reporter.progress,
+        )
+    except archive_services.ArchiveServiceError:
+        print(
+            "activity-group-membership-recover could not bind safe private recovery evidence.",
+            file=sys.stderr,
+        )
+        return 1
+    except (ArchivePathError, OSError, UnicodeError, ValueError):
+        print(
+            "activity-group-membership-recover failed before a privacy-safe result could be produced.",
+            file=sys.stderr,
+        )
+        return 1
+    finally:
+        reporter.close()
+    if args.format == "json":
+        print_json(result)
+    else:
+        print(
+            "WOM activity-group membership recovery: "
+            + str(result.get("status") or "unknown")
+        )
+        print(
+            "Recovery action: "
+            + str(result.get("recovery_action") or "none")
+        )
+        print(
+            "Canonical files restored this run: "
+            + str(
+                result.get("summary", {}).get(
+                    "canonical_files_restored_this_run",
+                    0,
+                )
+            )
+        )
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+        print("Next safe actions:")
+        for action in result.get("next_safe_actions", []):
+            print(f"- {action}")
+    return 0 if result.get("ok") else 1
+
+
 def command_block_header(args: argparse.Namespace) -> int:
     try:
         result = archive_services.block_header_preview(
@@ -23247,6 +23471,159 @@ def build_parser() -> argparse.ArgumentParser:
     )
     activity_group_membership_plan.set_defaults(
         func=command_activity_group_membership_plan
+    )
+
+    activity_group_membership_write = subcommands.add_parser(
+        "activity-group-membership-write",
+        aliases=["event-group-membership-write"],
+        help=(
+            "Preview or approve adding one explicitly reviewed event anchor "
+            "to exact canonical member facets with transaction recovery evidence."
+        ),
+    )
+    activity_group_membership_write.add_argument(
+        "archive_root",
+        help="Archive root containing the exact canonical anchor and members.",
+    )
+    activity_group_membership_write.add_argument(
+        "--request",
+        required=True,
+        help=(
+            "Archive-relative reviewed JSON request under "
+            ".wom-scratch/private/activity-groups/."
+        ),
+    )
+    activity_group_membership_write.add_argument(
+        "--expected-request-sha256",
+        required=True,
+        help="Exact sha256:<digest> returned for the private request.",
+    )
+    activity_group_membership_write.add_argument(
+        "--expected-review-plan-sha256",
+        required=True,
+        help="Exact review-plan sha256:<digest> returned by the read-only plan.",
+    )
+    activity_group_membership_write.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview the exact approval-bound transaction without writing.",
+    )
+    activity_group_membership_write.add_argument(
+        "--approve",
+        action="store_true",
+        help="Write only after every request and review binding passes.",
+    )
+    activity_group_membership_write.add_argument(
+        "--reviewed-by",
+        help="Safe human reviewer id required with --approve.",
+    )
+    activity_group_membership_write.add_argument(
+        "--affirm-memberships-reviewed",
+        action="store_true",
+        help="Affirm that every explicitly requested membership was reviewed.",
+    )
+    activity_group_membership_write.add_argument(
+        "--max-members",
+        type=int,
+        default=archive_services.ACTIVITY_GROUP_MEMBERSHIP_MAX_MEMBERS,
+        help="Maximum explicit member ids to validate (1-5000).",
+    )
+    activity_group_membership_write.add_argument(
+        "--progress",
+        action="store_true",
+        help="Stream content-free transaction counts to stderr.",
+    )
+    activity_group_membership_write.add_argument(
+        "--format",
+        choices=["text", "json"],
+        default="json",
+        help="Output format.",
+    )
+    activity_group_membership_write.set_defaults(
+        func=command_activity_group_membership_write
+    )
+
+    activity_group_membership_recovery_plan = subcommands.add_parser(
+        "activity-group-membership-recovery-plan",
+        aliases=["event-group-membership-recovery-plan"],
+        help=(
+            "Classify one retained activity-group write transaction without "
+            "echoing private participants or changing evidence."
+        ),
+    )
+    activity_group_membership_recovery_plan.add_argument(
+        "archive_root",
+        help="Archive root containing the private transaction evidence.",
+    )
+    activity_group_membership_recovery_plan.add_argument(
+        "--expected-request-sha256",
+        required=True,
+        help="Exact sha256:<digest> that names the private transaction.",
+    )
+    activity_group_membership_recovery_plan.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Required. Classify evidence and write nothing.",
+    )
+    activity_group_membership_recovery_plan.add_argument(
+        "--format",
+        choices=["text", "json"],
+        default="json",
+        help="Output format.",
+    )
+    activity_group_membership_recovery_plan.set_defaults(
+        func=command_activity_group_membership_recovery_plan
+    )
+
+    activity_group_membership_recover = subcommands.add_parser(
+        "activity-group-membership-recover",
+        aliases=["event-group-membership-recover"],
+        help=(
+            "Approve one digest-bound cleanup or rollback for an interrupted "
+            "activity-group membership transaction."
+        ),
+    )
+    activity_group_membership_recover.add_argument(
+        "archive_root",
+        help="Archive root containing the private transaction evidence.",
+    )
+    activity_group_membership_recover.add_argument(
+        "--expected-request-sha256",
+        required=True,
+        help="Exact sha256:<digest> that names the private transaction.",
+    )
+    activity_group_membership_recover.add_argument(
+        "--expected-recovery-plan-sha256",
+        required=True,
+        help="Exact recovery-plan sha256:<digest> from the read-only plan.",
+    )
+    activity_group_membership_recover.add_argument(
+        "--approve",
+        action="store_true",
+        help="Execute only the fixed action from the matching recovery plan.",
+    )
+    activity_group_membership_recover.add_argument(
+        "--reviewed-by",
+        help="Safe human reviewer id required with --approve.",
+    )
+    activity_group_membership_recover.add_argument(
+        "--affirm-recovery-reviewed",
+        action="store_true",
+        help="Affirm that the retained transaction evidence was reviewed.",
+    )
+    activity_group_membership_recover.add_argument(
+        "--progress",
+        action="store_true",
+        help="Stream content-free recovery counts to stderr.",
+    )
+    activity_group_membership_recover.add_argument(
+        "--format",
+        choices=["text", "json"],
+        default="json",
+        help="Output format.",
+    )
+    activity_group_membership_recover.set_defaults(
+        func=command_activity_group_membership_recover
     )
 
     promote = subcommands.add_parser("promote", help="Legacy: check whether a draft zettel can be promoted.")

@@ -98,7 +98,11 @@ Alias:
 event-group-membership-plan
 ```
 
-The command requires `--dry-run`. There is no approved write mode in v0.3.280.
+The planning command always requires `--dry-run`. Since v0.3.281, its exact
+request and `review_plan_sha256` may continue through the separate
+approval-gated
+[`activity-group-membership-write`](activity-group-membership-write.md)
+command. The planner itself never writes.
 
 ## Result
 
@@ -160,12 +164,12 @@ not return body text.
 It writes no zettel, facet, receipt, index, diagnostic, or request file. It
 calls no model, provider, network, or credential store.
 
-## What comes later
+## Write boundary
 
-An approval-gated writer is intentionally deferred. A later release must bind
-the exact request bytes and review-plan digest, revalidate current bytes,
-record a human reviewer, use a lock and pre-mutation journal, write an immutable
-receipt, and provide recovery before it can change canonical zets.
+v0.3.281 adds the separate approval-gated writer and explicit interruption
+recovery. It binds the exact request bytes and review-plan digest, revalidates
+current bytes under a lock, records human review, preserves before-snapshots,
+publishes a pre-mutation journal, and writes an immutable receipt last.
 
-Member removal is also a separate reviewed operation. v0.3.280 does not remove
-or rewrite any membership.
+Member removal remains a separate reviewed operation. Neither the plan nor the
+v0.3.281 writer removes any membership.
