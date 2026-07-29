@@ -1,6 +1,6 @@
 # AI Command-Path Routing
 
-Status: implemented in v0.3.278, extended through v0.3.282
+Status: implemented in v0.3.278, extended through v0.3.283
 
 ## Purpose
 
@@ -43,6 +43,10 @@ v0.3.282 adds the separate read-only event-membership removal-plan route:
 ```text
 wom-kit/ai-command-path-routing/v0.5
 ```
+
+v0.3.283 hardens the retained-journal and recovery-evidence boundary beneath
+those same commands. It deliberately keeps routing at v0.5: no route, command,
+alias, schema version, or MCP surface is added.
 
 It is returned by:
 
@@ -95,7 +99,7 @@ Every write remains preview-first and human-reviewed.
 | Create a persistent saved-view | `archive view-recommendation-plan <archive-root> --dry-run --format json` | No dedicated writer exists. An AI must not edit `views/*.yml` directly. |
 | Add reviewed event memberships | Run `activity-group-membership-plan`, then preview `archive activity-group-membership-write <archive-root> --request <private-reviewed-request> --expected-request-sha256 <sha256> --expected-review-plan-sha256 <sha256> --dry-run --progress --format json` | Approve the same digest-bound writer with `--approve --reviewed-by <human-actor> --affirm-memberships-reviewed`. It writes a journal and receipt; it does not infer or remove memberships. |
 | Recover an interrupted event-membership write | `archive activity-group-membership-recovery-plan <archive-root> --expected-request-sha256 <sha256> --dry-run --format json` | First confirm the old writer is no longer running. Approve only the exact recovery-plan digest with `activity-group-membership-recover`; unknown drift remains a manual forensic hold. |
-| Remove reviewed event memberships | First run `activity-group-membership-removal-plan`. | No approved removal writer exists in v0.3.282. Preserve the private request and digest; do not edit canonical zets directly. |
+| Remove reviewed event memberships | First run `activity-group-membership-removal-plan`. | No approved removal writer exists in v0.3.283; it is deferred to v0.3.284. Preserve the private request and digest; do not edit canonical zets directly. |
 
 ## Safety And Compatibility
 
@@ -105,6 +109,8 @@ Every write remains preview-first and human-reviewed.
 - It writes no archive, host configuration, or existing `AGENTS.md`.
 - The routing object has its own schema, so the existing
   `ai-start-here/v0.3` response remains additively compatible.
+- v0.3.283 retains `wom-kit/ai-command-path-routing/v0.5` and every existing
+  activity-group v0.1 artifact schema.
 - Human approval is still required for every listed write route.
 
 ## v0.3.279 Detection Boundary
@@ -150,3 +156,19 @@ proximity, edges, or the generated index.
 The route reports removal planning as implemented and removal writing as
 unimplemented. It grants no approval, receipt, direct edit, or MCP write
 authority.
+
+## v0.3.283 Retained-Journal Isolation Boundary
+
+v0.3.283 changes no route name or routing version. The existing approved-add
+writer now performs a bounded, content-free direct-child scan of both
+activity-group private roots before attempting the writer lock and again under
+that shared lock. A retained add journal or reserved future-removal journal
+blocks a new add.
+
+Recovery now accepts completed evidence only when the immutable receipt exactly
+matches the retained journal or lock on their shared fields and ordered items.
+The raw receipt SHA-256 and transaction-binding SHA-256 are part of the
+recovery-plan digest and are verified again immediately before cleanup.
+Foreign, malformed, mismatched, or changed evidence stays in a non-executable
+forensic hold. This hardening does not implement removal; the removal writer is
+deferred to v0.3.284.

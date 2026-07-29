@@ -1,12 +1,12 @@
 # Activity-Group Membership Removal Plan
 
-Status: v0.3.282 read-only explicit membership-removal planning
+Status: v0.3.283 read-only explicit membership-removal planning with reserved-journal isolation
 
 `activity-group-membership-removal-plan` lets an archive owner review removing
 one named event anchor from an explicit ordered set of canonical zets.
 
 It writes nothing. The approval-gated removal writer is not implemented in
-v0.3.282.
+v0.3.283 and is deferred to v0.3.284.
 
 ## Why This Is Separate
 
@@ -150,7 +150,7 @@ a model, the network, a database, or a credential store.
 
 ## Write Boundary
 
-v0.3.282:
+Through v0.3.283:
 
 - writes no canonical zet;
 - writes no receipt, journal, lock, index, or scratch file;
@@ -163,6 +163,12 @@ A later approval-gated writer must use a separate removal operation, bind the
 exact request and plan hashes, share serialization with addition and recovery,
 publish a transaction journal before mutation, preserve exact snapshots, write
 an immutable receipt last, and provide hard-interruption recovery.
+
+v0.3.283 reserves
+`.activity-group-membership-removal.transaction.json` evidence in this private
+root. A retained reserved journal blocks the existing add writer both before
+it attempts the shared lock and after it owns that lock. This is isolation for
+a future removal transaction, not a removal implementation or approval.
 
 Until that writer ships, keep the reviewed private request and digest as
 evidence and do not edit canonical zets directly.

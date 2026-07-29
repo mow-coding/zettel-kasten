@@ -6,6 +6,64 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.283 - 2026-07-30
+
+- Added bounded, content-free retained-journal discovery across the direct
+  children of both private activity-group request roots.
+- Block the approved membership-add writer before lock acquisition when any
+  retained add journal or reserved future-removal journal exists.
+- Repeat the same scan under the shared activity-group writer lock before
+  snapshots or canonical mutation, closing the preflight-to-lock race.
+- Fail closed on an unsafe scan root or more than 5,000 directory entries;
+  reserved journal content and private filenames remain out of public output.
+- Bind every archive-root-to-private-leaf directory component while scanning
+  or creating transaction evidence; junction, symlink, and ancestor
+  replacement attempts are refused rather than followed.
+- Bind every shared receipt/journal field and ordered participant item exactly,
+  including before/after hashes and before-snapshot evidence.
+- Bind completed-receipt raw SHA-256 and the transaction-binding SHA-256 into
+  the recovery plan, then re-read and verify both immediately before cleanup.
+- Commit each canonical participant through an OS-level compare-and-swap:
+  POSIX exchanges two bound sibling names with `renameat2(RENAME_EXCHANGE)` or
+  `renameatx_np(RENAME_SWAP)`, while Windows uses `ReplaceFileW` with a
+  deterministic backup. Runtime rollback and approved recovery restore only
+  an exact committed after-state; unknown concurrent bytes are never
+  overwritten and deterministic swap residue remains recoverable.
+- Delete only evidence whose exact raw SHA-256 still matches the reviewed
+  lock, journal, or receipt. POSIX first atomically captures the pathname into
+  a globally scanned private transaction quarantine, performs a stable
+  descriptor/stat/double-hash check, and then deletes that captured entry;
+  Windows marks the verified READ+DELETE handle itself for deletion. A hard
+  exit leaves a discoverable blocker instead of hidden residue, and a
+  same-name replacement is retained. POSIX cannot exclude an uncooperative
+  already-open writable descriptor after its final check, so external editors
+  must be quiescent during evidence cleanup.
+- Use lock-first, journal-last cleanup with participant/receipt revalidation,
+  verify that the writer's own journal is the sole retained transaction before
+  removing it, and require a clean final inventory before reporting success.
+  Any post-commit cleanup/revalidation failure returns
+  `applied_evidence_conflict` while retaining valid canonical and receipt
+  truth. Recheck even lock-only recovery immediately before a success result.
+- Route foreign/orphan evidence, malformed or mismatched receipt evidence, and
+  unknown transaction drift to non-executable `manual_forensic_hold`; a
+  changed approved recovery retains the evidence instead of cleaning it.
+- Bind recovery-guard creation and missing-lock claims to the same held
+  archive-root-to-private-leaf identity used for their cleanup.
+- Add internal write-lock schema v0.2 with a SHA-256 commitment to the full
+  receipt/journal transaction semantics. Legacy v0.1 locks remain compatible
+  while their journal is present, but a v0.1 lock-only completed residue now
+  requires manual forensic review.
+- Automatically clean a verified v0.2 completed lock-only residue only on
+  Windows, where the receipt is held without write/delete sharing. POSIX keeps
+  this journal-free two-file state in manual forensic hold.
+- Keep the public request, plan, write, receipt, journal, recovery-plan, and
+  recovery-result artifact schemas at v0.1, retain the existing CLI commands
+  and aliases, and keep AI command-path routing at v0.5.
+- Added no new MCP method, route version, schema file, canonical mutation
+  field, provider/model/network/database access, or membership inference.
+- Deferred the separately approved membership-removal writer and its recovery
+  path to v0.3.284.
+
 ## v0.3.282 - 2026-07-29
 
 - Added CLI-only read-only `activity-group-membership-removal-plan`, alias

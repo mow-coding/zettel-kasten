@@ -1,6 +1,6 @@
 # Runtime Canonical Entry Points
 
-Status: v0.3.282 installed-wheel resource, quick start, session handoff, local backup evidence, and philosophy implementation traceability checkpoint
+Status: v0.3.283 installed-wheel resource, retained-journal isolation, quick start, session handoff, local backup evidence, and philosophy implementation traceability checkpoint
 
 When an AI runtime enters a WOM archive, it needs a small, explicit "start
 here" map. The archive may contain zets, source bindings, provider metadata,
@@ -33,7 +33,7 @@ them.
 
 ## Official Action Routing
 
-Introduced in v0.3.278 and extended through v0.3.282, `action_routing` uses
+Introduced in v0.3.278 and extended through v0.3.283, `action_routing` uses
 `wom-kit/ai-command-path-routing/v0.5`. It tells an AI which official command
 handles session entry, search, local version truth, saved-view inspection,
 inbox pipeline-shape review, explicit event-membership add/removal planning, command
@@ -49,7 +49,8 @@ conservative structural signals, not proof or automatic repair. Saved-view
 writing remains unavailable. Event-membership additions use the dedicated
 digest-bound writer and separate recovery commands; inference and removal
 writing remain unavailable, while exact explicit removal planning is
-read-only. See
+read-only. v0.3.283 keeps routing v0.5 and the same commands while retained add
+and reserved removal journals share one fail-closed writer boundary. See
 [AI Command-Path Routing](ai-command-path-routing.md).
 
 ## AI Runtime Order

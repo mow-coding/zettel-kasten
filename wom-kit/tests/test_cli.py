@@ -49624,25 +49624,26 @@ archive_services.zet_abstract_backfill_recover(
                 },
             )
 
-            original_write_json_new_file = (
-                archive_services.write_json_new_file
+            original_bound_write = (
+                archive_services
+                .write_activity_group_bytes_new_file_bound
             )
 
             def fail_journal(
+                binding: dict[str, Any],
                 path: Path,
-                payload: dict[str, Any],
+                raw: bytes,
             ) -> None:
-                if (
-                    payload.get("schema")
-                    == archive_services
-                    .ACTIVITY_GROUP_MEMBERSHIP_TRANSACTION_JOURNAL_SCHEMA
+                if path.name.endswith(
+                    archive_services
+                    .ACTIVITY_GROUP_MEMBERSHIP_TRANSACTION_JOURNAL_SUFFIX
                 ):
                     raise OSError("PRIVATE_JOURNAL_FAILURE")
-                original_write_json_new_file(path, payload)
+                original_bound_write(binding, path, raw)
 
             with patch.object(
                 archive_services,
-                "write_json_new_file",
+                "write_activity_group_bytes_new_file_bound",
                 side_effect=fail_journal,
             ):
                 failed = (
@@ -49698,7 +49699,8 @@ archive_services.zet_abstract_backfill_recover(
                 for path in rollback_fixture["member_paths"]
             ]
             original_write_bytes_atomic = (
-                archive_services.write_bytes_atomic
+                archive_services
+                .replace_activity_group_canonical_bytes_compare_and_swap
             )
             rollback_member_names = {
                 path.name for path in rollback_fixture["member_paths"]
@@ -49707,8 +49709,9 @@ archive_services.zet_abstract_backfill_recover(
             failure_injected = False
 
             def fail_second_canonical_once(
+                root: Path,
                 path: Path,
-                value: bytes,
+                **kwargs: Any,
             ) -> None:
                 nonlocal canonical_attempts, failure_injected
                 if path.name in rollback_member_names:
@@ -49716,11 +49719,14 @@ archive_services.zet_abstract_backfill_recover(
                     if canonical_attempts == 2 and not failure_injected:
                         failure_injected = True
                         raise OSError("PRIVATE_SECOND_WRITE_FAILURE")
-                original_write_bytes_atomic(path, value)
+                original_write_bytes_atomic(root, path, **kwargs)
 
             with patch.object(
                 archive_services,
-                "write_bytes_atomic",
+                (
+                    "replace_activity_group_canonical_bytes_"
+                    "compare_and_swap"
+                ),
                 side_effect=fail_second_canonical_once,
             ):
                 rolled_back = (
@@ -49803,8 +49809,9 @@ archive_services.zet_abstract_backfill_recover(
             hard_exit_attempts = 0
 
             def interrupt_second_canonical(
+                root: Path,
                 path: Path,
-                value: bytes,
+                **kwargs: Any,
             ) -> None:
                 nonlocal hard_exit_attempts
                 if path.name in hard_exit_member_names:
@@ -49813,11 +49820,14 @@ archive_services.zet_abstract_backfill_recover(
                         raise KeyboardInterrupt(
                             "PRIVATE_HARD_EXIT_AFTER_FIRST_WRITE"
                         )
-                original_write_bytes_atomic(path, value)
+                original_write_bytes_atomic(root, path, **kwargs)
 
             with patch.object(
                 archive_services,
-                "write_bytes_atomic",
+                (
+                    "replace_activity_group_canonical_bytes_"
+                    "compare_and_swap"
+                ),
                 side_effect=interrupt_second_canonical,
             ):
                 with self.assertRaises(KeyboardInterrupt):
@@ -49897,7 +49907,8 @@ archive_services.zet_abstract_backfill_recover(
                 path.read_bytes() for path in fixture["member_paths"]
             ]
             original_write_bytes_atomic = (
-                archive_services.write_bytes_atomic
+                archive_services
+                .replace_activity_group_canonical_bytes_compare_and_swap
             )
             member_names = {
                 path.name for path in fixture["member_paths"]
@@ -49905,8 +49916,9 @@ archive_services.zet_abstract_backfill_recover(
             attempts = 0
 
             def interrupt_second(
+                root: Path,
                 path: Path,
-                value: bytes,
+                **kwargs: Any,
             ) -> None:
                 nonlocal attempts
                 if path.name in member_names:
@@ -49915,11 +49927,14 @@ archive_services.zet_abstract_backfill_recover(
                         raise KeyboardInterrupt(
                             "PRIVATE_RECOVERY_HARD_EXIT"
                         )
-                original_write_bytes_atomic(path, value)
+                original_write_bytes_atomic(root, path, **kwargs)
 
             with patch.object(
                 archive_services,
-                "write_bytes_atomic",
+                (
+                    "replace_activity_group_canonical_bytes_"
+                    "compare_and_swap"
+                ),
                 side_effect=interrupt_second,
             ):
                 with self.assertRaises(KeyboardInterrupt):
@@ -50116,7 +50131,8 @@ archive_services.zet_abstract_backfill_recover(
                 path.read_bytes() for path in fixture["member_paths"]
             ]
             original_write_bytes_atomic = (
-                archive_services.write_bytes_atomic
+                archive_services
+                .replace_activity_group_canonical_bytes_compare_and_swap
             )
             member_names = {
                 path.name for path in fixture["member_paths"]
@@ -50124,8 +50140,9 @@ archive_services.zet_abstract_backfill_recover(
             attempts = 0
 
             def interrupt_second(
+                root: Path,
                 path: Path,
-                value: bytes,
+                **kwargs: Any,
             ) -> None:
                 nonlocal attempts
                 if path.name in member_names:
@@ -50134,11 +50151,14 @@ archive_services.zet_abstract_backfill_recover(
                         raise KeyboardInterrupt(
                             "PRIVATE_RECOVERY_LOCK_CLAIM_HARD_EXIT"
                         )
-                original_write_bytes_atomic(path, value)
+                original_write_bytes_atomic(root, path, **kwargs)
 
             with patch.object(
                 archive_services,
-                "write_bytes_atomic",
+                (
+                    "replace_activity_group_canonical_bytes_"
+                    "compare_and_swap"
+                ),
                 side_effect=interrupt_second,
             ):
                 with self.assertRaises(KeyboardInterrupt):
@@ -50354,29 +50374,45 @@ archive_services.zet_abstract_backfill_recover(
                     completed_fixture["request_sha256"],
                 )
             )
-            original_unlink = Path.unlink
-            journal_cleanup_failed = False
+            completed_lock = (
+                completed_root
+                / ".wom-scratch"
+                / "private"
+                / "activity-groups"
+                / archive_services
+                .ACTIVITY_GROUP_MEMBERSHIP_WRITE_LOCK_NAME
+            )
+            original_delete = (
+                archive_services
+                .delete_activity_group_evidence_exact
+            )
+            lock_cleanup_failed = False
 
-            def fail_completed_journal_cleanup(
+            def fail_completed_lock_cleanup(
+                root: Path,
                 path: Path,
                 *args: Any,
                 **kwargs: Any,
             ) -> None:
-                nonlocal journal_cleanup_failed
+                nonlocal lock_cleanup_failed
                 if (
-                    path == journal_path
-                    and not journal_cleanup_failed
-                ):
-                    journal_cleanup_failed = True
-                    raise OSError(
-                        "PRIVATE_COMPLETED_JOURNAL_CLEANUP_FAILURE"
+                    path.name == completed_lock.name
+                    and os.path.samefile(
+                        path.parent,
+                        completed_lock.parent,
                     )
-                original_unlink(path, *args, **kwargs)
+                    and not lock_cleanup_failed
+                ):
+                    lock_cleanup_failed = True
+                    raise OSError(
+                        "PRIVATE_COMPLETED_LOCK_CLEANUP_FAILURE"
+                    )
+                original_delete(root, path, *args, **kwargs)
 
             with patch.object(
-                Path,
-                "unlink",
-                new=fail_completed_journal_cleanup,
+                archive_services,
+                "delete_activity_group_evidence_exact",
+                new=fail_completed_lock_cleanup,
             ):
                 applied = (
                     archive_services.activity_group_membership_write(
@@ -50395,22 +50431,21 @@ archive_services.zet_abstract_backfill_recover(
                         affirm_memberships_reviewed=True,
                     )
                 )
-            self.assertTrue(applied["ok"])
-            self.assertEqual(applied["status"], "applied")
+            self.assertFalse(applied["ok"])
+            self.assertEqual(
+                applied["status"],
+                "applied_evidence_conflict",
+            )
+            self.assertIn(
+                "activity_group_unresolved_transaction_evidence_exists",
+                applied["blockers"],
+            )
             self.assertFalse(
                 applied["transaction_journal"][
                     "removed_after_completion"
                 ]
             )
             self.assertTrue(journal_path.is_file())
-            completed_lock = (
-                completed_root
-                / ".wom-scratch"
-                / "private"
-                / "activity-groups"
-                / archive_services
-                .ACTIVITY_GROUP_MEMBERSHIP_WRITE_LOCK_NAME
-            )
             self.assertTrue(completed_lock.is_file())
             receipt_path = completed_root / (
                 archive_services
@@ -50490,7 +50525,8 @@ archive_services.zet_abstract_backfill_recover(
                 suffix="60",
             )
             original_write_bytes_atomic = (
-                archive_services.write_bytes_atomic
+                archive_services
+                .replace_activity_group_canonical_bytes_compare_and_swap
             )
             member_names = {
                 path.name for path in fixture["member_paths"]
@@ -50498,8 +50534,9 @@ archive_services.zet_abstract_backfill_recover(
             attempts = 0
 
             def interrupt_second(
+                root: Path,
                 path: Path,
-                value: bytes,
+                **kwargs: Any,
             ) -> None:
                 nonlocal attempts
                 if path.name in member_names:
@@ -50508,11 +50545,14 @@ archive_services.zet_abstract_backfill_recover(
                         raise KeyboardInterrupt(
                             "PRIVATE_DRIFT_HARD_EXIT"
                         )
-                original_write_bytes_atomic(path, value)
+                original_write_bytes_atomic(root, path, **kwargs)
 
             with patch.object(
                 archive_services,
-                "write_bytes_atomic",
+                (
+                    "replace_activity_group_canonical_bytes_"
+                    "compare_and_swap"
+                ),
                 side_effect=interrupt_second,
             ):
                 with self.assertRaises(KeyboardInterrupt):
@@ -50668,25 +50708,26 @@ archive_services.zet_abstract_backfill_recover(
                 path.read_bytes()
                 for path in failure_fixture["member_paths"]
             ]
-            original_write_json_new_file = (
-                archive_services.write_json_new_file
+            original_write_bound_file = (
+                archive_services
+                .write_activity_group_bytes_new_file_bound
             )
 
             def fail_receipt(
+                binding: dict[str, Any],
                 path: Path,
-                payload: dict[str, Any],
+                raw: bytes,
             ) -> None:
                 if (
-                    payload.get("schema")
-                    == archive_services
-                    .ACTIVITY_GROUP_MEMBERSHIP_RECEIPT_SCHEMA
+                    path.parent.name == "activity-groups"
+                    and path.parent.parent.name == "receipts"
                 ):
                     raise OSError("PRIVATE_RECEIPT_WRITE_FAILURE")
-                original_write_json_new_file(path, payload)
+                original_write_bound_file(binding, path, raw)
 
             with patch.object(
                 archive_services,
-                "write_json_new_file",
+                "write_activity_group_bytes_new_file_bound",
                 side_effect=fail_receipt,
             ):
                 failed = (
@@ -50762,26 +50803,30 @@ archive_services.zet_abstract_backfill_recover(
             concurrent_receipt_created = False
 
             def create_concurrent_receipt(
+                binding: dict[str, Any],
                 path: Path,
-                payload: dict[str, Any],
+                raw: bytes,
             ) -> None:
                 nonlocal concurrent_receipt_created
                 if (
-                    payload.get("schema")
-                    == archive_services
-                    .ACTIVITY_GROUP_MEMBERSHIP_RECEIPT_SCHEMA
+                    path.parent.name == "activity-groups"
+                    and path.parent.parent.name == "receipts"
                     and not concurrent_receipt_created
                 ):
-                    original_write_json_new_file(path, payload)
+                    original_write_bound_file(
+                        binding,
+                        path,
+                        raw,
+                    )
                     concurrent_receipt_created = True
                     raise FileExistsError(
                         "PRIVATE_CONCURRENT_RECEIPT_CREATED"
                     )
-                original_write_json_new_file(path, payload)
+                original_write_bound_file(binding, path, raw)
 
             with patch.object(
                 archive_services,
-                "write_json_new_file",
+                "write_activity_group_bytes_new_file_bound",
                 side_effect=create_concurrent_receipt,
             ):
                 concurrent = (
