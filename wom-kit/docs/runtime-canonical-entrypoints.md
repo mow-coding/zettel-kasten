@@ -1,6 +1,6 @@
 # Runtime Canonical Entry Points
 
-Status: v0.3.284 installed-wheel resource, activity-group removal routing, quick start, session handoff, local backup evidence, and philosophy implementation traceability checkpoint
+Status: v0.3.285 installed-wheel resource, activity-group removal routing, quick start, session handoff, local backup evidence, and philosophy implementation traceability checkpoint
 
 When an AI runtime enters a WOM archive, it needs a small, explicit "start
 here" map. The archive may contain zets, source bindings, provider metadata,
