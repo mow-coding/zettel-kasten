@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable
 from unittest.mock import patch
@@ -16,8 +17,11 @@ KIT_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = KIT_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
+TESTS_ROOT = Path(__file__).resolve().parent
+if str(TESTS_ROOT) not in sys.path:
+    sys.path.insert(0, str(TESTS_ROOT))
 
-from tests import test_cli as cli_test_helpers
+import test_cli as cli_test_helpers
 from wom_kit import archive_services
 
 
@@ -1174,6 +1178,120 @@ class ActivityGroupTransactionSafetyTests(unittest.TestCase):
             finally:
                 if injected:
                     self.remove_directory_reparse(receipt_parent)
+
+    def test_rollback_closes_receipt_binding_before_empty_dir_cleanup(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root, fixture = self.create_fixture(
+                Path(tmp),
+                suffix="92c",
+            )
+            receipt_path = (
+                archive_services
+                .activity_group_membership_receipt_path(
+                    archive_root,
+                    fixture["request_sha256"],
+                )
+            )
+            receipt_parent = receipt_path.parent
+            real_bound_directory_chain = (
+                archive_services.activity_group_bound_directory_chain
+            )
+            real_cleanup_empty_archive_dirs = (
+                archive_services.cleanup_empty_archive_dirs
+            )
+            receipt_binding_open = False
+            receipt_binding_seen = False
+            receipt_cleanup_seen = False
+
+            @contextmanager
+            def tracked_bound_directory_chain(
+                root: Path,
+                target: Path,
+                *,
+                create: bool = False,
+            ) -> Any:
+                nonlocal receipt_binding_open, receipt_binding_seen
+                is_receipt_parent = target == receipt_parent
+                try:
+                    with real_bound_directory_chain(
+                        root,
+                        target,
+                        create=create,
+                    ) as binding:
+                        if is_receipt_parent:
+                            receipt_binding_open = True
+                            receipt_binding_seen = True
+                        yield binding
+                finally:
+                    if is_receipt_parent:
+                        receipt_binding_open = False
+
+            def guarded_cleanup_empty_archive_dirs(
+                root: Path,
+                paths: list[Path],
+            ) -> None:
+                nonlocal receipt_cleanup_seen
+                if receipt_path in paths:
+                    receipt_cleanup_seen = True
+                    self.assertFalse(
+                        receipt_binding_open,
+                        "receipt parent cleanup ran before binding close",
+                    )
+                real_cleanup_empty_archive_dirs(root, paths)
+
+            def fail_before_receipt_write(
+                operation: str,
+                state: str,
+                current: int | None,
+                total: int | None,
+            ) -> None:
+                del current, total
+                if (
+                    operation == "activity-group-membership-receipt"
+                    and state == "start"
+                ):
+                    raise RuntimeError("synthetic pre-receipt failure")
+
+            with (
+                patch.object(
+                    archive_services,
+                    "activity_group_bound_directory_chain",
+                    new=tracked_bound_directory_chain,
+                ),
+                patch.object(
+                    archive_services,
+                    "cleanup_empty_archive_dirs",
+                    new=guarded_cleanup_empty_archive_dirs,
+                ),
+            ):
+                result = (
+                    archive_services.activity_group_membership_write(
+                        archive_root,
+                        request_path=fixture["request_relative"],
+                        expected_request_sha256=fixture[
+                            "request_sha256"
+                        ],
+                        expected_review_plan_sha256=fixture[
+                            "review_plan_sha256"
+                        ],
+                        approve=True,
+                        reviewed_by=(
+                            "person:activity-group-safety-reviewer"
+                        ),
+                        affirm_memberships_reviewed=True,
+                        progress_callback=fail_before_receipt_write,
+                    )
+                )
+
+            self.assertTrue(receipt_binding_seen)
+            self.assertTrue(receipt_cleanup_seen)
+            self.assertFalse(receipt_binding_open)
+            self.assertFalse(receipt_parent.exists())
+            self.assertFalse(result["ok"], result)
+            self.assertEqual(result["status"], "failed_rolled_back")
+            self.assertTrue(result["rollback"]["succeeded"], result)
 
     def test_canonical_compare_and_swap_preserves_last_moment_foreign_bytes(
         self,

@@ -37024,8 +37024,6 @@ def activity_group_membership_write(
                 transaction_journal_removed = False
         else:
             transaction_journal_removed = False
-        if not receipt_parent_existed:
-            cleanup_empty_archive_dirs(root, [receipt_path])
         rollback["canonical_files_restored"] = restored
         rollback["receipt_removed"] = receipt_removed
         rollback["transaction_journal_removed"] = (
