@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -12,8 +13,15 @@ from unittest.mock import patch
 
 # Import the existing fixture helpers only through their module.  Binding the
 # large ArchiveCliTests class in this module would make unittest discover its
-# complete suite a second time.
-from tests import test_cli as cli_test_module
+# complete suite a second time.  CI starts discovery from ``wom-kit/tests``
+# while its working directory is the repository root, so bind the test module
+# directory explicitly instead of assuming ``tests`` is importable as a
+# namespace package.
+TESTS_ROOT = Path(__file__).resolve().parent
+if str(TESTS_ROOT) not in sys.path:
+    sys.path.insert(0, str(TESTS_ROOT))
+
+import test_cli as cli_test_module
 from wom_kit import archive_services
 
 
