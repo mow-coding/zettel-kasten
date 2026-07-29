@@ -34,10 +34,10 @@ not re-grow baseline ladders or tag lists here.
 Current public baseline:
 
 ```text
-v0.3.283 pre-release
+v0.3.284 pre-release
 ```
 
-Previous public baseline: v0.3.282 pre-release.
+Previous public baseline: v0.3.283 pre-release.
 
 Full release history: see [CHANGELOG.md](CHANGELOG.md) and [wom-kit/docs/releases/](wom-kit/docs/releases/).
 
@@ -55,7 +55,7 @@ future-only boundaries.
 Install the exact release wheel as an isolated command-line tool:
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.283/wom_kit-0.3.283-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.284/wom_kit-0.3.284-py3-none-any.whl"
 archive --version
 ```
 
@@ -85,7 +85,7 @@ approval-gated write, or docs-only), see the
 ### Archive core & lifecycle
 
 - a public WOM/zet/ZET design baseline with specs, schemas, fake archives, release notes, and work logs,
-- an explicit event-membership workflow that validates one human-selected anchor and member set, applies only digest-bound `facets.activity_group` additions through a human-approved, locked, snapshot/journal/receipt-backed writer with separately approved interruption recovery, blocks retained add journals and reserved future-removal journals before and under the shared writer lock, and separately plans exact human-selected removals without writing; receipts are exactly rebound to journal/lock evidence during recovery, membership is never inferred, and the removal writer is deferred to v0.3.284,
+- an explicit event-membership workflow that validates one human-selected anchor and member set, applies separately digest-bound additions and removals to `facets.activity_group` through human-approved, locked, snapshot/journal/receipt-backed CLI writers with separately approved interruption recovery, shares one global writer lock and a bounded two-root evidence scan while keeping add and removal requests, journals, receipts, and recovery contracts distinct, excludes `already_absent` rows from removal mutation artifacts, and never infers membership or exposes an MCP writer,
 - an artifact-first human-memory doctrine: time-situated local artifacts and their chronology outrank regenerable entity/graph projections; matching labels never authorize silent identity merges, `canonical` names the subject-approved current archive state rather than objective truth, and AI may re-infer context while human change remains visible; see [Product Philosophy](wom-kit/docs/concepts/product-philosophy.md) and the claim-by-claim [Philosophy Implementation Evidence](wom-kit/docs/philosophy-implementation-evidence.md),
 - a public version-line roadmap that explains how the pre-1.0 minor lines map to idea, implementation, WOM feedback, UI/control-layer, and ZET feedback phases,
 - a machine-readable local-sovereignty contract: local reviewed WOM state is canonical, GitHub backs up metadata/version history, object storage backs up objet bytes, and external databases hold regenerable map backups or replicas; runtime/start-here/recovery surfaces share the same offline, conflict, recovery, and receipt boundaries, while read-only `backup-evidence` reports only locally verifiable lane evidence and never turns local commits, declared labels, generated indexes, or receipt-time coverage into a false current-remote or whole-backup claim,
@@ -500,7 +500,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
-v0.3.283 (current checkpoint)
+v0.3.284 (current checkpoint)
 ```
 
 Public releases from `v0.2.5` onward are tagged as compatibility checkpoints.

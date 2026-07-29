@@ -43,8 +43,8 @@ satisfied sentence into `next_safe_steps`.
 
 ## Official Read And Write Paths
 
-Introduced in v0.3.278 and extended through v0.3.283, JSON output includes
-`wom-kit/ai-command-path-routing/v0.5`, and Markdown output renders
+Introduced in v0.3.278 and extended through v0.3.284, JSON output includes
+`wom-kit/ai-command-path-routing/v0.6`, and Markdown output renders
 `Official Read Command Paths` and `Official Write Command Paths`.
 
 The routes require `archive search --count-total --format json` for
@@ -59,10 +59,13 @@ repair. Explicit event-membership review routes through the read-only
 `activity-group-membership-plan`; approved additions then route through the
 digest-bound `activity-group-membership-write`, and interrupted transactions
 route through a separate plan/approval recovery pair. Explicit removals route
-only to `activity-group-membership-removal-plan`; no removal writer exists and
-no route infers membership. v0.3.283 keeps the routing object at v0.5 while
-the existing add/recovery commands block retained or reserved journals across
-both private roots and hold mismatched completion evidence for forensics.
+through `activity-group-membership-removal-plan`, the separate digest-bound
+`activity-group-membership-removal-write`, and their own
+recovery-plan/approval pair. v0.3.284 advances the routing object to v0.6.
+Addition and removal share one global writer lock and block retained journals
+across both private roots, but their request, journal, receipt, and recovery
+contracts remain separate. No route infers membership, authorizes a direct
+canonical edit, exposes an MCP writer, or supplies a removal revert.
 See [AI Command-Path Routing](ai-command-path-routing.md).
 
 ## Identity Consistency

@@ -1,14 +1,26 @@
 {
   "schema": "wom-kit/package-resource-manifest/v0.1",
-  "version": "0.3.283",
+  "version": "0.3.284",
   "source_of_truth": "wom-kit source resource directories",
-  "file_count": 99,
+  "file_count": 101,
   "files": [
     {
       "source": "schemas/activity-group-membership-receipt.schema.json",
       "packaged": "schemas/activity-group-membership-receipt.schema.json",
       "bytes": 4951,
       "sha256": "050c30c7952a2f2c7769180b44320f22968e5efc22eed255e9c78ddebe0e1a02"
+    },
+    {
+      "source": "schemas/activity-group-membership-removal-receipt.schema.json",
+      "packaged": "schemas/activity-group-membership-removal-receipt.schema.json",
+      "bytes": 4990,
+      "sha256": "9e00f9a0ee85f54c142ee74745f84f78059e0f256b27745c538f60fa9348978e"
+    },
+    {
+      "source": "schemas/activity-group-membership-removal-transaction-journal.schema.json",
+      "packaged": "schemas/activity-group-membership-removal-transaction-journal.schema.json",
+      "bytes": 3748,
+      "sha256": "138d7060d1bac077fd6c41704a723f36226fa0989923a25d47d2a96314fc5c94"
     },
     {
       "source": "schemas/activity-group-membership-transaction-journal.schema.json",
@@ -301,8 +313,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/SKILL.md",
       "packaged": "templates/ai-runtime/wom-archive/SKILL.md",
-      "bytes": 6982,
-      "sha256": "090da3c37a32286b34d656488145888b01879dfc150a147836c96eafe7949831"
+      "bytes": 7297,
+      "sha256": "511cf18f260b58c266064f89946dca248666a831a9ddc5eb942439cec66c29c7"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/capture-draft-and-publication.md",
@@ -325,8 +337,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/references/reading-memory-and-revision.md",
       "packaged": "templates/ai-runtime/wom-archive/references/reading-memory-and-revision.md",
-      "bytes": 7403,
-      "sha256": "f64869813060233936c45bff6dfce78e7574ce9074d5f1b238b59bd0ab601a20"
+      "bytes": 7846,
+      "sha256": "af26e1c720efe54c3c3b28b3a5576f514693338d8afc062132e54a474dcae161"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/safety-results-and-human-language.md",
@@ -593,10 +605,10 @@
       "sha256": "d619dc26af3216498c8392dfe838b0fe752d4bad9da998a58ca682d668fc510c"
     },
     {
-      "source": "docs/releases/v0.3.283.md",
-      "packaged": "release-notes/v0.3.283.md",
-      "bytes": 10396,
-      "sha256": "1f7db730b8123b71bdeebba69430a4a18bd484a3848b384ca017037a9b725d39"
+      "source": "docs/releases/v0.3.284.md",
+      "packaged": "release-notes/v0.3.284.md",
+      "bytes": 7300,
+      "sha256": "a8a940e00baa8135eaf556bb899faa84dac855501b974ac6911ba813068e2682"
     }
   ]
 }

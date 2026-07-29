@@ -83,9 +83,11 @@ request root:
 
 The first bounded scan happens before the shared writer lock is attempted.
 The writer repeats the same scan after it owns that lock and before it writes
-a snapshot or canonical byte. This isolates an unfinished addition from a new
-addition and reserves the same serialization boundary for the future removal
-writer. Journal contents are not needed for this blocker and are not returned.
+a snapshot or canonical byte. This isolates an unfinished addition or removal
+from either new operation writer. Removal uses its own request, journal,
+receipt, and recovery contracts, but shares this global serialization
+boundary. Journal contents are not needed for this blocker and are not
+returned.
 
 The scan and private evidence writes do not rely on a pathname that was checked
 only once. WOM binds every directory component from the resolved archive root
@@ -269,12 +271,17 @@ journal filename or content.
 
 ## Deliberate boundary
 
-v0.3.281 implements additions only. v0.3.282 adds a distinct read-only
+This command remains addition-only. v0.3.282 added a distinct read-only
 [Activity-Group Membership Removal Plan](activity-group-membership-removal-plan.md),
-and v0.3.283 hardens the existing add/recovery transaction boundary without
-adding a command, public artifact-schema version, MCP method, or AI-routing
-version. The private write-lock shape advances to v0.2 for full transaction
-commitment; legacy v0.1 handling is restricted as described above.
-Removal writing remains unavailable and is deferred to v0.3.284. Search,
-title, time, proximity, and edges remain candidate-finding aids for a human,
-never write authority.
+and v0.3.284 adds a separate approval-gated
+[Activity-Group Membership Removal Write And Recovery](activity-group-membership-removal-write.md)
+path. The two writers share one global lock, recovery guard namespace, and
+bounded two-root transaction-evidence inventory, but they do not share
+requests, plan digests, journals, receipts, affirmations, or recovery
+authority.
+
+The addition writer never removes a membership, and the removal writer never
+reuses addition approval. Neither path infers membership, exposes an MCP
+writer, or grants direct canonical-edit permission. Search, title, time,
+proximity, and edges remain candidate-finding aids for a human, never write
+authority.

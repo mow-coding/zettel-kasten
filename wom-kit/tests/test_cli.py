@@ -5293,7 +5293,7 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertFalse(operational_context["closed_actions"]["files_written"])
             self.assertEqual(
                 operational_context["action_routing"]["schema"],
-                "wom-kit/ai-command-path-routing/v0.5",
+                "wom-kit/ai-command-path-routing/v0.6",
             )
             entrypoints = result["canonical_entrypoints"]
             self.assertEqual(entrypoints["lifecycle_action"], "runtime_canonical_entrypoints")
@@ -5362,12 +5362,12 @@ class ArchiveCliTests(unittest.TestCase):
                     "canonical_removal_plan_implemented"
                 ]
             )
-            self.assertFalse(
+            self.assertTrue(
                 activity_group_route[
                     "canonical_removal_write_implemented"
                 ]
             )
-            self.assertFalse(
+            self.assertTrue(
                 activity_group_route["canonical_removal_implemented"]
             )
             self.assertIn(
@@ -5389,10 +5389,19 @@ class ArchiveCliTests(unittest.TestCase):
                     "canonical_removal_plan_implemented"
                 ]
             )
-            self.assertFalse(
+            self.assertTrue(
                 activity_group_removal_route[
                     "canonical_removal_write_implemented"
                 ]
+            )
+            self.assertTrue(
+                activity_group_removal_route[
+                    "canonical_removal_recovery_implemented"
+                ]
+            )
+            self.assertIn(
+                "archive activity-group-membership-removal-write",
+                activity_group_removal_route["next_command"],
             )
             self.assertFalse(
                 activity_group_removal_route["direct_file_edit_allowed"]
@@ -5427,10 +5436,10 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertTrue(
                 activity_group_write_route["removal_plan_implemented"]
             )
-            self.assertFalse(
+            self.assertTrue(
                 activity_group_write_route["removal_write_implemented"]
             )
-            self.assertFalse(
+            self.assertTrue(
                 activity_group_write_route["removal_implemented"]
             )
             self.assertIn(
@@ -5452,6 +5461,49 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertIn(
                 "activity-group-membership-recovery-plan",
                 activity_group_write_route["recovery_plan_command"],
+            )
+            activity_group_removal_write_route = next(
+                item
+                for item in action_routing["write_action_routes"]
+                if item["action"]
+                == "write_activity_group_membership_removal"
+            )
+            self.assertIn(
+                "archive activity-group-membership-removal-plan",
+                activity_group_removal_write_route["review_command"],
+            )
+            self.assertIn(
+                "archive activity-group-membership-removal-write",
+                activity_group_removal_write_route["preview_command"],
+            )
+            self.assertIn(
+                "--affirm-removals-reviewed",
+                activity_group_removal_write_route["approved_command"],
+            )
+            self.assertIn(
+                "activity-group-membership-removal-recovery-plan",
+                activity_group_removal_write_route[
+                    "recovery_plan_command"
+                ],
+            )
+            self.assertIn(
+                "activity-group-membership-removal-recover",
+                activity_group_removal_write_route[
+                    "approved_recovery_command"
+                ],
+            )
+            self.assertTrue(
+                activity_group_removal_write_route["write_implemented"]
+            )
+            self.assertTrue(
+                activity_group_removal_write_route[
+                    "transaction_recovery_implemented"
+                ]
+            )
+            self.assertFalse(
+                activity_group_removal_write_route[
+                    "direct_file_write_allowed"
+                ]
             )
             self.assertEqual(
                 entrypoints["recommended_first_commands"][0]["command"],
@@ -5750,7 +5802,7 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(result["first_read"]["source_truths"]["canonical_zets"], "zettels/")
             self.assertEqual(
                 result["action_routing"]["schema"],
-                "wom-kit/ai-command-path-routing/v0.5",
+                "wom-kit/ai-command-path-routing/v0.6",
             )
             self.assertEqual(
                 result["operational_context"]["action_routing"],
@@ -5807,6 +5859,16 @@ class ArchiveCliTests(unittest.TestCase):
                     ]
                     if item["action"]
                     == "write_activity_group_membership"
+                )["write_implemented"]
+            )
+            self.assertTrue(
+                next(
+                    item
+                    for item in result["action_routing"][
+                        "write_action_routes"
+                    ]
+                    if item["action"]
+                    == "write_activity_group_membership_removal"
                 )["write_implemented"]
             )
             self.assertEqual(result["storage_authority"]["canonical_authority"], "local_wom")
@@ -48783,15 +48845,15 @@ archive_services.zet_abstract_backfill_recover(
             self.assertTrue(
                 result["membership_contract"]["body_and_updated_at_preserved"]
             )
-            self.assertFalse(
+            self.assertTrue(
                 result["future_write_preview"]["implemented_now"]
             )
-            self.assertIsNone(
-                result["future_write_preview"]["official_command"]
-            )
             self.assertEqual(
-                result["future_write_preview"]["planned_command"],
+                result["future_write_preview"]["official_command"],
                 "archive activity-group-membership-removal-write",
+            )
+            self.assertIsNone(
+                result["future_write_preview"]["planned_command"]
             )
             self.assertFalse(result["write_boundary"]["write_implemented"])
             self.assertFalse(result["index_evidence"]["index_used"])
@@ -51016,6 +51078,7 @@ archive_services.zet_abstract_backfill_recover(
             def drift_request_under_lock(
                 archive_root: Path,
                 request_path: str,
+                operation_contract: Any,
             ) -> tuple[bytes, dict[str, Any]]:
                 nonlocal request_reads
                 request_reads += 1
@@ -51030,6 +51093,7 @@ archive_services.zet_abstract_backfill_recover(
                 return original_private_request(
                     archive_root,
                     request_path,
+                    operation_contract,
                 )
 
             with patch.object(
