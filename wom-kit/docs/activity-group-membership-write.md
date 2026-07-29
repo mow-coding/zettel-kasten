@@ -149,6 +149,7 @@ bounded to 16 MiB.
 
 ## Deliberate boundary
 
-v0.3.281 implements additions only. Removing an event membership is a distinct
-semantic operation and remains unavailable. Search, title, time, proximity,
-and edges remain candidate-finding aids for a human, never write authority.
+v0.3.281 implements additions only. v0.3.282 adds a distinct read-only
+[Activity-Group Membership Removal Plan](activity-group-membership-removal-plan.md),
+but removal writing remains unavailable. Search, title, time, proximity, and
+edges remain candidate-finding aids for a human, never write authority.

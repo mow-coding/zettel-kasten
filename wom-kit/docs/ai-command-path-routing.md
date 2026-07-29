@@ -1,6 +1,6 @@
 # AI Command-Path Routing
 
-Status: implemented in v0.3.278, extended through v0.3.281
+Status: implemented in v0.3.278, extended through v0.3.282
 
 ## Purpose
 
@@ -38,6 +38,12 @@ v0.3.281 completes the matching approved-add and interruption-recovery route:
 wom-kit/ai-command-path-routing/v0.4
 ```
 
+v0.3.282 adds the separate read-only event-membership removal-plan route:
+
+```text
+wom-kit/ai-command-path-routing/v0.5
+```
+
 It is returned by:
 
 - `archive runtime-context <archive-root> --format json`;
@@ -72,6 +78,7 @@ packaged runtime skill, the fake archive, and live read-only command output.
 | Inspect saved-view state | `archive view-health <archive-root> --dry-run --format json` | Follow with `view-recommendation-plan`; both are read-only. |
 | Inspect possible historical inbox pipeline bypasses | `archive inbox-pipeline-audit <archive-root> --dry-run --format json` | Structural classes are conservative signals, not proof of command execution; no automatic repair exists. |
 | Plan one explicit event membership set | `archive activity-group-membership-plan <archive-root> --request .wom-scratch/private/activity-groups/<reviewed>.json --dry-run --progress --format json` | The private request must contain one human-selected event anchor and ordered member ids. The command infers no member and writes nothing. |
+| Plan removing one explicit event membership from selected zets | `archive activity-group-membership-removal-plan <archive-root> --request .wom-scratch/private/activity-group-removals/<reviewed>.json --dry-run --progress --format json` | The private request must contain the exact human-selected event anchor and ordered member ids. It writes nothing; the removal writer is not implemented. |
 | Discover installed commands | `archive capabilities --machine --format json` | Use the installed inventory before declaring that WOM lacks a command. |
 
 ## Official Write Routes
@@ -88,6 +95,7 @@ Every write remains preview-first and human-reviewed.
 | Create a persistent saved-view | `archive view-recommendation-plan <archive-root> --dry-run --format json` | No dedicated writer exists. An AI must not edit `views/*.yml` directly. |
 | Add reviewed event memberships | Run `activity-group-membership-plan`, then preview `archive activity-group-membership-write <archive-root> --request <private-reviewed-request> --expected-request-sha256 <sha256> --expected-review-plan-sha256 <sha256> --dry-run --progress --format json` | Approve the same digest-bound writer with `--approve --reviewed-by <human-actor> --affirm-memberships-reviewed`. It writes a journal and receipt; it does not infer or remove memberships. |
 | Recover an interrupted event-membership write | `archive activity-group-membership-recovery-plan <archive-root> --expected-request-sha256 <sha256> --dry-run --format json` | First confirm the old writer is no longer running. Approve only the exact recovery-plan digest with `activity-group-membership-recover`; unknown drift remains a manual forensic hold. |
+| Remove reviewed event memberships | First run `activity-group-membership-removal-plan`. | No approved removal writer exists in v0.3.282. Preserve the private request and digest; do not edit canonical zets directly. |
 
 ## Safety And Compatibility
 
@@ -126,5 +134,19 @@ The writer accepts additions only after exact request/review hashes and human
 approval. It revalidates under a lock, preserves before-state snapshots,
 publishes a journal before mutation, and publishes a receipt last. Recovery is
 a second digest-bound human approval and never guesses through unknown drift.
-Membership discovery, membership removal, direct canonical editing, and an MCP
-writer remain unavailable.
+Membership discovery, membership removal writing, direct canonical editing,
+and an MCP writer remain unavailable.
+
+## v0.3.282 Event-Membership Removal-Plan Boundary
+
+v0.3.282 adds the read-only
+[Activity-Group Membership Removal Plan](activity-group-membership-removal-plan.md).
+It validates only one explicit private removal request, exact live canonical
+bytes, and the existing event-anchor contract. It classifies
+`ready_to_remove`, `already_absent`, and `blocked` rows, computes exact
+current/proposed hashes, and infers no removal from search, title, time,
+proximity, edges, or the generated index.
+
+The route reports removal planning as implemented and removal writing as
+unimplemented. It grants no approval, receipt, direct edit, or MCP write
+authority.

@@ -45,8 +45,17 @@ to `activity-group-membership-write --dry-run`, then use its explicit
 human review. Never hand-edit canonical zets. If a hard interruption retains
 its journal and lock, first confirm the old writer is no longer running, then
 use `activity-group-membership-recovery-plan --dry-run` and the exact
-digest-bound `activity-group-membership-recover` approval. Never infer or
-remove membership, and never execute a `manual_forensic_hold`.
+digest-bound `activity-group-membership-recover` approval. Never infer
+membership and never execute a `manual_forensic_hold`.
+
+To review explicitly selected removals without writing, use:
+
+```text
+archive activity-group-membership-removal-plan <archive-root> --request .wom-scratch/private/activity-group-removals/<reviewed>.json --dry-run --progress --format json
+```
+
+The removal writer is not implemented. Preserve the private request and review
+digest, and never remove a membership by editing a canonical zet directly.
 
 ## Read Abstracts Before Full Bodies
 

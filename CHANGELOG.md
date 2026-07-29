@@ -6,6 +6,30 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.282 - 2026-07-29
+
+- Added CLI-only read-only `activity-group-membership-removal-plan`, alias
+  `event-group-membership-removal-plan`.
+- Accept only one bounded private removal request containing an exact
+  human-selected event anchor and ordered unique canonical member ids.
+- Classify rows as `ready_to_remove`, `already_absent`, or `blocked`; infer no
+  removal from search, title, time, proximity, edges, or the generated index.
+- Compute exact candidate bytes that remove only the named anchor, preserve
+  other membership order and list shape, and leave other facets, body,
+  `updated_at`, BOM state, and newline convention unchanged.
+- Bind the separate removal schema, exact request/anchor hashes, and ordered
+  current/proposed row hashes into `review_plan_sha256`.
+- Keep malformed, duplicate, empty, mixed, unsafe, mapping, or null current
+  membership shapes blocked instead of normalizing them.
+- Bound request, member count, per-canonical bytes, and total canonical bytes;
+  return no request path, ids, paths, titles, facet values, bodies, provider
+  locators, secrets, or absolute local paths.
+- Extended AI command-path routing to
+  `wom-kit/ai-command-path-routing/v0.5` with the read-only removal-plan route
+  while continuing to report removal writing as unimplemented.
+- Added no approval mode, canonical removal, receipt, journal, lock, snapshot,
+  index change, inference, direct-file-edit permission, or MCP writer.
+
 ## v0.3.281 - 2026-07-29
 
 - Added CLI-only approval-gated `activity-group-membership-write`, alias

@@ -172,4 +172,7 @@ current bytes under a lock, records human review, preserves before-snapshots,
 publishes a pre-mutation journal, and writes an immutable receipt last.
 
 Member removal remains a separate reviewed operation. Neither the plan nor the
-v0.3.281 writer removes any membership.
+v0.3.281 writer removes any membership. v0.3.282 adds only the separate
+read-only
+[Activity-Group Membership Removal Plan](activity-group-membership-removal-plan.md);
+its removal writer is still unavailable.

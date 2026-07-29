@@ -2,6 +2,31 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.3.282 읽기 전용 activity-group 멤버십 제거 계획
+
+아카이브 마이그레이션은 필요하지 않습니다. v0.3.282는 멤버십을 실제로
+제거하지 않습니다. 소유자가 하나의 사건 앵커와 그 앵커를 제거할 정확한
+canonical 멤버를 직접 고른 뒤, 비공개 요청을
+`.wom-scratch/private/activity-group-removals/` 아래에 두고 실행하세요.
+
+```powershell
+archive activity-group-membership-removal-plan <archive-root> `
+  --request .wom-scratch/private/activity-group-removals/reviewed.json `
+  --dry-run --progress --format json
+```
+
+`ready_to_remove`, `already_absent`, 내용이 노출되지 않는 `blocked` 행과
+`review_plan_sha256`를 모두 검토해야 합니다. 이 명령은 요청에 적힌 현재
+canonical 파일만 읽고, 후보 바이트에서 지정한 앵커 하나만 제거합니다.
+검색 결과, 제목, 날짜, 인접 파일, edge, 생성 인덱스로 제거 대상을
+추론하지 않습니다.
+
+요청 파일은 비공개로 유지하세요. v0.3.282에는 승인 모드와 제거 writer가
+없습니다. 요청과 digest를 검토 증거로 보존하고 canonical zet를 직접
+편집하지 마세요. 자세한 계약은
+[`wom-kit/docs/activity-group-membership-removal-plan.md`](wom-kit/docs/activity-group-membership-removal-plan.md)를
+참조하세요.
+
 ## v0.3.281 승인형 activity-group 멤버십 쓰기
 
 아카이브 마이그레이션은 필요하지 않습니다. v0.3.281은 멤버를 검색하거나

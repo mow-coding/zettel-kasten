@@ -43,8 +43,8 @@ satisfied sentence into `next_safe_steps`.
 
 ## Official Read And Write Paths
 
-Introduced in v0.3.278 and extended through v0.3.281, JSON output includes
-`wom-kit/ai-command-path-routing/v0.4`, and Markdown output renders
+Introduced in v0.3.278 and extended through v0.3.282, JSON output includes
+`wom-kit/ai-command-path-routing/v0.5`, and Markdown output renders
 `Official Read Command Paths` and `Official Write Command Paths`.
 
 The routes require `archive search --count-total --format json` for
@@ -58,8 +58,9 @@ routes historical inbox-shape review through the read-only
 repair. Explicit event-membership review routes through the read-only
 `activity-group-membership-plan`; approved additions then route through the
 digest-bound `activity-group-membership-write`, and interrupted transactions
-route through a separate plan/approval recovery pair. No route infers or
-removes membership.
+route through a separate plan/approval recovery pair. Explicit removals route
+only to `activity-group-membership-removal-plan`; no removal writer exists and
+no route infers membership.
 See [AI Command-Path Routing](ai-command-path-routing.md).
 
 ## Identity Consistency
