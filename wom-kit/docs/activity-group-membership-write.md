@@ -155,11 +155,11 @@ algorithm protects against pathname replacement and detects in-place changes
 observed before its final unlink, but external editors must remain quiescent
 during approved evidence cleanup.
 
-Completion and rollback remove the exact lock first, revalidate the receipt
-state and canonical participants, prove that the transaction's own journal is
-the only retained transaction, remove that exact journal last, and require a
-clean final inventory. If foreign evidence appears after the receipt commit,
-or exact lock/journal cleanup or its revalidation fails, the committed
+Normal writer completion and rollback remove the exact lock first, revalidate
+the receipt state and canonical participants, prove that the transaction's own
+journal is the only retained transaction, remove that exact journal last, and
+require a clean final inventory. If foreign evidence appears after the receipt
+commit, or exact lock/journal cleanup or its revalidation fails, the committed
 canonical bytes and receipt remain valid but the writer returns
 `applied_evidence_conflict`, not a false clean success.
 
@@ -233,13 +233,22 @@ paths cannot begin concurrently. Recovery never guesses through unknown
 drift, never cleans evidence that changed after review, and never acts on
 `manual_forensic_hold`.
 
-The executor revalidates after removing the exact lock in every recovery state,
-including `lock_only_before_journal`. When a journal is present, it reclassifies
-all participants while that journal still exists and deletes the journal only
-after the verified before/completed state remains stable and no foreign
-transaction is present. Immediately before a success result it runs the common
-cleanup verifier once more with both lock and journal required to be absent.
-A newly appeared receipt, lock, or reserved journal therefore produces
+Approved recovery uses state-specific terminal cleanup. When a journal is
+present, it removes the exact writer lock, revalidates the reviewed receipt,
+participants, and journal with the lock absent, removes the exact recovery
+guard and verifies its absence, revalidates that the reviewed journal is the
+sole retained transaction while both lock and guard are absent, and removes
+that exact journal last. When no journal is present
+(`lock_only_before_journal`, or the Windows-only
+`verified_completed_lock_residue`), it removes the exact guard and verifies
+its absence first, revalidates the journal-free state while the exact writer
+lock remains, and removes that lock last.
+
+Immediately before success, the common cleanup verifier requires journal and
+lock to be absent, and the following guard check requires guard absence. If
+guard deletion or its immediate absence check fails, journal-backed states
+retain the journal and journal-free states retain the lock. A newly appeared
+receipt, lock, guard, or reserved journal therefore produces
 `failed_recovery_evidence_retained`, not a successful cleanup claim.
 
 ## Privacy and bounds

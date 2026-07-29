@@ -38066,6 +38066,7 @@ def activity_group_membership_recover(
     journal_removed: bool | None = None
     write_lock_removed: bool | None = None
     recovery_guard_removed: bool | None = None
+    recovery_guard_cleanup_attempted = False
     private_root = _activity_group_private_root(root)
     write_lock_path = (
         private_root / ACTIVITY_GROUP_MEMBERSHIP_WRITE_LOCK_NAME
@@ -38270,6 +38271,54 @@ def activity_group_membership_recover(
         blockers.append("activity_group_recovery_guard_create_failed")
         close_recovery_private_root_context()
         return result_payload("blocked")
+
+    def delete_recovery_guard_exact() -> None:
+        nonlocal recovery_guard_cleanup_attempted, recovery_guard_removed
+        if recovery_guard_cleanup_attempted:
+            if recovery_guard_removed is True:
+                return
+            raise ArchiveServiceError(
+                "activity_group_recovery_guard_cleanup_authority_spent"
+            )
+        recovery_guard_cleanup_attempted = True
+        delete_activity_group_evidence_exact(
+            root,
+            recovery_guard_path,
+            expected_sha256=guard_sha256,
+            max_bytes=ACTIVITY_GROUP_MEMBERSHIP_MAX_LOCK_BYTES,
+            parent_binding=private_root_binding,
+        )
+        try:
+            _read_activity_group_regular_bytes_bound(
+                root,
+                private_root_binding,
+                recovery_guard_path,
+                max_bytes=ACTIVITY_GROUP_MEMBERSHIP_MAX_LOCK_BYTES,
+            )
+        except FileNotFoundError:
+            recovery_guard_removed = True
+            return
+        recovery_guard_removed = False
+        raise ArchiveServiceError(
+            "activity_group_recovery_guard_cleanup_failed"
+        )
+
+    def require_recovery_guard_absent() -> None:
+        nonlocal recovery_guard_removed
+        recovery_guard_removed = False
+        try:
+            _read_activity_group_regular_bytes_bound(
+                root,
+                private_root_binding,
+                recovery_guard_path,
+                max_bytes=ACTIVITY_GROUP_MEMBERSHIP_MAX_LOCK_BYTES,
+            )
+        except FileNotFoundError:
+            recovery_guard_removed = True
+            return
+        raise ArchiveServiceError(
+            "activity_group_recovery_guard_reappeared"
+        )
 
     try:
         locked_plan = activity_group_membership_recovery_plan(
@@ -38829,6 +38878,26 @@ def activity_group_membership_recover(
                     expected_write_lock=cleanup_lock_document,
                 )
             )
+            if not journal_required_for_cleanup:
+                delete_recovery_guard_exact()
+                require_recovery_guard_absent()
+                cleanup_journal = (
+                    verify_activity_group_membership_recovery_cleanup_phase(
+                        root,
+                        archive_id=archive_id,
+                        request_sha256=request_sha256,
+                        transaction_state=str(transaction_state),
+                        journal_path=journal_path,
+                        write_lock_path=write_lock_path,
+                        locked_evidence=locked_evidence,
+                        expected_write_lock_sha256=(
+                            cleanup_expected_write_lock_sha256
+                        ),
+                        journal_required=False,
+                        write_lock_required=True,
+                        expected_write_lock=cleanup_lock_document,
+                    )
+                )
             delete_activity_group_evidence_exact(
                 root,
                 write_lock_path,
@@ -38863,6 +38932,26 @@ def activity_group_membership_recover(
                 expected_write_lock=cleanup_lock_document,
             )
             if journal_required_for_cleanup:
+                delete_recovery_guard_exact()
+                require_recovery_guard_absent()
+                cleanup_journal = (
+                    verify_activity_group_membership_recovery_cleanup_phase(
+                        root,
+                        archive_id=archive_id,
+                        request_sha256=request_sha256,
+                        transaction_state=str(transaction_state),
+                        journal_path=journal_path,
+                        write_lock_path=write_lock_path,
+                        locked_evidence=locked_evidence,
+                        expected_write_lock_sha256=(
+                            cleanup_expected_write_lock_sha256
+                        ),
+                        journal_required=True,
+                        write_lock_required=False,
+                        expected_journal=cleanup_journal,
+                        expected_write_lock=cleanup_lock_document,
+                    )
+                )
                 journal_sha256 = locked_evidence.get(
                     "evidence_sha256"
                 )
@@ -38905,6 +38994,7 @@ def activity_group_membership_recover(
             expected_journal=cleanup_journal,
             expected_write_lock=cleanup_lock_document,
         )
+        require_recovery_guard_absent()
         status = (
             "recovered"
             if action
@@ -38921,29 +39011,14 @@ def activity_group_membership_recover(
         blockers.append("activity_group_recovery_execution_failed")
         status = "failed_recovery_evidence_retained"
     finally:
-        try:
-            delete_activity_group_evidence_exact(
-                root,
-                recovery_guard_path,
-                expected_sha256=guard_sha256,
-                max_bytes=ACTIVITY_GROUP_MEMBERSHIP_MAX_LOCK_BYTES,
-                parent_binding=private_root_binding,
-            )
+        if not recovery_guard_cleanup_attempted:
             try:
-                _read_activity_group_regular_bytes_bound(
-                    root,
-                    private_root_binding,
-                    recovery_guard_path,
-                    max_bytes=ACTIVITY_GROUP_MEMBERSHIP_MAX_LOCK_BYTES,
-                )
+                delete_recovery_guard_exact()
+            except (ArchiveServiceError, OSError):
                 recovery_guard_removed = False
-            except FileNotFoundError:
-                recovery_guard_removed = True
-        except OSError:
-            recovery_guard_removed = False
-            warnings.append(
-                "activity_group_recovery_guard_cleanup_failed"
-            )
+                warnings.append(
+                    "activity_group_recovery_guard_cleanup_failed"
+                )
         try:
             close_recovery_private_root_context()
         except OSError:

@@ -57,10 +57,16 @@ The recovery-plan digest did not bind the receipt's raw bytes.
     capture the current pathname in a quarantine under the separately bound,
     globally scanned private activity-group root, then verify and delete only
     that captured entry.
-17. Remove the exact lock first, revalidate receipt and participant state, and
-    remove the exact journal last. Approved recovery runs the common cleanup
-    verifier once more immediately before returning success, including the
-    lock-only interruption state.
+17. Use state-specific terminal cleanup for approved recovery. When a journal
+    exists, remove the exact lock, revalidate the reviewed receipt,
+    participants, and journal with the lock absent, remove and verify absence
+    of the exact recovery guard, revalidate that the reviewed journal is the
+    sole retained transaction, and remove that journal last. When no journal
+    exists, remove and verify absence of the exact guard first, revalidate the
+    journal-free state while the exact lock remains, and remove that lock
+    last. The final verification sequence requires guard, lock, and journal
+    absence. If guard cleanup fails, retain the journal or lock that still
+    carries the transaction semantics.
 18. Replace canonical participant bytes only through an OS-level
     compare-and-swap: POSIX atomic sibling exchange or Windows `ReplaceFileW`
     with backup. Verify the captured expected bytes and installed replacement;
@@ -70,6 +76,8 @@ The recovery-plan digest did not bind the receipt's raw bytes.
     when it forms a known complementary before/after pair.
 20. Create the recovery guard and any missing-writer-lock claim under one held
     root-to-private-leaf binding, and delete them through that same binding.
+    Consume guard-cleanup authority before the exact delete attempt so a
+    same-name replacement is never deleted by a retry in `finally`.
 21. Immediately before deleting its journal, require the writer inventory to
     contain exactly that journal; after deletion require an empty inventory.
     Report `applied_evidence_conflict` if committed data is valid but foreign
@@ -115,8 +123,10 @@ Deleting by pathname after verification repeats the same ambiguity at the end
 of a transaction. POSIX therefore captures the name first and verifies the
 captured entry, while Windows deletes through the verified open handle. A
 replacement remains at the public name or in retained quarantine evidence.
-Keeping the journal until the last verified step preserves the durable
-explanation whenever lock cleanup or state revalidation fails.
+For journal-bearing states, keeping the journal until the last verified step
+preserves the durable explanation whenever lock, guard, or state revalidation
+fails. For journal-free states, the lock remains the semantic evidence until
+guard cleanup and state revalidation have succeeded.
 
 A check followed by `os.replace()` is not a compare-and-swap: another actor can
 change the file between those operations and be overwritten. Atomic sibling
@@ -163,8 +173,9 @@ could irreversibly remove the only semantic commitment.
   silently omitted from the final inventory.
 - Verified v0.2 completed lock-only cleanup is automatic on Windows and a
   manual forensic hold on POSIX.
-- Lock-only cleanup is revalidated after lock deletion and again immediately
-  before success.
+- Journal-free cleanup removes and verifies the guard, revalidates while the
+  lock remains, removes the lock last, and then runs the final common
+  verification.
 - Healthy v0.1 requests, plans, receipts, journals, and recovery commands
   remain compatible. v0.1 locks remain compatible beside a journal; v0.1
   lock-only completion requires manual review.
