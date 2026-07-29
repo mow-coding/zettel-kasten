@@ -24,6 +24,38 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.283 Activity-Group Retained-Journal Isolation
+
+No archive migration is required. v0.3.283 keeps every existing activity-group
+artifact schema at v0.1, keeps the current CLI and aliases, and keeps
+AI command-path routing at v0.5.
+
+The approved membership-add writer now checks both direct private request
+roots:
+
+```text
+.wom-scratch/private/activity-groups/
+.wom-scratch/private/activity-group-removals/
+```
+
+Any retained add journal or reserved future-removal journal blocks a new add
+before the writer lock and again under that shared lock. The scan is bounded
+to 5,000 direct entries, does not recursively inspect nested material, and
+does not read or echo journal content. An unsafe root or incomplete scan fails
+closed.
+
+Completed recovery now requires the immutable receipt to match the retained
+journal or lock on all shared fields and ordered participants. The recovery
+plan binds the raw receipt SHA-256 and transaction-binding SHA-256, and the
+executor verifies them again immediately before deleting transaction
+evidence. Missing, malformed, foreign, or mismatched evidence remains in
+`manual_forensic_hold`; do not delete it to make another writer run.
+
+No new command, schema file, MCP method, or route version is introduced.
+The approval-gated removal writer remains unavailable and is deferred to
+v0.3.284. See
+[`wom-kit/docs/activity-group-membership-write.md`](wom-kit/docs/activity-group-membership-write.md).
+
 ## v0.3.282 Read-Only Activity-Group Membership Removal Plan
 
 No archive migration is required. v0.3.282 does not remove a membership.

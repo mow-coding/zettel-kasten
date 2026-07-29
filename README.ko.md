@@ -32,10 +32,10 @@ wom-kit/docs/releases/에만 쌓고, baseline 사다리와 tag 목록을 여기�
 현재 공개 기준:
 
 ```text
-v0.3.282 pre-release
+v0.3.283 pre-release
 ```
 
-이전 공개 기준: v0.3.281 pre-release.
+이전 공개 기준: v0.3.282 pre-release.
 
 전체 릴리스 이력은 [CHANGELOG.md](CHANGELOG.md)와 [wom-kit/docs/releases/](wom-kit/docs/releases/)를 보세요.
 
@@ -52,7 +52,7 @@ Roadmap 요약: `v0.1.x`는 아이디어/프로토콜 언어 라인, `v0.2.x`는
 정확한 릴리스 파일을 격리된 명령줄 도구로 설치합니다.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.282/wom_kit-0.3.282-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.283/wom_kit-0.3.283-py3-none-any.whl"
 archive --version
 ```
 
@@ -80,7 +80,7 @@ archive runtime-skill-install --dry-run --format json
 ### Archive 핵심과 lifecycle
 
 - WOM / zet / ZET 설계 기준, specs, schemas, fake archive, release notes, work logs,
-- 사람이 선택한 이벤트 anchor와 member 집합을 먼저 검증한 뒤, 정확한 해시에 묶인 `facets.activity_group` 추가만 사람 승인·잠금·이전 상태 보존·journal·영수증을 갖춘 writer로 적용하고 별도 승인 복구까지 제공하며, 사람이 고른 제거 후보는 별도 읽기 전용 명령으로 정확히 계획하는 workflow. 멤버십을 추론하지 않으며 제거 writer는 아직 구현되지 않았습니다.
+- 사람이 선택한 이벤트 anchor와 member 집합을 먼저 검증한 뒤, 정확한 해시에 묶인 `facets.activity_group` 추가만 사람 승인·잠금·이전 상태 보존·journal·영수증을 갖춘 writer로 적용하고 별도 승인 복구까지 제공하는 workflow. 남아 있는 추가 journal과 미래 제거용 예약 journal은 공유 writer 잠금 전과 잠금 아래에서 새 추가 작업을 막고, 복구 시 영수증은 journal/lock 근거와 다시 정확히 결속됩니다. 사람이 고른 제거 후보는 별도 읽기 전용 명령으로만 계획하며 멤버십을 추론하지 않고, 제거 writer는 v0.3.284로 연기되었습니다.
 - 아티팩트 우선 인간 기억 원칙. 특정 시점의 로컬 아티팩트와 시간순 이력이 다시 만들 수 있는 엔티티·그래프 투영보다 우선하며, 같은 라벨은 자동 동일성 병합의 권한이 아니고, 정본은 객관적 진실이 아니라 사용자가 승인한 현재 아카이브 상태이며, AI가 맥락을 다시 추론하더라도 인간의 변화는 보이게 남깁니다. 자세한 내용은 [제품 철학](wom-kit/docs/concepts/product-philosophy.ko.md)과 원칙별 [설계 철학 구현 근거](wom-kit/docs/philosophy-implementation-evidence.ko.md)를 보세요.
 - 기계가 읽을 수 있는 local sovereignty 계약. 검토된 local WOM 상태가 정본이고, GitHub는 metadata/version 이력 백업, object storage는 objet byte 백업, 외부 DB는 local 관계 기록에서 재생성 가능한 지도 백업/복제본입니다. runtime/start-here/recovery 표면은 offline 범위, 충돌 우선순위, 복구 방향, 영수증 경계를 동일하게 제공하며, 읽기 전용 `backup-evidence`는 로컬에서 실제로 검증 가능한 백업 근거만 보고하고 로컬 커밋·선언 라벨·생성 인덱스·영수증 시점의 오브제 커버리지를 현재 원격 상태나 전체 백업 완료라고 부풀리지 않습니다.
 - `wom-kit/` 안의 local CLI와 MCP tooling,
@@ -393,7 +393,7 @@ WOM, `zettel-kasten`, `zet`, `ZET`는 버전이 있는 protocol family로 관리
 Release tag는 compatibility checkpoint입니다.
 
 ```text
-v0.3.282 (현재 checkpoint)
+v0.3.283 (현재 checkpoint)
 ```
 
 `v0.2.5` 이후의 공개 릴리스에는 compatibility checkpoint tag가 붙습니다. 전체

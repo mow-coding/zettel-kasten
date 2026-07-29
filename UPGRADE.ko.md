@@ -2,6 +2,38 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.3.283 activity-group 잔존 journal 격리
+
+아카이브 마이그레이션은 필요하지 않습니다. v0.3.283은 기존
+activity-group 아티팩트 schema를 모두 v0.1로 유지하고, 현재 CLI와 alias,
+AI command-path routing v0.5도 그대로 유지합니다.
+
+승인형 멤버십 추가 writer는 이제 아래 두 비공개 요청 root의 직접 자식만
+제한된 범위에서 확인합니다.
+
+```text
+.wom-scratch/private/activity-groups/
+.wom-scratch/private/activity-group-removals/
+```
+
+남아 있는 추가 journal이나 미래 제거 writer를 위해 예약된 journal이
+하나라도 있으면 새 추가 작업은 writer 잠금을 잡기 전과 공유 잠금 아래에서
+모두 중단됩니다. 최대 5,000개 직접 항목만 확인하고 하위 폴더를 재귀적으로
+읽지 않으며, journal 내용이나 비공개 파일 이름을 출력하지 않습니다.
+root가 안전하지 않거나 검사가 끝나지 않으면 안전하게 차단합니다.
+
+완료된 작업의 복구 정리는 불변 영수증이 잔존 journal 또는 lock의 공통
+필드와 순서가 있는 모든 참여 항목에 정확히 맞을 때만 가능합니다. 복구
+계획은 영수증 원문 SHA-256과 transaction binding SHA-256을 묶고, 실행기는
+증거를 지우기 직전에 둘을 다시 검증합니다. 없거나 손상되었거나 다른
+작업의 것이거나 서로 맞지 않는 증거는 `manual_forensic_hold`에 남습니다.
+새 writer를 실행하려고 이 증거를 직접 지우지 마세요.
+
+새 명령, schema 파일, MCP method, routing 버전은 추가되지 않았습니다.
+승인형 제거 writer는 아직 없으며 v0.3.284로 연기되었습니다. 자세한 내용은
+[`wom-kit/docs/activity-group-membership-write.md`](wom-kit/docs/activity-group-membership-write.md)를
+보세요.
+
 ## v0.3.282 읽기 전용 activity-group 멤버십 제거 계획
 
 아카이브 마이그레이션은 필요하지 않습니다. v0.3.282는 멤버십을 실제로

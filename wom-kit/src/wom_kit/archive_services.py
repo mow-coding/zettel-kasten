@@ -26,7 +26,7 @@ import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
@@ -2908,12 +2908,22 @@ ACTIVITY_GROUP_MEMBERSHIP_WRITE_LOCK_NAME = (
 ACTIVITY_GROUP_MEMBERSHIP_RECOVERY_GUARD_NAME = (
     ".activity-group-membership.recovery.lock"
 )
+ACTIVITY_GROUP_MEMBERSHIP_TRANSACTION_JOURNAL_SUFFIX = (
+    ".activity-group-membership.transaction.json"
+)
+ACTIVITY_GROUP_MEMBERSHIP_REMOVAL_TRANSACTION_JOURNAL_SUFFIX = (
+    ".activity-group-membership-removal.transaction.json"
+)
+ACTIVITY_GROUP_MEMBERSHIP_CANONICAL_SWAP_SUFFIX = (
+    ".activity-group-membership.swap"
+)
 ACTIVITY_GROUP_MEMBERSHIP_MAX_REQUEST_BYTES = 2 * 1024 * 1024
 ACTIVITY_GROUP_MEMBERSHIP_MAX_MEMBERS = 5000
 ACTIVITY_GROUP_MEMBERSHIP_MAX_CANONICAL_FILE_BYTES = 16 * 1024 * 1024
 ACTIVITY_GROUP_MEMBERSHIP_MAX_TOTAL_CANONICAL_BYTES = 256 * 1024 * 1024
 ACTIVITY_GROUP_MEMBERSHIP_MAX_RECEIPT_BYTES = 16 * 1024 * 1024
 ACTIVITY_GROUP_MEMBERSHIP_MAX_TRANSACTION_JOURNAL_BYTES = 16 * 1024 * 1024
+ACTIVITY_GROUP_MEMBERSHIP_MAX_TRANSACTION_SCAN_ENTRIES = 5000
 ACTIVITY_GROUP_MEMBERSHIP_MAX_LOCK_BYTES = 256 * 1024
 ACTIVITY_GROUP_MEMBERSHIP_RECOVERY_ACTIONS = frozenset(
     {
@@ -10232,8 +10242,6 @@ def zet_title_remap_write(
                 write_lock_removed = False
         else:
             write_lock_removed = False
-        if not receipt_parent_existed:
-            cleanup_empty_archive_dirs(root, [receipt_path])
         rollback["canonical_files_restored"] = restored
         rollback["receipt_removed"] = receipt_removed
         rollback["transaction_journal_removed"] = (
@@ -33276,9 +33284,20 @@ def activity_group_membership_removal_plan(
 
 
 def _activity_group_private_root(root: Path) -> Path:
-    return archive_internal_path(
-        root,
-        ACTIVITY_GROUP_MEMBERSHIP_REQUEST_PREFIX.rstrip("/"),
+    canonical_root = root.resolve()
+    return canonical_root.joinpath(
+        *PurePosixPath(
+            ACTIVITY_GROUP_MEMBERSHIP_REQUEST_PREFIX.rstrip("/")
+        ).parts
+    )
+
+
+def _activity_group_removal_private_root(root: Path) -> Path:
+    canonical_root = root.resolve()
+    return canonical_root.joinpath(
+        *PurePosixPath(
+            ACTIVITY_GROUP_MEMBERSHIP_REMOVAL_REQUEST_PREFIX.rstrip("/")
+        ).parts
     )
 
 
@@ -33294,6 +33313,33 @@ def activity_group_membership_receipt_relative_path(
     )
 
 
+def activity_group_membership_receipt_path(
+    root: Path,
+    request_sha256: str,
+) -> Path:
+    relative = activity_group_membership_receipt_relative_path(
+        request_sha256
+    )
+    canonical_root = root.resolve()
+    return canonical_root.joinpath(*PurePosixPath(relative).parts)
+
+
+def activity_group_membership_receipt_path_is_safe(
+    root: Path,
+    receipt_path: Path,
+) -> bool:
+    try:
+        return bool(
+            not zet_revision_path_has_symlink_component(
+                root,
+                receipt_path,
+            )
+            and is_path_within_root(receipt_path, root)
+        )
+    except (ArchivePathError, OSError):
+        return False
+
+
 def activity_group_membership_transaction_journal_path(
     root: Path,
     request_sha256: str,
@@ -33302,8 +33348,1647 @@ def activity_group_membership_transaction_journal_path(
         raise ValueError("activity_group_request_sha256_invalid")
     digest = request_sha256.removeprefix("sha256:")
     return _activity_group_private_root(root) / (
-        f".{digest}.activity-group-membership.transaction.json"
+        f".{digest}"
+        f"{ACTIVITY_GROUP_MEMBERSHIP_TRANSACTION_JOURNAL_SUFFIX}"
     )
+
+
+@contextmanager
+def activity_group_bound_directory_chain(
+    root: Path,
+    target: Path,
+    *,
+    create: bool = False,
+) -> Iterable[dict[str, Any]]:
+    """Bind every component from the archive root to one directory."""
+
+    canonical_root = root.resolve()
+    try:
+        relative = target.relative_to(canonical_root)
+    except ValueError as exc:
+        raise OSError(
+            "activity_group_transaction_scan_root_outside_archive"
+        ) from exc
+
+    if os.name != "nt":
+        flags = os.O_RDONLY
+        flags |= getattr(os, "O_DIRECTORY", 0)
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        descriptors: list[int] = []
+        identities: list[tuple[Path, tuple[int, int]]] = []
+        try:
+            root_descriptor = os.open(canonical_root, flags)
+            descriptors.append(root_descriptor)
+            root_stat = os.fstat(root_descriptor)
+            identities.append(
+                (
+                    canonical_root,
+                    (root_stat.st_dev, root_stat.st_ino),
+                )
+            )
+            current_descriptor = root_descriptor
+            current_path = canonical_root
+            for part in relative.parts:
+                try:
+                    entry_stat = os.stat(
+                        part,
+                        dir_fd=current_descriptor,
+                        follow_symlinks=False,
+                    )
+                except FileNotFoundError:
+                    if not create:
+                        raise
+                    os.mkdir(
+                        part,
+                        mode=0o700,
+                        dir_fd=current_descriptor,
+                    )
+                    entry_stat = os.stat(
+                        part,
+                        dir_fd=current_descriptor,
+                        follow_symlinks=False,
+                    )
+                if (
+                    stat.S_ISLNK(entry_stat.st_mode)
+                    or not stat.S_ISDIR(entry_stat.st_mode)
+                ):
+                    raise OSError(
+                        "activity_group_transaction_scan_root_unsafe"
+                    )
+                child_descriptor = os.open(
+                    part,
+                    flags,
+                    dir_fd=current_descriptor,
+                )
+                child_stat = os.fstat(child_descriptor)
+                if (
+                    child_stat.st_dev,
+                    child_stat.st_ino,
+                ) != (
+                    entry_stat.st_dev,
+                    entry_stat.st_ino,
+                ):
+                    os.close(child_descriptor)
+                    raise OSError(
+                        "activity_group_transaction_scan_root_changed"
+                    )
+                descriptors.append(child_descriptor)
+                current_descriptor = child_descriptor
+                current_path = current_path / part
+                identities.append(
+                    (
+                        current_path,
+                        (child_stat.st_dev, child_stat.st_ino),
+                    )
+                )
+            yield {
+                "path": target,
+                "descriptor": current_descriptor,
+                "windows_handles": None,
+            }
+            for path, expected_identity in identities:
+                current_stat = os.stat(
+                    path,
+                    follow_symlinks=False,
+                )
+                if (
+                    current_stat.st_dev,
+                    current_stat.st_ino,
+                ) != expected_identity:
+                    raise OSError(
+                        "activity_group_transaction_scan_root_changed"
+                    )
+        finally:
+            for descriptor in reversed(descriptors):
+                os.close(descriptor)
+        return
+
+    # Windows path operations cannot consume a directory descriptor. Hold a
+    # FILE_LIST_DIRECTORY handle without delete sharing for the archive root
+    # and every descendant component. This prevents a checked parent from
+    # being replaced while a child or the final scan is opened.
+    import ctypes
+    from ctypes import wintypes
+
+    class ByHandleFileInformation(ctypes.Structure):
+        _fields_ = [
+            ("dwFileAttributes", wintypes.DWORD),
+            ("ftCreationTime", wintypes.FILETIME),
+            ("ftLastAccessTime", wintypes.FILETIME),
+            ("ftLastWriteTime", wintypes.FILETIME),
+            ("dwVolumeSerialNumber", wintypes.DWORD),
+            ("nFileSizeHigh", wintypes.DWORD),
+            ("nFileSizeLow", wintypes.DWORD),
+            ("nNumberOfLinks", wintypes.DWORD),
+            ("nFileIndexHigh", wintypes.DWORD),
+            ("nFileIndexLow", wintypes.DWORD),
+        ]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    create_file = kernel32.CreateFileW
+    create_file.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    ]
+    create_file.restype = wintypes.HANDLE
+    get_information = kernel32.GetFileInformationByHandle
+    get_information.argtypes = [
+        wintypes.HANDLE,
+        ctypes.POINTER(ByHandleFileInformation),
+    ]
+    get_information.restype = wintypes.BOOL
+    close_handle = kernel32.CloseHandle
+    close_handle.argtypes = [wintypes.HANDLE]
+    close_handle.restype = wintypes.BOOL
+
+    file_share_read = 0x00000001
+    file_share_write = 0x00000002
+    file_list_directory = 0x00000001
+    open_existing = 3
+    file_flag_open_reparse_point = 0x00200000
+    file_flag_backup_semantics = 0x02000000
+    invalid_handle = wintypes.HANDLE(-1).value
+    file_attribute_directory = 0x00000010
+    file_attribute_reparse_point = 0x00000400
+    handles: list[Any] = []
+    identities: list[tuple[Path, tuple[int, int]]] = []
+
+    def open_bound_directory(path: Path) -> Any:
+        entry_stat = os.stat(path, follow_symlinks=False)
+        reparse_flag = getattr(
+            stat,
+            "FILE_ATTRIBUTE_REPARSE_POINT",
+            0,
+        )
+        if (
+            not stat.S_ISDIR(entry_stat.st_mode)
+            or (
+                reparse_flag
+                and getattr(
+                    entry_stat,
+                    "st_file_attributes",
+                    0,
+                )
+                & reparse_flag
+            )
+        ):
+            raise OSError(
+                "activity_group_transaction_scan_root_unsafe"
+            )
+        handle = create_file(
+            str(path),
+            file_list_directory,
+            file_share_read | file_share_write,
+            None,
+            open_existing,
+            (
+                file_flag_open_reparse_point
+                | file_flag_backup_semantics
+            ),
+            None,
+        )
+        if handle == invalid_handle:
+            raise ctypes.WinError(ctypes.get_last_error())
+        information = ByHandleFileInformation()
+        if not get_information(handle, ctypes.byref(information)):
+            error = ctypes.WinError(ctypes.get_last_error())
+            close_handle(handle)
+            raise error
+        opened_file_index = (
+            int(information.nFileIndexHigh) << 32
+        ) | int(information.nFileIndexLow)
+        if (
+            opened_file_index != entry_stat.st_ino
+            or not (
+                information.dwFileAttributes
+                & file_attribute_directory
+            )
+            or (
+                information.dwFileAttributes
+                & file_attribute_reparse_point
+            )
+        ):
+            close_handle(handle)
+            raise OSError(
+                "activity_group_transaction_scan_root_changed"
+            )
+        identities.append(
+            (
+                path,
+                (entry_stat.st_dev, entry_stat.st_ino),
+            )
+        )
+        return handle
+
+    try:
+        current_path = canonical_root
+        handles.append(open_bound_directory(current_path))
+        for part in relative.parts:
+            current_path = current_path / part
+            if create and not current_path.exists():
+                os.mkdir(current_path, mode=0o700)
+            handles.append(open_bound_directory(current_path))
+        yield {
+            "path": target,
+            "descriptor": None,
+            "windows_handles": handles,
+        }
+        for path, expected_identity in identities:
+            current_stat = os.stat(path, follow_symlinks=False)
+            if (
+                current_stat.st_dev,
+                current_stat.st_ino,
+            ) != expected_identity:
+                raise OSError(
+                    "activity_group_transaction_scan_root_changed"
+                )
+    finally:
+        for handle in reversed(handles):
+            close_handle(handle)
+
+
+@contextmanager
+def activity_group_transaction_scan_entries(
+    root: Path,
+    private_root: Path,
+) -> Iterable[os.DirEntry[str]]:
+    with activity_group_bound_directory_chain(
+        root,
+        private_root,
+    ) as binding:
+        scan_target = (
+            binding["descriptor"]
+            if binding["descriptor"] is not None
+            else private_root
+        )
+        with os.scandir(scan_target) as entries:
+            yield entries
+
+
+def scan_activity_group_transaction_evidence(
+    root: Path,
+    *,
+    max_entries: int = (
+        ACTIVITY_GROUP_MEMBERSHIP_MAX_TRANSACTION_SCAN_ENTRIES
+    ),
+) -> dict[str, Any]:
+    """Boundedly discover unresolved add/removal journals without reading them."""
+
+    blockers: list[str] = []
+    journal_paths: list[Path] = []
+    scanned_entry_count = 0
+    scan_complete = True
+    roots = (
+        _activity_group_private_root(root),
+        _activity_group_removal_private_root(root),
+    )
+    suffixes = (
+        ACTIVITY_GROUP_MEMBERSHIP_TRANSACTION_JOURNAL_SUFFIX,
+        ACTIVITY_GROUP_MEMBERSHIP_REMOVAL_TRANSACTION_JOURNAL_SUFFIX,
+    )
+
+    for private_root in roots:
+        try:
+            with activity_group_transaction_scan_entries(
+                root,
+                private_root,
+            ) as entries:
+                for entry in entries:
+                    scanned_entry_count += 1
+                    if scanned_entry_count > max_entries:
+                        blockers.append(
+                            "activity_group_transaction_evidence_scan_failed"
+                        )
+                        scan_complete = False
+                        break
+                    lowered_name = entry.name.lower()
+                    if not any(
+                        lowered_name.endswith(suffix)
+                        for suffix in suffixes
+                    ):
+                        continue
+                    journal_paths.append(private_root / entry.name)
+        except FileNotFoundError:
+            continue
+        except OSError:
+            blockers.append(
+                "activity_group_transaction_evidence_scan_failed"
+            )
+            scan_complete = False
+        if not scan_complete:
+            break
+
+    journal_paths.sort(key=lambda path: str(path).casefold())
+    if journal_paths:
+        blockers.append(
+            "activity_group_unresolved_transaction_evidence_exists"
+        )
+    return {
+        "ok": not blockers,
+        "complete": scan_complete,
+        "journal_count": len(journal_paths),
+        "journal_paths": journal_paths,
+        "blockers": unique_preserve_order(blockers),
+    }
+
+
+def activity_group_evidence_json_bytes(
+    payload: dict[str, Any],
+) -> bytes:
+    return (
+        json.dumps(
+            json_safe(payload),
+            indent=2,
+            ensure_ascii=False,
+            default=str,
+        )
+        + "\n"
+    ).encode("utf-8")
+
+
+def write_activity_group_bytes_new_file_bound(
+    binding: dict[str, Any],
+    path: Path,
+    raw: bytes,
+) -> None:
+    if path.parent != binding.get("path"):
+        raise OSError("activity_group_bound_parent_mismatch")
+    descriptor = binding.get("descriptor")
+    if isinstance(descriptor, int):
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        flags |= getattr(os, "O_BINARY", 0)
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        file_descriptor = os.open(
+            path.name,
+            flags,
+            0o600,
+            dir_fd=descriptor,
+        )
+        try:
+            offset = 0
+            while offset < len(raw):
+                written = os.write(file_descriptor, raw[offset:])
+                if written <= 0:
+                    raise OSError(
+                        "activity_group_bound_write_incomplete"
+                    )
+                offset += written
+            os.fsync(file_descriptor)
+        finally:
+            os.close(file_descriptor)
+        os.fsync(descriptor)
+        return
+
+    # The Windows ancestor chain is held without delete sharing. O_EXCL makes
+    # a concurrently created file or reparse entry a refusal, not a target.
+    with path.open("xb") as handle:
+        handle.write(raw)
+        handle.flush()
+        os.fsync(handle.fileno())
+    fsync_directory(path.parent)
+
+
+@contextmanager
+def hold_activity_group_evidence_file(
+    root: Path,
+    path: Path,
+    *,
+    max_bytes: int,
+) -> Iterable[dict[str, Any]]:
+    """Hold one exact non-reparse evidence file stable while authority is used."""
+
+    with activity_group_bound_directory_chain(
+        root,
+        path.parent,
+    ) as binding:
+        if os.name != "nt":
+            parent_descriptor = binding["descriptor"]
+            flags = os.O_RDONLY
+            flags |= getattr(os, "O_BINARY", 0)
+            flags |= getattr(os, "O_NOFOLLOW", 0)
+            descriptor = os.open(
+                path.name,
+                flags,
+                dir_fd=parent_descriptor,
+            )
+            try:
+                opened_stat = os.fstat(descriptor)
+                entry_stat = os.stat(
+                    path.name,
+                    dir_fd=parent_descriptor,
+                    follow_symlinks=False,
+                )
+                if (
+                    not stat.S_ISREG(opened_stat.st_mode)
+                    or (
+                        opened_stat.st_dev,
+                        opened_stat.st_ino,
+                    )
+                    != (
+                        entry_stat.st_dev,
+                        entry_stat.st_ino,
+                    )
+                    or opened_stat.st_size > max_bytes
+                ):
+                    raise OSError(
+                        "activity_group_evidence_file_unsafe"
+                    )
+                chunks: list[bytes] = []
+                remaining = max_bytes + 1
+                while remaining:
+                    chunk = os.read(
+                        descriptor,
+                        min(1024 * 1024, remaining),
+                    )
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                    remaining -= len(chunk)
+                raw = b"".join(chunks)
+                if len(raw) > max_bytes:
+                    raise OSError(
+                        "activity_group_evidence_file_too_large"
+                    )
+                yield {
+                    "raw": raw,
+                    "identity": (
+                        opened_stat.st_dev,
+                        opened_stat.st_ino,
+                    ),
+                    "descriptor": descriptor,
+                    "windows_handle": None,
+                }
+            finally:
+                os.close(descriptor)
+            return
+
+        import ctypes
+        from ctypes import wintypes
+
+        class ByHandleFileInformation(ctypes.Structure):
+            _fields_ = [
+                ("dwFileAttributes", wintypes.DWORD),
+                ("ftCreationTime", wintypes.FILETIME),
+                ("ftLastAccessTime", wintypes.FILETIME),
+                ("ftLastWriteTime", wintypes.FILETIME),
+                ("dwVolumeSerialNumber", wintypes.DWORD),
+                ("nFileSizeHigh", wintypes.DWORD),
+                ("nFileSizeLow", wintypes.DWORD),
+                ("nNumberOfLinks", wintypes.DWORD),
+                ("nFileIndexHigh", wintypes.DWORD),
+                ("nFileIndexLow", wintypes.DWORD),
+            ]
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        create_file = kernel32.CreateFileW
+        create_file.argtypes = [
+            wintypes.LPCWSTR,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.LPVOID,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.HANDLE,
+        ]
+        create_file.restype = wintypes.HANDLE
+        get_information = kernel32.GetFileInformationByHandle
+        get_information.argtypes = [
+            wintypes.HANDLE,
+            ctypes.POINTER(ByHandleFileInformation),
+        ]
+        get_information.restype = wintypes.BOOL
+        read_file = kernel32.ReadFile
+        read_file.argtypes = [
+            wintypes.HANDLE,
+            wintypes.LPVOID,
+            wintypes.DWORD,
+            ctypes.POINTER(wintypes.DWORD),
+            wintypes.LPVOID,
+        ]
+        read_file.restype = wintypes.BOOL
+        close_handle = kernel32.CloseHandle
+        close_handle.argtypes = [wintypes.HANDLE]
+        close_handle.restype = wintypes.BOOL
+
+        generic_read = 0x80000000
+        file_share_read = 0x00000001
+        open_existing = 3
+        file_flag_open_reparse_point = 0x00200000
+        handle = create_file(
+            str(path),
+            generic_read,
+            file_share_read,
+            None,
+            open_existing,
+            file_flag_open_reparse_point,
+            None,
+        )
+        invalid_handle = wintypes.HANDLE(-1).value
+        if handle == invalid_handle:
+            raise ctypes.WinError(ctypes.get_last_error())
+        try:
+            information = ByHandleFileInformation()
+            if not get_information(
+                handle,
+                ctypes.byref(information),
+            ):
+                raise ctypes.WinError(ctypes.get_last_error())
+            file_attribute_directory = 0x00000010
+            file_attribute_reparse_point = 0x00000400
+            size = (
+                int(information.nFileSizeHigh) << 32
+            ) | int(information.nFileSizeLow)
+            file_index = (
+                int(information.nFileIndexHigh) << 32
+            ) | int(information.nFileIndexLow)
+            entry_stat = os.stat(path, follow_symlinks=False)
+            if (
+                size > max_bytes
+                or entry_stat.st_ino != file_index
+                or (
+                    information.dwFileAttributes
+                    & (
+                        file_attribute_directory
+                        | file_attribute_reparse_point
+                    )
+                )
+            ):
+                raise OSError(
+                    "activity_group_evidence_file_unsafe"
+                )
+            chunks: list[bytes] = []
+            remaining = size
+            while remaining:
+                chunk_size = min(1024 * 1024, remaining)
+                buffer = ctypes.create_string_buffer(chunk_size)
+                read_count = wintypes.DWORD()
+                if not read_file(
+                    handle,
+                    buffer,
+                    chunk_size,
+                    ctypes.byref(read_count),
+                    None,
+                ):
+                    raise ctypes.WinError(ctypes.get_last_error())
+                if read_count.value == 0:
+                    raise OSError(
+                        "activity_group_evidence_read_incomplete"
+                    )
+                chunks.append(buffer.raw[: read_count.value])
+                remaining -= read_count.value
+            yield {
+                "raw": b"".join(chunks),
+                "identity": (entry_stat.st_dev, file_index),
+                "descriptor": None,
+                "windows_handle": handle,
+            }
+        finally:
+            close_handle(handle)
+
+
+def delete_activity_group_evidence_exact(
+    root: Path,
+    path: Path,
+    *,
+    expected_sha256: str,
+    max_bytes: int,
+    parent_binding: dict[str, Any] | None = None,
+) -> None:
+    """Delete only the exact non-reparse evidence bytes that were reviewed."""
+
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", expected_sha256):
+        raise OSError("activity_group_evidence_sha256_invalid")
+    if os.name != "nt":
+        binding_context = (
+            nullcontext(parent_binding)
+            if parent_binding is not None
+            else activity_group_bound_directory_chain(
+                root,
+                path.parent,
+            )
+        )
+        with binding_context as binding:
+            if (
+                not isinstance(binding, dict)
+                or binding.get("path") != path.parent
+            ):
+                raise OSError("activity_group_bound_parent_mismatch")
+            parent_descriptor = binding["descriptor"]
+            quarantine_parent_path = _activity_group_private_root(root)
+            quarantine_binding_context = (
+                nullcontext(binding)
+                if quarantine_parent_path == path.parent
+                else activity_group_bound_directory_chain(
+                    root,
+                    quarantine_parent_path,
+                    create=True,
+                )
+            )
+            with quarantine_binding_context as quarantine_binding:
+                if (
+                    not isinstance(quarantine_binding, dict)
+                    or quarantine_binding.get("path")
+                    != quarantine_parent_path
+                ):
+                    raise OSError(
+                        "activity_group_bound_quarantine_parent_mismatch"
+                    )
+                quarantine_parent_descriptor = quarantine_binding[
+                    "descriptor"
+                ]
+                quarantine_name = (
+                    f".exact-delete-{secrets.token_hex(16)}"
+                    f"{ACTIVITY_GROUP_MEMBERSHIP_TRANSACTION_JOURNAL_SUFFIX}"
+                )
+                os.mkdir(
+                    quarantine_name,
+                    mode=0o700,
+                    dir_fd=quarantine_parent_descriptor,
+                )
+                directory_flags = os.O_RDONLY
+                directory_flags |= getattr(os, "O_DIRECTORY", 0)
+                directory_flags |= getattr(os, "O_NOFOLLOW", 0)
+                quarantine_descriptor = os.open(
+                    quarantine_name,
+                    directory_flags,
+                    dir_fd=quarantine_parent_descriptor,
+                )
+                captured = False
+                try:
+                    os.rename(
+                        path.name,
+                        "evidence",
+                        src_dir_fd=parent_descriptor,
+                        dst_dir_fd=quarantine_descriptor,
+                    )
+                    captured = True
+                    os.fsync(parent_descriptor)
+                    os.fsync(quarantine_descriptor)
+                    os.fsync(quarantine_parent_descriptor)
+                    flags = os.O_RDONLY
+                    flags |= getattr(os, "O_BINARY", 0)
+                    flags |= getattr(os, "O_NOFOLLOW", 0)
+                    descriptor = os.open(
+                        "evidence",
+                        flags,
+                        dir_fd=quarantine_descriptor,
+                    )
+                    try:
+                        opened_stat = os.fstat(descriptor)
+                        if (
+                            not stat.S_ISREG(opened_stat.st_mode)
+                            or opened_stat.st_size > max_bytes
+                        ):
+                            raise OSError(
+                                "activity_group_evidence_file_unsafe"
+                            )
+                        chunks: list[bytes] = []
+                        remaining = max_bytes + 1
+                        while remaining:
+                            chunk = os.read(
+                                descriptor,
+                                min(1024 * 1024, remaining),
+                            )
+                            if not chunk:
+                                break
+                            chunks.append(chunk)
+                            remaining -= len(chunk)
+                        raw = b"".join(chunks)
+                        entry_stat = os.stat(
+                            "evidence",
+                            dir_fd=quarantine_descriptor,
+                            follow_symlinks=False,
+                        )
+                        if (
+                            len(raw) > max_bytes
+                            or (
+                                entry_stat.st_dev,
+                                entry_stat.st_ino,
+                            )
+                            != (
+                                opened_stat.st_dev,
+                                opened_stat.st_ino,
+                            )
+                            or (
+                                "sha256:"
+                                + hashlib.sha256(raw).hexdigest()
+                            )
+                            != expected_sha256
+                        ):
+                            raise OSError(
+                                "activity_group_evidence_changed"
+                            )
+                        os.lseek(descriptor, 0, os.SEEK_SET)
+                        stable_chunks: list[bytes] = []
+                        stable_remaining = max_bytes + 1
+                        while stable_remaining:
+                            stable_chunk = os.read(
+                                descriptor,
+                                min(1024 * 1024, stable_remaining),
+                            )
+                            if not stable_chunk:
+                                break
+                            stable_chunks.append(stable_chunk)
+                            stable_remaining -= len(stable_chunk)
+                        stable_raw = b"".join(stable_chunks)
+                        final_descriptor_stat = os.fstat(descriptor)
+                        final_entry_stat = os.stat(
+                            "evidence",
+                            dir_fd=quarantine_descriptor,
+                            follow_symlinks=False,
+                        )
+                        if (
+                            stable_raw != raw
+                            or (
+                                "sha256:"
+                                + hashlib.sha256(stable_raw).hexdigest()
+                            )
+                            != expected_sha256
+                            or (
+                                opened_stat.st_dev,
+                                opened_stat.st_ino,
+                                opened_stat.st_size,
+                                opened_stat.st_mtime_ns,
+                                opened_stat.st_ctime_ns,
+                            )
+                            != (
+                                final_descriptor_stat.st_dev,
+                                final_descriptor_stat.st_ino,
+                                final_descriptor_stat.st_size,
+                                final_descriptor_stat.st_mtime_ns,
+                                final_descriptor_stat.st_ctime_ns,
+                            )
+                            or (
+                                final_entry_stat.st_dev,
+                                final_entry_stat.st_ino,
+                            )
+                            != (
+                                opened_stat.st_dev,
+                                opened_stat.st_ino,
+                            )
+                        ):
+                            raise OSError(
+                                "activity_group_evidence_changed"
+                            )
+                        os.unlink(
+                            "evidence",
+                            dir_fd=quarantine_descriptor,
+                        )
+                        captured = False
+                        os.fsync(quarantine_descriptor)
+                        os.fsync(parent_descriptor)
+                        os.fsync(quarantine_parent_descriptor)
+                    finally:
+                        os.close(descriptor)
+                finally:
+                    if captured:
+                        try:
+                            captured_stat = os.stat(
+                                "evidence",
+                                dir_fd=quarantine_descriptor,
+                                follow_symlinks=False,
+                            )
+                            if stat.S_ISREG(captured_stat.st_mode):
+                                os.link(
+                                    "evidence",
+                                    path.name,
+                                    src_dir_fd=quarantine_descriptor,
+                                    dst_dir_fd=parent_descriptor,
+                                    follow_symlinks=False,
+                                )
+                                os.unlink(
+                                    "evidence",
+                                    dir_fd=quarantine_descriptor,
+                                )
+                                captured = False
+                                os.fsync(parent_descriptor)
+                                os.fsync(quarantine_descriptor)
+                                os.fsync(
+                                    quarantine_parent_descriptor
+                                )
+                        except OSError:
+                            pass
+                    os.close(quarantine_descriptor)
+                    if not captured:
+                        os.rmdir(
+                            quarantine_name,
+                            dir_fd=quarantine_parent_descriptor,
+                        )
+                        os.fsync(quarantine_parent_descriptor)
+        return
+
+    import ctypes
+    from ctypes import wintypes
+
+    class ByHandleFileInformation(ctypes.Structure):
+        _fields_ = [
+            ("dwFileAttributes", wintypes.DWORD),
+            ("ftCreationTime", wintypes.FILETIME),
+            ("ftLastAccessTime", wintypes.FILETIME),
+            ("ftLastWriteTime", wintypes.FILETIME),
+            ("dwVolumeSerialNumber", wintypes.DWORD),
+            ("nFileSizeHigh", wintypes.DWORD),
+            ("nFileSizeLow", wintypes.DWORD),
+            ("nNumberOfLinks", wintypes.DWORD),
+            ("nFileIndexHigh", wintypes.DWORD),
+            ("nFileIndexLow", wintypes.DWORD),
+        ]
+
+    class FileDispositionInformation(ctypes.Structure):
+        _fields_ = [("DeleteFile", ctypes.c_ubyte)]
+
+    binding_context = (
+        nullcontext(parent_binding)
+        if parent_binding is not None
+        else activity_group_bound_directory_chain(
+            root,
+            path.parent,
+        )
+    )
+    with binding_context as binding:
+        if (
+            not isinstance(binding, dict)
+            or binding.get("path") != path.parent
+        ):
+            raise OSError("activity_group_bound_parent_mismatch")
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        create_file = kernel32.CreateFileW
+        create_file.argtypes = [
+            wintypes.LPCWSTR,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.LPVOID,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.HANDLE,
+        ]
+        create_file.restype = wintypes.HANDLE
+        get_information = kernel32.GetFileInformationByHandle
+        get_information.argtypes = [
+            wintypes.HANDLE,
+            ctypes.POINTER(ByHandleFileInformation),
+        ]
+        get_information.restype = wintypes.BOOL
+        read_file = kernel32.ReadFile
+        read_file.argtypes = [
+            wintypes.HANDLE,
+            wintypes.LPVOID,
+            wintypes.DWORD,
+            ctypes.POINTER(wintypes.DWORD),
+            wintypes.LPVOID,
+        ]
+        read_file.restype = wintypes.BOOL
+        set_information = kernel32.SetFileInformationByHandle
+        set_information.argtypes = [
+            wintypes.HANDLE,
+            ctypes.c_int,
+            wintypes.LPVOID,
+            wintypes.DWORD,
+        ]
+        set_information.restype = wintypes.BOOL
+        close_handle = kernel32.CloseHandle
+        close_handle.argtypes = [wintypes.HANDLE]
+        close_handle.restype = wintypes.BOOL
+
+        generic_read = 0x80000000
+        delete_access = 0x00010000
+        file_share_read = 0x00000001
+        open_existing = 3
+        file_flag_open_reparse_point = 0x00200000
+        handle = create_file(
+            str(path),
+            generic_read | delete_access,
+            file_share_read,
+            None,
+            open_existing,
+            file_flag_open_reparse_point,
+            None,
+        )
+        invalid_handle = wintypes.HANDLE(-1).value
+        if handle == invalid_handle:
+            raise ctypes.WinError(ctypes.get_last_error())
+        delete_marked = False
+        try:
+            information = ByHandleFileInformation()
+            if not get_information(
+                handle,
+                ctypes.byref(information),
+            ):
+                raise ctypes.WinError(ctypes.get_last_error())
+            file_attribute_directory = 0x00000010
+            file_attribute_reparse_point = 0x00000400
+            size = (
+                int(information.nFileSizeHigh) << 32
+            ) | int(information.nFileSizeLow)
+            file_index = (
+                int(information.nFileIndexHigh) << 32
+            ) | int(information.nFileIndexLow)
+            entry_stat = os.stat(path, follow_symlinks=False)
+            if (
+                size > max_bytes
+                or entry_stat.st_ino != file_index
+                or (
+                    information.dwFileAttributes
+                    & (
+                        file_attribute_directory
+                        | file_attribute_reparse_point
+                    )
+                )
+            ):
+                raise OSError(
+                    "activity_group_evidence_file_unsafe"
+                )
+            chunks: list[bytes] = []
+            remaining = size
+            while remaining:
+                chunk_size = min(1024 * 1024, remaining)
+                buffer = ctypes.create_string_buffer(chunk_size)
+                read_count = wintypes.DWORD()
+                if not read_file(
+                    handle,
+                    buffer,
+                    chunk_size,
+                    ctypes.byref(read_count),
+                    None,
+                ):
+                    raise ctypes.WinError(ctypes.get_last_error())
+                if read_count.value == 0:
+                    raise OSError(
+                        "activity_group_evidence_read_incomplete"
+                    )
+                chunks.append(buffer.raw[: read_count.value])
+                remaining -= read_count.value
+            raw = b"".join(chunks)
+            if (
+                "sha256:" + hashlib.sha256(raw).hexdigest()
+                != expected_sha256
+            ):
+                raise OSError("activity_group_evidence_changed")
+            disposition = FileDispositionInformation(1)
+            if not set_information(
+                handle,
+                4,
+                ctypes.byref(disposition),
+                ctypes.sizeof(disposition),
+            ):
+                raise ctypes.WinError(ctypes.get_last_error())
+            delete_marked = True
+        finally:
+            close_handle(handle)
+        if not delete_marked or path.exists() or path.is_symlink():
+            raise OSError("activity_group_evidence_delete_failed")
+        fsync_directory(path.parent)
+
+
+def activity_group_canonical_swap_paths(
+    path: Path,
+    request_sha256: str,
+) -> tuple[Path, Path]:
+    """Return content-free deterministic names for one interrupted CAS."""
+
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", request_sha256):
+        raise ValueError("activity_group_request_sha256_invalid")
+    request_digest = request_sha256.removeprefix("sha256:")
+    path_digest = hashlib.sha256(path.name.encode("utf-8")).hexdigest()[:24]
+    swap_path = path.with_name(
+        f".{request_digest}.{path_digest}"
+        f"{ACTIVITY_GROUP_MEMBERSHIP_CANONICAL_SWAP_SUFFIX}"
+    )
+    return swap_path, swap_path.with_name(swap_path.name + ".previous")
+
+
+def _read_activity_group_regular_bytes_bound(
+    root: Path,
+    binding: dict[str, Any],
+    path: Path,
+    *,
+    max_bytes: int,
+) -> bytes:
+    if binding.get("path") != path.parent:
+        raise OSError("activity_group_bound_parent_mismatch")
+    if os.name == "nt":
+        with hold_activity_group_evidence_file(
+            root,
+            path,
+            max_bytes=max_bytes,
+        ) as held:
+            return held["raw"]
+
+    parent_descriptor = binding.get("descriptor")
+    if not isinstance(parent_descriptor, int):
+        raise OSError("activity_group_bound_parent_descriptor_missing")
+    flags = os.O_RDONLY
+    flags |= getattr(os, "O_BINARY", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(
+        path.name,
+        flags,
+        dir_fd=parent_descriptor,
+    )
+    try:
+        opened_stat = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(opened_stat.st_mode)
+            or opened_stat.st_size > max_bytes
+        ):
+            raise OSError("activity_group_canonical_swap_file_unsafe")
+        chunks: list[bytes] = []
+        remaining = max_bytes + 1
+        while remaining:
+            chunk = os.read(
+                descriptor,
+                min(1024 * 1024, remaining),
+            )
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        raw = b"".join(chunks)
+        final_stat = os.fstat(descriptor)
+        entry_stat = os.stat(
+            path.name,
+            dir_fd=parent_descriptor,
+            follow_symlinks=False,
+        )
+        if (
+            len(raw) > max_bytes
+            or (
+                opened_stat.st_dev,
+                opened_stat.st_ino,
+                opened_stat.st_size,
+                opened_stat.st_mtime_ns,
+            )
+            != (
+                final_stat.st_dev,
+                final_stat.st_ino,
+                final_stat.st_size,
+                final_stat.st_mtime_ns,
+            )
+            or (
+                opened_stat.st_dev,
+                opened_stat.st_ino,
+            )
+            != (
+                entry_stat.st_dev,
+                entry_stat.st_ino,
+            )
+        ):
+            raise OSError("activity_group_canonical_swap_file_changed")
+        return raw
+    finally:
+        os.close(descriptor)
+
+
+def _exchange_activity_group_entries_posix(
+    binding: dict[str, Any],
+    first: Path,
+    second: Path,
+) -> None:
+    """Atomically exchange two bound sibling names without deleting either."""
+
+    if os.name == "nt":
+        raise OSError("activity_group_atomic_exchange_wrong_platform")
+    if (
+        binding.get("path") != first.parent
+        or first.parent != second.parent
+    ):
+        raise OSError("activity_group_bound_parent_mismatch")
+    parent_descriptor = binding.get("descriptor")
+    if not isinstance(parent_descriptor, int):
+        raise OSError("activity_group_bound_parent_descriptor_missing")
+
+    import ctypes
+
+    libc = ctypes.CDLL(None, use_errno=True)
+    rename_exchange_function = getattr(libc, "renameat2", None)
+    if rename_exchange_function is None:
+        rename_exchange_function = getattr(
+            libc,
+            "renameatx_np",
+            None,
+        )
+    if rename_exchange_function is None:
+        raise OSError("activity_group_atomic_exchange_unsupported")
+    rename_exchange_function.argtypes = [
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    ]
+    rename_exchange_function.restype = ctypes.c_int
+    rename_exchange = 0x2
+    if (
+        rename_exchange_function(
+            parent_descriptor,
+            os.fsencode(first.name),
+            parent_descriptor,
+            os.fsencode(second.name),
+            rename_exchange,
+        )
+        != 0
+    ):
+        error_number = ctypes.get_errno()
+        raise OSError(
+            error_number,
+            os.strerror(error_number),
+        )
+    os.fsync(parent_descriptor)
+
+
+def _move_activity_group_entry_no_replace(
+    binding: dict[str, Any],
+    source: Path,
+    destination: Path,
+) -> None:
+    """Atomically move one bound sibling only while the destination is absent."""
+
+    if (
+        binding.get("path") != source.parent
+        or source.parent != destination.parent
+    ):
+        raise OSError("activity_group_bound_parent_mismatch")
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        move_file_ex = kernel32.MoveFileExW
+        move_file_ex.argtypes = [
+            wintypes.LPCWSTR,
+            wintypes.LPCWSTR,
+            wintypes.DWORD,
+        ]
+        move_file_ex.restype = wintypes.BOOL
+        movefile_write_through = 0x00000008
+        if not move_file_ex(
+            str(source),
+            str(destination),
+            movefile_write_through,
+        ):
+            raise ctypes.WinError(ctypes.get_last_error())
+        return
+
+    parent_descriptor = binding.get("descriptor")
+    if not isinstance(parent_descriptor, int):
+        raise OSError("activity_group_bound_parent_descriptor_missing")
+
+    import ctypes
+
+    libc = ctypes.CDLL(None, use_errno=True)
+    rename_no_replace_function = getattr(libc, "renameat2", None)
+    rename_no_replace_flag = 0x1
+    if rename_no_replace_function is None:
+        rename_no_replace_function = getattr(
+            libc,
+            "renameatx_np",
+            None,
+        )
+        rename_no_replace_flag = 0x4
+    if rename_no_replace_function is None:
+        raise OSError("activity_group_atomic_no_replace_unsupported")
+    rename_no_replace_function.argtypes = [
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    ]
+    rename_no_replace_function.restype = ctypes.c_int
+    if (
+        rename_no_replace_function(
+            parent_descriptor,
+            os.fsencode(source.name),
+            parent_descriptor,
+            os.fsencode(destination.name),
+            rename_no_replace_flag,
+        )
+        != 0
+    ):
+        error_number = ctypes.get_errno()
+        raise OSError(
+            error_number,
+            os.strerror(error_number),
+        )
+    os.fsync(parent_descriptor)
+
+
+def _replace_activity_group_file_with_backup_windows(
+    replaced_path: Path,
+    replacement_path: Path,
+    backup_path: Path,
+) -> None:
+    """Atomically replace one Windows file while preserving its prior bytes."""
+
+    if os.name != "nt":
+        raise OSError("activity_group_replace_with_backup_wrong_platform")
+    if (
+        replaced_path.parent != replacement_path.parent
+        or replaced_path.parent != backup_path.parent
+    ):
+        raise OSError("activity_group_bound_parent_mismatch")
+    if backup_path.exists() or backup_path.is_symlink():
+        raise FileExistsError(backup_path)
+
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    replace_file = kernel32.ReplaceFileW
+    replace_file.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.LPCWSTR,
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.LPVOID,
+    ]
+    replace_file.restype = wintypes.BOOL
+    replacefile_write_through = 0x00000001
+    if not replace_file(
+        str(replaced_path),
+        str(replacement_path),
+        str(backup_path),
+        replacefile_write_through,
+        None,
+        None,
+    ):
+        raise ctypes.WinError(ctypes.get_last_error())
+
+
+def _activity_group_swap_residue_bytes(
+    root: Path,
+    binding: dict[str, Any],
+    path: Path,
+) -> bytes | None:
+    try:
+        return _read_activity_group_regular_bytes_bound(
+            root,
+            binding,
+            path,
+            max_bytes=(
+                ACTIVITY_GROUP_MEMBERSHIP_MAX_CANONICAL_FILE_BYTES
+            ),
+        )
+    except FileNotFoundError:
+        return None
+
+
+def cleanup_activity_group_canonical_swap_residue(
+    root: Path,
+    path: Path,
+    *,
+    request_sha256: str,
+    expected_current_sha256: str,
+    expected_complementary_sha256: str,
+) -> int:
+    """Remove only a known complementary CAS residue beside stable canonical bytes."""
+
+    for expected_sha256 in (
+        expected_current_sha256,
+        expected_complementary_sha256,
+    ):
+        if not re.fullmatch(r"sha256:[0-9a-f]{64}", expected_sha256):
+            raise OSError("activity_group_canonical_swap_sha256_invalid")
+    swap_path, previous_path = activity_group_canonical_swap_paths(
+        path,
+        request_sha256,
+    )
+    removed = 0
+    with activity_group_bound_directory_chain(
+        root,
+        path.parent,
+    ) as binding:
+        stable_bytes = _read_activity_group_regular_bytes_bound(
+            root,
+            binding,
+            path,
+            max_bytes=ACTIVITY_GROUP_MEMBERSHIP_MAX_CANONICAL_FILE_BYTES,
+        )
+        if (
+            "sha256:" + hashlib.sha256(stable_bytes).hexdigest()
+            != expected_current_sha256
+        ):
+            raise OSError("activity_group_canonical_changed_before_swap_cleanup")
+        residues = [
+            (candidate, residue_bytes)
+            for candidate in (swap_path, previous_path)
+            if (
+                residue_bytes := _activity_group_swap_residue_bytes(
+                    root,
+                    binding,
+                    candidate,
+                )
+            )
+            is not None
+        ]
+        if len(residues) > 1:
+            raise OSError("activity_group_canonical_swap_evidence_ambiguous")
+        for residue, residue_bytes in residues:
+            residue_sha256 = (
+                "sha256:" + hashlib.sha256(residue_bytes).hexdigest()
+            )
+            if residue_sha256 != expected_complementary_sha256:
+                raise OSError(
+                    "activity_group_canonical_swap_evidence_changed"
+                )
+            delete_activity_group_evidence_exact(
+                root,
+                residue,
+                expected_sha256=residue_sha256,
+                max_bytes=(
+                    ACTIVITY_GROUP_MEMBERSHIP_MAX_CANONICAL_FILE_BYTES
+                ),
+                parent_binding=binding,
+            )
+            removed += 1
+        final_bytes = _read_activity_group_regular_bytes_bound(
+            root,
+            binding,
+            path,
+            max_bytes=ACTIVITY_GROUP_MEMBERSHIP_MAX_CANONICAL_FILE_BYTES,
+        )
+        if (
+            "sha256:" + hashlib.sha256(final_bytes).hexdigest()
+            != expected_current_sha256
+        ):
+            raise OSError("activity_group_canonical_changed_during_swap_cleanup")
+    return removed
+
+
+def replace_activity_group_canonical_bytes_compare_and_swap(
+    root: Path,
+    path: Path,
+    *,
+    expected_bytes: bytes,
+    replacement_bytes: bytes,
+    request_sha256: str,
+    allow_already_replacement: bool = False,
+) -> bool:
+    """Replace exactly expected canonical bytes without overwriting unknown data."""
+
+    if (
+        len(expected_bytes)
+        > ACTIVITY_GROUP_MEMBERSHIP_MAX_CANONICAL_FILE_BYTES
+        or len(replacement_bytes)
+        > ACTIVITY_GROUP_MEMBERSHIP_MAX_CANONICAL_FILE_BYTES
+    ):
+        raise OSError("activity_group_canonical_swap_bytes_too_large")
+    swap_path, previous_path = activity_group_canonical_swap_paths(
+        path,
+        request_sha256,
+    )
+    with activity_group_bound_directory_chain(
+        root,
+        path.parent,
+    ) as binding:
+        current_bytes = _read_activity_group_regular_bytes_bound(
+            root,
+            binding,
+            path,
+            max_bytes=ACTIVITY_GROUP_MEMBERSHIP_MAX_CANONICAL_FILE_BYTES,
+        )
+        swap_bytes = _activity_group_swap_residue_bytes(
+            root,
+            binding,
+            swap_path,
+        )
+        previous_bytes = _activity_group_swap_residue_bytes(
+            root,
+            binding,
+            previous_path,
+        )
+        if swap_bytes is not None and previous_bytes is not None:
+            raise OSError("activity_group_canonical_swap_evidence_ambiguous")
+
+        residue_path: Path | None = None
+        residue_bytes: bytes | None = None
+        if swap_bytes is not None:
+            residue_path = swap_path
+            residue_bytes = swap_bytes
+        elif previous_bytes is not None:
+            residue_path = previous_path
+            residue_bytes = previous_bytes
+
+        if residue_path is not None:
+            if (
+                current_bytes == replacement_bytes
+                and residue_bytes == expected_bytes
+            ):
+                delete_activity_group_evidence_exact(
+                    root,
+                    residue_path,
+                    expected_sha256=(
+                        "sha256:"
+                        + hashlib.sha256(residue_bytes).hexdigest()
+                    ),
+                    max_bytes=(
+                        ACTIVITY_GROUP_MEMBERSHIP_MAX_CANONICAL_FILE_BYTES
+                    ),
+                    parent_binding=binding,
+                )
+                return True
+            if (
+                current_bytes == expected_bytes
+                and residue_bytes == replacement_bytes
+            ):
+                delete_activity_group_evidence_exact(
+                    root,
+                    residue_path,
+                    expected_sha256=(
+                        "sha256:"
+                        + hashlib.sha256(residue_bytes).hexdigest()
+                    ),
+                    max_bytes=(
+                        ACTIVITY_GROUP_MEMBERSHIP_MAX_CANONICAL_FILE_BYTES
+                    ),
+                    parent_binding=binding,
+                )
+                current_bytes = _read_activity_group_regular_bytes_bound(
+                    root,
+                    binding,
+                    path,
+                    max_bytes=(
+                        ACTIVITY_GROUP_MEMBERSHIP_MAX_CANONICAL_FILE_BYTES
+                    ),
+                )
+            else:
+                raise OSError(
+                    "activity_group_canonical_swap_evidence_changed"
+                )
+
+        if current_bytes == replacement_bytes:
+            if allow_already_replacement:
+                return False
+            raise OSError("activity_group_canonical_changed_before_swap")
+        if current_bytes != expected_bytes:
+            raise OSError("activity_group_canonical_changed_before_swap")
+        if expected_bytes == replacement_bytes:
+            return False
+
+        if os.name != "nt":
+            # Refuse before creating a replacement entry on POSIX platforms
+            # that cannot atomically exchange two sibling names.
+            import ctypes
+
+            libc = ctypes.CDLL(None)
+            if (
+                getattr(libc, "renameat2", None) is None
+                and getattr(libc, "renameatx_np", None) is None
+            ):
+                raise OSError("activity_group_atomic_exchange_unsupported")
+
+        write_activity_group_bytes_new_file_bound(
+            binding,
+            swap_path,
+            replacement_bytes,
+        )
+        capture_path = swap_path
+        swap_performed = False
+        try:
+            if os.name == "nt":
+                _replace_activity_group_file_with_backup_windows(
+                    path,
+                    swap_path,
+                    previous_path,
+                )
+                capture_path = previous_path
+            else:
+                _exchange_activity_group_entries_posix(
+                    binding,
+                    path,
+                    swap_path,
+                )
+            swap_performed = True
+
+            captured_bytes = _read_activity_group_regular_bytes_bound(
+                root,
+                binding,
+                capture_path,
+                max_bytes=(
+                    ACTIVITY_GROUP_MEMBERSHIP_MAX_CANONICAL_FILE_BYTES
+                ),
+            )
+            installed_bytes = _read_activity_group_regular_bytes_bound(
+                root,
+                binding,
+                path,
+                max_bytes=(
+                    ACTIVITY_GROUP_MEMBERSHIP_MAX_CANONICAL_FILE_BYTES
+                ),
+            )
+            if installed_bytes != replacement_bytes:
+                # An external edit arrived after the atomic swap. Keep that
+                # unknown occupant at the public canonical name and retain the
+                # captured entry as recovery evidence.
+                raise OSError(
+                    "activity_group_canonical_changed_during_swap"
+                )
+            if captured_bytes != expected_bytes:
+                # The swap captured an edit that arrived before commit. First
+                # capture our installed replacement without overwrite, then
+                # restore the unknown bytes only if the canonical name remains
+                # absent. This avoids an exchange-back race that could hide a
+                # newer external edit under the private residue name.
+                replacement_capture_path = (
+                    previous_path
+                    if capture_path == swap_path
+                    else swap_path
+                )
+                _move_activity_group_entry_no_replace(
+                    binding,
+                    path,
+                    replacement_capture_path,
+                )
+                installed_capture_bytes = (
+                    _read_activity_group_regular_bytes_bound(
+                        root,
+                        binding,
+                        replacement_capture_path,
+                        max_bytes=(
+                            ACTIVITY_GROUP_MEMBERSHIP_MAX_CANONICAL_FILE_BYTES
+                        ),
+                    )
+                )
+                restore_source = capture_path
+                if installed_capture_bytes != replacement_bytes:
+                    # A second external edit won the name before capture.
+                    # Restore that newer edit first and retain both older
+                    # occupants for forensic review.
+                    restore_source = replacement_capture_path
+                try:
+                    _move_activity_group_entry_no_replace(
+                        binding,
+                        restore_source,
+                        path,
+                    )
+                except OSError:
+                    # A third party already recreated the canonical name. It
+                    # remains visible; all captured bytes remain private.
+                    pass
+                raise OSError(
+                    "activity_group_canonical_changed_during_swap"
+                )
+
+            delete_activity_group_evidence_exact(
+                root,
+                capture_path,
+                expected_sha256=(
+                    "sha256:"
+                    + hashlib.sha256(captured_bytes).hexdigest()
+                ),
+                max_bytes=(
+                    ACTIVITY_GROUP_MEMBERSHIP_MAX_CANONICAL_FILE_BYTES
+                ),
+                parent_binding=binding,
+            )
+            final_bytes = _read_activity_group_regular_bytes_bound(
+                root,
+                binding,
+                path,
+                max_bytes=(
+                    ACTIVITY_GROUP_MEMBERSHIP_MAX_CANONICAL_FILE_BYTES
+                ),
+            )
+            if final_bytes != replacement_bytes:
+                raise OSError(
+                    "activity_group_canonical_swap_verification_failed"
+                )
+            return True
+        finally:
+            if not swap_performed:
+                for candidate in (swap_path, previous_path):
+                    try:
+                        candidate_bytes = (
+                            _activity_group_swap_residue_bytes(
+                                root,
+                                binding,
+                                candidate,
+                            )
+                        )
+                        if candidate_bytes != replacement_bytes:
+                            continue
+                        delete_activity_group_evidence_exact(
+                            root,
+                            candidate,
+                            expected_sha256=(
+                                "sha256:"
+                                + hashlib.sha256(
+                                    candidate_bytes
+                                ).hexdigest()
+                            ),
+                            max_bytes=(
+                                ACTIVITY_GROUP_MEMBERSHIP_MAX_CANONICAL_FILE_BYTES
+                            ),
+                            parent_binding=binding,
+                        )
+                    except OSError:
+                        pass
 
 
 def _activity_group_private_request(
@@ -33669,12 +35354,211 @@ def _read_activity_group_evidence_json(
     return raw, document
 
 
+def _activity_group_membership_binding_items(
+    value: Any,
+) -> list[Any]:
+    if not isinstance(value, list):
+        return []
+    projected: list[Any] = []
+    snapshot_fields = (
+        "object_id",
+        "logical_key",
+        "size_bytes",
+        "mime",
+        "stored_sha256_verified",
+        "manifest_registered",
+    )
+    for item in value:
+        if not isinstance(item, dict):
+            projected.append(None)
+            continue
+        snapshot = item.get("before_snapshot")
+        projected.append(
+            {
+                "row_index": item.get("row_index"),
+                "zettel_id": item.get("zettel_id"),
+                "canonical_path": item.get("canonical_path"),
+                "before_file_sha256": item.get("before_file_sha256"),
+                "after_file_sha256": item.get("after_file_sha256"),
+                "before_snapshot": (
+                    {
+                        field: snapshot.get(field)
+                        for field in snapshot_fields
+                    }
+                    if isinstance(snapshot, dict)
+                    else None
+                ),
+            }
+        )
+    return projected
+
+
+def _activity_group_membership_receipt_journal_projection(
+    document: dict[str, Any],
+    *,
+    receipt_relative_path: str,
+    journal: bool,
+) -> dict[str, Any]:
+    return {
+        "schema": (
+            "wom-kit/activity-group-membership-transaction-binding/v0.1"
+        ),
+        "membership_operation": "add",
+        "recorded_at": document.get(
+            "prepared_at" if journal else "applied_at"
+        ),
+        "archive_id": document.get("archive_id"),
+        "request_sha256": document.get("request_sha256"),
+        "review_plan_sha256": document.get("review_plan_sha256"),
+        "write_plan_sha256": document.get("write_plan_sha256"),
+        "anchor_zettel_id": document.get("anchor_zettel_id"),
+        "reviewed_by": document.get("reviewed_by"),
+        "human_affirmation": document.get("human_affirmation"),
+        "final_receipt_path": (
+            document.get("final_receipt_path")
+            if journal
+            else receipt_relative_path
+        ),
+        "item_count": document.get("item_count"),
+        "items": _activity_group_membership_binding_items(
+            document.get("items")
+        ),
+        "privacy_guards": {
+            field: (
+                document.get("privacy_guards", {}).get(field)
+                if isinstance(document.get("privacy_guards"), dict)
+                else None
+            )
+            for field in (
+                "request_path_stored",
+                "title_text_stored",
+                "body_text_stored",
+                "contains_private_zettel_ids_and_paths",
+                "provider_api_called",
+                "model_called",
+                "network_called",
+                "secret_store_or_environment_read",
+            )
+        },
+    }
+
+
+def _activity_group_membership_receipt_lock_projection(
+    document: dict[str, Any],
+    *,
+    receipt_relative_path: str,
+    lock: bool,
+) -> dict[str, Any]:
+    request_sha256 = document.get("request_sha256")
+    expected_journal_name: str | None = None
+    expected_receipt_path: str | None = None
+    if (
+        isinstance(request_sha256, str)
+        and re.fullmatch(r"sha256:[0-9a-f]{64}", request_sha256)
+    ):
+        digest = request_sha256.removeprefix("sha256:")
+        expected_journal_name = (
+            f".{digest}"
+            f"{ACTIVITY_GROUP_MEMBERSHIP_TRANSACTION_JOURNAL_SUFFIX}"
+        )
+        expected_receipt_path = (
+            activity_group_membership_receipt_relative_path(
+                request_sha256
+            )
+        )
+    return {
+        "schema": (
+            "wom-kit/activity-group-membership-lock-receipt-binding/v0.2"
+        ),
+        "membership_operation": "add",
+        "request_sha256": request_sha256,
+        "review_plan_sha256": document.get("review_plan_sha256"),
+        "write_plan_sha256": document.get("write_plan_sha256"),
+        "transaction_journal_name": (
+            document.get("transaction_journal_name")
+            if lock
+            else expected_journal_name
+        ),
+        "final_receipt_path": (
+            expected_receipt_path if lock else receipt_relative_path
+        ),
+        "transaction_binding_sha256": (
+            document.get("transaction_binding_sha256")
+            if lock
+            else sha256_json_value(
+                _activity_group_membership_receipt_journal_projection(
+                    document,
+                    receipt_relative_path=receipt_relative_path,
+                    journal=False,
+                )
+            )
+        ),
+    }
+
+
+def activity_group_write_lock_matches_journal(
+    lock_document: dict[str, Any],
+    journal: dict[str, Any],
+) -> bool:
+    if (
+        lock_document.get("review_plan_sha256")
+        != journal.get("review_plan_sha256")
+        or lock_document.get("write_plan_sha256")
+        != journal.get("write_plan_sha256")
+    ):
+        return False
+    if (
+        lock_document.get("schema")
+        == "wom-kit/activity-group-membership-write-lock/v0.1"
+    ):
+        return True
+    receipt_relative = journal.get("final_receipt_path")
+    if not isinstance(receipt_relative, str):
+        return False
+    return lock_document.get(
+        "transaction_binding_sha256"
+    ) == sha256_json_value(
+        _activity_group_membership_receipt_journal_projection(
+            journal,
+            receipt_relative_path=receipt_relative,
+            journal=True,
+        )
+    )
+
+
+def read_activity_group_membership_receipt_for_cleanup(
+    root: Path,
+    receipt_path: Path,
+    *,
+    expected_sha256: str,
+) -> tuple[bytes, dict[str, Any]]:
+    """Read one cleanup-authorizing receipt only at its reviewed raw hash."""
+
+    raw, document = _read_activity_group_evidence_json(
+        root,
+        receipt_path,
+        max_bytes=ACTIVITY_GROUP_MEMBERSHIP_MAX_RECEIPT_BYTES,
+        unreadable_code="activity_group_receipt_unreadable",
+    )
+    if (
+        not re.fullmatch(r"sha256:[0-9a-f]{64}", expected_sha256)
+        or "sha256:" + hashlib.sha256(raw).hexdigest()
+        != expected_sha256
+    ):
+        raise ArchiveServiceError(
+            "activity_group_recovery_receipt_changed"
+        )
+    return raw, document
+
+
 def verify_activity_group_membership_receipt(
     root: Path,
     receipt_path: Path,
     *,
     archive_id: str,
     request_sha256: str,
+    expected_journal: dict[str, Any] | None = None,
+    expected_write_lock: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     blockers: list[str] = []
     try:
@@ -33709,6 +35593,51 @@ def verify_activity_group_membership_receipt(
         or actual_relative != expected_relative
     ):
         blockers.append("activity_group_receipt_binding_invalid")
+    transaction_binding_sha256: str | None = None
+    if expected_journal is not None:
+        receipt_projection = (
+            _activity_group_membership_receipt_journal_projection(
+                receipt,
+                receipt_relative_path=actual_relative,
+                journal=False,
+            )
+        )
+        journal_projection = (
+            _activity_group_membership_receipt_journal_projection(
+                expected_journal,
+                receipt_relative_path=actual_relative,
+                journal=True,
+            )
+        )
+        transaction_binding_sha256 = sha256_json_value(
+            receipt_projection
+        )
+        if receipt_projection != journal_projection:
+            blockers.append(
+                "activity_group_receipt_journal_binding_invalid"
+            )
+    elif expected_write_lock is not None:
+        receipt_projection = (
+            _activity_group_membership_receipt_lock_projection(
+                receipt,
+                receipt_relative_path=actual_relative,
+                lock=False,
+            )
+        )
+        lock_projection = (
+            _activity_group_membership_receipt_lock_projection(
+                expected_write_lock,
+                receipt_relative_path=actual_relative,
+                lock=True,
+            )
+        )
+        transaction_binding_sha256 = sha256_json_value(
+            receipt_projection
+        )
+        if receipt_projection != lock_projection:
+            blockers.append(
+                "activity_group_receipt_write_lock_binding_invalid"
+            )
     anchor_zettel_id = receipt.get("anchor_zettel_id")
     items = receipt.get("items")
     if (
@@ -33795,6 +35724,7 @@ def verify_activity_group_membership_receipt(
         ),
         "review_plan_sha256": receipt.get("review_plan_sha256"),
         "write_plan_sha256": receipt.get("write_plan_sha256"),
+        "transaction_binding_sha256": transaction_binding_sha256,
         "review_affirmation_verified": (
             receipt.get("human_affirmation")
             == "all_activity_group_memberships_reviewed"
@@ -33845,6 +35775,7 @@ def activity_group_membership_write(
     transaction_journal_path: Path | None = None
     transaction_journal_written = False
     transaction_journal_removed: bool | None = None
+    final_transaction_inventory_clean: bool | None = None
     write_lock_path = (
         _activity_group_private_root(root)
         / ACTIVITY_GROUP_MEMBERSHIP_WRITE_LOCK_NAME
@@ -34026,6 +35957,17 @@ def activity_group_membership_write(
                 ]
                 if status == "ready_to_apply"
                 else [
+                    "Do not mutate or delete retained activity-group transaction evidence; resolve it through the approved recovery workflow before retrying."
+                ]
+                if any(
+                    code
+                    in {
+                        "activity_group_unresolved_transaction_evidence_exists",
+                        "activity_group_transaction_evidence_scan_failed",
+                    }
+                    for code in blockers
+                )
+                else [
                     "Fix content-free blockers and rerun the read-only membership plan before approving any write."
                 ]
             ),
@@ -34077,7 +36019,23 @@ def activity_group_membership_write(
     if blockers:
         return result_payload("blocked")
 
-    receipt_path = archive_internal_path(root, receipt_relative)
+    transaction_evidence_scan = (
+        scan_activity_group_transaction_evidence(root)
+    )
+    blockers.extend(transaction_evidence_scan["blockers"])
+    if blockers:
+        return result_payload("blocked")
+
+    receipt_path = activity_group_membership_receipt_path(
+        root,
+        actual_request_sha256,
+    )
+    if not activity_group_membership_receipt_path_is_safe(
+        root,
+        receipt_path,
+    ):
+        blockers.append("activity_group_receipt_path_unsafe")
+        return result_payload("blocked")
     if receipt_path.exists():
         receipt_exists = True
         if write_lock_path.exists():
@@ -34364,62 +36322,132 @@ def activity_group_membership_write(
         )
         return result_payload("blocked")
 
-    lock_descriptor: int | None = None
     if recovery_guard_path.exists():
         blockers.append("activity_group_recovery_guard_exists")
         return result_payload("blocked")
-    try:
-        write_lock_path.parent.mkdir(parents=True, exist_ok=True)
-        lock_descriptor = os.open(
-            write_lock_path,
-            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
-            0o600,
+    lock_transaction_binding_sha256 = sha256_json_value(
+        _activity_group_membership_receipt_journal_projection(
+            receipt,
+            receipt_relative_path=receipt_relative,
+            journal=False,
         )
-        lock_document = {
-            "schema": "wom-kit/activity-group-membership-write-lock/v0.1",
-            "request_sha256": actual_request_sha256,
-            "review_plan_sha256": actual_review_plan_sha256,
-            "write_plan_sha256": actual_write_plan_sha256,
-            "transaction_journal_name": transaction_journal_path.name,
-        }
-        with os.fdopen(lock_descriptor, "wb") as lock_handle:
-            lock_descriptor = None
-            lock_handle.write(
-                (
-                    json.dumps(
-                        lock_document,
-                        ensure_ascii=False,
-                        separators=(",", ":"),
-                    )
-                    + "\n"
-                ).encode("utf-8")
-            )
-            lock_handle.flush()
-            os.fsync(lock_handle.fileno())
-        fsync_directory(write_lock_path.parent)
+    )
+    lock_document = {
+        "schema": "wom-kit/activity-group-membership-write-lock/v0.2",
+        "request_sha256": actual_request_sha256,
+        "review_plan_sha256": actual_review_plan_sha256,
+        "write_plan_sha256": actual_write_plan_sha256,
+        "transaction_journal_name": transaction_journal_path.name,
+        "transaction_binding_sha256": (
+            lock_transaction_binding_sha256
+        ),
+    }
+    lock_raw = (
+        json.dumps(
+            lock_document,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        + "\n"
+    ).encode("utf-8")
+    lock_sha256 = (
+        "sha256:" + hashlib.sha256(lock_raw).hexdigest()
+    )
+    private_root_context = activity_group_bound_directory_chain(
+        root,
+        write_lock_path.parent,
+        create=True,
+    )
+    private_root_context_entered = False
+    private_root_context_closed = False
+
+    def close_private_root_context() -> None:
+        nonlocal private_root_context_closed
+        if (
+            private_root_context_entered
+            and not private_root_context_closed
+        ):
+            private_root_context.__exit__(None, None, None)
+            private_root_context_closed = True
+
+    try:
+        private_root_binding = private_root_context.__enter__()
+        private_root_context_entered = True
+        write_activity_group_bytes_new_file_bound(
+            private_root_binding,
+            write_lock_path,
+            lock_raw,
+        )
         if recovery_guard_path.exists():
             try:
-                write_lock_path.unlink()
-                fsync_directory(write_lock_path.parent)
+                delete_activity_group_evidence_exact(
+                    root,
+                    write_lock_path,
+                    expected_sha256=lock_sha256,
+                    max_bytes=(
+                        ACTIVITY_GROUP_MEMBERSHIP_MAX_LOCK_BYTES
+                    ),
+                    parent_binding=private_root_binding,
+                )
                 write_lock_removed = True
             except OSError:
                 write_lock_removed = False
             blockers.append("activity_group_recovery_guard_exists")
+            close_private_root_context()
             return result_payload("blocked")
     except FileExistsError:
         blockers.append("activity_group_write_lock_exists")
+        close_private_root_context()
         return result_payload("blocked")
     except OSError:
         try:
             if write_lock_path.exists():
-                write_lock_path.unlink()
+                delete_activity_group_evidence_exact(
+                    root,
+                    write_lock_path,
+                    expected_sha256=lock_sha256,
+                    max_bytes=(
+                        ACTIVITY_GROUP_MEMBERSHIP_MAX_LOCK_BYTES
+                    ),
+                    parent_binding=private_root_binding,
+                )
         except OSError:
             pass
         blockers.append("activity_group_write_lock_create_failed")
+        close_private_root_context()
         return result_payload("blocked")
-    finally:
-        if lock_descriptor is not None:
-            os.close(lock_descriptor)
+
+    try:
+        locked_transaction_evidence_scan = (
+            scan_activity_group_transaction_evidence(root)
+        )
+    except (OSError, ValueError):
+        locked_transaction_evidence_scan = {
+            "ok": False,
+            "blockers": [
+                "activity_group_transaction_evidence_scan_failed"
+            ],
+        }
+    if not locked_transaction_evidence_scan.get("ok"):
+        blockers.extend(
+            locked_transaction_evidence_scan.get("blockers", [])
+        )
+        try:
+            if write_lock_path.exists():
+                delete_activity_group_evidence_exact(
+                    root,
+                    write_lock_path,
+                    expected_sha256=lock_sha256,
+                    max_bytes=(
+                        ACTIVITY_GROUP_MEMBERSHIP_MAX_LOCK_BYTES
+                    ),
+                    parent_binding=private_root_binding,
+                )
+            write_lock_removed = not write_lock_path.exists()
+        except OSError:
+            write_lock_removed = False
+        close_private_root_context()
+        return result_payload("blocked")
 
     try:
         locked_request_bytes, locked_request_document = (
@@ -34490,45 +36518,134 @@ def activity_group_membership_write(
     except Exception:
         try:
             if write_lock_path.exists():
-                write_lock_path.unlink()
-                fsync_directory(write_lock_path.parent)
+                delete_activity_group_evidence_exact(
+                    root,
+                    write_lock_path,
+                    expected_sha256=lock_sha256,
+                    max_bytes=(
+                        ACTIVITY_GROUP_MEMBERSHIP_MAX_LOCK_BYTES
+                    ),
+                    parent_binding=private_root_binding,
+                )
             write_lock_removed = not write_lock_path.exists()
         except OSError:
             write_lock_removed = False
         blockers.append(
             "activity_group_write_preflight_or_snapshot_failed"
         )
+        close_private_root_context()
         return result_payload("blocked")
 
+    journal_raw = activity_group_evidence_json_bytes(journal)
+    journal_sha256 = (
+        "sha256:" + hashlib.sha256(journal_raw).hexdigest()
+    )
     try:
-        write_json_new_file(transaction_journal_path, journal)
+        write_activity_group_bytes_new_file_bound(
+            private_root_binding,
+            transaction_journal_path,
+            journal_raw,
+        )
+        journal_raw, written_journal = (
+            read_activity_group_membership_transaction_journal(
+                root,
+                transaction_journal_path,
+                archive_id=archive_id,
+                request_sha256=actual_request_sha256,
+            )
+        )
+        if written_journal != journal:
+            raise OSError(
+                "activity_group_transaction_journal_write_changed"
+            )
+        journal_sha256 = (
+            "sha256:" + hashlib.sha256(journal_raw).hexdigest()
+        )
         transaction_journal_written = True
     except FileExistsError:
         try:
-            write_lock_path.unlink()
-            fsync_directory(write_lock_path.parent)
+            delete_activity_group_evidence_exact(
+                root,
+                write_lock_path,
+                expected_sha256=lock_sha256,
+                max_bytes=(
+                    ACTIVITY_GROUP_MEMBERSHIP_MAX_LOCK_BYTES
+                ),
+                parent_binding=private_root_binding,
+            )
             write_lock_removed = True
         except OSError:
             write_lock_removed = False
         blockers.append("activity_group_transaction_journal_exists")
+        close_private_root_context()
         return result_payload("blocked")
     except OSError:
         try:
             if write_lock_path.exists():
-                write_lock_path.unlink()
-                fsync_directory(write_lock_path.parent)
+                delete_activity_group_evidence_exact(
+                    root,
+                    write_lock_path,
+                    expected_sha256=lock_sha256,
+                    max_bytes=(
+                        ACTIVITY_GROUP_MEMBERSHIP_MAX_LOCK_BYTES
+                    ),
+                    parent_binding=private_root_binding,
+                )
             write_lock_removed = not write_lock_path.exists()
         except OSError:
             write_lock_removed = False
         blockers.append(
             "activity_group_transaction_journal_create_failed"
         )
+        close_private_root_context()
         return result_payload("blocked")
 
     attempted_candidates: list[dict[str, Any]] = []
     receipt_parent_existed = receipt_path.parent.exists()
+    receipt_parent_context = activity_group_bound_directory_chain(
+        root,
+        receipt_path.parent,
+        create=True,
+    )
+    try:
+        receipt_parent_binding = receipt_parent_context.__enter__()
+    except (OSError, ValueError):
+        try:
+            delete_activity_group_evidence_exact(
+                root,
+                write_lock_path,
+                expected_sha256=lock_sha256,
+                max_bytes=(
+                    ACTIVITY_GROUP_MEMBERSHIP_MAX_LOCK_BYTES
+                ),
+                parent_binding=private_root_binding,
+            )
+            write_lock_removed = True
+        except OSError:
+            write_lock_removed = False
+        if write_lock_removed:
+            try:
+                delete_activity_group_evidence_exact(
+                    root,
+                    transaction_journal_path,
+                    expected_sha256=journal_sha256,
+                    max_bytes=(
+                        ACTIVITY_GROUP_MEMBERSHIP_MAX_TRANSACTION_JOURNAL_BYTES
+                    ),
+                    parent_binding=private_root_binding,
+                )
+                transaction_journal_removed = True
+            except OSError:
+                transaction_journal_removed = False
+        else:
+            transaction_journal_removed = False
+        blockers.append("activity_group_receipt_path_unsafe")
+        close_private_root_context()
+        return result_payload("blocked")
     receipt_write_attempted = False
     receipt_owned_this_run = False
+    receipt_raw: bytes | None = None
+    receipt_expected_sha256: str | None = None
     try:
         if progress_callback is not None:
             progress_callback(
@@ -34547,7 +36664,13 @@ def activity_group_membership_write(
                 )
             attempted_candidates.append(item)
             canonical_write_attempt_count += 1
-            write_bytes_atomic(item["path"], item["after_bytes"])
+            replace_activity_group_canonical_bytes_compare_and_swap(
+                root,
+                item["path"],
+                expected_bytes=item["before_bytes"],
+                replacement_bytes=item["after_bytes"],
+                request_sha256=actual_request_sha256,
+            )
             written_bytes, _written_stat = (
                 _read_activity_group_canonical_bytes(item["path"])
             )
@@ -34588,52 +36711,167 @@ def activity_group_membership_write(
                 None,
                 None,
             )
-        receipt_path.parent.mkdir(parents=True, exist_ok=True)
         receipt_write_attempted = True
         try:
-            write_json_new_file(receipt_path, receipt)
+            receipt_raw = activity_group_evidence_json_bytes(receipt)
+            receipt_expected_sha256 = (
+                "sha256:" + hashlib.sha256(receipt_raw).hexdigest()
+            )
+            write_activity_group_bytes_new_file_bound(
+                receipt_parent_binding,
+                receipt_path,
+                receipt_raw,
+            )
             receipt_owned_this_run = True
         except FileExistsError:
             receipt_write_attempted = False
             raise RuntimeError("receipt_created_concurrently")
         except Exception:
-            receipt_owned_this_run = receipt_path.exists()
             raise
-        verification = verify_activity_group_membership_receipt(
+        with hold_activity_group_evidence_file(
             root,
             receipt_path,
-            archive_id=archive_id,
-            request_sha256=actual_request_sha256,
-        )
-        if not verification.get("ok"):
-            raise RuntimeError("written_receipt_verification_failed")
-        receipt_exists = True
-        receipt_written_this_run = True
-        receipt_sha256 = verification.get("receipt_sha256")
-        try:
-            transaction_journal_path.unlink()
-            fsync_directory(transaction_journal_path.parent)
-            transaction_journal_removed = True
-        except OSError:
-            transaction_journal_removed = False
-            warnings.append(
-                "completed_activity_group_transaction_journal_cleanup_failed"
+            max_bytes=ACTIVITY_GROUP_MEMBERSHIP_MAX_RECEIPT_BYTES,
+        ) as held_receipt:
+            held_receipt_sha256 = (
+                "sha256:"
+                + hashlib.sha256(held_receipt["raw"]).hexdigest()
             )
-        if transaction_journal_removed:
+            verification = verify_activity_group_membership_receipt(
+                root,
+                receipt_path,
+                archive_id=archive_id,
+                request_sha256=actual_request_sha256,
+                expected_journal=journal,
+            )
+            if (
+                not verification.get("ok")
+                or verification.get("receipt_sha256")
+                != held_receipt_sha256
+            ):
+                raise RuntimeError(
+                    "written_receipt_verification_failed"
+                )
+            receipt_exists = True
+            receipt_written_this_run = True
+            receipt_sha256 = held_receipt_sha256
             try:
-                write_lock_path.unlink()
-                fsync_directory(write_lock_path.parent)
+                lock_bytes, current_lock_document = (
+                    read_activity_group_membership_write_lock(
+                        root,
+                        write_lock_path,
+                        request_sha256=actual_request_sha256,
+                    )
+                )
+                if (
+                    "sha256:"
+                    + hashlib.sha256(lock_bytes).hexdigest()
+                    != lock_sha256
+                    or current_lock_document != lock_document
+                    or not activity_group_write_lock_matches_journal(
+                        current_lock_document,
+                        journal,
+                    )
+                ):
+                    raise OSError(
+                        "activity_group_write_lock_changed_before_cleanup"
+                    )
+                delete_activity_group_evidence_exact(
+                    root,
+                    write_lock_path,
+                    expected_sha256=lock_sha256,
+                    max_bytes=(
+                        ACTIVITY_GROUP_MEMBERSHIP_MAX_LOCK_BYTES
+                    ),
+                    parent_binding=private_root_binding,
+                )
                 write_lock_removed = True
-            except OSError:
+            except (ArchiveServiceError, OSError):
                 write_lock_removed = False
+                final_transaction_inventory_clean = False
                 warnings.append(
                     "activity_group_write_lock_cleanup_failed"
                 )
-        else:
-            write_lock_removed = False
-            warnings.append(
-                "activity_group_write_lock_retained_with_journal"
-            )
+            if write_lock_removed:
+                try:
+                    verification = (
+                        verify_activity_group_membership_receipt(
+                            root,
+                            receipt_path,
+                            archive_id=archive_id,
+                            request_sha256=actual_request_sha256,
+                            expected_journal=journal,
+                        )
+                    )
+                    if (
+                        not verification.get("ok")
+                        or verification.get("receipt_sha256")
+                        != held_receipt_sha256
+                    ):
+                        raise OSError(
+                            "activity_group_receipt_changed_before_cleanup"
+                        )
+                    for item in candidates:
+                        current_bytes, _stat = (
+                            _read_activity_group_canonical_bytes(
+                                item["path"]
+                            )
+                        )
+                        if (
+                            "sha256:"
+                            + hashlib.sha256(current_bytes).hexdigest()
+                            != item["after_file_sha256"]
+                        ):
+                            raise OSError(
+                                "activity_group_participant_changed_before_cleanup"
+                            )
+                    cleanup_scan = (
+                        scan_activity_group_transaction_evidence(root)
+                    )
+                    cleanup_paths = cleanup_scan.get("journal_paths")
+                    if (
+                        not cleanup_scan.get("complete")
+                        or not isinstance(cleanup_paths, list)
+                        or cleanup_paths != [transaction_journal_path]
+                    ):
+                        final_transaction_inventory_clean = False
+                        raise OSError(
+                            "activity_group_unresolved_transaction_evidence_exists"
+                        )
+                    delete_activity_group_evidence_exact(
+                        root,
+                        transaction_journal_path,
+                        expected_sha256=journal_sha256,
+                        max_bytes=(
+                            ACTIVITY_GROUP_MEMBERSHIP_MAX_TRANSACTION_JOURNAL_BYTES
+                        ),
+                        parent_binding=private_root_binding,
+                    )
+                    transaction_journal_removed = True
+                    final_scan = (
+                        scan_activity_group_transaction_evidence(root)
+                    )
+                    if not final_scan.get("ok"):
+                        final_transaction_inventory_clean = False
+                        raise OSError(
+                            "activity_group_unresolved_transaction_evidence_exists"
+                        )
+                    final_transaction_inventory_clean = True
+                except (ArchiveServiceError, OSError):
+                    final_transaction_inventory_clean = False
+                    transaction_journal_removed = not (
+                        transaction_journal_path.exists()
+                        or transaction_journal_path.is_symlink()
+                    )
+                    warnings.append(
+                        "completed_activity_group_transaction_journal_cleanup_failed"
+                    )
+            else:
+                transaction_journal_removed = False
+                final_transaction_inventory_clean = False
+                warnings.append(
+                    "activity_group_transaction_journal_retained_with_lock"
+                )
         if progress_callback is not None:
             progress_callback(
                 "activity-group-membership-receipt",
@@ -34641,15 +36879,31 @@ def activity_group_membership_write(
                 None,
                 None,
             )
+        if final_transaction_inventory_clean is False:
+            blockers.append(
+                "activity_group_unresolved_transaction_evidence_exists"
+            )
+            return result_payload("applied_evidence_conflict")
         return result_payload("applied")
     except Exception:
         rollback["attempted"] = bool(
             attempted_candidates or receipt_write_attempted
         )
-        if receipt_owned_this_run and receipt_path.exists():
+        if (
+            receipt_owned_this_run
+            and receipt_expected_sha256 is not None
+            and receipt_path.exists()
+        ):
             try:
-                receipt_path.unlink()
-                fsync_directory(receipt_path.parent)
+                delete_activity_group_evidence_exact(
+                    root,
+                    receipt_path,
+                    expected_sha256=receipt_expected_sha256,
+                    max_bytes=(
+                        ACTIVITY_GROUP_MEMBERSHIP_MAX_RECEIPT_BYTES
+                    ),
+                    parent_binding=receipt_parent_binding,
+                )
             except OSError:
                 pass
         receipt_removed = not receipt_path.exists()
@@ -34657,7 +36911,38 @@ def activity_group_membership_write(
         canonical_restore_ok = True
         for item in reversed(attempted_candidates):
             try:
-                write_bytes_atomic(item["path"], item["before_bytes"])
+                current_bytes, _current_stat = (
+                    _read_activity_group_canonical_bytes(item["path"])
+                )
+                if current_bytes == item["before_bytes"]:
+                    cleanup_activity_group_canonical_swap_residue(
+                        root,
+                        item["path"],
+                        request_sha256=actual_request_sha256,
+                        expected_current_sha256=(
+                            item["before_file_sha256"]
+                        ),
+                        expected_complementary_sha256=(
+                            item["after_file_sha256"]
+                        ),
+                    )
+                elif current_bytes == item["after_bytes"]:
+                    changed = (
+                        replace_activity_group_canonical_bytes_compare_and_swap(
+                            root,
+                            item["path"],
+                            expected_bytes=item["after_bytes"],
+                            replacement_bytes=item["before_bytes"],
+                            request_sha256=actual_request_sha256,
+                            allow_already_replacement=True,
+                        )
+                    )
+                    if changed:
+                        restored += 1
+                else:
+                    raise OSError(
+                        "activity_group_rollback_participant_changed"
+                    )
                 restored_bytes, _restored_stat = (
                     _read_activity_group_canonical_bytes(item["path"])
                 )
@@ -34665,33 +36950,80 @@ def activity_group_membership_write(
                     raise OSError(
                         "canonical_restore_verification_failed"
                     )
-                restored += 1
             except Exception:
                 canonical_restore_ok = False
+        rollback_evidence_consistent = True
         if canonical_restore_ok and receipt_removed:
             try:
-                if transaction_journal_path.exists():
-                    transaction_journal_path.unlink()
-                    fsync_directory(transaction_journal_path.parent)
-                    transaction_journal_removed = True
-                else:
-                    transaction_journal_removed = False
-            except OSError:
-                transaction_journal_removed = False
-        else:
-            transaction_journal_removed = False
-        if transaction_journal_removed:
-            try:
                 if write_lock_path.exists():
-                    write_lock_path.unlink()
-                    fsync_directory(write_lock_path.parent)
-                write_lock_removed = True
+                    delete_activity_group_evidence_exact(
+                        root,
+                        write_lock_path,
+                        expected_sha256=lock_sha256,
+                        max_bytes=(
+                            ACTIVITY_GROUP_MEMBERSHIP_MAX_LOCK_BYTES
+                        ),
+                        parent_binding=private_root_binding,
+                    )
+                write_lock_removed = not write_lock_path.exists()
             except OSError:
                 write_lock_removed = False
         else:
             write_lock_removed = False
-        if not receipt_parent_existed:
-            cleanup_empty_archive_dirs(root, [receipt_path])
+        if (
+            canonical_restore_ok
+            and receipt_removed
+            and write_lock_removed
+        ):
+            try:
+                for item in candidates:
+                    current_bytes, _current_stat = (
+                        _read_activity_group_canonical_bytes(
+                            item["path"]
+                        )
+                    )
+                    if current_bytes != item["before_bytes"]:
+                        raise OSError(
+                            "activity_group_rollback_participant_changed"
+                        )
+                if receipt_path.exists():
+                    raise OSError(
+                        "activity_group_rollback_receipt_appeared"
+                    )
+                rollback_scan = (
+                    scan_activity_group_transaction_evidence(root)
+                )
+                rollback_paths = rollback_scan.get("journal_paths")
+                if (
+                    not rollback_scan.get("complete")
+                    or not isinstance(rollback_paths, list)
+                    or rollback_paths != [transaction_journal_path]
+                ):
+                    raise OSError(
+                        "activity_group_unresolved_transaction_evidence_exists"
+                    )
+                delete_activity_group_evidence_exact(
+                    root,
+                    transaction_journal_path,
+                    expected_sha256=journal_sha256,
+                    max_bytes=(
+                        ACTIVITY_GROUP_MEMBERSHIP_MAX_TRANSACTION_JOURNAL_BYTES
+                    ),
+                    parent_binding=private_root_binding,
+                )
+                transaction_journal_removed = True
+                final_rollback_scan = (
+                    scan_activity_group_transaction_evidence(root)
+                )
+                if (
+                    receipt_path.exists()
+                    or not final_rollback_scan.get("ok")
+                ):
+                    rollback_evidence_consistent = False
+            except (ArchiveServiceError, OSError):
+                transaction_journal_removed = False
+        else:
+            transaction_journal_removed = False
         rollback["canonical_files_restored"] = restored
         rollback["receipt_removed"] = receipt_removed
         rollback["transaction_journal_removed"] = (
@@ -34706,6 +37038,7 @@ def activity_group_membership_write(
             and receipt_removed
             and transaction_journal_removed
             and write_lock_removed
+            and rollback_evidence_consistent
         )
         canonical_files_written = (
             0 if rollback["succeeded"] else None
@@ -34734,6 +37067,14 @@ def activity_group_membership_write(
             if rollback["succeeded"]
             else "failed_rollback_incomplete"
         )
+    finally:
+        receipt_parent_context.__exit__(None, None, None)
+        close_private_root_context()
+        if (
+            not receipt_parent_existed
+            and not receipt_path.exists()
+        ):
+            cleanup_empty_archive_dirs(root, [receipt_path])
 
 
 def read_activity_group_membership_write_lock(
@@ -34754,17 +37095,23 @@ def read_activity_group_membership_write_lock(
             request_sha256,
         ).name
     )
+    schema = document.get("schema")
+    expected_fields = {
+        "schema",
+        "request_sha256",
+        "review_plan_sha256",
+        "write_plan_sha256",
+        "transaction_journal_name",
+    }
+    if schema == "wom-kit/activity-group-membership-write-lock/v0.2":
+        expected_fields.add("transaction_binding_sha256")
     if (
-        set(document)
-        != {
-            "schema",
-            "request_sha256",
-            "review_plan_sha256",
-            "write_plan_sha256",
-            "transaction_journal_name",
+        set(document) != expected_fields
+        or schema
+        not in {
+            "wom-kit/activity-group-membership-write-lock/v0.1",
+            "wom-kit/activity-group-membership-write-lock/v0.2",
         }
-        or document.get("schema")
-        != "wom-kit/activity-group-membership-write-lock/v0.1"
         or document.get("request_sha256") != request_sha256
         or not re.fullmatch(
             r"sha256:[0-9a-f]{64}",
@@ -34776,6 +37123,17 @@ def read_activity_group_membership_write_lock(
         )
         or document.get("transaction_journal_name")
         != expected_journal
+        or (
+            schema
+            == "wom-kit/activity-group-membership-write-lock/v0.2"
+            and not re.fullmatch(
+                r"sha256:[0-9a-f]{64}",
+                str(
+                    document.get("transaction_binding_sha256")
+                    or ""
+                ),
+            )
+        )
     ):
         raise ArchiveServiceError(
             "activity_group_write_lock_binding_invalid"
@@ -34928,23 +37286,77 @@ def classify_activity_group_membership_transaction(
     for item in items:
         row_index = item.get("row_index")
         participant_state = "unknown"
+        swap_residue_state = "absent"
         item_blockers: list[str] = []
         try:
             path = _activity_group_standard_canonical_path(
                 root,
                 item["zettel_id"],
             )
-            current_bytes, _stat = (
-                _read_activity_group_canonical_bytes(path)
+            swap_path, previous_path = (
+                activity_group_canonical_swap_paths(
+                    path,
+                    journal["request_sha256"],
+                )
             )
+            with activity_group_bound_directory_chain(
+                root,
+                path.parent,
+            ) as binding:
+                current_bytes = (
+                    _read_activity_group_regular_bytes_bound(
+                        root,
+                        binding,
+                        path,
+                        max_bytes=(
+                            ACTIVITY_GROUP_MEMBERSHIP_MAX_CANONICAL_FILE_BYTES
+                        ),
+                    )
+                )
+                swap_bytes = _activity_group_swap_residue_bytes(
+                    root,
+                    binding,
+                    swap_path,
+                )
+                previous_bytes = _activity_group_swap_residue_bytes(
+                    root,
+                    binding,
+                    previous_path,
+                )
+            if swap_bytes is not None and previous_bytes is not None:
+                raise ArchiveServiceError(
+                    "activity_group_canonical_swap_evidence_ambiguous"
+                )
             current_sha256 = (
                 "sha256:" + hashlib.sha256(current_bytes).hexdigest()
             )
+            residue_bytes = (
+                swap_bytes
+                if swap_bytes is not None
+                else previous_bytes
+            )
+            residue_sha256 = (
+                "sha256:" + hashlib.sha256(residue_bytes).hexdigest()
+                if residue_bytes is not None
+                else None
+            )
             if current_sha256 == item.get("before_file_sha256"):
                 participant_state = "before"
+                if residue_sha256 is not None:
+                    if residue_sha256 != item.get("after_file_sha256"):
+                        raise ArchiveServiceError(
+                            "activity_group_canonical_swap_evidence_changed"
+                        )
+                    swap_residue_state = "complementary_after"
                 before_count += 1
             elif current_sha256 == item.get("after_file_sha256"):
                 participant_state = "after"
+                if residue_sha256 is not None:
+                    if residue_sha256 != item.get("before_file_sha256"):
+                        raise ArchiveServiceError(
+                            "activity_group_canonical_swap_evidence_changed"
+                        )
+                    swap_residue_state = "complementary_before"
                 after_count += 1
             else:
                 unknown_count += 1
@@ -34966,26 +37378,56 @@ def classify_activity_group_membership_transaction(
             {
                 "row_index": row_index,
                 "state": participant_state,
+                "swap_residue_state": swap_residue_state,
                 "blocker_codes": item_blockers,
             }
         )
 
     receipt_relative = journal.get("final_receipt_path")
     receipt_path = (
-        archive_internal_path(root, receipt_relative)
+        activity_group_membership_receipt_path(
+            root,
+            journal["request_sha256"],
+        )
         if isinstance(receipt_relative, str)
         else None
     )
-    receipt_exists = bool(receipt_path and receipt_path.exists())
+    receipt_path_unsafe = bool(
+        receipt_path
+        and (
+            zet_revision_path_has_symlink_component(
+                root,
+                receipt_path,
+            )
+            or not is_path_within_root(receipt_path, root)
+        )
+    )
+    if receipt_path_unsafe:
+        blockers.append("activity_group_receipt_path_unsafe")
+    receipt_exists = bool(
+        receipt_path
+        and (receipt_path.exists() or receipt_path.is_symlink())
+    )
     receipt_verification: dict[str, Any] | None = None
-    if receipt_exists and receipt_path is not None:
+    receipt_sha256: str | None = None
+    transaction_binding_sha256: str | None = None
+    if (
+        receipt_exists
+        and receipt_path is not None
+        and not receipt_path_unsafe
+    ):
         receipt_verification = (
             verify_activity_group_membership_receipt(
                 root,
                 receipt_path,
                 archive_id=journal["archive_id"],
                 request_sha256=journal["request_sha256"],
+                expected_journal=journal,
             )
+        )
+        receipt_sha256 = receipt_verification.get("receipt_sha256")
+        transaction_binding_sha256 = receipt_verification.get(
+            "transaction_binding_sha256"
         )
         if not receipt_verification.get("ok"):
             blockers.extend(
@@ -35033,6 +37475,8 @@ def classify_activity_group_membership_transaction(
         "receipt_verified": bool(
             receipt_verification and receipt_verification.get("ok")
         ),
+        "receipt_sha256": receipt_sha256,
+        "transaction_binding_sha256": transaction_binding_sha256,
         "blockers": blockers,
     }
 
@@ -35066,11 +37510,9 @@ def activity_group_membership_recovery_plan(
                 request_sha256,
             )
         )
-        receipt_path = archive_internal_path(
+        receipt_path = activity_group_membership_receipt_path(
             root,
-            activity_group_membership_receipt_relative_path(
-                request_sha256
-            ),
+            request_sha256,
         )
 
     evidence_sha256: str | None = None
@@ -35084,11 +37526,75 @@ def activity_group_membership_recovery_plan(
         "after_count": 0,
         "unknown_count": 0,
     }
-    receipt_exists = bool(receipt_path and receipt_path.exists())
+    receipt_exists = bool(
+        receipt_path
+        and (receipt_path.exists() or receipt_path.is_symlink())
+    )
     receipt_verified = False
-    write_lock_exists = write_lock_path.exists()
+    receipt_sha256: str | None = None
+    transaction_binding_sha256: str | None = None
+    transaction_journal_count = 0
+    matching_transaction_journal_count = 0
+    write_lock_exists = bool(
+        write_lock_path.exists() or write_lock_path.is_symlink()
+    )
     write_lock_sha256: str | None = None
-    if not blockers and journal_path is not None and journal_path.exists():
+    if (
+        not blockers
+        and receipt_path is not None
+        and (
+            zet_revision_path_has_symlink_component(
+                root,
+                receipt_path,
+            )
+            or not is_path_within_root(receipt_path, root)
+        )
+    ):
+        blockers.append("activity_group_receipt_path_unsafe")
+        transaction_state = "unknown_or_drifted"
+    if not blockers and journal_path is not None:
+        transaction_evidence_scan = (
+            scan_activity_group_transaction_evidence(root)
+        )
+        transaction_paths = transaction_evidence_scan.get(
+            "journal_paths",
+            [],
+        )
+        transaction_journal_count = int(
+            transaction_evidence_scan.get("journal_count") or 0
+        )
+        matching_transaction_journal_count = sum(
+            1
+            for candidate_path in transaction_paths
+            if candidate_path == journal_path
+        )
+        scan_failed = (
+            "activity_group_transaction_evidence_scan_failed"
+            in transaction_evidence_scan.get("blockers", [])
+        )
+        foreign_transaction_journal_count = (
+            transaction_journal_count
+            - matching_transaction_journal_count
+        )
+        if scan_failed:
+            blockers.append(
+                "activity_group_transaction_evidence_scan_failed"
+            )
+            transaction_state = "unknown_or_drifted"
+        elif (
+            foreign_transaction_journal_count
+            or matching_transaction_journal_count > 1
+        ):
+            blockers.append(
+                "activity_group_unresolved_transaction_evidence_exists"
+            )
+            transaction_state = "unknown_or_drifted"
+
+    if (
+        not blockers
+        and journal_path is not None
+        and (journal_path.exists() or journal_path.is_symlink())
+    ):
         try:
             journal_bytes, journal = (
                 read_activity_group_membership_transaction_journal(
@@ -35113,6 +37619,10 @@ def activity_group_membership_recovery_plan(
             summary = classification["summary"]
             receipt_exists = classification["receipt_exists"]
             receipt_verified = classification["receipt_verified"]
+            receipt_sha256 = classification.get("receipt_sha256")
+            transaction_binding_sha256 = classification.get(
+                "transaction_binding_sha256"
+            )
             blockers.extend(classification["blockers"])
             if write_lock_exists:
                 lock_bytes, lock_document = (
@@ -35125,11 +37635,9 @@ def activity_group_membership_recovery_plan(
                 write_lock_sha256 = (
                     "sha256:" + hashlib.sha256(lock_bytes).hexdigest()
                 )
-                if (
-                    lock_document.get("review_plan_sha256")
-                    != journal.get("review_plan_sha256")
-                    or lock_document.get("write_plan_sha256")
-                    != journal.get("write_plan_sha256")
+                if not activity_group_write_lock_matches_journal(
+                    lock_document,
+                    journal,
                 ):
                     blockers.append(
                         "activity_group_write_lock_journal_binding_invalid"
@@ -35139,7 +37647,7 @@ def activity_group_membership_recovery_plan(
             transaction_state = "unknown_or_drifted"
     elif not blockers and write_lock_exists:
         try:
-            lock_bytes, _lock_document = (
+            lock_bytes, lock_document = (
                 read_activity_group_membership_write_lock(
                     root,
                     write_lock_path,
@@ -35156,6 +37664,11 @@ def activity_group_membership_recovery_plan(
                     receipt_path,
                     archive_id=archive_id,
                     request_sha256=request_sha256,
+                    expected_write_lock=lock_document,
+                )
+                receipt_sha256 = verification.get("receipt_sha256")
+                transaction_binding_sha256 = verification.get(
+                    "transaction_binding_sha256"
                 )
                 receipt_verified = bool(verification.get("ok"))
                 if receipt_verified:
@@ -35196,6 +37709,14 @@ def activity_group_membership_recovery_plan(
         "unknown_or_drifted": "manual_forensic_hold",
     }
     recovery_action = action_by_state.get(transaction_state)
+    if (
+        transaction_state == "verified_completed_lock_residue"
+        and os.name != "nt"
+    ):
+        recovery_action = "manual_forensic_hold"
+        blockers.append(
+            "activity_group_posix_lock_only_completion_requires_manual_hold"
+        )
     if journal_path is not None and journal_path.exists() and not write_lock_path.exists():
         warnings.append("activity_group_write_lock_missing")
     if recovery_action == "manual_forensic_hold":
@@ -35213,7 +37734,11 @@ def activity_group_membership_recovery_plan(
             "recovery_action": recovery_action,
             "participants": participants,
             "receipt_exists": receipt_exists,
+            "receipt_sha256": receipt_sha256,
             "receipt_verified": receipt_verified,
+            "transaction_binding_sha256": (
+                transaction_binding_sha256
+            ),
             "write_lock_exists": write_lock_exists,
             "write_lock_sha256": write_lock_sha256,
         }
@@ -35240,9 +37765,13 @@ def activity_group_membership_recovery_plan(
                 journal_path and journal_path.exists()
             ),
             "receipt_exists": receipt_exists,
+            "receipt_sha256": receipt_sha256,
             "receipt_verified": receipt_verified,
             "evidence_sha256": evidence_sha256,
             "journal_digest": journal_digest,
+            "transaction_binding_sha256": (
+                transaction_binding_sha256
+            ),
             "paths_echoed": False,
         },
         "summary": summary,
@@ -35286,6 +37815,228 @@ def activity_group_membership_recovery_plan(
     }
 
 
+def verify_activity_group_membership_recovery_cleanup_phase(
+    root: Path,
+    *,
+    archive_id: str,
+    request_sha256: str,
+    transaction_state: str,
+    journal_path: Path,
+    write_lock_path: Path,
+    locked_evidence: dict[str, Any],
+    expected_write_lock_sha256: str,
+    journal_required: bool,
+    write_lock_required: bool = True,
+    expected_journal: dict[str, Any] | None = None,
+    expected_write_lock: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Revalidate every cleanup authority immediately before one unlink."""
+
+    def verify_inventory() -> None:
+        scan = scan_activity_group_transaction_evidence(root)
+        if not scan.get("complete"):
+            raise ArchiveServiceError(
+                "activity_group_transaction_evidence_scan_failed"
+            )
+        paths = scan.get("journal_paths")
+        if not isinstance(paths, list):
+            raise ArchiveServiceError(
+                "activity_group_transaction_evidence_scan_failed"
+            )
+        if journal_required:
+            if len(paths) != 1 or paths[0] != journal_path:
+                raise ArchiveServiceError(
+                    "activity_group_unresolved_transaction_evidence_exists"
+                )
+        elif paths:
+            raise ArchiveServiceError(
+                "activity_group_unresolved_transaction_evidence_exists"
+            )
+
+    verify_inventory()
+    journal = expected_journal
+    if journal_required:
+        journal_bytes, current_journal = (
+            read_activity_group_membership_transaction_journal(
+                root,
+                journal_path,
+                archive_id=archive_id,
+                request_sha256=request_sha256,
+            )
+        )
+        if (
+            "sha256:" + hashlib.sha256(journal_bytes).hexdigest()
+            != locked_evidence.get("evidence_sha256")
+            or current_journal.get("journal_digest")
+            != locked_evidence.get("journal_digest")
+            or (
+                expected_journal is not None
+                and current_journal != expected_journal
+            )
+        ):
+            raise ArchiveServiceError(
+                "activity_group_recovery_journal_changed"
+            )
+        journal = current_journal
+
+    lock_document = expected_write_lock
+    if write_lock_required:
+        lock_bytes, current_lock_document = (
+            read_activity_group_membership_write_lock(
+                root,
+                write_lock_path,
+                request_sha256=request_sha256,
+            )
+        )
+        if (
+            "sha256:" + hashlib.sha256(lock_bytes).hexdigest()
+            != expected_write_lock_sha256
+            or (
+                expected_write_lock is not None
+                and current_lock_document != expected_write_lock
+            )
+        ):
+            raise ArchiveServiceError(
+                "activity_group_recovery_write_lock_changed"
+            )
+        lock_document = current_lock_document
+    elif write_lock_path.exists() or write_lock_path.is_symlink():
+        raise ArchiveServiceError(
+            "activity_group_recovery_write_lock_reappeared"
+        )
+    if lock_document is None:
+        raise ArchiveServiceError(
+            "activity_group_recovery_write_lock_missing"
+        )
+    if (
+        journal is not None
+        and not activity_group_write_lock_matches_journal(
+            lock_document,
+            journal,
+        )
+    ):
+        raise ArchiveServiceError(
+            "activity_group_write_lock_journal_binding_invalid"
+        )
+
+    receipt_path = activity_group_membership_receipt_path(
+        root,
+        request_sha256,
+    )
+    if (
+        zet_revision_path_has_symlink_component(root, receipt_path)
+        or not is_path_within_root(receipt_path, root)
+    ):
+        raise ArchiveServiceError("activity_group_receipt_path_unsafe")
+    completed_state = transaction_state in {
+        "verified_completed_residue",
+        "verified_completed_lock_residue",
+    }
+    if completed_state:
+        verification = verify_activity_group_membership_receipt(
+            root,
+            receipt_path,
+            archive_id=archive_id,
+            request_sha256=request_sha256,
+            expected_journal=(
+                journal
+                if transaction_state == "verified_completed_residue"
+                else None
+            ),
+            expected_write_lock=(
+                lock_document
+                if transaction_state
+                == "verified_completed_lock_residue"
+                else None
+            ),
+        )
+        if (
+            not verification.get("ok")
+            or verification.get("receipt_sha256")
+            != locked_evidence.get("receipt_sha256")
+            or verification.get("transaction_binding_sha256")
+            != locked_evidence.get(
+                "transaction_binding_sha256"
+            )
+        ):
+            raise ArchiveServiceError(
+                "activity_group_recovery_receipt_changed"
+            )
+    elif receipt_path.exists() or receipt_path.is_symlink():
+        raise ArchiveServiceError(
+            "activity_group_recovery_receipt_appeared"
+        )
+
+    if journal is not None and not completed_state:
+        classification = classify_activity_group_membership_transaction(
+            root,
+            journal,
+        )
+        if (
+            classification.get("state") != "prepared_not_started"
+            or classification.get("receipt_sha256")
+            != locked_evidence.get("receipt_sha256")
+        ):
+            raise ArchiveServiceError(
+                "activity_group_recovery_final_before_state_invalid"
+            )
+
+    if journal_required:
+        journal_raw, _journal_document = (
+            _read_activity_group_evidence_json(
+                root,
+                journal_path,
+                max_bytes=(
+                    ACTIVITY_GROUP_MEMBERSHIP_MAX_TRANSACTION_JOURNAL_BYTES
+                ),
+                unreadable_code=(
+                    "activity_group_transaction_journal_unreadable"
+                ),
+            )
+        )
+        if (
+            "sha256:" + hashlib.sha256(journal_raw).hexdigest()
+            != locked_evidence.get("evidence_sha256")
+        ):
+            raise ArchiveServiceError(
+                "activity_group_recovery_journal_changed"
+            )
+    if write_lock_required:
+        lock_raw, _lock_document = (
+            _read_activity_group_evidence_json(
+                root,
+                write_lock_path,
+                max_bytes=ACTIVITY_GROUP_MEMBERSHIP_MAX_LOCK_BYTES,
+                unreadable_code="activity_group_write_lock_unreadable",
+            )
+        )
+        if (
+            "sha256:" + hashlib.sha256(lock_raw).hexdigest()
+            != expected_write_lock_sha256
+        ):
+            raise ArchiveServiceError(
+                "activity_group_recovery_write_lock_changed"
+            )
+    if completed_state:
+        receipt_raw, _receipt_document = (
+            _read_activity_group_evidence_json(
+                root,
+                receipt_path,
+                max_bytes=ACTIVITY_GROUP_MEMBERSHIP_MAX_RECEIPT_BYTES,
+                unreadable_code="activity_group_receipt_unreadable",
+            )
+        )
+        if (
+            "sha256:" + hashlib.sha256(receipt_raw).hexdigest()
+            != locked_evidence.get("receipt_sha256")
+        ):
+            raise ArchiveServiceError(
+                "activity_group_recovery_receipt_changed"
+            )
+    verify_inventory()
+    return journal
+
+
 def activity_group_membership_recover(
     archive_root: Path | str,
     *,
@@ -35315,6 +38066,7 @@ def activity_group_membership_recover(
     journal_removed: bool | None = None
     write_lock_removed: bool | None = None
     recovery_guard_removed: bool | None = None
+    recovery_guard_cleanup_attempted = False
     private_root = _activity_group_private_root(root)
     write_lock_path = (
         private_root / ACTIVITY_GROUP_MEMBERSHIP_WRITE_LOCK_NAME
@@ -35394,6 +38146,31 @@ def activity_group_membership_recover(
             ),
         }
 
+    def cleanup_known_swap_residues(
+        items: list[Any],
+        *,
+        current_hash_field: str,
+        complementary_hash_field: str,
+    ) -> None:
+        for item in items:
+            if not isinstance(item, dict):
+                raise ArchiveServiceError(
+                    "activity_group_transaction_participant_invalid"
+                )
+            canonical_path = _activity_group_standard_canonical_path(
+                root,
+                item["zettel_id"],
+            )
+            cleanup_activity_group_canonical_swap_residue(
+                root,
+                canonical_path,
+                request_sha256=request_sha256,
+                expected_current_sha256=item[current_hash_field],
+                expected_complementary_sha256=(
+                    item[complementary_hash_field]
+                ),
+            )
+
     if not approve:
         blockers.append("approve_required")
     if not re.fullmatch(r"sha256:[0-9a-f]{64}", request_sha256):
@@ -35429,50 +38206,119 @@ def activity_group_membership_recover(
     if blockers:
         return result_payload("blocked")
 
-    guard_descriptor: int | None = None
-    try:
-        private_root.mkdir(parents=True, exist_ok=True)
-        guard_descriptor = os.open(
-            recovery_guard_path,
-            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
-            0o600,
+    guard_document = {
+        "schema": (
+            "wom-kit/activity-group-membership-recovery-guard/v0.1"
+        ),
+        "request_sha256": request_sha256,
+        "recovery_plan_sha256": actual_plan_sha256,
+    }
+    guard_raw = (
+        json.dumps(
+            guard_document,
+            ensure_ascii=False,
+            separators=(",", ":"),
         )
-        guard_document = {
-            "schema": (
-                "wom-kit/activity-group-membership-recovery-guard/v0.1"
-            ),
-            "request_sha256": request_sha256,
-            "recovery_plan_sha256": actual_plan_sha256,
-        }
-        with os.fdopen(guard_descriptor, "wb") as guard_handle:
-            guard_descriptor = None
-            guard_handle.write(
-                (
-                    json.dumps(
-                        guard_document,
-                        ensure_ascii=False,
-                        separators=(",", ":"),
-                    )
-                    + "\n"
-                ).encode("utf-8")
-            )
-            guard_handle.flush()
-            os.fsync(guard_handle.fileno())
-        fsync_directory(recovery_guard_path.parent)
+        + "\n"
+    ).encode("utf-8")
+    guard_sha256 = (
+        "sha256:" + hashlib.sha256(guard_raw).hexdigest()
+    )
+    private_root_context = activity_group_bound_directory_chain(
+        root,
+        private_root,
+        create=True,
+    )
+    private_root_context_entered = False
+    private_root_context_closed = False
+
+    def close_recovery_private_root_context() -> None:
+        nonlocal private_root_context_closed
+        if (
+            private_root_context_entered
+            and not private_root_context_closed
+        ):
+            private_root_context.__exit__(None, None, None)
+            private_root_context_closed = True
+
+    try:
+        private_root_binding = private_root_context.__enter__()
+        private_root_context_entered = True
+        write_activity_group_bytes_new_file_bound(
+            private_root_binding,
+            recovery_guard_path,
+            guard_raw,
+        )
     except FileExistsError:
         blockers.append("activity_group_recovery_guard_exists")
+        close_recovery_private_root_context()
         return result_payload("blocked")
     except OSError:
         try:
-            if recovery_guard_path.exists():
-                recovery_guard_path.unlink()
+            delete_activity_group_evidence_exact(
+                root,
+                recovery_guard_path,
+                expected_sha256=guard_sha256,
+                max_bytes=ACTIVITY_GROUP_MEMBERSHIP_MAX_LOCK_BYTES,
+                parent_binding=(
+                    private_root_binding
+                    if private_root_context_entered
+                    else None
+                ),
+            )
         except OSError:
             pass
         blockers.append("activity_group_recovery_guard_create_failed")
+        close_recovery_private_root_context()
         return result_payload("blocked")
-    finally:
-        if guard_descriptor is not None:
-            os.close(guard_descriptor)
+
+    def delete_recovery_guard_exact() -> None:
+        nonlocal recovery_guard_cleanup_attempted, recovery_guard_removed
+        if recovery_guard_cleanup_attempted:
+            if recovery_guard_removed is True:
+                return
+            raise ArchiveServiceError(
+                "activity_group_recovery_guard_cleanup_authority_spent"
+            )
+        recovery_guard_cleanup_attempted = True
+        delete_activity_group_evidence_exact(
+            root,
+            recovery_guard_path,
+            expected_sha256=guard_sha256,
+            max_bytes=ACTIVITY_GROUP_MEMBERSHIP_MAX_LOCK_BYTES,
+            parent_binding=private_root_binding,
+        )
+        try:
+            _read_activity_group_regular_bytes_bound(
+                root,
+                private_root_binding,
+                recovery_guard_path,
+                max_bytes=ACTIVITY_GROUP_MEMBERSHIP_MAX_LOCK_BYTES,
+            )
+        except FileNotFoundError:
+            recovery_guard_removed = True
+            return
+        recovery_guard_removed = False
+        raise ArchiveServiceError(
+            "activity_group_recovery_guard_cleanup_failed"
+        )
+
+    def require_recovery_guard_absent() -> None:
+        nonlocal recovery_guard_removed
+        recovery_guard_removed = False
+        try:
+            _read_activity_group_regular_bytes_bound(
+                root,
+                private_root_binding,
+                recovery_guard_path,
+                max_bytes=ACTIVITY_GROUP_MEMBERSHIP_MAX_LOCK_BYTES,
+            )
+        except FileNotFoundError:
+            recovery_guard_removed = True
+            return
+        raise ArchiveServiceError(
+            "activity_group_recovery_guard_reappeared"
+        )
 
     try:
         locked_plan = activity_group_membership_recovery_plan(
@@ -35502,6 +38348,8 @@ def activity_group_membership_recover(
             if isinstance(locked_plan.get("evidence"), dict)
             else {}
         )
+        claimed_write_lock = False
+        claim_journal: dict[str, Any] | None = None
         if not locked_evidence.get("write_lock_exists"):
             _claim_journal_bytes, claim_journal = (
                 read_activity_group_membership_transaction_journal(
@@ -35511,70 +38359,137 @@ def activity_group_membership_recover(
                     request_sha256=request_sha256,
                 )
             )
-            claim_descriptor: int | None = None
-            claim_path_created = False
-            try:
-                claim_descriptor = os.open(
-                    write_lock_path,
-                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
-                    0o600,
+            claim_receipt_relative = claim_journal.get(
+                "final_receipt_path"
+            )
+            if not isinstance(claim_receipt_relative, str):
+                raise ArchiveServiceError(
+                    "activity_group_recovery_write_lock_claim_failed"
                 )
-                claim_path_created = True
-                claim_document = {
-                    "schema": (
-                        "wom-kit/activity-group-membership-write-lock/v0.1"
-                    ),
-                    "request_sha256": request_sha256,
-                    "review_plan_sha256": claim_journal[
-                        "review_plan_sha256"
-                    ],
-                    "write_plan_sha256": claim_journal[
-                        "write_plan_sha256"
-                    ],
-                    "transaction_journal_name": journal_path.name,
-                }
-                with os.fdopen(claim_descriptor, "wb") as claim_handle:
-                    claim_descriptor = None
-                    claim_handle.write(
-                        (
-                            json.dumps(
-                                claim_document,
-                                ensure_ascii=False,
-                                separators=(",", ":"),
-                            )
-                            + "\n"
-                        ).encode("utf-8")
+            claim_document = {
+                "schema": (
+                    "wom-kit/activity-group-membership-write-lock/v0.2"
+                ),
+                "request_sha256": request_sha256,
+                "review_plan_sha256": claim_journal[
+                    "review_plan_sha256"
+                ],
+                "write_plan_sha256": claim_journal[
+                    "write_plan_sha256"
+                ],
+                "transaction_journal_name": journal_path.name,
+                "transaction_binding_sha256": sha256_json_value(
+                    _activity_group_membership_receipt_journal_projection(
+                        claim_journal,
+                        receipt_relative_path=claim_receipt_relative,
+                        journal=True,
                     )
-                    claim_handle.flush()
-                    os.fsync(claim_handle.fileno())
-                fsync_directory(write_lock_path.parent)
+                ),
+            }
+            claim_raw = (
+                json.dumps(
+                    claim_document,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+                + "\n"
+            ).encode("utf-8")
+            claim_sha256 = (
+                "sha256:" + hashlib.sha256(claim_raw).hexdigest()
+            )
+            try:
+                write_activity_group_bytes_new_file_bound(
+                    private_root_binding,
+                    write_lock_path,
+                    claim_raw,
+                )
+                claimed_write_lock = True
             except FileExistsError as exc:
                 raise ArchiveServiceError(
                     "activity_group_write_lock_changed_before_recovery_claim"
                 ) from exc
             except OSError as exc:
                 try:
-                    if claim_path_created and write_lock_path.exists():
-                        write_lock_path.unlink()
-                        fsync_directory(write_lock_path.parent)
+                    delete_activity_group_evidence_exact(
+                        root,
+                        write_lock_path,
+                        expected_sha256=claim_sha256,
+                        max_bytes=ACTIVITY_GROUP_MEMBERSHIP_MAX_LOCK_BYTES,
+                        parent_binding=private_root_binding,
+                    )
                 except OSError:
                     pass
                 raise ArchiveServiceError(
                     "activity_group_recovery_write_lock_claim_failed"
                 ) from exc
-            finally:
-                if claim_descriptor is not None:
-                    os.close(claim_descriptor)
+        cleanup_expected_write_lock_sha256 = locked_evidence.get(
+            "write_lock_sha256"
+        )
+        if claimed_write_lock:
+            claimed_lock_bytes, claimed_lock_document = (
+                read_activity_group_membership_write_lock(
+                    root,
+                    write_lock_path,
+                    request_sha256=request_sha256,
+                )
+            )
+            if (
+                claimed_lock_bytes != claim_raw
+                or claimed_lock_document != claim_document
+                or (
+                    "sha256:"
+                    + hashlib.sha256(claimed_lock_bytes).hexdigest()
+                )
+                != claim_sha256
+            ):
+                raise ArchiveServiceError(
+                    "activity_group_recovery_write_lock_claim_changed"
+                )
+            cleanup_expected_write_lock_sha256 = claim_sha256
+        if not re.fullmatch(
+            r"sha256:[0-9a-f]{64}",
+            str(cleanup_expected_write_lock_sha256 or ""),
+        ):
+            raise ArchiveServiceError(
+                "activity_group_recovery_write_lock_sha256_invalid"
+            )
+        assert isinstance(
+            cleanup_expected_write_lock_sha256,
+            str,
+        )
         if action == "cleanup_unstarted_lock":
             if not write_lock_path.exists():
                 raise ArchiveServiceError(
                     "activity_group_write_lock_missing_under_guard"
                 )
+            current_lock_bytes, _current_lock = (
+                read_activity_group_membership_write_lock(
+                    root,
+                    write_lock_path,
+                    request_sha256=request_sha256,
+                )
+            )
+            if (
+                "sha256:"
+                + hashlib.sha256(current_lock_bytes).hexdigest()
+                != locked_evidence.get("write_lock_sha256")
+            ):
+                raise ArchiveServiceError(
+                    "activity_group_recovery_write_lock_changed"
+                )
+            receipt_path = activity_group_membership_receipt_path(
+                root,
+                request_sha256,
+            )
+            if receipt_path.exists() or receipt_path.is_symlink():
+                raise ArchiveServiceError(
+                    "activity_group_recovery_receipt_appeared"
+                )
         elif action in {
             "cleanup_unstarted_transaction_evidence",
             "rollback_uncommitted_memberships_to_before",
         }:
-            _journal_bytes, journal = (
+            journal_bytes, journal = (
                 read_activity_group_membership_transaction_journal(
                     root,
                     journal_path,
@@ -35582,6 +38497,46 @@ def activity_group_membership_recover(
                     request_sha256=request_sha256,
                 )
             )
+            if (
+                "sha256:" + hashlib.sha256(journal_bytes).hexdigest()
+                != locked_evidence.get("evidence_sha256")
+                or journal.get("journal_digest")
+                != locked_evidence.get("journal_digest")
+            ):
+                raise ArchiveServiceError(
+                    "activity_group_recovery_journal_changed"
+                )
+            journal_lock_bytes, journal_lock_document = (
+                read_activity_group_membership_write_lock(
+                    root,
+                    write_lock_path,
+                    request_sha256=request_sha256,
+                )
+            )
+            if (
+                locked_evidence.get("write_lock_exists")
+                and (
+                    "sha256:"
+                    + hashlib.sha256(journal_lock_bytes).hexdigest()
+                    != locked_evidence.get("write_lock_sha256")
+                )
+            ):
+                raise ArchiveServiceError(
+                    "activity_group_recovery_write_lock_changed"
+                )
+            if (
+                not activity_group_write_lock_matches_journal(
+                    journal_lock_document,
+                    journal,
+                )
+                or (
+                    claimed_write_lock
+                    and claim_journal != journal
+                )
+            ):
+                raise ArchiveServiceError(
+                    "activity_group_write_lock_journal_binding_invalid"
+                )
             classification = (
                 classify_activity_group_membership_transaction(
                     root,
@@ -35591,6 +38546,17 @@ def activity_group_membership_recover(
             if classification.get("state") != transaction_state:
                 raise ArchiveServiceError(
                     "activity_group_recovery_classification_changed"
+                )
+            if (
+                classification.get("receipt_sha256")
+                != locked_evidence.get("receipt_sha256")
+                or classification.get("transaction_binding_sha256")
+                != locked_evidence.get(
+                    "transaction_binding_sha256"
+                )
+            ):
+                raise ArchiveServiceError(
+                    "activity_group_recovery_receipt_changed"
                 )
             if action == "rollback_uncommitted_memberships_to_before":
                 items = journal["items"]
@@ -35657,11 +38623,27 @@ def activity_group_membership_recover(
                         + hashlib.sha256(current_bytes).hexdigest()
                     )
                     if current_sha256 == item["before_file_sha256"]:
-                        pass
-                    elif current_sha256 == item["after_file_sha256"]:
-                        write_bytes_atomic(
+                        cleanup_activity_group_canonical_swap_residue(
+                            root,
                             canonical_path,
-                            before_bytes,
+                            request_sha256=request_sha256,
+                            expected_current_sha256=(
+                                item["before_file_sha256"]
+                            ),
+                            expected_complementary_sha256=(
+                                item["after_file_sha256"]
+                            ),
+                        )
+                    elif current_sha256 == item["after_file_sha256"]:
+                        changed = (
+                            replace_activity_group_canonical_bytes_compare_and_swap(
+                                root,
+                                canonical_path,
+                                expected_bytes=current_bytes,
+                                replacement_bytes=before_bytes,
+                                request_sha256=request_sha256,
+                                allow_already_replacement=True,
+                            )
                         )
                         restored_bytes, _restored_stat = (
                             _read_activity_group_canonical_bytes(
@@ -35672,7 +38654,8 @@ def activity_group_membership_recover(
                             raise ArchiveServiceError(
                                 "activity_group_recovery_restore_verification_failed"
                             )
-                        files_restored_this_run += 1
+                        if changed:
+                            files_restored_this_run += 1
                     else:
                         raise ArchiveServiceError(
                             "activity_group_recovery_participant_drifted"
@@ -35691,60 +38674,327 @@ def activity_group_membership_recover(
                         len(items),
                         len(items),
                     )
-                final_classification = (
-                    classify_activity_group_membership_transaction(
+            if action == "cleanup_unstarted_transaction_evidence":
+                cleanup_known_swap_residues(
+                    journal["items"],
+                    current_hash_field="before_file_sha256",
+                    complementary_hash_field="after_file_sha256",
+                )
+            final_classification = (
+                classify_activity_group_membership_transaction(
+                    root,
+                    journal,
+                )
+            )
+            if (
+                final_classification.get("state")
+                != "prepared_not_started"
+                or final_classification.get("receipt_sha256")
+                != locked_evidence.get("receipt_sha256")
+            ):
+                raise ArchiveServiceError(
+                    "activity_group_recovery_final_before_state_invalid"
+                )
+        elif action == "cleanup_verified_completed_evidence":
+            receipt_path = activity_group_membership_receipt_path(
+                root,
+                request_sha256,
+            )
+            expected_journal: dict[str, Any] | None = None
+            expected_write_lock: dict[str, Any] | None = None
+            if transaction_state == "verified_completed_residue":
+                journal_bytes, expected_journal = (
+                    read_activity_group_membership_transaction_journal(
                         root,
-                        journal,
+                        journal_path,
+                        archive_id=archive_id,
+                        request_sha256=request_sha256,
                     )
                 )
                 if (
-                    final_classification.get("state")
-                    != "prepared_not_started"
+                    "sha256:"
+                    + hashlib.sha256(journal_bytes).hexdigest()
+                    != locked_evidence.get("evidence_sha256")
+                    or expected_journal.get("journal_digest")
+                    != locked_evidence.get("journal_digest")
                 ):
                     raise ArchiveServiceError(
-                        "activity_group_recovery_final_before_state_invalid"
+                        "activity_group_recovery_journal_changed"
                     )
-        elif action == "cleanup_verified_completed_evidence":
-            receipt_path = archive_internal_path(
-                root,
-                activity_group_membership_receipt_relative_path(
-                    request_sha256
-                ),
-            )
+            elif (
+                transaction_state
+                == "verified_completed_lock_residue"
+            ):
+                lock_bytes, expected_write_lock = (
+                    read_activity_group_membership_write_lock(
+                        root,
+                        write_lock_path,
+                        request_sha256=request_sha256,
+                    )
+                )
+                if (
+                    "sha256:" + hashlib.sha256(lock_bytes).hexdigest()
+                    != locked_evidence.get("write_lock_sha256")
+                ):
+                    raise ArchiveServiceError(
+                        "activity_group_recovery_write_lock_changed"
+                    )
+            else:
+                raise ArchiveServiceError(
+                    "activity_group_recovery_completed_state_invalid"
+                )
+            if expected_journal is not None:
+                lock_bytes, lock_document = (
+                    read_activity_group_membership_write_lock(
+                        root,
+                        write_lock_path,
+                        request_sha256=request_sha256,
+                    )
+                )
+                if (
+                    not claimed_write_lock
+                    and (
+                        "sha256:"
+                        + hashlib.sha256(lock_bytes).hexdigest()
+                        != locked_evidence.get("write_lock_sha256")
+                    )
+                ):
+                    raise ArchiveServiceError(
+                        "activity_group_recovery_write_lock_changed"
+                    )
+                if not activity_group_write_lock_matches_journal(
+                    lock_document,
+                    expected_journal,
+                ):
+                    raise ArchiveServiceError(
+                        "activity_group_write_lock_journal_binding_invalid"
+                    )
+                if claimed_write_lock and claim_journal != expected_journal:
+                    raise ArchiveServiceError(
+                        "activity_group_recovery_claim_journal_changed"
+                    )
             verification = verify_activity_group_membership_receipt(
                 root,
                 receipt_path,
                 archive_id=archive_id,
                 request_sha256=request_sha256,
+                expected_journal=expected_journal,
+                expected_write_lock=expected_write_lock,
             )
             if not verification.get("ok"):
                 raise ArchiveServiceError(
                     "activity_group_recovery_receipt_not_verified"
                 )
+            if (
+                verification.get("receipt_sha256")
+                != locked_evidence.get("receipt_sha256")
+                or verification.get("transaction_binding_sha256")
+                != locked_evidence.get(
+                    "transaction_binding_sha256"
+                )
+            ):
+                raise ArchiveServiceError(
+                    "activity_group_recovery_receipt_changed"
+                )
+            _completed_receipt_bytes, completed_receipt = (
+                read_activity_group_membership_receipt_for_cleanup(
+                    root,
+                    receipt_path,
+                    expected_sha256=str(
+                        locked_evidence.get("receipt_sha256") or ""
+                    ),
+                )
+            )
+            receipt_items = completed_receipt.get("items")
+            if not isinstance(receipt_items, list):
+                raise ArchiveServiceError(
+                    "activity_group_receipt_shape_invalid"
+                )
+            cleanup_known_swap_residues(
+                receipt_items,
+                current_hash_field="after_file_sha256",
+                complementary_hash_field="before_file_sha256",
+            )
         else:
             raise ArchiveServiceError(
                 "activity_group_recovery_action_not_supported"
             )
 
-        if action != "cleanup_unstarted_lock":
-            if journal_path.exists():
-                journal_path.unlink()
-                fsync_directory(journal_path.parent)
-            journal_removed = not journal_path.exists()
-            if not journal_removed:
-                raise ArchiveServiceError(
-                    "activity_group_recovery_journal_cleanup_failed"
-                )
-        else:
-            journal_removed = None
-        if write_lock_path.exists():
-            write_lock_path.unlink()
-            fsync_directory(write_lock_path.parent)
-        write_lock_removed = not write_lock_path.exists()
-        if not write_lock_removed:
-            raise ArchiveServiceError(
-                "activity_group_recovery_write_lock_cleanup_failed"
+        journal_required_for_cleanup = transaction_state not in {
+            "lock_only_before_journal",
+            "verified_completed_lock_residue",
+        }
+        cleanup_lock_bytes, cleanup_lock_document = (
+            read_activity_group_membership_write_lock(
+                root,
+                write_lock_path,
+                request_sha256=request_sha256,
             )
+        )
+        if (
+            "sha256:"
+            + hashlib.sha256(cleanup_lock_bytes).hexdigest()
+            != cleanup_expected_write_lock_sha256
+        ):
+            raise ArchiveServiceError(
+                "activity_group_recovery_write_lock_changed"
+            )
+        completed_state_for_cleanup = transaction_state in {
+            "verified_completed_residue",
+            "verified_completed_lock_residue",
+        }
+        cleanup_receipt_context = (
+            hold_activity_group_evidence_file(
+                root,
+                receipt_path,
+                max_bytes=ACTIVITY_GROUP_MEMBERSHIP_MAX_RECEIPT_BYTES,
+            )
+            if completed_state_for_cleanup
+            else nullcontext(None)
+        )
+        with cleanup_receipt_context as held_receipt:
+            if held_receipt is not None and (
+                "sha256:"
+                + hashlib.sha256(held_receipt["raw"]).hexdigest()
+                != locked_evidence.get("receipt_sha256")
+            ):
+                raise ArchiveServiceError(
+                    "activity_group_recovery_receipt_changed"
+                )
+            cleanup_journal = (
+                verify_activity_group_membership_recovery_cleanup_phase(
+                    root,
+                    archive_id=archive_id,
+                    request_sha256=request_sha256,
+                    transaction_state=str(transaction_state),
+                    journal_path=journal_path,
+                    write_lock_path=write_lock_path,
+                    locked_evidence=locked_evidence,
+                    expected_write_lock_sha256=(
+                        cleanup_expected_write_lock_sha256
+                    ),
+                    journal_required=journal_required_for_cleanup,
+                    write_lock_required=True,
+                    expected_write_lock=cleanup_lock_document,
+                )
+            )
+            if not journal_required_for_cleanup:
+                delete_recovery_guard_exact()
+                require_recovery_guard_absent()
+                cleanup_journal = (
+                    verify_activity_group_membership_recovery_cleanup_phase(
+                        root,
+                        archive_id=archive_id,
+                        request_sha256=request_sha256,
+                        transaction_state=str(transaction_state),
+                        journal_path=journal_path,
+                        write_lock_path=write_lock_path,
+                        locked_evidence=locked_evidence,
+                        expected_write_lock_sha256=(
+                            cleanup_expected_write_lock_sha256
+                        ),
+                        journal_required=False,
+                        write_lock_required=True,
+                        expected_write_lock=cleanup_lock_document,
+                    )
+                )
+            delete_activity_group_evidence_exact(
+                root,
+                write_lock_path,
+                expected_sha256=(
+                    cleanup_expected_write_lock_sha256
+                ),
+                max_bytes=ACTIVITY_GROUP_MEMBERSHIP_MAX_LOCK_BYTES,
+                parent_binding=private_root_binding,
+            )
+            write_lock_removed = not (
+                write_lock_path.exists()
+                or write_lock_path.is_symlink()
+            )
+            if not write_lock_removed:
+                raise ArchiveServiceError(
+                    "activity_group_recovery_write_lock_cleanup_failed"
+                )
+            verify_activity_group_membership_recovery_cleanup_phase(
+                root,
+                archive_id=archive_id,
+                request_sha256=request_sha256,
+                transaction_state=str(transaction_state),
+                journal_path=journal_path,
+                write_lock_path=write_lock_path,
+                locked_evidence=locked_evidence,
+                expected_write_lock_sha256=(
+                    cleanup_expected_write_lock_sha256
+                ),
+                journal_required=journal_required_for_cleanup,
+                write_lock_required=False,
+                expected_journal=cleanup_journal,
+                expected_write_lock=cleanup_lock_document,
+            )
+            if journal_required_for_cleanup:
+                delete_recovery_guard_exact()
+                require_recovery_guard_absent()
+                cleanup_journal = (
+                    verify_activity_group_membership_recovery_cleanup_phase(
+                        root,
+                        archive_id=archive_id,
+                        request_sha256=request_sha256,
+                        transaction_state=str(transaction_state),
+                        journal_path=journal_path,
+                        write_lock_path=write_lock_path,
+                        locked_evidence=locked_evidence,
+                        expected_write_lock_sha256=(
+                            cleanup_expected_write_lock_sha256
+                        ),
+                        journal_required=True,
+                        write_lock_required=False,
+                        expected_journal=cleanup_journal,
+                        expected_write_lock=cleanup_lock_document,
+                    )
+                )
+                journal_sha256 = locked_evidence.get(
+                    "evidence_sha256"
+                )
+                if not isinstance(journal_sha256, str):
+                    raise ArchiveServiceError(
+                        "activity_group_recovery_journal_sha256_invalid"
+                    )
+                delete_activity_group_evidence_exact(
+                    root,
+                    journal_path,
+                    expected_sha256=journal_sha256,
+                    max_bytes=(
+                        ACTIVITY_GROUP_MEMBERSHIP_MAX_TRANSACTION_JOURNAL_BYTES
+                    ),
+                    parent_binding=private_root_binding,
+                )
+                journal_removed = not (
+                    journal_path.exists()
+                    or journal_path.is_symlink()
+                )
+                if not journal_removed:
+                    raise ArchiveServiceError(
+                        "activity_group_recovery_journal_cleanup_failed"
+                    )
+            else:
+                journal_removed = None
+        verify_activity_group_membership_recovery_cleanup_phase(
+            root,
+            archive_id=archive_id,
+            request_sha256=request_sha256,
+            transaction_state=str(transaction_state),
+            journal_path=journal_path,
+            write_lock_path=write_lock_path,
+            locked_evidence=locked_evidence,
+            expected_write_lock_sha256=(
+                cleanup_expected_write_lock_sha256
+            ),
+            journal_required=False,
+            write_lock_required=False,
+            expected_journal=cleanup_journal,
+            expected_write_lock=cleanup_lock_document,
+        )
+        require_recovery_guard_absent()
         status = (
             "recovered"
             if action
@@ -35761,15 +39011,20 @@ def activity_group_membership_recover(
         blockers.append("activity_group_recovery_execution_failed")
         status = "failed_recovery_evidence_retained"
     finally:
+        if not recovery_guard_cleanup_attempted:
+            try:
+                delete_recovery_guard_exact()
+            except (ArchiveServiceError, OSError):
+                recovery_guard_removed = False
+                warnings.append(
+                    "activity_group_recovery_guard_cleanup_failed"
+                )
         try:
-            if recovery_guard_path.exists():
-                recovery_guard_path.unlink()
-                fsync_directory(recovery_guard_path.parent)
-            recovery_guard_removed = not recovery_guard_path.exists()
+            close_recovery_private_root_context()
         except OSError:
             recovery_guard_removed = False
             warnings.append(
-                "activity_group_recovery_guard_cleanup_failed"
+                "activity_group_recovery_private_root_changed"
             )
     if not recovery_guard_removed:
         blockers.append("activity_group_recovery_guard_retained")

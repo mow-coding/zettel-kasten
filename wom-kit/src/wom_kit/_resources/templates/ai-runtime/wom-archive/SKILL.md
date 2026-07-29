@@ -84,8 +84,10 @@ token-budget contract.
   writer was interrupted, first confirm it is no longer running, then use the
   separate recovery plan and exact approved recovery command. Plan an explicit
   removal only with `activity-group-membership-removal-plan`; its writer is not
-  implemented, so never remove a membership by hand or execute a manual
-  forensic hold.
+  implemented until v0.3.284. Never remove a membership by hand, delete a
+  retained add or reserved removal journal to make a new writer run, or execute
+  a manual forensic hold. Let the official add writer block and route the
+  evidence through the exact recovery plan.
 - Create an AI-assisted draft only through `archive create-draft` dry-run and
   its exact reviewed replay. Never write Markdown directly into `inbox/`.
 - Before a write, show the human what will change, where it will change, and
