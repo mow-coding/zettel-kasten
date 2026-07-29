@@ -150,6 +150,407 @@ class ActivityGroupTransactionSafetyTests(unittest.TestCase):
             affirm_memberships_reviewed=True,
         )
 
+    def run_activity_group_child_hard_exit(
+        self,
+        archive_root: Path,
+        fixture: dict[str, Any],
+        *,
+        mode: str,
+        exit_code: int,
+        recovery_plan_sha256: str = "",
+        target_path: Path | None = None,
+    ) -> None:
+        child_source = """
+import os
+from pathlib import Path
+from wom_kit import archive_services
+
+root = Path(os.environ["WOM_TEST_ARCHIVE_ROOT"])
+mode = os.environ["WOM_TEST_MODE"]
+request_sha256 = os.environ["WOM_TEST_REQUEST_SHA256"]
+exit_code = int(os.environ["WOM_TEST_EXIT_CODE"])
+if mode == "writer_before_snapshots":
+    def exit_before_snapshots(*args, **kwargs):
+        os._exit(exit_code)
+
+    archive_services.preserve_activity_group_membership_before_snapshots = (
+        exit_before_snapshots
+    )
+    archive_services.activity_group_membership_write(
+        root,
+        request_path=os.environ["WOM_TEST_REQUEST_RELATIVE"],
+        expected_request_sha256=request_sha256,
+        expected_review_plan_sha256=os.environ[
+            "WOM_TEST_REVIEW_PLAN_SHA256"
+        ],
+        approve=True,
+        reviewed_by="person:activity-group-hard-exit-reviewer",
+        affirm_memberships_reviewed=True,
+    )
+elif mode == "recovery_after_delete":
+    target_path = Path(os.environ["WOM_TEST_TARGET_PATH"])
+    original_delete = archive_services.delete_activity_group_evidence_exact
+
+    def exit_after_target_delete(root_arg, path, *args, **kwargs):
+        candidate = Path(path)
+        matched = candidate.name == target_path.name
+        if matched:
+            try:
+                matched = os.path.samefile(
+                    candidate.parent,
+                    target_path.parent,
+                )
+            except OSError:
+                matched = (
+                    os.path.normcase(os.path.realpath(candidate.parent))
+                    == os.path.normcase(os.path.realpath(target_path.parent))
+                )
+        original_delete(root_arg, path, *args, **kwargs)
+        if matched:
+            os._exit(exit_code)
+
+    archive_services.delete_activity_group_evidence_exact = (
+        exit_after_target_delete
+    )
+    archive_services.activity_group_membership_recover(
+        root,
+        expected_request_sha256=request_sha256,
+        expected_recovery_plan_sha256=os.environ[
+            "WOM_TEST_RECOVERY_PLAN_SHA256"
+        ],
+        approve=True,
+        reviewed_by="person:activity-group-hard-exit-reviewer",
+        affirm_recovery_reviewed=True,
+    )
+else:
+    raise SystemExit(71)
+raise SystemExit(70)
+"""
+        environment = os.environ.copy()
+        environment["PYTHONPATH"] = str(SRC_ROOT)
+        environment["WOM_TEST_ARCHIVE_ROOT"] = str(archive_root)
+        environment["WOM_TEST_MODE"] = mode
+        environment["WOM_TEST_REQUEST_RELATIVE"] = fixture[
+            "request_relative"
+        ]
+        environment["WOM_TEST_REQUEST_SHA256"] = fixture[
+            "request_sha256"
+        ]
+        environment["WOM_TEST_REVIEW_PLAN_SHA256"] = fixture[
+            "review_plan_sha256"
+        ]
+        environment["WOM_TEST_RECOVERY_PLAN_SHA256"] = (
+            recovery_plan_sha256
+        )
+        environment["WOM_TEST_TARGET_PATH"] = str(target_path or "")
+        environment["WOM_TEST_EXIT_CODE"] = str(exit_code)
+        completed = subprocess.run(
+            [sys.executable, "-c", child_source],
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(
+            completed.returncode,
+            exit_code,
+            completed.stdout + completed.stderr,
+        )
+
+    @staticmethod
+    def call_recovery(
+        archive_root: Path,
+        fixture: dict[str, Any],
+        recovery_plan: dict[str, Any],
+    ) -> dict[str, Any]:
+        return archive_services.activity_group_membership_recover(
+            archive_root,
+            expected_request_sha256=fixture["request_sha256"],
+            expected_recovery_plan_sha256=recovery_plan[
+                "recovery_plan_sha256"
+            ],
+            approve=True,
+            reviewed_by="person:activity-group-safety-reviewer",
+            affirm_recovery_reviewed=True,
+        )
+
+    def prepare_partial_recovery_transaction(
+        self,
+        archive_root: Path,
+        fixture: dict[str, Any],
+    ) -> tuple[list[bytes], dict[str, Any]]:
+        before_bytes = [
+            path.read_bytes()
+            for path in fixture["member_paths"]
+        ]
+        original_compare_and_swap = (
+            archive_services
+            .replace_activity_group_canonical_bytes_compare_and_swap
+        )
+        forward_attempts = 0
+
+        def interrupt_second_forward(
+            root: Path,
+            path: Path,
+            **kwargs: Any,
+        ) -> bool:
+            nonlocal forward_attempts
+            if not kwargs.get("allow_already_replacement", False):
+                forward_attempts += 1
+                if forward_attempts == 2:
+                    raise KeyboardInterrupt(
+                        "PRIVATE_PARTIAL_RECOVERY_SETUP"
+                    )
+            return original_compare_and_swap(
+                root,
+                path,
+                **kwargs,
+            )
+
+        with patch.object(
+            archive_services,
+            (
+                "replace_activity_group_canonical_bytes_"
+                "compare_and_swap"
+            ),
+            new=interrupt_second_forward,
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                self.call_writer(archive_root, fixture)
+
+        recovery_plan = (
+            archive_services
+            .activity_group_membership_recovery_plan(
+                archive_root,
+                expected_request_sha256=fixture["request_sha256"],
+                dry_run=True,
+            )
+        )
+        self.assertTrue(recovery_plan["ok"], recovery_plan)
+        self.assertEqual(
+            recovery_plan["transaction_state"],
+            "partially_applied_without_receipt",
+        )
+        self.assertEqual(
+            recovery_plan["recovery_action"],
+            "rollback_uncommitted_memberships_to_before",
+        )
+        return before_bytes, recovery_plan
+
+    def prepare_lock_only_recovery_transaction(
+        self,
+        archive_root: Path,
+        fixture: dict[str, Any],
+    ) -> tuple[list[bytes], dict[str, Any]]:
+        before_bytes = [
+            path.read_bytes()
+            for path in fixture["member_paths"]
+        ]
+        self.run_activity_group_child_hard_exit(
+            archive_root,
+            fixture,
+            mode="writer_before_snapshots",
+            exit_code=94,
+        )
+        recovery_plan = (
+            archive_services
+            .activity_group_membership_recovery_plan(
+                archive_root,
+                expected_request_sha256=fixture["request_sha256"],
+                dry_run=True,
+            )
+        )
+        self.assertTrue(recovery_plan["ok"], recovery_plan)
+        self.assertEqual(
+            recovery_plan["transaction_state"],
+            "lock_only_before_journal",
+        )
+        self.assertEqual(
+            recovery_plan["recovery_action"],
+            "cleanup_unstarted_lock",
+        )
+        return before_bytes, recovery_plan
+
+    def prepare_recovery_evidence_case(
+        self,
+        tmp_root: Path,
+        *,
+        evidence_kind: str,
+        suffix: str,
+    ) -> dict[str, Any]:
+        if evidence_kind not in {"journal", "lock"}:
+            raise AssertionError("unsupported guard terminal test case")
+        archive_root, fixture = self.create_fixture(
+            tmp_root,
+            suffix=suffix,
+            member_count=2 if evidence_kind == "journal" else 1,
+        )
+        if evidence_kind == "journal":
+            before_bytes, recovery_plan = (
+                self.prepare_partial_recovery_transaction(
+                    archive_root,
+                    fixture,
+                )
+            )
+        else:
+            before_bytes, recovery_plan = (
+                self.prepare_lock_only_recovery_transaction(
+                    archive_root,
+                    fixture,
+                )
+            )
+        journal_path = (
+            archive_services
+            .activity_group_membership_transaction_journal_path(
+                archive_root,
+                fixture["request_sha256"],
+            )
+        )
+        lock_path = self.writer_lock_path(archive_root)
+        guard_path = self.recovery_guard_path(archive_root)
+        semantic_path = (
+            journal_path
+            if evidence_kind == "journal"
+            else lock_path
+        )
+        self.assertTrue(semantic_path.is_file())
+        return {
+            "evidence_kind": evidence_kind,
+            "archive_root": archive_root,
+            "fixture": fixture,
+            "before_bytes": before_bytes,
+            "recovery_plan": recovery_plan,
+            "journal_path": journal_path,
+            "lock_path": lock_path,
+            "guard_path": guard_path,
+            "semantic_path": semantic_path,
+            "semantic_bytes": semantic_path.read_bytes(),
+        }
+
+    def assert_case_canonical_before(
+        self,
+        case: dict[str, Any],
+    ) -> None:
+        self.assertEqual(
+            case["before_bytes"],
+            [
+                path.read_bytes()
+                for path in case["fixture"]["member_paths"]
+            ],
+        )
+
+    def assert_case_semantic_evidence_retained(
+        self,
+        case: dict[str, Any],
+    ) -> None:
+        self.assertEqual(
+            case["semantic_bytes"],
+            case["semantic_path"].read_bytes(),
+        )
+        self.assert_case_canonical_before(case)
+        inventory = (
+            archive_services.scan_activity_group_transaction_evidence(
+                case["archive_root"]
+            )
+        )
+        if case["evidence_kind"] == "journal":
+            self.assertFalse(inventory["ok"], inventory)
+            self.assertEqual(
+                inventory["journal_paths"],
+                [case["journal_path"]],
+            )
+            self.assertFalse(case["lock_path"].exists())
+        else:
+            self.assertTrue(inventory["ok"], inventory)
+            self.assertEqual(inventory["journal_count"], 0)
+            self.assertFalse(case["journal_path"].exists())
+            self.assertTrue(case["lock_path"].is_file())
+
+    def assert_failed_recovery_evidence_retained(
+        self,
+        result: dict[str, Any],
+    ) -> None:
+        self.assertFalse(result["ok"], result)
+        self.assertFalse(result["approved"])
+        self.assertEqual(
+            result["status"],
+            "failed_recovery_evidence_retained",
+        )
+        self.assertIn(
+            "activity_group_recovery_execution_failed",
+            result["blockers"],
+        )
+        self.assertIn(
+            "activity_group_recovery_guard_retained",
+            result["blockers"],
+        )
+
+    def assert_no_terminal_evidence_and_writer_retry(
+        self,
+        case: dict[str, Any],
+    ) -> None:
+        for evidence_path in (
+            case["guard_path"],
+            case["lock_path"],
+            case["journal_path"],
+        ):
+            self.assertFalse(evidence_path.exists())
+        self.assert_case_canonical_before(case)
+        for member_path in case["fixture"]["member_paths"]:
+            swap_path, previous_path = (
+                archive_services.activity_group_canonical_swap_paths(
+                    member_path,
+                    case["fixture"]["request_sha256"],
+                )
+            )
+            self.assertFalse(swap_path.exists())
+            self.assertFalse(previous_path.exists())
+        inventory = (
+            archive_services.scan_activity_group_transaction_evidence(
+                case["archive_root"]
+            )
+        )
+        self.assertTrue(inventory["ok"], inventory)
+        self.assertEqual(inventory["journal_count"], 0)
+        no_evidence_plan = (
+            archive_services.activity_group_membership_recovery_plan(
+                case["archive_root"],
+                expected_request_sha256=case["fixture"][
+                    "request_sha256"
+                ],
+                dry_run=True,
+            )
+        )
+        self.assertFalse(no_evidence_plan["ok"])
+        self.assertEqual(no_evidence_plan["status"], "blocked")
+        self.assertEqual(
+            no_evidence_plan["transaction_state"],
+            "no_recovery_evidence",
+        )
+        self.assertIsNone(no_evidence_plan["recovery_action"])
+        self.assertEqual(
+            no_evidence_plan["blockers"],
+            ["activity_group_recovery_evidence_missing"],
+        )
+        retry = self.call_writer(
+            case["archive_root"],
+            case["fixture"],
+        )
+        self.assertTrue(retry["ok"], retry)
+        self.assertEqual(retry["status"], "applied")
+        for evidence_path in (
+            case["guard_path"],
+            case["lock_path"],
+            case["journal_path"],
+        ):
+            self.assertFalse(evidence_path.exists())
+        final_inventory = (
+            archive_services.scan_activity_group_transaction_evidence(
+                case["archive_root"]
+            )
+        )
+        self.assertTrue(final_inventory["ok"], final_inventory)
+
     def assert_content_free(
         self,
         result: dict[str, Any],
@@ -1780,6 +2181,260 @@ class ActivityGroupTransactionSafetyTests(unittest.TestCase):
                 before_bytes,
                 fixture["member_paths"][0].read_bytes(),
             )
+
+    def test_recovery_hard_exit_after_exact_journal_delete_is_not_stranded(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            case = self.prepare_recovery_evidence_case(
+                Path(tmp),
+                evidence_kind="journal",
+                suffix="recovery-journal-delete-hard-exit",
+            )
+            self.run_activity_group_child_hard_exit(
+                case["archive_root"],
+                case["fixture"],
+                mode="recovery_after_delete",
+                recovery_plan_sha256=case["recovery_plan"][
+                    "recovery_plan_sha256"
+                ],
+                target_path=case["journal_path"],
+                exit_code=92,
+            )
+            self.assert_no_terminal_evidence_and_writer_retry(case)
+
+    def test_lock_only_recovery_hard_exit_after_exact_lock_delete_is_not_stranded(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            case = self.prepare_recovery_evidence_case(
+                Path(tmp),
+                evidence_kind="lock",
+                suffix="recovery-lock-delete-hard-exit",
+            )
+            self.run_activity_group_child_hard_exit(
+                case["archive_root"],
+                case["fixture"],
+                mode="recovery_after_delete",
+                recovery_plan_sha256=case["recovery_plan"][
+                    "recovery_plan_sha256"
+                ],
+                target_path=case["lock_path"],
+                exit_code=93,
+            )
+            self.assert_no_terminal_evidence_and_writer_retry(case)
+
+    def test_recovery_guard_delete_failure_retains_last_semantic_evidence(
+        self,
+    ) -> None:
+        for evidence_kind in ("journal", "lock"):
+            with self.subTest(evidence_kind=evidence_kind):
+                with tempfile.TemporaryDirectory() as tmp:
+                    case = self.prepare_recovery_evidence_case(
+                        Path(tmp),
+                        evidence_kind=evidence_kind,
+                        suffix=(
+                            "guard-delete-failure-" + evidence_kind
+                        ),
+                    )
+                    original_delete = (
+                        archive_services
+                        .delete_activity_group_evidence_exact
+                    )
+                    guard_delete_attempts = 0
+
+                    def fail_exact_guard_delete(
+                        root: Path,
+                        path: Path,
+                        *args: Any,
+                        **kwargs: Any,
+                    ) -> None:
+                        nonlocal guard_delete_attempts
+                        if self.same_directory_entry(
+                            path,
+                            case["guard_path"],
+                        ):
+                            guard_delete_attempts += 1
+                            raise OSError(
+                                "PRIVATE_EXACT_GUARD_DELETE_FAILURE"
+                            )
+                        original_delete(
+                            root,
+                            path,
+                            *args,
+                            **kwargs,
+                        )
+
+                    with patch.object(
+                        archive_services,
+                        "delete_activity_group_evidence_exact",
+                        new=fail_exact_guard_delete,
+                    ):
+                        result = self.call_recovery(
+                            case["archive_root"],
+                            case["fixture"],
+                            case["recovery_plan"],
+                        )
+
+                    self.assertEqual(guard_delete_attempts, 1)
+                    self.assert_failed_recovery_evidence_retained(
+                        result
+                    )
+                    self.assertTrue(case["guard_path"].is_file())
+                    self.assert_case_semantic_evidence_retained(case)
+
+    def test_recovery_guard_same_name_replacement_is_never_redeleted(
+        self,
+    ) -> None:
+        for evidence_kind in ("journal", "lock"):
+            with self.subTest(evidence_kind=evidence_kind):
+                with tempfile.TemporaryDirectory() as tmp:
+                    case = self.prepare_recovery_evidence_case(
+                        Path(tmp),
+                        evidence_kind=evidence_kind,
+                        suffix=(
+                            "guard-replacement-" + evidence_kind
+                        ),
+                    )
+                    original_delete = (
+                        archive_services
+                        .delete_activity_group_evidence_exact
+                    )
+                    guard_delete_calls = 0
+                    replacement_guard_bytes: bytes | None = None
+
+                    def replace_guard_after_exact_delete(
+                        root: Path,
+                        path: Path,
+                        *args: Any,
+                        **kwargs: Any,
+                    ) -> None:
+                        nonlocal guard_delete_calls, replacement_guard_bytes
+                        is_guard = self.same_directory_entry(
+                            path,
+                            case["guard_path"],
+                        )
+                        if is_guard:
+                            guard_delete_calls += 1
+                            if guard_delete_calls == 1:
+                                replacement_guard_bytes = (
+                                    case["guard_path"].read_bytes()
+                                )
+                        original_delete(
+                            root,
+                            path,
+                            *args,
+                            **kwargs,
+                        )
+                        if is_guard and guard_delete_calls == 1:
+                            assert replacement_guard_bytes is not None
+                            case["guard_path"].write_bytes(
+                                replacement_guard_bytes
+                            )
+
+                    with patch.object(
+                        archive_services,
+                        "delete_activity_group_evidence_exact",
+                        new=replace_guard_after_exact_delete,
+                    ):
+                        result = self.call_recovery(
+                            case["archive_root"],
+                            case["fixture"],
+                            case["recovery_plan"],
+                        )
+
+                    self.assertEqual(guard_delete_calls, 1)
+                    self.assert_failed_recovery_evidence_retained(
+                        result
+                    )
+                    self.assertIsNotNone(replacement_guard_bytes)
+                    self.assertEqual(
+                        replacement_guard_bytes,
+                        case["guard_path"].read_bytes(),
+                    )
+                    self.assert_case_semantic_evidence_retained(case)
+
+    def test_hard_exit_after_guard_delete_leaves_semantic_evidence_recoverable(
+        self,
+    ) -> None:
+        expected_retry = {
+            "journal": (
+                "prepared_not_started",
+                "cleanup_unstarted_transaction_evidence",
+            ),
+            "lock": (
+                "lock_only_before_journal",
+                "cleanup_unstarted_lock",
+            ),
+        }
+        for index, evidence_kind in enumerate(
+            ("journal", "lock"),
+            start=1,
+        ):
+            with self.subTest(evidence_kind=evidence_kind):
+                with tempfile.TemporaryDirectory() as tmp:
+                    case = self.prepare_recovery_evidence_case(
+                        Path(tmp),
+                        evidence_kind=evidence_kind,
+                        suffix=(
+                            "guard-delete-hard-exit-" + evidence_kind
+                        ),
+                    )
+                    self.run_activity_group_child_hard_exit(
+                        case["archive_root"],
+                        case["fixture"],
+                        mode="recovery_after_delete",
+                        recovery_plan_sha256=case[
+                            "recovery_plan"
+                        ]["recovery_plan_sha256"],
+                        target_path=case["guard_path"],
+                        exit_code=95 + index,
+                    )
+
+                    self.assertFalse(case["guard_path"].exists())
+                    self.assert_case_semantic_evidence_retained(case)
+
+                    retry_plan = (
+                        archive_services
+                        .activity_group_membership_recovery_plan(
+                            case["archive_root"],
+                            expected_request_sha256=case["fixture"][
+                                "request_sha256"
+                            ],
+                            dry_run=True,
+                        )
+                    )
+                    self.assertTrue(retry_plan["ok"], retry_plan)
+                    self.assertEqual(
+                        (
+                            retry_plan["transaction_state"],
+                            retry_plan["recovery_action"],
+                        ),
+                        expected_retry[evidence_kind],
+                    )
+                    recovered = self.call_recovery(
+                        case["archive_root"],
+                        case["fixture"],
+                        retry_plan,
+                    )
+                    self.assertTrue(recovered["ok"], recovered)
+                    self.assertEqual(
+                        recovered["status"],
+                        "cleanup_completed",
+                    )
+                    self.assertFalse(case["guard_path"].exists())
+                    self.assertFalse(case["lock_path"].exists())
+                    self.assertFalse(case["journal_path"].exists())
+                    final_inventory = (
+                        archive_services
+                        .scan_activity_group_transaction_evidence(
+                            case["archive_root"]
+                        )
+                    )
+                    self.assertTrue(
+                        final_inventory["ok"],
+                        final_inventory,
+                    )
 
     def test_recovery_compare_and_swap_preserves_post_classification_drift(
         self,

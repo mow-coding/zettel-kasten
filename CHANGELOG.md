@@ -38,12 +38,18 @@ This project uses semantic versioning for public compatibility checkpoints.
   same-name replacement is retained. POSIX cannot exclude an uncooperative
   already-open writable descriptor after its final check, so external editors
   must be quiescent during evidence cleanup.
-- Use lock-first, journal-last cleanup with participant/receipt revalidation,
-  verify that the writer's own journal is the sole retained transaction before
-  removing it, and require a clean final inventory before reporting success.
-  Any post-commit cleanup/revalidation failure returns
+- Keep normal writer cleanup lock-first and journal-last, with
+  participant/receipt revalidation, sole-journal proof, and a clean final
+  inventory. Approved recovery uses state-specific terminal evidence: with a
+  journal it removes the lock, revalidates, removes and verifies the recovery
+  guard, revalidates the sole journal, and removes that journal last; without
+  a journal it removes and verifies the guard, revalidates while the lock
+  remains, and removes that lock last. The final verification sequence
+  requires guard, lock, and journal absence. A guard-cleanup failure retains
+  the journal or lock that still carries the transaction semantics.
+  Post-commit writer cleanup/revalidation failure returns
   `applied_evidence_conflict` while retaining valid canonical and receipt
-  truth. Recheck even lock-only recovery immediately before a success result.
+  truth.
 - Route foreign/orphan evidence, malformed or mismatched receipt evidence, and
   unknown transaction drift to non-executable `manual_forensic_hold`; a
   changed approved recovery retains the evidence instead of cleaning it.
