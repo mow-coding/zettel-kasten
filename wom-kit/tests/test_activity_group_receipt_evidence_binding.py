@@ -966,33 +966,38 @@ class ActivityGroupReceiptEvidenceBindingTests(unittest.TestCase):
             completed_bytes = self.canonical_bytes(fixture)
             plan = self.recovery_plan(archive_root, fixture)
             self.assertTrue(plan["ok"], plan)
+            original_receipt_raw = receipt_path.read_bytes()
             original_receipt_sha256 = self.sha256_path(receipt_path)
+            rewritten_receipt_raw = (
+                json.dumps(
+                    self.read_json(receipt_path),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n"
+            ).encode("utf-8")
+            rewritten_receipt_sha256 = (
+                "sha256:"
+                + hashlib.sha256(rewritten_receipt_raw).hexdigest()
+            )
             original_verifier = (
                 archive_services
                 .verify_activity_group_membership_receipt
             )
             verifier_calls = 0
+            rewrite_succeeded = False
 
             def rewrite_after_cleanup_verifier(
                 *args: Any,
                 **kwargs: Any,
             ) -> dict[str, Any]:
-                nonlocal verifier_calls
+                nonlocal verifier_calls, rewrite_succeeded
                 result = original_verifier(*args, **kwargs)
                 verifier_calls += 1
                 if verifier_calls == 4:
-                    receipt = self.read_json(receipt_path)
-                    receipt_path.write_bytes(
-                        (
-                            json.dumps(
-                                receipt,
-                                ensure_ascii=False,
-                                sort_keys=True,
-                                separators=(",", ":"),
-                            )
-                            + "\n"
-                        ).encode("utf-8")
-                    )
+                    receipt_path.write_bytes(rewritten_receipt_raw)
+                    rewrite_succeeded = True
                 return result
 
             with patch.object(
@@ -1007,8 +1012,18 @@ class ActivityGroupReceiptEvidenceBindingTests(unittest.TestCase):
                 )
 
             self.assertEqual(verifier_calls, 4)
+            if rewrite_succeeded:
+                expected_receipt_raw = rewritten_receipt_raw
+                expected_receipt_sha256 = rewritten_receipt_sha256
+            else:
+                expected_receipt_raw = original_receipt_raw
+                expected_receipt_sha256 = original_receipt_sha256
             self.assertEqual(
-                original_receipt_sha256,
+                expected_receipt_raw,
+                receipt_path.read_bytes(),
+            )
+            self.assertEqual(
+                expected_receipt_sha256,
                 self.sha256_path(receipt_path),
             )
             self.assertFalse(recovered["ok"], recovered)
