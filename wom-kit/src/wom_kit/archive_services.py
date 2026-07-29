@@ -2874,6 +2874,12 @@ ACTIVITY_GROUP_MEMBERSHIP_REQUEST_SCHEMA = (
 ACTIVITY_GROUP_MEMBERSHIP_PLAN_SCHEMA = (
     "wom-kit/activity-group-membership-plan/v0.1"
 )
+ACTIVITY_GROUP_MEMBERSHIP_REMOVAL_REQUEST_SCHEMA = (
+    "wom-kit/activity-group-membership-removal-request/v0.1"
+)
+ACTIVITY_GROUP_MEMBERSHIP_REMOVAL_PLAN_SCHEMA = (
+    "wom-kit/activity-group-membership-removal-plan/v0.1"
+)
 ACTIVITY_GROUP_MEMBERSHIP_WRITE_SCHEMA = (
     "wom-kit/activity-group-membership-write/v0.1"
 )
@@ -2891,6 +2897,9 @@ ACTIVITY_GROUP_MEMBERSHIP_RECOVER_SCHEMA = (
 )
 ACTIVITY_GROUP_MEMBERSHIP_REQUEST_PREFIX = (
     ".wom-scratch/private/activity-groups/"
+)
+ACTIVITY_GROUP_MEMBERSHIP_REMOVAL_REQUEST_PREFIX = (
+    ".wom-scratch/private/activity-group-removals/"
 )
 ACTIVITY_GROUP_MEMBERSHIP_RECEIPTS_DIR = "receipts/activity-groups"
 ACTIVITY_GROUP_MEMBERSHIP_WRITE_LOCK_NAME = (
@@ -32339,6 +32348,8 @@ def _activity_group_request_path(
     root: Path,
     raw_path: str,
     blockers: list[str],
+    *,
+    request_prefix: str = ACTIVITY_GROUP_MEMBERSHIP_REQUEST_PREFIX,
 ) -> tuple[str, Path | None]:
     try:
         normalized = normalize_archive_relative_path(raw_path)
@@ -32346,7 +32357,7 @@ def _activity_group_request_path(
         blockers.append("request_path_not_archive_relative")
         return "", None
     if (
-        not normalized.startswith(ACTIVITY_GROUP_MEMBERSHIP_REQUEST_PREFIX)
+        not normalized.startswith(request_prefix)
         or not normalized.lower().endswith(".json")
     ):
         blockers.append("request_path_outside_private_activity_group_scratch")
@@ -32547,9 +32558,12 @@ def _activity_group_candidate_bytes(
     raw: bytes,
     *,
     anchor_zettel_id: str,
+    operation: str = "add",
 ) -> bytes:
     """Replace only the facets YAML node and verify all other content is equal."""
 
+    if operation not in {"add", "remove"}:
+        raise ArchiveServiceError("activity_group_operation_unsupported")
     require_yaml()
     frontmatter, payload, frontmatter_source = _parse_activity_group_canonical(raw)
     facets = frontmatter.get("facets")
@@ -32558,15 +32572,35 @@ def _activity_group_candidate_bytes(
     state, current = _activity_group_current_membership(
         frontmatter, anchor_zettel_id
     )
-    if state != "ready_to_add":
-        raise ArchiveServiceError("activity_group_not_ready_to_add")
     updated_facets = copy.deepcopy(facets)
-    if not current:
-        updated_facets["activity_group"] = anchor_zettel_id
-    elif len(current) == 1 and isinstance(facets.get("activity_group"), str):
-        updated_facets["activity_group"] = [current[0], anchor_zettel_id]
+    if operation == "add":
+        if state != "ready_to_add":
+            raise ArchiveServiceError("activity_group_not_ready_to_add")
+        if not current:
+            updated_facets["activity_group"] = anchor_zettel_id
+        elif len(current) == 1 and isinstance(
+            facets.get("activity_group"), str
+        ):
+            updated_facets["activity_group"] = [
+                current[0],
+                anchor_zettel_id,
+            ]
+        else:
+            updated_facets["activity_group"] = [*current, anchor_zettel_id]
     else:
-        updated_facets["activity_group"] = [*current, anchor_zettel_id]
+        if state != "already_member":
+            raise ArchiveServiceError("activity_group_not_ready_to_remove")
+        remaining = [
+            membership
+            for membership in current
+            if membership != anchor_zettel_id
+        ]
+        if remaining:
+            # Preserve both list shape and relative order. Collapsing a
+            # one-item list to a scalar would be an unrelated normalization.
+            updated_facets["activity_group"] = remaining
+        else:
+            updated_facets.pop("activity_group", None)
 
     try:
         node = yaml.compose(frontmatter_source)  # type: ignore[union-attr]
@@ -32629,7 +32663,7 @@ def _activity_group_candidate_bytes(
     return candidate_bytes
 
 
-def activity_group_membership_plan(
+def _activity_group_membership_plan(
     archive_root: Path | str,
     *,
     request_path: str,
@@ -32637,9 +32671,22 @@ def activity_group_membership_plan(
     max_members: int = ACTIVITY_GROUP_MEMBERSHIP_MAX_MEMBERS,
     progress_callback: Callable[[str, str, int | None, int | None], None]
     | None = None,
+    operation: str,
+    request_schema: str,
+    request_prefix: str,
+    plan_schema: str,
+    future_write_implemented: bool,
+    planned_write_command: str,
 ) -> dict[str, Any]:
-    """Validate an explicit event anchor and member list without inferring membership."""
+    """Validate one explicit event-membership add/remove request without writes."""
 
+    if operation not in {"add", "remove"}:
+        raise ArchiveServiceError("activity_group_operation_unsupported")
+    progress_prefix = (
+        "activity-group-removal"
+        if operation == "remove"
+        else "activity-group"
+    )
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
     blockers: list[str] = []
@@ -32655,14 +32702,17 @@ def activity_group_membership_plan(
         blockers.append("max_members_out_of_range")
 
     _normalized_request_path, request_file = _activity_group_request_path(
-        root, request_path, blockers
+        root,
+        request_path,
+        blockers,
+        request_prefix=request_prefix,
     )
     request_bytes = b""
     request_doc: dict[str, Any] | None = None
     if request_file is not None:
         if progress_callback is not None:
             progress_callback(
-                "activity-group-request",
+                f"{progress_prefix}-request",
                 "start",
                 0,
                 int(request_file.stat().st_size),
@@ -32672,7 +32722,7 @@ def activity_group_membership_plan(
         )
         if progress_callback is not None:
             progress_callback(
-                "activity-group-request",
+                f"{progress_prefix}-request",
                 "done",
                 len(request_bytes),
                 len(request_bytes),
@@ -32690,7 +32740,7 @@ def activity_group_membership_plan(
         }
         if set(request_doc) - allowed_fields:
             blockers.append("request_contains_unsupported_fields")
-        if request_doc.get("schema") != ACTIVITY_GROUP_MEMBERSHIP_REQUEST_SCHEMA:
+        if request_doc.get("schema") != request_schema:
             blockers.append("request_schema_unsupported")
         if request_doc.get("archive_id") != archive_id:
             blockers.append("request_archive_id_mismatch")
@@ -32854,13 +32904,13 @@ def activity_group_membership_plan(
 
     item_results: list[dict[str, Any]] = []
     plan_fingerprint_items: list[dict[str, Any]] = []
-    ready_to_add_count = 0
-    already_member_count = 0
+    ready_action_count = 0
+    no_op_count = 0
     blocked_member_count = 0
     if member_zettel_ids and anchor_zettel_id is not None and not blockers:
         if progress_callback is not None:
             progress_callback(
-                "activity-group-members",
+                f"{progress_prefix}-members",
                 "start",
                 0,
                 len(member_zettel_ids),
@@ -32914,21 +32964,42 @@ def activity_group_membership_plan(
                     item_blockers.append(
                         "activity_group_current_shape_conflicts_with_anchor_contract"
                     )
-                elif current_state == "already_member":
-                    state = "already_member"
-                    after_sha256 = before_sha256
-                    already_member_count += 1
-                elif not item_blockers:
+                elif operation == "add":
+                    if current_state == "already_member":
+                        state = "already_member"
+                        after_sha256 = before_sha256
+                        no_op_count += 1
+                    elif not item_blockers:
+                        candidate_bytes = _activity_group_candidate_bytes(
+                            member_bytes,
+                            anchor_zettel_id=anchor_zettel_id,
+                            operation="add",
+                        )
+                        after_sha256 = (
+                            "sha256:"
+                            + hashlib.sha256(candidate_bytes).hexdigest()
+                        )
+                        state = "ready_to_add"
+                        ready_action_count += 1
+                elif (
+                    current_state == "already_member"
+                    and not item_blockers
+                ):
                     candidate_bytes = _activity_group_candidate_bytes(
                         member_bytes,
                         anchor_zettel_id=anchor_zettel_id,
+                        operation="remove",
                     )
                     after_sha256 = (
                         "sha256:"
                         + hashlib.sha256(candidate_bytes).hexdigest()
                     )
-                    state = "ready_to_add"
-                    ready_to_add_count += 1
+                    state = "ready_to_remove"
+                    ready_action_count += 1
+                elif not item_blockers:
+                    state = "already_absent"
+                    after_sha256 = before_sha256
+                    no_op_count += 1
             except ArchiveServiceError as exc:
                 item_blockers.append(str(exc))
             except (ArchivePathError, OSError, ValueError):
@@ -32962,14 +33033,14 @@ def activity_group_membership_plan(
                 or (index + 1) % 100 == 0
             ):
                 progress_callback(
-                    "activity-group-members",
+                    f"{progress_prefix}-members",
                     "scanned",
                     index + 1,
                     len(member_zettel_ids),
                 )
         if progress_callback is not None:
             progress_callback(
-                "activity-group-members",
+                f"{progress_prefix}-members",
                 "done",
                 len(member_zettel_ids),
                 len(member_zettel_ids),
@@ -32982,7 +33053,7 @@ def activity_group_membership_plan(
     ready = not blockers
     review_plan_sha256 = sha256_json_value(
         {
-            "schema": ACTIVITY_GROUP_MEMBERSHIP_PLAN_SCHEMA,
+            "schema": plan_schema,
             "archive_id": archive_id,
             "request_sha256": request_sha256,
             "anchor_current_file_sha256": anchor_result.get(
@@ -32991,19 +33062,32 @@ def activity_group_membership_plan(
             "items": plan_fingerprint_items,
         }
     )
+    action_counts = (
+        {
+            "ready_to_add_count": ready_action_count,
+            "already_member_count": no_op_count,
+        }
+        if operation == "add"
+        else {
+            "ready_to_remove_count": ready_action_count,
+            "already_absent_count": no_op_count,
+        }
+    )
     return {
         "ok": ready,
         "dry_run": True,
-        "schema": ACTIVITY_GROUP_MEMBERSHIP_PLAN_SCHEMA,
-        "lifecycle_action": "activity_group_membership_plan",
+        "schema": plan_schema,
+        "lifecycle_action": (
+            "activity_group_membership_removal_plan"
+            if operation == "remove"
+            else "activity_group_membership_plan"
+        ),
         "status": "ready_for_human_review" if ready else "blocked",
         "archive_id": archive_id,
         "request": {
-            "schema": ACTIVITY_GROUP_MEMBERSHIP_REQUEST_SCHEMA,
+            "schema": request_schema,
             "sha256": request_sha256,
-            "path_policy": (
-                ACTIVITY_GROUP_MEMBERSHIP_REQUEST_PREFIX + "<private>.json"
-            ),
+            "path_policy": request_prefix + "<private>.json",
             "path_echoed": False,
             "bytes_read": len(request_bytes),
             "member_count": requested_member_count,
@@ -33019,8 +33103,7 @@ def activity_group_membership_plan(
             "requested_member_count": requested_member_count,
             "valid_member_id_count": len(member_zettel_ids),
             "inspected_member_count": len(item_results),
-            "ready_to_add_count": ready_to_add_count,
-            "already_member_count": already_member_count,
+            **action_counts,
             "blocked_member_count": blocked_member_count,
             "max_members": effective_max_members,
             "canonical_bytes_read": total_canonical_bytes,
@@ -33048,6 +33131,7 @@ def activity_group_membership_plan(
             ],
         },
         "membership_contract": {
+            "operation": operation,
             "member_field": "facets.activity_group",
             "member_value": "event_anchor_zettel_id",
             "multiple_memberships_supported": True,
@@ -33057,6 +33141,9 @@ def activity_group_membership_plan(
             "membership_implies_source_or_derivation": False,
             "membership_was_inferred": False,
             "request_is_explicit_human_selected_input": True,
+            "only_named_anchor_is_changed": True,
+            "other_activity_group_memberships_preserved": True,
+            "body_and_updated_at_preserved": True,
         },
         "claim_boundary": {
             "checked": (
@@ -33102,9 +33189,14 @@ def activity_group_membership_plan(
             "writes": False,
         },
         "future_write_preview": {
-            "eligible_member_count": ready_to_add_count if ready else 0,
-            "implemented_now": True,
-            "official_command": "archive activity-group-membership-write",
+            "eligible_member_count": ready_action_count if ready else 0,
+            "implemented_now": future_write_implemented,
+            "official_command": (
+                planned_write_command if future_write_implemented else None
+            ),
+            "planned_command": (
+                None if future_write_implemented else planned_write_command
+            ),
         },
         "would_change": [],
         "blockers": blockers,
@@ -33114,12 +33206,73 @@ def activity_group_membership_plan(
                 "Fix only the content-free blocker codes in the private request or current canonical shapes, then rerun this read-only plan."
             ]
             if blockers
-            else [
-                "Review the anchor and ordered member selection with the archive owner.",
-                "Keep this request and review-plan digest as evidence, then preview the dedicated approval-gated activity-group-membership-write command.",
-            ]
+            else (
+                [
+                    "Review the anchor and ordered member selection with the archive owner.",
+                    "Keep this request and review-plan digest as evidence, then preview the dedicated approval-gated activity-group-membership-write command.",
+                ]
+                if operation == "add"
+                else [
+                    "Review every named removal and every already-absent row with the archive owner.",
+                    "Keep this private request and review-plan digest as evidence. The approval-gated activity-group-membership-removal-write command is not implemented in this release.",
+                ]
+            )
         ),
     }
+
+
+def activity_group_membership_plan(
+    archive_root: Path | str,
+    *,
+    request_path: str,
+    dry_run: bool = False,
+    max_members: int = ACTIVITY_GROUP_MEMBERSHIP_MAX_MEMBERS,
+    progress_callback: Callable[[str, str, int | None, int | None], None]
+    | None = None,
+) -> dict[str, Any]:
+    """Validate an explicit event anchor and member-add list without writes."""
+
+    return _activity_group_membership_plan(
+        archive_root,
+        request_path=request_path,
+        dry_run=dry_run,
+        max_members=max_members,
+        progress_callback=progress_callback,
+        operation="add",
+        request_schema=ACTIVITY_GROUP_MEMBERSHIP_REQUEST_SCHEMA,
+        request_prefix=ACTIVITY_GROUP_MEMBERSHIP_REQUEST_PREFIX,
+        plan_schema=ACTIVITY_GROUP_MEMBERSHIP_PLAN_SCHEMA,
+        future_write_implemented=True,
+        planned_write_command="archive activity-group-membership-write",
+    )
+
+
+def activity_group_membership_removal_plan(
+    archive_root: Path | str,
+    *,
+    request_path: str,
+    dry_run: bool = False,
+    max_members: int = ACTIVITY_GROUP_MEMBERSHIP_MAX_MEMBERS,
+    progress_callback: Callable[[str, str, int | None, int | None], None]
+    | None = None,
+) -> dict[str, Any]:
+    """Plan removal of one named event anchor from explicit canonical members."""
+
+    return _activity_group_membership_plan(
+        archive_root,
+        request_path=request_path,
+        dry_run=dry_run,
+        max_members=max_members,
+        progress_callback=progress_callback,
+        operation="remove",
+        request_schema=ACTIVITY_GROUP_MEMBERSHIP_REMOVAL_REQUEST_SCHEMA,
+        request_prefix=ACTIVITY_GROUP_MEMBERSHIP_REMOVAL_REQUEST_PREFIX,
+        plan_schema=ACTIVITY_GROUP_MEMBERSHIP_REMOVAL_PLAN_SCHEMA,
+        future_write_implemented=False,
+        planned_write_command=(
+            "archive activity-group-membership-removal-write"
+        ),
+    )
 
 
 def _activity_group_private_root(root: Path) -> Path:
@@ -87049,7 +87202,20 @@ def runtime_context_read_action_routes() -> list[dict[str, Any]]:
             "authoritative_for": "the explicit request ids against exact current canonical bytes and the event-anchor contract",
             "membership_is_inferred": False,
             "canonical_add_write_implemented": True,
+            "canonical_removal_plan_implemented": True,
+            "canonical_removal_write_implemented": False,
             "canonical_removal_implemented": False,
+            "writes": False,
+        },
+        {
+            "action": "plan_activity_group_membership_removal",
+            "when": "a human has explicitly selected one canonical event anchor to remove from an ordered set of canonical member zets",
+            "command": "archive activity-group-membership-removal-plan <archive-root> --request .wom-scratch/private/activity-group-removals/<reviewed>.json --dry-run --progress --format json",
+            "authoritative_for": "the explicit removal request ids against exact current canonical bytes and the event-anchor contract",
+            "membership_is_inferred": False,
+            "canonical_removal_plan_implemented": True,
+            "canonical_removal_write_implemented": False,
+            "direct_file_edit_allowed": False,
             "writes": False,
         },
         {
@@ -87131,6 +87297,9 @@ def runtime_context_write_action_routes() -> list[dict[str, Any]]:
             "preview_command": "archive activity-group-membership-write <archive-root> --request .wom-scratch/private/activity-groups/<reviewed>.json --expected-request-sha256 <sha256> --expected-review-plan-sha256 <sha256> --dry-run --progress --format json",
             "approved_command": "archive activity-group-membership-write <archive-root> --request .wom-scratch/private/activity-groups/<reviewed>.json --expected-request-sha256 <sha256> --expected-review-plan-sha256 <sha256> --approve --reviewed-by <human-actor> --affirm-memberships-reviewed --progress --format json",
             "write_implemented": True,
+            "removal_plan_command": "archive activity-group-membership-removal-plan <archive-root> --request .wom-scratch/private/activity-group-removals/<reviewed>.json --dry-run --progress --format json",
+            "removal_plan_implemented": True,
+            "removal_write_implemented": False,
             "removal_implemented": False,
             "membership_is_inferred": False,
             "requires_human_approval": True,
@@ -87139,14 +87308,14 @@ def runtime_context_write_action_routes() -> list[dict[str, Any]]:
             "transaction_recovery_implemented": True,
             "recovery_plan_command": "archive activity-group-membership-recovery-plan <archive-root> --expected-request-sha256 <sha256> --dry-run --format json",
             "approved_recovery_command": "archive activity-group-membership-recover <archive-root> --expected-request-sha256 <sha256> --expected-recovery-plan-sha256 <sha256> --approve --reviewed-by <human-actor> --affirm-recovery-reviewed --progress --format json",
-            "next_safe_action": "use the digest-bound WOM writer for additions; use its recovery plan only after confirming an interrupted writer is no longer running; do not remove memberships or edit canonical zets directly",
+            "next_safe_action": "use the digest-bound WOM writer for additions; use the read-only removal plan for explicitly reviewed candidates, but do not remove memberships or edit canonical zets directly because the removal writer is not implemented",
         },
     ]
 
 
 def runtime_context_action_routing() -> dict[str, Any]:
     return {
-        "schema": "wom-kit/ai-command-path-routing/v0.4",
+        "schema": "wom-kit/ai-command-path-routing/v0.5",
         "official_wom_command_required_for_archive_actions": True,
         "location_policy_alone_is_sufficient": False,
         "raw_filesystem_search_is_authoritative": False,

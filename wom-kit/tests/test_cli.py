@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import base64
+import copy
 import hashlib
 import itertools
 import json
@@ -5292,7 +5293,7 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertFalse(operational_context["closed_actions"]["files_written"])
             self.assertEqual(
                 operational_context["action_routing"]["schema"],
-                "wom-kit/ai-command-path-routing/v0.4",
+                "wom-kit/ai-command-path-routing/v0.5",
             )
             entrypoints = result["canonical_entrypoints"]
             self.assertEqual(entrypoints["lifecycle_action"], "runtime_canonical_entrypoints")
@@ -5356,12 +5357,45 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertTrue(
                 activity_group_route["canonical_add_write_implemented"]
             )
+            self.assertTrue(
+                activity_group_route[
+                    "canonical_removal_plan_implemented"
+                ]
+            )
+            self.assertFalse(
+                activity_group_route[
+                    "canonical_removal_write_implemented"
+                ]
+            )
             self.assertFalse(
                 activity_group_route["canonical_removal_implemented"]
             )
             self.assertIn(
                 "archive activity-group-membership-write",
                 activity_group_route["next_command"],
+            )
+            activity_group_removal_route = next(
+                item
+                for item in action_routing["read_action_routes"]
+                if item["action"]
+                == "plan_activity_group_membership_removal"
+            )
+            self.assertIn(
+                "archive activity-group-membership-removal-plan",
+                activity_group_removal_route["command"],
+            )
+            self.assertTrue(
+                activity_group_removal_route[
+                    "canonical_removal_plan_implemented"
+                ]
+            )
+            self.assertFalse(
+                activity_group_removal_route[
+                    "canonical_removal_write_implemented"
+                ]
+            )
+            self.assertFalse(
+                activity_group_removal_route["direct_file_edit_allowed"]
             )
             draft_route = next(
                 item
@@ -5390,8 +5424,18 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertTrue(
                 activity_group_write_route["write_implemented"]
             )
+            self.assertTrue(
+                activity_group_write_route["removal_plan_implemented"]
+            )
+            self.assertFalse(
+                activity_group_write_route["removal_write_implemented"]
+            )
             self.assertFalse(
                 activity_group_write_route["removal_implemented"]
+            )
+            self.assertIn(
+                "activity-group-membership-removal-plan",
+                activity_group_write_route["removal_plan_command"],
             )
             self.assertIn(
                 "--affirm-memberships-reviewed",
@@ -5706,7 +5750,7 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(result["first_read"]["source_truths"]["canonical_zets"], "zettels/")
             self.assertEqual(
                 result["action_routing"]["schema"],
-                "wom-kit/ai-command-path-routing/v0.4",
+                "wom-kit/ai-command-path-routing/v0.5",
             )
             self.assertEqual(
                 result["operational_context"]["action_routing"],
@@ -5734,6 +5778,17 @@ class ArchiveCliTests(unittest.TestCase):
                     item
                     for item in result["action_routing"]["read_action_routes"]
                     if item["action"] == "plan_activity_group_membership"
+                )["command"],
+            )
+            self.assertIn(
+                "archive activity-group-membership-removal-plan",
+                next(
+                    item
+                    for item in result["action_routing"][
+                        "read_action_routes"
+                    ]
+                    if item["action"]
+                    == "plan_activity_group_membership_removal"
                 )["command"],
             )
             self.assertIn(
@@ -48449,6 +48504,717 @@ archive_services.zet_abstract_backfill_recover(
                 missing_member_id,
                 json.dumps(missing_result, ensure_ascii=False),
             )
+
+    def test_activity_group_membership_removal_plan_is_exact_read_only_and_private(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "personal-archive"
+            archive_id = "archive:personal:activity-group-removal-plan"
+            init_code, init_output = self.init_personal_archive(
+                archive_root,
+                archive_id,
+            )
+            self.assertEqual(init_code, 0, init_output)
+            anchor_id = "zet_20260729_021000_private_event_anchor"
+            other_anchor_ids = [
+                "zet_20260729_020900_private_other_event_one",
+                "zet_20260729_020901_private_other_event_two",
+            ]
+            member_ids = [
+                "zet_20260729_021001_private_scalar_member",
+                "zet_20260729_021002_private_single_list_member",
+                "zet_20260729_021003_private_two_list_member",
+                "zet_20260729_021004_private_three_list_member",
+                "zet_20260729_021005_private_absent_member",
+            ]
+            self.create_activity_group_canonical(
+                archive_root,
+                zettel_id=anchor_id,
+                title="PRIVATE_REMOVAL_EVENT_TITLE",
+                facets={
+                    "record_type": "event",
+                    "event_start": "2022-08-26",
+                    "event_end": "2022-08-27",
+                },
+            )
+            member_facets = [
+                {
+                    "record_type": "memory",
+                    "activity_group": anchor_id,
+                    "subject": "PRIVATE_SUBJECT_SCALAR",
+                },
+                {
+                    "record_type": "memory",
+                    "activity_group": [anchor_id],
+                    "subject": "PRIVATE_SUBJECT_SINGLE_LIST",
+                },
+                {
+                    "record_type": "memory",
+                    "activity_group": [other_anchor_ids[0], anchor_id],
+                    "subject": "PRIVATE_SUBJECT_TWO_LIST",
+                },
+                {
+                    "record_type": "memory",
+                    "activity_group": [
+                        other_anchor_ids[0],
+                        anchor_id,
+                        other_anchor_ids[1],
+                    ],
+                    "subject": "PRIVATE_SUBJECT_THREE_LIST",
+                },
+                {
+                    "record_type": "memory",
+                    "activity_group": other_anchor_ids[0],
+                    "subject": "PRIVATE_SUBJECT_ABSENT",
+                },
+            ]
+            member_paths = [
+                self.create_activity_group_canonical(
+                    archive_root,
+                    zettel_id=member_id,
+                    title=f"PRIVATE_REMOVAL_MEMBER_TITLE_{index}",
+                    facets=member_facets[index],
+                    body=f"PRIVATE_REMOVAL_MEMBER_BODY_{index}",
+                )
+                for index, member_id in enumerate(member_ids)
+            ]
+            crlf_bom_member_path = member_paths[3]
+            crlf_bom_member_bytes = crlf_bom_member_path.read_bytes()
+            self.assertFalse(
+                crlf_bom_member_bytes.startswith(b"\xef\xbb\xbf")
+            )
+            crlf_bom_member_path.write_bytes(
+                b"\xef\xbb\xbf"
+                + crlf_bom_member_bytes.replace(
+                    b"\r\n",
+                    b"\n",
+                ).replace(b"\n", b"\r\n")
+            )
+            request_relative = (
+                ".wom-scratch/private/activity-group-removals/"
+                "PRIVATE_REMOVAL_REQUEST.json"
+            )
+            request_path = archive_root / request_relative
+            request_path.parent.mkdir(parents=True, exist_ok=True)
+            request_path.write_text(
+                json.dumps(
+                    {
+                        "schema": (
+                            "wom-kit/activity-group-membership-removal-request/v0.1"
+                        ),
+                        "archive_id": archive_id,
+                        "anchor_zettel_id": anchor_id,
+                        "member_zettel_ids": member_ids,
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            reordered_request_relative = (
+                ".wom-scratch/private/activity-group-removals/"
+                "PRIVATE_REORDERED_REMOVAL_REQUEST.json"
+            )
+            reordered_request_path = archive_root / reordered_request_relative
+            reordered_request_path.write_text(
+                json.dumps(
+                    {
+                        "schema": (
+                            "wom-kit/activity-group-membership-removal-request/v0.1"
+                        ),
+                        "archive_id": archive_id,
+                        "anchor_zettel_id": anchor_id,
+                        "member_zettel_ids": list(reversed(member_ids)),
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            add_request_relative = (
+                ".wom-scratch/private/activity-groups/"
+                "PRIVATE_ADD_REQUEST.json"
+            )
+            add_request_path = archive_root / add_request_relative
+            add_request_path.parent.mkdir(parents=True, exist_ok=True)
+            add_request_path.write_text(
+                json.dumps(
+                    {
+                        "schema": (
+                            "wom-kit/activity-group-membership-request/v0.1"
+                        ),
+                        "archive_id": archive_id,
+                        "anchor_zettel_id": anchor_id,
+                        "member_zettel_ids": member_ids,
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            before = {
+                path.relative_to(archive_root).as_posix(): (
+                    path.read_bytes(),
+                    path.stat().st_mtime_ns,
+                )
+                for path in archive_root.rglob("*")
+                if path.is_file()
+            }
+
+            missing_code, missing_output = self.run_cli(
+                [
+                    "activity-group-membership-removal-plan",
+                    str(archive_root),
+                    "--request",
+                    request_relative,
+                ]
+            )
+            self.assertEqual(missing_code, 1)
+            self.assertIn("read-only and requires --dry-run", missing_output)
+
+            help_code, help_output = self.run_cli(
+                ["activity-group-membership-removal-plan", "--help"]
+            )
+            self.assertEqual(help_code, 0, help_output)
+            for hidden_flag in (
+                "--approve",
+                "--reviewed-by",
+                "--affirm-memberships-reviewed",
+            ):
+                self.assertNotIn(hidden_flag, help_output)
+
+            capabilities_code, capabilities_output = self.run_cli(
+                ["capabilities", "--machine"]
+            )
+            self.assertEqual(
+                capabilities_code,
+                0,
+                capabilities_output,
+            )
+            capabilities = json.loads(capabilities_output)
+            removal_capability = next(
+                command
+                for command in capabilities["data"]["commands"]
+                if command["name"]
+                == "activity-group-membership-removal-plan"
+            )
+            self.assertIn(
+                "event-group-membership-removal-plan",
+                removal_capability["aliases"],
+            )
+            for hidden_flag in (
+                "--approve",
+                "--reviewed-by",
+                "--affirm-memberships-reviewed",
+            ):
+                self.assertNotIn(
+                    hidden_flag,
+                    removal_capability["options"],
+                )
+
+            for forbidden_args in (
+                ["--approve"],
+                ["--reviewed-by", "PRIVATE_REMOVAL_REVIEWER"],
+                ["--reviewed-by", ""],
+                ["--affirm-memberships-reviewed"],
+            ):
+                with self.subTest(forbidden_args=forbidden_args):
+                    forbidden_code, forbidden_output = self.run_cli(
+                        [
+                            "activity-group-membership-removal-plan",
+                            str(archive_root),
+                            "--request",
+                            request_relative,
+                            "--dry-run",
+                            *forbidden_args,
+                        ]
+                    )
+                    self.assertEqual(forbidden_code, 1)
+                    self.assertIn(
+                        "rejects approval or reviewer flags",
+                        forbidden_output,
+                    )
+                    self.assertNotIn(
+                        "PRIVATE_REMOVAL_REVIEWER",
+                        forbidden_output,
+                    )
+
+            code, stdout, stderr = self.run_cli_split(
+                [
+                    "event-group-membership-removal-plan",
+                    str(archive_root),
+                    "--request",
+                    request_relative,
+                    "--dry-run",
+                    "--progress",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, stdout + stderr)
+            result = json.loads(stdout)
+            self.assertTrue(result["ok"])
+            self.assertEqual(
+                result["schema"],
+                "wom-kit/activity-group-membership-removal-plan/v0.1",
+            )
+            self.assertEqual(
+                result["lifecycle_action"],
+                "activity_group_membership_removal_plan",
+            )
+            self.assertEqual(result["summary"]["ready_to_remove_count"], 4)
+            self.assertEqual(result["summary"]["already_absent_count"], 1)
+            self.assertEqual(result["summary"]["blocked_member_count"], 0)
+            self.assertEqual(
+                [item["status"] for item in result["items"]],
+                [
+                    "ready_to_remove",
+                    "ready_to_remove",
+                    "ready_to_remove",
+                    "ready_to_remove",
+                    "already_absent",
+                ],
+            )
+            self.assertEqual(
+                result["membership_contract"]["operation"],
+                "remove",
+            )
+            self.assertTrue(
+                result["membership_contract"][
+                    "other_activity_group_memberships_preserved"
+                ]
+            )
+            self.assertTrue(
+                result["membership_contract"]["body_and_updated_at_preserved"]
+            )
+            self.assertFalse(
+                result["future_write_preview"]["implemented_now"]
+            )
+            self.assertIsNone(
+                result["future_write_preview"]["official_command"]
+            )
+            self.assertEqual(
+                result["future_write_preview"]["planned_command"],
+                "archive activity-group-membership-removal-write",
+            )
+            self.assertFalse(result["write_boundary"]["write_implemented"])
+            self.assertFalse(result["index_evidence"]["index_used"])
+            self.assertRegex(
+                result["review_plan_sha256"],
+                r"^sha256:[0-9a-f]{64}$",
+            )
+            reordered_result = (
+                archive_services.activity_group_membership_removal_plan(
+                    archive_root,
+                    request_path=reordered_request_relative,
+                    dry_run=True,
+                )
+            )
+            self.assertTrue(reordered_result["ok"])
+            self.assertNotEqual(
+                reordered_result["review_plan_sha256"],
+                result["review_plan_sha256"],
+            )
+            add_result = archive_services.activity_group_membership_plan(
+                archive_root,
+                request_path=add_request_relative,
+                dry_run=True,
+            )
+            self.assertTrue(add_result["ok"])
+            self.assertNotEqual(
+                add_result["schema"],
+                result["schema"],
+            )
+            self.assertNotEqual(
+                add_result["review_plan_sha256"],
+                result["review_plan_sha256"],
+            )
+            self.assertIn(
+                "[activity-group-membership-removal-plan]",
+                stderr,
+            )
+
+            expected_memberships = [
+                None,
+                None,
+                [other_anchor_ids[0]],
+                [other_anchor_ids[0], other_anchor_ids[1]],
+            ]
+            for index, member_path in enumerate(member_paths[:4]):
+                original_bytes = member_path.read_bytes()
+                candidate_bytes = (
+                    archive_services._activity_group_candidate_bytes(
+                        original_bytes,
+                        anchor_zettel_id=anchor_id,
+                        operation="remove",
+                    )
+                )
+                self.assertEqual(
+                    result["items"][index]["proposed_file_sha256"],
+                    "sha256:" + hashlib.sha256(candidate_bytes).hexdigest(),
+                )
+                original_frontmatter, original_payload, _original_source = (
+                    archive_services._parse_activity_group_canonical(
+                        original_bytes
+                    )
+                )
+                candidate_frontmatter, candidate_payload, _candidate_source = (
+                    archive_services._parse_activity_group_canonical(
+                        candidate_bytes
+                    )
+                )
+                expected_frontmatter = copy.deepcopy(original_frontmatter)
+                if expected_memberships[index] is None:
+                    expected_frontmatter["facets"].pop(
+                        "activity_group",
+                        None,
+                    )
+                else:
+                    expected_frontmatter["facets"]["activity_group"] = (
+                        expected_memberships[index]
+                    )
+                self.assertEqual(
+                    candidate_frontmatter,
+                    expected_frontmatter,
+                )
+                original_match = archive_services.FRONTMATTER_RE.match(
+                    original_payload
+                )
+                candidate_match = archive_services.FRONTMATTER_RE.match(
+                    candidate_payload
+                )
+                self.assertIsNotNone(original_match)
+                self.assertIsNotNone(candidate_match)
+                self.assertEqual(
+                    original_payload[original_match.end() :],
+                    candidate_payload[candidate_match.end() :],
+                )
+                self.assertEqual(
+                    candidate_frontmatter["updated_at"],
+                    original_frontmatter["updated_at"],
+                )
+                if member_path == crlf_bom_member_path:
+                    self.assertTrue(
+                        original_bytes.startswith(b"\xef\xbb\xbf")
+                    )
+                    self.assertTrue(
+                        candidate_bytes.startswith(b"\xef\xbb\xbf")
+                    )
+                    self.assertIn(b"\r\n", candidate_bytes)
+                    self.assertNotIn(
+                        b"\n",
+                        candidate_bytes.replace(b"\r\n", b""),
+                    )
+            self.assertEqual(
+                result["items"][4]["current_file_sha256"],
+                result["items"][4]["proposed_file_sha256"],
+            )
+
+            combined_output = stdout + stderr
+            for private_value in (
+                request_path.name,
+                anchor_id,
+                *other_anchor_ids,
+                *member_ids,
+                "PRIVATE_REMOVAL_EVENT_TITLE",
+                "PRIVATE_REMOVAL_MEMBER_TITLE",
+                "PRIVATE_REMOVAL_MEMBER_BODY",
+                "PRIVATE_SUBJECT",
+                str(archive_root),
+            ):
+                self.assertNotIn(private_value, combined_output)
+            self.assertEqual(
+                before,
+                {
+                    path.relative_to(archive_root).as_posix(): (
+                        path.read_bytes(),
+                        path.stat().st_mtime_ns,
+                    )
+                    for path in archive_root.rglob("*")
+                    if path.is_file()
+                },
+            )
+
+            text_code, text_output = self.run_cli(
+                [
+                    "activity-group-membership-removal-plan",
+                    str(archive_root),
+                    "--request",
+                    request_relative,
+                    "--dry-run",
+                    "--format",
+                    "text",
+                ]
+            )
+            self.assertEqual(text_code, 0, text_output)
+            self.assertIn(
+                "WOM activity-group membership removal plan: "
+                "ready_for_human_review",
+                text_output,
+            )
+            self.assertIn("Members ready to remove: 4", text_output)
+            self.assertIn(
+                "Members already without the named membership: 1",
+                text_output,
+            )
+
+    def test_activity_group_membership_removal_plan_blocks_unsafe_or_ambiguous_inputs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "personal-archive"
+            archive_id = "archive:personal:activity-group-removal-blockers"
+            init_code, init_output = self.init_personal_archive(
+                archive_root,
+                archive_id,
+            )
+            self.assertEqual(init_code, 0, init_output)
+            anchor_id = "zet_20260729_022000_private_event_anchor"
+            member_id = "zet_20260729_022001_private_member"
+            self.create_activity_group_canonical(
+                archive_root,
+                zettel_id=anchor_id,
+                title="PRIVATE_BLOCKER_EVENT_TITLE",
+                facets={
+                    "record_type": "event",
+                    "event_start": "2022-08-26",
+                },
+            )
+            member_path = self.create_activity_group_canonical(
+                archive_root,
+                zettel_id=member_id,
+                title="PRIVATE_BLOCKER_MEMBER_TITLE",
+                facets={
+                    "record_type": "memory",
+                    "activity_group": [anchor_id, anchor_id],
+                },
+            )
+            request_relative = (
+                ".wom-scratch/private/activity-group-removals/"
+                "PRIVATE_BLOCKER_REQUEST.json"
+            )
+            request_path = archive_root / request_relative
+            request_path.parent.mkdir(parents=True, exist_ok=True)
+            request_path.write_text(
+                json.dumps(
+                    {
+                        "schema": (
+                            "wom-kit/activity-group-membership-removal-request/v0.1"
+                        ),
+                        "archive_id": archive_id,
+                        "anchor_zettel_id": anchor_id,
+                        "member_zettel_ids": [member_id],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            result = (
+                archive_services.activity_group_membership_removal_plan(
+                    archive_root,
+                    request_path=request_relative,
+                    dry_run=True,
+                )
+            )
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["items"][0]["status"], "blocked")
+            self.assertIn(
+                "activity_group_current_shape_conflicts_with_anchor_contract",
+                result["items"][0]["blocker_codes"],
+            )
+
+            member_path.write_text(
+                member_path.read_text(encoding="utf-8")
+                .replace(
+                    f"  - {anchor_id}\n  - {anchor_id}\n",
+                    f"  - {anchor_id}\n",
+                )
+                .replace("status: canonical", "status: draft", 1),
+                encoding="utf-8",
+            )
+            request_path.write_text(
+                json.dumps(
+                    {
+                        "schema": (
+                            "wom-kit/activity-group-membership-removal-request/v0.1"
+                        ),
+                        "archive_id": archive_id,
+                        "anchor_zettel_id": anchor_id,
+                        "member_zettel_ids": [member_id],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            noncanonical_result = (
+                archive_services.activity_group_membership_removal_plan(
+                    archive_root,
+                    request_path=request_relative,
+                    dry_run=True,
+                )
+            )
+            self.assertFalse(noncanonical_result["ok"])
+            self.assertEqual(
+                noncanonical_result["summary"]["ready_to_remove_count"],
+                0,
+            )
+            self.assertEqual(
+                noncanonical_result["summary"]["blocked_member_count"],
+                1,
+            )
+            self.assertEqual(
+                noncanonical_result["items"][0]["status"],
+                "blocked",
+            )
+            self.assertEqual(
+                noncanonical_result["items"][0][
+                    "existing_membership_count"
+                ],
+                1,
+            )
+            self.assertIsNone(
+                noncanonical_result["items"][0][
+                    "proposed_file_sha256"
+                ]
+            )
+            self.assertIn(
+                "member_status_not_canonical",
+                noncanonical_result["items"][0]["blocker_codes"],
+            )
+
+            member_path.write_text(
+                member_path.read_text(encoding="utf-8").replace(
+                    "status: draft",
+                    "status: canonical",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            request_path.write_text(
+                (
+                    '{"schema":"wom-kit/activity-group-membership-removal-request/v0.1",'
+                    f'"archive_id":"{archive_id}",'
+                    f'"anchor_zettel_id":"{anchor_id}",'
+                    f'"anchor_zettel_id":"{anchor_id}",'
+                    f'"member_zettel_ids":["{member_id}"]}}'
+                ),
+                encoding="utf-8",
+            )
+            duplicate_key_result = (
+                archive_services.activity_group_membership_removal_plan(
+                    archive_root,
+                    request_path=request_relative,
+                    dry_run=True,
+                )
+            )
+            self.assertFalse(duplicate_key_result["ok"])
+            self.assertIn(
+                "request_json_duplicate_key",
+                duplicate_key_result["blockers"],
+            )
+
+            request_path.write_text(
+                json.dumps(
+                    {
+                        "schema": (
+                            "wom-kit/activity-group-membership-request/v0.1"
+                        ),
+                        "archive_id": archive_id,
+                        "anchor_zettel_id": anchor_id,
+                        "member_zettel_ids": [member_id],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            wrong_schema_result = (
+                archive_services.activity_group_membership_removal_plan(
+                    archive_root,
+                    request_path=request_relative,
+                    dry_run=True,
+                )
+            )
+            self.assertFalse(wrong_schema_result["ok"])
+            self.assertIn(
+                "request_schema_unsupported",
+                wrong_schema_result["blockers"],
+            )
+            serialized = json.dumps(
+                wrong_schema_result,
+                ensure_ascii=False,
+            )
+            for private_value in (
+                request_path.name,
+                anchor_id,
+                member_id,
+                "PRIVATE_BLOCKER",
+                str(archive_root),
+            ):
+                self.assertNotIn(private_value, serialized)
+
+            request_path.write_text(
+                json.dumps(
+                    {
+                        "schema": (
+                            "wom-kit/activity-group-membership-removal-request/v0.1"
+                        ),
+                        "archive_id": archive_id,
+                        "anchor_zettel_id": anchor_id,
+                        "member_zettel_ids": [member_id],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            malformed_memberships = (
+                ("empty", []),
+                ("null", None),
+                ("mapping", {"PRIVATE_KEY": anchor_id}),
+                ("mixed", [anchor_id, 7]),
+                ("unsafe", "PRIVATE_UNSAFE_MEMBERSHIP"),
+            )
+            for shape_name, membership_value in malformed_memberships:
+                with self.subTest(shape_name=shape_name):
+                    self.create_activity_group_canonical(
+                        archive_root,
+                        zettel_id=member_id,
+                        title="PRIVATE_BLOCKER_MEMBER_TITLE",
+                        facets={
+                            "record_type": "memory",
+                            "activity_group": membership_value,
+                        },
+                    )
+                    malformed_result = (
+                        archive_services.activity_group_membership_removal_plan(
+                            archive_root,
+                            request_path=request_relative,
+                            dry_run=True,
+                        )
+                    )
+                    self.assertFalse(malformed_result["ok"])
+                    self.assertEqual(
+                        malformed_result["summary"][
+                            "ready_to_remove_count"
+                        ],
+                        0,
+                    )
+                    self.assertEqual(
+                        malformed_result["summary"][
+                            "blocked_member_count"
+                        ],
+                        1,
+                    )
+                    self.assertEqual(
+                        malformed_result["items"][0]["status"],
+                        "blocked",
+                    )
+                    self.assertIsNone(
+                        malformed_result["items"][0][
+                            "proposed_file_sha256"
+                        ]
+                    )
+                    self.assertIn(
+                        "activity_group_current_shape_conflicts_with_anchor_contract",
+                        malformed_result["items"][0]["blocker_codes"],
+                    )
+                    malformed_serialized = json.dumps(
+                        malformed_result,
+                        ensure_ascii=False,
+                    )
+                    self.assertNotIn(
+                        "PRIVATE_UNSAFE_MEMBERSHIP",
+                        malformed_serialized,
+                    )
 
     def test_activity_group_membership_write_requires_review_and_applies_once(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
