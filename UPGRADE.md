@@ -24,6 +24,60 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.284 Approval-Gated Activity-Group Membership Removal
+
+No archive migration is required. v0.3.284 continues from the exact private
+request and `review_plan_sha256` produced by the v0.3.282 read-only removal
+plan. Preview the dedicated removal writer first:
+
+```powershell
+archive activity-group-membership-removal-write <archive-root> `
+  --request .wom-scratch/private/activity-group-removals/reviewed.json `
+  --expected-request-sha256 sha256:<request-digest> `
+  --expected-review-plan-sha256 sha256:<review-plan-digest> `
+  --dry-run --progress --format json
+```
+
+After a human verifies every requested removal and every `already_absent`
+row, replace `--dry-run` with `--approve`, add a safe `--reviewed-by` value,
+and add `--affirm-removals-reviewed`. WOM rebuilds the exact plan under the
+shared activity-group writer lock. Changed request or canonical bytes block
+the transaction before mutation.
+
+The writer removes only the named event anchor from `ready_to_remove`
+participants. It preserves all other membership entries and list shape,
+other facets, body, `updated_at`, BOM state, and newline convention.
+`already_absent` rows are satisfied without entering snapshots, the mutation
+journal, canonical write attempts, or receipt participant entries. When every
+row is already absent, no mutation artifacts are created.
+
+Add and removal transactions share one global writer lock and the bounded,
+fail-closed scan of both private roots. Their request, journal, receipt, and
+recovery contracts remain separate. A handled execution failure restores
+exact prior bytes. A process or machine interruption leaves private evidence;
+first confirm that the old writer is no longer running, then inspect it with:
+
+```powershell
+archive activity-group-membership-removal-recovery-plan <archive-root> `
+  --expected-request-sha256 sha256:<request-digest> `
+  --dry-run --format json
+```
+
+Approve only the exact returned recovery-plan digest:
+
+```powershell
+archive activity-group-membership-removal-recover <archive-root> `
+  --expected-request-sha256 sha256:<request-digest> `
+  --expected-recovery-plan-sha256 sha256:<recovery-plan-digest> `
+  --approve --reviewed-by <safe-reviewer-id> `
+  --affirm-recovery-reviewed --progress --format json
+```
+
+Unknown drift remains `manual_forensic_hold`. Do not delete transaction
+evidence or edit canonical zets to force progress. v0.3.284 adds no
+membership inference, MCP writer, or removal revert command. See
+[`wom-kit/docs/activity-group-membership-removal-write.md`](wom-kit/docs/activity-group-membership-removal-write.md).
+
 ## v0.3.283 Activity-Group Retained-Journal Isolation
 
 No archive migration is required. v0.3.283 keeps every existing activity-group

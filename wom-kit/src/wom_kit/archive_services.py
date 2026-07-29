@@ -28,6 +28,7 @@ import urllib.parse
 import urllib.request
 from contextlib import contextmanager, nullcontext
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterable, Protocol
@@ -2895,6 +2896,21 @@ ACTIVITY_GROUP_MEMBERSHIP_RECOVERY_PLAN_SCHEMA = (
 ACTIVITY_GROUP_MEMBERSHIP_RECOVER_SCHEMA = (
     "wom-kit/activity-group-membership-recover/v0.1"
 )
+ACTIVITY_GROUP_MEMBERSHIP_REMOVAL_WRITE_SCHEMA = (
+    "wom-kit/activity-group-membership-removal-write/v0.1"
+)
+ACTIVITY_GROUP_MEMBERSHIP_REMOVAL_RECEIPT_SCHEMA = (
+    "wom-kit/activity-group-membership-removal-receipt/v0.1"
+)
+ACTIVITY_GROUP_MEMBERSHIP_REMOVAL_TRANSACTION_JOURNAL_SCHEMA = (
+    "wom-kit/activity-group-membership-removal-transaction-journal/v0.1"
+)
+ACTIVITY_GROUP_MEMBERSHIP_REMOVAL_RECOVERY_PLAN_SCHEMA = (
+    "wom-kit/activity-group-membership-removal-recovery-plan/v0.1"
+)
+ACTIVITY_GROUP_MEMBERSHIP_REMOVAL_RECOVER_SCHEMA = (
+    "wom-kit/activity-group-membership-removal-recover/v0.1"
+)
 ACTIVITY_GROUP_MEMBERSHIP_REQUEST_PREFIX = (
     ".wom-scratch/private/activity-groups/"
 )
@@ -2902,6 +2918,9 @@ ACTIVITY_GROUP_MEMBERSHIP_REMOVAL_REQUEST_PREFIX = (
     ".wom-scratch/private/activity-group-removals/"
 )
 ACTIVITY_GROUP_MEMBERSHIP_RECEIPTS_DIR = "receipts/activity-groups"
+ACTIVITY_GROUP_MEMBERSHIP_REMOVAL_RECEIPTS_DIR = (
+    "receipts/activity-group-removals"
+)
 ACTIVITY_GROUP_MEMBERSHIP_WRITE_LOCK_NAME = (
     ".activity-group-membership.write.lock"
 )
@@ -2933,6 +2952,184 @@ ACTIVITY_GROUP_MEMBERSHIP_RECOVERY_ACTIONS = frozenset(
         "cleanup_verified_completed_evidence",
         "manual_forensic_hold",
     }
+)
+ACTIVITY_GROUP_MEMBERSHIP_REMOVAL_RECOVERY_ACTIONS = frozenset(
+    {
+        "cleanup_unstarted_removal_lock",
+        "cleanup_unstarted_removal_transaction_evidence",
+        "rollback_uncommitted_membership_removals_to_before",
+        "cleanup_verified_completed_removal_evidence",
+        "manual_forensic_hold",
+    }
+)
+
+
+@dataclass(frozen=True)
+class _ActivityGroupMembershipOperationContract:
+    """Frozen names and invariants for one explicit membership operation."""
+
+    operation: str
+    request_schema: str
+    plan_schema: str
+    request_prefix: str
+    write_schema: str
+    receipt_schema: str
+    transaction_journal_schema: str
+    recovery_plan_schema: str
+    recover_schema: str
+    receipts_dir: str
+    receipt_suffix: str
+    journal_suffix: str
+    write_action: str
+    transaction_action: str
+    recovery_plan_action: str
+    recover_action: str
+    journal_operation: str
+    ready_status: str
+    already_status: str
+    ready_count_key: str
+    already_count_key: str
+    human_affirmation: str
+    affirmation_required_blocker: str
+    receipt_schema_filename: str
+    journal_schema_filename: str
+    transaction_binding_schema: str
+    lock_receipt_binding_schema: str
+    write_lock_schema: str
+    recovery_guard_schema: str
+    progress_write: str
+    progress_receipt: str
+    progress_recovery: str
+    cleanup_lock_action: str
+    cleanup_unstarted_action: str
+    rollback_action: str
+    cleanup_completed_action: str
+    recovery_actions: frozenset[str]
+    snapshot_source: str
+    snapshot_write_plan_field: str
+    membership_removal_implemented: bool
+
+
+ACTIVITY_GROUP_MEMBERSHIP_ADD = _ActivityGroupMembershipOperationContract(
+    operation="add",
+    request_schema=ACTIVITY_GROUP_MEMBERSHIP_REQUEST_SCHEMA,
+    plan_schema=ACTIVITY_GROUP_MEMBERSHIP_PLAN_SCHEMA,
+    request_prefix=ACTIVITY_GROUP_MEMBERSHIP_REQUEST_PREFIX,
+    write_schema=ACTIVITY_GROUP_MEMBERSHIP_WRITE_SCHEMA,
+    receipt_schema=ACTIVITY_GROUP_MEMBERSHIP_RECEIPT_SCHEMA,
+    transaction_journal_schema=(
+        ACTIVITY_GROUP_MEMBERSHIP_TRANSACTION_JOURNAL_SCHEMA
+    ),
+    recovery_plan_schema=ACTIVITY_GROUP_MEMBERSHIP_RECOVERY_PLAN_SCHEMA,
+    recover_schema=ACTIVITY_GROUP_MEMBERSHIP_RECOVER_SCHEMA,
+    receipts_dir=ACTIVITY_GROUP_MEMBERSHIP_RECEIPTS_DIR,
+    receipt_suffix=".activity-group-membership.json",
+    journal_suffix=ACTIVITY_GROUP_MEMBERSHIP_TRANSACTION_JOURNAL_SUFFIX,
+    write_action="activity_group_membership_write",
+    transaction_action="activity_group_membership_transaction",
+    recovery_plan_action="activity_group_membership_recovery_plan",
+    recover_action="activity_group_membership_recover",
+    journal_operation="apply",
+    ready_status="ready_to_add",
+    already_status="already_member",
+    ready_count_key="ready_to_add_count",
+    already_count_key="already_member_count",
+    human_affirmation="all_activity_group_memberships_reviewed",
+    affirmation_required_blocker="affirm_memberships_reviewed_required",
+    receipt_schema_filename="activity-group-membership-receipt.schema.json",
+    journal_schema_filename=(
+        "activity-group-membership-transaction-journal.schema.json"
+    ),
+    transaction_binding_schema=(
+        "wom-kit/activity-group-membership-transaction-binding/v0.1"
+    ),
+    lock_receipt_binding_schema=(
+        "wom-kit/activity-group-membership-lock-receipt-binding/v0.2"
+    ),
+    write_lock_schema="wom-kit/activity-group-membership-write-lock/v0.2",
+    recovery_guard_schema=(
+        "wom-kit/activity-group-membership-recovery-guard/v0.1"
+    ),
+    progress_write="activity-group-membership-write",
+    progress_receipt="activity-group-membership-receipt",
+    progress_recovery="activity-group-membership-recovery",
+    cleanup_lock_action="cleanup_unstarted_lock",
+    cleanup_unstarted_action="cleanup_unstarted_transaction_evidence",
+    rollback_action="rollback_uncommitted_memberships_to_before",
+    cleanup_completed_action="cleanup_verified_completed_evidence",
+    recovery_actions=ACTIVITY_GROUP_MEMBERSHIP_RECOVERY_ACTIONS,
+    snapshot_source="canonical_zet_before_activity_group_membership",
+    snapshot_write_plan_field=(
+        "activity_group_membership_write_plan_sha256"
+    ),
+    membership_removal_implemented=False,
+)
+
+ACTIVITY_GROUP_MEMBERSHIP_REMOVE = _ActivityGroupMembershipOperationContract(
+    operation="remove",
+    request_schema=ACTIVITY_GROUP_MEMBERSHIP_REMOVAL_REQUEST_SCHEMA,
+    plan_schema=ACTIVITY_GROUP_MEMBERSHIP_REMOVAL_PLAN_SCHEMA,
+    request_prefix=ACTIVITY_GROUP_MEMBERSHIP_REMOVAL_REQUEST_PREFIX,
+    write_schema=ACTIVITY_GROUP_MEMBERSHIP_REMOVAL_WRITE_SCHEMA,
+    receipt_schema=ACTIVITY_GROUP_MEMBERSHIP_REMOVAL_RECEIPT_SCHEMA,
+    transaction_journal_schema=(
+        ACTIVITY_GROUP_MEMBERSHIP_REMOVAL_TRANSACTION_JOURNAL_SCHEMA
+    ),
+    recovery_plan_schema=(
+        ACTIVITY_GROUP_MEMBERSHIP_REMOVAL_RECOVERY_PLAN_SCHEMA
+    ),
+    recover_schema=ACTIVITY_GROUP_MEMBERSHIP_REMOVAL_RECOVER_SCHEMA,
+    receipts_dir=ACTIVITY_GROUP_MEMBERSHIP_REMOVAL_RECEIPTS_DIR,
+    receipt_suffix=".activity-group-membership-removal.json",
+    journal_suffix=(
+        ACTIVITY_GROUP_MEMBERSHIP_REMOVAL_TRANSACTION_JOURNAL_SUFFIX
+    ),
+    write_action="activity_group_membership_removal_write",
+    transaction_action="activity_group_membership_removal_transaction",
+    recovery_plan_action="activity_group_membership_removal_recovery_plan",
+    recover_action="activity_group_membership_removal_recover",
+    journal_operation="remove",
+    ready_status="ready_to_remove",
+    already_status="already_absent",
+    ready_count_key="ready_to_remove_count",
+    already_count_key="already_absent_count",
+    human_affirmation="all_activity_group_membership_removals_reviewed",
+    affirmation_required_blocker="affirm_removals_reviewed_required",
+    receipt_schema_filename=(
+        "activity-group-membership-removal-receipt.schema.json"
+    ),
+    journal_schema_filename=(
+        "activity-group-membership-removal-transaction-journal.schema.json"
+    ),
+    transaction_binding_schema=(
+        "wom-kit/activity-group-membership-removal-transaction-binding/v0.1"
+    ),
+    lock_receipt_binding_schema=(
+        "wom-kit/activity-group-membership-removal-lock-receipt-binding/v0.1"
+    ),
+    write_lock_schema="wom-kit/activity-group-membership-write-lock/v0.3",
+    recovery_guard_schema=(
+        "wom-kit/activity-group-membership-recovery-guard/v0.2"
+    ),
+    progress_write="activity-group-membership-removal-write",
+    progress_receipt="activity-group-membership-removal-receipt",
+    progress_recovery="activity-group-membership-removal-recovery",
+    cleanup_lock_action="cleanup_unstarted_removal_lock",
+    cleanup_unstarted_action=(
+        "cleanup_unstarted_removal_transaction_evidence"
+    ),
+    rollback_action="rollback_uncommitted_membership_removals_to_before",
+    cleanup_completed_action=(
+        "cleanup_verified_completed_removal_evidence"
+    ),
+    recovery_actions=ACTIVITY_GROUP_MEMBERSHIP_REMOVAL_RECOVERY_ACTIONS,
+    snapshot_source=(
+        "canonical_zet_before_activity_group_membership_removal"
+    ),
+    snapshot_write_plan_field=(
+        "activity_group_membership_removal_write_plan_sha256"
+    ),
+    membership_removal_implemented=True,
 )
 
 
@@ -33222,7 +33419,11 @@ def _activity_group_membership_plan(
                 if operation == "add"
                 else [
                     "Review every named removal and every already-absent row with the archive owner.",
-                    "Keep this private request and review-plan digest as evidence. The approval-gated activity-group-membership-removal-write command is not implemented in this release.",
+                    (
+                        "Keep this private request and review-plan digest as evidence, then preview the dedicated approval-gated activity-group-membership-removal-write command."
+                        if future_write_implemented
+                        else "Keep this private request and review-plan digest as evidence. The approval-gated activity-group-membership-removal-write command is not implemented in this release."
+                    ),
                 ]
             )
         ),
@@ -33276,7 +33477,7 @@ def activity_group_membership_removal_plan(
         request_schema=ACTIVITY_GROUP_MEMBERSHIP_REMOVAL_REQUEST_SCHEMA,
         request_prefix=ACTIVITY_GROUP_MEMBERSHIP_REMOVAL_REQUEST_PREFIX,
         plan_schema=ACTIVITY_GROUP_MEMBERSHIP_REMOVAL_PLAN_SCHEMA,
-        future_write_implemented=False,
+        future_write_implemented=True,
         planned_write_command=(
             "archive activity-group-membership-removal-write"
         ),
@@ -33301,27 +33502,81 @@ def _activity_group_removal_private_root(root: Path) -> Path:
     )
 
 
-def activity_group_membership_receipt_relative_path(
+def _activity_group_operation_private_root(
+    root: Path,
+    operation_contract: _ActivityGroupMembershipOperationContract,
+) -> Path:
+    return (
+        _activity_group_removal_private_root(root)
+        if operation_contract.operation == "remove"
+        else _activity_group_private_root(root)
+    )
+
+
+def _activity_group_membership_receipt_relative_path(
     request_sha256: str,
+    operation_contract: _ActivityGroupMembershipOperationContract,
 ) -> str:
     if not re.fullmatch(r"sha256:[0-9a-f]{64}", request_sha256):
         raise ValueError("activity_group_request_sha256_invalid")
     digest = request_sha256.removeprefix("sha256:")
     return (
-        f"{ACTIVITY_GROUP_MEMBERSHIP_RECEIPTS_DIR}/"
-        f"{digest}.activity-group-membership.json"
+        f"{operation_contract.receipts_dir}/"
+        f"{digest}{operation_contract.receipt_suffix}"
     )
+
+
+def activity_group_membership_receipt_relative_path(
+    request_sha256: str,
+) -> str:
+    return _activity_group_membership_receipt_relative_path(
+        request_sha256,
+        ACTIVITY_GROUP_MEMBERSHIP_ADD,
+    )
+
+
+def activity_group_membership_removal_receipt_relative_path(
+    request_sha256: str,
+) -> str:
+    return _activity_group_membership_receipt_relative_path(
+        request_sha256,
+        ACTIVITY_GROUP_MEMBERSHIP_REMOVE,
+    )
+
+
+def _activity_group_membership_receipt_path(
+    root: Path,
+    request_sha256: str,
+    operation_contract: _ActivityGroupMembershipOperationContract,
+) -> Path:
+    relative = _activity_group_membership_receipt_relative_path(
+        request_sha256,
+        operation_contract,
+    )
+    canonical_root = root.resolve()
+    return canonical_root.joinpath(*PurePosixPath(relative).parts)
 
 
 def activity_group_membership_receipt_path(
     root: Path,
     request_sha256: str,
 ) -> Path:
-    relative = activity_group_membership_receipt_relative_path(
-        request_sha256
+    return _activity_group_membership_receipt_path(
+        root,
+        request_sha256,
+        ACTIVITY_GROUP_MEMBERSHIP_ADD,
     )
-    canonical_root = root.resolve()
-    return canonical_root.joinpath(*PurePosixPath(relative).parts)
+
+
+def activity_group_membership_removal_receipt_path(
+    root: Path,
+    request_sha256: str,
+) -> Path:
+    return _activity_group_membership_receipt_path(
+        root,
+        request_sha256,
+        ACTIVITY_GROUP_MEMBERSHIP_REMOVE,
+    )
 
 
 def activity_group_membership_receipt_path_is_safe(
@@ -33344,12 +33599,37 @@ def activity_group_membership_transaction_journal_path(
     root: Path,
     request_sha256: str,
 ) -> Path:
+    return _activity_group_membership_transaction_journal_path(
+        root,
+        request_sha256,
+        ACTIVITY_GROUP_MEMBERSHIP_ADD,
+    )
+
+
+def activity_group_membership_removal_transaction_journal_path(
+    root: Path,
+    request_sha256: str,
+) -> Path:
+    return _activity_group_membership_transaction_journal_path(
+        root,
+        request_sha256,
+        ACTIVITY_GROUP_MEMBERSHIP_REMOVE,
+    )
+
+
+def _activity_group_membership_transaction_journal_path(
+    root: Path,
+    request_sha256: str,
+    operation_contract: _ActivityGroupMembershipOperationContract,
+) -> Path:
     if not re.fullmatch(r"sha256:[0-9a-f]{64}", request_sha256):
         raise ValueError("activity_group_request_sha256_invalid")
     digest = request_sha256.removeprefix("sha256:")
-    return _activity_group_private_root(root) / (
-        f".{digest}"
-        f"{ACTIVITY_GROUP_MEMBERSHIP_TRANSACTION_JOURNAL_SUFFIX}"
+    return _activity_group_operation_private_root(
+        root,
+        operation_contract,
+    ) / (
+        f".{digest}{operation_contract.journal_suffix}"
     )
 
 
@@ -34994,12 +35274,16 @@ def replace_activity_group_canonical_bytes_compare_and_swap(
 def _activity_group_private_request(
     root: Path,
     request_path: str,
+    operation_contract: _ActivityGroupMembershipOperationContract = (
+        ACTIVITY_GROUP_MEMBERSHIP_ADD
+    ),
 ) -> tuple[bytes, dict[str, Any]]:
     blockers: list[str] = []
     _normalized, path = _activity_group_request_path(
         root,
         request_path,
         blockers,
+        request_prefix=operation_contract.request_prefix,
     )
     raw = b""
     document: dict[str, Any] | None = None
@@ -35041,6 +35325,9 @@ def materialize_activity_group_membership_candidates(
     request_bytes: bytes,
     request_document: dict[str, Any],
     plan: dict[str, Any],
+    operation_contract: _ActivityGroupMembershipOperationContract = (
+        ACTIVITY_GROUP_MEMBERSHIP_ADD
+    ),
 ) -> tuple[list[dict[str, Any]], list[str]]:
     blockers: list[str] = []
     candidates: list[dict[str, Any]] = []
@@ -35080,9 +35367,9 @@ def materialize_activity_group_membership_candidates(
             blockers.append("activity_group_plan_row_binding_invalid")
             continue
         status = plan_item.get("status")
-        if status == "already_member":
+        if status == operation_contract.already_status:
             continue
-        if status != "ready_to_add":
+        if status != operation_contract.ready_status:
             blockers.append("activity_group_plan_contains_nonwritable_row")
             continue
         try:
@@ -35116,6 +35403,7 @@ def materialize_activity_group_membership_candidates(
             after_bytes = _activity_group_candidate_bytes(
                 before_bytes,
                 anchor_zettel_id=anchor_zettel_id,
+                operation=operation_contract.operation,
             )
             after_sha256 = (
                 "sha256:" + hashlib.sha256(after_bytes).hexdigest()
@@ -35153,10 +35441,13 @@ def activity_group_membership_write_plan_sha256(
     review_plan_sha256: str,
     anchor_current_file_sha256: str,
     candidates: list[dict[str, Any]],
+    operation_contract: _ActivityGroupMembershipOperationContract = (
+        ACTIVITY_GROUP_MEMBERSHIP_ADD
+    ),
 ) -> str:
     return sha256_json_value(
         {
-            "schema": ACTIVITY_GROUP_MEMBERSHIP_WRITE_SCHEMA,
+            "schema": operation_contract.write_schema,
             "archive_id": archive_id,
             "request_sha256": request_sha256,
             "review_plan_sha256": review_plan_sha256,
@@ -35171,6 +35462,24 @@ def activity_group_membership_write_plan_sha256(
                 for item in candidates
             ],
         }
+    )
+
+
+def activity_group_membership_removal_write_plan_sha256(
+    *,
+    archive_id: str,
+    request_sha256: str,
+    review_plan_sha256: str,
+    anchor_current_file_sha256: str,
+    candidates: list[dict[str, Any]],
+) -> str:
+    return activity_group_membership_write_plan_sha256(
+        archive_id=archive_id,
+        request_sha256=request_sha256,
+        review_plan_sha256=review_plan_sha256,
+        anchor_current_file_sha256=anchor_current_file_sha256,
+        candidates=candidates,
+        operation_contract=ACTIVITY_GROUP_MEMBERSHIP_REMOVE,
     )
 
 
@@ -35198,6 +35507,9 @@ def preserve_activity_group_membership_before_snapshots(
     captured_at: str,
     reviewed_by: str,
     write_plan_sha256: str,
+    operation_contract: _ActivityGroupMembershipOperationContract = (
+        ACTIVITY_GROUP_MEMBERSHIP_ADD
+    ),
 ) -> dict[str, int]:
     bytes_written = 0
     records_appended = 0
@@ -35264,12 +35576,10 @@ def preserve_activity_group_membership_before_snapshots(
                 ],
                 "provenance": {
                     "created_in": f"archive:{archive_id}",
-                    "source": (
-                        "canonical_zet_before_activity_group_membership"
-                    ),
+                    "source": operation_contract.snapshot_source,
                     "captured_at": captured_at,
                     "captured_by": reviewed_by,
-                    "activity_group_membership_write_plan_sha256": (
+                    operation_contract.snapshot_write_plan_field: (
                         write_plan_sha256
                     ),
                 },
@@ -35398,12 +35708,13 @@ def _activity_group_membership_receipt_journal_projection(
     *,
     receipt_relative_path: str,
     journal: bool,
+    operation_contract: _ActivityGroupMembershipOperationContract = (
+        ACTIVITY_GROUP_MEMBERSHIP_ADD
+    ),
 ) -> dict[str, Any]:
     return {
-        "schema": (
-            "wom-kit/activity-group-membership-transaction-binding/v0.1"
-        ),
-        "membership_operation": "add",
+        "schema": operation_contract.transaction_binding_schema,
+        "membership_operation": operation_contract.operation,
         "recorded_at": document.get(
             "prepared_at" if journal else "applied_at"
         ),
@@ -35448,9 +35759,13 @@ def _activity_group_membership_receipt_lock_projection(
     *,
     receipt_relative_path: str,
     lock: bool,
+    operation_contract: _ActivityGroupMembershipOperationContract = (
+        ACTIVITY_GROUP_MEMBERSHIP_ADD
+    ),
 ) -> dict[str, Any]:
     request_sha256 = document.get("request_sha256")
     expected_journal_name: str | None = None
+    expected_journal_path: str | None = None
     expected_receipt_path: str | None = None
     if (
         isinstance(request_sha256, str)
@@ -35458,27 +35773,23 @@ def _activity_group_membership_receipt_lock_projection(
     ):
         digest = request_sha256.removeprefix("sha256:")
         expected_journal_name = (
-            f".{digest}"
-            f"{ACTIVITY_GROUP_MEMBERSHIP_TRANSACTION_JOURNAL_SUFFIX}"
+            f".{digest}{operation_contract.journal_suffix}"
+        )
+        expected_journal_path = (
+            f"{operation_contract.request_prefix}{expected_journal_name}"
         )
         expected_receipt_path = (
-            activity_group_membership_receipt_relative_path(
-                request_sha256
+            _activity_group_membership_receipt_relative_path(
+                request_sha256,
+                operation_contract,
             )
         )
-    return {
-        "schema": (
-            "wom-kit/activity-group-membership-lock-receipt-binding/v0.2"
-        ),
-        "membership_operation": "add",
+    projection = {
+        "schema": operation_contract.lock_receipt_binding_schema,
+        "membership_operation": operation_contract.operation,
         "request_sha256": request_sha256,
         "review_plan_sha256": document.get("review_plan_sha256"),
         "write_plan_sha256": document.get("write_plan_sha256"),
-        "transaction_journal_name": (
-            document.get("transaction_journal_name")
-            if lock
-            else expected_journal_name
-        ),
         "final_receipt_path": (
             expected_receipt_path if lock else receipt_relative_path
         ),
@@ -35490,15 +35801,62 @@ def _activity_group_membership_receipt_lock_projection(
                     document,
                     receipt_relative_path=receipt_relative_path,
                     journal=False,
+                    operation_contract=operation_contract,
                 )
             )
         ),
     }
+    if operation_contract.operation == "add":
+        projection["transaction_journal_name"] = (
+            document.get("transaction_journal_name")
+            if lock
+            else expected_journal_name
+        )
+        # Preserve the exact insertion order of the historical add projection.
+        projection = {
+            "schema": projection["schema"],
+            "membership_operation": projection["membership_operation"],
+            "request_sha256": projection["request_sha256"],
+            "review_plan_sha256": projection["review_plan_sha256"],
+            "write_plan_sha256": projection["write_plan_sha256"],
+            "transaction_journal_name": projection[
+                "transaction_journal_name"
+            ],
+            "final_receipt_path": projection["final_receipt_path"],
+            "transaction_binding_sha256": projection[
+                "transaction_binding_sha256"
+            ],
+        }
+    else:
+        projection["transaction_journal_path"] = (
+            document.get("transaction_journal_path")
+            if lock
+            else expected_journal_path
+        )
+        projection = {
+            "schema": projection["schema"],
+            "membership_operation": projection["membership_operation"],
+            "request_sha256": projection["request_sha256"],
+            "review_plan_sha256": projection["review_plan_sha256"],
+            "write_plan_sha256": projection["write_plan_sha256"],
+            "transaction_journal_path": projection[
+                "transaction_journal_path"
+            ],
+            "final_receipt_path": projection["final_receipt_path"],
+            "transaction_binding_sha256": projection[
+                "transaction_binding_sha256"
+            ],
+        }
+    return projection
 
 
 def activity_group_write_lock_matches_journal(
     lock_document: dict[str, Any],
     journal: dict[str, Any],
+    *,
+    operation_contract: _ActivityGroupMembershipOperationContract = (
+        ACTIVITY_GROUP_MEMBERSHIP_ADD
+    ),
 ) -> bool:
     if (
         lock_document.get("review_plan_sha256")
@@ -35511,7 +35869,7 @@ def activity_group_write_lock_matches_journal(
         lock_document.get("schema")
         == "wom-kit/activity-group-membership-write-lock/v0.1"
     ):
-        return True
+        return operation_contract.operation == "add"
     receipt_relative = journal.get("final_receipt_path")
     if not isinstance(receipt_relative, str):
         return False
@@ -35522,6 +35880,7 @@ def activity_group_write_lock_matches_journal(
             journal,
             receipt_relative_path=receipt_relative,
             journal=True,
+            operation_contract=operation_contract,
         )
     )
 
@@ -35559,6 +35918,9 @@ def verify_activity_group_membership_receipt(
     request_sha256: str,
     expected_journal: dict[str, Any] | None = None,
     expected_write_lock: dict[str, Any] | None = None,
+    operation_contract: _ActivityGroupMembershipOperationContract = (
+        ACTIVITY_GROUP_MEMBERSHIP_ADD
+    ),
 ) -> dict[str, Any]:
     blockers: list[str] = []
     try:
@@ -35577,11 +35939,14 @@ def verify_activity_group_membership_receipt(
         }
     if validate_schema(
         receipt,
-        "activity-group-membership-receipt.schema.json",
+        operation_contract.receipt_schema_filename,
     ):
         blockers.append("activity_group_receipt_schema_invalid")
     expected_relative = (
-        activity_group_membership_receipt_relative_path(request_sha256)
+        _activity_group_membership_receipt_relative_path(
+            request_sha256,
+            operation_contract,
+        )
     )
     try:
         actual_relative = archive_relative_path(receipt_path, root)
@@ -35600,6 +35965,7 @@ def verify_activity_group_membership_receipt(
                 receipt,
                 receipt_relative_path=actual_relative,
                 journal=False,
+                operation_contract=operation_contract,
             )
         )
         journal_projection = (
@@ -35607,6 +35973,7 @@ def verify_activity_group_membership_receipt(
                 expected_journal,
                 receipt_relative_path=actual_relative,
                 journal=True,
+                operation_contract=operation_contract,
             )
         )
         transaction_binding_sha256 = sha256_json_value(
@@ -35622,6 +35989,7 @@ def verify_activity_group_membership_receipt(
                 receipt,
                 receipt_relative_path=actual_relative,
                 lock=False,
+                operation_contract=operation_contract,
             )
         )
         lock_projection = (
@@ -35629,6 +35997,7 @@ def verify_activity_group_membership_receipt(
                 expected_write_lock,
                 receipt_relative_path=actual_relative,
                 lock=True,
+                operation_contract=operation_contract,
             )
         )
         transaction_binding_sha256 = sha256_json_value(
@@ -35693,9 +36062,20 @@ def verify_activity_group_membership_receipt(
                     frontmatter,
                     anchor_zettel_id,
                 )
-                if state != "already_member" or anchor_zettel_id not in current:
+                if operation_contract.operation == "add":
+                    if (
+                        state != "already_member"
+                        or anchor_zettel_id not in current
+                    ):
+                        raise ArchiveServiceError(
+                            "activity_group_receipt_membership_missing"
+                        )
+                elif (
+                    state != "ready_to_add"
+                    or anchor_zettel_id in current
+                ):
                     raise ArchiveServiceError(
-                        "activity_group_receipt_membership_missing"
+                        "activity_group_removal_receipt_membership_present"
                     )
             except ArchiveServiceError as exc:
                 item_blockers.append(str(exc))
@@ -35727,12 +36107,32 @@ def verify_activity_group_membership_receipt(
         "transaction_binding_sha256": transaction_binding_sha256,
         "review_affirmation_verified": (
             receipt.get("human_affirmation")
-            == "all_activity_group_memberships_reviewed"
+            == operation_contract.human_affirmation
         ),
     }
 
 
-def activity_group_membership_write(
+def verify_activity_group_membership_removal_receipt(
+    root: Path,
+    receipt_path: Path,
+    *,
+    archive_id: str,
+    request_sha256: str,
+    expected_journal: dict[str, Any] | None = None,
+    expected_write_lock: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return verify_activity_group_membership_receipt(
+        root,
+        receipt_path,
+        archive_id=archive_id,
+        request_sha256=request_sha256,
+        expected_journal=expected_journal,
+        expected_write_lock=expected_write_lock,
+        operation_contract=ACTIVITY_GROUP_MEMBERSHIP_REMOVE,
+    )
+
+
+def _activity_group_membership_write(
     archive_root: Path | str,
     *,
     request_path: str,
@@ -35747,6 +36147,7 @@ def activity_group_membership_write(
         [str, str, int | None, int | None], None
     ]
     | None = None,
+    operation_contract: _ActivityGroupMembershipOperationContract,
 ) -> dict[str, Any]:
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
@@ -35776,12 +36177,17 @@ def activity_group_membership_write(
     transaction_journal_written = False
     transaction_journal_removed: bool | None = None
     final_transaction_inventory_clean: bool | None = None
+    coordination_private_root = _activity_group_private_root(root)
+    operation_private_root = _activity_group_operation_private_root(
+        root,
+        operation_contract,
+    )
     write_lock_path = (
-        _activity_group_private_root(root)
+        coordination_private_root
         / ACTIVITY_GROUP_MEMBERSHIP_WRITE_LOCK_NAME
     )
     recovery_guard_path = (
-        _activity_group_private_root(root)
+        coordination_private_root
         / ACTIVITY_GROUP_MEMBERSHIP_RECOVERY_GUARD_NAME
     )
     write_lock_removed: bool | None = None
@@ -35802,8 +36208,8 @@ def activity_group_membership_write(
         "transaction_journal_retained": None,
         "write_lock_removed": None,
     }
-    ready_to_add_count = 0
-    already_member_count = 0
+    ready_action_count = 0
+    already_satisfied_count = 0
     requested_member_count = 0
 
     def result_payload(status: str) -> dict[str, Any]:
@@ -35818,8 +36224,8 @@ def activity_group_membership_write(
                 }
                 and not blockers
             ),
-            "schema": ACTIVITY_GROUP_MEMBERSHIP_WRITE_SCHEMA,
-            "lifecycle_action": "activity_group_membership_write",
+            "schema": operation_contract.write_schema,
+            "lifecycle_action": operation_contract.write_action,
             "status": status,
             "dry_run": bool(dry_run),
             "approved": bool(approve and status == "applied"),
@@ -35841,8 +36247,10 @@ def activity_group_membership_write(
             "write_plan_sha256": actual_write_plan_sha256,
             "summary": {
                 "requested_member_count": requested_member_count,
-                "ready_to_add_count": ready_to_add_count,
-                "already_member_count": already_member_count,
+                operation_contract.ready_count_key: ready_action_count,
+                operation_contract.already_count_key: (
+                    already_satisfied_count
+                ),
                 "canonical_files_written_this_run": (
                     canonical_files_written
                 ),
@@ -35856,9 +36264,11 @@ def activity_group_membership_write(
                 "required_for_new_write": True,
                 "reviewed_by_supplied": bool(reviewer),
                 "reviewed_by_echoed": False,
-                "all_memberships_reviewed_affirmed": bool(
-                    affirm_memberships_reviewed
-                ),
+                (
+                    "all_removals_reviewed_affirmed"
+                    if operation_contract.operation == "remove"
+                    else "all_memberships_reviewed_affirmed"
+                ): bool(affirm_memberships_reviewed),
             },
             "receipt": {
                 "path": receipt_relative,
@@ -35916,7 +36326,9 @@ def activity_group_membership_write(
                     else False
                 ),
                 "membership_inferred": False,
-                "membership_removal_implemented": False,
+                "membership_removal_implemented": (
+                    operation_contract.membership_removal_implemented
+                ),
                 "temporary_write_lock_removed": write_lock_removed,
                 "provider_state_written": False,
                 "database_rows_written": False,
@@ -35941,19 +36353,35 @@ def activity_group_membership_write(
             "warnings": unique_preserve_order(warnings),
             "next_safe_actions": (
                 [
-                    "Use the immutable private receipt as membership evidence and retain the prior-byte snapshots."
+                    (
+                        "Use the immutable private receipt as removal evidence and retain the prior-byte snapshots."
+                        if operation_contract.operation == "remove"
+                        else "Use the immutable private receipt as membership evidence and retain the prior-byte snapshots."
+                    )
                 ]
                 if status == "applied"
                 else [
-                    "No write is needed; the private receipt verifies and every recorded membership remains present."
+                    (
+                        "No write is needed; the private receipt verifies and every named anchor remains absent."
+                        if operation_contract.operation == "remove"
+                        else "No write is needed; the private receipt verifies and every recorded membership remains present."
+                    )
                 ]
                 if status == "already_applied"
                 else [
-                    "No write is needed; every explicitly requested membership is already present."
+                    (
+                        "No write is needed; every explicitly requested membership is already absent."
+                        if operation_contract.operation == "remove"
+                        else "No write is needed; every explicitly requested membership is already present."
+                    )
                 ]
                 if status == "already_satisfied"
                 else [
-                    "Run the unchanged request with --approve, the exact request and review-plan digests, a safe reviewer id, and the explicit membership-review affirmation."
+                    (
+                        "Run the unchanged removal request with --approve, the exact request and review-plan digests, a safe reviewer id, and the explicit removal-review affirmation."
+                        if operation_contract.operation == "remove"
+                        else "Run the unchanged request with --approve, the exact request and review-plan digests, a safe reviewer id, and the explicit membership-review affirmation."
+                    )
                 ]
                 if status == "ready_to_apply"
                 else [
@@ -35987,7 +36415,11 @@ def activity_group_membership_write(
 
     try:
         request_bytes, request_document = (
-            _activity_group_private_request(root, request_path)
+            _activity_group_private_request(
+                root,
+                request_path,
+                operation_contract,
+            )
         )
     except ArchiveServiceError as exc:
         blockers.append(str(exc))
@@ -36003,14 +36435,16 @@ def activity_group_membership_write(
         blockers.append("request_sha256_mismatch")
     try:
         receipt_relative = (
-            activity_group_membership_receipt_relative_path(
-                actual_request_sha256
+            _activity_group_membership_receipt_relative_path(
+                actual_request_sha256,
+                operation_contract,
             )
         )
         transaction_journal_path = (
-            activity_group_membership_transaction_journal_path(
+            _activity_group_membership_transaction_journal_path(
                 root,
                 actual_request_sha256,
+                operation_contract,
             )
         )
     except ValueError:
@@ -36026,9 +36460,10 @@ def activity_group_membership_write(
     if blockers:
         return result_payload("blocked")
 
-    receipt_path = activity_group_membership_receipt_path(
+    receipt_path = _activity_group_membership_receipt_path(
         root,
         actual_request_sha256,
+        operation_contract,
     )
     if not activity_group_membership_receipt_path_is_safe(
         root,
@@ -36054,6 +36489,7 @@ def activity_group_membership_write(
             receipt_path,
             archive_id=archive_id,
             request_sha256=actual_request_sha256,
+            operation_contract=operation_contract,
         )
         receipt_sha256 = verification.get("receipt_sha256")
         actual_review_plan_sha256 = verification.get(
@@ -36069,12 +36505,22 @@ def activity_group_membership_write(
             blockers.append(
                 "existing_receipt_review_plan_sha256_mismatch"
             )
-        current_plan = activity_group_membership_plan(
+        current_plan = _activity_group_membership_plan(
             root,
             request_path=request_path,
             dry_run=True,
             max_members=effective_max_members,
             progress_callback=None,
+            operation=operation_contract.operation,
+            request_schema=operation_contract.request_schema,
+            request_prefix=operation_contract.request_prefix,
+            plan_schema=operation_contract.plan_schema,
+            future_write_implemented=True,
+            planned_write_command=(
+                "archive activity-group-membership-removal-write"
+                if operation_contract.operation == "remove"
+                else "archive activity-group-membership-write"
+            ),
         )
         current_plan_items = (
             current_plan.get("items")
@@ -36086,7 +36532,7 @@ def activity_group_membership_write(
             or len(current_plan_items) != requested_member_count
             or any(
                 not isinstance(item, dict)
-                or item.get("status") != "already_member"
+                or item.get("status") != operation_contract.already_status
                 for item in current_plan_items
             )
         ):
@@ -36098,7 +36544,7 @@ def activity_group_membership_write(
                 "row_index": item.get("row_index"),
                 "status": (
                     "verified_applied"
-                    if item.get("status") == "already_member"
+                    if item.get("status") == operation_contract.already_status
                     else "blocked"
                 ),
                 "current_file_sha256": item.get(
@@ -36114,12 +36560,12 @@ def activity_group_membership_write(
             for item in current_plan_items
             if isinstance(item, dict)
         ]
-        ready_to_add_count = 0
-        already_member_count = sum(
+        ready_action_count = 0
+        already_satisfied_count = sum(
             1
             for item in current_plan_items
             if isinstance(item, dict)
-            and item.get("status") == "already_member"
+            and item.get("status") == operation_contract.already_status
         )
         return result_payload(
             "already_applied" if not blockers else "blocked"
@@ -36129,7 +36575,9 @@ def activity_group_membership_write(
         if reviewer is None:
             blockers.append("safe_reviewed_by_required")
         if not affirm_memberships_reviewed:
-            blockers.append("affirm_memberships_reviewed_required")
+            blockers.append(
+                operation_contract.affirmation_required_blocker
+            )
     elif reviewed_by:
         blockers.append("reviewed_by_only_valid_with_approve")
     elif affirm_memberships_reviewed:
@@ -36137,12 +36585,22 @@ def activity_group_membership_write(
     if blockers:
         return result_payload("blocked")
 
-    plan = activity_group_membership_plan(
+    plan = _activity_group_membership_plan(
         root,
         request_path=request_path,
         dry_run=True,
         max_members=effective_max_members,
         progress_callback=progress_callback,
+        operation=operation_contract.operation,
+        request_schema=operation_contract.request_schema,
+        request_prefix=operation_contract.request_prefix,
+        plan_schema=operation_contract.plan_schema,
+        future_write_implemented=True,
+        planned_write_command=(
+            "archive activity-group-membership-removal-write"
+            if operation_contract.operation == "remove"
+            else "archive activity-group-membership-write"
+        ),
     )
     actual_review_plan_sha256 = (
         plan.get("review_plan_sha256")
@@ -36165,7 +36623,7 @@ def activity_group_membership_write(
             "row_index": item.get("row_index"),
             "status": (
                 "ready_to_apply"
-                if item.get("status") == "ready_to_add"
+                if item.get("status") == operation_contract.ready_status
                 else item.get("status")
             ),
             "current_file_sha256": item.get("current_file_sha256"),
@@ -36175,11 +36633,11 @@ def activity_group_membership_write(
         for item in plan_items
         if isinstance(item, dict)
     ]
-    ready_to_add_count = int(
-        plan.get("summary", {}).get("ready_to_add_count") or 0
+    ready_action_count = int(
+        plan.get("summary", {}).get(operation_contract.ready_count_key) or 0
     )
-    already_member_count = int(
-        plan.get("summary", {}).get("already_member_count") or 0
+    already_satisfied_count = int(
+        plan.get("summary", {}).get(operation_contract.already_count_key) or 0
     )
     if blockers:
         for item in public_items:
@@ -36193,12 +36651,13 @@ def activity_group_membership_write(
             request_bytes=request_bytes,
             request_document=request_document,
             plan=plan,
+            operation_contract=operation_contract,
         )
     )
     blockers.extend(materialize_blockers)
-    if ready_to_add_count != len(candidates):
+    if ready_action_count != len(candidates):
         blockers.append("activity_group_candidate_count_mismatch")
-    if not candidates and already_member_count:
+    if not candidates and already_satisfied_count:
         return result_payload(
             "already_satisfied" if not blockers else "blocked"
         )
@@ -36220,6 +36679,7 @@ def activity_group_membership_write(
             review_plan_sha256=actual_review_plan_sha256,
             anchor_current_file_sha256=anchor_sha256,
             candidates=candidates,
+            operation_contract=operation_contract,
         )
     )
     if dry_run:
@@ -36245,7 +36705,9 @@ def activity_group_membership_write(
         "rollback_on_runtime_failure": True,
         "crash_recovery_journal_written": True,
         "membership_inferred": False,
-        "membership_removal_implemented": False,
+        "membership_removal_implemented": (
+            operation_contract.membership_removal_implemented
+        ),
     }
     private_privacy_guards = {
         "request_path_stored": False,
@@ -36258,8 +36720,8 @@ def activity_group_membership_write(
         "secret_store_or_environment_read": False,
     }
     receipt = {
-        "schema": ACTIVITY_GROUP_MEMBERSHIP_RECEIPT_SCHEMA,
-        "action": "activity_group_membership_write",
+        "schema": operation_contract.receipt_schema,
+        "action": operation_contract.write_action,
         "status": "applied",
         "applied_at": applied_at,
         "archive_id": archive_id,
@@ -36268,9 +36730,7 @@ def activity_group_membership_write(
         "write_plan_sha256": actual_write_plan_sha256,
         "anchor_zettel_id": anchor_zettel_id,
         "reviewed_by": reviewer,
-        "human_affirmation": (
-            "all_activity_group_memberships_reviewed"
-        ),
+        "human_affirmation": operation_contract.human_affirmation,
         "item_count": len(private_items),
         "items": private_items,
         "mutation_contract": mutation_contract,
@@ -36278,17 +36738,15 @@ def activity_group_membership_write(
     }
     if validate_schema(
         receipt,
-        "activity-group-membership-receipt.schema.json",
+        operation_contract.receipt_schema_filename,
     ):
         blockers.append("activity_group_receipt_schema_validation_failed")
         return result_payload("blocked")
     journal = {
-        "schema": (
-            ACTIVITY_GROUP_MEMBERSHIP_TRANSACTION_JOURNAL_SCHEMA
-        ),
-        "action": "activity_group_membership_transaction",
+        "schema": operation_contract.transaction_journal_schema,
+        "action": operation_contract.transaction_action,
         "status": "prepared",
-        "operation": "apply",
+        "operation": operation_contract.journal_operation,
         "prepared_at": applied_at,
         "archive_id": archive_id,
         "request_sha256": actual_request_sha256,
@@ -36296,9 +36754,7 @@ def activity_group_membership_write(
         "write_plan_sha256": actual_write_plan_sha256,
         "anchor_zettel_id": anchor_zettel_id,
         "reviewed_by": reviewer,
-        "human_affirmation": (
-            "all_activity_group_memberships_reviewed"
-        ),
+        "human_affirmation": operation_contract.human_affirmation,
         "final_receipt_path": receipt_relative,
         "item_count": len(private_items),
         "items": private_items,
@@ -36315,7 +36771,7 @@ def activity_group_membership_write(
     journal["journal_digest"] = sha256_json_value(journal)
     if validate_schema(
         journal,
-        "activity-group-membership-transaction-journal.schema.json",
+        operation_contract.journal_schema_filename,
     ):
         blockers.append(
             "activity_group_transaction_journal_schema_validation_failed"
@@ -36330,18 +36786,36 @@ def activity_group_membership_write(
             receipt,
             receipt_relative_path=receipt_relative,
             journal=False,
+            operation_contract=operation_contract,
         )
     )
-    lock_document = {
-        "schema": "wom-kit/activity-group-membership-write-lock/v0.2",
-        "request_sha256": actual_request_sha256,
-        "review_plan_sha256": actual_review_plan_sha256,
-        "write_plan_sha256": actual_write_plan_sha256,
-        "transaction_journal_name": transaction_journal_path.name,
-        "transaction_binding_sha256": (
-            lock_transaction_binding_sha256
-        ),
-    }
+    if operation_contract.operation == "add":
+        # v0.1/v0.2 add evidence is a public compatibility boundary.
+        lock_document = {
+            "schema": operation_contract.write_lock_schema,
+            "request_sha256": actual_request_sha256,
+            "review_plan_sha256": actual_review_plan_sha256,
+            "write_plan_sha256": actual_write_plan_sha256,
+            "transaction_journal_name": transaction_journal_path.name,
+            "transaction_binding_sha256": (
+                lock_transaction_binding_sha256
+            ),
+        }
+    else:
+        lock_document = {
+            "schema": operation_contract.write_lock_schema,
+            "membership_operation": operation_contract.operation,
+            "request_sha256": actual_request_sha256,
+            "review_plan_sha256": actual_review_plan_sha256,
+            "write_plan_sha256": actual_write_plan_sha256,
+            "transaction_journal_path": archive_relative_path(
+                transaction_journal_path,
+                root,
+            ),
+            "transaction_binding_sha256": (
+                lock_transaction_binding_sha256
+            ),
+        }
     lock_raw = (
         json.dumps(
             lock_document,
@@ -36360,15 +36834,32 @@ def activity_group_membership_write(
     )
     private_root_context_entered = False
     private_root_context_closed = False
+    operation_root_context: Any | None = None
+    operation_root_context_entered = False
+    operation_root_context_closed = False
+    journal_root_binding: dict[str, Any] | None = None
 
     def close_private_root_context() -> None:
         nonlocal private_root_context_closed
+        try:
+            close_operation_root_context()
+        finally:
+            if (
+                private_root_context_entered
+                and not private_root_context_closed
+            ):
+                private_root_context.__exit__(None, None, None)
+                private_root_context_closed = True
+
+    def close_operation_root_context() -> None:
+        nonlocal operation_root_context_closed
         if (
-            private_root_context_entered
-            and not private_root_context_closed
+            operation_root_context_entered
+            and not operation_root_context_closed
+            and operation_root_context is not None
         ):
-            private_root_context.__exit__(None, None, None)
-            private_root_context_closed = True
+            operation_root_context.__exit__(None, None, None)
+            operation_root_context_closed = True
 
     try:
         private_root_binding = private_root_context.__enter__()
@@ -36449,20 +36940,65 @@ def activity_group_membership_write(
         close_private_root_context()
         return result_payload("blocked")
 
+    if operation_private_root == coordination_private_root:
+        journal_root_binding = private_root_binding
+    else:
+        try:
+            operation_root_context = activity_group_bound_directory_chain(
+                root,
+                operation_private_root,
+                create=True,
+            )
+            journal_root_binding = operation_root_context.__enter__()
+            operation_root_context_entered = True
+        except (OSError, ValueError):
+            try:
+                delete_activity_group_evidence_exact(
+                    root,
+                    write_lock_path,
+                    expected_sha256=lock_sha256,
+                    max_bytes=ACTIVITY_GROUP_MEMBERSHIP_MAX_LOCK_BYTES,
+                    parent_binding=private_root_binding,
+                )
+                write_lock_removed = True
+            except OSError:
+                write_lock_removed = False
+            blockers.append(
+                "activity_group_transaction_journal_root_unsafe"
+            )
+            close_operation_root_context()
+            close_private_root_context()
+            return result_payload("blocked")
+    assert journal_root_binding is not None
+
     try:
         locked_request_bytes, locked_request_document = (
-            _activity_group_private_request(root, request_path)
+            _activity_group_private_request(
+                root,
+                request_path,
+                operation_contract,
+            )
         )
         locked_request_sha256 = (
             "sha256:"
             + hashlib.sha256(locked_request_bytes).hexdigest()
         )
-        locked_plan = activity_group_membership_plan(
+        locked_plan = _activity_group_membership_plan(
             root,
             request_path=request_path,
             dry_run=True,
             max_members=effective_max_members,
             progress_callback=None,
+            operation=operation_contract.operation,
+            request_schema=operation_contract.request_schema,
+            request_prefix=operation_contract.request_prefix,
+            plan_schema=operation_contract.plan_schema,
+            future_write_implemented=True,
+            planned_write_command=(
+                "archive activity-group-membership-removal-write"
+                if operation_contract.operation == "remove"
+                else "archive activity-group-membership-write"
+            ),
         )
         locked_review_plan_sha256 = locked_plan.get(
             "review_plan_sha256"
@@ -36473,6 +37009,7 @@ def activity_group_membership_write(
                 request_bytes=locked_request_bytes,
                 request_document=locked_request_document,
                 plan=locked_plan,
+                operation_contract=operation_contract,
             )
         )
         locked_anchor_sha256 = locked_plan.get("anchor", {}).get(
@@ -36485,6 +37022,7 @@ def activity_group_membership_write(
                 review_plan_sha256=locked_review_plan_sha256,
                 anchor_current_file_sha256=locked_anchor_sha256,
                 candidates=locked_candidates,
+                operation_contract=operation_contract,
             )
             if (
                 locked_plan.get("ok")
@@ -36513,6 +37051,7 @@ def activity_group_membership_write(
                 captured_at=applied_at,
                 reviewed_by=reviewer,
                 write_plan_sha256=actual_write_plan_sha256,
+                operation_contract=operation_contract,
             )
         )
     except Exception:
@@ -36542,7 +37081,7 @@ def activity_group_membership_write(
     )
     try:
         write_activity_group_bytes_new_file_bound(
-            private_root_binding,
+            journal_root_binding,
             transaction_journal_path,
             journal_raw,
         )
@@ -36552,6 +37091,7 @@ def activity_group_membership_write(
                 transaction_journal_path,
                 archive_id=archive_id,
                 request_sha256=actual_request_sha256,
+                operation_contract=operation_contract,
             )
         )
         if written_journal != journal:
@@ -36632,7 +37172,7 @@ def activity_group_membership_write(
                     max_bytes=(
                         ACTIVITY_GROUP_MEMBERSHIP_MAX_TRANSACTION_JOURNAL_BYTES
                     ),
-                    parent_binding=private_root_binding,
+                    parent_binding=journal_root_binding,
                 )
                 transaction_journal_removed = True
             except OSError:
@@ -36649,7 +37189,7 @@ def activity_group_membership_write(
     try:
         if progress_callback is not None:
             progress_callback(
-                "activity-group-membership-write",
+                operation_contract.progress_write,
                 "start",
                 0,
                 len(candidates),
@@ -36682,7 +37222,7 @@ def activity_group_membership_write(
             public_items[item["row_index"]]["status"] = "applied"
             if progress_callback is not None:
                 progress_callback(
-                    "activity-group-membership-write",
+                    operation_contract.progress_write,
                     "written",
                     index,
                     len(candidates),
@@ -36700,13 +37240,13 @@ def activity_group_membership_write(
                 )
         if progress_callback is not None:
             progress_callback(
-                "activity-group-membership-write",
+                operation_contract.progress_write,
                 "done",
                 len(candidates),
                 len(candidates),
             )
             progress_callback(
-                "activity-group-membership-receipt",
+                operation_contract.progress_receipt,
                 "start",
                 None,
                 None,
@@ -36743,6 +37283,7 @@ def activity_group_membership_write(
                 archive_id=archive_id,
                 request_sha256=actual_request_sha256,
                 expected_journal=journal,
+                operation_contract=operation_contract,
             )
             if (
                 not verification.get("ok")
@@ -36761,6 +37302,7 @@ def activity_group_membership_write(
                         root,
                         write_lock_path,
                         request_sha256=actual_request_sha256,
+                        operation_contract=operation_contract,
                     )
                 )
                 if (
@@ -36771,6 +37313,7 @@ def activity_group_membership_write(
                     or not activity_group_write_lock_matches_journal(
                         current_lock_document,
                         journal,
+                        operation_contract=operation_contract,
                     )
                 ):
                     raise OSError(
@@ -36801,6 +37344,7 @@ def activity_group_membership_write(
                             archive_id=archive_id,
                             request_sha256=actual_request_sha256,
                             expected_journal=journal,
+                            operation_contract=operation_contract,
                         )
                     )
                     if (
@@ -36845,7 +37389,7 @@ def activity_group_membership_write(
                         max_bytes=(
                             ACTIVITY_GROUP_MEMBERSHIP_MAX_TRANSACTION_JOURNAL_BYTES
                         ),
-                        parent_binding=private_root_binding,
+                        parent_binding=journal_root_binding,
                     )
                     transaction_journal_removed = True
                     final_scan = (
@@ -36874,7 +37418,7 @@ def activity_group_membership_write(
                 )
         if progress_callback is not None:
             progress_callback(
-                "activity-group-membership-receipt",
+                operation_contract.progress_receipt,
                 "done",
                 None,
                 None,
@@ -37009,7 +37553,7 @@ def activity_group_membership_write(
                     max_bytes=(
                         ACTIVITY_GROUP_MEMBERSHIP_MAX_TRANSACTION_JOURNAL_BYTES
                     ),
-                    parent_binding=private_root_binding,
+                    parent_binding=journal_root_binding,
                 )
                 transaction_journal_removed = True
                 final_rollback_scan = (
@@ -37077,11 +37621,76 @@ def activity_group_membership_write(
             cleanup_empty_archive_dirs(root, [receipt_path])
 
 
+def activity_group_membership_write(
+    archive_root: Path | str,
+    *,
+    request_path: str,
+    expected_request_sha256: str,
+    expected_review_plan_sha256: str,
+    dry_run: bool = False,
+    approve: bool = False,
+    reviewed_by: str | None = None,
+    affirm_memberships_reviewed: bool = False,
+    max_members: int = ACTIVITY_GROUP_MEMBERSHIP_MAX_MEMBERS,
+    progress_callback: Callable[
+        [str, str, int | None, int | None], None
+    ]
+    | None = None,
+) -> dict[str, Any]:
+    return _activity_group_membership_write(
+        archive_root,
+        request_path=request_path,
+        expected_request_sha256=expected_request_sha256,
+        expected_review_plan_sha256=expected_review_plan_sha256,
+        dry_run=dry_run,
+        approve=approve,
+        reviewed_by=reviewed_by,
+        affirm_memberships_reviewed=affirm_memberships_reviewed,
+        max_members=max_members,
+        progress_callback=progress_callback,
+        operation_contract=ACTIVITY_GROUP_MEMBERSHIP_ADD,
+    )
+
+
+def activity_group_membership_removal_write(
+    archive_root: Path | str,
+    *,
+    request_path: str,
+    expected_request_sha256: str,
+    expected_review_plan_sha256: str,
+    dry_run: bool = False,
+    approve: bool = False,
+    reviewed_by: str | None = None,
+    affirm_removals_reviewed: bool = False,
+    max_members: int = ACTIVITY_GROUP_MEMBERSHIP_MAX_MEMBERS,
+    progress_callback: Callable[
+        [str, str, int | None, int | None], None
+    ]
+    | None = None,
+) -> dict[str, Any]:
+    return _activity_group_membership_write(
+        archive_root,
+        request_path=request_path,
+        expected_request_sha256=expected_request_sha256,
+        expected_review_plan_sha256=expected_review_plan_sha256,
+        dry_run=dry_run,
+        approve=approve,
+        reviewed_by=reviewed_by,
+        affirm_memberships_reviewed=affirm_removals_reviewed,
+        max_members=max_members,
+        progress_callback=progress_callback,
+        operation_contract=ACTIVITY_GROUP_MEMBERSHIP_REMOVE,
+    )
+
+
 def read_activity_group_membership_write_lock(
     root: Path,
     path: Path,
     *,
     request_sha256: str,
+    operation_contract: _ActivityGroupMembershipOperationContract = (
+        ACTIVITY_GROUP_MEMBERSHIP_ADD
+    ),
 ) -> tuple[bytes, dict[str, Any]]:
     raw, document = _read_activity_group_evidence_json(
         root,
@@ -37089,29 +37698,52 @@ def read_activity_group_membership_write_lock(
         max_bytes=ACTIVITY_GROUP_MEMBERSHIP_MAX_LOCK_BYTES,
         unreadable_code="activity_group_write_lock_unreadable",
     )
-    expected_journal = (
-        activity_group_membership_transaction_journal_path(
+    expected_journal_path = (
+        _activity_group_membership_transaction_journal_path(
             root,
             request_sha256,
-        ).name
+            operation_contract,
+        )
     )
     schema = document.get("schema")
-    expected_fields = {
-        "schema",
-        "request_sha256",
-        "review_plan_sha256",
-        "write_plan_sha256",
-        "transaction_journal_name",
-    }
-    if schema == "wom-kit/activity-group-membership-write-lock/v0.2":
-        expected_fields.add("transaction_binding_sha256")
-    if (
-        set(document) != expected_fields
-        or schema
-        not in {
+    if operation_contract.operation == "add":
+        expected_fields = {
+            "schema",
+            "request_sha256",
+            "review_plan_sha256",
+            "write_plan_sha256",
+            "transaction_journal_name",
+        }
+        if schema == "wom-kit/activity-group-membership-write-lock/v0.2":
+            expected_fields.add("transaction_binding_sha256")
+        accepted_schemas = {
             "wom-kit/activity-group-membership-write-lock/v0.1",
             "wom-kit/activity-group-membership-write-lock/v0.2",
         }
+        journal_binding_matches = (
+            document.get("transaction_journal_name")
+            == expected_journal_path.name
+        )
+    else:
+        expected_fields = {
+            "schema",
+            "membership_operation",
+            "request_sha256",
+            "review_plan_sha256",
+            "write_plan_sha256",
+            "transaction_journal_path",
+            "transaction_binding_sha256",
+        }
+        accepted_schemas = {operation_contract.write_lock_schema}
+        journal_binding_matches = (
+            document.get("membership_operation")
+            == operation_contract.operation
+            and document.get("transaction_journal_path")
+            == archive_relative_path(expected_journal_path, root)
+        )
+    if (
+        set(document) != expected_fields
+        or schema not in accepted_schemas
         or document.get("request_sha256") != request_sha256
         or not re.fullmatch(
             r"sha256:[0-9a-f]{64}",
@@ -37121,11 +37753,13 @@ def read_activity_group_membership_write_lock(
             r"sha256:[0-9a-f]{64}",
             str(document.get("write_plan_sha256") or ""),
         )
-        or document.get("transaction_journal_name")
-        != expected_journal
+        or not journal_binding_matches
         or (
             schema
-            == "wom-kit/activity-group-membership-write-lock/v0.2"
+            in {
+                "wom-kit/activity-group-membership-write-lock/v0.2",
+                ACTIVITY_GROUP_MEMBERSHIP_REMOVE.write_lock_schema,
+            }
             and not re.fullmatch(
                 r"sha256:[0-9a-f]{64}",
                 str(
@@ -37147,6 +37781,9 @@ def read_activity_group_membership_transaction_journal(
     *,
     archive_id: str,
     request_sha256: str,
+    operation_contract: _ActivityGroupMembershipOperationContract = (
+        ACTIVITY_GROUP_MEMBERSHIP_ADD
+    ),
 ) -> tuple[bytes, dict[str, Any]]:
     raw, journal = _read_activity_group_evidence_json(
         root,
@@ -37158,7 +37795,7 @@ def read_activity_group_membership_transaction_journal(
     )
     if validate_schema(
         journal,
-        "activity-group-membership-transaction-journal.schema.json",
+        operation_contract.journal_schema_filename,
     ):
         raise ArchiveServiceError(
             "activity_group_transaction_journal_schema_invalid"
@@ -37171,9 +37808,10 @@ def read_activity_group_membership_transaction_journal(
             "activity_group_transaction_journal_digest_invalid"
         )
     expected_path = (
-        activity_group_membership_transaction_journal_path(
+        _activity_group_membership_transaction_journal_path(
             root,
             request_sha256,
+            operation_contract,
         )
     )
     try:
@@ -37184,14 +37822,19 @@ def read_activity_group_membership_transaction_journal(
             "activity_group_transaction_journal_path_invalid"
         ) from exc
     expected_receipt = (
-        activity_group_membership_receipt_relative_path(
-            request_sha256
+        _activity_group_membership_receipt_relative_path(
+            request_sha256,
+            operation_contract,
         )
     )
     items = journal.get("items")
     anchor_zettel_id = journal.get("anchor_zettel_id")
     if (
         actual_relative != expected_relative
+        or journal.get("schema")
+        != operation_contract.transaction_journal_schema
+        or journal.get("action") != operation_contract.transaction_action
+        or journal.get("operation") != operation_contract.journal_operation
         or journal.get("archive_id") != archive_id
         or journal.get("request_sha256") != request_sha256
         or journal.get("final_receipt_path") != expected_receipt
@@ -37265,9 +37908,29 @@ def read_activity_group_membership_transaction_journal(
     return raw, journal
 
 
+def read_activity_group_membership_removal_transaction_journal(
+    root: Path,
+    path: Path,
+    *,
+    archive_id: str,
+    request_sha256: str,
+) -> tuple[bytes, dict[str, Any]]:
+    return read_activity_group_membership_transaction_journal(
+        root,
+        path,
+        archive_id=archive_id,
+        request_sha256=request_sha256,
+        operation_contract=ACTIVITY_GROUP_MEMBERSHIP_REMOVE,
+    )
+
+
 def classify_activity_group_membership_transaction(
     root: Path,
     journal: dict[str, Any],
+    *,
+    operation_contract: _ActivityGroupMembershipOperationContract = (
+        ACTIVITY_GROUP_MEMBERSHIP_ADD
+    ),
 ) -> dict[str, Any]:
     blockers: list[str] = []
     participants: list[dict[str, Any]] = []
@@ -37385,9 +38048,10 @@ def classify_activity_group_membership_transaction(
 
     receipt_relative = journal.get("final_receipt_path")
     receipt_path = (
-        activity_group_membership_receipt_path(
+        _activity_group_membership_receipt_path(
             root,
             journal["request_sha256"],
+            operation_contract,
         )
         if isinstance(receipt_relative, str)
         else None
@@ -37423,6 +38087,7 @@ def classify_activity_group_membership_transaction(
                 archive_id=journal["archive_id"],
                 request_sha256=journal["request_sha256"],
                 expected_journal=journal,
+                operation_contract=operation_contract,
             )
         )
         receipt_sha256 = receipt_verification.get("receipt_sha256")
@@ -37481,11 +38146,12 @@ def classify_activity_group_membership_transaction(
     }
 
 
-def activity_group_membership_recovery_plan(
+def _activity_group_membership_recovery_plan(
     archive_root: Path | str,
     *,
     expected_request_sha256: str,
     dry_run: bool = False,
+    operation_contract: _ActivityGroupMembershipOperationContract,
 ) -> dict[str, Any]:
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
@@ -37497,22 +38163,25 @@ def activity_group_membership_recovery_plan(
     if not re.fullmatch(r"sha256:[0-9a-f]{64}", request_sha256):
         blockers.append("expected_request_sha256_invalid")
 
-    private_root = _activity_group_private_root(root)
+    coordination_private_root = _activity_group_private_root(root)
     write_lock_path = (
-        private_root / ACTIVITY_GROUP_MEMBERSHIP_WRITE_LOCK_NAME
+        coordination_private_root
+        / ACTIVITY_GROUP_MEMBERSHIP_WRITE_LOCK_NAME
     )
     journal_path: Path | None = None
     receipt_path: Path | None = None
     if not blockers:
         journal_path = (
-            activity_group_membership_transaction_journal_path(
+            _activity_group_membership_transaction_journal_path(
                 root,
                 request_sha256,
+                operation_contract,
             )
         )
-        receipt_path = activity_group_membership_receipt_path(
+        receipt_path = _activity_group_membership_receipt_path(
             root,
             request_sha256,
+            operation_contract,
         )
 
     evidence_sha256: str | None = None
@@ -37602,6 +38271,7 @@ def activity_group_membership_recovery_plan(
                     journal_path,
                     archive_id=archive_id,
                     request_sha256=request_sha256,
+                    operation_contract=operation_contract,
                 )
             )
             evidence_sha256 = (
@@ -37612,6 +38282,7 @@ def activity_group_membership_recovery_plan(
                 classify_activity_group_membership_transaction(
                     root,
                     journal,
+                    operation_contract=operation_contract,
                 )
             )
             transaction_state = classification["state"]
@@ -37630,14 +38301,16 @@ def activity_group_membership_recovery_plan(
                         root,
                         write_lock_path,
                         request_sha256=request_sha256,
+                        operation_contract=operation_contract,
                     )
                 )
                 write_lock_sha256 = (
                     "sha256:" + hashlib.sha256(lock_bytes).hexdigest()
                 )
                 if not activity_group_write_lock_matches_journal(
-                    lock_document,
-                    journal,
+                        lock_document,
+                        journal,
+                        operation_contract=operation_contract,
                 ):
                     blockers.append(
                         "activity_group_write_lock_journal_binding_invalid"
@@ -37652,6 +38325,7 @@ def activity_group_membership_recovery_plan(
                     root,
                     write_lock_path,
                     request_sha256=request_sha256,
+                    operation_contract=operation_contract,
                 )
             )
             evidence_sha256 = (
@@ -37665,6 +38339,7 @@ def activity_group_membership_recovery_plan(
                     archive_id=archive_id,
                     request_sha256=request_sha256,
                     expected_write_lock=lock_document,
+                    operation_contract=operation_contract,
                 )
                 receipt_sha256 = verification.get("receipt_sha256")
                 transaction_binding_sha256 = verification.get(
@@ -37690,21 +38365,17 @@ def activity_group_membership_recovery_plan(
         blockers.append("activity_group_recovery_evidence_missing")
 
     action_by_state = {
-        "lock_only_before_journal": "cleanup_unstarted_lock",
-        "prepared_not_started": (
-            "cleanup_unstarted_transaction_evidence"
-        ),
+        "lock_only_before_journal": operation_contract.cleanup_lock_action,
+        "prepared_not_started": operation_contract.cleanup_unstarted_action,
         "partially_applied_without_receipt": (
-            "rollback_uncommitted_memberships_to_before"
+            operation_contract.rollback_action
         ),
-        "fully_applied_without_receipt": (
-            "rollback_uncommitted_memberships_to_before"
-        ),
+        "fully_applied_without_receipt": operation_contract.rollback_action,
         "verified_completed_residue": (
-            "cleanup_verified_completed_evidence"
+            operation_contract.cleanup_completed_action
         ),
         "verified_completed_lock_residue": (
-            "cleanup_verified_completed_evidence"
+            operation_contract.cleanup_completed_action
         ),
         "unknown_or_drifted": "manual_forensic_hold",
     }
@@ -37725,7 +38396,7 @@ def activity_group_membership_recovery_plan(
     warnings = unique_preserve_order(warnings)
     recovery_plan_sha256 = sha256_json_value(
         {
-            "schema": ACTIVITY_GROUP_MEMBERSHIP_RECOVERY_PLAN_SCHEMA,
+            "schema": operation_contract.recovery_plan_schema,
             "archive_id": archive_id,
             "request_sha256": request_sha256,
             "evidence_sha256": evidence_sha256,
@@ -37746,10 +38417,8 @@ def activity_group_membership_recovery_plan(
     return {
         "ok": not blockers,
         "dry_run": True,
-        "schema": ACTIVITY_GROUP_MEMBERSHIP_RECOVERY_PLAN_SCHEMA,
-        "lifecycle_action": (
-            "activity_group_membership_recovery_plan"
-        ),
+        "schema": operation_contract.recovery_plan_schema,
+        "lifecycle_action": operation_contract.recovery_plan_action,
         "status": (
             "recovery_ready" if not blockers else "blocked"
         ),
@@ -37815,6 +38484,34 @@ def activity_group_membership_recovery_plan(
     }
 
 
+def activity_group_membership_recovery_plan(
+    archive_root: Path | str,
+    *,
+    expected_request_sha256: str,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    return _activity_group_membership_recovery_plan(
+        archive_root,
+        expected_request_sha256=expected_request_sha256,
+        dry_run=dry_run,
+        operation_contract=ACTIVITY_GROUP_MEMBERSHIP_ADD,
+    )
+
+
+def activity_group_membership_removal_recovery_plan(
+    archive_root: Path | str,
+    *,
+    expected_request_sha256: str,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    return _activity_group_membership_recovery_plan(
+        archive_root,
+        expected_request_sha256=expected_request_sha256,
+        dry_run=dry_run,
+        operation_contract=ACTIVITY_GROUP_MEMBERSHIP_REMOVE,
+    )
+
+
 def verify_activity_group_membership_recovery_cleanup_phase(
     root: Path,
     *,
@@ -37829,6 +38526,9 @@ def verify_activity_group_membership_recovery_cleanup_phase(
     write_lock_required: bool = True,
     expected_journal: dict[str, Any] | None = None,
     expected_write_lock: dict[str, Any] | None = None,
+    operation_contract: _ActivityGroupMembershipOperationContract = (
+        ACTIVITY_GROUP_MEMBERSHIP_ADD
+    ),
 ) -> dict[str, Any] | None:
     """Revalidate every cleanup authority immediately before one unlink."""
 
@@ -37862,6 +38562,7 @@ def verify_activity_group_membership_recovery_cleanup_phase(
                 journal_path,
                 archive_id=archive_id,
                 request_sha256=request_sha256,
+                operation_contract=operation_contract,
             )
         )
         if (
@@ -37886,6 +38587,7 @@ def verify_activity_group_membership_recovery_cleanup_phase(
                 root,
                 write_lock_path,
                 request_sha256=request_sha256,
+                operation_contract=operation_contract,
             )
         )
         if (
@@ -37913,15 +38615,17 @@ def verify_activity_group_membership_recovery_cleanup_phase(
         and not activity_group_write_lock_matches_journal(
             lock_document,
             journal,
+            operation_contract=operation_contract,
         )
     ):
         raise ArchiveServiceError(
             "activity_group_write_lock_journal_binding_invalid"
         )
 
-    receipt_path = activity_group_membership_receipt_path(
+    receipt_path = _activity_group_membership_receipt_path(
         root,
         request_sha256,
+        operation_contract,
     )
     if (
         zet_revision_path_has_symlink_component(root, receipt_path)
@@ -37949,6 +38653,7 @@ def verify_activity_group_membership_recovery_cleanup_phase(
                 == "verified_completed_lock_residue"
                 else None
             ),
+            operation_contract=operation_contract,
         )
         if (
             not verification.get("ok")
@@ -37971,6 +38676,7 @@ def verify_activity_group_membership_recovery_cleanup_phase(
         classification = classify_activity_group_membership_transaction(
             root,
             journal,
+            operation_contract=operation_contract,
         )
         if (
             classification.get("state") != "prepared_not_started"
@@ -38037,7 +38743,7 @@ def verify_activity_group_membership_recovery_cleanup_phase(
     return journal
 
 
-def activity_group_membership_recover(
+def _activity_group_membership_recover(
     archive_root: Path | str,
     *,
     expected_request_sha256: str,
@@ -38049,6 +38755,7 @@ def activity_group_membership_recover(
         [str, str, int | None, int | None], None
     ]
     | None = None,
+    operation_contract: _ActivityGroupMembershipOperationContract,
 ) -> dict[str, Any]:
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
@@ -38067,20 +38774,26 @@ def activity_group_membership_recover(
     write_lock_removed: bool | None = None
     recovery_guard_removed: bool | None = None
     recovery_guard_cleanup_attempted = False
-    private_root = _activity_group_private_root(root)
+    coordination_private_root = _activity_group_private_root(root)
+    operation_private_root = _activity_group_operation_private_root(
+        root,
+        operation_contract,
+    )
     write_lock_path = (
-        private_root / ACTIVITY_GROUP_MEMBERSHIP_WRITE_LOCK_NAME
+        coordination_private_root
+        / ACTIVITY_GROUP_MEMBERSHIP_WRITE_LOCK_NAME
     )
     recovery_guard_path = (
-        private_root / ACTIVITY_GROUP_MEMBERSHIP_RECOVERY_GUARD_NAME
+        coordination_private_root
+        / ACTIVITY_GROUP_MEMBERSHIP_RECOVERY_GUARD_NAME
     )
 
     def result_payload(status: str) -> dict[str, Any]:
         return {
             "ok": status in {"recovered", "cleanup_completed"}
             and not blockers,
-            "schema": ACTIVITY_GROUP_MEMBERSHIP_RECOVER_SCHEMA,
-            "lifecycle_action": "activity_group_membership_recover",
+            "schema": operation_contract.recover_schema,
+            "lifecycle_action": operation_contract.recover_action,
             "status": status,
             "approved": bool(
                 approve and status in {"recovered", "cleanup_completed"}
@@ -38113,7 +38826,9 @@ def activity_group_membership_recover(
             "safety_boundary": {
                 "only_bound_transaction_evidence_changed": True,
                 "successful_receipt_removed": False,
-                "membership_removal_feature_used": False,
+                "membership_removal_feature_used": (
+                    operation_contract.membership_removal_implemented
+                ),
                 "unknown_state_written": False,
                 "provider_state_written": False,
                 "database_rows_written": False,
@@ -38171,6 +38886,12 @@ def activity_group_membership_recover(
                 ),
             )
 
+    recovery_plan_function = (
+        activity_group_membership_removal_recovery_plan
+        if operation_contract.operation == "remove"
+        else activity_group_membership_recovery_plan
+    )
+
     if not approve:
         blockers.append("approve_required")
     if not re.fullmatch(r"sha256:[0-9a-f]{64}", request_sha256):
@@ -38184,7 +38905,7 @@ def activity_group_membership_recover(
     if blockers:
         return result_payload("blocked")
 
-    preview = activity_group_membership_recovery_plan(
+    preview = recovery_plan_function(
         root,
         expected_request_sha256=request_sha256,
         dry_run=True,
@@ -38199,20 +38920,34 @@ def activity_group_membership_recover(
     if actual_plan_sha256 != expected_plan:
         blockers.append("recovery_plan_sha256_mismatch")
     if action not in (
-        ACTIVITY_GROUP_MEMBERSHIP_RECOVERY_ACTIONS
+        operation_contract.recovery_actions
         - {"manual_forensic_hold"}
     ):
         blockers.append("recovery_action_not_executable")
     if blockers:
         return result_payload("blocked")
 
-    guard_document = {
-        "schema": (
-            "wom-kit/activity-group-membership-recovery-guard/v0.1"
-        ),
-        "request_sha256": request_sha256,
-        "recovery_plan_sha256": actual_plan_sha256,
-    }
+    if operation_contract.operation == "add":
+        guard_document = {
+            "schema": operation_contract.recovery_guard_schema,
+            "request_sha256": request_sha256,
+            "recovery_plan_sha256": actual_plan_sha256,
+        }
+    else:
+        guard_document = {
+            "schema": operation_contract.recovery_guard_schema,
+            "membership_operation": operation_contract.operation,
+            "request_sha256": request_sha256,
+            "recovery_plan_sha256": actual_plan_sha256,
+            "transaction_journal_path": archive_relative_path(
+                _activity_group_membership_transaction_journal_path(
+                    root,
+                    request_sha256,
+                    operation_contract,
+                ),
+                root,
+            ),
+        }
     guard_raw = (
         json.dumps(
             guard_document,
@@ -38226,20 +38961,37 @@ def activity_group_membership_recover(
     )
     private_root_context = activity_group_bound_directory_chain(
         root,
-        private_root,
+        coordination_private_root,
         create=True,
     )
     private_root_context_entered = False
     private_root_context_closed = False
+    operation_root_context: Any | None = None
+    operation_root_context_entered = False
+    operation_root_context_closed = False
+    journal_root_binding: dict[str, Any] | None = None
 
     def close_recovery_private_root_context() -> None:
         nonlocal private_root_context_closed
+        try:
+            close_recovery_operation_root_context()
+        finally:
+            if (
+                private_root_context_entered
+                and not private_root_context_closed
+            ):
+                private_root_context.__exit__(None, None, None)
+                private_root_context_closed = True
+
+    def close_recovery_operation_root_context() -> None:
+        nonlocal operation_root_context_closed
         if (
-            private_root_context_entered
-            and not private_root_context_closed
+            operation_root_context_entered
+            and not operation_root_context_closed
+            and operation_root_context is not None
         ):
-            private_root_context.__exit__(None, None, None)
-            private_root_context_closed = True
+            operation_root_context.__exit__(None, None, None)
+            operation_root_context_closed = True
 
     try:
         private_root_binding = private_root_context.__enter__()
@@ -38271,6 +39023,36 @@ def activity_group_membership_recover(
         blockers.append("activity_group_recovery_guard_create_failed")
         close_recovery_private_root_context()
         return result_payload("blocked")
+
+    if operation_private_root == coordination_private_root:
+        journal_root_binding = private_root_binding
+    else:
+        try:
+            operation_root_context = activity_group_bound_directory_chain(
+                root,
+                operation_private_root,
+            )
+            journal_root_binding = operation_root_context.__enter__()
+            operation_root_context_entered = True
+        except (FileNotFoundError, OSError, ValueError):
+            try:
+                delete_activity_group_evidence_exact(
+                    root,
+                    recovery_guard_path,
+                    expected_sha256=guard_sha256,
+                    max_bytes=ACTIVITY_GROUP_MEMBERSHIP_MAX_LOCK_BYTES,
+                    parent_binding=private_root_binding,
+                )
+                recovery_guard_removed = True
+                recovery_guard_cleanup_attempted = True
+            except OSError:
+                recovery_guard_removed = False
+            blockers.append(
+                "activity_group_transaction_journal_root_unsafe"
+            )
+            close_recovery_private_root_context()
+            return result_payload("blocked")
+    assert journal_root_binding is not None
 
     def delete_recovery_guard_exact() -> None:
         nonlocal recovery_guard_cleanup_attempted, recovery_guard_removed
@@ -38321,7 +39103,7 @@ def activity_group_membership_recover(
         )
 
     try:
-        locked_plan = activity_group_membership_recovery_plan(
+        locked_plan = recovery_plan_function(
             root,
             expected_request_sha256=request_sha256,
             dry_run=True,
@@ -38338,9 +39120,10 @@ def activity_group_membership_recover(
                 "activity_group_recovery_state_changed_under_guard"
             )
         journal_path = (
-            activity_group_membership_transaction_journal_path(
+            _activity_group_membership_transaction_journal_path(
                 root,
                 request_sha256,
+                operation_contract,
             )
         )
         locked_evidence = (
@@ -38357,6 +39140,7 @@ def activity_group_membership_recover(
                     journal_path,
                     archive_id=archive_id,
                     request_sha256=request_sha256,
+                    operation_contract=operation_contract,
                 )
             )
             claim_receipt_relative = claim_journal.get(
@@ -38366,26 +39150,48 @@ def activity_group_membership_recover(
                 raise ArchiveServiceError(
                     "activity_group_recovery_write_lock_claim_failed"
                 )
-            claim_document = {
-                "schema": (
-                    "wom-kit/activity-group-membership-write-lock/v0.2"
-                ),
-                "request_sha256": request_sha256,
-                "review_plan_sha256": claim_journal[
-                    "review_plan_sha256"
-                ],
-                "write_plan_sha256": claim_journal[
-                    "write_plan_sha256"
-                ],
-                "transaction_journal_name": journal_path.name,
-                "transaction_binding_sha256": sha256_json_value(
-                    _activity_group_membership_receipt_journal_projection(
-                        claim_journal,
-                        receipt_relative_path=claim_receipt_relative,
-                        journal=True,
-                    )
-                ),
-            }
+            claim_transaction_binding_sha256 = sha256_json_value(
+                _activity_group_membership_receipt_journal_projection(
+                    claim_journal,
+                    receipt_relative_path=claim_receipt_relative,
+                    journal=True,
+                    operation_contract=operation_contract,
+                )
+            )
+            if operation_contract.operation == "add":
+                claim_document = {
+                    "schema": operation_contract.write_lock_schema,
+                    "request_sha256": request_sha256,
+                    "review_plan_sha256": claim_journal[
+                        "review_plan_sha256"
+                    ],
+                    "write_plan_sha256": claim_journal[
+                        "write_plan_sha256"
+                    ],
+                    "transaction_journal_name": journal_path.name,
+                    "transaction_binding_sha256": (
+                        claim_transaction_binding_sha256
+                    ),
+                }
+            else:
+                claim_document = {
+                    "schema": operation_contract.write_lock_schema,
+                    "membership_operation": operation_contract.operation,
+                    "request_sha256": request_sha256,
+                    "review_plan_sha256": claim_journal[
+                        "review_plan_sha256"
+                    ],
+                    "write_plan_sha256": claim_journal[
+                        "write_plan_sha256"
+                    ],
+                    "transaction_journal_path": archive_relative_path(
+                        journal_path,
+                        root,
+                    ),
+                    "transaction_binding_sha256": (
+                        claim_transaction_binding_sha256
+                    ),
+                }
             claim_raw = (
                 json.dumps(
                     claim_document,
@@ -38431,6 +39237,7 @@ def activity_group_membership_recover(
                     root,
                     write_lock_path,
                     request_sha256=request_sha256,
+                    operation_contract=operation_contract,
                 )
             )
             if (
@@ -38457,7 +39264,7 @@ def activity_group_membership_recover(
             cleanup_expected_write_lock_sha256,
             str,
         )
-        if action == "cleanup_unstarted_lock":
+        if action == operation_contract.cleanup_lock_action:
             if not write_lock_path.exists():
                 raise ArchiveServiceError(
                     "activity_group_write_lock_missing_under_guard"
@@ -38467,6 +39274,7 @@ def activity_group_membership_recover(
                     root,
                     write_lock_path,
                     request_sha256=request_sha256,
+                    operation_contract=operation_contract,
                 )
             )
             if (
@@ -38477,17 +39285,18 @@ def activity_group_membership_recover(
                 raise ArchiveServiceError(
                     "activity_group_recovery_write_lock_changed"
                 )
-            receipt_path = activity_group_membership_receipt_path(
+            receipt_path = _activity_group_membership_receipt_path(
                 root,
                 request_sha256,
+                operation_contract,
             )
             if receipt_path.exists() or receipt_path.is_symlink():
                 raise ArchiveServiceError(
                     "activity_group_recovery_receipt_appeared"
                 )
         elif action in {
-            "cleanup_unstarted_transaction_evidence",
-            "rollback_uncommitted_memberships_to_before",
+            operation_contract.cleanup_unstarted_action,
+            operation_contract.rollback_action,
         }:
             journal_bytes, journal = (
                 read_activity_group_membership_transaction_journal(
@@ -38495,6 +39304,7 @@ def activity_group_membership_recover(
                     journal_path,
                     archive_id=archive_id,
                     request_sha256=request_sha256,
+                    operation_contract=operation_contract,
                 )
             )
             if (
@@ -38511,6 +39321,7 @@ def activity_group_membership_recover(
                     root,
                     write_lock_path,
                     request_sha256=request_sha256,
+                    operation_contract=operation_contract,
                 )
             )
             if (
@@ -38528,6 +39339,7 @@ def activity_group_membership_recover(
                 not activity_group_write_lock_matches_journal(
                     journal_lock_document,
                     journal,
+                    operation_contract=operation_contract,
                 )
                 or (
                     claimed_write_lock
@@ -38541,6 +39353,7 @@ def activity_group_membership_recover(
                 classify_activity_group_membership_transaction(
                     root,
                     journal,
+                    operation_contract=operation_contract,
                 )
             )
             if classification.get("state") != transaction_state:
@@ -38558,11 +39371,11 @@ def activity_group_membership_recover(
                 raise ArchiveServiceError(
                     "activity_group_recovery_receipt_changed"
                 )
-            if action == "rollback_uncommitted_memberships_to_before":
+            if action == operation_contract.rollback_action:
                 items = journal["items"]
                 if progress_callback is not None:
                     progress_callback(
-                        "activity-group-membership-recovery",
+                        operation_contract.progress_recovery,
                         "start",
                         0,
                         len(items),
@@ -38662,19 +39475,19 @@ def activity_group_membership_recover(
                         )
                     if progress_callback is not None:
                         progress_callback(
-                            "activity-group-membership-recovery",
+                            operation_contract.progress_recovery,
                             "restored",
                             index,
                             len(items),
                         )
                 if progress_callback is not None:
                     progress_callback(
-                        "activity-group-membership-recovery",
+                        operation_contract.progress_recovery,
                         "done",
                         len(items),
                         len(items),
                     )
-            if action == "cleanup_unstarted_transaction_evidence":
+            if action == operation_contract.cleanup_unstarted_action:
                 cleanup_known_swap_residues(
                     journal["items"],
                     current_hash_field="before_file_sha256",
@@ -38684,6 +39497,7 @@ def activity_group_membership_recover(
                 classify_activity_group_membership_transaction(
                     root,
                     journal,
+                    operation_contract=operation_contract,
                 )
             )
             if (
@@ -38695,10 +39509,11 @@ def activity_group_membership_recover(
                 raise ArchiveServiceError(
                     "activity_group_recovery_final_before_state_invalid"
                 )
-        elif action == "cleanup_verified_completed_evidence":
-            receipt_path = activity_group_membership_receipt_path(
+        elif action == operation_contract.cleanup_completed_action:
+            receipt_path = _activity_group_membership_receipt_path(
                 root,
                 request_sha256,
+                operation_contract,
             )
             expected_journal: dict[str, Any] | None = None
             expected_write_lock: dict[str, Any] | None = None
@@ -38709,6 +39524,7 @@ def activity_group_membership_recover(
                         journal_path,
                         archive_id=archive_id,
                         request_sha256=request_sha256,
+                        operation_contract=operation_contract,
                     )
                 )
                 if (
@@ -38730,6 +39546,7 @@ def activity_group_membership_recover(
                         root,
                         write_lock_path,
                         request_sha256=request_sha256,
+                        operation_contract=operation_contract,
                     )
                 )
                 if (
@@ -38749,6 +39566,7 @@ def activity_group_membership_recover(
                         root,
                         write_lock_path,
                         request_sha256=request_sha256,
+                        operation_contract=operation_contract,
                     )
                 )
                 if (
@@ -38765,6 +39583,7 @@ def activity_group_membership_recover(
                 if not activity_group_write_lock_matches_journal(
                     lock_document,
                     expected_journal,
+                    operation_contract=operation_contract,
                 ):
                     raise ArchiveServiceError(
                         "activity_group_write_lock_journal_binding_invalid"
@@ -38780,6 +39599,7 @@ def activity_group_membership_recover(
                 request_sha256=request_sha256,
                 expected_journal=expected_journal,
                 expected_write_lock=expected_write_lock,
+                operation_contract=operation_contract,
             )
             if not verification.get("ok"):
                 raise ArchiveServiceError(
@@ -38829,6 +39649,7 @@ def activity_group_membership_recover(
                 root,
                 write_lock_path,
                 request_sha256=request_sha256,
+                operation_contract=operation_contract,
             )
         )
         if (
@@ -38876,6 +39697,7 @@ def activity_group_membership_recover(
                     journal_required=journal_required_for_cleanup,
                     write_lock_required=True,
                     expected_write_lock=cleanup_lock_document,
+                    operation_contract=operation_contract,
                 )
             )
             if not journal_required_for_cleanup:
@@ -38896,6 +39718,7 @@ def activity_group_membership_recover(
                         journal_required=False,
                         write_lock_required=True,
                         expected_write_lock=cleanup_lock_document,
+                        operation_contract=operation_contract,
                     )
                 )
             delete_activity_group_evidence_exact(
@@ -38930,6 +39753,7 @@ def activity_group_membership_recover(
                 write_lock_required=False,
                 expected_journal=cleanup_journal,
                 expected_write_lock=cleanup_lock_document,
+                operation_contract=operation_contract,
             )
             if journal_required_for_cleanup:
                 delete_recovery_guard_exact()
@@ -38950,6 +39774,7 @@ def activity_group_membership_recover(
                         write_lock_required=False,
                         expected_journal=cleanup_journal,
                         expected_write_lock=cleanup_lock_document,
+                        operation_contract=operation_contract,
                     )
                 )
                 journal_sha256 = locked_evidence.get(
@@ -38966,7 +39791,7 @@ def activity_group_membership_recover(
                     max_bytes=(
                         ACTIVITY_GROUP_MEMBERSHIP_MAX_TRANSACTION_JOURNAL_BYTES
                     ),
-                    parent_binding=private_root_binding,
+                    parent_binding=journal_root_binding,
                 )
                 journal_removed = not (
                     journal_path.exists()
@@ -38993,12 +39818,12 @@ def activity_group_membership_recover(
             write_lock_required=False,
             expected_journal=cleanup_journal,
             expected_write_lock=cleanup_lock_document,
+            operation_contract=operation_contract,
         )
         require_recovery_guard_absent()
         status = (
             "recovered"
-            if action
-            == "rollback_uncommitted_memberships_to_before"
+            if action == operation_contract.rollback_action
             else "cleanup_completed"
         )
     except (
@@ -39031,6 +39856,56 @@ def activity_group_membership_recover(
         if status in {"recovered", "cleanup_completed"}:
             status = "failed_recovery_evidence_retained"
     return result_payload(status)
+
+
+def activity_group_membership_recover(
+    archive_root: Path | str,
+    *,
+    expected_request_sha256: str,
+    expected_recovery_plan_sha256: str,
+    approve: bool = False,
+    reviewed_by: str | None = None,
+    affirm_recovery_reviewed: bool = False,
+    progress_callback: Callable[
+        [str, str, int | None, int | None], None
+    ]
+    | None = None,
+) -> dict[str, Any]:
+    return _activity_group_membership_recover(
+        archive_root,
+        expected_request_sha256=expected_request_sha256,
+        expected_recovery_plan_sha256=expected_recovery_plan_sha256,
+        approve=approve,
+        reviewed_by=reviewed_by,
+        affirm_recovery_reviewed=affirm_recovery_reviewed,
+        progress_callback=progress_callback,
+        operation_contract=ACTIVITY_GROUP_MEMBERSHIP_ADD,
+    )
+
+
+def activity_group_membership_removal_recover(
+    archive_root: Path | str,
+    *,
+    expected_request_sha256: str,
+    expected_recovery_plan_sha256: str,
+    approve: bool = False,
+    reviewed_by: str | None = None,
+    affirm_recovery_reviewed: bool = False,
+    progress_callback: Callable[
+        [str, str, int | None, int | None], None
+    ]
+    | None = None,
+) -> dict[str, Any]:
+    return _activity_group_membership_recover(
+        archive_root,
+        expected_request_sha256=expected_request_sha256,
+        expected_recovery_plan_sha256=expected_recovery_plan_sha256,
+        approve=approve,
+        reviewed_by=reviewed_by,
+        affirm_recovery_reviewed=affirm_recovery_reviewed,
+        progress_callback=progress_callback,
+        operation_contract=ACTIVITY_GROUP_MEMBERSHIP_REMOVE,
+    )
 
 
 def promote_zettel_dry_run(
@@ -90458,18 +91333,20 @@ def runtime_context_read_action_routes() -> list[dict[str, Any]]:
             "membership_is_inferred": False,
             "canonical_add_write_implemented": True,
             "canonical_removal_plan_implemented": True,
-            "canonical_removal_write_implemented": False,
-            "canonical_removal_implemented": False,
+            "canonical_removal_write_implemented": True,
+            "canonical_removal_implemented": True,
             "writes": False,
         },
         {
             "action": "plan_activity_group_membership_removal",
             "when": "a human has explicitly selected one canonical event anchor to remove from an ordered set of canonical member zets",
             "command": "archive activity-group-membership-removal-plan <archive-root> --request .wom-scratch/private/activity-group-removals/<reviewed>.json --dry-run --progress --format json",
+            "next_command": "archive activity-group-membership-removal-write <archive-root> --request .wom-scratch/private/activity-group-removals/<reviewed>.json --expected-request-sha256 <sha256> --expected-review-plan-sha256 <sha256> --dry-run --progress --format json",
             "authoritative_for": "the explicit removal request ids against exact current canonical bytes and the event-anchor contract",
             "membership_is_inferred": False,
             "canonical_removal_plan_implemented": True,
-            "canonical_removal_write_implemented": False,
+            "canonical_removal_write_implemented": True,
+            "canonical_removal_recovery_implemented": True,
             "direct_file_edit_allowed": False,
             "writes": False,
         },
@@ -90554,8 +91431,8 @@ def runtime_context_write_action_routes() -> list[dict[str, Any]]:
             "write_implemented": True,
             "removal_plan_command": "archive activity-group-membership-removal-plan <archive-root> --request .wom-scratch/private/activity-group-removals/<reviewed>.json --dry-run --progress --format json",
             "removal_plan_implemented": True,
-            "removal_write_implemented": False,
-            "removal_implemented": False,
+            "removal_write_implemented": True,
+            "removal_implemented": True,
             "membership_is_inferred": False,
             "requires_human_approval": True,
             "direct_file_write_allowed": False,
@@ -90563,14 +91440,31 @@ def runtime_context_write_action_routes() -> list[dict[str, Any]]:
             "transaction_recovery_implemented": True,
             "recovery_plan_command": "archive activity-group-membership-recovery-plan <archive-root> --expected-request-sha256 <sha256> --dry-run --format json",
             "approved_recovery_command": "archive activity-group-membership-recover <archive-root> --expected-request-sha256 <sha256> --expected-recovery-plan-sha256 <sha256> --approve --reviewed-by <human-actor> --affirm-recovery-reviewed --progress --format json",
-            "next_safe_action": "use the digest-bound WOM writer for additions; use the read-only removal plan for explicitly reviewed candidates, but do not remove memberships or edit canonical zets directly because the removal writer is not implemented",
+            "next_safe_action": "use the digest-bound WOM writer and its separate recovery route for additions; use the separate removal route for explicitly reviewed removals",
+        },
+        {
+            "action": "write_activity_group_membership_removal",
+            "when": "a human-reviewed private removal request may remove one exact event anchor from explicitly selected canonical zets",
+            "review_command": "archive activity-group-membership-removal-plan <archive-root> --request .wom-scratch/private/activity-group-removals/<reviewed>.json --dry-run --progress --format json",
+            "preview_command": "archive activity-group-membership-removal-write <archive-root> --request .wom-scratch/private/activity-group-removals/<reviewed>.json --expected-request-sha256 <sha256> --expected-review-plan-sha256 <sha256> --dry-run --progress --format json",
+            "approved_command": "archive activity-group-membership-removal-write <archive-root> --request .wom-scratch/private/activity-group-removals/<reviewed>.json --expected-request-sha256 <sha256> --expected-review-plan-sha256 <sha256> --approve --reviewed-by <human-actor> --affirm-removals-reviewed --progress --format json",
+            "write_implemented": True,
+            "membership_operation": "remove",
+            "membership_is_inferred": False,
+            "requires_human_approval": True,
+            "direct_file_write_allowed": False,
+            "receipt_required": True,
+            "transaction_recovery_implemented": True,
+            "recovery_plan_command": "archive activity-group-membership-removal-recovery-plan <archive-root> --expected-request-sha256 <sha256> --dry-run --format json",
+            "approved_recovery_command": "archive activity-group-membership-removal-recover <archive-root> --expected-request-sha256 <sha256> --expected-recovery-plan-sha256 <sha256> --approve --reviewed-by <human-actor> --affirm-recovery-reviewed --progress --format json",
+            "next_safe_action": "review the exact private removal request and digests, use the approval-gated removal writer, and use only its separate recovery route for retained removal transaction evidence",
         },
     ]
 
 
 def runtime_context_action_routing() -> dict[str, Any]:
     return {
-        "schema": "wom-kit/ai-command-path-routing/v0.5",
+        "schema": "wom-kit/ai-command-path-routing/v0.6",
         "official_wom_command_required_for_archive_actions": True,
         "location_policy_alone_is_sufficient": False,
         "raw_filesystem_search_is_authoritative": False,
