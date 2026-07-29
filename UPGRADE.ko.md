@@ -2,6 +2,63 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.3.284 승인형 activity-group 멤버십 제거
+
+아카이브 마이그레이션은 필요하지 않습니다. v0.3.284는 v0.3.282의 읽기
+전용 제거 계획이 만든 정확한 비공개 request와 `review_plan_sha256`에서
+이어집니다. 먼저 전용 제거 writer를 미리보기로 실행하세요.
+
+```powershell
+archive activity-group-membership-removal-write <archive-root> `
+  --request .wom-scratch/private/activity-group-removals/reviewed.json `
+  --expected-request-sha256 sha256:<request-digest> `
+  --expected-review-plan-sha256 sha256:<review-plan-digest> `
+  --dry-run --progress --format json
+```
+
+사람이 요청된 제거와 모든 `already_absent` 행을 확인한 뒤에만
+`--dry-run`을 `--approve`로 바꾸고, 안전한 `--reviewed-by` 값과
+`--affirm-removals-reviewed`를 추가하세요. WOM은 공유 activity-group
+writer 잠금 아래에서 정확한 계획을 다시 만듭니다. request나 canonical
+바이트가 바뀌었으면 정본을 변경하기 전에 차단합니다.
+
+writer는 `ready_to_remove` 참여 항목에서 지정한 이벤트 anchor 하나만
+제거합니다. 다른 멤버십의 순서와 list 모양, 다른 facet, 본문,
+`updated_at`, BOM, 줄바꿈 형식은 그대로 보존합니다. `already_absent`
+행은 이미 충족된 것으로 처리하고 snapshot, 변경 journal, canonical
+쓰기 시도, 영수증 참여 항목에서 제외합니다. 모든 행이 이미 없는
+상태라면 변경 아티팩트를 만들지 않습니다.
+
+추가와 제거 트랜잭션은 하나의 전역 writer 잠금과 두 비공개 root의
+제한된 fail-closed 검사를 공유합니다. 하지만 request, journal, 영수증,
+복구 계약은 서로 분리됩니다. 처리 가능한 실행 실패는 정확한 이전
+바이트로 되돌립니다. process나 컴퓨터가 중단되어 비공개 증거가 남았다면
+기존 writer가 더 이상 실행 중이 아님을 먼저 확인하고 다음을
+실행하세요.
+
+```powershell
+archive activity-group-membership-removal-recovery-plan <archive-root> `
+  --expected-request-sha256 sha256:<request-digest> `
+  --dry-run --format json
+```
+
+반환된 정확한 복구 계획 digest만 승인하세요.
+
+```powershell
+archive activity-group-membership-removal-recover <archive-root> `
+  --expected-request-sha256 sha256:<request-digest> `
+  --expected-recovery-plan-sha256 sha256:<recovery-plan-digest> `
+  --approve --reviewed-by <safe-reviewer-id> `
+  --affirm-recovery-reviewed --progress --format json
+```
+
+알 수 없는 drift는 `manual_forensic_hold`로 남습니다. 진행을 강제하려고
+트랜잭션 증거를 지우거나 canonical zet를 직접 편집하지 마세요.
+v0.3.284는 멤버십 추론, MCP writer, 제거 revert 명령을 추가하지
+않습니다. 자세한 내용은
+[`wom-kit/docs/activity-group-membership-removal-write.md`](wom-kit/docs/activity-group-membership-removal-write.md)를
+보세요.
+
 ## v0.3.283 activity-group 잔존 journal 격리
 
 아카이브 마이그레이션은 필요하지 않습니다. v0.3.283은 기존

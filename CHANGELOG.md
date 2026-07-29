@@ -6,6 +6,49 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.284 - 2026-07-30
+
+- Added CLI-only approval-gated
+  `activity-group-membership-removal-write`, alias
+  `event-group-membership-removal-write`, for exact human-selected membership
+  removals.
+- Require the exact private removal request SHA-256 and read-only removal
+  review-plan SHA-256, an attributed human reviewer, and
+  `--affirm-removals-reviewed`; rebuild and rebind the plan under the writer
+  lock before any canonical mutation.
+- Remove only the explicitly named event anchor from `ready_to_remove`
+  participants. Preserve other membership order/list shape, all other facets,
+  body, `updated_at`, BOM state, and newline convention.
+- Treat `already_absent` participants as satisfied review rows and exclude
+  them from snapshots, the mutation journal, canonical write attempts, and
+  receipt participant entries. An all-absent request creates no mutation
+  artifacts.
+- Keep add and removal transactions under one global writer lock and one
+  bounded, fail-closed scan of both private request roots, while keeping
+  operation-specific request, journal, receipt, and recovery artifacts
+  separate.
+- Preserve exact content-addressed before-state snapshots, publish the
+  removal journal before the first canonical change, replace canonical bytes
+  through compare-and-swap, verify final hashes, and publish the immutable
+  removal receipt last.
+- Roll back handled execution failures to exact prior bytes. A hard exit
+  retains private evidence for the separate removal recovery path rather than
+  guessing or silently continuing.
+- Added read-only
+  `activity-group-membership-removal-recovery-plan` and separately approved
+  `activity-group-membership-removal-recover`, with `event-group-*` aliases,
+  exact recovery-plan binding, evidence cleanup for safe terminal states, and
+  exact-snapshot rollback for recoverable partial writes.
+- Added the public
+  `activity-group-membership-removal-transaction-journal/v0.1` and
+  `activity-group-membership-removal-receipt/v0.1` schemas.
+- Extended AI command-path routing to
+  `wom-kit/ai-command-path-routing/v0.6` with the official removal write and
+  recovery routes.
+- Added no membership inference, general facet editor, direct canonical edit
+  permission, MCP writer, provider/model/network/index/database/
+  credential-store call, or removal revert operation.
+
 ## v0.3.283 - 2026-07-30
 
 - Added bounded, content-free retained-journal discovery across the direct

@@ -171,10 +171,15 @@ recovery. It binds the exact request bytes and review-plan digest, revalidates
 current bytes under a lock, records human review, preserves before-snapshots,
 publishes a pre-mutation journal, and writes an immutable receipt last.
 
-Member removal remains a separate reviewed operation. Neither the plan nor the
-v0.3.281 writer removes any membership. v0.3.282 adds only the separate
-read-only
-[Activity-Group Membership Removal Plan](activity-group-membership-removal-plan.md);
-v0.3.283 isolates retained add journals and reserved future-removal journals
-under the existing shared writer boundary but adds no removal write. The
-approval-gated removal writer is deferred to v0.3.284.
+Member removal remains a separate reviewed operation. Neither this plan nor
+the v0.3.281 addition writer removes any membership. v0.3.282 added the
+separate read-only
+[Activity-Group Membership Removal Plan](activity-group-membership-removal-plan.md),
+and v0.3.284 adds its separate approval-gated
+[Activity-Group Membership Removal Write And Recovery](activity-group-membership-removal-write.md)
+continuation.
+
+The addition and removal operations share one global writer lock and scan both
+private roots for retained transaction evidence, but their requests, plans,
+journals, receipts, approval affirmations, and recovery contracts remain
+separate. An addition request or receipt never grants removal authority.

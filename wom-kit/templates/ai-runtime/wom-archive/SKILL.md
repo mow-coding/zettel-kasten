@@ -82,12 +82,16 @@ token-budget contract.
   only through the plan's exact request/review hashes and
   `activity-group-membership-write`; never hand-edit canonical zets. If that
   writer was interrupted, first confirm it is no longer running, then use the
-  separate recovery plan and exact approved recovery command. Plan an explicit
-  removal only with `activity-group-membership-removal-plan`; its writer is not
-  implemented until v0.3.284. Never remove a membership by hand, delete a
-  retained add or reserved removal journal to make a new writer run, or execute
-  a manual forensic hold. Let the official add writer block and route the
-  evidence through the exact recovery plan.
+  separate add recovery plan and exact approved add recovery command. Plan an
+  explicit removal only with `activity-group-membership-removal-plan`, then
+  continue through its exact request/review hashes and the separate
+  `activity-group-membership-removal-write` preview/approval command. If that
+  writer was interrupted, use only its dedicated read-only removal recovery
+  plan and exact approved removal recovery command. Never remove a membership
+  by hand, delete a retained add or removal journal to make a writer run,
+  treat `already_absent` as a write candidate, or execute a manual forensic
+  hold. Both writers share one lock and a two-root evidence scan but keep
+  their request, journal, receipt, and recovery authority separate.
 - Create an AI-assisted draft only through `archive create-draft` dry-run and
   its exact reviewed replay. Never write Markdown directly into `inbox/`.
 - Before a write, show the human what will change, where it will change, and

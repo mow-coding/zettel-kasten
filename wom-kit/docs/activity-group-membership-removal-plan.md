@@ -1,12 +1,13 @@
 # Activity-Group Membership Removal Plan
 
-Status: v0.3.283 read-only explicit membership-removal planning with reserved-journal isolation
+Status: v0.3.284 read-only planning for the separate approval-gated removal writer
 
 `activity-group-membership-removal-plan` lets an archive owner review removing
 one named event anchor from an explicit ordered set of canonical zets.
 
-It writes nothing. The approval-gated removal writer is not implemented in
-v0.3.283 and is deferred to v0.3.284.
+This command still writes nothing. v0.3.284 implements the separate
+approval-gated removal writer and interruption recovery documented in
+[Activity-Group Membership Removal Write And Recovery](activity-group-membership-removal-write.md).
 
 ## Why This Is Separate
 
@@ -150,25 +151,32 @@ a model, the network, a database, or a credential store.
 
 ## Write Boundary
 
-Through v0.3.283:
+This planning command:
 
 - writes no canonical zet;
 - writes no receipt, journal, lock, index, or scratch file;
 - removes no membership;
 - repairs no malformed membership;
-- exposes no MCP write method;
+- exposes no MCP write method; and
 - grants no direct-file-edit permission.
 
-A later approval-gated writer must use a separate removal operation, bind the
-exact request and plan hashes, share serialization with addition and recovery,
-publish a transaction journal before mutation, preserve exact snapshots, write
-an immutable receipt last, and provide hard-interruption recovery.
+v0.3.284 makes its `future_write` continuation official through the separate
+`activity-group-membership-removal-write` command. That writer requires this
+plan's exact request and review-plan hashes, an attributed human reviewer, and
+an explicit removal-review affirmation. It replans under the shared writer
+lock, preserves exact snapshots, publishes a separate removal journal before
+mutation, and writes a separate immutable removal receipt last.
 
-v0.3.283 reserves
-`.activity-group-membership-removal.transaction.json` evidence in this private
-root. A retained reserved journal blocks the existing add writer both before
-it attempts the shared lock and after it owns that lock. This is isolation for
-a future removal transaction, not a removal implementation or approval.
+`already_absent` remains part of the reviewed plan but is not a mutation
+candidate. The writer excludes those rows from snapshots, journal participant
+items, canonical write attempts, and receipt participant items.
 
-Until that writer ships, keep the reviewed private request and digest as
-evidence and do not edit canonical zets directly.
+The separate removal journal suffix is
+`.activity-group-membership-removal.transaction.json`. Retained add or removal
+journals block both operation writers before and under one global
+activity-group writer lock. Use the dedicated read-only removal recovery plan
+and separately approved removal recovery command after a hard exit.
+
+Keep the reviewed private request and digests as evidence. Do not edit
+canonical zets or transaction evidence directly. See
+[Activity-Group Membership Removal Write And Recovery](activity-group-membership-removal-write.md).
