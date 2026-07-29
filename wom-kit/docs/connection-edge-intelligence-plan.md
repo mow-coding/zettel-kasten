@@ -1,6 +1,7 @@
 # Connection Edge Intelligence Plan
 
-Status: v0.3.102 read-only connection edge review summary and supersedes heuristic checkpoint
+Status: v0.3.286 manual-only format-variant activation on the read-only review layer
+Previous checkpoint: Status: v0.3.102 read-only connection edge review summary and supersedes heuristic checkpoint
 Original checkpoint: Status: v0.3.87 read-only connection edge intelligence checkpoint
 
 `archive connection-edge-intelligence-plan` is a read-only review layer on top
@@ -90,17 +91,32 @@ contains
 supersedes
 view_query
 comment_context
+format_variant
 ```
 
 The command maps those active edge types to meaning labels such as
 `source_material`, `derived_output`, `weak_semantic`, `embedded_objet`,
 `explicit_mention`, `structural_containment`, `version_replacement`,
-`view_snapshot_context`, and `comment_context`.
+`view_snapshot_context`, `comment_context`, and `format_variant`.
 
 `contains` is an active meaning for structural nesting only. It should be used
 when a parent zet/page contains a child zet/page/database/view. It should not
 be used as a loose topical relation, and child database evidence should not be
 forced into `view_query`, `references`, `material`, or `inherited_by`.
+
+Since v0.3.286, `format_variant` is an active WOM-local base link type for a
+human-reviewed pair that carries the same intellectual content in another
+format or rendition. The source is only the human-selected review anchor; the
+stored direction does not claim that it is the older, original, or canonical
+member. The type is conceptually close to DCMI `hasFormat` / `isFormatOf`, but
+it is not an exact mapping because the current evidence does not establish
+DCMI's pre-existing-resource direction.
+
+Activation does not add an inference rule. This planner does not recommend
+`format_variant` from a title, filename, provider mechanism, or node category.
+A reviewer must choose it explicitly in a later `zettel-edge` dry-run/approve
+flow. The writer stores one reviewed assertion and does not create a reciprocal
+edge.
 
 ## Version Chain Heuristic
 
@@ -128,16 +144,16 @@ zet. Durable writes still require a later human-approved `zettel-edge` or
 The command also reports provisional meaning candidates:
 
 ```text
-format_variant
 responds_to
 fulfills
 enabling
 sequence
 ```
 
-These are not active durable edge types in v0.3.87. They are review labels. The
-point is to collect repeated evidence under `neither_fits`-style review before
-promoting too many edge types too early.
+These remain review labels rather than active durable edge types. The point is
+to collect repeated evidence under `neither_fits`-style review before promoting
+too many edge types too early. `format_variant` left this list in v0.3.286, but
+its activation remains manual-only and adds no automatic classification.
 
 ## Safety Boundary
 
@@ -172,6 +188,8 @@ The command is intentionally cautious:
 - source mechanism and relationship meaning are separate axes,
 - version-chain hints can recommend `supersedes`,
 - structural child page/database evidence can recommend `contains`,
+- `format_variant` is chosen manually and is never inferred from title or file
+  labels,
 - AI suggestions require human approval,
 - ambiguous edges get review flags,
 - vague `semantic` links should be named more specifically or dropped,

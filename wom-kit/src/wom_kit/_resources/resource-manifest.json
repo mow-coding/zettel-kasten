@@ -1,6 +1,6 @@
 {
   "schema": "wom-kit/package-resource-manifest/v0.1",
-  "version": "0.3.285",
+  "version": "0.3.286",
   "source_of_truth": "wom-kit source resource directories",
   "file_count": 101,
   "files": [
@@ -595,8 +595,8 @@
     {
       "source": "zettel-kasten/types.yml",
       "packaged": "zettel-kasten/types.yml",
-      "bytes": 15167,
-      "sha256": "b70dd2d494278e52760f973e9b7a856e5982c0dd03b4338619b7f2309ef6c9e1"
+      "bytes": 15681,
+      "sha256": "8e371e851ab19a5e81af8262612c54159b9b1f3cb2f7eba9a71e0dbe2d4a89de"
     },
     {
       "source": "zettel-kasten/zettel-rules.yml",
@@ -605,10 +605,10 @@
       "sha256": "d619dc26af3216498c8392dfe838b0fe752d4bad9da998a58ca682d668fc510c"
     },
     {
-      "source": "docs/releases/v0.3.285.md",
-      "packaged": "release-notes/v0.3.285.md",
-      "bytes": 6464,
-      "sha256": "0f380acfa448464b188b5286a6e1d8b83e5cb69de1ac6d36f47a31752bbc7ab0"
+      "source": "docs/releases/v0.3.286.md",
+      "packaged": "release-notes/v0.3.286.md",
+      "bytes": 7781,
+      "sha256": "19139cb1045a2aa36953b60fc78aee18a844687e2f0cc5fc1394a400b1ea6c71"
     }
   ]
 }

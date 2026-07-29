@@ -492,6 +492,18 @@ link_types:
     to:
       - OriginalObject
 
+  - id: format_variant
+    description: The target is an alternate rendition of the same intellectual content as the human-selected source anchor.
+    from:
+      - Zettel
+    to:
+      - Zettel
+      - OriginalObject
+    policy_notes:
+      - Direction does not claim that the source is older, original, or canonical.
+      - Record only after human review; do not infer from titles, filenames, or node categories.
+      - Store one reviewed assertion per pair and do not automatically create a reciprocal edge.
+
   - id: mention
     description: The current zet explicitly mentions another zet or imported page.
     from:

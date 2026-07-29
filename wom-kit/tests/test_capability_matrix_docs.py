@@ -12,7 +12,7 @@ REPO_ROOT = KIT_ROOT.parent
 CURRENT_VERSION = f"v{__version__}"
 CURRENT_RUNTIME_STATUS = (
     f"Status: {CURRENT_VERSION} installed-wheel resource, "
-    "activity-group removal routing, quick start, session handoff, "
+    "manual format-variant routing, quick start, session handoff, "
     "local backup evidence, "
     "and philosophy implementation traceability checkpoint"
 )
@@ -8888,7 +8888,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(document="v03282-public-version-surface"):
                 self.assertIn("v0.3.282", text)
         self.assertIn(
-            "releases/download/v0.3.285/wom_kit-0.3.285-py3-none-any.whl",
+            "releases/download/v0.3.286/wom_kit-0.3.286-py3-none-any.whl",
             root_readme_text,
         )
 
@@ -9007,7 +9007,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         ):
             with self.subTest(document="v03283-current-install"):
                 self.assertIn(
-                    "releases/download/v0.3.285/wom_kit-0.3.285-py3-none-any.whl",
+                    "releases/download/v0.3.286/wom_kit-0.3.286-py3-none-any.whl",
                     text,
                 )
 
@@ -9195,11 +9195,11 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                     "https://json-schema.org/draft/2020-12/schema",
                 )
 
-    def test_v03285_notion_manifest_index_title_fallback_is_public_and_synchronized(
+    def test_v03285_notion_manifest_index_title_fallback_remains_historical_source_documentation(
         self,
     ) -> None:
         release_path = KIT_ROOT / "docs" / "releases" / "v0.3.285.md"
-        packaged_release_path = (
+        historical_packaged_release_path = (
             KIT_ROOT
             / "src"
             / "wom_kit"
@@ -9215,42 +9215,14 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         guide_path = KIT_ROOT / "docs" / "external-imports.md"
 
         release_text = release_path.read_text(encoding="utf-8")
-        packaged_release_text = packaged_release_path.read_text(encoding="utf-8")
         decision_text = decision_path.read_text(encoding="utf-8")
         guide_text = guide_path.read_text(encoding="utf-8")
         matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
-        root_readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
-        root_readme_ko_text = (REPO_ROOT / "README.ko.md").read_text(
-            encoding="utf-8"
+        self.assertTrue(release_path.is_file())
+        self.assertFalse(
+            historical_packaged_release_path.exists(),
+            "Historical source release notes stay public, but only the current release note is packaged.",
         )
-        install_text = (
-            KIT_ROOT / "docs" / "python-tool-install.md"
-        ).read_text(encoding="utf-8")
-        install_ko_text = (
-            KIT_ROOT / "docs" / "python-tool-install.ko.md"
-        ).read_text(encoding="utf-8")
-        upgrade_text = (REPO_ROOT / "UPGRADE.md").read_text(encoding="utf-8")
-        upgrade_ko_text = (REPO_ROOT / "UPGRADE.ko.md").read_text(
-            encoding="utf-8"
-        )
-        changelog_text = (REPO_ROOT / "CHANGELOG.md").read_text(
-            encoding="utf-8"
-        )
-        versioning_text = (REPO_ROOT / "VERSIONING.md").read_text(
-            encoding="utf-8"
-        )
-        pyproject_text = (KIT_ROOT / "pyproject.toml").read_text(
-            encoding="utf-8"
-        )
-        package_init_text = (
-            KIT_ROOT / "src" / "wom_kit" / "__init__.py"
-        ).read_text(encoding="utf-8")
-
-        self.assertEqual(__version__, "0.3.285")
-        self.assertEqual(CURRENT_VERSION, "v0.3.285")
-        self.assertIn('version = "0.3.285"', pyproject_text)
-        self.assertIn('__version__ = "0.3.285"', package_init_text)
-        self.assertEqual(packaged_release_text, release_text)
 
         for text in (release_text, decision_text, guide_text, matrix_text):
             with self.subTest(document="v03285-index-title-contract"):
@@ -9313,9 +9285,170 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             matrix_text,
         )
 
+    def test_v03286_format_variant_manual_activation_is_current_and_synchronized(
+        self,
+    ) -> None:
+        release_path = KIT_ROOT / "docs" / "releases" / "v0.3.286.md"
+        historical_release_path = KIT_ROOT / "docs" / "releases" / "v0.3.285.md"
+        packaged_release_dir = (
+            KIT_ROOT / "src" / "wom_kit" / "_resources" / "release-notes"
+        )
+        packaged_release_path = packaged_release_dir / "v0.3.286.md"
+        decision_path = (
+            KIT_ROOT
+            / "docs"
+            / "archive-infra-decision-log-2026-07-30-v03286-format-variant-manual-activation.md"
+        )
+        connection_guide_path = KIT_ROOT / "docs" / "connection-edge-intelligence-plan.md"
+        edge_guide_path = KIT_ROOT / "docs" / "zettel-edge-write.md"
+        resource_manifest_path = (
+            KIT_ROOT / "src" / "wom_kit" / "_resources" / "resource-manifest.json"
+        )
+
+        release_text = release_path.read_text(encoding="utf-8")
+        packaged_release_text = packaged_release_path.read_text(encoding="utf-8")
+        decision_text = decision_path.read_text(encoding="utf-8")
+        connection_guide_text = connection_guide_path.read_text(encoding="utf-8")
+        edge_guide_text = edge_guide_path.read_text(encoding="utf-8")
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        root_readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        root_readme_ko_text = (REPO_ROOT / "README.ko.md").read_text(
+            encoding="utf-8"
+        )
+        install_text = (
+            KIT_ROOT / "docs" / "python-tool-install.md"
+        ).read_text(encoding="utf-8")
+        install_ko_text = (
+            KIT_ROOT / "docs" / "python-tool-install.ko.md"
+        ).read_text(encoding="utf-8")
+        upgrade_text = (REPO_ROOT / "UPGRADE.md").read_text(encoding="utf-8")
+        upgrade_ko_text = (REPO_ROOT / "UPGRADE.ko.md").read_text(
+            encoding="utf-8"
+        )
+        changelog_text = (REPO_ROOT / "CHANGELOG.md").read_text(
+            encoding="utf-8"
+        )
+        versioning_text = (REPO_ROOT / "VERSIONING.md").read_text(
+            encoding="utf-8"
+        )
+        pyproject_text = (KIT_ROOT / "pyproject.toml").read_text(
+            encoding="utf-8"
+        )
+        package_init_text = (
+            KIT_ROOT / "src" / "wom_kit" / "__init__.py"
+        ).read_text(encoding="utf-8")
+        root_package_init_text = (
+            REPO_ROOT / "wom_kit" / "__init__.py"
+        ).read_text(encoding="utf-8")
+        resource_manifest = json.loads(
+            resource_manifest_path.read_text(encoding="utf-8")
+        )
+        release_flat = " ".join(release_text.split())
+        decision_flat = " ".join(decision_text.split())
+        connection_guide_flat = " ".join(connection_guide_text.split())
+        edge_guide_flat = " ".join(edge_guide_text.split())
+        matrix_flat = " ".join(matrix_text.split())
+
+        self.assertEqual(__version__, "0.3.286")
+        self.assertEqual(CURRENT_VERSION, "v0.3.286")
+        self.assertIn('version = "0.3.286"', pyproject_text)
+        self.assertIn('__version__ = "0.3.286"', package_init_text)
+        self.assertIn('__version__ = "0.3.286"', root_package_init_text)
+        self.assertEqual(packaged_release_text, release_text)
+        self.assertTrue(historical_release_path.is_file())
+        self.assertEqual(
+            sorted(path.name for path in packaged_release_dir.glob("v*.md")),
+            ["v0.3.286.md"],
+        )
+        self.assertEqual(resource_manifest["version"], "0.3.286")
+        packaged_release_entries = [
+            item
+            for item in resource_manifest["files"]
+            if str(item.get("packaged") or "").startswith("release-notes/")
+        ]
+        self.assertEqual(
+            [
+                {
+                    "source": item["source"],
+                    "packaged": item["packaged"],
+                }
+                for item in packaged_release_entries
+            ],
+            [
+                {
+                    "source": "docs/releases/v0.3.286.md",
+                    "packaged": "release-notes/v0.3.286.md",
+                }
+            ],
+        )
+
+        for text in (
+            release_text,
+            decision_text,
+            connection_guide_text,
+            edge_guide_text,
+            matrix_text,
+        ):
+            with self.subTest(document="v03286-format-variant-contract"):
+                self.assertIn("v0.3.286", text)
+                self.assertIn("format_variant", text)
+
+        for phrase in (
+            "Zettel -> Zettel | OriginalObject",
+            "not an automatic matching feature",
+            "does not recommend or create",
+            "Do not add a second",
+            "base-link-types",
+            "present_not_overwritten",
+            "link-types-v0.3",
+            "No new edge writer is introduced",
+            "reclassify an existing `references`",
+            "beta tester's private archive",
+        ):
+            with self.subTest(release_phrase=phrase):
+                self.assertIn(phrase, release_flat)
+
+        for phrase in (
+            "active_mapping",
+            "active_edge_type: format_variant",
+            "does not create an automatic classifier",
+            "Only a human-reviewed `zettel-edge`",
+            "Existing `references` edges",
+        ):
+            with self.subTest(decision_phrase=phrase):
+                self.assertIn(phrase, decision_flat)
+
+        for phrase in (
+            "Activation does not add an inference rule",
+            "does not recommend",
+            "left this list in v0.3.286",
+            "does not create a reciprocal",
+        ):
+            with self.subTest(connection_guide_phrase=phrase):
+                self.assertIn(phrase, connection_guide_flat)
+
+        for phrase in (
+            "`Zettel` to `Zettel | OriginalObject`",
+            "--approve --reviewed-by <actor>",
+            "Do not write a second reciprocal edge",
+            "existing `references` edges",
+            "performs no corpus",
+        ):
+            with self.subTest(edge_guide_phrase=phrase):
+                self.assertIn(phrase, edge_guide_flat)
+
+        self.assertIn(
+            "| Base `format_variant` edge type | `manual approval-gated base vocabulary` |",
+            matrix_flat,
+        )
+        self.assertNotIn(
+            "provisional meaning labels such as `format_variant`",
+            matrix_text,
+        )
+
         current_wheel_url = (
-            "releases/download/v0.3.285/"
-            "wom_kit-0.3.285-py3-none-any.whl"
+            "releases/download/v0.3.286/"
+            "wom_kit-0.3.286-py3-none-any.whl"
         )
         for text in (
             root_readme_text,
@@ -9323,7 +9456,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             install_text,
             install_ko_text,
         ):
-            with self.subTest(document="v03285-current-install"):
+            with self.subTest(document="v03286-current-install"):
                 self.assertIn(current_wheel_url, text)
 
         for text in (
@@ -9331,8 +9464,10 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             upgrade_ko_text,
             changelog_text,
         ):
-            with self.subTest(document="v03285-version-surface"):
-                self.assertIn("v0.3.285", text)
+            with self.subTest(document="v03286-version-surface"):
+                self.assertIn("v0.3.286", text)
+                self.assertIn("format_variant", text)
+        self.assertIn("v0.3.286 pre-release", versioning_text)
 
 
 if __name__ == "__main__":
