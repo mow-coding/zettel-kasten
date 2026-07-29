@@ -46,23 +46,29 @@ human review. Never hand-edit canonical zets. If a hard interruption retains
 its journal and lock, first confirm the old writer is no longer running, then
 use `activity-group-membership-recovery-plan --dry-run` and the exact
 digest-bound `activity-group-membership-recover` approval. Never infer
-membership and never execute a `manual_forensic_hold`. A retained add journal
-or reserved future-removal journal in either private request root blocks a new
-add before and under the shared lock. Do not read, rename, or delete that
-private evidence merely to make the writer proceed. Completed cleanup requires
-the receipt's raw hash and exact ordered journal/lock binding to remain the
-same as the reviewed recovery plan.
+membership and never execute a `manual_forensic_hold`. A retained add or
+removal journal in either private request root blocks both operation writers
+before and under the shared lock. Do not read, rename, or delete that private
+evidence merely to make a writer proceed. Completed cleanup requires the
+operation-specific receipt's raw hash and exact ordered journal/lock binding to remain the same as the reviewed recovery plan.
 
-To review explicitly selected removals without writing, use:
+To review explicitly selected removals, start read-only:
 
 ```text
 archive activity-group-membership-removal-plan <archive-root> --request .wom-scratch/private/activity-group-removals/<reviewed>.json --dry-run --progress --format json
 ```
 
-The removal writer is deferred to v0.3.284. Preserve the private request and
-review digest, and never remove a membership by editing a canonical zet
-directly. The reserved removal-journal suffix in this root is transaction
-isolation for that future writer, not current removal authority.
+Preserve the exact private request and review digest. Preview the separate
+`activity-group-membership-removal-write` with both expected digests; approve
+only with an attributed human reviewer and `--affirm-removals-reviewed`.
+`already_absent` rows are reviewed no-ops and
+must not appear as mutation evidence. If the removal writer is interrupted,
+first confirm it has stopped, then use
+`activity-group-membership-removal-recovery-plan --dry-run` and only the exact
+digest-bound `activity-group-membership-removal-recover` approval. Never use
+the add recovery command for removal evidence, remove a membership by editing
+a canonical zet directly, infer candidates, expose an MCP writer, or treat
+recovery as a deliberate revert.
 
 ## Read Abstracts Before Full Bodies
 

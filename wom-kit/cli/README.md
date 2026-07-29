@@ -10,11 +10,15 @@ v0.3.0 opens the first narrow receiver-side write boundary: an approval-gated sh
 
 v0.3.1 adds a read-only shared update route preview. It points to an existing candidate route surface and writes nothing. See `wom-kit/docs/shared-update-route-preview.md`.
 
-v0.3.283 keeps the existing activity-group CLI and v0.1 artifacts while
-isolating retained add journals and reserved future-removal journals across
-the shared writer boundary. Recovery exactly rebinds completed receipts before
-cleanup. It adds no MCP writer, and the removal writer is deferred to
-v0.3.284. See `wom-kit/docs/activity-group-membership-write.md`.
+v0.3.284 adds the separate approval-gated
+`activity-group-membership-removal-write`, read-only
+`activity-group-membership-removal-recovery-plan`, and approval-gated
+`activity-group-membership-removal-recover` commands, each with an
+`event-group-*` alias. Add and removal transactions share one global writer
+lock and scan both private roots, while removal keeps its own request,
+journal, receipt, and recovery contracts. It adds no MCP writer and performs
+no membership inference. See
+`wom-kit/docs/activity-group-membership-removal-write.md`.
 
 For a beginner-friendly full walkthrough, see:
 
