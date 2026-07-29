@@ -10,6 +10,17 @@ v0.3.0 opens the first narrow receiver-side write boundary: an approval-gated sh
 
 v0.3.1 adds a read-only shared update route preview. It points to an existing candidate route surface and writes nothing. See `wom-kit/docs/shared-update-route-preview.md`.
 
+v0.3.286 activates the WOM-local base edge type `format_variant` for one
+human-reviewed alternate rendition of the same intellectual content. The
+source is only the chosen review anchor, not a claim that it is older,
+original, or canonical. Use the existing `base-link-types` adoption,
+`zettel-edge` dry-run/approve, `revert-edge`, and `related-zets` paths. This
+release adds no inference, corpus migration, automatic reciprocal edge,
+provider read, beta-archive write, or MCP writer. `zettel-edge-batch` always
+routes this type to `human_review_queue` with
+`manual_single_edge_review_required` and cannot write it. See
+`wom-kit/docs/zettel-edge-write.md`.
+
 v0.3.285 narrows one recurring Notion manifest-import title failure. For a
 new Notion JSON/YAML item whose normal title is identifier-shaped,
 `import-external` can use the same item's exact lowercase top-level string

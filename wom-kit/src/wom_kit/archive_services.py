@@ -364,9 +364,11 @@ CONNECTION_EDGE_RELATIONSHIP_VOCABULARY = [
     },
     {
         "meaning_id": "format_variant",
-        "status": "provisional_collect_under_neither_fits",
-        "active_edge_type": None,
-        "meaning": "The source and target are the same intellectual content in another format or rendition.",
+        "status": "active_mapping",
+        "active_edge_type": "format_variant",
+        "meaning": "The target is an alternate rendition of the same intellectual content as the human-selected source anchor.",
+        "write_policy": "manual_human_review_only",
+        "direction_policy": "does_not_claim_original_older_or_canonical_status",
     },
     {
         "meaning_id": "responds_to",
@@ -413,6 +415,7 @@ CONNECTION_EDGE_ACTIVE_MEANING_BY_EDGE_TYPE = {
     "supersedes": "version_replacement",
     "view_query": "view_snapshot_context",
     "comment_context": "comment_context",
+    "format_variant": "format_variant",
 }
 NOTION_NESTED_TREE_SOURCES = {"notion"}
 NOTION_NESTED_TREE_NODE_KINDS = {
@@ -54683,11 +54686,9 @@ def connection_edge_provisional_meaning_candidates(*, edge_type: str, connection
     if connection_kind == "relation_property" and edge_type == "material":
         return ["responds_to", "fulfills"]
     if connection_kind == "relation_property" and edge_type == "derived":
-        return ["format_variant", "fulfills"]
+        return ["fulfills"]
     if edge_type == "semantic":
         return ["enabling"]
-    if edge_type == "embed":
-        return ["format_variant"]
     if edge_type == "view_query":
         return ["sequence"]
     return []
@@ -61855,6 +61856,8 @@ def zettel_edge_batch_candidate_rows(plan: dict[str, Any], blockers: list[str]) 
 
 
 def zettel_edge_batch_item_policy_state(item: dict[str, Any], policy: dict[str, Any]) -> tuple[str, str]:
+    if item.get("edge_type") == "format_variant":
+        return "review_queue", "manual_single_edge_review_required"
     if item.get("requires_human_review"):
         return "review_queue", "candidate_requires_human_review"
     review_status = str(item.get("review_status") or "").strip().lower()
