@@ -10,6 +10,16 @@ v0.3.0 opens the first narrow receiver-side write boundary: an approval-gated sh
 
 v0.3.1 adds a read-only shared update route preview. It points to an existing candidate route surface and writes nothing. See `wom-kit/docs/shared-update-route-preview.md`.
 
+v0.3.285 narrows one recurring Notion manifest-import title failure. For a
+new Notion JSON/YAML item whose normal title is identifier-shaped,
+`import-external` can use the same item's exact lowercase top-level string
+`index` after the existing title and privacy checks. A normal human title
+always wins. The fallback does not apply to Google Drive, directory-only
+Markdown, `pages.index.jsonl`, nested/differently-cased keys, or existing
+zettels, and one approved call's frozen discovery does not bind a later
+separate approval to an earlier dry-run. See
+`wom-kit/docs/external-imports.md`.
+
 v0.3.284 adds the separate approval-gated
 `activity-group-membership-removal-write`, read-only
 `activity-group-membership-removal-recovery-plan`, and approval-gated

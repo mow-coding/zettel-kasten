@@ -6,6 +6,43 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.285 - 2026-07-30
+
+- Added a narrow Notion manifest-import title fallback for new items whose
+  resolved primary title is identifier-shaped.
+- Keep a normal human title authoritative. Consider only the exact lowercase
+  top-level `index` field on the same Notion JSON/YAML manifest item; ignore
+  differently cased, nested, rich-text, non-string, non-Notion, and
+  directory-only forms.
+- Require a present fallback value to pass the existing title normalization,
+  whitespace, specificity, identifier, 500-character, local-path,
+  provider-locator, and secret-like metadata boundaries. Unsafe values block
+  the item with fixed content-free codes rather than leaking the rejected
+  value.
+- Redact every user-derived preview and receipt-preview identity field for a
+  rejected fallback, compare numeric and other scalar item ids through the
+  importer's effective string form, and withhold public-field aliases of the
+  private `source_page_id`. A Notion `source_page_id` that would become an
+  explicit or deterministic generated public zettel filename now blocks
+  before writing. This boundary covers item projections and generated target
+  paths; independently supplied export/reviewer provenance remains truthful.
+- Use one shared resolver for file-backed and inline-content manifest items.
+- Preflight an explicit identifier-title path-backed item before path I/O and
+  keep unsupported, missing/unsafe, unreadable/undecodable, and empty item-file
+  failures content-free.
+- Reject POSIX/UNC/Windows drive-qualified/traversing manifest item paths
+  before joining, and wrap root/candidate resolver failures without path echo.
+- Derive item-relative paths from one guarded resolved pair, and skip
+  filesystem existence probes for already blocked withheld targets.
+- Freeze one discovery projection inside an approved import call, so planning
+  and writes in that call cannot select different titles after a manifest
+  edit.
+- Preserve existing zets and all existing external-import authority and
+  privacy boundaries. This release does not join `pages.index.jsonl`, call a
+  provider API, create `facets.index`, use `source_page_id` for title
+  selection, repair an existing corpus, improve generated indexes, or bind a
+  later separately approved invocation to an earlier dry-run digest.
+
 ## v0.3.284 - 2026-07-30
 
 - Added CLI-only approval-gated
