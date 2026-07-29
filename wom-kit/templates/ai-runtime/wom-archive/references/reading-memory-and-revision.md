@@ -27,8 +27,7 @@ archive inbox-pipeline-audit <archive-root> --dry-run --format json
 `insufficient_evidence` must remain uncertain. Do not rewrite or delete a
 draft to silence the audit.
 
-To validate one human-selected event anchor and exact member set before any
-future write, use:
+To validate one human-selected event anchor and exact member set, use:
 
 ```text
 archive activity-group-membership-plan <archive-root> --request .wom-scratch/private/activity-groups/<reviewed>.json --dry-run --progress --format json
@@ -38,8 +37,16 @@ The request is private review evidence. Search can help a human find
 candidates, but the command must not convert search results, titles, dates,
 nearby files, or existing edges into membership. Treat `activity_group` as
 neutral co-membership, not sequence, source, derivation, continuation, or
-containment. v0.3.280 has no writer or member-removal mode; never hand-edit
-canonical zets to imitate one.
+containment.
+
+To add the reviewed memberships, pass the exact request and review-plan hashes
+to `activity-group-membership-write --dry-run`, then use its explicit
+`--approve --reviewed-by ... --affirm-memberships-reviewed` path only after
+human review. Never hand-edit canonical zets. If a hard interruption retains
+its journal and lock, first confirm the old writer is no longer running, then
+use `activity-group-membership-recovery-plan --dry-run` and the exact
+digest-bound `activity-group-membership-recover` approval. Never infer or
+remove membership, and never execute a `manual_forensic_hold`.
 
 ## Read Abstracts Before Full Bodies
 

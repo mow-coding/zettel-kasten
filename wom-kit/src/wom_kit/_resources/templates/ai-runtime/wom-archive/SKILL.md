@@ -78,8 +78,12 @@ token-budget contract.
 - Plan event membership only from one explicit human-selected private request
   with `archive activity-group-membership-plan <archive-root> --request
   <private-reviewed-request> --dry-run --format json`. Never infer members
-  from search, titles, dates, nearby files, or edges; no membership writer
-  exists yet.
+  from search, titles, dates, nearby files, or edges. Add reviewed memberships
+  only through the plan's exact request/review hashes and
+  `activity-group-membership-write`; never hand-edit canonical zets. If that
+  writer was interrupted, first confirm it is no longer running, then use the
+  separate recovery plan and exact approved recovery command. Never remove a
+  membership or execute a manual forensic hold.
 - Create an AI-assisted draft only through `archive create-draft` dry-run and
   its exact reviewed replay. Never write Markdown directly into `inbox/`.
 - Before a write, show the human what will change, where it will change, and
