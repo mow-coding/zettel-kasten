@@ -46,7 +46,12 @@ human review. Never hand-edit canonical zets. If a hard interruption retains
 its journal and lock, first confirm the old writer is no longer running, then
 use `activity-group-membership-recovery-plan --dry-run` and the exact
 digest-bound `activity-group-membership-recover` approval. Never infer
-membership and never execute a `manual_forensic_hold`.
+membership and never execute a `manual_forensic_hold`. A retained add journal
+or reserved future-removal journal in either private request root blocks a new
+add before and under the shared lock. Do not read, rename, or delete that
+private evidence merely to make the writer proceed. Completed cleanup requires
+the receipt's raw hash and exact ordered journal/lock binding to remain the
+same as the reviewed recovery plan.
 
 To review explicitly selected removals without writing, use:
 
@@ -54,8 +59,10 @@ To review explicitly selected removals without writing, use:
 archive activity-group-membership-removal-plan <archive-root> --request .wom-scratch/private/activity-group-removals/<reviewed>.json --dry-run --progress --format json
 ```
 
-The removal writer is not implemented. Preserve the private request and review
-digest, and never remove a membership by editing a canonical zet directly.
+The removal writer is deferred to v0.3.284. Preserve the private request and
+review digest, and never remove a membership by editing a canonical zet
+directly. The reserved removal-journal suffix in this root is transaction
+isolation for that future writer, not current removal authority.
 
 ## Read Abstracts Before Full Bodies
 

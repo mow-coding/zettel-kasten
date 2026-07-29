@@ -1,6 +1,6 @@
 {
   "schema": "wom-kit/package-resource-manifest/v0.1",
-  "version": "0.3.282",
+  "version": "0.3.283",
   "source_of_truth": "wom-kit source resource directories",
   "file_count": 99,
   "files": [
@@ -301,8 +301,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/SKILL.md",
       "packaged": "templates/ai-runtime/wom-archive/SKILL.md",
-      "bytes": 6799,
-      "sha256": "9324a381ec757379b867778d69595192f20fde135ccaf01ffcbc32a188a8950d"
+      "bytes": 6982,
+      "sha256": "090da3c37a32286b34d656488145888b01879dfc150a147836c96eafe7949831"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/capture-draft-and-publication.md",
@@ -325,8 +325,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/references/reading-memory-and-revision.md",
       "packaged": "templates/ai-runtime/wom-archive/references/reading-memory-and-revision.md",
-      "bytes": 6902,
-      "sha256": "5ab07815d045521546f8a2160427ec03dde084dc94b34d4cd9d0f7318206bb6b"
+      "bytes": 7403,
+      "sha256": "f64869813060233936c45bff6dfce78e7574ce9074d5f1b238b59bd0ab601a20"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/safety-results-and-human-language.md",
@@ -593,10 +593,10 @@
       "sha256": "d619dc26af3216498c8392dfe838b0fe752d4bad9da998a58ca682d668fc510c"
     },
     {
-      "source": "docs/releases/v0.3.282.md",
-      "packaged": "release-notes/v0.3.282.md",
-      "bytes": 2247,
-      "sha256": "0748456d747cf4900e5351af2e85582e0a543db6001eaf9f199e25b67261c7a6"
+      "source": "docs/releases/v0.3.283.md",
+      "packaged": "release-notes/v0.3.283.md",
+      "bytes": 9812,
+      "sha256": "ca7a21b59ac0d136ab4a0c06b58981f0da9054c706298279d97a00ce5fabc796"
     }
   ]
 }

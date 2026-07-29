@@ -175,4 +175,6 @@ Member removal remains a separate reviewed operation. Neither the plan nor the
 v0.3.281 writer removes any membership. v0.3.282 adds only the separate
 read-only
 [Activity-Group Membership Removal Plan](activity-group-membership-removal-plan.md);
-its removal writer is still unavailable.
+v0.3.283 isolates retained add journals and reserved future-removal journals
+under the existing shared writer boundary but adds no removal write. The
+approval-gated removal writer is deferred to v0.3.284.
