@@ -40,7 +40,7 @@ To inspect only this layer, run:
 archive operational-context <archive-root> --dry-run --format json
 ```
 
-Introduced in v0.3.278 and extended through v0.3.282, this read-only output also
+Introduced in v0.3.278 and extended through v0.3.283, this read-only output also
 returns the same official
 `wom-kit/ai-command-path-routing/v0.5` object as runtime-context and
 ai-start-here. It routes search through `archive search`, conservative inbox
@@ -51,7 +51,10 @@ read-only `activity-group-membership-plan`, approved additions through the
 digest-bound `activity-group-membership-write`, and interrupted writes through
 the separate recovery plan/approval commands. Explicit removals have a
 read-only removal plan but no writer. None infers membership. A destination
-folder alone is never write authorization. The inbox
+folder alone is never write authorization. v0.3.283 keeps routing v0.5 and
+adds no new route; it makes retained/reserved activity-group journals block a
+new add before and under the shared lock, and keeps mismatched completion
+evidence in forensic hold. The inbox
 audit proves no writer identity and performs no automatic repair. See
 [AI Command-Path Routing](ai-command-path-routing.md).
 

@@ -11,9 +11,10 @@ KIT_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = KIT_ROOT.parent
 CURRENT_VERSION = f"v{__version__}"
 CURRENT_RUNTIME_STATUS = (
-    f"Status: {CURRENT_VERSION} installed-wheel resource, quick start, "
-    "session handoff, local backup evidence, and philosophy implementation "
-    "traceability checkpoint"
+    f"Status: {CURRENT_VERSION} installed-wheel resource, "
+    "retained-journal isolation, quick start, session handoff, "
+    "local backup evidence, "
+    "and philosophy implementation traceability checkpoint"
 )
 MATRIX_PATH = KIT_ROOT / "docs" / "capability-matrix.md"
 PRODUCT_ROADMAP_PATH = KIT_ROOT / "docs" / "product-roadmap.md"
@@ -8769,14 +8770,6 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             / "docs"
             / "archive-infra-decision-log-2026-07-29-v03282-activity-group-membership-removal-plan.md"
         ).read_text(encoding="utf-8")
-        packaged_release_text = (
-            KIT_ROOT
-            / "src"
-            / "wom_kit"
-            / "_resources"
-            / "release-notes"
-            / "v0.3.282.md"
-        ).read_text(encoding="utf-8")
         source_skill_text = (
             KIT_ROOT / "templates" / "ai-runtime" / "wom-archive" / "SKILL.md"
         ).read_text(encoding="utf-8")
@@ -8882,7 +8875,6 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "[Activity-Group Membership Removal Plan](activity-group-membership-removal-plan.md)",
             public_map_ko_text,
         )
-        self.assertEqual(packaged_release_text, release_text)
         self.assertEqual(packaged_skill_text, source_skill_text)
         self.assertEqual(packaged_reference_text, source_reference_text)
 
@@ -8892,15 +8884,141 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             upgrade_text,
             upgrade_ko_text,
             changelog_text,
-            install_text,
-            install_ko_text,
         ):
             with self.subTest(document="v03282-public-version-surface"):
                 self.assertIn("v0.3.282", text)
         self.assertIn(
-            "releases/download/v0.3.282/wom_kit-0.3.282-py3-none-any.whl",
+            "releases/download/v0.3.283/wom_kit-0.3.283-py3-none-any.whl",
             root_readme_text,
         )
+
+    def test_v03283_activity_group_transaction_hardening_is_public_and_synchronized(
+        self,
+    ) -> None:
+        release_text = (
+            KIT_ROOT / "docs" / "releases" / "v0.3.283.md"
+        ).read_text(encoding="utf-8")
+        packaged_release_text = (
+            KIT_ROOT
+            / "src"
+            / "wom_kit"
+            / "_resources"
+            / "release-notes"
+            / "v0.3.283.md"
+        ).read_text(encoding="utf-8")
+        decision_text = (
+            KIT_ROOT
+            / "docs"
+            / "archive-infra-decision-log-2026-07-29-v03283-activity-group-retained-journal-isolation.md"
+        ).read_text(encoding="utf-8")
+        guide_text = (
+            KIT_ROOT / "docs" / "activity-group-membership-write.md"
+        ).read_text(encoding="utf-8")
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        routing_text = (
+            KIT_ROOT / "docs" / "ai-command-path-routing.md"
+        ).read_text(encoding="utf-8")
+        source_skill_text = (
+            KIT_ROOT / "templates" / "ai-runtime" / "wom-archive" / "SKILL.md"
+        ).read_text(encoding="utf-8")
+        packaged_skill_text = (
+            KIT_ROOT
+            / "src"
+            / "wom_kit"
+            / "_resources"
+            / "templates"
+            / "ai-runtime"
+            / "wom-archive"
+            / "SKILL.md"
+        ).read_text(encoding="utf-8")
+        root_readme_text = (REPO_ROOT / "README.md").read_text(
+            encoding="utf-8"
+        )
+        root_readme_ko_text = (REPO_ROOT / "README.ko.md").read_text(
+            encoding="utf-8"
+        )
+        install_text = (
+            KIT_ROOT / "docs" / "python-tool-install.md"
+        ).read_text(encoding="utf-8")
+        install_ko_text = (
+            KIT_ROOT / "docs" / "python-tool-install.ko.md"
+        ).read_text(encoding="utf-8")
+
+        self.assertEqual(packaged_release_text, release_text)
+        self.assertEqual(packaged_skill_text, source_skill_text)
+        for text in (
+            release_text,
+            decision_text,
+            guide_text,
+            matrix_text,
+            routing_text,
+        ):
+            with self.subTest(document="v03283-transaction-boundary"):
+                self.assertIn("v0.3.283", text)
+                self.assertIn("retained", text.lower())
+                self.assertIn("journal", text.lower())
+
+        for phrase in (
+            ".wom-scratch/private/activity-groups/",
+            ".wom-scratch/private/activity-group-removals/",
+            "5,000",
+            "direct-child",
+            "transaction-binding SHA-256",
+            "receipt",
+            "manual_forensic_hold",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, release_text)
+
+        self.assertIn(
+            "wom-kit/ai-command-path-routing/v0.5",
+            routing_text,
+        )
+        self.assertIn("artifact schema at v0.1", release_text)
+        self.assertIn(
+            "No new schema file",
+            release_text,
+        )
+        release_flat = " ".join(release_text.split())
+        guide_flat = " ".join(guide_text.split())
+        matrix_flat = " ".join(matrix_text.split())
+        for phrase in (
+            "activity-group-membership-write-lock/v0.2",
+            "renameat2(RENAME_EXCHANGE)",
+            "renameatx_np(RENAME_SWAP)",
+            "ReplaceFileW",
+            "globally scanned private activity-group transaction root",
+            "v0.1 lock-only",
+            "applied_evidence_conflict",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, release_flat)
+        for phrase in (
+            "compare-and-swap",
+            "clean final inventory",
+            "v0.1 lock-only",
+            "applied_evidence_conflict",
+        ):
+            with self.subTest(guide_phrase=phrase):
+                self.assertIn(phrase, guide_flat)
+        for phrase in (
+            "compare-and-swap",
+            "v0.2",
+            "applied_evidence_conflict",
+        ):
+            with self.subTest(matrix_phrase=phrase):
+                self.assertIn(phrase, matrix_flat)
+        for text in (
+            root_readme_text,
+            root_readme_ko_text,
+            install_text,
+            install_ko_text,
+        ):
+            with self.subTest(document="v03283-current-install"):
+                self.assertIn(
+                    "releases/download/v0.3.283/wom_kit-0.3.283-py3-none-any.whl",
+                    text,
+                )
 
 
 if __name__ == "__main__":
