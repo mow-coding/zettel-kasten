@@ -59687,6 +59687,1792 @@ archive_services.zet_abstract_backfill_recover(
             self.assertTrue(any("already has zettel id" in blocker for blocker in result["blockers"]))
             self.assertIn("zettel_id_exists", result["zettels"][0]["conflicts"])
 
+    def test_import_external_notion_index_fallback_obeys_precedence_and_source_boundaries(self) -> None:
+        identifier = "0123456789abcdef0123456789abcdef"
+        dashed_identifier = "01234567-89ab-cdef-0123-456789abcdef"
+        valid_301 = "Reviewed 301 character source title " + ("a" * 265)
+        self.assertEqual(len(valid_301), 301)
+        valid_500 = "Reviewed " + ("b" * 491)
+        self.assertEqual(len(valid_500), 500)
+
+        cases = [
+            {
+                "name": "human_title_precedence",
+                "source": "notion",
+                "item": {
+                    "external_id": "notion-human-title",
+                    "title": "Human Authored Project Brief",
+                    "index": "Fallback Must Not Replace A Human Title",
+                },
+                "expected": "Human Authored Project Brief",
+            },
+            {
+                "name": "normal_title_equal_to_external_id",
+                "source": "notion",
+                "item": {
+                    "external_id": "Quarterly Roadmap Notes",
+                    "title": "Quarterly Roadmap Notes",
+                    "index": "Fallback Must Not Replace A Normal Title",
+                },
+                "expected": "Quarterly Roadmap Notes",
+            },
+            {
+                "name": "compact_32_hex_fallback",
+                "source": "notion",
+                "item": {
+                    "external_id": "notion-compact-uuid",
+                    "title": identifier,
+                    "index": "Reviewed Operating Model Notes",
+                },
+                "expected": "Reviewed Operating Model Notes",
+            },
+            {
+                "name": "dashed_uuid_fallback",
+                "source": "notion",
+                "item": {
+                    "external_id": "notion-dashed-uuid",
+                    "title": dashed_identifier,
+                    "index": "Reviewed Source Architecture Notes",
+                },
+                "expected": "Reviewed Source Architecture Notes",
+            },
+            {
+                "name": "short_hex_is_not_identifier_shaped",
+                "source": "notion",
+                "item": {
+                    "external_id": "notion-short-hex",
+                    "title": "deadbeef",
+                    "index": "Fallback Must Not Replace Short Hex",
+                },
+                "expected": "deadbeef",
+            },
+            {
+                "name": "absent_index_keeps_legacy_title",
+                "source": "notion",
+                "item": {
+                    "external_id": "notion-no-index",
+                    "title": identifier,
+                },
+                "expected": identifier,
+            },
+            {
+                "name": "google_drive_ignores_index",
+                "source": "google_drive",
+                "item": {
+                    "external_id": "gdrive-index",
+                    "title": identifier,
+                    "index": "Google Drive Index Must Be Ignored",
+                },
+                "expected": identifier,
+            },
+            {
+                "name": "google_drive_source_page_alias_boundary_is_unchanged",
+                "source": "google_drive",
+                "item": {
+                    "id": "zet_google_drive_source_page_alias",
+                    "external_id": "zet_google_drive_source_page_alias",
+                    "title": "Google Drive Human Title",
+                    "index": "Google Drive Index Must Be Ignored",
+                    "facets": {
+                        "source_page_id": (
+                            "zet_google_drive_source_page_alias"
+                        ),
+                    },
+                },
+                "expected": "Google Drive Human Title",
+                "expected_external_id": (
+                    "zet_google_drive_source_page_alias"
+                ),
+            },
+            {
+                "name": "differently_cased_index_is_ignored",
+                "source": "notion",
+                "item": {
+                    "external_id": "notion-uppercase-index",
+                    "title": identifier,
+                    "Index": "Uppercase Index Must Be Ignored",
+                },
+                "expected": identifier,
+            },
+            {
+                "name": "nested_index_is_ignored",
+                "source": "notion",
+                "item": {
+                    "external_id": "notion-nested-index",
+                    "title": identifier,
+                    "properties": {"index": "Nested Index Must Be Ignored"},
+                },
+                "expected": identifier,
+            },
+            {
+                "name": "valid_301_character_candidate",
+                "source": "notion",
+                "item": {
+                    "external_id": "notion-301-title",
+                    "title": identifier,
+                    "index": valid_301,
+                },
+                "expected": valid_301,
+            },
+            {
+                "name": "exact_500_character_candidate",
+                "source": "notion",
+                "item": {
+                    "external_id": "notion-500-title",
+                    "title": identifier,
+                    "index": valid_500,
+                },
+                "expected": valid_500,
+            },
+        ]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            archive_root = tmp_root / "archive"
+            init_code, init_output = self.init_personal_archive(
+                archive_root,
+                "archive:personal:notion-index-fallback-boundaries",
+            )
+            self.assertEqual(init_code, 0, init_output)
+
+            for case_number, case in enumerate(cases):
+                with self.subTest(case=case["name"]):
+                    export_root = tmp_root / f"case-{case_number:02d}"
+                    export_root.mkdir()
+                    manifest = export_root / "manifest.json"
+                    item = dict(case["item"])
+                    item["content"] = "# Imported source\n\nSanitized source body.\n"
+                    manifest.write_text(
+                        json.dumps(
+                            {
+                                "source_system": case["source"],
+                                "items": [item],
+                            },
+                            ensure_ascii=False,
+                            sort_keys=True,
+                        ),
+                        encoding="utf-8",
+                    )
+                    code, output = self.run_cli(
+                        [
+                            "import-external",
+                            str(archive_root),
+                            "--source",
+                            str(case["source"]),
+                            "--export",
+                            str(manifest),
+                            "--dry-run",
+                            "--format",
+                            "json",
+                        ]
+                    )
+                    self.assertEqual(code, 0, output)
+                    result = json.loads(output)
+                    self.assertTrue(result["ok"], result)
+                    self.assertEqual(result["items"][0]["title"], case["expected"])
+                    self.assertEqual(result["items"][0]["conflicts"], [])
+                    if "expected_external_id" in case:
+                        self.assertEqual(
+                            result["items"][0]["external_id"],
+                            case["expected_external_id"],
+                        )
+
+            directory_export = tmp_root / "directory-only"
+            directory_export.mkdir()
+            (directory_export / "identifier.md").write_text(
+                f"# {identifier}\n\nDirectory-only source body.\n",
+                encoding="utf-8",
+            )
+            (directory_export / "index.json").write_text(
+                json.dumps({"index": "A Sidecar Must Not Be Joined"}),
+                encoding="utf-8",
+            )
+            code, output = self.run_cli(
+                [
+                    "import-external",
+                    str(archive_root),
+                    "--source",
+                    "notion",
+                    "--export",
+                    str(directory_export),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertEqual(result["item_count"], 1)
+            self.assertEqual(result["items"][0]["title"], identifier)
+            self.assertNotIn("A Sidecar Must Not Be Joined", output)
+
+            yaml_export = tmp_root / "yaml-export"
+            yaml_export.mkdir()
+            yaml_manifest = yaml_export / "manifest.yml"
+            yaml_manifest.write_text(
+                "\n".join(
+                    [
+                        "source_system: notion",
+                        "items:",
+                        "  - external_id: notion-yaml-fallback",
+                        f"    title: {identifier}",
+                        "    index: Reviewed YAML Source Title",
+                        "    content: |",
+                        "      # YAML source",
+                        "",
+                        "      Safe YAML body.",
+                        "",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            yaml_code, yaml_output = self.run_cli(
+                [
+                    "import-external",
+                    str(archive_root),
+                    "--source",
+                    "notion",
+                    "--export",
+                    str(yaml_manifest),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(yaml_code, 0, yaml_output)
+            yaml_result = json.loads(yaml_output)
+            self.assertEqual(yaml_result["item_count"], 1)
+            self.assertEqual(
+                yaml_result["items"][0]["title"],
+                "Reviewed YAML Source Title",
+            )
+
+    def test_import_external_notion_index_fallback_is_shared_by_path_and_inline_items(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            archive_root = tmp_root / "archive"
+            init_code, init_output = self.init_personal_archive(
+                archive_root,
+                "archive:personal:notion-index-fallback-shared-resolver",
+            )
+            self.assertEqual(init_code, 0, init_output)
+
+            export_root = tmp_root / "notion-export"
+            export_root.mkdir()
+            (export_root / "path-backed.md").write_text(
+                "# 0123456789abcdef0123456789abcdef\n\nPath-backed body.\n",
+                encoding="utf-8",
+            )
+            manifest = export_root / "manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "source_system": "notion",
+                        "items": [
+                            {
+                                "external_id": "notion-path-backed",
+                                "title": "0123456789abcdef0123456789abcdef",
+                                "index": "Reviewed Path Backed Source Title",
+                                "path": "path-backed.md",
+                            },
+                            {
+                                "external_id": "notion-inline",
+                                "title": "01234567-89ab-cdef-0123-456789abcdef",
+                                "index": "Reviewed Inline Source Title",
+                                "content": "# Inline source\n\nInline body.\n",
+                            },
+                        ],
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
+
+            code, output = self.run_cli(
+                [
+                    "import-external",
+                    str(archive_root),
+                    "--source",
+                    "notion",
+                    "--export",
+                    str(manifest),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            titles = {item["external_id"]: item["title"] for item in result["items"]}
+            self.assertEqual(
+                titles,
+                {
+                    "notion-path-backed": "Reviewed Path Backed Source Title",
+                    "notion-inline": "Reviewed Inline Source Title",
+                },
+            )
+
+    def test_import_external_notion_index_fallback_preflights_before_item_path_resolution(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            archive_root = tmp_root / "archive"
+            init_code, init_output = self.init_personal_archive(
+                archive_root,
+                "archive:personal:notion-index-fallback-path-preflight",
+            )
+            self.assertEqual(init_code, 0, init_output)
+
+            export_root = tmp_root / "notion-export"
+            export_root.mkdir()
+            rejected_path_alias = (
+                "C:"
+                + "\\"
+                + "Users"
+                + "\\"
+                + "Private"
+                + "\\"
+                + "PRIVATE_REJECTED_INDEX_PATH_ALIAS.md"
+            )
+            manifest = export_root / "manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "source_system": "notion",
+                        "items": [
+                            {
+                                "external_id": "notion-path-preflight",
+                                "title": "0123456789abcdef0123456789abcdef",
+                                "index": rejected_path_alias,
+                                "path": rejected_path_alias,
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
+            expected_code = (
+                "notion_index_fallback_title_unsafe_for_external_import"
+            )
+
+            code, output = self.run_cli(
+                [
+                    "import-external",
+                    str(archive_root),
+                    "--source",
+                    "notion",
+                    "--export",
+                    str(manifest),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 1, output)
+            result = json.loads(output)
+            self.assertFalse(result["ok"])
+            self.assertIn(
+                expected_code,
+                result["items"][0]["conflicts"],
+            )
+            self.assertNotIn(rejected_path_alias, output)
+            for field in (
+                "external_id",
+                "title",
+                "source_path",
+                "source_url",
+                "sha256",
+                "zettel_id",
+                "target_path",
+            ):
+                self.assertEqual(
+                    result["items"][0][field],
+                    "<withheld:private_metadata_alias>",
+                )
+
+            approve_code, approve_output = self.run_cli(
+                [
+                    "import-external",
+                    str(archive_root),
+                    "--source",
+                    "notion",
+                    "--export",
+                    str(manifest),
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(approve_code, 1, approve_output)
+            self.assertIn(expected_code, approve_output)
+            self.assertNotIn(rejected_path_alias, approve_output)
+            self.assertFalse(any((archive_root / "inbox").glob("*.md")))
+            self.assertFalse(
+                any(
+                    (archive_root / "receipts" / "import").glob("*.json")
+                )
+            )
+
+            unsafe_path_marker = "../PRIVATE_UNSAFE_ITEM_PATH.md"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "source_system": "notion",
+                        "items": [
+                            {
+                                "external_id": "notion-normal-title",
+                                "title": "Normal Human Title",
+                                "index": "Ignored Index Value",
+                                "path": unsafe_path_marker,
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
+            unsafe_code, unsafe_output = self.run_cli(
+                [
+                    "import-external",
+                    str(archive_root),
+                    "--source",
+                    "notion",
+                    "--export",
+                    str(manifest),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(unsafe_code, 1, unsafe_output)
+            self.assertEqual(
+                unsafe_output.strip(),
+                "External export item path is unsafe.",
+            )
+            self.assertNotIn(unsafe_path_marker, unsafe_output)
+
+            collision_marker = "PRIVATE_WRONG_WINDOWS_ABSOLUTE"
+            collision_path = (
+                export_root
+                / "Users"
+                / "Private"
+                / f"{collision_marker}.md"
+            )
+            collision_path.parent.mkdir(parents=True)
+            collision_path.write_text(
+                "# Wrong collision\n\nMUST_NOT_BE_IMPORTED\n",
+                encoding="utf-8",
+            )
+            windows_absolute_path = (
+                "C:"
+                + "\\"
+                + "Users"
+                + "\\"
+                + "Private"
+                + "\\"
+                + f"{collision_marker}.md"
+            )
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "source_system": "notion",
+                        "items": [
+                            {
+                                "external_id": "notion-windows-absolute",
+                                "title": "Normal Windows Path Title",
+                                "path": windows_absolute_path,
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
+            absolute_code, absolute_output = self.run_cli(
+                [
+                    "import-external",
+                    str(archive_root),
+                    "--source",
+                    "notion",
+                    "--export",
+                    str(manifest),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(absolute_code, 1, absolute_output)
+            self.assertEqual(
+                absolute_output.strip(),
+                "External export item path is unsafe.",
+            )
+            self.assertNotIn(collision_marker, absolute_output)
+            self.assertNotIn("MUST_NOT_BE_IMPORTED", absolute_output)
+
+            drive_relative_marker = "PRIVATE_WRONG_DRIVE_RELATIVE"
+            drive_relative_collision = (
+                export_root / f"{drive_relative_marker}.md"
+            )
+            drive_relative_collision.write_text(
+                "# Wrong drive-relative collision\n\n"
+                "MUST_NOT_IMPORT_DRIVE_RELATIVE\n",
+                encoding="utf-8",
+            )
+            drive_relative_path = f"C:{drive_relative_marker}.md"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "source_system": "notion",
+                        "items": [
+                            {
+                                "external_id": "notion-drive-relative",
+                                "title": "Normal Drive Relative Title",
+                                "path": drive_relative_path,
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
+            drive_code, drive_output = self.run_cli(
+                [
+                    "import-external",
+                    str(archive_root),
+                    "--source",
+                    "notion",
+                    "--export",
+                    str(manifest),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(drive_code, 1, drive_output)
+            self.assertEqual(
+                drive_output.strip(),
+                "External export item path is unsafe.",
+            )
+            self.assertNotIn(drive_relative_marker, drive_output)
+            self.assertNotIn(
+                "MUST_NOT_IMPORT_DRIVE_RELATIVE",
+                drive_output,
+            )
+
+            runtime_marker = "PRIVATE_SOURCE_PAGE_RUNTIME_LOOP"
+            runtime_relative = f"{runtime_marker}.md"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "source_system": "notion",
+                        "items": [
+                            {
+                                "external_id": "notion-runtime-loop",
+                                "title": "Normal Runtime Loop Title",
+                                "path": runtime_relative,
+                                "facets": {
+                                    "source_page_id": runtime_marker,
+                                },
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
+            original_resolve = Path.resolve
+
+            def selective_resolve(
+                path: Path,
+                *args: Any,
+                **kwargs: Any,
+            ) -> Path:
+                if path.name == runtime_relative:
+                    raise RuntimeError(
+                        f"symlink loop at {runtime_marker}"
+                    )
+                return original_resolve(path, *args, **kwargs)
+
+            with patch.object(
+                Path,
+                "resolve",
+                autospec=True,
+                side_effect=selective_resolve,
+            ):
+                runtime_code, runtime_output = self.run_cli(
+                    [
+                        "import-external",
+                        str(archive_root),
+                        "--source",
+                        "notion",
+                        "--export",
+                        str(manifest),
+                        "--dry-run",
+                        "--format",
+                        "json",
+                    ]
+                )
+            self.assertEqual(runtime_code, 1, runtime_output)
+            self.assertEqual(
+                runtime_output.strip(),
+                "External export item path is unsafe.",
+            )
+            self.assertNotIn(runtime_marker, runtime_output)
+
+            late_marker = "PRIVATE_SOURCE_PAGE_LATE_RESOLVE"
+            late_relative = f"{late_marker}.md"
+            (export_root / late_relative).write_text(
+                "# Safe source\n\nSafe body.\n",
+                encoding="utf-8",
+            )
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "source_system": "notion",
+                        "items": [
+                            {
+                                "external_id": "notion-late-resolve",
+                                "title": "Normal Late Resolve Title",
+                                "path": late_relative,
+                                "facets": {
+                                    "source_page_id": late_marker,
+                                },
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
+            late_resolve_calls = 0
+
+            def selective_late_resolve(
+                path: Path,
+                *args: Any,
+                **kwargs: Any,
+            ) -> Path:
+                nonlocal late_resolve_calls
+                if path.name == late_relative:
+                    late_resolve_calls += 1
+                    if late_resolve_calls == 2:
+                        raise RuntimeError(
+                            f"late symlink race at {late_marker}"
+                        )
+                return original_resolve(path, *args, **kwargs)
+
+            with patch.object(
+                Path,
+                "resolve",
+                autospec=True,
+                side_effect=selective_late_resolve,
+            ):
+                late_code, late_output = self.run_cli(
+                    [
+                        "import-external",
+                        str(archive_root),
+                        "--source",
+                        "notion",
+                        "--export",
+                        str(manifest),
+                        "--dry-run",
+                        "--format",
+                        "json",
+                    ]
+                )
+            self.assertEqual(late_code, 1, late_output)
+            late_result = json.loads(late_output)
+            self.assertEqual(late_result["item_count"], 0)
+            self.assertIn(
+                "Skipping unsafe external import path.",
+                late_result["warnings"],
+            )
+            self.assertNotIn(late_marker, late_output)
+
+    def test_import_external_notion_index_fallback_blocks_invalid_candidates_without_echo(self) -> None:
+        identifier_title = "fedcba9876543210fedcba9876543210"
+        private_501 = "PRIVATE501" + ("x" * 491)
+        self.assertEqual(len(private_501), 501)
+        private_2001 = "PRIVATE2001" + ("y" * 1990)
+        self.assertEqual(len(private_2001), 2001)
+        invalid_cases = [
+            (
+                "non_string",
+                {"private_nonstring_index_value": "PRIVATE_NONSTRING_MARKER"},
+                "notion_index_fallback_title_not_string",
+                "PRIVATE_NONSTRING_MARKER",
+            ),
+            (
+                "rich_text_array",
+                [
+                    {
+                        "type": "text",
+                        "plain_text": "PRIVATE_RICH_TEXT_MARKER",
+                    }
+                ],
+                "notion_index_fallback_title_not_string",
+                "PRIVATE_RICH_TEXT_MARKER",
+            ),
+            (
+                "empty",
+                "",
+                "notion_index_fallback_title_empty",
+                None,
+            ),
+            (
+                "whitespace_only",
+                "   ",
+                "notion_index_fallback_title_empty",
+                None,
+            ),
+            (
+                "line_break",
+                "PRIVATE_LINEBREAK_MARKER\nSecond line",
+                "notion_index_fallback_title_contains_line_break",
+                "PRIVATE_LINEBREAK_MARKER",
+            ),
+            (
+                "nbsp",
+                "PRIVATE_NBSP_MARKER\u00a0Detail",
+                "notion_index_fallback_title_contains_non_normalized_whitespace",
+                "PRIVATE_NBSP_MARKER",
+            ),
+            (
+                "local_path",
+                "C:"
+                + "\\"
+                + "Users"
+                + "\\"
+                + "Private"
+                + "\\"
+                + "PRIVATE_PATH_MARKER.md",
+                "notion_index_fallback_title_unsafe_for_external_import",
+                "PRIVATE_PATH_MARKER",
+            ),
+            (
+                "provider_url",
+                "https://www.notion.so/PRIVATE_PROVIDER_MARKER",
+                "notion_index_fallback_title_unsafe_for_external_import",
+                "PRIVATE_PROVIDER_MARKER",
+            ),
+            (
+                "secret_like",
+                "token=PRIVATE_SECRET_MARKER_1234567890",
+                "notion_index_fallback_title_unsafe_for_external_import",
+                "PRIVATE_SECRET_MARKER",
+            ),
+            (
+                "identifier_shaped",
+                "abcdef0123456789abcdef0123456789",
+                "notion_index_fallback_title_is_identifier_shaped",
+                "abcdef0123456789abcdef0123456789",
+            ),
+            (
+                "not_specific",
+                "Untitled",
+                "notion_index_fallback_title_not_specific_enough_for_promotion_checklist",
+                "Untitled",
+            ),
+            (
+                "over_importer_ceiling",
+                private_501,
+                "notion_index_fallback_title_unsafe_for_external_import",
+                "PRIVATE501",
+            ),
+            (
+                "over_shared_title_ceiling",
+                private_2001,
+                "notion_index_fallback_title_too_long",
+                "PRIVATE2001",
+            ),
+        ]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            archive_root = tmp_root / "archive"
+            init_code, init_output = self.init_personal_archive(
+                archive_root,
+                "archive:personal:notion-index-fallback-invalid",
+            )
+            self.assertEqual(init_code, 0, init_output)
+
+            for case_number, (name, candidate, expected_code, raw_marker) in enumerate(invalid_cases):
+                with self.subTest(case=name):
+                    source_page_id = f"PRIVATE_SOURCE_PAGE_ID_{case_number:02d}"
+                    export_root = tmp_root / f"invalid-{case_number:02d}"
+                    export_root.mkdir()
+                    manifest = export_root / "manifest.json"
+                    manifest.write_text(
+                        json.dumps(
+                            {
+                                "source_system": "notion",
+                                "items": [
+                                    {
+                                        "external_id": f"notion-invalid-{case_number:02d}",
+                                        "title": identifier_title,
+                                        "index": candidate,
+                                        "content": "# Sanitized source\n\nSafe body.\n",
+                                        "facets": {
+                                            "source_page_id": source_page_id,
+                                        },
+                                    }
+                                ],
+                            },
+                            ensure_ascii=False,
+                            sort_keys=True,
+                        ),
+                        encoding="utf-8",
+                    )
+                    code, output = self.run_cli(
+                        [
+                            "import-external",
+                            str(archive_root),
+                            "--source",
+                            "notion",
+                            "--export",
+                            str(manifest),
+                            "--dry-run",
+                            "--format",
+                            "json",
+                        ]
+                    )
+                    self.assertEqual(code, 1, output)
+                    result = json.loads(output)
+                    self.assertFalse(result["ok"])
+                    self.assertIn(expected_code, result["items"][0]["conflicts"])
+                    self.assertIn(expected_code, output)
+                    self.assertNotIn(source_page_id, output)
+                    if raw_marker:
+                        self.assertNotIn(raw_marker, output)
+                    self.assertFalse(any((archive_root / "inbox").glob("*.md")))
+                    self.assertFalse(any((archive_root / "receipts" / "import").glob("*.json")))
+
+    def test_import_external_notion_index_fallback_blocks_candidate_matching_item_identifier(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            archive_root = tmp_root / "archive"
+            init_code, init_output = self.init_personal_archive(
+                archive_root,
+                "archive:personal:notion-index-fallback-item-identifier",
+            )
+            self.assertEqual(init_code, 0, init_output)
+
+            cases = [
+                {
+                    "name": "separator_external_id",
+                    "metadata": {
+                        "external_id": "Quarterly-Source_Reference.2026",
+                    },
+                    "candidate": "Quarterly Source Reference 2026",
+                    "primary_title": "0123456789abcdef0123456789abcdef",
+                    "expected_code": (
+                        "notion_index_fallback_title_matches_item_identifier"
+                    ),
+                    "expects_withheld": False,
+                },
+                {
+                    "name": "separator_id",
+                    "metadata": {
+                        "id": "Quarterly-Source_Reference.2027",
+                    },
+                    "candidate": "Quarterly Source Reference 2027",
+                    "primary_title": "0123456789abcdef0123456789abcdef",
+                    "expected_code": (
+                        "notion_index_fallback_title_matches_item_identifier"
+                    ),
+                    "expects_withheld": False,
+                },
+                {
+                    "name": "exact_external_id",
+                    "metadata": {
+                        "external_id": "Quarterly Source Reference 2028",
+                    },
+                    "candidate": "Quarterly Source Reference 2028",
+                    "primary_title": "0123456789abcdef0123456789abcdef",
+                    "expected_code": (
+                        "notion_index_fallback_title_matches_item_identifier"
+                    ),
+                    "expects_withheld": True,
+                },
+                {
+                    "name": "exact_id_override",
+                    "metadata": {
+                        "id": "zet_reviewed_source_title_2029",
+                    },
+                    "candidate": "zet_reviewed_source_title_2029",
+                    "primary_title": "0123456789abcdef0123456789abcdef",
+                    "expected_code": (
+                        "notion_index_fallback_title_matches_item_identifier"
+                    ),
+                    "expects_withheld": True,
+                },
+                {
+                    "name": "float_external_id",
+                    "metadata": {"external_id": 123.45},
+                    "candidate": "123.45",
+                    "primary_title": "0123456789abcdef0123456789abcdef",
+                    "expected_code": (
+                        "notion_index_fallback_title_matches_item_identifier"
+                    ),
+                    "expects_withheld": True,
+                },
+                {
+                    "name": "float_id",
+                    "metadata": {"id": 123.45},
+                    "candidate": "123.45",
+                    "primary_title": "0123456789abcdef0123456789abcdef",
+                    "expected_code": (
+                        "notion_index_fallback_title_matches_item_identifier"
+                    ),
+                    "expects_withheld": True,
+                },
+                {
+                    "name": "primary_title_alias",
+                    "metadata": {"external_id": "notion-primary-title-alias"},
+                    "candidate": "abcdef0123456789abcdef0123456789",
+                    "primary_title": "abcdef0123456789abcdef0123456789",
+                    "expected_code": (
+                        "notion_index_fallback_title_is_identifier_shaped"
+                    ),
+                    "expects_withheld": True,
+                },
+                {
+                    "name": "source_path_alias",
+                    "metadata": {
+                        "id": "Reviewed-Path_Alias.2030",
+                        "path": "Reviewed Path Alias 2030",
+                    },
+                    "candidate": "Reviewed Path Alias 2030",
+                    "primary_title": "0123456789abcdef0123456789abcdef",
+                    "expected_code": (
+                        "notion_index_fallback_title_matches_item_identifier"
+                    ),
+                    "expects_withheld": True,
+                },
+                {
+                    "name": "source_url_alias",
+                    "metadata": {
+                        "external_id": "notion-source-url-alias",
+                        "source_url": (
+                            "https://www.notion.so/"
+                            "PRIVATE_REJECTED_SOURCE_URL_ALIAS"
+                        ),
+                    },
+                    "candidate": (
+                        "https://www.notion.so/"
+                        "PRIVATE_REJECTED_SOURCE_URL_ALIAS"
+                    ),
+                    "primary_title": "0123456789abcdef0123456789abcdef",
+                    "expected_code": (
+                        "notion_index_fallback_title_unsafe_for_external_import"
+                    ),
+                    "expects_withheld": True,
+                },
+            ]
+            for case_number, case in enumerate(cases):
+                with self.subTest(case=case["name"]):
+                    rejected_candidate = str(case["candidate"])
+                    source_page_id = (
+                        f"PRIVATE_SOURCE_PAGE_ID_IDENTIFIER_MATCH_{case_number}"
+                    )
+                    export_root = tmp_root / f"notion-export-{case_number}"
+                    export_root.mkdir()
+                    manifest = export_root / "manifest.json"
+                    item = {
+                        **case["metadata"],
+                        "title": case["primary_title"],
+                        "index": case["candidate"],
+                        "content": "# Sanitized source\n\nSafe body.\n",
+                        "facets": {
+                            "source_page_id": source_page_id,
+                        },
+                    }
+                    manifest.write_text(
+                        json.dumps(
+                            {
+                                "source_system": "notion",
+                                "items": [item],
+                            },
+                            ensure_ascii=False,
+                            sort_keys=True,
+                        ),
+                        encoding="utf-8",
+                    )
+
+                    code, output = self.run_cli(
+                        [
+                            "import-external",
+                            str(archive_root),
+                            "--source",
+                            "notion",
+                            "--export",
+                            str(manifest),
+                            "--dry-run",
+                            "--format",
+                            "json",
+                        ]
+                    )
+                    self.assertEqual(code, 1, output)
+                    result = json.loads(output)
+                    self.assertIn(
+                        case["expected_code"],
+                        result["items"][0]["conflicts"],
+                    )
+                    self.assertNotIn(rejected_candidate, output)
+                    self.assertNotIn(source_page_id, output)
+                    if case["expects_withheld"]:
+                        self.assertIn(
+                            "<withheld:private_metadata_alias>",
+                            output,
+                        )
+                    self.assertFalse(any((archive_root / "inbox").glob("*.md")))
+                    self.assertFalse(
+                        any(
+                            (archive_root / "receipts" / "import").glob(
+                                "*.json"
+                            )
+                        )
+                    )
+
+                    if case["name"] == "exact_external_id":
+                        approve_code, approve_output = self.run_cli(
+                            [
+                                "import-external",
+                                str(archive_root),
+                                "--source",
+                                "notion",
+                                "--export",
+                                str(manifest),
+                                "--approve",
+                                "--reviewed-by",
+                                "person:test",
+                                "--format",
+                                "json",
+                            ]
+                        )
+                        self.assertEqual(approve_code, 1, approve_output)
+                        self.assertIn(
+                            case["expected_code"],
+                            approve_output,
+                        )
+                        self.assertNotIn(
+                            rejected_candidate,
+                            approve_output,
+                        )
+                        self.assertFalse(
+                            any((archive_root / "inbox").glob("*.md"))
+                        )
+                        self.assertFalse(
+                            any(
+                                (
+                                    archive_root
+                                    / "receipts"
+                                    / "import"
+                                ).glob("*.json")
+                            )
+                        )
+
+    def test_import_external_notion_index_fallback_apply_is_inbox_only_and_does_not_project_index(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            archive_root = tmp_root / "archive"
+            init_code, init_output = self.init_personal_archive(
+                archive_root,
+                "archive:personal:notion-index-fallback-apply",
+            )
+            self.assertEqual(init_code, 0, init_output)
+
+            canonical_path = archive_root / "zettels" / "zet_20260730_existing_sentinel.md"
+            canonical_bytes = (
+                b"---\n"
+                b"id: zet_20260730_existing_sentinel\n"
+                b"title: Existing Canonical Sentinel\n"
+                b"status: active\n"
+                b"---\n\n"
+                b"EXISTING_CANONICAL_SENTINEL_BYTES\n"
+            )
+            canonical_path.write_bytes(canonical_bytes)
+            index_path = archive_root / "db" / "archive-index.sqlite"
+            index_path.parent.mkdir(parents=True, exist_ok=True)
+            sqlite_sentinel = b"EXISTING_SQLITE_SENTINEL_BYTES"
+            index_path.write_bytes(sqlite_sentinel)
+            canonical_before = {
+                path.relative_to(archive_root).as_posix(): path.read_bytes()
+                for path in (archive_root / "zettels").rglob("*")
+                if path.is_file()
+            }
+
+            source_page_id = "PRIVATE_SOURCE_PAGE_ID_APPLY_SENTINEL"
+            selected_title = "Reviewed Notion Operating Agreement"
+            export_root = tmp_root / "notion-export"
+            export_root.mkdir()
+            manifest = export_root / "manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "source_system": "notion",
+                        "items": [
+                            {
+                                "external_id": "notion-index-apply",
+                                "title": "0123456789abcdef0123456789abcdef",
+                                "index": selected_title,
+                                "content": "# Imported source\n\nSanitized source body.\n",
+                                "facets": {
+                                    "domain": "research",
+                                    "source_page_id": source_page_id,
+                                },
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
+
+            code, output = self.run_cli(
+                [
+                    "import-external",
+                    str(archive_root),
+                    "--source",
+                    "notion",
+                    "--export",
+                    str(manifest),
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertEqual(result["imported_count"], 1)
+            draft_paths = [
+                archive_root / relative
+                for relative in result["created_paths"]
+                if relative.startswith("inbox/")
+            ]
+            self.assertEqual(len(draft_paths), 1)
+            draft_text = draft_paths[0].read_text(encoding="utf-8")
+            frontmatter, _body = archive_services.split_zettel_text(draft_text)
+            self.assertEqual(frontmatter["title"], selected_title)
+            self.assertEqual(frontmatter["facets"]["source_page_id"], source_page_id)
+            self.assertNotIn("index", frontmatter["facets"])
+            self.assertNotIn("source_index_path", draft_text)
+
+            receipt_bytes = (archive_root / result["receipt_path"]).read_bytes()
+            self.assertNotIn(source_page_id, output)
+            self.assertNotIn(source_page_id.encode("utf-8"), receipt_bytes)
+            self.assertEqual(canonical_path.read_bytes(), canonical_bytes)
+            self.assertEqual(index_path.read_bytes(), sqlite_sentinel)
+            self.assertEqual(
+                {
+                    path.relative_to(archive_root).as_posix(): path.read_bytes()
+                    for path in (archive_root / "zettels").rglob("*")
+                    if path.is_file()
+                },
+                canonical_before,
+            )
+
+    def test_import_external_notion_source_page_path_alias_early_file_failures_are_content_free(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            archive_root = tmp_root / "archive"
+            init_code, init_output = self.init_personal_archive(
+                archive_root,
+                "archive:personal:notion-source-page-path-early-failures",
+            )
+            self.assertEqual(init_code, 0, init_output)
+
+            export_root = tmp_root / "notion-export"
+            export_root.mkdir()
+            manifest = export_root / "manifest.json"
+            cases = (
+                (
+                    "MISSING",
+                    ".md",
+                    None,
+                    "Skipping unsafe external import path.",
+                ),
+                (
+                    "EMPTY",
+                    ".md",
+                    b"",
+                    "Skipping empty external import file.",
+                ),
+                (
+                    "UNSUPPORTED",
+                    ".bin",
+                    b"safe bytes",
+                    "Skipping unsupported external import file type.",
+                ),
+                (
+                    "UNREADABLE",
+                    ".md",
+                    b"\xff\xfe\xff",
+                    "Skipping unreadable external import file.",
+                ),
+            )
+            for name, suffix, file_bytes, expected_warning in cases:
+                with self.subTest(case=name):
+                    private_source_page_id = f"PRIVATE_SOURCE_PAGE_{name}"
+                    relative_path = f"{private_source_page_id}{suffix}"
+                    item_path = export_root / relative_path
+                    if file_bytes is not None:
+                        item_path.write_bytes(file_bytes)
+                    manifest.write_text(
+                        json.dumps(
+                            {
+                                "source_system": "notion",
+                                "items": [
+                                    {
+                                        "external_id": f"notion-{name.lower()}",
+                                        "title": "Normal Human Import Title",
+                                        "path": relative_path,
+                                        "facets": {
+                                            "source_page_id": (
+                                                private_source_page_id
+                                            ),
+                                        },
+                                    }
+                                ],
+                            },
+                            ensure_ascii=False,
+                            sort_keys=True,
+                        ),
+                        encoding="utf-8",
+                    )
+
+                    code, output = self.run_cli(
+                        [
+                            "import-external",
+                            str(archive_root),
+                            "--source",
+                            "notion",
+                            "--export",
+                            str(manifest),
+                            "--dry-run",
+                            "--format",
+                            "json",
+                        ]
+                    )
+                    self.assertEqual(code, 1, output)
+                    result = json.loads(output)
+                    self.assertEqual(result["item_count"], 0)
+                    self.assertIn(expected_warning, result["warnings"])
+                    self.assertNotIn(private_source_page_id, output)
+
+                    approve_code, approve_output = self.run_cli(
+                        [
+                            "import-external",
+                            str(archive_root),
+                            "--source",
+                            "notion",
+                            "--export",
+                            str(manifest),
+                            "--approve",
+                            "--reviewed-by",
+                            "person:test",
+                            "--format",
+                            "json",
+                        ]
+                    )
+                    self.assertEqual(approve_code, 1, approve_output)
+                    self.assertNotIn(
+                        private_source_page_id,
+                        approve_output,
+                    )
+                    self.assertFalse(
+                        any((archive_root / "inbox").glob("*.md"))
+                    )
+                    self.assertFalse(
+                        any(
+                            (archive_root / "receipts" / "import").glob(
+                                "*.json"
+                            )
+                        )
+                    )
+
+    def test_import_external_notion_source_page_id_alias_is_withheld_from_output_and_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            archive_root = tmp_root / "archive"
+            init_code, init_output = self.init_personal_archive(
+                archive_root,
+                "archive:personal:notion-source-page-id-alias",
+            )
+            self.assertEqual(init_code, 0, init_output)
+
+            private_source_page_id = (
+                "PRIVATE_SOURCE_PAGE_ID_MATCHING_EXTERNAL_ID"
+            )
+            selected_title = "Reviewed Notion Alias Privacy Record"
+            export_root = tmp_root / "notion-export"
+            export_root.mkdir()
+            manifest = export_root / "manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "source_system": "notion",
+                        "items": [
+                            {
+                                "external_id": private_source_page_id,
+                                "title": "0123456789abcdef0123456789abcdef",
+                                "index": selected_title,
+                                "content": "# Imported source\n\nSafe body.\n",
+                                "facets": {
+                                    "source_page_id": private_source_page_id,
+                                },
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
+
+            code, output = self.run_cli(
+                [
+                    "import-external",
+                    str(archive_root),
+                    "--source",
+                    "notion",
+                    "--export",
+                    str(manifest),
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            self.assertNotIn(private_source_page_id, output)
+            result = json.loads(output)
+            self.assertEqual(
+                result["receipt"]["items"][0]["external_id"],
+                "<withheld:private_metadata_alias>",
+            )
+
+            draft_relative = next(
+                path
+                for path in result["created_paths"]
+                if path.startswith("inbox/")
+            )
+            draft_text = (archive_root / draft_relative).read_text(
+                encoding="utf-8"
+            )
+            frontmatter, _body = archive_services.split_zettel_text(draft_text)
+            self.assertEqual(frontmatter["title"], selected_title)
+            self.assertEqual(
+                frontmatter["facets"]["source_page_id"],
+                private_source_page_id,
+            )
+            self.assertEqual(
+                frontmatter["external_import"]["external_id"],
+                private_source_page_id,
+            )
+            receipt_bytes = (
+                archive_root / result["receipt_path"]
+            ).read_bytes()
+            self.assertNotIn(
+                private_source_page_id.encode("utf-8"),
+                receipt_bytes,
+            )
+
+    def test_import_external_blocks_source_page_id_that_would_become_public_target_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            archive_root = tmp_root / "archive"
+            init_code, init_output = self.init_personal_archive(
+                archive_root,
+                "archive:personal:notion-source-page-id-path-alias",
+            )
+            self.assertEqual(init_code, 0, init_output)
+
+            private_source_page_id = "zet_private_source_page_alias_2031"
+            export_root = tmp_root / "notion-export"
+            export_root.mkdir()
+            manifest = export_root / "manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "source_system": "notion",
+                        "items": [
+                            {
+                                "id": private_source_page_id,
+                                "external_id": private_source_page_id,
+                                "title": "0123456789abcdef0123456789abcdef",
+                                "index": "Reviewed Private Path Alias Record",
+                                "content": "# Imported source\n\nSafe body.\n",
+                                "facets": {
+                                    "source_page_id": private_source_page_id,
+                                },
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
+            expected_code = "source_page_id_aliases_public_target_path"
+
+            code, output = self.run_cli(
+                [
+                    "import-external",
+                    str(archive_root),
+                    "--source",
+                    "notion",
+                    "--export",
+                    str(manifest),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 1, output)
+            self.assertNotIn(private_source_page_id, output)
+            result = json.loads(output)
+            self.assertIn(expected_code, result["items"][0]["conflicts"])
+
+            original_archive_internal_path = (
+                archive_services.archive_internal_path
+            )
+            guarded_relative_paths: list[str] = []
+
+            def fail_if_private_target_is_resolved(
+                root: Path,
+                relative_path: str,
+            ) -> Path:
+                guarded_relative_paths.append(relative_path)
+                if private_source_page_id in relative_path:
+                    raise archive_services.ArchiveServiceError(
+                        "unsafe reparse target "
+                        + private_source_page_id
+                    )
+                return original_archive_internal_path(
+                    root,
+                    relative_path,
+                )
+
+            with patch(
+                "wom_kit.archive_services.archive_internal_path",
+                side_effect=fail_if_private_target_is_resolved,
+            ):
+                guarded_code, guarded_output = self.run_cli(
+                    [
+                        "import-external",
+                        str(archive_root),
+                        "--source",
+                        "notion",
+                        "--export",
+                        str(manifest),
+                        "--dry-run",
+                        "--format",
+                        "json",
+                    ]
+                )
+            self.assertEqual(guarded_code, 1, guarded_output)
+            guarded_result = json.loads(guarded_output)
+            self.assertIn(
+                expected_code,
+                guarded_result["items"][0]["conflicts"],
+            )
+            self.assertNotIn(private_source_page_id, guarded_output)
+            self.assertFalse(
+                any(
+                    private_source_page_id in relative_path
+                    for relative_path in guarded_relative_paths
+                )
+            )
+
+            approve_code, approve_output = self.run_cli(
+                [
+                    "import-external",
+                    str(archive_root),
+                    "--source",
+                    "notion",
+                    "--export",
+                    str(manifest),
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(approve_code, 1, approve_output)
+            self.assertIn(expected_code, approve_output)
+            self.assertNotIn(private_source_page_id, approve_output)
+            self.assertFalse(any((archive_root / "inbox").glob("*.md")))
+            self.assertFalse(
+                any(
+                    (archive_root / "receipts" / "import").glob("*.json")
+                )
+            )
+
+    def test_import_external_notion_source_page_id_content_hash_alias_is_withheld(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            archive_root = tmp_root / "archive"
+            init_code, init_output = self.init_personal_archive(
+                archive_root,
+                "archive:personal:notion-source-page-id-sha-alias",
+            )
+            self.assertEqual(init_code, 0, init_output)
+
+            content = "# Imported source\n\nSafe content hash alias body.\n"
+            private_source_page_id = hashlib.sha256(
+                content.encode("utf-8")
+            ).hexdigest()
+            export_root = tmp_root / "notion-export"
+            export_root.mkdir()
+            manifest = export_root / "manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "source_system": "notion",
+                        "items": [
+                            {
+                                "external_id": "notion-content-sha-alias",
+                                "title": "0123456789abcdef0123456789abcdef",
+                                "index": "Reviewed Content Hash Alias Record",
+                                "content": content,
+                                "facets": {
+                                    "source_page_id": private_source_page_id,
+                                },
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
+
+            code, output = self.run_cli(
+                [
+                    "import-external",
+                    str(archive_root),
+                    "--source",
+                    "notion",
+                    "--export",
+                    str(manifest),
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            self.assertNotIn(private_source_page_id, output)
+            result = json.loads(output)
+            self.assertEqual(
+                result["receipt"]["items"][0]["sha256"],
+                "<withheld:private_metadata_alias>",
+            )
+            receipt_bytes = (
+                archive_root / result["receipt_path"]
+            ).read_bytes()
+            self.assertNotIn(
+                private_source_page_id.encode("utf-8"),
+                receipt_bytes,
+            )
+            draft_relative = next(
+                path
+                for path in result["created_paths"]
+                if path.startswith("inbox/")
+            )
+            draft_text = (archive_root / draft_relative).read_text(
+                encoding="utf-8"
+            )
+            frontmatter, _body = archive_services.split_zettel_text(draft_text)
+            self.assertEqual(
+                frontmatter["facets"]["source_page_id"],
+                private_source_page_id,
+            )
+            self.assertEqual(
+                frontmatter["external_import"]["sha256"],
+                private_source_page_id,
+            )
+
+    def test_import_external_blocks_generated_target_path_that_aliases_source_page_id(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            archive_root = tmp_root / "archive"
+            init_code, init_output = self.init_personal_archive(
+                archive_root,
+                "archive:personal:notion-generated-path-alias",
+            )
+            self.assertEqual(init_code, 0, init_output)
+
+            external_id = "notion-generated-path-alias"
+            source_path = f"manifest:{external_id}"
+            content = "# Imported source\n\nSafe generated path body.\n"
+            content_sha256 = hashlib.sha256(
+                content.encode("utf-8")
+            ).hexdigest()
+            digest = hashlib.sha256(
+                (
+                    f"notion\n{external_id}\n{source_path}\n"
+                    f"{content_sha256}"
+                ).encode("utf-8")
+            ).hexdigest()[:16]
+            private_source_page_id = f"zet_import_notion_{digest}"
+            export_root = tmp_root / "notion-export"
+            export_root.mkdir()
+            manifest = export_root / "manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "source_system": "notion",
+                        "items": [
+                            {
+                                "external_id": external_id,
+                                "title": "0123456789abcdef0123456789abcdef",
+                                "index": "Reviewed Generated Path Alias Record",
+                                "content": content,
+                                "facets": {
+                                    "source_page_id": private_source_page_id,
+                                },
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
+            expected_code = "source_page_id_aliases_public_target_path"
+
+            for mode_args in (
+                ["--dry-run"],
+                ["--approve", "--reviewed-by", "person:test"],
+            ):
+                with self.subTest(mode=mode_args[0]):
+                    code, output = self.run_cli(
+                        [
+                            "import-external",
+                            str(archive_root),
+                            "--source",
+                            "notion",
+                            "--export",
+                            str(manifest),
+                            *mode_args,
+                            "--format",
+                            "json",
+                        ]
+                    )
+                    self.assertEqual(code, 1, output)
+                    self.assertIn(expected_code, output)
+                    self.assertNotIn(private_source_page_id, output)
+                    self.assertFalse(
+                        any((archive_root / "inbox").glob("*.md"))
+                    )
+                    self.assertFalse(
+                        any(
+                            (
+                                archive_root / "receipts" / "import"
+                            ).glob("*.json")
+                        )
+                    )
+
+    def test_import_external_approved_apply_uses_one_frozen_discovery_snapshot_and_rolls_back_partial_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            archive_root = tmp_root / "archive"
+            init_code, init_output = self.init_personal_archive(
+                archive_root,
+                "archive:personal:external-import-frozen-discovery",
+            )
+            self.assertEqual(init_code, 0, init_output)
+
+            export_root = tmp_root / "notion-export"
+            export_root.mkdir()
+            manifest = export_root / "manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "source_system": "notion",
+                        "items": [
+                            {
+                                "external_id": "notion-frozen-one",
+                                "title": "0123456789abcdef0123456789abcdef",
+                                "index": "Frozen Discovery First Item",
+                                "content": "# First item\n\nFirst body.\n",
+                            },
+                            {
+                                "external_id": "notion-frozen-two",
+                                "title": "fedcba9876543210fedcba9876543210",
+                                "index": "Frozen Discovery Second Item",
+                                "content": "# Second item\n\nSecond body.\n",
+                            },
+                        ],
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
+            files_before = {
+                path.relative_to(archive_root).as_posix(): path.read_bytes()
+                for path in archive_root.rglob("*")
+                if path.is_file()
+            }
+            real_discovery = archive_services.discover_external_import_items
+            real_builder = archive_services.build_external_import_zettel_text
+            build_count = 0
+
+            def fail_second_build(**kwargs: Any) -> str:
+                nonlocal build_count
+                build_count += 1
+                if build_count == 2:
+                    raise archive_services.ArchiveServiceError(
+                        "synthetic second-item build failure"
+                    )
+                return real_builder(**kwargs)
+
+            with patch(
+                "wom_kit.archive_services.discover_external_import_items",
+                wraps=real_discovery,
+            ) as discovery_mock, patch(
+                "wom_kit.archive_services.build_external_import_zettel_text",
+                side_effect=fail_second_build,
+            ):
+                with self.assertRaisesRegex(
+                    archive_services.ArchiveServiceError,
+                    "synthetic second-item build failure",
+                ):
+                    archive_services.import_external_archive(
+                        archive_root,
+                        manifest,
+                        source_system="notion",
+                        reviewed_by="person:test",
+                    )
+
+            self.assertEqual(discovery_mock.call_count, 1)
+            self.assertEqual(build_count, 2)
+            self.assertEqual(
+                {
+                    path.relative_to(archive_root).as_posix(): path.read_bytes()
+                    for path in archive_root.rglob("*")
+                    if path.is_file()
+                },
+                files_before,
+            )
+
     def test_import_external_notion_dry_run_previews_inbox_draft_without_mutation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = Path(tmp) / "archive"

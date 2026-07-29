@@ -2,6 +2,65 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.3.285 Notion manifest index-title fallback
+
+아카이브 마이그레이션은 필요하지 않습니다. v0.3.285는 JSON 또는 YAML
+manifest에서 읽는 **새 Notion 항목**의 제목 선택만 보완합니다. 기존
+명령을 먼저 미리보기로 실행하세요.
+
+```powershell
+archive import-external <archive-root> `
+  --source notion `
+  --export <manifest.json-or-yaml> `
+  --dry-run --format json
+```
+
+WOM은 먼저 기존 방식으로 기본 제목을 정합니다. 사람이 읽을 수 있는
+일반 제목이 있으면 언제나 그 제목이 우선합니다. 기본 제목이 식별자
+모양일 때만 같은 manifest 항목의 정확한 소문자 top-level 문자열
+`index`를 살펴봅니다. 그 값은 기존 제목 정규화, 공백, 구체성, 식별자,
+500자 길이, 로컬 경로, 외부 서비스 위치, 비밀정보 모양 검사를 모두
+통과해야 합니다. 정확한 `index`가 있지만 안전하지 않으면 거부된 값을
+출력하지 않고 내용 없는 고정 코드로 그 항목을 차단합니다.
+
+차단된 Notion fallback 미리보기는 scalar id, 경로, URL, hash, target id를
+포함한 사용자 유래 항목 식별 필드를 모두 내용 없는 값으로 가립니다.
+비공개 `source_page_id`와 같은 값을 가진 공개 필드도 가리며, 그 값이
+명시적 또는 결정론적으로 생성된 공개 target 파일명이 되면 쓰기 전에
+`source_page_id_aliases_public_target_path`로 차단합니다. Google Drive
+제목 선택과 fallback 동작은 바뀌지 않습니다. 다만 공용 manifest 항목
+경로 실패 진단은 두 source 모두 더 엄격하고 내용 없는 형태로 바뀝니다.
+
+보호 범위는 항목 식별 필드 7개와 생성되는 target 경로입니다. 모든 출력
+바이트에서 우연히 같은 문자열까지 지우는 기능은 아닙니다. 별도로 입력한
+`--export` 경로, target archive id, `--reviewed-by` 값은 기존과 같이
+정확한 운영·출처 기록으로 결과와 영수증에 남으므로, 기록될 값이라는
+전제에서 입력해야 합니다.
+
+현재 미리보기와 source export를 사람이 확인한 뒤 기존 승인형 명령을
+실행하세요.
+
+```powershell
+archive import-external <archive-root> `
+  --source notion `
+  --export <manifest.json-or-yaml> `
+  --approve --reviewed-by <safe-reviewer-id> --format json
+```
+
+한 번의 승인 실행 안에서는 하나로 고정된 discovery 결과를 계획과
+쓰기에 함께 사용합니다. 따라서 그 실행 도중 manifest가 바뀌어도 이미
+선택한 zet id와 영수증 경로 아래에서 제목이 바뀌지 않습니다. 그러나
+나중에 별도로 실행한 승인 명령을 이전 dry-run digest에 묶어 주는 기능은
+아닙니다.
+
+기존 inbox 및 canonical zet는 건드리지 않습니다. directory-only
+Markdown, Google Drive, `Index`, 중첩된 `properties.index`, rich-text
+배열, `pages.index.jsonl`, 외부 서비스 mirror/API, `source_page_id`에는
+적용하지 않습니다. `facets.index`나 `source_index_path`를 만들지 않고
+generated search index도 개선하지 않습니다. 자세한 내용은
+[`wom-kit/docs/external-imports.md`](wom-kit/docs/external-imports.md)를
+보세요.
+
 ## v0.3.284 승인형 activity-group 멤버십 제거
 
 아카이브 마이그레이션은 필요하지 않습니다. v0.3.284는 v0.3.282의 읽기

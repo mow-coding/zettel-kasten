@@ -8888,7 +8888,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(document="v03282-public-version-surface"):
                 self.assertIn("v0.3.282", text)
         self.assertIn(
-            "releases/download/v0.3.284/wom_kit-0.3.284-py3-none-any.whl",
+            "releases/download/v0.3.285/wom_kit-0.3.285-py3-none-any.whl",
             root_readme_text,
         )
 
@@ -9007,7 +9007,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         ):
             with self.subTest(document="v03283-current-install"):
                 self.assertIn(
-                    "releases/download/v0.3.284/wom_kit-0.3.284-py3-none-any.whl",
+                    "releases/download/v0.3.285/wom_kit-0.3.285-py3-none-any.whl",
                     text,
                 )
 
@@ -9015,14 +9015,6 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         self,
     ) -> None:
         release_path = KIT_ROOT / "docs" / "releases" / "v0.3.284.md"
-        packaged_release_path = (
-            KIT_ROOT
-            / "src"
-            / "wom_kit"
-            / "_resources"
-            / "release-notes"
-            / "v0.3.284.md"
-        )
         decision_path = (
             KIT_ROOT
             / "docs"
@@ -9038,7 +9030,6 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         )
 
         release_text = release_path.read_text(encoding="utf-8")
-        packaged_release_text = packaged_release_path.read_text(encoding="utf-8")
         decision_text = decision_path.read_text(encoding="utf-8")
         guide_text = guide_path.read_text(encoding="utf-8")
         matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
@@ -9052,22 +9043,6 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         changelog_text = (REPO_ROOT / "CHANGELOG.md").read_text(
             encoding="utf-8"
         )
-        versioning_text = (REPO_ROOT / "VERSIONING.md").read_text(
-            encoding="utf-8"
-        )
-        pyproject_text = (KIT_ROOT / "pyproject.toml").read_text(
-            encoding="utf-8"
-        )
-        package_init_text = (
-            KIT_ROOT / "src" / "wom_kit" / "__init__.py"
-        ).read_text(encoding="utf-8")
-
-        self.assertEqual(__version__, "0.3.284")
-        self.assertEqual(CURRENT_VERSION, "v0.3.284")
-        self.assertIn('version = "0.3.284"', pyproject_text)
-        self.assertIn('__version__ = "0.3.284"', package_init_text)
-        self.assertEqual(packaged_release_text, release_text)
-
         public_contract_texts = (
             release_text,
             decision_text,
@@ -9140,7 +9115,6 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             upgrade_text,
             upgrade_ko_text,
             changelog_text,
-            versioning_text,
         ):
             with self.subTest(document="v03284-version-surface"):
                 self.assertIn("v0.3.284", text)
@@ -9220,6 +9194,145 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                     schema["$schema"],
                     "https://json-schema.org/draft/2020-12/schema",
                 )
+
+    def test_v03285_notion_manifest_index_title_fallback_is_public_and_synchronized(
+        self,
+    ) -> None:
+        release_path = KIT_ROOT / "docs" / "releases" / "v0.3.285.md"
+        packaged_release_path = (
+            KIT_ROOT
+            / "src"
+            / "wom_kit"
+            / "_resources"
+            / "release-notes"
+            / "v0.3.285.md"
+        )
+        decision_path = (
+            KIT_ROOT
+            / "docs"
+            / "archive-infra-decision-log-2026-07-30-v03285-notion-index-title-fallback.md"
+        )
+        guide_path = KIT_ROOT / "docs" / "external-imports.md"
+
+        release_text = release_path.read_text(encoding="utf-8")
+        packaged_release_text = packaged_release_path.read_text(encoding="utf-8")
+        decision_text = decision_path.read_text(encoding="utf-8")
+        guide_text = guide_path.read_text(encoding="utf-8")
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        root_readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        root_readme_ko_text = (REPO_ROOT / "README.ko.md").read_text(
+            encoding="utf-8"
+        )
+        install_text = (
+            KIT_ROOT / "docs" / "python-tool-install.md"
+        ).read_text(encoding="utf-8")
+        install_ko_text = (
+            KIT_ROOT / "docs" / "python-tool-install.ko.md"
+        ).read_text(encoding="utf-8")
+        upgrade_text = (REPO_ROOT / "UPGRADE.md").read_text(encoding="utf-8")
+        upgrade_ko_text = (REPO_ROOT / "UPGRADE.ko.md").read_text(
+            encoding="utf-8"
+        )
+        changelog_text = (REPO_ROOT / "CHANGELOG.md").read_text(
+            encoding="utf-8"
+        )
+        versioning_text = (REPO_ROOT / "VERSIONING.md").read_text(
+            encoding="utf-8"
+        )
+        pyproject_text = (KIT_ROOT / "pyproject.toml").read_text(
+            encoding="utf-8"
+        )
+        package_init_text = (
+            KIT_ROOT / "src" / "wom_kit" / "__init__.py"
+        ).read_text(encoding="utf-8")
+
+        self.assertEqual(__version__, "0.3.285")
+        self.assertEqual(CURRENT_VERSION, "v0.3.285")
+        self.assertIn('version = "0.3.285"', pyproject_text)
+        self.assertIn('__version__ = "0.3.285"', package_init_text)
+        self.assertEqual(packaged_release_text, release_text)
+
+        for text in (release_text, decision_text, guide_text, matrix_text):
+            with self.subTest(document="v03285-index-title-contract"):
+                self.assertIn("v0.3.285", text)
+                self.assertIn("Notion", text)
+                self.assertIn("index", text)
+                self.assertIn(
+                    "source_page_id_aliases_public_target_path",
+                    text,
+                )
+
+        for phrase in (
+            "A human title always wins",
+            "exact lowercase top-level `index`",
+            "JSON or YAML manifest",
+            "identifier-shaped",
+        ):
+            with self.subTest(guide_phrase=phrase):
+                self.assertIn(phrase, guide_text)
+
+        for phrase in (
+            "`pages.index.jsonl`",
+            "provider mirror",
+            "Notion API",
+            "`source_page_id`",
+        ):
+            with self.subTest(release_boundary=phrase):
+                self.assertIn(phrase, release_text)
+            with self.subTest(decision_boundary=phrase):
+                self.assertIn(phrase, decision_text)
+
+        for phrase in (
+            "project a new facet",
+            "generated search index",
+            "cross-invocation",
+            "existing zet",
+        ):
+            with self.subTest(release_boundary=phrase):
+                self.assertIn(phrase, release_text)
+        for phrase in (
+            "facet projection",
+            "generated-index",
+            "Cross-invocation",
+            "existing-zet rewrite",
+        ):
+            with self.subTest(decision_boundary=phrase):
+                self.assertIn(phrase, decision_text)
+
+        self.assertIn("one frozen discovery projection", matrix_text)
+        self.assertIn(
+            "not digest-bound to an earlier dry-run",
+            matrix_text,
+        )
+        self.assertIn(
+            "<withheld:private_metadata_alias>",
+            guide_text,
+        )
+        self.assertIn(
+            "Google Drive title-selection and fallback behavior remains unchanged",
+            matrix_text,
+        )
+
+        current_wheel_url = (
+            "releases/download/v0.3.285/"
+            "wom_kit-0.3.285-py3-none-any.whl"
+        )
+        for text in (
+            root_readme_text,
+            root_readme_ko_text,
+            install_text,
+            install_ko_text,
+        ):
+            with self.subTest(document="v03285-current-install"):
+                self.assertIn(current_wheel_url, text)
+
+        for text in (
+            upgrade_text,
+            upgrade_ko_text,
+            changelog_text,
+        ):
+            with self.subTest(document="v03285-version-surface"):
+                self.assertIn("v0.3.285", text)
 
 
 if __name__ == "__main__":

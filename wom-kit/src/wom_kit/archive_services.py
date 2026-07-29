@@ -7900,6 +7900,18 @@ def compact_zet_title_comparison_form(value: str) -> str:
     return re.sub(r"[\s._-]+", "", str(value).casefold())
 
 
+def zet_title_is_identifier_shaped(value: Any) -> bool:
+    """Whether a title is the house's separator-insensitive bare hex shape."""
+
+    if not isinstance(value, str):
+        return False
+    compact = compact_zet_title_comparison_form(value)
+    return bool(
+        len(compact) >= ZET_TITLE_IDENTIFIER_MIN_HEX_CHARS
+        and ZET_TITLE_HEX_RE.match(compact)
+    )
+
+
 def zet_title_reference_discloses_title(reference: Any, compact_title: str) -> bool:
     """Whether emitting `reference` would reproduce the title it is reported for.
 
@@ -7963,10 +7975,7 @@ def zet_title_identifier_signals(item: dict[str, Any]) -> list[str]:
             ) == compact_title:
                 signals.append("title_matches_external_id")
                 break
-    if (
-        len(compact_title) >= ZET_TITLE_IDENTIFIER_MIN_HEX_CHARS
-        and ZET_TITLE_HEX_RE.match(compact_title)
-    ):
+    if zet_title_is_identifier_shaped(title):
         signals.append("title_is_identifier_shaped")
     return signals
 
@@ -8377,8 +8386,7 @@ def normalized_zet_title_candidate(
     # A replacement that is itself identifier-shaped would be scored by
     # zet-title-readiness exactly as the value it replaces. Refuse it here rather
     # than let the census re-flag the archive after an approved write.
-    compact = compact_zet_title_comparison_form(normalized)
-    if len(compact) >= ZET_TITLE_IDENTIFIER_MIN_HEX_CHARS and ZET_TITLE_HEX_RE.match(compact):
+    if zet_title_is_identifier_shaped(normalized):
         blocker_codes.append("title_is_identifier_shaped")
         return None
     if not title_is_specific_enough_for_checklist(normalized):
@@ -77526,10 +77534,39 @@ def external_import_dry_run(
         raise ArchiveServiceError(f"External import export path does not exist: {export_root}")
     limit = max(1, min(int(limit), 1000))
 
-    blockers: list[str] = []
     warnings: list[str] = []
+    discovered = tuple(
+        discover_external_import_items(
+            export_root,
+            source,
+            limit=limit,
+            warnings=warnings,
+        )
+    )
+    return _external_import_dry_run_from_snapshot(
+        root=root,
+        export_root=export_root,
+        source=source,
+        locator_policy=locator_policy,
+        discovered=discovered,
+        warnings=warnings,
+    )
+
+
+def _external_import_dry_run_from_snapshot(
+    *,
+    root: Path,
+    export_root: Path,
+    source: str,
+    locator_policy: str,
+    discovered: tuple[dict[str, Any], ...],
+    warnings: list[str],
+) -> dict[str, Any]:
+    """Project one already-discovered external-import snapshot without rereading it."""
+
+    blockers: list[str] = []
+    warnings = list(warnings)
     target_archive = read_archive_id(root)
-    discovered = discover_external_import_items(export_root, source, limit=limit, warnings=warnings)
     if not discovered:
         blockers.append("No importable Markdown or text items were found.")
 
@@ -77539,6 +77576,62 @@ def external_import_dry_run(
         item_blockers = [str(blocker) for blocker in item.get("blockers", []) if blocker]
         zettel_id = external_import_zettel_id(source, item)
         target_path = f"inbox/{zettel_id}.md"
+        raw_facets = item.get("facets")
+        source_page_id = (
+            raw_facets.get("source_page_id")
+            if isinstance(raw_facets, dict)
+            else None
+        )
+        private_path_alias = (
+            source == "notion"
+            and source_page_id is not None
+            and str(source_page_id).strip()
+            and (
+                str(source_page_id) in zettel_id
+                or str(source_page_id) in target_path
+            )
+        )
+        private_path_alias_code = (
+            "source_page_id_aliases_public_target_path"
+        )
+        if (
+            private_path_alias
+            and private_path_alias_code not in item_blockers
+        ):
+            item_blockers.append(private_path_alias_code)
+        private_redact_fields = {
+            str(field)
+            for field in item.get("_private_preview_redact_fields", ())
+        }
+        if private_path_alias:
+            private_redact_fields.update({"zettel_id", "target_path"})
+        if any(
+            blocker.startswith("notion_index_fallback_")
+            for blocker in item_blockers
+        ):
+            private_redact_fields.update(
+                {
+                    "external_id",
+                    "title",
+                    "source_path",
+                    "source_url",
+                    "sha256",
+                    "zettel_id",
+                    "target_path",
+                }
+            )
+        withheld = "<withheld:private_metadata_alias>"
+
+        def preview_value(field: str, value: Any) -> Any:
+            return withheld if field in private_redact_fields else value
+
+        public_external_id = preview_value("external_id", item["external_id"])
+        public_title = preview_value("title", item["title"])
+        public_source_path = preview_value("source_path", item["source_path"])
+        public_source_url = preview_value("source_url", item.get("source_url"))
+        public_sha256 = preview_value("sha256", item["sha256"])
+        public_zettel_id = preview_value("zettel_id", zettel_id)
+        public_target_path = preview_value("target_path", target_path)
         conflicts: list[str] = []
         body_info = external_import_body_for_import(
             item,
@@ -77549,30 +77642,49 @@ def external_import_dry_run(
         )
         if zettel_id in target_ids:
             conflicts.append("zettel_id_exists")
-            blockers.append(f"Target archive already has imported zettel id: {zettel_id}.")
-        if archive_internal_path(root, target_path).exists():
+            blockers.append(
+                f"Target archive already has imported zettel id: {public_zettel_id}."
+            )
+        if (
+            "target_path" not in private_redact_fields
+            and archive_internal_path(root, target_path).exists()
+        ):
             conflicts.append("target_path_exists")
-            blockers.append(f"Target inbox path already exists: {target_path}.")
+            blockers.append(
+                f"Target inbox path already exists: {public_target_path}."
+            )
         for item_blocker in item_blockers:
             conflicts.append("manifest_metadata_blocked")
-            blockers.append(f"External import item metadata is unsafe for {item['source_path']}: {item_blocker}")
+            if (
+                item_blocker.startswith("notion_index_fallback_")
+                or item_blocker
+                == "source_page_id_aliases_public_target_path"
+            ):
+                conflicts.append(item_blocker)
+            blockers.append(
+                "External import item metadata is unsafe for "
+                f"{public_source_path}: {item_blocker}"
+            )
         if contains_forbidden_location_reference(body_info["body"]) or source_intake_has_provider_url(body_info["body"]):
             conflicts.append("forbidden_location_reference")
-            blockers.append(f"External item contains a forbidden provider/local path reference: {item['source_path']}.")
+            blockers.append(
+                "External item contains a forbidden provider/local path reference: "
+                f"{public_source_path}."
+            )
         previews.append(
             {
-                "external_id": item["external_id"],
-                "title": item["title"],
-                "source_path": item["source_path"],
-                "source_url": item.get("source_url"),
-                "sha256": item["sha256"],
+                "external_id": public_external_id,
+                "title": public_title,
+                "source_path": public_source_path,
+                "source_url": public_source_url,
+                "sha256": public_sha256,
                 "source_ref_count": len(item.get("source_refs") or []),
                 "source_refs_preserved": bool(item.get("source_refs")),
                 "facet_count": len(item.get("facets") or {}),
                 "facets_preserved": bool(item.get("facets")),
-                "zettel_id": zettel_id,
+                "zettel_id": public_zettel_id,
                 "zettel_id_source": item.get("zettel_id_source") or "generated",
-                "target_path": target_path,
+                "target_path": public_target_path,
                 "action": "create_inbox_draft",
                 "conflicts": conflicts,
                 "provider_locator_policy": locator_policy,
@@ -77677,27 +77789,40 @@ def import_external_archive(
         raise ArchiveServiceError("External import requires --reviewed-by.")
 
     root = require_existing_archive_root(archive_root)
-    dry_run = external_import_dry_run(
-        root,
-        export_path,
-        source_system=source_system,
-        limit=limit,
-        provider_locator_policy=provider_locator_policy,
+    source = normalize_external_import_source(source_system)
+    locator_policy = normalize_external_import_provider_locator_policy(
+        provider_locator_policy
+    )
+    export_root = Path(export_path).expanduser().resolve()
+    if not export_root.exists():
+        raise ArchiveServiceError(
+            f"External import export path does not exist: {export_root}"
+        )
+    limit = max(1, min(int(limit), 1000))
+    discovery_warnings: list[str] = []
+    discovery_snapshot = tuple(
+        copy.deepcopy(
+            discover_external_import_items(
+                export_root,
+                source,
+                limit=limit,
+                warnings=discovery_warnings,
+            )
+        )
+    )
+    dry_run = _external_import_dry_run_from_snapshot(
+        root=root,
+        export_root=export_root,
+        source=source,
+        locator_policy=locator_policy,
+        discovered=discovery_snapshot,
+        warnings=discovery_warnings,
     )
     if dry_run["blockers"]:
         raise ArchiveServiceError("External import blocked by dry-run: " + "; ".join(dry_run["blockers"]))
 
     now = datetime.now().astimezone().replace(microsecond=0).isoformat()
     source = dry_run["source_system"]
-    discovered_by_id = {
-        external_import_zettel_id(source, item): item
-        for item in discover_external_import_items(
-            Path(export_path).expanduser().resolve(),
-            source,
-            limit=limit,
-            warnings=[],
-        )
-    }
     receipt_relative = dry_run["proposed_receipt_path"]
     receipt_path = archive_internal_path(root, receipt_relative)
     if receipt_path.exists():
@@ -77717,31 +77842,34 @@ def import_external_archive(
     }
 
     try:
-        for preview in dry_run["items"]:
-            item = discovered_by_id.get(preview["zettel_id"])
-            if item is None:
-                raise ArchiveServiceError(f"External import item disappeared before apply: {preview['source_path']}")
-            target_path = archive_internal_path(root, preview["target_path"])
+        if len(dry_run["items"]) != len(discovery_snapshot):
+            raise ArchiveServiceError(
+                "External import frozen projection count changed before apply."
+            )
+        for preview, item in zip(dry_run["items"], discovery_snapshot):
+            zettel_id = external_import_zettel_id(source, item)
+            target_relative = f"inbox/{zettel_id}.md"
+            target_path = archive_internal_path(root, target_relative)
             target_path.parent.mkdir(parents=True, exist_ok=True)
             text = build_external_import_zettel_text(
                 target_archive=dry_run["target_archive"],
                 source_system=source,
                 item=item,
-                zettel_id=preview["zettel_id"],
+                zettel_id=zettel_id,
                 now=now,
                 reviewed_by=reviewer,
                 provider_locator_policy=dry_run["provider_locator_policy"],
             )
             with target_path.open("x", encoding="utf-8") as handle:
+                created_paths.append(target_path)
                 handle.write(text)
-            created_paths.append(target_path)
-            created_relative_paths.append(preview["target_path"])
+            created_relative_paths.append(target_relative)
 
         receipt["result"]["created_paths"] = created_relative_paths + [receipt_relative]
         receipt_path.parent.mkdir(parents=True, exist_ok=True)
         with receipt_path.open("x", encoding="utf-8") as handle:
+            created_paths.append(receipt_path)
             handle.write(json.dumps(json_safe(receipt), indent=2, ensure_ascii=False, default=str) + "\n")
-        created_paths.append(receipt_path)
     except Exception:
         for path in reversed(created_paths):
             try:
@@ -77840,6 +77968,20 @@ def discover_external_import_manifest_items(
         if not isinstance(raw_path, str):
             warnings.append("Skipping manifest item without path or content.")
             continue
+        preflight_blockers = external_import_manifest_index_preflight_blockers(
+            source_system,
+            raw_item,
+        )
+        if preflight_blockers:
+            items.append(
+                external_import_item_from_content(
+                    root,
+                    source_system,
+                    raw_item,
+                    warnings,
+                )
+            )
+            continue
         item_path = resolve_external_export_path(root, raw_path)
         items.extend(external_import_item_from_file(root, item_path, source_system, metadata=raw_item, warnings=warnings))
     if len(raw_items) > limit:
@@ -77856,14 +77998,181 @@ def load_external_import_manifest_data(manifest_path: Path) -> Any:
 def resolve_external_export_path(root: Path, raw_path: str) -> Path:
     try:
         normalized = raw_path.replace("\\", "/").strip()
-        if normalized.startswith("/") or ".." in normalized.split("/"):
+        if (
+            normalized.startswith("/")
+            or re.match(r"^[A-Za-z]:", normalized)
+            or WINDOWS_ABSOLUTE_RE.match(normalized)
+            or UNC_PATH_RE.match(normalized)
+            or ".." in normalized.split("/")
+        ):
             raise ArchivePathError("External export item path must stay inside the export folder.")
+        resolved_root = root.resolve()
         candidate = root.joinpath(*normalized.split("/")).resolve()
-    except (OSError, ValueError) as exc:
-        raise ArchiveServiceError(f"External export path is unsafe: {raw_path} ({exc})") from exc
-    if not candidate.is_relative_to(root.resolve()):
-        raise ArchiveServiceError(f"External export path escapes export folder: {raw_path}")
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise ArchiveServiceError(
+            "External export item path is unsafe."
+        ) from exc
+    if not candidate.is_relative_to(resolved_root):
+        raise ArchiveServiceError(
+            "External export item path escapes the export folder."
+        )
     return candidate
+
+
+def external_import_manifest_index_preflight_blockers(
+    source_system: str,
+    metadata: dict[str, Any],
+) -> list[str]:
+    """Check an explicit-title Notion fallback before opening its item path."""
+
+    primary_title = metadata.get("title")
+    if (
+        source_system != "notion"
+        or not primary_title
+        or "index" not in metadata
+    ):
+        return []
+    effective_external_id = str(
+        metadata.get("external_id")
+        or metadata.get("id")
+        or "\x00unresolved-manifest-item-external-id"
+    )
+    blockers: list[str] = []
+    external_import_effective_title(
+        source_system,
+        str(primary_title),
+        metadata,
+        blockers,
+        effective_external_id=effective_external_id,
+    )
+    return blockers
+
+
+def external_import_effective_title(
+    source_system: str,
+    primary_title: str,
+    metadata: dict[str, Any],
+    blockers: list[str],
+    *,
+    effective_external_id: str,
+) -> str:
+    """Resolve the one safe Notion manifest fallback without echoing rejected input."""
+
+    if (
+        source_system != "notion"
+        or not zet_title_is_identifier_shaped(primary_title)
+        or "index" not in metadata
+    ):
+        return primary_title
+
+    raw_candidate = metadata.get("index")
+    candidate_blockers: list[str] = []
+    normalized = normalized_zet_title_candidate(raw_candidate, candidate_blockers)
+    if normalized is not None:
+        compact_candidate = compact_zet_title_comparison_form(normalized)
+        item_identifiers: list[Any] = [effective_external_id]
+        item_identifiers.extend(
+            metadata.get(key)
+            for key in ("external_id", "id")
+            if metadata.get(key) is not None
+        )
+        for item_identifier in item_identifiers:
+            if (
+                compact_zet_title_comparison_form(str(item_identifier))
+                == compact_candidate
+            ):
+                candidate_blockers.append("title_matches_item_identifier")
+                break
+    for code in candidate_blockers:
+        prefixed = f"notion_index_fallback_{code}"
+        if prefixed not in blockers:
+            blockers.append(prefixed)
+
+    candidate_is_import_safe = external_import_safe_metadata_scalar(raw_candidate)
+    if not candidate_is_import_safe:
+        code = "notion_index_fallback_title_unsafe_for_external_import"
+        if code not in blockers:
+            blockers.append(code)
+
+    if candidate_blockers or not candidate_is_import_safe:
+        return primary_title
+    return normalized if normalized is not None else primary_title
+
+
+def external_import_private_preview_alias_fields(
+    source_system: str,
+    metadata: dict[str, Any],
+    blockers: list[str],
+    *,
+    external_id: str,
+    title: str,
+    source_path: str,
+    source_url: Any,
+    sha256: str,
+    zettel_id_override: str | None,
+) -> tuple[str, ...]:
+    """Name preview fields that would repeat one protected metadata value."""
+
+    private_aliases: set[str] = set()
+    if any(
+        blocker.startswith("notion_index_fallback_")
+        for blocker in blockers
+    ):
+        raw_candidate = metadata.get("index")
+        if raw_candidate is not None and str(raw_candidate).strip():
+            private_aliases.add(str(raw_candidate))
+    raw_facets = metadata.get("facets")
+    if source_system == "notion" and isinstance(raw_facets, dict):
+        source_page_id = raw_facets.get("source_page_id")
+        if source_page_id is not None and str(source_page_id).strip():
+            private_aliases.add(str(source_page_id))
+    if not private_aliases:
+        return ()
+
+    fields: set[str] = set()
+    public_values = {
+        "external_id": external_id,
+        "title": title,
+        "source_path": source_path,
+        "source_url": source_url,
+        "sha256": sha256,
+    }
+    for field, value in public_values.items():
+        if value is not None and any(
+            alias in str(value)
+            for alias in private_aliases
+        ):
+            fields.add(field)
+    if (
+        zettel_id_override is not None
+        and any(alias in zettel_id_override for alias in private_aliases)
+    ):
+        fields.update({"zettel_id", "target_path"})
+    return tuple(sorted(fields))
+
+
+def external_import_block_private_path_alias(
+    source_system: str,
+    metadata: dict[str, Any],
+    zettel_id_override: str | None,
+    blockers: list[str],
+) -> None:
+    """Fail closed when a private source-page value would become a public path."""
+
+    if source_system != "notion" or zettel_id_override is None:
+        return
+    raw_facets = metadata.get("facets")
+    if not isinstance(raw_facets, dict):
+        return
+    source_page_id = raw_facets.get("source_page_id")
+    if source_page_id is None:
+        return
+    private_value = str(source_page_id)
+    if not private_value.strip() or private_value not in zettel_id_override:
+        return
+    code = "source_page_id_aliases_public_target_path"
+    if code not in blockers:
+        blockers.append(code)
 
 
 def external_import_item_from_file(
@@ -77875,39 +78184,98 @@ def external_import_item_from_file(
     warnings: list[str],
 ) -> list[dict[str, Any]]:
     if path.suffix.lower() not in EXTERNAL_IMPORT_EXTENSIONS:
-        warnings.append(f"Skipping unsupported external import file type: {path.name}.")
+        warnings.append("Skipping unsupported external import file type.")
         return []
-    if not path.is_file() or not is_path_within_root(path, export_root):
-        warnings.append(f"Skipping unsafe external import path: {path}.")
+    try:
+        resolved_root = export_root.resolve()
+        resolved_path = path.resolve()
+        if (
+            not resolved_path.is_relative_to(resolved_root)
+            or not resolved_path.is_file()
+        ):
+            warnings.append("Skipping unsafe external import path.")
+            return []
+        relative = PurePosixPath(
+            *resolved_path.relative_to(resolved_root).parts
+        ).as_posix()
+    except (OSError, RuntimeError, ValueError):
+        warnings.append("Skipping unsafe external import path.")
         return []
-    text = path.read_text(encoding="utf-8")
+    try:
+        text = resolved_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        warnings.append("Skipping unreadable external import file.")
+        return []
     if not text.strip():
-        warnings.append(f"Skipping empty external import file: {path.name}.")
+        warnings.append("Skipping empty external import file.")
         return []
-    relative = archive_relative_path(path, export_root)
     meta = metadata or {}
-    title = str(meta.get("title") or extract_external_import_title(text, path))
+    primary_title = str(
+        meta.get("title")
+        or extract_external_import_title(text, resolved_path)
+    )
     external_id = str(meta.get("external_id") or meta.get("id") or f"{source_system}:{relative}")
     metadata_blockers: list[str] = []
+    title = external_import_effective_title(
+        source_system,
+        primary_title,
+        meta,
+        metadata_blockers,
+        effective_external_id=external_id,
+    )
     if not external_import_safe_metadata_scalar(title):
         metadata_blockers.append("title is unsafe.")
     if not external_import_safe_metadata_scalar(external_id):
         metadata_blockers.append("external_id is unsafe.")
+    source_url = meta.get("url") or meta.get("source_url")
+    content_sha256 = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    source_refs = external_import_source_refs_from_metadata(
+        meta,
+        metadata_blockers,
+    )
+    facets = external_import_facets_from_metadata(
+        meta,
+        source_system,
+        external_id,
+        metadata_blockers,
+    )
+    zettel_id_override = external_import_zettel_id_override_from_metadata(
+        meta,
+        metadata_blockers,
+    )
+    external_import_block_private_path_alias(
+        source_system,
+        meta,
+        zettel_id_override,
+        metadata_blockers,
+    )
+    private_preview_redact_fields = external_import_private_preview_alias_fields(
+        source_system,
+        meta,
+        metadata_blockers,
+        external_id=external_id,
+        title=title,
+        source_path=relative,
+        source_url=source_url,
+        sha256=content_sha256,
+        zettel_id_override=zettel_id_override,
+    )
     return [
         {
             "external_id": external_id,
             "title": title,
             "body": text.rstrip() + "\n",
             "source_path": relative,
-            "source_url": meta.get("url") or meta.get("source_url"),
+            "source_url": source_url,
             "created_at": meta.get("created_at"),
             "updated_at": meta.get("updated_at"),
-            "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
-            "source_refs": external_import_source_refs_from_metadata(meta, metadata_blockers),
-            "facets": external_import_facets_from_metadata(meta, source_system, external_id, metadata_blockers),
-            "zettel_id_override": external_import_zettel_id_override_from_metadata(meta, metadata_blockers),
+            "sha256": content_sha256,
+            "source_refs": source_refs,
+            "facets": facets,
+            "zettel_id_override": zettel_id_override,
             "zettel_id_source": external_import_zettel_id_source_from_metadata(meta),
             "blockers": metadata_blockers,
+            "_private_preview_redact_fields": private_preview_redact_fields,
         }
     ]
 
@@ -77919,29 +78287,75 @@ def external_import_item_from_content(
     warnings: list[str],
 ) -> dict[str, Any]:
     text = str(metadata.get("content") or "")
-    title = str(metadata.get("title") or "Untitled external import")
-    external_id = str(metadata.get("external_id") or metadata.get("id") or f"{source_system}:{safe_slug(title)}")
+    primary_title = str(metadata.get("title") or "Untitled external import")
+    external_id = str(
+        metadata.get("external_id")
+        or metadata.get("id")
+        or f"{source_system}:{safe_slug(primary_title)}"
+    )
     metadata_blockers: list[str] = []
+    title = external_import_effective_title(
+        source_system,
+        primary_title,
+        metadata,
+        metadata_blockers,
+        effective_external_id=external_id,
+    )
     if not external_import_safe_metadata_scalar(title):
         metadata_blockers.append("title is unsafe.")
     if not external_import_safe_metadata_scalar(external_id):
         metadata_blockers.append("external_id is unsafe.")
     if not text.strip():
         warnings.append("Manifest item has empty content.")
+    source_path = str(metadata.get("path") or f"manifest:{external_id}")
+    source_url = metadata.get("url") or metadata.get("source_url")
+    content_sha256 = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    source_refs = external_import_source_refs_from_metadata(
+        metadata,
+        metadata_blockers,
+    )
+    facets = external_import_facets_from_metadata(
+        metadata,
+        source_system,
+        external_id,
+        metadata_blockers,
+    )
+    zettel_id_override = external_import_zettel_id_override_from_metadata(
+        metadata,
+        metadata_blockers,
+    )
+    external_import_block_private_path_alias(
+        source_system,
+        metadata,
+        zettel_id_override,
+        metadata_blockers,
+    )
+    private_preview_redact_fields = external_import_private_preview_alias_fields(
+        source_system,
+        metadata,
+        metadata_blockers,
+        external_id=external_id,
+        title=title,
+        source_path=source_path,
+        source_url=source_url,
+        sha256=content_sha256,
+        zettel_id_override=zettel_id_override,
+    )
     return {
         "external_id": external_id,
         "title": title,
         "body": text.rstrip() + "\n",
-        "source_path": str(metadata.get("path") or f"manifest:{external_id}"),
-        "source_url": metadata.get("url") or metadata.get("source_url"),
+        "source_path": source_path,
+        "source_url": source_url,
         "created_at": metadata.get("created_at"),
         "updated_at": metadata.get("updated_at"),
-        "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
-        "source_refs": external_import_source_refs_from_metadata(metadata, metadata_blockers),
-        "facets": external_import_facets_from_metadata(metadata, source_system, external_id, metadata_blockers),
-        "zettel_id_override": external_import_zettel_id_override_from_metadata(metadata, metadata_blockers),
+        "sha256": content_sha256,
+        "source_refs": source_refs,
+        "facets": facets,
+        "zettel_id_override": zettel_id_override,
         "zettel_id_source": external_import_zettel_id_source_from_metadata(metadata),
         "blockers": metadata_blockers,
+        "_private_preview_redact_fields": private_preview_redact_fields,
     }
 
 

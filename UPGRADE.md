@@ -24,6 +24,64 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.285 Notion Manifest Index-Title Fallback
+
+No archive migration is required. v0.3.285 changes only title selection for a
+new Notion item read from a JSON or YAML manifest. Preview the existing import
+command as usual:
+
+```powershell
+archive import-external <archive-root> `
+  --source notion `
+  --export <manifest.json-or-yaml> `
+  --dry-run --format json
+```
+
+The normal primary title is resolved first. A human-readable title always
+wins. Only when that title is identifier-shaped does WOM consider the exact
+lowercase top-level string `index` from the same manifest item. The fallback
+must pass the existing normalization, whitespace, specificity, identifier,
+500-character, local-path, provider-locator, and secret-like metadata checks.
+A present unsafe value blocks that item with a fixed content-free code rather
+than echoing the rejected value.
+
+Blocked Notion fallback previews withhold all user-derived item identity
+fields, including aliases through scalar ids, paths, URLs, hashes, and target
+ids. A private `source_page_id` alias is also withheld; if it would become an
+explicit or deterministic generated public target filename, the item blocks
+with `source_page_id_aliases_public_target_path` before writing. Google Drive
+title selection and fallback behavior is unchanged. Shared manifest item-path
+failures now use the same hardened, content-free diagnostics for both sources.
+
+The protection covers the seven item identity fields and generated target
+path. It is not a byte-global coincidence scrubber: independently supplied
+`--export`, target archive, and `--reviewed-by` provenance keeps the existing
+truthful result/receipt behavior, so supply those values as intentionally
+recorded operational metadata.
+
+After reviewing the current preview and source export, use the existing
+approval form:
+
+```powershell
+archive import-external <archive-root> `
+  --source notion `
+  --export <manifest.json-or-yaml> `
+  --approve --reviewed-by <safe-reviewer-id> --format json
+```
+
+Planning and writes inside this one approved call use one frozen discovery
+projection. This prevents an edit during that call from changing the chosen
+title beneath the selected zettel id and receipt path. It does not
+digest-bind a later approval invocation to an earlier dry-run.
+
+Existing inbox and canonical zets are untouched. The fallback does not apply
+to directory-only Markdown or Google Drive imports, and it does not interpret
+`Index`, nested `properties.index`, rich-text arrays, `pages.index.jsonl`, a
+provider mirror, Notion API data, or `source_page_id`. It creates no
+`facets.index` or `source_index_path` and does not improve the generated
+search index. See
+[`wom-kit/docs/external-imports.md`](wom-kit/docs/external-imports.md).
+
 ## v0.3.284 Approval-Gated Activity-Group Membership Removal
 
 No archive migration is required. v0.3.284 continues from the exact private
