@@ -24,6 +24,30 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.282 Read-Only Activity-Group Membership Removal Plan
+
+No archive migration is required. v0.3.282 does not remove a membership.
+After the owner explicitly selects one event anchor and the exact canonical
+members from which it may be removed, store a private request under
+`.wom-scratch/private/activity-group-removals/` and run:
+
+```powershell
+archive activity-group-membership-removal-plan <archive-root> `
+  --request .wom-scratch/private/activity-group-removals/reviewed.json `
+  --dry-run --progress --format json
+```
+
+Review every `ready_to_remove`, `already_absent`, and content-free `blocked`
+row plus `review_plan_sha256`. The command reads only the named live canonical
+files, removes only the named anchor in candidate bytes, and does not infer
+removal from search results, titles, dates, nearby files, edges, or the
+generated index.
+
+Keep the request private. v0.3.282 has no approval mode or removal writer, so
+preserve the request and digest as review evidence and do not edit canonical
+zets directly. See
+[`wom-kit/docs/activity-group-membership-removal-plan.md`](wom-kit/docs/activity-group-membership-removal-plan.md).
+
 ## v0.3.281 Approval-Gated Activity-Group Membership Write
 
 No archive migration is required. v0.3.281 does not scan for or automatically

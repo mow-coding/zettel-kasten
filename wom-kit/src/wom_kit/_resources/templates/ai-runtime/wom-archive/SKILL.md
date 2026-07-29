@@ -82,8 +82,10 @@ token-budget contract.
   only through the plan's exact request/review hashes and
   `activity-group-membership-write`; never hand-edit canonical zets. If that
   writer was interrupted, first confirm it is no longer running, then use the
-  separate recovery plan and exact approved recovery command. Never remove a
-  membership or execute a manual forensic hold.
+  separate recovery plan and exact approved recovery command. Plan an explicit
+  removal only with `activity-group-membership-removal-plan`; its writer is not
+  implemented, so never remove a membership by hand or execute a manual
+  forensic hold.
 - Create an AI-assisted draft only through `archive create-draft` dry-run and
   its exact reviewed replay. Never write Markdown directly into `inbox/`.
 - Before a write, show the human what will change, where it will change, and

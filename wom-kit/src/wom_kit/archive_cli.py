@@ -4269,6 +4269,8 @@ def parser_command_manifest(parser: argparse.ArgumentParser) -> list[dict[str, A
         options: list[str] = []
         nested_subcommands: list[str] = []
         for command_action in command_parser._actions:
+            if command_action.help == argparse.SUPPRESS:
+                continue
             if isinstance(command_action, argparse._SubParsersAction):
                 nested_subcommands.extend(sorted(command_action.choices.keys()))
                 continue
@@ -11907,6 +11909,100 @@ def command_activity_group_membership_plan(args: argparse.Namespace) -> int:
         print(
             "Members already present: "
             + str(summary.get("already_member_count", 0))
+        )
+        print(
+            "Blocked members: "
+            + str(summary.get("blocked_member_count", 0))
+        )
+        print(
+            "Review plan SHA-256: "
+            + str(result.get("review_plan_sha256") or "unavailable")
+        )
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+        print("Next safe actions:")
+        for action in result.get("next_safe_actions", []):
+            print(f"- {action}")
+    return 0 if result.get("ok") else 1
+
+
+def command_activity_group_membership_removal_plan(
+    args: argparse.Namespace,
+) -> int:
+    if (
+        bool(getattr(args, "approve", False))
+        or getattr(args, "reviewed_by", None) is not None
+        or bool(
+            getattr(
+                args,
+                "affirm_memberships_reviewed",
+                False,
+            )
+        )
+    ):
+        print(
+            "activity-group-membership-removal-plan is read-only and rejects approval or reviewer flags.",
+            file=sys.stderr,
+        )
+        return 1
+    if not args.dry_run:
+        print(
+            "activity-group-membership-removal-plan is read-only and requires --dry-run.",
+            file=sys.stderr,
+        )
+        return 1
+    reporter = CommandProgressReporter(
+        bool(getattr(args, "progress", False)),
+        label="activity-group-membership-removal-plan",
+    )
+    try:
+        result = archive_services.activity_group_membership_removal_plan(
+            Path(args.archive_root),
+            request_path=args.request,
+            dry_run=True,
+            max_members=int(args.max_members),
+            progress_callback=reporter.progress,
+        )
+    except archive_services.ArchiveServiceError:
+        print(
+            "activity-group-membership-removal-plan could not inspect the archive safely.",
+            file=sys.stderr,
+        )
+        return 1
+    except (ArchivePathError, OSError, UnicodeError, ValueError):
+        print(
+            "activity-group-membership-removal-plan failed before a privacy-safe result could be produced.",
+            file=sys.stderr,
+        )
+        return 1
+    finally:
+        reporter.close()
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        summary = (
+            result.get("summary")
+            if isinstance(result.get("summary"), dict)
+            else {}
+        )
+        print(
+            "WOM activity-group membership removal plan: "
+            + str(result.get("status") or "unknown")
+        )
+        print(
+            "Members ready to remove: "
+            + str(summary.get("ready_to_remove_count", 0))
+        )
+        print(
+            "Members already without the named membership: "
+            + str(summary.get("already_absent_count", 0))
         )
         print(
             "Blocked members: "
@@ -23471,6 +23567,66 @@ def build_parser() -> argparse.ArgumentParser:
     )
     activity_group_membership_plan.set_defaults(
         func=command_activity_group_membership_plan
+    )
+
+    activity_group_membership_removal_plan = subcommands.add_parser(
+        "activity-group-membership-removal-plan",
+        aliases=["event-group-membership-removal-plan"],
+        help=(
+            "Validate removing one named event anchor from explicitly listed "
+            "canonical members without inferring membership or writing zettels."
+        ),
+    )
+    activity_group_membership_removal_plan.add_argument(
+        "archive_root",
+        help="Archive root containing the exact canonical anchor and members.",
+    )
+    activity_group_membership_removal_plan.add_argument(
+        "--request",
+        required=True,
+        help=(
+            "Archive-relative JSON request under "
+            ".wom-scratch/private/activity-group-removals/."
+        ),
+    )
+    activity_group_membership_removal_plan.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Required. Validate exact live canonical bytes and write nothing.",
+    )
+    activity_group_membership_removal_plan.add_argument(
+        "--approve",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+    activity_group_membership_removal_plan.add_argument(
+        "--reviewed-by",
+        help=argparse.SUPPRESS,
+    )
+    activity_group_membership_removal_plan.add_argument(
+        "--affirm-memberships-reviewed",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+    activity_group_membership_removal_plan.add_argument(
+        "--max-members",
+        type=int,
+        default=archive_services.ACTIVITY_GROUP_MEMBERSHIP_MAX_MEMBERS,
+        help="Maximum explicit member ids to validate (1-5000).",
+    )
+    activity_group_membership_removal_plan.add_argument(
+        "--progress",
+        action="store_true",
+        help="Stream content-free request/member counts to stderr.",
+    )
+    activity_group_membership_removal_plan.add_argument(
+        "--format",
+        choices=["text", "json"],
+        default="json",
+        help="Output format.",
+    )
+    activity_group_membership_removal_plan.set_defaults(
+        func=command_activity_group_membership_removal_plan
     )
 
     activity_group_membership_write = subcommands.add_parser(
