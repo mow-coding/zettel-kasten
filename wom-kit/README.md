@@ -10,10 +10,10 @@ It is not a website, SaaS app, dashboard, or visual note-taking product. The int
 
 ## Install The Command-Line Tool
 
-v0.3.284 provides a self-contained wheel on the exact GitHub release:
+v0.3.285 provides a self-contained wheel on the exact GitHub release:
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.284/wom_kit-0.3.284-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.285/wom_kit-0.3.285-py3-none-any.whl"
 archive --version
 ```
 
@@ -703,10 +703,10 @@ import --dry-run
   Transitional compatibility alias for admit.
 
 import-external --dry-run
-  Preview a Notion or Google Drive export import without mutating the target archive. Manifest items that contain safe object refs, source refs, facets, or zettel id overrides report counts and routing metadata without echoing private values.
+  Preview a Notion or Google Drive export import without mutating the target archive. Manifest items that contain safe object refs, source refs, facets, or zettel id overrides report counts and routing metadata without echoing private values. For a new Notion JSON/YAML manifest item only, an identifier-shaped primary title can fall back to the same item's exact lowercase top-level string `index` after the existing title and privacy checks; a normal human title always wins.
 
 import-external --approve --reviewed-by
-  Import Notion or Google Drive export items as inbox drafts and write an import receipt. Explicit safe metadata from the manifest is preserved in draft source_refs and facets; use --provider-locator-policy object-ref to convert supported Notion body locators to a reviewed objet ref when exactly one object source ref is present.
+  Import Notion or Google Drive export items as inbox drafts and write an import receipt. Explicit safe metadata from the manifest is preserved in draft source_refs and facets; use --provider-locator-policy object-ref to convert supported Notion body locators to a reviewed objet ref when exactly one object source ref is present. Within one approved call, discovery is frozen before planning and writes; this is not cross-invocation dry-run digest binding.
 
 share --dry-run
   Legacy-compatible dry-run for the older share language. Product language should prefer delegate.
@@ -1120,7 +1120,7 @@ Real minting reuses the dry-run checks as a gate. Blockers always stop the comma
 
 `archive admit --dry-run` previews target inbox writes, object manifest merges, conflicts, and an admit/import receipt. Real parcel/workpack admit remains unavailable until the dry-run path is proven safer. `archive import --dry-run` remains a v0.2 compatibility alias.
 
-`archive import-external --source notion --export <folder> --dry-run` previews a Notion Markdown export import. `archive import-external --source google_drive --export <manifest.json> --dry-run` does the same for Google Drive exports. Approved imports write inbox drafts and `receipts/import/*.external-import.json`; when manifest metadata includes explicit safe object refs, safe non-object source refs, safe facets, or a safe zettel id override, those values are preserved in the imported draft frontmatter. Imported bodies that still contain provider URLs or local absolute paths block before approval. `--provider-locator-policy object-ref` can convert supported Notion body locators to one reviewed `objet:<object_id>` reference when exactly one object source ref is present. The command does not call Notion or Google Drive APIs, read object bytes, or store OAuth secrets.
+`archive import-external --source notion --export <folder> --dry-run` previews a Notion Markdown export import. `archive import-external --source google_drive --export <manifest.json> --dry-run` does the same for Google Drive exports. Approved imports write inbox drafts and `receipts/import/*.external-import.json`; when manifest metadata includes explicit safe object refs, safe non-object source refs, safe facets, or a safe zettel id override, those values are preserved in the imported draft frontmatter. For a new Notion JSON/YAML manifest item only, v0.3.285 keeps a normal human title authoritative but can replace an identifier-shaped primary title with the same item's exact lowercase top-level string `index` after the normal title and privacy checks. It ignores differently cased or nested fields, rich-text arrays, Google Drive items, and directory-only Markdown imports; reads no `pages.index.jsonl` or provider mirror; creates no `facets.index`; changes no existing zet; and does not claim that a later approval is digest-bound to an earlier dry-run. An approved call freezes one discovery projection for its own plan and writes. Imported bodies that still contain provider URLs or local absolute paths block before approval. `--provider-locator-policy object-ref` can convert supported Notion body locators to one reviewed `objet:<object_id>` reference when exactly one object source ref is present. The command does not call Notion or Google Drive APIs, read object bytes, or store OAuth secrets.
 
 `archive share --dry-run` is the legacy dry-run for the older share language. It previews a GitHub-like archive share from a saved view, shows which zettels are included or excluded, blocks sensitive categories by default, verifies the target counterparty fingerprint against `archive-identity.yml`, and writes nothing. Product design should prefer `delegate-zet`.
 
