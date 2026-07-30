@@ -37,7 +37,7 @@ and policy gates. See [Credential KeePassXC Write](credential-keepassxc-write.md
 ## Read-Only Planner
 
 ```powershell
-python cli\archive.py credential-access-broker-plan .\my-archive `
+$env:PYTHONPATH='src'; python -m wom_kit.archive_cli credential-access-broker-plan .\my-archive `
   --credential-id cred:openai-api `
   --credential-ref secret:keepassxc-openai-api `
   --action-kind model_api_call `

@@ -34,10 +34,10 @@ not re-grow baseline ladders or tag lists here.
 Current public baseline:
 
 ```text
-v0.3.290 pre-release
+v0.3.291 pre-release
 ```
 
-Previous public baseline: v0.3.289 pre-release.
+Previous public baseline: v0.3.290 pre-release.
 
 Full release history: see [CHANGELOG.md](CHANGELOG.md) and [wom-kit/docs/releases/](wom-kit/docs/releases/).
 
@@ -55,7 +55,7 @@ future-only boundaries.
 Install the exact release wheel as an isolated command-line tool:
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.290/wom_kit-0.3.290-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.291/wom_kit-0.3.291-py3-none-any.whl"
 archive --version
 ```
 
@@ -148,7 +148,7 @@ approval-gated write, or docs-only), see the
 - an optional [MOW Harness compatibility boundary](wom-kit/docs/mow-harness-compatibility.md) that keeps `collab/` and `.mow-harness/` local-only, leaves WOM usable without the Harness, and separates external read-only preview from separately approved update and activation,
 - a CLI-only local Agent Skill host lifecycle: read-only `runtime-skill-status`, digest-bound `runtime-skill-install --dry-run|--approve`, and manifest-verified `runtime-skill-uninstall --dry-run|--approve` use current Codex user/repository `.agents/skills` locations or one explicit custom root, redact paths by default, require a reviewer plus the exact preview digest before writes, and never overwrite or remove unmanaged/human-edited skill directories; Python installation itself still writes no host configuration and no MCP write surface is added,
 - a standards-compatible `wom-archive` Agent Skill package with a 104-line first-read `SKILL.md`, six focused task references, one preserved complete operator contract, and a release-gated validator for metadata, link/path safety, discovery, context budgets, approval/privacy boundaries, artifact primacy, and no-silent-identity-merge guidance; AI operators load only the reference needed for the current goal, treat canonical as reviewed state rather than objective truth, preserve human change, and never install themselves silently,
-- read-only WOM-kit version truth-source checks through `archive --version`, `archive version --format json`, parent project installed-version pin discovery from archive roots, and runtime-context version metadata, plus approval-gated `project-version-update` for an atomic configured-origin fetch, verified exact-tag detached checkout, recognized pin alignment, rollback, receipt, and mandatory new-process verification without touching archive knowledge,
+- read-only WOM-kit version truth-source checks through `archive --version`, `archive version --format json`, parent project installed-version pin discovery from archive roots, and runtime-context version metadata, plus approval-gated `project-version-update` for an atomic configured-origin fetch, complete tracked commit-tree materialization without `git checkout`, recognized pin alignment, checkpointed rollback, an immutable v0.2 receipt, and mandatory new-process verification without touching archive knowledge; since v0.3.291, a self-consistent project mirror that differs from the running import can expose an opt-in Python `-I -S` bridge after real-path/Git/source/resource/tag/ancestry checks; the bridge never puts `wom-kit/src` on `sys.path`, purges project aliases, and loads only `wom_kit` through exact Git object IDs, blocking post-gate top-level dependency shadows; updater scans stream under caps and ignored `wom-kit/src` shadows block before mutation; v0.3.291 approval is Windows-only with no-`FILE_SHARE_DELETE` directory holds, while POSIX dry-run returns `preview_only_platform_unsupported` plus `approval_platform_supported: false`; after dry-run, every Windows approval requires editors, sync/backup clients, and other Git writers to stay paused for the complete transaction plus the exact `--affirm-external-writers-quiescent` flag and reviewer; results report `external_writer_quiescence_required: true`, `external_writer_quiescence_affirmed: true`, `atomic_file_compare_and_swap: false`, and `checkpointed_change_detection: true`, while the v0.2 receipt records `external_writer_quiescence: {affirmed: true, scope: complete_project_version_update_transaction}`; the trust digest binds effective Git config plus exactly `GIT_ASKPASS`, `GIT_PROXY_COMMAND`, `GIT_SSH`, and `GIT_SSH_COMMAND`, while the selected Git executable, `PATH`, `HTTP_PROXY`, `HTTPS_PROXY`, `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `SSH_AUTH_SOCK`, `HOME`, and other non-`GIT_*` toolchain/transport environment are unbound trusted-stable prerequisites,
 - read-only `archive capabilities --machine` for AI operators that need a stable `ok/state/summary/data/blockers/warnings` envelope listing the executable local CLI commands, aliases, required positionals, options, nested subcommands, and local release identity without calling GitHub or providers,
 - read-only `archive operator-feedback-plan --dry-run` and approval-gated `archive operator-feedback-record --approve` for tracking operator-generated tool feedback under `ops/feedback/` with draft/delivered/acknowledged/resolved/archived lifecycle metadata, plus read-only `archive operator-feedback-ledger --dry-run` (aliases `feedback-ledger`, `feedback-board`) that aggregates delivery-status counts + a pending list and approval-gated `archive operator-feedback-mark-delivered --approve` that batches the draft->delivered boundary with a `delivered_at` stamp and a single receipt, all without reading feedback bodies, echoing feedback refs/titles, submitting externally (metadata only; `delivered` is the operator's own mark, not proof of external delivery), or mixing feedback lifecycle state into user knowledge `objets/`,
 - read-only `archive approval-handoff-plan --dry-run` and approval-gated `archive approval-handoff-record --approve` for AI-to-human approval handoff metadata under `ops/approval-handoffs/`, so sensitive operations can stop at a clear needs_review/approved_once/denied/superseded/resolved state without executing the operation, reading private material, calling providers, or echoing target/action values,
@@ -505,7 +505,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
-v0.3.290 (current checkpoint)
+v0.3.291 (current checkpoint)
 ```
 
 Public releases from `v0.2.5` onward are tagged as compatibility checkpoints.
@@ -556,7 +556,7 @@ Start with [Public Documentation Map](wom-kit/docs/public-documentation-map.md) 
 ```bash
 cd wom-kit
 python -m unittest discover -s tests
-python cli/archive.py doctor examples/fake-life-archive --strict
+PYTHONPATH=src python -m wom_kit.archive_cli doctor examples/fake-life-archive --strict
 ```
 
 Expected result:
@@ -565,6 +565,11 @@ Expected result:
 tests pass
 doctor reports 0 errors and 0 warnings
 ```
+
+The direct `wom-kit/cli/archive.py` wrapper is a verified bridge and pristine
+checkout recovery entrypoint, not the normal development launcher. Use the
+module form above in an active source tree, including after tests have created
+bytecode caches.
 
 ## Privacy Boundary
 

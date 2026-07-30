@@ -6,6 +6,120 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.291 - 2026-07-31
+
+- Extended the read-only `archive version <root>` result with a bounded
+  `runtime_alignment` decision and deterministic `next_safe_actions`.
+- Distinguished an aligned runtime, a project source/pin that needs update or
+  repair, and a self-consistent project mirror that can provide a
+  project-scoped bridge when the running import differs.
+- Restricted shareable version metadata to exact stable labels. Arbitrary
+  local pin, source, pyproject, and Git tag payloads now fail closed as
+  invalid/null evidence instead of being copied into JSON, text, or
+  `runtime_alignment`; only exact `v<major>.<minor>.<patch>` tags can populate
+  head/latest-tag fields.
+- Kept the executable bridge argv path-redacted by default and returned it
+  only under explicit `--no-redact-local-paths`, after mirror package,
+  pyproject, pin, and wrapper checks plus a verified
+  `runtime_alignment.integrity` result.
+- Required isolated Python `-I -S`, real in-project paths, conventional
+  project-local Git metadata, an untracked version pin, direct raw
+  worktree/index/flag agreement, the complete runtime Python and synchronized
+  resource sets, a closed import tree, the exact annotated version tag at
+  `HEAD`, matching tagged source versions, and local `origin/main` ancestry
+  before returning executable argv.
+- Bound the bridge to the expected commit, annotated tag, wrapper blob, and all
+  103 synchronized resources. Its in-memory bootstrap executes the verified
+  wrapper blob and permits only the read-only `version` command. The source
+  root is never placed on `sys.path`: project aliases are purged and an
+  exact-object-id finder loads only `wom_kit`, so a post-gate top-level
+  `yaml`/`sqlite3` shadow cannot execute. Replacement objects and lazy fetch
+  are disabled. `-S` blocks site initialization, executable `.pth` lines, and
+  `sitecustomize`; verified stdlib-`sysconfig` `purelib`/`platlib` paths are
+  added only after bootstrap without `site.py` processing. The gate uses no
+  network, reads only the fixed origin key name, and claims neither a
+  cryptographic signature nor current remote freshness.
+- Replaced per-resource Git subprocess verification in that bridge with one
+  bounded full-tree inventory, one strict unique-object `cat-file --batch`,
+  and one full stage-zero index inventory. The resource gate now uses exactly
+  three Git children regardless of resource count while preserving exact
+  tree/index/worktree/OID/size/hash and closed-world checks.
+- Made approval-gated `project-version-update` transition-safe for existing
+  Windows mirrors whose unchanged Python files can retain pre-attribute CRLF
+  bytes: it validates strict cross-platform paths and safe file/directory
+  transitions, manually materializes the complete tracked target commit tree
+  without `git checkout`, rebuilds the stage-zero index, and verifies raw
+  bytes/index/flags/resources before pins.
+- Made rollback branch restoration follow Git's native branch-name rules,
+  including `+` and Unicode names. Full symbolic refs are classified exactly:
+  only return code 1 is detached `HEAD`; abnormal or non-`refs/heads/*`
+  symbolic state blocks before fetch or mutation.
+- Replaced status-based updater snapshots with direct commit-tree,
+  stage-zero-index, flag, bounded raw-byte, and untracked-path comparisons so
+  repository filters cannot execute. Added project-local `.git`
+  metadata/alternate/graft rejection, no-replace/no-lazy Git controls, and an
+  effective-config digest checkpoint around fetch. The digest binds the
+  effective Git configuration plus exactly `GIT_ASKPASS`,
+  `GIT_PROXY_COMMAND`, `GIT_SSH`, and `GIT_SSH_COMMAND`; the selected Git
+  executable, `PATH`, `HTTP_PROXY`, `HTTPS_PROXY`, `SSL_CERT_FILE`,
+  `CURL_CA_BUNDLE`, `SSH_AUTH_SOCK`, `HOME`, and other non-Git toolchain or
+  transport environment remain trusted stable operational prerequisites.
+- Added streaming, capped directory scans and made even an ignored,
+  noncolliding `wom-kit/src` shadow a pre-mutation blocker.
+- Added `O_EXCL` lock and receipt ownership journals plus checkpointed
+  source/pin drift detection. This is not atomic file compare-and-swap and
+  cannot guarantee that an external writer will never clobber a file. Every
+  Windows approval therefore requires the operator to pause editors, sync,
+  backup, and other Git writers for the complete transaction, then pass
+  `--affirm-external-writers-quiescent` with the reviewer. Results report
+  `external_writer_quiescence_required: true`,
+  `external_writer_quiescence_affirmed: true`,
+  `atomic_file_compare_and_swap: false`, and
+  `checkpointed_change_detection: true`; the v0.2 receipt records
+  `external_writer_quiescence: {affirmed: true, scope:
+  complete_project_version_update_transaction}`. A changed configuration
+  digest immediately before rollback skips restoration, preserves the owned
+  lock, and reports incomplete rollback. True file-handle/descriptor-bound CAS
+  remains future work. New receipts use schema v0.2 while v0.1 remains
+  compatible; `no_change` requires the exact target tree, resources, and pins.
+- Limited v0.3.291 update approval to Windows, where held directory handles
+  omit `FILE_SHARE_DELETE` across project/source/`.git`/pin/lock/receipt path
+  chains. Missing receipt parents are created and held sequentially, and the
+  receipt writer requires a held root. POSIX dry-run remains available with
+  `preview_only_platform_unsupported` and
+  `write_boundary.approval_platform_supported: false`; POSIX approval blocks
+  until Git and complete-tree work are descriptor-relative end to end.
+- Strengthened the Windows hold from attribute-only access to directory-list
+  access, bound every retained handle to its volume/file identity, revalidated
+  the current pathname against that identity before use, and rechecked
+  containment, real components, held parent, and regular-file type immediately
+  before each tracked unlink. Incomplete internal handle/identity cache state
+  is now purged and any surviving handle is closed fail-closed.
+- Replaced extension/name guesses for CRLF-equivalent tracked text with the
+  exact bounded `git ls-files --eol -z` set, including extensionless
+  `Dockerfile`, `.dockerignore`, and `.gitkeep` paths. All five NUL-delimited
+  Git inventories now require canonical framing, nonempty records, known EOL
+  tokens, exact path-set agreement, and safe metadata whitespace before an
+  approved update can proceed.
+- Made the bridge boundary explicit: one invocation of verified project
+  source, not replacement of `archive` on `PATH`, Python environment mutation,
+  installer-provenance inference, process restart, or runtime Skill install.
+- Corrected ordinary source-checkout guidance to use `PYTHONPATH=src` plus
+  `python -m wom_kit.archive_cli`; the direct `wom-kit/cli/archive.py` wrapper
+  is now documented only as an exact verified bridge or pristine-checkout
+  recovery entrypoint. Updated both packaged runtime references, the current
+  CLI guide, and English/Korean quick verification so a preceding test run
+  cannot make the next Doctor command fail only because of `__pycache__`.
+- Documented the six stable external `WOM_BRIDGE_*` refusal codes. Every
+  direct-wrapper refusal now prints its code plus the fixed content-free
+  `WOM_BRIDGE_RECOVERY_DOC=https://github.com/mow-coding/zettel-kasten/blob/main/wom-kit/docs/version-truth-source.md#wom-bridge-refusal-codes`
+  pointer, without inspected paths, payloads, or raw exception text.
+- Kept the required `--target` in packaged project-update previews.
+- Added no global self-updater, pip/uv/pipx operation, automatic project
+  update, archive mutation, provider/model/MCP write, or beta-archive
+  operation. The existing project updater still fetches only after its
+  explicit approval boundary.
+
 ## v0.3.290 - 2026-07-30
 
 - Made the generic `zettel-edge` writer enforce the selected active

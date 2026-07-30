@@ -36,7 +36,7 @@ Local reviewed WOM state is canonical. GitHub backs up metadata/version history,
 
 ## WOM-kit Updates
 
-- When available, use `project-version-update --dry-run` and then explicit human-reviewed `--approve`; do not hand-edit the source checkout or installed-version pins.
+- When available, use `project-version-update --dry-run` first. Before Windows approval, pause editors, sync/backup clients, and other Git writers for the complete transaction, then use `--approve --reviewed-by <actor> --affirm-external-writers-quiescent`; do not hand-edit the source checkout or installed-version pins.
 - After `updated_restart_required`, start a new process and require `archive version` import/source/pin/tag agreement before claiming the new runtime is active. Never bypass a dirty-state, tag, metadata, lock, or rollback blocker.
 - `archive version` proves local runtime/source/pin and already-fetched tag state only. Check an authoritative remote release surface separately before claiming that no newer release exists.
 

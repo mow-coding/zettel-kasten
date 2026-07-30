@@ -193,7 +193,7 @@ No existing private archive migration is required by this document.
 `v0.2.15` ships the first concrete tool for this rollout: a read-only CLI dry-run validator that previews whether a v0.2 Markdown-compatible zet is compatible with a future WOM Safe HTML Profile migration.
 
 ```bash
-python wom-kit/cli/archive.py check-safe-html <archive-root> \
+PYTHONPATH=wom-kit/src python -m wom_kit.archive_cli check-safe-html <archive-root> \
   --path inbox/<draft-zet>.md \
   --dry-run \
   --format json

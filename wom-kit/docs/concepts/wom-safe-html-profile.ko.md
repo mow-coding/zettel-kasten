@@ -193,7 +193,7 @@ future minor release
 `v0.2.15`는 위 rollout의 첫 구체 도구를 추가합니다. v0.2 Markdown 호환 zet가 미래의 WOM Safe HTML Profile 마이그레이션과 호환 가능한지 미리 검사하는 읽기 전용 CLI dry-run validator입니다.
 
 ```bash
-python wom-kit/cli/archive.py check-safe-html <archive-root> \
+PYTHONPATH=wom-kit/src python -m wom_kit.archive_cli check-safe-html <archive-root> \
   --path inbox/<draft-zet>.md \
   --dry-run \
   --format json

@@ -24,6 +24,119 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.291 Runtime Version Alignment
+
+v0.3.291 changes no archive data and requires no archive migration.
+
+After a project update, the project source mirror and version pin may be
+current while the global `archive` command still imports another Python
+checkout. Use:
+
+```powershell
+archive version <project-or-archive-root> --format json
+```
+
+The new `runtime_alignment` block distinguishes an aligned runtime, project
+source that must be repaired or updated first, and a self-consistent source
+mirror that can be run through a project-scoped bridge. Local paths remain
+redacted by default.
+
+On a trusted machine, explicit `--no-redact-local-paths` can return a
+structured exact bridge argv only after source package, pyproject, pin, and
+wrapper checks and only when `runtime_alignment.integrity.verified` is true.
+That local gate also requires real project paths and project-local Git
+metadata, direct raw worktree/index/flag agreement, the closed import tree, all
+103 synchronized resources, the annotated version tag and matching tagged
+versions, and local `origin/main` ancestry. The Python `-I -S` bootstrap binds
+the expected commit, tag, wrapper blob, and resource blobs, executes the
+wrapper from verified memory, and permits only the `version` command. `-S` blocks
+`site`, executable `.pth` lines, and `sitecustomize` before bootstrap; only
+after verification are stdlib `sysconfig`'s `purelib` and `platlib` paths
+appended without `site.py` processing. The gate disables
+replacement objects and lazy fetch, uses no network, and reads no origin URL
+value. The bridge removes project aliases from `sys.path`, never inserts
+`wom-kit/src`, and uses an exact-object-ID finder only for `wom_kit`; a
+post-gate top-level `yaml` or `sqlite3` shadow therefore cannot execute from
+the project tree. The bridge runs the project source once. It does not replace
+`archive` on `PATH`, update a Python environment, infer
+pip/uv/pipx/editable ownership, restart a process, or install the runtime Agent
+Skill.
+
+For ordinary work in an active source checkout, do not invoke
+`wom-kit/cli/archive.py` directly. From inside `wom-kit/`, use:
+
+```powershell
+$env:PYTHONPATH = "src"
+python -m wom_kit.archive_cli <command> ...
+```
+
+or in a POSIX shell:
+
+```bash
+PYTHONPATH=src python -m wom_kit.archive_cli <command> ...
+```
+
+The direct wrapper is reserved for the exact verified `bridge_argv` or a
+pristine-checkout recovery attempt. Its six stable external refusal codes and
+fixed `WOM_BRIDGE_RECOVERY_DOC` pointer are documented in
+[`wom-kit/docs/version-truth-source.md`](wom-kit/docs/version-truth-source.md#wom-bridge-refusal-codes).
+
+Existing Windows source mirrors need one additional transition safeguard.
+When an older checkout used `core.autocrlf=true`, an unchanged `.py` file can
+remain in CRLF form even after the new repository attributes require LF.
+Approved `project-version-update` now validates cross-platform paths and safe
+file/directory transitions, then manually materializes the complete tracked
+target commit tree without `git checkout`. It rebuilds the stage-zero index and
+verifies raw bytes, flags, versions, the closed tree, and synchronized
+resources before pins.
+
+The updater snapshots raw worktree/index/flags instead of calling `git status`,
+so configured clean/process filters do not run. Runtime inventories stream
+`os.scandir` under fixed caps, and an ignored, noncolliding top-level
+`wom-kit/src` shadow blocks before mutation.
+
+The configuration digest binds effective Git config plus exactly
+`GIT_ASKPASS`, `GIT_PROXY_COMMAND`, `GIT_SSH`, and `GIT_SSH_COMMAND`. It does
+not bind the selected `git` executable, `PATH`, `HTTP_PROXY`, `HTTPS_PROXY`,
+`SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `SSH_AUTH_SOCK`, `HOME`, or other
+non-`GIT_*` toolchain/transport environment; keep them trusted and stable for
+the approval.
+If the digest changes immediately before rollback, WOM skips source/pin
+restore, keeps the owned lock, and reports incomplete rollback.
+
+Source and pin snapshots are checkpointed drift detection, not atomic file
+compare-and-swap. Windows directory stability does not stop file-content
+changes between a check and write. After dry-run, keep external editors,
+sync/backup tools, and other Git writers quiescent for the complete transaction,
+then pass `--affirm-external-writers-quiescent` with the reviewer on every
+approval. The result reports
+`external_writer_quiescence_required: true`,
+`external_writer_quiescence_affirmed: true`,
+`atomic_file_compare_and_swap: false`, and
+`checkpointed_change_detection: true`. The v0.2 receipt records
+`external_writer_quiescence: {affirmed: true, scope:
+complete_project_version_update_transaction}`. True handle/descriptor-bound
+file CAS remains future work. Receipt schema v0.1 remains compatible for old
+receipts.
+`no_change` still requires the exact target tree, synchronized resources, and
+all recognized pins to be verified.
+
+The approved v0.3.291 project updater is Windows-only. Windows holds the real
+project, source/`.git`, pin, lock, and receipt directory chains without
+`FILE_SHARE_DELETE`, so another process cannot rename, delete, or junction-swap
+them during the transaction. A missing receipt parent and root are created and
+held in order, and the receipt helper requires that held root.
+
+On POSIX, dry-run still returns a complete read-only preview, but its status is
+`preview_only_platform_unsupported` and
+`write_boundary.approval_platform_supported` is `false`. POSIX `--approve`
+fails closed because an open directory descriptor does not stop pathname rename
+and the Git/complete-tree transaction is not descriptor-relative end to end.
+
+See [`wom-kit/docs/releases/v0.3.291.md`](wom-kit/docs/releases/v0.3.291.md)
+and
+[`wom-kit/docs/version-truth-source.md`](wom-kit/docs/version-truth-source.md).
+
 ## v0.3.290 Edge Writer Entity-Type Enforcement
 
 v0.3.290 fixes the existing `zettel-edge` safety gate. It requires no archive
@@ -2417,15 +2530,20 @@ archive project-version-update <project-or-archive-root> --target vX.Y.Z --dry-r
 After reviewing a clean preview, approve one transaction:
 
 ```text
-archive project-version-update <project-or-archive-root> --target vX.Y.Z --approve --reviewed-by <actor> --progress --format json
+archive project-version-update <project-or-archive-root> --target vX.Y.Z --approve --reviewed-by <actor> --affirm-external-writers-quiescent --progress --format json
 ```
 
-Approval atomically fetches only configured `origin/main` and the exact target
-tag, requires an annotated tag on that main history, verifies all three package
-version files, checks out the tag detached, aligns recognized pins, and writes a
-project metadata receipt. Dirty or ambiguous state blocks. A failure after
-checkout restores the original checkout and exact prior pin bytes; fetched refs
-may remain as non-canonical discovery state.
+On the current CLI, first pause editors, sync/backup clients, and other Git
+writers for the complete transaction; the affirmation flag above is required
+for every approval. The original v0.3.215 boundary fetched only configured
+`origin/main` and the exact target tag, required an annotated tag on that main
+history, verified all three package version files, aligned recognized pins, and
+wrote a project metadata receipt. The current v0.3.291 updater still keeps that
+bounded fetch but manually materializes the complete target commit tree without
+`git checkout`. Rollback now uses checkpointed drift detection and may remain
+incomplete with the owned lock preserved; the v0.3.291 section above is the
+current operational contract. Fetched refs may remain as non-canonical
+discovery state.
 
 The current Python process is never reloaded. After success, start a new process
 from the project mirror and run `archive version <root> --format json` before
@@ -4643,11 +4761,11 @@ What changed:
 
 No private archive migration is required.
 
-Current commands should use the new paths:
+Current source-development commands use the import package. Since v0.3.291,
+the direct wrapper is reserved for a verified bridge or pristine recovery:
 
 ```bash
-python wom-kit/cli/archive.py doctor wom-kit/examples/fake-life-archive --strict
-python -m wom_kit.archive_cli doctor wom-kit/examples/fake-life-archive --strict
+PYTHONPATH=wom-kit/src python -m wom_kit.archive_cli doctor wom-kit/examples/fake-life-archive --strict
 ```
 
 ## From `v0.2.17` To `v0.2.18`

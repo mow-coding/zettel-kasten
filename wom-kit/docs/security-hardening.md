@@ -139,8 +139,8 @@ store provider secrets
 Before connecting real personal or team data, run:
 
 ```powershell
-python cli\archive.py preflight <archive> --strict --check-docker
-python cli\archive.py restore-drill <archive> --target C:\tmp\archive-restore --dry-run
+$env:PYTHONPATH='src'; python -m wom_kit.archive_cli preflight <archive> --strict --check-docker
+$env:PYTHONPATH='src'; python -m wom_kit.archive_cli restore-drill <archive> --target C:\tmp\archive-restore --dry-run
 ```
 
 This catches the most dangerous first-pilot mistakes:

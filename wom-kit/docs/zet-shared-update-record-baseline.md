@@ -101,7 +101,7 @@ The example is non-executable and public-safe. It keeps:
 v0.2.56 adds a read-only review preview for one local shared update record:
 
 ```powershell
-python wom-kit\cli\archive.py shared-update-record-review <archive-root> --record <archive-relative-json> --dry-run --format json
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli shared-update-record-review <archive-root> --record <archive-relative-json> --dry-run --format json
 ```
 
 The command reads only the selected archive-relative JSON record. It writes nothing, does not read a shared body, and does not create trust, import, acceptance, attestation, signature, anchor, feed update, projection, provider call, receipt, or ZET transport effects.
@@ -119,7 +119,7 @@ MCP requires `dry_run: true` as a boolean and exposes no write/apply/publish/tra
 v0.2.58 adds a read-only review index for direct-child local shared update record JSON files:
 
 ```powershell
-python wom-kit\cli\archive.py shared-update-record-review-index <archive-root> --records-dir <archive-relative-dir> --dry-run --format json
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli shared-update-record-review-index <archive-root> --records-dir <archive-relative-dir> --dry-run --format json
 ```
 
 The index reuses the v0.2.56 single-record review preview policy for each JSON record. It writes nothing, ignores non-JSON files, does not recurse, and does not create review records, feed updates, trust, import, acceptance, attestation, signature, anchor, provider calls, projection writes, receipts, or ZET transport effects.

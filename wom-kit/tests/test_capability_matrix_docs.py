@@ -11,7 +11,8 @@ KIT_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = KIT_ROOT.parent
 CURRENT_VERSION = f"v{__version__}"
 CURRENT_RUNTIME_STATUS = (
-    f"Status: {CURRENT_VERSION} edge-writer entity-type enforcement, "
+    f"Status: {CURRENT_VERSION} runtime version alignment, "
+    "edge-writer entity-type enforcement, "
     "exact installed-wheel resource integrity, "
     "read-only Notion locator evidence routing, content-free MCP error boundary, "
     "quick start, session handoff, local backup evidence, "
@@ -1560,7 +1561,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         current_release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.215.md").read_text(encoding="utf-8")
         update_text = (KIT_ROOT / "docs" / "project-version-update.md").read_text(encoding="utf-8")
         for phrase in (
-            "Status: v0.3.215 read-only version truth plus approval-gated project update",
+            "Status: v0.3.291 read-only runtime alignment plus approval-gated project update",
             "archive --version",
             "archive version --format json",
             "archive version <project-or-archive-root> --format json",
@@ -1579,7 +1580,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "reads no secrets",
             "repairs no project source mirror",
             "redacts local absolute paths by default",
-            "not an unattended auto-updater",
+            "not an unattended global auto-updater",
             "does not verify a cryptographic tag signature",
         ):
             with self.subTest(phrase=phrase):
@@ -4613,7 +4614,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         for phrase in (
             "Status: v0.3.19 read-only source planning baseline",
             "imap_mailbox",
-            "archive.py imap-mailbox-plan",
+            "wom_kit.archive_cli imap-mailbox-plan",
             "imap_mailbox_plan",
             "gmail",
             "naver",
@@ -4635,7 +4636,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                 self.assertIn(phrase, imap_text)
         for phrase in (
             "imap_mailbox",
-            "archive.py imap-mailbox-plan",
+            "wom_kit.archive_cli imap-mailbox-plan",
             "does not connect, login, read headers, read bodies",
             "imap_mailbox_plan",
         ):
@@ -5743,7 +5744,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
         for phrase in (
             "Status: v0.3.20 read-only credential reference baseline",
-            "archive.py credential-ref-plan",
+            "wom_kit.archive_cli credential-ref-plan",
             "credential_ref_plan",
             "env:NAME",
             "keyring:name",
@@ -8889,7 +8890,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(document="v03282-public-version-surface"):
                 self.assertIn("v0.3.282", text)
         self.assertIn(
-            "releases/download/v0.3.290/wom_kit-0.3.290-py3-none-any.whl",
+            "releases/download/v0.3.291/wom_kit-0.3.291-py3-none-any.whl",
             root_readme_text,
         )
 
@@ -9008,7 +9009,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         ):
             with self.subTest(document="v03283-current-install"):
                 self.assertIn(
-                    "releases/download/v0.3.290/wom_kit-0.3.290-py3-none-any.whl",
+                    "releases/download/v0.3.291/wom_kit-0.3.291-py3-none-any.whl",
                     text,
                 )
 
@@ -9430,8 +9431,8 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         packaged_release_dir = (
             KIT_ROOT / "src" / "wom_kit" / "_resources" / "release-notes"
         )
-        current_release_path = KIT_ROOT / "docs" / "releases" / "v0.3.290.md"
-        packaged_release_path = packaged_release_dir / "v0.3.290.md"
+        current_release_path = KIT_ROOT / "docs" / "releases" / "v0.3.291.md"
+        packaged_release_path = packaged_release_dir / "v0.3.291.md"
         decision_path = (
             KIT_ROOT
             / "docs"
@@ -9497,19 +9498,19 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         )
         guide_flat = " ".join(guide_text.split())
 
-        self.assertEqual(__version__, "0.3.290")
-        self.assertEqual(CURRENT_VERSION, "v0.3.290")
-        self.assertIn('version = "0.3.290"', pyproject_text)
-        self.assertIn('__version__ = "0.3.290"', package_init_text)
-        self.assertIn('__version__ = "0.3.290"', root_package_init_text)
+        self.assertEqual(__version__, "0.3.291")
+        self.assertEqual(CURRENT_VERSION, "v0.3.291")
+        self.assertIn('version = "0.3.291"', pyproject_text)
+        self.assertIn('__version__ = "0.3.291"', package_init_text)
+        self.assertIn('__version__ = "0.3.291"', root_package_init_text)
         self.assertTrue(historical_release_path.is_file())
         self.assertEqual(packaged_release_text, current_release_text)
         self.assertEqual(packaged_schema_text, source_schema_text)
         self.assertEqual(
             sorted(path.name for path in packaged_release_dir.glob("v*.md")),
-            ["v0.3.290.md"],
+            ["v0.3.291.md"],
         )
-        self.assertEqual(resource_manifest["version"], "0.3.290")
+        self.assertEqual(resource_manifest["version"], "0.3.291")
 
         packaged_release_entries = [
             item
@@ -9526,8 +9527,8 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             ],
             [
                 {
-                    "source": "docs/releases/v0.3.290.md",
-                    "packaged": "release-notes/v0.3.290.md",
+                    "source": "docs/releases/v0.3.291.md",
+                    "packaged": "release-notes/v0.3.291.md",
                 }
             ],
         )
@@ -9591,8 +9592,8 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         )
 
         current_wheel_url = (
-            "releases/download/v0.3.290/"
-            "wom_kit-0.3.290-py3-none-any.whl"
+            "releases/download/v0.3.291/"
+            "wom_kit-0.3.291-py3-none-any.whl"
         )
         for text in (
             root_readme_text,
@@ -9611,20 +9612,20 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(document="v03287-version-surface"):
                 self.assertIn("v0.3.287", text)
                 self.assertIn("notion-import-locator-evidence-plan", text)
-        self.assertIn("v0.3.290 pre-release", versioning_text)
+        self.assertIn("v0.3.291 pre-release", versioning_text)
 
     def test_v03288_mcp_content_free_error_boundary_is_current_and_synchronized(
         self,
     ) -> None:
         release_path = KIT_ROOT / "docs" / "releases" / "v0.3.288.md"
-        current_release_path = KIT_ROOT / "docs" / "releases" / "v0.3.290.md"
+        current_release_path = KIT_ROOT / "docs" / "releases" / "v0.3.291.md"
         packaged_release_path = (
             KIT_ROOT
             / "src"
             / "wom_kit"
             / "_resources"
             / "release-notes"
-            / "v0.3.290.md"
+            / "v0.3.291.md"
         )
         decision_path = (
             KIT_ROOT
@@ -9656,10 +9657,10 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             resource_manifest_path.read_text(encoding="utf-8")
         )
 
-        self.assertEqual(__version__, "0.3.290")
-        self.assertEqual(CURRENT_VERSION, "v0.3.290")
+        self.assertEqual(__version__, "0.3.291")
+        self.assertEqual(CURRENT_VERSION, "v0.3.291")
         self.assertEqual(packaged_release_text, current_release_text)
-        self.assertEqual(resource_manifest["version"], "0.3.290")
+        self.assertEqual(resource_manifest["version"], "0.3.291")
         self.assertEqual(
             [
                 (row["source"], row["packaged"])
@@ -9668,8 +9669,8 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             ],
             [
                 (
-                    "docs/releases/v0.3.290.md",
-                    "release-notes/v0.3.290.md",
+                    "docs/releases/v0.3.291.md",
+                    "release-notes/v0.3.291.md",
                 )
             ],
         )
@@ -9735,8 +9736,8 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         )
 
         current_wheel_url = (
-            "releases/download/v0.3.290/"
-            "wom_kit-0.3.290-py3-none-any.whl"
+            "releases/download/v0.3.291/"
+            "wom_kit-0.3.291-py3-none-any.whl"
         )
         for text in (
             root_readme_text,
@@ -9755,11 +9756,11 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         self,
     ) -> None:
         release_path = KIT_ROOT / "docs" / "releases" / "v0.3.289.md"
-        current_release_path = KIT_ROOT / "docs" / "releases" / "v0.3.290.md"
+        current_release_path = KIT_ROOT / "docs" / "releases" / "v0.3.291.md"
         packaged_release_dir = (
             KIT_ROOT / "src" / "wom_kit" / "_resources" / "release-notes"
         )
-        packaged_release_path = packaged_release_dir / "v0.3.290.md"
+        packaged_release_path = packaged_release_dir / "v0.3.291.md"
         decision_path = (
             KIT_ROOT
             / "docs"
@@ -9803,17 +9804,17 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         )
         release_flat = " ".join(release_text.split())
 
-        self.assertEqual(__version__, "0.3.290")
-        self.assertEqual(CURRENT_VERSION, "v0.3.290")
-        self.assertIn('version = "0.3.290"', pyproject_text)
-        self.assertIn('__version__ = "0.3.290"', package_init_text)
-        self.assertIn('__version__ = "0.3.290"', root_package_init_text)
+        self.assertEqual(__version__, "0.3.291")
+        self.assertEqual(CURRENT_VERSION, "v0.3.291")
+        self.assertIn('version = "0.3.291"', pyproject_text)
+        self.assertIn('__version__ = "0.3.291"', package_init_text)
+        self.assertIn('__version__ = "0.3.291"', root_package_init_text)
         self.assertEqual(packaged_release_text, current_release_text)
         self.assertEqual(
             sorted(path.name for path in packaged_release_dir.glob("v*.md")),
-            ["v0.3.290.md"],
+            ["v0.3.291.md"],
         )
-        self.assertEqual(resource_manifest["version"], "0.3.290")
+        self.assertEqual(resource_manifest["version"], "0.3.291")
         self.assertEqual(
             [
                 (row["source"], row["packaged"])
@@ -9822,8 +9823,8 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             ],
             [
                 (
-                    "docs/releases/v0.3.290.md",
-                    "release-notes/v0.3.290.md",
+                    "docs/releases/v0.3.291.md",
+                    "release-notes/v0.3.291.md",
                 )
             ],
         )
@@ -9857,8 +9858,8 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         self.assertIn("exact resource-set equality", decision_text)
 
         current_wheel_url = (
-            "releases/download/v0.3.290/"
-            "wom_kit-0.3.290-py3-none-any.whl"
+            "releases/download/v0.3.291/"
+            "wom_kit-0.3.291-py3-none-any.whl"
         )
         for text in (
             root_readme_text,
@@ -9869,17 +9870,15 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(document="v03289-current-install"):
                 self.assertIn(current_wheel_url, text)
 
-    def test_v03290_edge_writer_entity_types_are_current_and_synchronized(
+    def test_v03290_edge_writer_entity_types_remain_historical_and_documented(
         self,
     ) -> None:
         release_path = KIT_ROOT / "docs" / "releases" / "v0.3.290.md"
-        historical_release_path = (
-            KIT_ROOT / "docs" / "releases" / "v0.3.289.md"
-        )
+        current_release_path = KIT_ROOT / "docs" / "releases" / "v0.3.291.md"
         packaged_release_dir = (
             KIT_ROOT / "src" / "wom_kit" / "_resources" / "release-notes"
         )
-        packaged_release_path = packaged_release_dir / "v0.3.290.md"
+        packaged_release_path = packaged_release_dir / "v0.3.291.md"
         decision_path = (
             KIT_ROOT
             / "docs"
@@ -9892,6 +9891,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         )
 
         release_text = release_path.read_text(encoding="utf-8")
+        current_release_text = current_release_path.read_text(encoding="utf-8")
         packaged_release_text = packaged_release_path.read_text(encoding="utf-8")
         decision_text = decision_path.read_text(encoding="utf-8")
         write_guide_text = write_guide_path.read_text(encoding="utf-8")
@@ -9928,18 +9928,18 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         )
         release_flat = " ".join(release_text.split())
 
-        self.assertEqual(__version__, "0.3.290")
-        self.assertEqual(CURRENT_VERSION, "v0.3.290")
-        self.assertIn('version = "0.3.290"', pyproject_text)
-        self.assertIn('__version__ = "0.3.290"', package_init_text)
-        self.assertIn('__version__ = "0.3.290"', root_package_init_text)
-        self.assertTrue(historical_release_path.is_file())
-        self.assertEqual(packaged_release_text, release_text)
+        self.assertEqual(__version__, "0.3.291")
+        self.assertEqual(CURRENT_VERSION, "v0.3.291")
+        self.assertIn('version = "0.3.291"', pyproject_text)
+        self.assertIn('__version__ = "0.3.291"', package_init_text)
+        self.assertIn('__version__ = "0.3.291"', root_package_init_text)
+        self.assertTrue(release_path.is_file())
+        self.assertEqual(packaged_release_text, current_release_text)
         self.assertEqual(
             sorted(path.name for path in packaged_release_dir.glob("v*.md")),
-            ["v0.3.290.md"],
+            ["v0.3.291.md"],
         )
-        self.assertEqual(resource_manifest["version"], "0.3.290")
+        self.assertEqual(resource_manifest["version"], "0.3.291")
         self.assertEqual(
             [
                 (row["source"], row["packaged"])
@@ -9948,8 +9948,8 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             ],
             [
                 (
-                    "docs/releases/v0.3.290.md",
-                    "release-notes/v0.3.290.md",
+                    "docs/releases/v0.3.291.md",
+                    "release-notes/v0.3.291.md",
                 )
             ],
         )
@@ -9963,10 +9963,6 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             changelog_text,
             upgrade_text,
             upgrade_ko_text,
-            root_readme_text,
-            root_readme_ko_text,
-            kit_readme_text,
-            cli_readme_text,
         ):
             with self.subTest(document="v03290-public-contract"):
                 self.assertIn("v0.3.290", text)
@@ -9994,8 +9990,8 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         )
 
         current_wheel_url = (
-            "releases/download/v0.3.290/"
-            "wom_kit-0.3.290-py3-none-any.whl"
+            "releases/download/v0.3.291/"
+            "wom_kit-0.3.291-py3-none-any.whl"
         )
         for text in (
             root_readme_text,
@@ -10003,8 +9999,293 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             install_text,
             install_ko_text,
         ):
-            with self.subTest(document="v03290-current-install"):
+            with self.subTest(document="v03290-historical-current-install"):
                 self.assertIn(current_wheel_url, text)
+
+    def test_v03291_runtime_version_alignment_is_current_and_synchronized(
+        self,
+    ) -> None:
+        release_path = KIT_ROOT / "docs" / "releases" / "v0.3.291.md"
+        historical_release_path = (
+            KIT_ROOT / "docs" / "releases" / "v0.3.290.md"
+        )
+        packaged_release_dir = (
+            KIT_ROOT / "src" / "wom_kit" / "_resources" / "release-notes"
+        )
+        packaged_release_path = packaged_release_dir / "v0.3.291.md"
+        decision_path = (
+            KIT_ROOT
+            / "docs"
+            / "archive-infra-decision-log-2026-07-30-v03291-runtime-version-alignment.md"
+        )
+        version_guide_path = KIT_ROOT / "docs" / "version-truth-source.md"
+        project_update_path = KIT_ROOT / "docs" / "project-version-update.md"
+        startup_path = (
+            KIT_ROOT
+            / "templates"
+            / "ai-runtime"
+            / "wom-archive"
+            / "references"
+            / "startup-and-update.md"
+        )
+        operator_contract_path = (
+            KIT_ROOT
+            / "templates"
+            / "ai-runtime"
+            / "wom-archive"
+            / "references"
+            / "operator-contract.md"
+        )
+        runtime_entrypoints_path = (
+            KIT_ROOT / "docs" / "runtime-canonical-entrypoints.md"
+        )
+        resource_manifest_path = (
+            KIT_ROOT / "src" / "wom_kit" / "_resources" / "resource-manifest.json"
+        )
+
+        release_text = release_path.read_text(encoding="utf-8")
+        packaged_release_text = packaged_release_path.read_text(encoding="utf-8")
+        decision_text = decision_path.read_text(encoding="utf-8")
+        version_guide_text = version_guide_path.read_text(encoding="utf-8")
+        project_update_text = project_update_path.read_text(encoding="utf-8")
+        startup_text = startup_path.read_text(encoding="utf-8")
+        operator_contract_text = operator_contract_path.read_text(encoding="utf-8")
+        runtime_entrypoints_text = runtime_entrypoints_path.read_text(
+            encoding="utf-8"
+        )
+        wrapper_text = (KIT_ROOT / "cli" / "archive.py").read_text(
+            encoding="utf-8"
+        )
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        changelog_text = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+        upgrade_text = (REPO_ROOT / "UPGRADE.md").read_text(encoding="utf-8")
+        upgrade_ko_text = (REPO_ROOT / "UPGRADE.ko.md").read_text(
+            encoding="utf-8"
+        )
+        root_readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        root_readme_ko_text = (REPO_ROOT / "README.ko.md").read_text(
+            encoding="utf-8"
+        )
+        kit_readme_text = (KIT_ROOT / "README.md").read_text(encoding="utf-8")
+        cli_readme_text = (KIT_ROOT / "cli" / "README.md").read_text(
+            encoding="utf-8"
+        )
+        install_text = (
+            KIT_ROOT / "docs" / "python-tool-install.md"
+        ).read_text(encoding="utf-8")
+        install_ko_text = (
+            KIT_ROOT / "docs" / "python-tool-install.ko.md"
+        ).read_text(encoding="utf-8")
+        pyproject_text = (KIT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        package_init_text = (
+            KIT_ROOT / "src" / "wom_kit" / "__init__.py"
+        ).read_text(encoding="utf-8")
+        root_package_init_text = (
+            REPO_ROOT / "wom_kit" / "__init__.py"
+        ).read_text(encoding="utf-8")
+        resource_manifest = json.loads(
+            resource_manifest_path.read_text(encoding="utf-8")
+        )
+        release_flat = " ".join(release_text.split())
+
+        self.assertEqual(__version__, "0.3.291")
+        self.assertEqual(CURRENT_VERSION, "v0.3.291")
+        self.assertIn('version = "0.3.291"', pyproject_text)
+        self.assertIn('__version__ = "0.3.291"', package_init_text)
+        self.assertIn('__version__ = "0.3.291"', root_package_init_text)
+        self.assertTrue(historical_release_path.is_file())
+        self.assertEqual(packaged_release_text, release_text)
+        self.assertEqual(
+            sorted(path.name for path in packaged_release_dir.glob("v*.md")),
+            ["v0.3.291.md"],
+        )
+        self.assertEqual(resource_manifest["version"], "0.3.291")
+        self.assertEqual(
+            [
+                (row["source"], row["packaged"])
+                for row in resource_manifest["files"]
+                if str(row.get("packaged") or "").startswith("release-notes/")
+            ],
+            [
+                (
+                    "docs/releases/v0.3.291.md",
+                    "release-notes/v0.3.291.md",
+                )
+            ],
+        )
+
+        for text in (
+            release_text,
+            decision_text,
+            version_guide_text,
+            project_update_text,
+            matrix_text,
+            changelog_text,
+            upgrade_text,
+            upgrade_ko_text,
+            root_readme_text,
+            root_readme_ko_text,
+            kit_readme_text,
+            cli_readme_text,
+            install_text,
+            install_ko_text,
+        ):
+            with self.subTest(document="v03291-public-contract"):
+                self.assertIn("v0.3.291", text)
+
+        for phrase in (
+            "runtime_alignment",
+            "runtime_alignment.integrity",
+            "project_scoped_bridge_available",
+            "bridge_argv",
+            "--no-redact-local-paths",
+            "wom-kit/cli/archive.py",
+            "one invocation",
+            "does not replace",
+            "runtime Agent Skill",
+            "pip, uv, pipx",
+            "No network call",
+        ):
+            with self.subTest(release_phrase=phrase):
+                self.assertIn(phrase, release_flat)
+
+        self.assertIn("python -m wom_kit.archive_cli ai-start-here", startup_text)
+        self.assertIn(
+            "python -m wom_kit.archive_cli ai-start-here",
+            operator_contract_text,
+        )
+        self.assertNotIn(
+            "python wom-kit/cli/archive.py ai-start-here",
+            startup_text,
+        )
+        self.assertNotIn(
+            "python wom-kit/cli/archive.py ai-start-here",
+            operator_contract_text,
+        )
+        self.assertNotIn("python wom-kit/archive.py", startup_text)
+        self.assertIn(
+            "project-version-update <project-or-archive-root> --target vX.Y.Z",
+            startup_text,
+        )
+        self.assertIn(
+            "PYTHONPATH=src python -m wom_kit.archive_cli doctor",
+            root_readme_text,
+        )
+        self.assertIn(
+            "PYTHONPATH=src python -m wom_kit.archive_cli doctor",
+            root_readme_ko_text,
+        )
+        self.assertNotIn(
+            "python cli/archive.py doctor examples/fake-life-archive --strict",
+            root_readme_text,
+        )
+        self.assertNotIn(
+            "python cli/archive.py doctor examples/fake-life-archive --strict",
+            root_readme_ko_text,
+        )
+        self.assertIn("python -m wom_kit.archive_cli doctor", cli_readme_text)
+        self.assertNotIn("python wom-kit\\cli\\archive.py", cli_readme_text)
+        refusal_codes = (
+            "WOM_BRIDGE_PRELOADED_MODULE",
+            "WOM_BRIDGE_SOURCE_TREE_UNSAFE",
+            "WOM_BRIDGE_PROJECT_PATH_ON_SYS_PATH",
+            "WOM_BRIDGE_IMPORT_FAILED",
+            "WOM_BRIDGE_IMPORT_SOURCE_MISMATCH",
+            "WOM_BRIDGE_ENTRYPOINT_INVALID",
+        )
+        for refusal_code in refusal_codes:
+            with self.subTest(refusal_code=refusal_code):
+                self.assertIn(refusal_code, version_guide_text)
+                self.assertIn(refusal_code, wrapper_text)
+        recovery_doc_url = (
+            "https://github.com/mow-coding/zettel-kasten/blob/main/"
+            "wom-kit/docs/version-truth-source.md#wom-bridge-refusal-codes"
+        )
+        recovery_pointer = f"WOM_BRIDGE_RECOVERY_DOC={recovery_doc_url}"
+        self.assertIn("WOM_BRIDGE_RECOVERY_DOC=", wrapper_text)
+        self.assertIn(recovery_doc_url, wrapper_text)
+        self.assertIn(recovery_pointer, version_guide_text)
+        self.assertIn(recovery_pointer, release_text)
+        self.assertIn(recovery_pointer, changelog_text)
+        self.assertIn("## Audit Correction — 2026-07-31", decision_text)
+        self.assertIn("project_scoped_bridge_available", operator_contract_text)
+        self.assertIn(
+            "runtime_alignment.integrity.verified: true",
+            operator_contract_text,
+        )
+        self.assertIn(
+            "runtime_alignment.integrity.verified: true",
+            startup_text,
+        )
+        self.assertIn("runtime_alignment.integrity.verified", matrix_text)
+        self.assertIn(CURRENT_RUNTIME_STATUS, runtime_entrypoints_text)
+        self.assertIn("Since v0.3.291", matrix_text)
+
+        current_wheel_url = (
+            "releases/download/v0.3.291/"
+            "wom_kit-0.3.291-py3-none-any.whl"
+        )
+        for text in (
+            root_readme_text,
+            root_readme_ko_text,
+            kit_readme_text,
+            install_text,
+            install_ko_text,
+        ):
+            with self.subTest(document="v03291-current-install"):
+                self.assertIn(current_wheel_url, text)
+
+    def test_active_source_docs_use_module_launcher_not_direct_wrapper(self) -> None:
+        active_paths = (
+            KIT_ROOT / "README.md",
+            KIT_ROOT / "docs" / "new-user-flow.md",
+            KIT_ROOT / "docs" / "phase-2-quickstart.md",
+            KIT_ROOT / "docs" / "real-pilot-preflight.md",
+            KIT_ROOT / "docs" / "source-maps.md",
+            KIT_ROOT / "docs" / "imap-mailbox-source.md",
+            KIT_ROOT / "docs" / "derived-text.md",
+            KIT_ROOT / "docs" / "artifact-hygiene.md",
+            KIT_ROOT / "docs" / "credential-access-approval-plan.md",
+            KIT_ROOT / "docs" / "credential-store-contract.md",
+            KIT_ROOT / "docs" / "notion-objet-link-index.md",
+            KIT_ROOT / "docs" / "notion-objet-link-plan.md",
+            KIT_ROOT / "docs" / "security-hardening.md",
+            KIT_ROOT / "docs" / "zet-shared-update-record-baseline.md",
+            KIT_ROOT / "docs" / "zettel-objet-links.md",
+            KIT_ROOT / "docs" / "connection-edge-intelligence-plan.md",
+            KIT_ROOT / "docs" / "credential-access-broker-plan.md",
+            KIT_ROOT / "docs" / "credential-ref-inventory-and-onboarding.md",
+            KIT_ROOT / "docs" / "credential-store-recommendations.md",
+            KIT_ROOT / "docs" / "human-artifact-store-contract.md",
+            KIT_ROOT / "docs" / "index-health.md",
+            KIT_ROOT / "docs" / "notion-objet-link-convert.md",
+            KIT_ROOT / "docs" / "notion-objet-link-rewrite-plan.md",
+            KIT_ROOT / "docs" / "view-health.md",
+            KIT_ROOT / "docs" / "view-recommendation-plan.md",
+            KIT_ROOT / "docs" / "zet-shared-update-record-review-index.md",
+            KIT_ROOT / "docs" / "zet-shared-update-record-review-preview.md",
+            KIT_ROOT / "docs" / "zet-transport-threat-model.md",
+            KIT_ROOT / "docs" / "concepts" / "wom-safe-html-profile.md",
+            KIT_ROOT / "docs" / "concepts" / "wom-safe-html-profile.ko.md",
+            KIT_ROOT / "docs" / "shared-update-route-preview.md",
+            KIT_ROOT / "docs" / "shared-update-route-preview.ko.md",
+            KIT_ROOT / "docs" / "shared-update-route-preview-example.md",
+            KIT_ROOT / "docs" / "shared-update-route-preview-example.ko.md",
+        )
+        forbidden_launchers = (
+            "python wom-kit\\cli\\archive.py",
+            "python wom-kit/cli/archive.py",
+            "python cli\\archive.py",
+            "python cli/archive.py",
+        )
+
+        self.assertEqual(len(active_paths), 34)
+        for path in active_paths:
+            text = path.read_text(encoding="utf-8")
+            with self.subTest(path=path.relative_to(REPO_ROOT).as_posix()):
+                self.assertIn("python -m wom_kit.archive_cli", text)
+                for launcher in forbidden_launchers:
+                    self.assertNotIn(launcher, text)
 
 
 if __name__ == "__main__":

@@ -601,10 +601,14 @@ class McpServerTests(unittest.TestCase):
         return path
 
     def init_transfer_ready_family_archive(self, root: Path) -> Path:
+        env = os.environ.copy()
+        env["PYTHONPATH"] = str(SRC_ROOT)
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
         result = subprocess.run(
             [
                 sys.executable,
-                "cli/archive.py",
+                "-m",
+                "wom_kit.archive_cli",
                 "init",
                 str(root),
                 "--type",
@@ -621,6 +625,7 @@ class McpServerTests(unittest.TestCase):
                 "Example Household Archive",
             ],
             cwd=KIT_ROOT,
+            env=env,
             capture_output=True,
             text=True,
             encoding="utf-8",
