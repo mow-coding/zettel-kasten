@@ -2,6 +2,38 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.3.288 내용 없는 MCP 오류 경계
+
+v0.3.288은 `archive-mcp` 또는 `wom-mcp`를 사용하는 클라이언트를 위한
+개인정보 보호 강화 릴리스입니다.
+
+보관소 이관은 필요하지 않습니다. 클라이언트와 서버 wheel을 함께
+업그레이드한 뒤, MCP 호스트 프로세스를 다시 시작해 새 서버를
+불러오세요.
+
+실패한 도구는 이제 하나의 고정 응답만 반환합니다.
+
+```json
+{
+  "content": [{"type": "text", "text": "Tool execution failed."}],
+  "structuredContent": {"error": "tool_execution_failed"},
+  "isError": true
+}
+```
+
+클라이언트가 예전에 `structuredContent.error`의 사람이 읽는 예외 문구를
+표시하거나 해석했다면 `tool_execution_failed`를 인식하도록 바꾸세요.
+실제 실패 원인은 로컬에서 진단해야 하며, 서버는 내부 상세 내용을 MCP
+클라이언트에 보내지 않습니다.
+
+프로토콜 오류도 고정된 분류 문구를 사용합니다. 요청 `params`나 도구
+`arguments`가 필요 없으면 `null` 또는 `{}`를 사용하세요. `false`, `0`,
+`""`, `[]`는 이제 잘못된 인자로 거부됩니다.
+
+성공 응답과 보관소 안전 규칙은 바뀌지 않았습니다. 자세한 내용은
+[`wom-kit/docs/releases/v0.3.288.md`](wom-kit/docs/releases/v0.3.288.md)를
+보세요.
+
 ## v0.3.287 읽기 전용 Notion locator 증거 계획
 
 v0.3.287은 v0.3.277 locator 손실 조사 다음의 읽기 전용 단계입니다.

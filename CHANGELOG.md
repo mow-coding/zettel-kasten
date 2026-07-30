@@ -6,6 +6,32 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.288 - 2026-07-30
+
+- Replaced every failed MCP tool response with one exact content-free envelope:
+  human text `Tool execution failed.`, structured code
+  `tool_execution_failed`, and `isError: true`.
+- Removed raw exception messages, paths, identifiers, frontmatter values,
+  provider details, validation text, unknown method/tool names, and
+  caller-controlled values from MCP error wire responses.
+- Normalized JSON-RPC parse, invalid-request, method-not-found,
+  invalid-params, and internal failures to fixed category messages.
+- Changed request parsing so only literal `null` and objects are accepted for
+  `params` and tool `arguments`; falsey non-object values no longer become
+  empty objects.
+- Added strict per-line UTF-8 handling, bounded failure for excessive JSON
+  nesting, non-finite input/output number rejection, JSON-RPC id type checks,
+  ASCII-safe string escaping, and quiet closed-stdout handling so transport
+  failures do not print raw tracebacks or local paths.
+- Kept unexpected executed-tool and tool-result serialization failures inside
+  the exact failed-tool envelope; unexpected non-tool server failures remain
+  fixed JSON-RPC `Internal error`.
+- Preserved internal exception chaining, successful tool result shapes, and
+  every existing dry-run, approval, allowed-root, redaction, provider, and
+  write-safety boundary.
+- Added no MCP tool, CLI command, archive write, migration, provider/model/
+  network call, or beta archive operation.
+
 ## v0.3.287 - 2026-07-30
 
 - Added CLI-only, read-only
