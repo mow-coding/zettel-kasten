@@ -1,6 +1,6 @@
 # Install WOM-kit As A Python Tool
 
-Status: v0.3.288 GitHub wheel and content-free MCP error checkpoint
+Status: v0.3.289 GitHub wheel and exact packaged-resource integrity checkpoint
 
 WOM-kit is a command-line tool. It should live in its own Python environment
 instead of being mixed into an application project's dependencies.
@@ -10,7 +10,7 @@ instead of being mixed into an application project's dependencies.
 Install the verified wheel attached to the exact WOM release with `uv`:
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.288/wom_kit-0.3.288-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.289/wom_kit-0.3.289-py3-none-any.whl"
 archive --version
 ```
 
@@ -28,7 +28,7 @@ Plain `pip` works when it is placed inside a dedicated virtual environment:
 
 ```powershell
 py -m venv "$HOME\.wom-tools\wom-kit"
-& "$HOME\.wom-tools\wom-kit\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.288/wom_kit-0.3.288-py3-none-any.whl"
+& "$HOME\.wom-tools\wom-kit\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.289/wom_kit-0.3.289-py3-none-any.whl"
 & "$HOME\.wom-tools\wom-kit\Scripts\archive.exe" --version
 ```
 
@@ -48,6 +48,10 @@ those commands:
 
 The repository copies remain the source of truth. A deterministic manifest
 binds each packaged mirror file to its exact byte length and SHA-256.
+Before release, the wheel checker also requires that manifest to match the
+reviewed repository manifest byte for byte, requires the packaged resource set
+to be exact, and verifies every resource against both its declared digest and
+the repository packaged mirror.
 
 ## What Installation Does Not Do
 

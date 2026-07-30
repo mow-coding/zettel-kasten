@@ -34,10 +34,10 @@ not re-grow baseline ladders or tag lists here.
 Current public baseline:
 
 ```text
-v0.3.288 pre-release
+v0.3.289 pre-release
 ```
 
-Previous public baseline: v0.3.287 pre-release.
+Previous public baseline: v0.3.288 pre-release.
 
 Full release history: see [CHANGELOG.md](CHANGELOG.md) and [wom-kit/docs/releases/](wom-kit/docs/releases/).
 
@@ -55,7 +55,7 @@ future-only boundaries.
 Install the exact release wheel as an isolated command-line tool:
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.288/wom_kit-0.3.288-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.289/wom_kit-0.3.289-py3-none-any.whl"
 archive --version
 ```
 
@@ -90,12 +90,10 @@ approval-gated write, or docs-only), see the
 - a public version-line roadmap that explains how the pre-1.0 minor lines map to idea, implementation, WOM feedback, UI/control-layer, and ZET feedback phases,
 - a machine-readable local-sovereignty contract: local reviewed WOM state is canonical, GitHub backs up metadata/version history, object storage backs up objet bytes, and external databases hold regenerable map backups or replicas; runtime/start-here/recovery surfaces share the same offline, conflict, recovery, and receipt boundaries, while read-only `backup-evidence` reports only locally verifiable lane evidence and never turns local commits, declared labels, generated indexes, or receipt-time coverage into a false current-remote or whole-backup claim,
 - WOM-kit local CLI and MCP tooling under `wom-kit/`, importing as `wom_kit`,
-- a content-free MCP failure boundary: failed tools return one fixed
-  `tool_execution_failed` envelope, JSON-RPC errors use fixed category
-  messages, and falsey non-object parameters are rejected without echoing
-  exception text, paths, identifiers, validation details, method/tool names,
-  or caller-controlled values in error `message`/`data`; a valid JSON-RPC
-  request id still appears unchanged in the top-level `id` correlation field,
+- an exact installed-wheel resource integrity gate: release checking rejects
+  duplicate or unsafe ZIP members, malformed or duplicate-key manifests,
+  undeclared resources, and any manifest, byte-count, SHA-256, or packaged
+  mirror mismatch before a wheel is accepted,
 - a self-contained v0.3.242 Python wheel whose exact GitHub release artifact carries the runtime schemas, templates, base rules, and release identity needed for clean-environment onboarding and strict Doctor; isolated `uv tool install` is recommended, a dedicated `pip` virtual environment is supported, and PyPI publication remains explicitly future work,
 - private archive lifecycle tools for doctor checks, draft creation (with forward-only draft-id hygiene so a titleless or Hangul-only title no longer yields a misleading `_draft` id, and draft-time `--kind` validation that warns and lists valid kinds), minting with dry-run checklist guidance and an attributed `--affirm` flag that satisfies the two human-review checklist items via an audited, reviewer-attributed CLI act instead of a raw YAML edit (recorded in the mint receipt, inert without `--reviewed-by`, never overriding machine-enforced items), verified minted-draft retirement, delegation, receipts, search, and metadata review,
 - honest `archive remint-reconcile` (and the sibling `archive retire-draft-reconcile` for retire receipts) that re-issues a receipt's recorded sha256 after a zet drifts on disk (a CRLF/BOM re-checkout or a human content edit): it classifies the drift as newline/BOM-only `format_drift` or `content_change` even when the draft snapshot itself drifted — checking every content frontmatter field (a full-field reconstruction plus an `id`/`title` cross-check against the mint receipt) so an edit to any field, or a content-tampered snapshot, can never anchor `format_drift` — always shows the on-disk content, requires a reviewer to approve, offers an opt-in `--strip-bom` that never bypasses the content-change ack gate (and, since v0.3.172, previews the same strip-intent metadata on a dry-run as an approve run records — a strict classification no-op that never launders a `content_change`), surfaces (since v0.3.176) a content-free `body_diff_diagnostic` on a `content_change` whose body still differs after the BOM/newline fold — a category label plus a normalized-form byte offset and length delta, never any body text — and now offers dry-run JSON `--diagnostic-only` to omit canonical body text and frontmatter values while preserving those drift numbers; since v0.3.230, every `content_change` also returns a content-free ordered human-review plan and requires its SHA-256 again at approval, so changed bytes or receipt refs invalidate stale approval before any write, never masks corruption, and writes both an in-place receipt update and a separate immutable audit receipt,
@@ -507,7 +505,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
-v0.3.288 (current checkpoint)
+v0.3.289 (current checkpoint)
 ```
 
 Public releases from `v0.2.5` onward are tagged as compatibility checkpoints.
