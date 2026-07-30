@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import json
 import hashlib
+import io
+import json
 import os
 import shutil
 import subprocess
@@ -9,6 +10,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 KIT_ROOT = Path(__file__).resolve().parents[1]
@@ -17,10 +19,42 @@ SRC_ROOT = KIT_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from wom_kit import archive_cli, archive_services
+from wom_kit import archive_cli, archive_services, mcp_server
+
+
+EXPECTED_TOOL_ERROR_ENVELOPE = {
+    "content": [{"type": "text", "text": "Tool execution failed."}],
+    "structuredContent": {"error": "tool_execution_failed"},
+    "isError": True,
+}
 
 
 class McpServerTests(unittest.TestCase):
+    def assert_tool_error_envelope(self, result: dict) -> None:
+        self.assertEqual(result, EXPECTED_TOOL_ERROR_ENVELOPE)
+
+    def assert_wire_omits(self, response: dict, *private_values: str) -> None:
+        serialized = json.dumps(response, ensure_ascii=False, sort_keys=True)
+        for private_value in private_values:
+            self.assertNotIn(private_value, serialized)
+
+    def assert_jsonrpc_error(
+        self,
+        response: dict,
+        *,
+        request_id: object,
+        code: int,
+        message: str,
+    ) -> None:
+        self.assertEqual(
+            response,
+            {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "error": {"code": code, "message": message},
+            },
+        )
+
     def start_server(self, extra_env: dict[str, str] | None = None) -> subprocess.Popen[str]:
         env = os.environ.copy()
         env["PYTHONPATH"] = "src"
@@ -606,6 +640,704 @@ class McpServerTests(unittest.TestCase):
         identity_path.write_text(archive_cli.dump_yaml(identity), encoding="utf-8")
         return root
 
+    def test_tool_error_envelope_is_exact_and_content_free_across_exception_boundaries(self) -> None:
+        server = mcp_server.JsonRpcMcpServer()
+        private_path = r"C:\private-archive\SENTINEL_PRIVATE_ZETTEL.md"
+
+        direct_secret = f"SENTINEL_DIRECT_TOOL_ERROR {private_path}"
+        with mock.patch.object(
+            server,
+            "_dispatch_request",
+            side_effect=mcp_server.ToolError(direct_secret),
+        ):
+            direct_response = server.handle_message(
+                {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}
+            )
+        self.assertIsNotNone(direct_response)
+        self.assert_tool_error_envelope(direct_response["result"])
+        self.assert_wire_omits(direct_response, direct_secret, private_path, "ToolError")
+
+        service_secret = f"SENTINEL_ARCHIVE_SERVICE_ERROR {private_path}"
+
+        def raise_service_error() -> None:
+            raise archive_services.ArchiveServiceError(service_secret)
+
+        def dispatch_service_error(_method: str, _params: dict) -> dict:
+            return mcp_server.call_service(raise_service_error)
+
+        with mock.patch.object(server, "_dispatch_request", side_effect=dispatch_service_error):
+            service_response = server.handle_message(
+                {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}
+            )
+        self.assertIsNotNone(service_response)
+        self.assert_tool_error_envelope(service_response["result"])
+        self.assert_wire_omits(
+            service_response,
+            service_secret,
+            private_path,
+            "ArchiveServiceError",
+            "ToolError",
+        )
+
+        unexpected_secret = f"SENTINEL_UNEXPECTED_EXCEPTION {private_path}"
+        private_exception_type = type("PrivateSentinelRuntimeError", (RuntimeError,), {})
+        with mock.patch.object(
+            server,
+            "_dispatch_request",
+            side_effect=private_exception_type(unexpected_secret),
+        ):
+            unexpected_response = server.handle_message(
+                {"jsonrpc": "2.0", "id": 3, "method": "tools/list", "params": {}}
+            )
+        self.assertIsNotNone(unexpected_response)
+        self.assert_jsonrpc_error(
+            unexpected_response,
+            request_id=3,
+            code=-32603,
+            message="Internal error",
+        )
+        self.assert_wire_omits(
+            unexpected_response,
+            unexpected_secret,
+            private_path,
+            "PrivateSentinelRuntimeError",
+            "RuntimeError",
+        )
+
+        unexpected_tool_secret = (
+            f"SENTINEL_UNEXPECTED_TOOL_EXCEPTION {private_path}"
+        )
+        with mock.patch.object(
+            mcp_server,
+            "handle_tools_call",
+            side_effect=private_exception_type(unexpected_tool_secret),
+        ):
+            unexpected_tool_response = server.handle_message(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 4,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "archive_doctor",
+                        "arguments": {},
+                    },
+                }
+            )
+        self.assertIsNotNone(unexpected_tool_response)
+        self.assert_tool_error_envelope(unexpected_tool_response["result"])
+        self.assert_wire_omits(
+            unexpected_tool_response,
+            unexpected_tool_secret,
+            private_path,
+            "PrivateSentinelRuntimeError",
+            "RuntimeError",
+        )
+
+    def test_jsonrpc_errors_are_fixed_and_content_free(self) -> None:
+        server = mcp_server.JsonRpcMcpServer()
+        private_path = r"C:\private-archive\SENTINEL_PRIVATE_ZETTEL.md"
+
+        parse_secret = "SENTINEL_PARSE_FRAGMENT"
+        stdout = io.StringIO()
+        server.serve(io.StringIO(f"{parse_secret}\n"), stdout)
+        parse_response = json.loads(stdout.getvalue())
+        self.assert_jsonrpc_error(
+            parse_response,
+            request_id=None,
+            code=-32700,
+            message="Parse error",
+        )
+        self.assert_wire_omits(parse_response, parse_secret)
+
+        invalid_request_secret = "SENTINEL_INVALID_REQUEST_METHOD"
+        invalid_request_response = server.handle_message(
+            {
+                "jsonrpc": "1.0",
+                "id": 4,
+                "method": invalid_request_secret,
+                "params": {"private_path": private_path},
+            }
+        )
+        self.assertIsNotNone(invalid_request_response)
+        self.assert_jsonrpc_error(
+            invalid_request_response,
+            request_id=None,
+            code=-32600,
+            message="Invalid Request",
+        )
+        self.assert_wire_omits(
+            invalid_request_response,
+            invalid_request_secret,
+            private_path,
+            "private_path",
+        )
+
+        unknown_method = "SENTINEL_UNKNOWN_METHOD"
+        method_response = server.handle_message(
+            {"jsonrpc": "2.0", "id": 5, "method": unknown_method, "params": {}}
+        )
+        self.assertIsNotNone(method_response)
+        self.assert_jsonrpc_error(
+            method_response,
+            request_id=5,
+            code=-32601,
+            message="Method not found",
+        )
+        self.assert_wire_omits(method_response, unknown_method)
+
+        unknown_tool = "SENTINEL_UNKNOWN_TOOL"
+        tool_response = server.handle_message(
+            {
+                "jsonrpc": "2.0",
+                "id": 6,
+                "method": "tools/call",
+                "params": {"name": unknown_tool, "arguments": {}},
+            }
+        )
+        self.assertIsNotNone(tool_response)
+        self.assert_jsonrpc_error(
+            tool_response,
+            request_id=6,
+            code=-32602,
+            message="Invalid params",
+        )
+        self.assert_wire_omits(tool_response, unknown_tool, "Unknown tool")
+
+        invalid_params_secret = f"SENTINEL_INVALID_PARAMS {private_path}"
+        params_response = server.handle_message(
+            {
+                "jsonrpc": "2.0",
+                "id": 7,
+                "method": "ping",
+                "params": invalid_params_secret,
+            }
+        )
+        self.assertIsNotNone(params_response)
+        self.assert_jsonrpc_error(
+            params_response,
+            request_id=7,
+            code=-32602,
+            message="Invalid params",
+        )
+        self.assert_wire_omits(
+            params_response,
+            invalid_params_secret,
+            private_path,
+        )
+
+        invalid_arguments_secret = f"SENTINEL_INVALID_ARGUMENTS {private_path}"
+        arguments_response = server.handle_message(
+            {
+                "jsonrpc": "2.0",
+                "id": 8,
+                "method": "tools/call",
+                "params": {
+                    "name": "archive_doctor",
+                    "arguments": invalid_arguments_secret,
+                },
+            }
+        )
+        self.assertIsNotNone(arguments_response)
+        self.assert_jsonrpc_error(
+            arguments_response,
+            request_id=8,
+            code=-32602,
+            message="Invalid params",
+        )
+        self.assert_wire_omits(
+            arguments_response,
+            invalid_arguments_secret,
+            private_path,
+            "arguments must be an object",
+        )
+
+    def test_unexpected_json_parse_failure_is_fixed_content_free_and_server_continues(self) -> None:
+        private_sentinel = "SENTINEL_DEEP_JSON_PRIVATE_PATH"
+        parser_failure = (
+            '{"jsonrpc":"2.0","id":90,"method":"ping","params":'
+            f'["{private_sentinel}"]'
+            + "}"
+        )
+        following_ping = json.dumps(
+            {"jsonrpc": "2.0", "id": 91, "method": "ping", "params": {}},
+            separators=(",", ":"),
+        )
+        real_json_loads = json.loads
+
+        def loads_with_one_internal_failure(value: str, **kwargs: object) -> object:
+            if private_sentinel in value:
+                raise RecursionError("synthetic parser depth failure")
+            return real_json_loads(value, **kwargs)
+
+        stdout = io.StringIO()
+        with mock.patch.object(
+            mcp_server.json,
+            "loads",
+            side_effect=loads_with_one_internal_failure,
+        ):
+            return_code = mcp_server.JsonRpcMcpServer().serve(
+                io.BytesIO((parser_failure + "\n" + following_ping + "\n").encode("utf-8")),
+                stdout,
+            )
+
+        self.assertEqual(return_code, 0)
+        responses = [
+            json.loads(line)
+            for line in stdout.getvalue().splitlines()
+            if line.strip()
+        ]
+        self.assertEqual(len(responses), 2, stdout.getvalue())
+        self.assert_jsonrpc_error(
+            responses[0],
+            request_id=None,
+            code=-32603,
+            message="Internal error",
+        )
+        self.assertEqual(
+            responses[1],
+            {"jsonrpc": "2.0", "id": 91, "result": {}},
+        )
+        self.assert_wire_omits(
+            responses[0],
+            private_sentinel,
+            "RecursionError",
+            str(KIT_ROOT),
+        )
+
+    def test_invalid_request_shape_and_id_are_fixed_content_free(self) -> None:
+        server = mcp_server.JsonRpcMcpServer()
+        private_path = r"C:\private-archive\SENTINEL_INVALID_ID.md"
+
+        malformed_without_id = (
+            {},
+            {"jsonrpc": "2.0", "method": 42},
+            {"jsonrpc": "1.0", "method": "ping"},
+        )
+        for message in malformed_without_id:
+            with self.subTest(message=message):
+                response = server.handle_message(message)
+                self.assert_jsonrpc_error(
+                    response,
+                    request_id=None,
+                    code=-32600,
+                    message="Invalid Request",
+                )
+
+        invalid_ids = (
+            {"private_path": private_path},
+            [private_path],
+            True,
+            False,
+            float("inf"),
+            float("-inf"),
+            float("nan"),
+        )
+        for invalid_id in invalid_ids:
+            with self.subTest(invalid_id=invalid_id):
+                response = server.handle_message(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": invalid_id,
+                        "method": "SENTINEL_UNKNOWN_METHOD",
+                        "params": {},
+                    }
+                )
+                self.assert_jsonrpc_error(
+                    response,
+                    request_id=None,
+                    code=-32600,
+                    message="Invalid Request",
+                )
+                self.assert_wire_omits(
+                    response,
+                    private_path,
+                    "SENTINEL_UNKNOWN_METHOD",
+                    "private_path",
+                )
+
+        for valid_id in (None, "request-1", 0, 1, -1, 1.5):
+            with self.subTest(valid_id=valid_id):
+                response = server.handle_message(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": valid_id,
+                        "method": "ping",
+                        "params": {},
+                    }
+                )
+                self.assertEqual(
+                    response,
+                    {"jsonrpc": "2.0", "id": valid_id, "result": {}},
+                )
+
+        self.assertIsNone(
+            server.handle_message(
+                {
+                    "jsonrpc": "2.0",
+                    "method": "notifications/initialized",
+                    "params": {},
+                }
+            )
+        )
+
+    def test_lone_surrogate_request_id_is_ascii_safe_on_stdio(self) -> None:
+        env = os.environ.copy()
+        env["PYTHONPATH"] = "src"
+        request_line = (
+            '{"jsonrpc":"2.0","id":"\\ud800SENTINEL_ID",'
+            '"method":"ping","params":{}}\n'
+        )
+
+        result = subprocess.run(
+            [sys.executable, "-m", "wom_kit.mcp_server"],
+            cwd=KIT_ROOT,
+            env=env,
+            input=request_line,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=15,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stderr, "")
+        self.assertEqual(
+            json.loads(result.stdout),
+            {
+                "jsonrpc": "2.0",
+                "id": "\ud800SENTINEL_ID",
+                "result": {},
+            },
+        )
+        self.assertIn("\\ud800SENTINEL_ID", result.stdout)
+
+    def test_invalid_utf8_is_fixed_parse_error_and_server_continues(self) -> None:
+        env = os.environ.copy()
+        env["PYTHONPATH"] = "src"
+        following_ping = json.dumps(
+            {"jsonrpc": "2.0", "id": 92, "method": "ping", "params": {}},
+            separators=(",", ":"),
+        ).encode("utf-8")
+
+        result = subprocess.run(
+            [sys.executable, "-m", "wom_kit.mcp_server"],
+            cwd=KIT_ROOT,
+            env=env,
+            input=b"\xffSENTINEL_INVALID_UTF8\n" + following_ping + b"\n",
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=15,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stderr, b"")
+        responses = [
+            json.loads(line)
+            for line in result.stdout.splitlines()
+            if line.strip()
+        ]
+        self.assertEqual(len(responses), 2, result.stdout)
+        self.assert_jsonrpc_error(
+            responses[0],
+            request_id=None,
+            code=-32700,
+            message="Parse error",
+        )
+        self.assertEqual(
+            responses[1],
+            {"jsonrpc": "2.0", "id": 92, "result": {}},
+        )
+        self.assertNotIn(b"SENTINEL_INVALID_UTF8", result.stdout)
+        self.assertNotIn(b"UnicodeDecodeError", result.stdout)
+
+    def test_invalid_utf8_with_failed_stdout_stops_before_following_tool_request(
+        self,
+    ) -> None:
+        class WriteFailure:
+            def write(self, _value: str) -> int:
+                raise OSError("SENTINEL_INVALID_UTF8_WRITE_FAILURE")
+
+            def flush(self) -> None:
+                return None
+
+        server = mcp_server.JsonRpcMcpServer()
+        following_tool_request = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 921,
+                "method": "tools/call",
+                "params": {
+                    "name": "create_draft_zettel",
+                    "arguments": {
+                        "archive_root": "SENTINEL_UNREACHABLE_ARCHIVE",
+                        "title": "SENTINEL_UNREACHABLE_WRITE",
+                    },
+                },
+            },
+            separators=(",", ":"),
+        ).encode("utf-8")
+
+        with mock.patch.object(server, "handle_message") as handle_message:
+            returncode = server.serve(
+                [
+                    b"\xffSENTINEL_INVALID_UTF8\n",
+                    following_tool_request + b"\n",
+                ],
+                WriteFailure(),
+            )
+
+        self.assertEqual(returncode, 0)
+        handle_message.assert_not_called()
+
+    def test_response_serialization_failure_is_fixed_internal_and_continues(self) -> None:
+        server = mcp_server.JsonRpcMcpServer()
+        stdin = io.StringIO(
+            "\n".join(
+                (
+                    '{"jsonrpc":"2.0","id":93,"method":"ping","params":{}}',
+                    '{"jsonrpc":"2.0","id":94,"method":"ping","params":{}}',
+                    '{"jsonrpc":"2.0","id":95,"method":"ping","params":{}}',
+                    "",
+                )
+            )
+        )
+        stdout = io.StringIO()
+        with mock.patch.object(
+            server,
+            "_dispatch_request",
+            side_effect=(
+                {"non_serializable": object()},
+                {"nonfinite": float("nan")},
+                {},
+            ),
+        ):
+            returncode = server.serve(stdin, stdout)
+
+        self.assertEqual(returncode, 0)
+        responses = [
+            json.loads(line)
+            for line in stdout.getvalue().splitlines()
+            if line.strip()
+        ]
+        self.assertEqual(len(responses), 3)
+        self.assert_jsonrpc_error(
+            responses[0],
+            request_id=93,
+            code=-32603,
+            message="Internal error",
+        )
+        self.assert_jsonrpc_error(
+            responses[1],
+            request_id=94,
+            code=-32603,
+            message="Internal error",
+        )
+        self.assertEqual(
+            responses[2],
+            {"jsonrpc": "2.0", "id": 95, "result": {}},
+        )
+
+    def test_tool_result_serialization_failure_uses_exact_tool_envelope(self) -> None:
+        server = mcp_server.JsonRpcMcpServer()
+        stdin = io.StringIO(
+            "\n".join(
+                (
+                    (
+                        '{"jsonrpc":"2.0","id":97,"method":"tools/call",'
+                        '"params":{"name":"archive_doctor","arguments":{}}}'
+                    ),
+                    '{"jsonrpc":"2.0","id":98,"method":"ping","params":{}}',
+                    "",
+                )
+            )
+        )
+        stdout = io.StringIO()
+        with mock.patch.object(
+            mcp_server,
+            "handle_tools_call",
+            return_value=mcp_server.tool_success_result(
+                "SENTINEL_NON_SERIALIZABLE_TOOL_RESULT",
+                {"non_serializable": object()},
+            ),
+        ):
+            returncode = server.serve(stdin, stdout)
+
+        self.assertEqual(returncode, 0)
+        responses = [
+            json.loads(line)
+            for line in stdout.getvalue().splitlines()
+            if line.strip()
+        ]
+        self.assertEqual(len(responses), 2)
+        self.assert_tool_error_envelope(responses[0]["result"])
+        self.assert_wire_omits(
+            responses[0],
+            "SENTINEL_NON_SERIALIZABLE_TOOL_RESULT",
+            "non_serializable",
+        )
+        self.assertEqual(
+            responses[1],
+            {"jsonrpc": "2.0", "id": 98, "result": {}},
+        )
+
+    def test_nonfinite_json_numbers_are_parse_errors_and_server_continues(self) -> None:
+        env = os.environ.copy()
+        env["PYTHONPATH"] = "src"
+        invalid_lines = [
+            (
+                '{"jsonrpc":"2.0","id":100,"method":"ping",'
+                + '"params":{"value":'
+                + token
+                + "}}"
+            )
+            for token in ("NaN", "Infinity", "-Infinity", "1e400")
+        ]
+        following_ping = (
+            '{"jsonrpc":"2.0","id":101,"method":"ping","params":{}}'
+        )
+
+        result = subprocess.run(
+            [sys.executable, "-m", "wom_kit.mcp_server"],
+            cwd=KIT_ROOT,
+            env=env,
+            input="\n".join((*invalid_lines, following_ping, "")),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=15,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stderr, "")
+        responses = [
+            json.loads(line)
+            for line in result.stdout.splitlines()
+            if line.strip()
+        ]
+        self.assertEqual(len(responses), 5, result.stdout)
+        for response in responses[:4]:
+            self.assert_jsonrpc_error(
+                response,
+                request_id=None,
+                code=-32700,
+                message="Parse error",
+            )
+        self.assertEqual(
+            responses[4],
+            {"jsonrpc": "2.0", "id": 101, "result": {}},
+        )
+        self.assertNotIn("NaN", result.stdout)
+        self.assertNotIn("Infinity", result.stdout)
+        self.assertNotIn("1e400", result.stdout)
+
+    def test_write_and_flush_failures_end_serve_without_exception(self) -> None:
+        class WriteFailure:
+            def write(self, _value: str) -> int:
+                raise OSError("SENTINEL_WRITE_FAILURE")
+
+            def flush(self) -> None:
+                return None
+
+        class FlushFailure:
+            def write(self, value: str) -> int:
+                return len(value)
+
+            def flush(self) -> None:
+                raise ValueError("SENTINEL_FLUSH_FAILURE")
+
+        request = '{"jsonrpc":"2.0","id":95,"method":"ping","params":{}}\n'
+        for stdout in (WriteFailure(), FlushFailure()):
+            with self.subTest(stdout_type=type(stdout).__name__):
+                self.assertEqual(
+                    mcp_server.JsonRpcMcpServer().serve(
+                        io.StringIO(request),
+                        stdout,
+                    ),
+                    0,
+                )
+
+    def test_closed_stdout_pipe_exits_without_stderr_traceback(self) -> None:
+        process = self.start_server()
+        assert process.stdin is not None
+        assert process.stdout is not None
+        assert process.stderr is not None
+        process.stdout.close()
+        process.stdin.write(
+            '{"jsonrpc":"2.0","id":96,"method":"ping","params":{}}\n'
+        )
+        process.stdin.flush()
+        process.stdin.close()
+
+        returncode = process.wait(timeout=15)
+        stderr = process.stderr.read()
+        process.stderr.close()
+
+        self.assertEqual(returncode, 0, stderr)
+        self.assertEqual(stderr, "")
+
+    def test_request_params_normalize_only_null_and_object(self) -> None:
+        server = mcp_server.JsonRpcMcpServer()
+
+        for request_id, params in enumerate((None, {}), start=20):
+            with self.subTest(params=params):
+                response = server.handle_message(
+                    {"jsonrpc": "2.0", "id": request_id, "method": "ping", "params": params}
+                )
+                self.assertEqual(
+                    response,
+                    {"jsonrpc": "2.0", "id": request_id, "result": {}},
+                )
+
+        for request_id, params in enumerate((False, 0, "", []), start=30):
+            with self.subTest(params=params):
+                response = server.handle_message(
+                    {"jsonrpc": "2.0", "id": request_id, "method": "ping", "params": params}
+                )
+                self.assertIsNotNone(response)
+                self.assert_jsonrpc_error(
+                    response,
+                    request_id=request_id,
+                    code=-32602,
+                    message="Invalid params",
+                )
+
+    def test_tool_arguments_normalize_only_null_and_object(self) -> None:
+        server = mcp_server.JsonRpcMcpServer()
+
+        for request_id, arguments in enumerate((None, {}), start=40):
+            with self.subTest(arguments=arguments):
+                response = server.handle_message(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": request_id,
+                        "method": "tools/call",
+                        "params": {"name": "archive_doctor", "arguments": arguments},
+                    }
+                )
+                self.assertIsNotNone(response)
+                self.assert_tool_error_envelope(response["result"])
+
+        for request_id, arguments in enumerate((False, 0, "", []), start=50):
+            with self.subTest(arguments=arguments):
+                response = server.handle_message(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": request_id,
+                        "method": "tools/call",
+                        "params": {"name": "archive_doctor", "arguments": arguments},
+                    }
+                )
+                self.assertIsNotNone(response)
+                self.assert_jsonrpc_error(
+                    response,
+                    request_id=request_id,
+                    code=-32602,
+                    message="Invalid params",
+                )
+
     def test_initialize_and_list_tools(self) -> None:
         process = self.start_server()
         try:
@@ -1098,7 +1830,7 @@ class McpServerTests(unittest.TestCase):
                     },
                 )
                 self.assertTrue(outside_response["result"]["isError"])
-                self.assertIn("outside allowed archive root", outside_response["result"]["structuredContent"]["error"])
+                self.assert_tool_error_envelope(outside_response["result"])
             finally:
                 self.stop_server(process)
 
@@ -1245,7 +1977,7 @@ class McpServerTests(unittest.TestCase):
 
                 result = response["result"]
                 self.assertTrue(result["isError"])
-                self.assertIn("dry-run only", result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(result)
             finally:
                 self.stop_server(process)
 
@@ -1320,7 +2052,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 outside_result = outside_response["result"]
                 self.assertTrue(outside_result["isError"])
-                self.assertIn("outside allowed archive root", outside_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(outside_result)
             finally:
                 self.stop_server(process)
 
@@ -1407,7 +2139,7 @@ class McpServerTests(unittest.TestCase):
                     },
                 )
                 self.assertTrue(outside_response["result"]["isError"])
-                self.assertIn("outside allowed archive root", outside_response["result"]["structuredContent"]["error"])
+                self.assert_tool_error_envelope(outside_response["result"])
             finally:
                 self.stop_server(process)
 
@@ -1437,7 +2169,7 @@ class McpServerTests(unittest.TestCase):
 
             result = response["result"]
             self.assertTrue(result["isError"])
-            self.assertIn("dry-run only", result["structuredContent"]["error"])
+            self.assert_tool_error_envelope(result)
         finally:
             self.stop_server(process)
 
@@ -1509,7 +2241,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 outside_result = outside_response["result"]
                 self.assertTrue(outside_result["isError"])
-                self.assertIn("outside allowed archive root", outside_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(outside_result)
             finally:
                 self.stop_server(process)
 
@@ -1582,7 +2314,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 outside_result = outside_response["result"]
                 self.assertTrue(outside_result["isError"])
-                self.assertIn("outside allowed archive root", outside_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(outside_result)
             finally:
                 self.stop_server(process)
 
@@ -1664,7 +2396,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 outside_result = outside_response["result"]
                 self.assertTrue(outside_result["isError"])
-                self.assertIn("outside allowed archive root", outside_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(outside_result)
 
                 dry_run_response = self.send(
                     process,
@@ -1680,7 +2412,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 dry_run_result = dry_run_response["result"]
                 self.assertTrue(dry_run_result["isError"])
-                self.assertIn("dry-run only", dry_run_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(dry_run_result)
 
                 verification_response = self.send(
                     process,
@@ -1837,7 +2569,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 outside_result = outside_response["result"]
                 self.assertTrue(outside_result["isError"])
-                self.assertIn("outside allowed archive root", outside_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(outside_result)
 
                 dry_run_response = self.send(
                     process,
@@ -1853,7 +2585,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 dry_run_result = dry_run_response["result"]
                 self.assertTrue(dry_run_result["isError"])
-                self.assertIn("dry-run only", dry_run_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(dry_run_result)
             finally:
                 self.stop_server(process)
 
@@ -1988,7 +2720,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 outside_result = outside_response["result"]
                 self.assertTrue(outside_result["isError"])
-                self.assertIn("outside allowed archive root", outside_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(outside_result)
 
                 dry_run_response = self.send(
                     process,
@@ -2004,7 +2736,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 dry_run_result = dry_run_response["result"]
                 self.assertTrue(dry_run_result["isError"])
-                self.assertIn("dry-run only", dry_run_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(dry_run_result)
             finally:
                 self.stop_server(process)
 
@@ -2141,7 +2873,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 outside_result = outside_response["result"]
                 self.assertTrue(outside_result["isError"])
-                self.assertIn("outside allowed archive root", outside_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(outside_result)
 
                 dry_run_response = self.send(
                     process,
@@ -2161,7 +2893,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 dry_run_result = dry_run_response["result"]
                 self.assertTrue(dry_run_result["isError"])
-                self.assertIn("dry-run only", dry_run_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(dry_run_result)
             finally:
                 self.stop_server(process)
 
@@ -2233,7 +2965,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 outside_result = outside_response["result"]
                 self.assertTrue(outside_result["isError"])
-                self.assertIn("outside allowed archive root", outside_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(outside_result)
 
                 dry_run_response = self.send(
                     process,
@@ -2253,7 +2985,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 dry_run_result = dry_run_response["result"]
                 self.assertTrue(dry_run_result["isError"])
-                self.assertIn("dry-run only", dry_run_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(dry_run_result)
             finally:
                 self.stop_server(process)
 
@@ -2331,7 +3063,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 outside_result = outside_response["result"]
                 self.assertTrue(outside_result["isError"])
-                self.assertIn("outside allowed archive root", outside_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(outside_result)
 
                 dry_run_response = self.send(
                     process,
@@ -2351,7 +3083,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 dry_run_result = dry_run_response["result"]
                 self.assertTrue(dry_run_result["isError"])
-                self.assertIn("dry-run only", dry_run_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(dry_run_result)
             finally:
                 self.stop_server(process)
 
@@ -2430,7 +3162,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 outside_result = outside_response["result"]
                 self.assertTrue(outside_result["isError"])
-                self.assertIn("outside allowed archive root", outside_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(outside_result)
 
                 dry_run_response = self.send(
                     process,
@@ -2451,7 +3183,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 dry_run_result = dry_run_response["result"]
                 self.assertTrue(dry_run_result["isError"])
-                self.assertIn("dry-run only", dry_run_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(dry_run_result)
             finally:
                 self.stop_server(process)
 
@@ -2528,7 +3260,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 outside_result = outside_response["result"]
                 self.assertTrue(outside_result["isError"])
-                self.assertIn("outside allowed archive root", outside_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(outside_result)
 
                 dry_run_response = self.send(
                     process,
@@ -2549,7 +3281,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 dry_run_result = dry_run_response["result"]
                 self.assertTrue(dry_run_result["isError"])
-                self.assertIn("dry-run only", dry_run_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(dry_run_result)
             finally:
                 self.stop_server(process)
 
@@ -2628,7 +3360,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 outside_result = outside_response["result"]
                 self.assertTrue(outside_result["isError"])
-                self.assertIn("outside allowed archive root", outside_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(outside_result)
 
                 dry_run_response = self.send(
                     process,
@@ -2649,7 +3381,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 dry_run_result = dry_run_response["result"]
                 self.assertTrue(dry_run_result["isError"])
-                self.assertIn("dry-run only", dry_run_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(dry_run_result)
             finally:
                 self.stop_server(process)
 
@@ -2739,7 +3471,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 dry_run_result = dry_run_response["result"]
                 self.assertTrue(dry_run_result["isError"])
-                self.assertIn("dry-run only", dry_run_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(dry_run_result)
             finally:
                 self.stop_server(process)
 
@@ -2822,7 +3554,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 dry_run_result = dry_run_response["result"]
                 self.assertTrue(dry_run_result["isError"])
-                self.assertIn("dry-run only", dry_run_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(dry_run_result)
             finally:
                 self.stop_server(process)
 
@@ -2965,7 +3697,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 dry_run_result = dry_run_response["result"]
                 self.assertTrue(dry_run_result["isError"])
-                self.assertIn("dry-run only", dry_run_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(dry_run_result)
 
                 after = {
                     path.relative_to(allowed_archive).as_posix(): path.read_text(encoding="utf-8")
@@ -3055,7 +3787,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 outside_result = outside_response["result"]
                 self.assertTrue(outside_result["isError"])
-                self.assertIn("outside allowed archive root", outside_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(outside_result)
 
                 dry_run_response = self.send(
                     process,
@@ -3079,7 +3811,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 dry_run_result = dry_run_response["result"]
                 self.assertTrue(dry_run_result["isError"])
-                self.assertIn("dry-run only", dry_run_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(dry_run_result)
             finally:
                 self.stop_server(process)
 
@@ -3172,7 +3904,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 outside_result = outside_response["result"]
                 self.assertTrue(outside_result["isError"])
-                self.assertIn("outside allowed archive root", outside_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(outside_result)
 
                 dry_run_response = self.send(
                     process,
@@ -3196,7 +3928,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 dry_run_result = dry_run_response["result"]
                 self.assertTrue(dry_run_result["isError"])
-                self.assertIn("dry-run only", dry_run_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(dry_run_result)
             finally:
                 self.stop_server(process)
 
@@ -3292,7 +4024,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 outside_result = outside_response["result"]
                 self.assertTrue(outside_result["isError"])
-                self.assertIn("outside allowed archive root", outside_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(outside_result)
 
                 dry_run_response = self.send(
                     process,
@@ -3316,7 +4048,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 dry_run_result = dry_run_response["result"]
                 self.assertTrue(dry_run_result["isError"])
-                self.assertIn("dry-run only", dry_run_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(dry_run_result)
             finally:
                 self.stop_server(process)
 
@@ -3415,7 +4147,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 outside_result = outside_response["result"]
                 self.assertTrue(outside_result["isError"])
-                self.assertIn("outside allowed archive root", outside_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(outside_result)
 
                 dry_run_response = self.send(
                     process,
@@ -3439,7 +4171,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 dry_run_result = dry_run_response["result"]
                 self.assertTrue(dry_run_result["isError"])
-                self.assertIn("dry-run only", dry_run_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(dry_run_result)
             finally:
                 self.stop_server(process)
 
@@ -3548,7 +4280,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 outside_result = outside_response["result"]
                 self.assertTrue(outside_result["isError"])
-                self.assertIn("outside allowed archive root", outside_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(outside_result)
 
                 dry_run_response = self.send(
                     process,
@@ -3573,7 +4305,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 dry_run_result = dry_run_response["result"]
                 self.assertTrue(dry_run_result["isError"])
-                self.assertIn("dry-run only", dry_run_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(dry_run_result)
             finally:
                 self.stop_server(process)
 
@@ -3669,7 +4401,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 outside_result = outside_response["result"]
                 self.assertTrue(outside_result["isError"])
-                self.assertIn("outside allowed archive root", outside_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(outside_result)
 
                 dry_run_response = self.send(
                     process,
@@ -3694,7 +4426,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 dry_run_result = dry_run_response["result"]
                 self.assertTrue(dry_run_result["isError"])
-                self.assertIn("dry-run only", dry_run_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(dry_run_result)
             finally:
                 self.stop_server(process)
 
@@ -3785,7 +4517,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 outside_result = outside_response["result"]
                 self.assertTrue(outside_result["isError"])
-                self.assertIn("outside allowed archive root", outside_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(outside_result)
 
                 dry_run_response = self.send(
                     process,
@@ -3805,7 +4537,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 dry_run_result = dry_run_response["result"]
                 self.assertTrue(dry_run_result["isError"])
-                self.assertIn("dry-run only", dry_run_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(dry_run_result)
             finally:
                 self.stop_server(process)
 
@@ -3881,7 +4613,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 outside_result = outside_response["result"]
                 self.assertTrue(outside_result["isError"])
-                self.assertIn("outside allowed archive root", outside_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(outside_result)
 
                 dry_run_response = self.send(
                     process,
@@ -3902,7 +4634,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 dry_run_result = dry_run_response["result"]
                 self.assertTrue(dry_run_result["isError"])
-                self.assertIn("dry-run only", dry_run_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(dry_run_result)
             finally:
                 self.stop_server(process)
 
@@ -3988,7 +4720,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 outside_result = outside_response["result"]
                 self.assertTrue(outside_result["isError"])
-                self.assertIn("outside allowed archive root", outside_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(outside_result)
 
                 dry_run_response = self.send(
                     process,
@@ -4007,7 +4739,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 dry_run_result = dry_run_response["result"]
                 self.assertTrue(dry_run_result["isError"])
-                self.assertIn("read-only", dry_run_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(dry_run_result)
             finally:
                 self.stop_server(process)
 
@@ -4109,7 +4841,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 outside_result = outside_response["result"]
                 self.assertTrue(outside_result["isError"])
-                self.assertIn("outside allowed archive root", outside_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(outside_result)
 
                 dry_run_response = self.send(
                     process,
@@ -4129,7 +4861,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 dry_run_result = dry_run_response["result"]
                 self.assertTrue(dry_run_result["isError"])
-                self.assertIn("read-only", dry_run_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(dry_run_result)
             finally:
                 self.stop_server(process)
 
@@ -4209,7 +4941,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 outside_result = outside_response["result"]
                 self.assertTrue(outside_result["isError"])
-                self.assertIn("outside allowed archive root", outside_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(outside_result)
 
                 dry_run_response = self.send(
                     process,
@@ -4229,7 +4961,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 dry_run_result = dry_run_response["result"]
                 self.assertTrue(dry_run_result["isError"])
-                self.assertIn("read-only", dry_run_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(dry_run_result)
             finally:
                 self.stop_server(process)
 
@@ -4310,7 +5042,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 outside_result = outside_response["result"]
                 self.assertTrue(outside_result["isError"])
-                self.assertIn("outside allowed archive root", outside_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(outside_result)
 
                 dry_run_response = self.send(
                     process,
@@ -4331,7 +5063,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 dry_run_result = dry_run_response["result"]
                 self.assertTrue(dry_run_result["isError"])
-                self.assertIn("read-only", dry_run_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(dry_run_result)
             finally:
                 self.stop_server(process)
 
@@ -4442,7 +5174,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 outside_result = outside_response["result"]
                 self.assertTrue(outside_result["isError"])
-                self.assertIn("outside allowed archive root", outside_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(outside_result)
 
                 dry_run_response = self.send(
                     process,
@@ -4463,7 +5195,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 dry_run_result = dry_run_response["result"]
                 self.assertTrue(dry_run_result["isError"])
-                self.assertIn("read-only", dry_run_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(dry_run_result)
             finally:
                 self.stop_server(process)
 
@@ -4566,7 +5298,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 outside_result = outside_response["result"]
                 self.assertTrue(outside_result["isError"])
-                self.assertIn("outside allowed archive root", outside_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(outside_result)
 
                 dry_run_response = self.send(
                     process,
@@ -4588,7 +5320,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 dry_run_result = dry_run_response["result"]
                 self.assertTrue(dry_run_result["isError"])
-                self.assertIn("read-only", dry_run_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(dry_run_result)
             finally:
                 self.stop_server(process)
 
@@ -4666,7 +5398,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 outside_result = outside_response["result"]
                 self.assertTrue(outside_result["isError"])
-                self.assertIn("outside allowed archive root", outside_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(outside_result)
 
                 dry_run_response = self.send(
                     process,
@@ -4687,7 +5419,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 dry_run_result = dry_run_response["result"]
                 self.assertTrue(dry_run_result["isError"])
-                self.assertIn("read-only", dry_run_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(dry_run_result)
             finally:
                 self.stop_server(process)
 
@@ -4767,7 +5499,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 outside_result = outside_response["result"]
                 self.assertTrue(outside_result["isError"])
-                self.assertIn("outside allowed archive root", outside_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(outside_result)
 
                 dry_run_response = self.send(
                     process,
@@ -4788,7 +5520,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 dry_run_result = dry_run_response["result"]
                 self.assertTrue(dry_run_result["isError"])
-                self.assertIn("read-only", dry_run_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(dry_run_result)
             finally:
                 self.stop_server(process)
 
@@ -4871,7 +5603,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 outside_result = outside_response["result"]
                 self.assertTrue(outside_result["isError"])
-                self.assertIn("outside allowed archive root", outside_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(outside_result)
 
                 dry_run_response = self.send(
                     process,
@@ -4894,7 +5626,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 dry_run_result = dry_run_response["result"]
                 self.assertTrue(dry_run_result["isError"])
-                self.assertIn("read-only", dry_run_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(dry_run_result)
             finally:
                 self.stop_server(process)
 
@@ -4974,7 +5706,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 outside_result = outside_response["result"]
                 self.assertTrue(outside_result["isError"])
-                self.assertIn("outside allowed archive root", outside_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(outside_result)
 
                 dry_run_response = self.send(
                     process,
@@ -4995,7 +5727,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 dry_run_result = dry_run_response["result"]
                 self.assertTrue(dry_run_result["isError"])
-                self.assertIn("read-only", dry_run_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(dry_run_result)
             finally:
                 self.stop_server(process)
 
@@ -5083,7 +5815,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 outside_result = outside_response["result"]
                 self.assertTrue(outside_result["isError"])
-                self.assertIn("outside allowed archive root", outside_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(outside_result)
 
                 dry_run_response = self.send(
                     process,
@@ -5107,7 +5839,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 dry_run_result = dry_run_response["result"]
                 self.assertTrue(dry_run_result["isError"])
-                self.assertIn("read-only", dry_run_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(dry_run_result)
             finally:
                 self.stop_server(process)
 
@@ -5177,7 +5909,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 outside_result = outside_response["result"]
                 self.assertTrue(outside_result["isError"])
-                self.assertIn("outside allowed archive root", outside_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(outside_result)
 
                 dry_run_response = self.send(
                     process,
@@ -5197,7 +5929,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 dry_run_result = dry_run_response["result"]
                 self.assertTrue(dry_run_result["isError"])
-                self.assertIn("dry-run only", dry_run_result["content"][0]["text"])
+                self.assert_tool_error_envelope(dry_run_result)
             finally:
                 self.stop_server(process)
 
@@ -5284,7 +6016,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 outside_result = outside_response["result"]
                 self.assertTrue(outside_result["isError"])
-                self.assertIn("outside allowed archive root", outside_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(outside_result)
 
                 dry_run_response = self.send(
                     process,
@@ -5304,7 +6036,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 dry_run_result = dry_run_response["result"]
                 self.assertTrue(dry_run_result["isError"])
-                self.assertIn("dry-run only", dry_run_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(dry_run_result)
             finally:
                 self.stop_server(process)
 
@@ -5401,7 +6133,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 outside_result = outside_response["result"]
                 self.assertTrue(outside_result["isError"])
-                self.assertIn("outside allowed archive root", outside_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(outside_result)
 
                 dry_run_response = self.send(
                     process,
@@ -5421,7 +6153,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 dry_run_result = dry_run_response["result"]
                 self.assertTrue(dry_run_result["isError"])
-                self.assertIn("dry-run only", dry_run_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(dry_run_result)
             finally:
                 self.stop_server(process)
 
@@ -5527,7 +6259,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 outside_result = outside_response["result"]
                 self.assertTrue(outside_result["isError"])
-                self.assertIn("outside allowed archive root", outside_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(outside_result)
 
                 dry_run_response = self.send(
                     process,
@@ -5547,7 +6279,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 dry_run_result = dry_run_response["result"]
                 self.assertTrue(dry_run_result["isError"])
-                self.assertIn("dry-run only", dry_run_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(dry_run_result)
             finally:
                 self.stop_server(process)
 
@@ -5660,7 +6392,7 @@ class McpServerTests(unittest.TestCase):
                     },
                 )
                 self.assertTrue(dry_run_response["result"]["isError"])
-                self.assertIn("dry-run only", dry_run_response["result"]["structuredContent"]["error"])
+                self.assert_tool_error_envelope(dry_run_response["result"])
             finally:
                 self.stop_server(process)
 
@@ -5785,7 +6517,7 @@ class McpServerTests(unittest.TestCase):
                     },
                 )
                 self.assertTrue(dry_run_response["result"]["isError"])
-                self.assertIn("dry-run only", dry_run_response["result"]["structuredContent"]["error"])
+                self.assert_tool_error_envelope(dry_run_response["result"])
             finally:
                 self.stop_server(process)
 
@@ -5924,7 +6656,7 @@ class McpServerTests(unittest.TestCase):
                     },
                 )
                 self.assertTrue(dry_run_response["result"]["isError"])
-                self.assertIn("dry-run only", dry_run_response["result"]["structuredContent"]["error"])
+                self.assert_tool_error_envelope(dry_run_response["result"])
             finally:
                 self.stop_server(process)
 
@@ -6052,7 +6784,7 @@ class McpServerTests(unittest.TestCase):
                     },
                 )
                 self.assertTrue(dry_run_response["result"]["isError"])
-                self.assertIn("dry-run only", dry_run_response["result"]["structuredContent"]["error"])
+                self.assert_tool_error_envelope(dry_run_response["result"])
             finally:
                 self.stop_server(process)
 
@@ -6150,7 +6882,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 outside_result = outside_response["result"]
                 self.assertTrue(outside_result["isError"])
-                self.assertIn("outside allowed archive root", outside_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(outside_result)
 
                 dry_run_response = self.send(
                     process,
@@ -6169,7 +6901,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 dry_run_result = dry_run_response["result"]
                 self.assertTrue(dry_run_result["isError"])
-                self.assertIn("dry-run only", dry_run_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(dry_run_result)
             finally:
                 self.stop_server(process)
 
@@ -6520,7 +7252,7 @@ class McpServerTests(unittest.TestCase):
                     },
                 )
                 self.assertTrue(outside_response["result"]["isError"])
-                self.assertIn("outside allowed archive root", outside_response["result"]["structuredContent"]["error"])
+                self.assert_tool_error_envelope(outside_response["result"])
 
                 dry_run_response = self.send(
                     process,
@@ -6539,7 +7271,7 @@ class McpServerTests(unittest.TestCase):
                     },
                 )
                 self.assertTrue(dry_run_response["result"]["isError"])
-                self.assertIn("dry-run only", dry_run_response["result"]["structuredContent"]["error"])
+                self.assert_tool_error_envelope(dry_run_response["result"])
             finally:
                 self.stop_server(process)
 
@@ -6642,7 +7374,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 outside_result = outside_response["result"]
                 self.assertTrue(outside_result["isError"])
-                self.assertIn("outside allowed archive root", outside_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(outside_result)
             finally:
                 self.stop_server(process)
 
@@ -6713,7 +7445,7 @@ class McpServerTests(unittest.TestCase):
                 )
                 outside_result = outside_response["result"]
                 self.assertTrue(outside_result["isError"])
-                self.assertIn("outside allowed archive root", outside_result["structuredContent"]["error"])
+                self.assert_tool_error_envelope(outside_result)
             finally:
                 self.stop_server(process)
 
@@ -7397,7 +8129,7 @@ class McpServerTests(unittest.TestCase):
                     },
                 )
                 self.assertTrue(write_attempt["result"]["isError"])
-                self.assertIn("dry-run only", write_attempt["result"]["structuredContent"]["error"])
+                self.assert_tool_error_envelope(write_attempt["result"])
         finally:
             self.stop_server(process)
 
@@ -7659,10 +8391,7 @@ class McpServerTests(unittest.TestCase):
                     },
                 )
                 self.assertTrue(unbound_response["result"]["isError"])
-                self.assertIn(
-                    "requires expected_body_sha256 from the first page",
-                    unbound_response["result"]["content"][0]["text"],
-                )
+                self.assert_tool_error_envelope(unbound_response["result"])
 
                 continued_response = self.send(
                     process,
@@ -7866,7 +8595,7 @@ class McpServerTests(unittest.TestCase):
                     },
                 )
                 self.assertTrue(blocked["result"]["isError"])
-                self.assertIn("dry-run only", blocked["result"]["content"][0]["text"])
+                self.assert_tool_error_envelope(blocked["result"])
         finally:
             self.stop_server(process)
 
@@ -7941,7 +8670,7 @@ class McpServerTests(unittest.TestCase):
                             },
                         )
                         self.assertTrue(response["result"]["isError"])
-                        self.assertIn("dry-run only", response["result"]["content"][0]["text"])
+                        self.assert_tool_error_envelope(response["result"])
         finally:
             self.stop_server(process)
 
@@ -8031,7 +8760,7 @@ class McpServerTests(unittest.TestCase):
                             },
                         )
                         self.assertTrue(response["result"]["isError"])
-                        self.assertIn("dry-run only", response["result"]["content"][0]["text"])
+                        self.assert_tool_error_envelope(response["result"])
         finally:
             self.stop_server(process)
 
@@ -8121,7 +8850,7 @@ class McpServerTests(unittest.TestCase):
                             },
                         )
                         self.assertTrue(response["result"]["isError"])
-                        self.assertIn("dry-run only", response["result"]["content"][0]["text"])
+                        self.assert_tool_error_envelope(response["result"])
         finally:
             self.stop_server(process)
 
@@ -10435,7 +11164,7 @@ class McpServerTests(unittest.TestCase):
                     },
                 )
                 self.assertTrue(read_response["result"]["isError"])
-                self.assertIn("unsafe", read_response["result"]["structuredContent"]["error"])
+                self.assert_tool_error_envelope(read_response["result"])
         finally:
             self.stop_server(process)
 
@@ -10580,10 +11309,7 @@ class McpServerTests(unittest.TestCase):
                     },
                 )
                 self.assertTrue(read_response["result"]["isError"])
-                self.assertEqual(
-                    read_response["result"]["structuredContent"]["error"],
-                    "Zettel content is unavailable because its frontmatter could not be validated.",
-                )
+                self.assert_tool_error_envelope(read_response["result"])
                 serialized_read = json.dumps(read_response, ensure_ascii=False)
                 for private_value in (private_id, private_title, private_body, private_hash):
                     self.assertNotIn(private_value, serialized_read)

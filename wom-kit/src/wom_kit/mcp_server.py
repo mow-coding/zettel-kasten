@@ -8,6 +8,7 @@ archive-facing tool functions.
 from __future__ import annotations
 
 import json
+import math
 import os
 import sys
 from pathlib import Path
@@ -30,6 +31,31 @@ JSONRPC_INVALID_REQUEST = -32600
 JSONRPC_METHOD_NOT_FOUND = -32601
 JSONRPC_INVALID_PARAMS = -32602
 JSONRPC_INTERNAL_ERROR = -32603
+JSONRPC_ERROR_MESSAGES = {
+    JSONRPC_PARSE_ERROR: "Parse error",
+    JSONRPC_INVALID_REQUEST: "Invalid Request",
+    JSONRPC_METHOD_NOT_FOUND: "Method not found",
+    JSONRPC_INVALID_PARAMS: "Invalid params",
+    JSONRPC_INTERNAL_ERROR: "Internal error",
+}
+
+TOOL_EXECUTION_ERROR_TEXT = "Tool execution failed."
+TOOL_EXECUTION_ERROR_CODE = "tool_execution_failed"
+
+
+class NonFiniteJsonNumberError(ValueError):
+    pass
+
+
+def reject_nonstandard_json_constant(value: str) -> None:
+    raise NonFiniteJsonNumberError(value)
+
+
+def parse_finite_json_float(value: str) -> float:
+    parsed = float(value)
+    if not math.isfinite(parsed):
+        raise NonFiniteJsonNumberError(value)
+    return parsed
 
 
 def zet_catalog_item_cache(archive_root: Path, status: str) -> dict[str, dict[str, Any]]:
@@ -2811,49 +2837,83 @@ def main() -> int:
 
 class JsonRpcMcpServer:
     def serve(self, stdin: Any, stdout: Any) -> int:
-        for raw_line in stdin:
+        input_stream = getattr(stdin, "buffer", stdin)
+        for raw_line in input_stream:
+            if isinstance(raw_line, bytes):
+                try:
+                    raw_line = raw_line.decode("utf-8", errors="strict")
+                except UnicodeDecodeError:
+                    if not self._write(
+                        stdout,
+                        error_response(None, JSONRPC_PARSE_ERROR),
+                    ):
+                        return 0
+                    continue
             line = raw_line.strip()
             if not line:
                 continue
             try:
-                message = json.loads(line)
-            except json.JSONDecodeError as exc:
-                self._write(stdout, error_response(None, JSONRPC_PARSE_ERROR, f"Parse error: {exc}"))
+                message = json.loads(
+                    line,
+                    parse_constant=reject_nonstandard_json_constant,
+                    parse_float=parse_finite_json_float,
+                )
+            except (json.JSONDecodeError, NonFiniteJsonNumberError):
+                if not self._write(stdout, error_response(None, JSONRPC_PARSE_ERROR)):
+                    return 0
+                continue
+            except Exception:
+                if not self._write(stdout, error_response(None, JSONRPC_INTERNAL_ERROR)):
+                    return 0
                 continue
 
             response = self.handle_message(message)
             if response is not None:
-                self._write(stdout, response)
+                if not self._write(stdout, response):
+                    return 0
         return 0
 
     def handle_message(self, message: Any) -> dict[str, Any] | None:
         if not isinstance(message, dict):
-            return error_response(None, JSONRPC_INVALID_REQUEST, "Request must be a JSON object.")
+            return error_response(None, JSONRPC_INVALID_REQUEST)
 
-        request_id = message.get("id")
+        has_request_id = "id" in message
+        request_id = message.get("id") if has_request_id else None
         method = message.get("method")
-        is_notification = "id" not in message
 
-        if message.get("jsonrpc") != "2.0" or not isinstance(method, str):
-            if is_notification:
-                return None
-            return error_response(request_id, JSONRPC_INVALID_REQUEST, "Invalid JSON-RPC request.")
+        if (
+            message.get("jsonrpc") != "2.0"
+            or not isinstance(method, str)
+            or (has_request_id and not jsonrpc_request_id_is_valid(request_id))
+        ):
+            return error_response(None, JSONRPC_INVALID_REQUEST)
 
-        if is_notification:
+        if not has_request_id:
             self._handle_notification(method)
             return None
 
         try:
-            result = self._dispatch_request(method, message.get("params") or {})
+            params = message.get("params")
+            if params is None:
+                params = {}
+            elif not isinstance(params, dict):
+                raise InvalidParamsError()
+            result = self._dispatch_request(method, params)
             return {"jsonrpc": "2.0", "id": request_id, "result": result}
-        except ToolError as exc:
-            return {"jsonrpc": "2.0", "id": request_id, "result": tool_error_result(str(exc))}
-        except InvalidParamsError as exc:
-            return error_response(request_id, JSONRPC_INVALID_PARAMS, str(exc))
+        except ToolError:
+            return {"jsonrpc": "2.0", "id": request_id, "result": tool_error_result()}
+        except InvalidParamsError:
+            return error_response(request_id, JSONRPC_INVALID_PARAMS)
         except MethodNotFoundError:
-            return error_response(request_id, JSONRPC_METHOD_NOT_FOUND, f"Method not found: {method}")
-        except Exception as exc:  # pragma: no cover - defensive protocol boundary.
-            return error_response(request_id, JSONRPC_INTERNAL_ERROR, f"Internal error: {exc}")
+            return error_response(request_id, JSONRPC_METHOD_NOT_FOUND)
+        except Exception:  # pragma: no cover - defensive protocol boundary.
+            if method == "tools/call":
+                return {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "result": tool_error_result(),
+                }
+            return error_response(request_id, JSONRPC_INTERNAL_ERROR)
 
     def _handle_notification(self, method: str) -> None:
         return None
@@ -2869,9 +2929,43 @@ class JsonRpcMcpServer:
             return handle_tools_call(params)
         raise MethodNotFoundError()
 
-    def _write(self, stdout: Any, response: dict[str, Any]) -> None:
-        stdout.write(json.dumps(response, ensure_ascii=False, separators=(",", ":")) + "\n")
-        stdout.flush()
+    def _write(self, stdout: Any, response: dict[str, Any]) -> bool:
+        try:
+            serialized = json.dumps(
+                response,
+                ensure_ascii=True,
+                allow_nan=False,
+                separators=(",", ":"),
+            )
+        except Exception:
+            request_id = response.get("id") if isinstance(response, dict) else None
+            if not jsonrpc_request_id_is_valid(request_id):
+                request_id = None
+            result = response.get("result") if isinstance(response, dict) else None
+            if (
+                isinstance(result, dict)
+                and {"content", "structuredContent", "isError"}.issubset(result)
+            ):
+                replacement = {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "result": tool_error_result(),
+                }
+            else:
+                replacement = error_response(request_id, JSONRPC_INTERNAL_ERROR)
+            serialized = json.dumps(
+                replacement,
+                ensure_ascii=True,
+                allow_nan=False,
+                separators=(",", ":"),
+            )
+        try:
+            stdout.write(serialized + "\n")
+            stdout.flush()
+        except Exception:
+            neutralize_failed_stdout(stdout)
+            return False
+        return True
 
 
 def handle_initialize(params: dict[str, Any]) -> dict[str, Any]:
@@ -2891,10 +2985,12 @@ def handle_initialize(params: dict[str, Any]) -> dict[str, Any]:
 
 def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
     name = params.get("name")
-    arguments = params.get("arguments") or {}
     if not isinstance(name, str):
         raise InvalidParamsError("tools/call params.name must be a string.")
-    if not isinstance(arguments, dict):
+    arguments = params.get("arguments")
+    if arguments is None:
+        arguments = {}
+    elif not isinstance(arguments, dict):
         raise InvalidParamsError("tools/call params.arguments must be an object.")
 
     if name == "wom_profile_list":
@@ -3138,7 +3234,7 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
     if name == "ownership_transfer_check":
         return tool_ownership_transfer_check(arguments)
 
-    raise ToolError(f"Unknown tool: {name}")
+    raise InvalidParamsError("Unknown tool.")
 
 
 def tool_archive_doctor(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -5830,10 +5926,10 @@ def tool_success_result(text: str, structured: dict[str, Any]) -> dict[str, Any]
     }
 
 
-def tool_error_result(text: str) -> dict[str, Any]:
+def tool_error_result() -> dict[str, Any]:
     return {
-        "content": [{"type": "text", "text": text}],
-        "structuredContent": {"error": text},
+        "content": [{"type": "text", "text": TOOL_EXECUTION_ERROR_TEXT}],
+        "structuredContent": {"error": TOOL_EXECUTION_ERROR_CODE},
         "isError": True,
     }
 
@@ -5855,8 +5951,48 @@ def add_mcp_redaction_warning(result: dict[str, Any], requested_redaction: bool,
     )
 
 
-def error_response(request_id: Any, code: int, message: str) -> dict[str, Any]:
-    return {"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}}
+def error_response(request_id: Any, code: int) -> dict[str, Any]:
+    return {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "error": {"code": code, "message": JSONRPC_ERROR_MESSAGES[code]},
+    }
+
+
+def jsonrpc_request_id_is_valid(request_id: Any) -> bool:
+    if request_id is None or isinstance(request_id, str):
+        return True
+    if isinstance(request_id, bool):
+        return False
+    if isinstance(request_id, int):
+        return True
+    return isinstance(request_id, float) and math.isfinite(request_id)
+
+
+class _FailedStdioSink:
+    encoding = "utf-8"
+    errors = "strict"
+    closed = False
+
+    @staticmethod
+    def write(value: str) -> int:
+        return len(value)
+
+    @staticmethod
+    def flush() -> None:
+        return None
+
+    @staticmethod
+    def isatty() -> bool:
+        return False
+
+
+_FAILED_STDOUT_SINK = _FailedStdioSink()
+
+
+def neutralize_failed_stdout(stream: Any) -> None:
+    if stream is sys.stdout:
+        sys.stdout = _FAILED_STDOUT_SINK
 
 
 def require_string_arg(arguments: dict[str, Any], name: str) -> str:
@@ -5933,7 +6069,7 @@ def call_service(func: Any, *args: Any, **kwargs: Any) -> Any:
     try:
         return func(*args, **kwargs)
     except archive_services.ArchiveServiceError as exc:
-        raise ToolError(str(exc)) from exc
+        raise ToolError() from exc
 
 
 if __name__ == "__main__":
