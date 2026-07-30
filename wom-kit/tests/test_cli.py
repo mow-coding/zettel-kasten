@@ -6301,8 +6301,8 @@ class ArchiveCliTests(unittest.TestCase):
                     str(external_mirror),
                 ],
                 check=False,
-                capture_output=True,
-                text=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
                 timeout=30,
             )
             if created.returncode != 0:
@@ -8853,8 +8853,8 @@ class ArchiveCliTests(unittest.TestCase):
                         str(external_root),
                     ],
                     check=False,
-                    capture_output=True,
-                    text=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
                     timeout=30,
                 )
                 if created.returncode != 0:
@@ -9268,8 +9268,8 @@ class ArchiveCliTests(unittest.TestCase):
                     str(external_receipts),
                 ],
                 check=False,
-                capture_output=True,
-                text=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
                 timeout=30,
             )
             if created.returncode != 0:
@@ -30614,8 +30614,8 @@ state:
                         str(linked_root),
                         str(outside),
                     ],
-                    capture_output=True,
-                    text=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
                     check=False,
                 )
                 if completed.returncode != 0:
@@ -66303,8 +66303,8 @@ archive_services.zet_abstract_backfill_recover(
                 diagnostics_junction.rmdir()
             created = subprocess.run(
                 ["cmd", "/c", "mklink", "/J", str(diagnostics_junction), str(outside_diagnostics)],
-                capture_output=True,
-                text=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
                 check=False,
             )
             if created.returncode != 0:

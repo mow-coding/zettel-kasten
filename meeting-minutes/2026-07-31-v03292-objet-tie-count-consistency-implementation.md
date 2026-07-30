@@ -136,6 +136,29 @@ Beta semantic confirmation remains a later human real-use validation step.
     lists the wheel. This wording remains true both before and after
     publication; a documentation regression requires the boundary on every
     current install surface.
+14. The first post-rebase complete-suite command reached its 60-minute tool
+    limit without returning a final unittest summary. It was not counted as
+    success. A fresh run at exact clean head `86038728` was therefore launched
+    as a hidden process with verbose stdout/stderr logs outside the worktree so
+    progress and the final summary would survive the caller's tool limit. That
+    run completed naturally: 1,874 tests in 3,937.216 seconds, 22 skips, zero
+    unittest errors, and one failure. The sole failure was
+    `test_writer_rechecks_receipt_path_after_callback_before_write`; a Windows
+    `cmd.exe mklink` helper decoded localized OEM output as UTF-8 under the
+    explicitly selected `PYTHONUTF8=1` environment. Its background reader
+    raised `UnicodeDecodeError` before the expected junction-failure state
+    could be recorded. Six other junction cases emitted the same non-counted
+    reader-thread traceback while their assertions happened to pass.
+15. The product implementation was not changed for that environment-dependent
+    test-harness failure. All Windows `mklink` regression helpers that only
+    need the process return code now send command output to `DEVNULL`; the
+    shared transaction helper raises a fixed content-free `OSError` on a
+    nonzero result. This avoids decoding localized command output and also
+    prevents OS error text from becoming assertion content. The nine directly
+    affected junction, reparse, project-update, version-gate, and recovery
+    tests passed in 10.295 seconds with `PYTHONUTF8=1`, with no reader-thread
+    decode traceback. A fresh complete suite on the resulting exact commit
+    remains required.
 
 ## Later release-train boundary
 
@@ -217,3 +240,12 @@ also passed the privacy checker's own text rules when checked directly.
 The post-rebase complete source suite, clean wheel, remote CI, tag, release,
 anonymous download, digest, fresh install, and beta semantic validation remain
 outside this exact-predecessor documentation checkpoint.
+
+The first post-rebase full-suite attempt was terminated by the caller's
+60-minute limit and produced no verdict. The logged replacement run then
+completed all 1,874 tests in 3,937.216 seconds with 22 skips and one
+test-harness failure, as chronology item 14 records. After redirecting
+return-code-only Windows `mklink` output away from text decoders, the exact
+nine affected tests passed in 10.295 seconds under the same UTF-8 environment.
+This focused result closes the reproduced decoder failure, but it does not
+replace the required fresh complete-suite result on the corrected commit.
