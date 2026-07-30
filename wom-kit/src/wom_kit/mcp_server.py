@@ -2722,6 +2722,44 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "objet_rediscovery_plan",
+        "description": (
+            "Summarize checked and unchecked objet rediscovery layers before "
+            "any global absence claim. Read-only; never echoes the query, "
+            "search rows, filenames, source ids, local paths, provider "
+            "locators, or secret values."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string"},
+                "query": {
+                    "type": "string",
+                    "description": "Private local query; never echoed.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": archive_services.SEARCH_LIMIT_CEILING,
+                    "default": 20,
+                },
+                "count_total": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": (
+                        "Count all generated-index matches. This cannot make "
+                        "the multi-layer rediscovery result complete."
+                    ),
+                },
+                "dry_run": {
+                    "type": "boolean",
+                    "description": "Required. Read-only inspection; must be true.",
+                },
+            },
+            "required": ["archive_root", "query", "dry_run"],
+        },
+    },
+    {
         "name": "promotion_check",
         "description": "Dry-run check whether an inbox draft zettel can be promoted. This never writes canonical memory.",
         "inputSchema": {
@@ -3219,6 +3257,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_archive_index(arguments)
     if name == "archive_search":
         return tool_archive_search(arguments)
+    if name == "objet_rediscovery_plan":
+        return tool_objet_rediscovery_plan(arguments)
     if name == "promotion_check":
         return tool_promotion_check(arguments)
     if name == "mint_zettel_check":
@@ -5772,6 +5812,32 @@ def tool_archive_search(arguments: dict[str, Any]) -> dict[str, Any]:
             f"Returned {result['returned']} match(es); more matches exist beyond the requested "
             f"limit. Call again with count_total for the exact number."
         )
+    return tool_success_result(summary, result)
+
+
+def tool_objet_rediscovery_plan(arguments: dict[str, Any]) -> dict[str, Any]:
+    archive_root = require_path_arg(arguments, "archive_root")
+    raw_query = arguments.get("query")
+    query = (
+        raw_query
+        if isinstance(raw_query, str)
+        else require_string_arg(arguments, "query")
+    )
+    limit = int(arguments.get("limit", 20))
+    count_total = bool(arguments.get("count_total", False))
+    dry_run = arguments.get("dry_run") is True
+    result = call_service(
+        archive_services.objet_rediscovery_plan,
+        archive_root,
+        query,
+        dry_run=dry_run,
+        limit=limit,
+        count_total=count_total,
+    )
+    if result.get("status") == "search_incomplete":
+        summary = "SEARCH INCOMPLETE. No global absence claim is supported."
+    else:
+        summary = "Objet rediscovery plan blocked safely."
     return tool_success_result(summary, result)
 
 

@@ -24,6 +24,31 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.294 Checked-Layer Objet Rediscovery
+
+v0.3.294 requires no archive migration and rewrites no zettel, index,
+manifest, receipt, metadata, Runtime Skill installation, or `AGENTS.md`.
+
+Before claiming that a preserved original or objet does not exist, run:
+
+```text
+archive objet-rediscovery-plan <archive-root> <query> --dry-run --count-total --format json
+```
+
+The command is intentionally a privacy-safe evidence plan, not a private
+filename finder. It does not echo the query or search rows. It reports all ten
+fixed rediscovery layers and preserves ordinary index `complete` and
+`truncated` values under `index_search`. Each of the five index channels gets
+its own bounded probe even when an earlier channel fills the result limit. In
+v0.3.294, unimplemented or unchecked layers mean the result remains `search_incomplete`,
+`rediscovery_complete: false`, and `negative_claim_supported: false`.
+
+Before public release, rebase this candidate onto the exact public v0.3.293
+merge commit and rerun the full suite and clean-wheel verification.
+
+See
+[`wom-kit/docs/releases/v0.3.294.md`](wom-kit/docs/releases/v0.3.294.md).
+
 ## v0.3.293 Runtime Guidance Readiness
 
 v0.3.293 requires no archive migration and rewrites no zettel or `AGENTS.md`.

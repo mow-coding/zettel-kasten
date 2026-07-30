@@ -7,6 +7,14 @@ It exposes the local archive through MCP tools so an AI client can inspect and w
 The MCP tools share zettel listing, reading, draft creation, and view listing logic with the CLI service layer.
 Indexing and search also use the same shared service layer.
 
+v0.3.294 adds read-only `objet_rediscovery_plan`. It uses the same service as
+the CLI `objet-rediscovery-plan`, requires `dry_run: true`, lists ten fixed
+checked/unchecked evidence layers, preserves generated-index
+complete/truncated evidence separately, and never upgrades an index-only zero
+result to global absence. It echoes no private query, search row, filename,
+title, id, path, provider locator, secret, or exception. See
+`wom-kit/docs/objet-rediscovery-plan.md`.
+
 v0.2.48 radio-frequency recommendation is documentation and sanitized examples only. MCP exposes no recommendation fetch, rank, feed update, selector execution, provider, projection, receipt, or ZET transport tool.
 
 v0.2.49 public release link hygiene is a local development script and test guardrail only. MCP exposes no link checking, GitHub Release editing, network URL fetching, provider, projection, receipt, or archive mutation tool for this batch.
@@ -221,6 +229,9 @@ archive_index
 
 archive_search
   Search zettels, object manifest entries, views, and source map entries through the generated index.
+
+objet_rediscovery_plan
+  Build a read-only, privacy-safe checked-layer evidence plan before a global objet/source absence claim. Requires `dry_run: true`; structured transport success does not change `search_incomplete`, `rediscovery_complete: false`, or `negative_claim_supported: false`.
 
 archive_onboarding_plan
   Plan beginner-friendly Docker-first onboarding for a new archive. Returns the target folder, provider profile, keyring guidance, doctor plan, blockers, and warnings. This never creates folders or writes files.

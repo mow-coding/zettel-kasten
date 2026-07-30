@@ -3303,6 +3303,10 @@ class ArchiveServiceError(Exception):
     pass
 
 
+class ObjetRediscoveryArchiveBoundaryError(ArchiveServiceError):
+    """The plan cannot enumerate local zettels without crossing an unsafe path."""
+
+
 class ZetTitleRemapInputError(ArchiveServiceError):
     """A title-remap input error whose fixed code/message are safe to print."""
 
@@ -3337,12 +3341,31 @@ def connect_archive_index(
     *,
     write: bool = False,
     row_factory: bool = False,
+    immutable_read: bool = False,
 ) -> sqlite3.Connection:
-    conn = sqlite3.connect(db_path, timeout=ARCHIVE_INDEX_BUSY_TIMEOUT_MS / 1000)
+    if write and immutable_read:
+        raise ValueError("immutable_read cannot be combined with write")
+    if immutable_read:
+        # This inspection path must not create WAL/SHM sidecars.  `immutable=1`
+        # is intentionally limited to dry-run evidence summaries: it reads the
+        # last complete SQLite snapshot and makes no concurrent-freshness claim.
+        database = db_path.resolve(strict=True).as_uri() + "?mode=ro&immutable=1"
+        conn = sqlite3.connect(
+            database,
+            timeout=ARCHIVE_INDEX_BUSY_TIMEOUT_MS / 1000,
+            uri=True,
+        )
+    else:
+        conn = sqlite3.connect(
+            db_path,
+            timeout=ARCHIVE_INDEX_BUSY_TIMEOUT_MS / 1000,
+        )
     if row_factory:
         conn.row_factory = sqlite3.Row
     try:
         conn.execute(f"PRAGMA busy_timeout = {ARCHIVE_INDEX_BUSY_TIMEOUT_MS}")
+        if immutable_read:
+            conn.execute("PRAGMA query_only=ON")
         if write:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA synchronous=NORMAL")
@@ -98372,8 +98395,31 @@ def runtime_context_read_action_routes() -> list[dict[str, Any]]:
             "when": "the AI needs zets or indexed archive records matching a query",
             "command": "archive search <archive-root> <query> --count-total --format json",
             "authoritative_for": "WOM search result and explicit complete-or-truncated result metadata",
+            "global_absence_supported": False,
+            "negative_claim_next_command": (
+                "archive objet-rediscovery-plan <archive-root> <query> "
+                "--dry-run --count-total --format json"
+            ),
             "raw_filesystem_search_is_authoritative": False,
             "raw_sql_is_authoritative": False,
+            "writes": False,
+        },
+        {
+            "action": "plan_objet_rediscovery_before_negative_claim",
+            "when": (
+                "the AI is considering a claim that an objet, source file, "
+                "or preserved original does not exist"
+            ),
+            "command": (
+                "archive objet-rediscovery-plan <archive-root> <query> "
+                "--dry-run --count-total --format json"
+            ),
+            "authoritative_for": (
+                "which rediscovery layers were checked, incomplete, "
+                "unavailable, or not yet implemented"
+            ),
+            "global_absence_claim_requires_complete_layers": True,
+            "query_is_echoed": False,
             "writes": False,
         },
         {
@@ -98541,7 +98587,7 @@ def runtime_context_write_action_routes() -> list[dict[str, Any]]:
 
 def runtime_context_action_routing() -> dict[str, Any]:
     return {
-        "schema": "wom-kit/ai-command-path-routing/v0.7",
+        "schema": "wom-kit/ai-command-path-routing/v0.8",
         "official_wom_command_required_for_archive_actions": True,
         "location_policy_alone_is_sufficient": False,
         "raw_filesystem_search_is_authoritative": False,
@@ -107175,9 +107221,14 @@ def live_zettel_index_entries(
     progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
     read_observations: dict[str, bool] | None = None,
     inspection_issues: list[dict[str, str]] | None = None,
+    reject_reparse_directories: bool = False,
 ) -> list[dict[str, Any]]:
     entries: list[dict[str, Any]] = []
-    zettel_paths = list(iter_zettel_paths(root))
+    zettel_paths = (
+        strict_local_zettel_paths(root)
+        if reject_reparse_directories
+        else list(iter_zettel_paths(root))
+    )
     zettel_path_count = len(zettel_paths)
     if progress_callback is not None:
         progress_callback("index-health-live-zettels", "start", 0, zettel_path_count)
@@ -107228,6 +107279,43 @@ def index_health(
     max_items: int = 50,
     progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
 ) -> dict[str, Any]:
+    return _index_health_impl(
+        archive_root,
+        dry_run=dry_run,
+        max_items=max_items,
+        progress_callback=progress_callback,
+        immutable_index_read=False,
+        reject_reparse_directories=False,
+    )
+
+
+def index_health_immutable_snapshot(
+    archive_root: Path | str,
+    *,
+    dry_run: bool = True,
+    max_items: int = 50,
+) -> dict[str, Any]:
+    """Plan-private health read that cannot create SQLite sidecar files."""
+
+    return _index_health_impl(
+        archive_root,
+        dry_run=dry_run,
+        max_items=max_items,
+        progress_callback=None,
+        immutable_index_read=True,
+        reject_reparse_directories=True,
+    )
+
+
+def _index_health_impl(
+    archive_root: Path | str,
+    *,
+    dry_run: bool,
+    max_items: int,
+    progress_callback: Callable[[str, str, int | None, int | None], None] | None,
+    immutable_index_read: bool,
+    reject_reparse_directories: bool,
+) -> dict[str, Any]:
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
     blockers: list[str] = []
@@ -107248,6 +107336,7 @@ def index_health(
         progress_callback=progress_callback,
         read_observations=read_observations,
         inspection_issues=live_zettel_inspection_issues,
+        reject_reparse_directories=reject_reparse_directories,
     )
     live_by_path = {entry["path"]: entry for entry in live_entries}
     indexed_entries: list[dict[str, Any]] = []
@@ -107255,7 +107344,11 @@ def index_health(
     index_schema_complete = False
 
     if db_path.is_file():
-        conn = connect_archive_index(db_path, row_factory=True)
+        conn = connect_archive_index(
+            db_path,
+            row_factory=True,
+            immutable_read=immutable_index_read,
+        )
         try:
             zettels_table = conn.execute(
                 "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'zettels'"
@@ -107549,6 +107642,783 @@ SEARCH_CHANNEL_TABLES: tuple[tuple[str, str, str], ...] = (
     ("source_map", "source_map_entries", SEARCH_SOURCE_MAP_WHERE),
 )
 SEARCH_LIMIT_CEILING = 100
+OBJET_REDISCOVERY_SCHEMA = "wom-kit/objet-rediscovery-plan/v0.1"
+OBJET_REDISCOVERY_QUERY_MAX_CHARS = 4096
+OBJET_REDISCOVERY_LAYER_IDS = (
+    "indexed_zettels",
+    "indexed_object_manifests",
+    "indexed_derived_text",
+    "indexed_views",
+    "indexed_source_records",
+    "zettel_objet_edges",
+    "private_original_name_metadata",
+    "approved_external_local_store",
+    "external_store_evidence",
+    "unrecovered_source_references",
+)
+OBJET_REDISCOVERY_INDEX_LAYERS = (
+    (
+        "indexed_zettels",
+        "zettel",
+        "Current generated-index zettel rows for the submitted query.",
+    ),
+    (
+        "indexed_object_manifests",
+        "object",
+        "Current generated-index object-manifest rows for the submitted query.",
+    ),
+    (
+        "indexed_derived_text",
+        "derived_text",
+        "Current generated-index derived-text rows for the submitted query.",
+    ),
+    (
+        "indexed_views",
+        "view",
+        "Current generated-index view rows for the submitted query.",
+    ),
+    (
+        "indexed_source_records",
+        "source_map",
+        "Current generated-index source-map rows for the submitted query.",
+    ),
+)
+OBJET_REDISCOVERY_INDEX_STALE_REASON_CODES = {
+    "archive_index_schema_incomplete",
+    "live_zettels_missing_from_index",
+    "index_has_paths_missing_from_live_zettels",
+    "indexed_zettel_metadata_differs_from_live_frontmatter",
+    "live_zettel_modified_after_index",
+    "live_zettel_frontmatter_unreadable_or_invalid",
+    "index_health_blocked",
+}
+OBJET_REDISCOVERY_INSPECTION_ERRORS: tuple[type[BaseException], ...] = (
+    ArchiveServiceError,
+    OSError,
+    UnicodeError,
+    TypeError,
+    ValueError,
+    OverflowError,
+    RuntimeError,
+    sqlite3.Error,
+)
+if yaml is not None:
+    OBJET_REDISCOVERY_INSPECTION_ERRORS += (yaml.YAMLError,)  # type: ignore[union-attr]
+
+
+def objet_rediscovery_closed_actions() -> dict[str, bool]:
+    return {
+        "files_written": False,
+        "index_rebuilt": False,
+        "manifest_written": False,
+        "receipt_written": False,
+        "metadata_written": False,
+        "object_bytes_opened": False,
+        "external_directory_scanned": False,
+        "provider_api_called": False,
+        "network_checked": False,
+        "credential_store_accessed": False,
+        "runtime_skill_changed": False,
+        "agents_file_modified": False,
+    }
+
+
+def objet_rediscovery_privacy() -> dict[str, bool]:
+    return {
+        "query_echoed": False,
+        "search_result_rows_echoed": False,
+        "source_filenames_echoed": False,
+        "source_identifiers_echoed": False,
+        "zettel_titles_echoed": False,
+        "zettel_body_text_echoed": False,
+        "local_absolute_paths_echoed": False,
+        "provider_locators_echoed": False,
+        "secret_values_echoed": False,
+        "exception_details_echoed": False,
+    }
+
+
+def objet_rediscovery_layer(
+    layer_id: str,
+    *,
+    applicability: str,
+    check_state: str,
+    match_state: str,
+    evidence_scope: str,
+    freshness_proven: bool,
+    negative_claim_contribution: bool,
+    reason_codes: list[str],
+) -> dict[str, Any]:
+    return {
+        "layer_id": layer_id,
+        "applicability": applicability,
+        "check_state": check_state,
+        "match_state": match_state,
+        "evidence_scope": evidence_scope,
+        "freshness_proven": freshness_proven,
+        "negative_claim_contribution": negative_claim_contribution,
+        "reason_codes": reason_codes,
+    }
+
+
+def blocked_objet_rediscovery_result(
+    *,
+    diagnostic_code: str,
+    blocker: str,
+    query_present: bool,
+) -> dict[str, Any]:
+    layers = [
+        objet_rediscovery_layer(
+            layer_id,
+            applicability="unknown",
+            check_state="blocked",
+            match_state="unknown",
+            evidence_scope="The rediscovery inspection stopped before this layer could be checked.",
+            freshness_proven=False,
+            negative_claim_contribution=False,
+            reason_codes=["rediscovery_inspection_blocked"],
+        )
+        for layer_id in OBJET_REDISCOVERY_LAYER_IDS
+    ]
+    return {
+        "ok": False,
+        "dry_run": True,
+        "schema": OBJET_REDISCOVERY_SCHEMA,
+        "lifecycle_action": "objet_rediscovery_plan",
+        "status": "blocked",
+        "query_present": query_present,
+        "query_echoed": False,
+        "rediscovery_complete": False,
+        "negative_claim_supported": False,
+        "checked_match_count": 0,
+        "checked_match_count_exact": False,
+        "unchecked_or_unavailable_layer_count": len(layers),
+        "checked_layers": layers,
+        "index_search": {
+            "checked": False,
+            "complete": False,
+            "truncated": False,
+            "returned": 0,
+            "total_matches": None,
+            "total_matches_known": False,
+            "matches_by_type": None,
+            "limit_applied": None,
+            "limit_ceiling": SEARCH_LIMIT_CEILING,
+            "meaning": (
+                "Index search completeness concerns only the current generated "
+                "SQLite result set, never every rediscovery layer."
+            ),
+        },
+        "index_health": {
+            "checked": False,
+            "index_state": "blocked",
+            "zettel_identity_metadata_current": False,
+            "zettel_search_content_freshness_proven": False,
+            "non_zettel_source_freshness_proven": False,
+            "stale_reason_codes": [],
+        },
+        "diagnostic_codes": [diagnostic_code],
+        "next_safe_commands": [],
+        "closed_actions": objet_rediscovery_closed_actions(),
+        "privacy": objet_rediscovery_privacy(),
+        "blockers": [blocker],
+        "warnings": [],
+    }
+
+
+def objet_rediscovery_nonnegative_int(value: Any) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+def objet_rediscovery_index_snapshot_state(
+    root: Path,
+) -> tuple[tuple[int, int, int], bool]:
+    """Return a content-change signal and pending state immutable SQLite could miss."""
+
+    db_path = root / INDEX_RELATIVE_PATH
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    db_entry = os.lstat(db_path)
+    if (
+        stat.S_ISLNK(db_entry.st_mode)
+        or not stat.S_ISREG(db_entry.st_mode)
+        or (
+            reparse_flag
+            and getattr(db_entry, "st_file_attributes", 0) & reparse_flag
+        )
+        or not is_path_within_root(db_path, root)
+    ):
+        raise ArchiveServiceError("generated archive index is unavailable")
+    resolved_db_path = db_path.resolve(strict=True)
+    db_stat = resolved_db_path.stat()
+    wal_path = Path(f"{resolved_db_path}-wal")
+    journal_path = Path(f"{resolved_db_path}-journal")
+
+    def sidecar_requires_block(path: Path) -> bool:
+        try:
+            sidecar_stat = os.lstat(path)
+        except FileNotFoundError:
+            return False
+        return (
+            stat.S_ISLNK(sidecar_stat.st_mode)
+            or not stat.S_ISREG(sidecar_stat.st_mode)
+            or (
+                reparse_flag
+                and getattr(sidecar_stat, "st_file_attributes", 0)
+                & reparse_flag
+            )
+            or sidecar_stat.st_size > 0
+        )
+
+    pending_recovery_sidecar = (
+        sidecar_requires_block(wal_path)
+        or sidecar_requires_block(journal_path)
+    )
+    return (
+        (db_stat.st_size, db_stat.st_mtime_ns, db_stat.st_ctime_ns),
+        pending_recovery_sidecar,
+    )
+
+
+def objet_rediscovery_index_channel_evidence(
+    root: Path,
+    query: str,
+    *,
+    limit: int,
+) -> dict[str, dict[str, Any]]:
+    """Probe every indexed search channel without returning any matching row."""
+
+    db_path = root / INDEX_RELATIVE_PATH
+    bounded_limit = min(max(1, int(limit)), SEARCH_LIMIT_CEILING)
+    probe_limit = bounded_limit + 1
+    like = f"%{query.lower()}%"
+    evidence: dict[str, dict[str, Any]] = {}
+    conn = connect_archive_index(
+        db_path,
+        row_factory=False,
+        immutable_read=True,
+    )
+    try:
+        conn.execute("BEGIN")
+        for channel, table, where_clause in SEARCH_CHANNEL_TABLES:
+            rows = conn.execute(
+                f"SELECT 1 FROM {table} WHERE {where_clause} LIMIT ?",  # noqa: S608 - fixed table/clause constants
+                (like, probe_limit),
+            ).fetchall()
+            observed = len(rows)
+            channel_truncated = observed > bounded_limit
+            evidence[channel] = {
+                "checked": True,
+                "complete": not channel_truncated,
+                "truncated": channel_truncated,
+                "bounded_match_count": min(observed, bounded_limit),
+                "limit_applied": bounded_limit,
+            }
+    finally:
+        conn.rollback()
+        conn.close()
+    return evidence
+
+
+def objet_rediscovery_plan(
+    archive_root: Path | str,
+    query: str,
+    *,
+    dry_run: bool,
+    limit: int = 20,
+    count_total: bool = False,
+) -> dict[str, Any]:
+    """Summarize checked rediscovery layers without exposing search rows or private labels."""
+
+    query_present = isinstance(query, str) and bool(query.strip())
+    if not dry_run:
+        return blocked_objet_rediscovery_result(
+            diagnostic_code="dry_run_required",
+            blocker="Objet rediscovery planning is read-only and requires dry-run.",
+            query_present=query_present,
+        )
+    if not query_present:
+        return blocked_objet_rediscovery_result(
+            diagnostic_code="query_required",
+            blocker="Objet rediscovery planning requires a non-empty query.",
+            query_present=False,
+        )
+    if len(query) > OBJET_REDISCOVERY_QUERY_MAX_CHARS:
+        return blocked_objet_rediscovery_result(
+            diagnostic_code="query_too_large",
+            blocker="Objet rediscovery planning requires a bounded query.",
+            query_present=True,
+        )
+
+    try:
+        root = require_existing_archive_root(archive_root)
+        archive_id = read_archive_id(root)
+        if not archive_id.strip():
+            raise ArchiveServiceError("archive identity is empty")
+    except OBJET_REDISCOVERY_INSPECTION_ERRORS:
+        return blocked_objet_rediscovery_result(
+            diagnostic_code="invalid_archive",
+            blocker="Objet rediscovery planning requires a readable WOM archive identity.",
+            query_present=True,
+        )
+
+    try:
+        snapshot_before, pending_sidecar_before = (
+            objet_rediscovery_index_snapshot_state(root)
+        )
+        if pending_sidecar_before:
+            return blocked_objet_rediscovery_result(
+                diagnostic_code="archive_index_snapshot_unstable",
+                blocker=(
+                    "Objet rediscovery planning requires a stable generated-index "
+                    "snapshot with no pending SQLite recovery sidecar."
+                ),
+                query_present=True,
+            )
+        health = index_health_immutable_snapshot(
+            root,
+            dry_run=True,
+            max_items=1,
+        )
+        search_result = search_archive_immutable_snapshot(
+            root,
+            query,
+            limit=limit,
+            count_total=count_total,
+        )
+        channel_evidence = objet_rediscovery_index_channel_evidence(
+            root,
+            query,
+            limit=limit,
+        )
+        snapshot_after, pending_sidecar_after = (
+            objet_rediscovery_index_snapshot_state(root)
+        )
+    except ObjetRediscoveryArchiveBoundaryError:
+        return blocked_objet_rediscovery_result(
+            diagnostic_code="archive_scan_boundary_unsafe",
+            blocker=(
+                "Objet rediscovery planning requires local zettel directories "
+                "without symlink, junction, or reparse traversal."
+            ),
+            query_present=True,
+        )
+    except OBJET_REDISCOVERY_INSPECTION_ERRORS:
+        return blocked_objet_rediscovery_result(
+            diagnostic_code="archive_index_unavailable",
+            blocker="Objet rediscovery planning could not inspect the generated archive index safely.",
+            query_present=True,
+        )
+    if pending_sidecar_after or snapshot_after != snapshot_before:
+        return blocked_objet_rediscovery_result(
+            diagnostic_code="archive_index_snapshot_changed",
+            blocker=(
+                "Objet rediscovery planning stopped because the generated-index "
+                "snapshot changed during inspection."
+            ),
+            query_present=True,
+        )
+
+    raw_index_state = health.get("index_state")
+    if raw_index_state not in {"current", "stale_or_incomplete", "blocked"}:
+        return blocked_objet_rediscovery_result(
+            diagnostic_code="index_health_invalid",
+            blocker="Objet rediscovery planning received invalid index-health evidence.",
+            query_present=True,
+        )
+    index_state = str(raw_index_state)
+    if index_state == "blocked":
+        return blocked_objet_rediscovery_result(
+            diagnostic_code="archive_index_unavailable",
+            blocker="Objet rediscovery planning requires a readable generated archive index.",
+            query_present=True,
+        )
+
+    expected_channels = {
+        channel for channel, _table, _where in SEARCH_CHANNEL_TABLES
+    }
+    if (
+        not isinstance(channel_evidence, dict)
+        or set(channel_evidence) != expected_channels
+    ):
+        return blocked_objet_rediscovery_result(
+            diagnostic_code="index_search_evidence_invalid",
+            blocker="Objet rediscovery planning received invalid per-channel evidence.",
+            query_present=True,
+        )
+    for channel in expected_channels:
+        evidence = channel_evidence.get(channel)
+        if not isinstance(evidence, dict):
+            return blocked_objet_rediscovery_result(
+                diagnostic_code="index_search_evidence_invalid",
+                blocker="Objet rediscovery planning received invalid per-channel evidence.",
+                query_present=True,
+            )
+        channel_complete = evidence.get("complete")
+        channel_truncated = evidence.get("truncated")
+        bounded_match_count = objet_rediscovery_nonnegative_int(
+            evidence.get("bounded_match_count")
+        )
+        channel_limit = objet_rediscovery_nonnegative_int(
+            evidence.get("limit_applied")
+        )
+        if (
+            evidence.get("checked") is not True
+            or not isinstance(channel_complete, bool)
+            or not isinstance(channel_truncated, bool)
+            or channel_complete == channel_truncated
+            or bounded_match_count is None
+            or channel_limit is None
+            or channel_limit < 1
+            or channel_limit > SEARCH_LIMIT_CEILING
+            or bounded_match_count > channel_limit
+            or (channel_truncated and bounded_match_count != channel_limit)
+        ):
+            return blocked_objet_rediscovery_result(
+                diagnostic_code="index_search_evidence_invalid",
+                blocker="Objet rediscovery planning received invalid per-channel evidence.",
+                query_present=True,
+            )
+
+    complete = search_result.get("complete")
+    truncated = search_result.get("truncated")
+    total_matches_known = search_result.get("total_matches_known")
+    if (
+        not isinstance(complete, bool)
+        or not isinstance(truncated, bool)
+        or complete == truncated
+        or not isinstance(total_matches_known, bool)
+    ):
+        return blocked_objet_rediscovery_result(
+            diagnostic_code="index_search_evidence_invalid",
+            blocker="Objet rediscovery planning received invalid index-search evidence.",
+            query_present=True,
+        )
+    returned = objet_rediscovery_nonnegative_int(search_result.get("returned"))
+    limit_applied = objet_rediscovery_nonnegative_int(search_result.get("limit_applied"))
+    total_matches = (
+        objet_rediscovery_nonnegative_int(search_result.get("total_matches"))
+        if total_matches_known
+        else None
+    )
+    if returned is None or limit_applied is None or (total_matches_known and total_matches is None):
+        return blocked_objet_rediscovery_result(
+            diagnostic_code="index_search_evidence_invalid",
+            blocker="Objet rediscovery planning received invalid index-search counts.",
+            query_present=True,
+        )
+    if (
+        limit_applied < 1
+        or limit_applied > SEARCH_LIMIT_CEILING
+        or returned > limit_applied
+        or (complete and not total_matches_known)
+        or (
+            total_matches_known
+            and total_matches is not None
+            and total_matches < returned
+        )
+    ):
+        return blocked_objet_rediscovery_result(
+            diagnostic_code="index_search_evidence_invalid",
+            blocker="Objet rediscovery planning received inconsistent index-search counts.",
+            query_present=True,
+        )
+
+    raw_results = search_result.get("results")
+    if not isinstance(raw_results, list) or len(raw_results) != returned:
+        return blocked_objet_rediscovery_result(
+            diagnostic_code="index_search_evidence_invalid",
+            blocker="Objet rediscovery planning received invalid index-search rows.",
+            query_present=True,
+        )
+    returned_by_type = {channel: 0 for channel, _table, _where in SEARCH_CHANNEL_TABLES}
+    for row in raw_results:
+        if not isinstance(row, dict):
+            return blocked_objet_rediscovery_result(
+                diagnostic_code="index_search_evidence_invalid",
+                blocker="Objet rediscovery planning received invalid index-search rows.",
+                query_present=True,
+            )
+        row_type = row.get("type")
+        if row_type not in returned_by_type:
+            return blocked_objet_rediscovery_result(
+                diagnostic_code="index_search_evidence_invalid",
+                blocker="Objet rediscovery planning received an unknown index-search channel.",
+                query_present=True,
+            )
+        returned_by_type[str(row_type)] += 1
+
+    matches_by_type: dict[str, int] | None = None
+    raw_matches_by_type = search_result.get("matches_by_type")
+    if total_matches_known:
+        if not isinstance(raw_matches_by_type, dict):
+            return blocked_objet_rediscovery_result(
+                diagnostic_code="index_search_evidence_invalid",
+                blocker="Objet rediscovery planning received invalid index-search channel counts.",
+                query_present=True,
+            )
+        matches_by_type = {}
+        for channel, _table, _where in SEARCH_CHANNEL_TABLES:
+            value = objet_rediscovery_nonnegative_int(raw_matches_by_type.get(channel, 0))
+            if value is None:
+                return blocked_objet_rediscovery_result(
+                    diagnostic_code="index_search_evidence_invalid",
+                    blocker="Objet rediscovery planning received invalid index-search channel counts.",
+                    query_present=True,
+                )
+            if value:
+                matches_by_type[channel] = value
+        if (
+            total_matches is None
+            or sum(matches_by_type.values()) != total_matches
+        ):
+            return blocked_objet_rediscovery_result(
+                diagnostic_code="index_search_evidence_invalid",
+                blocker="Objet rediscovery planning received inconsistent index-search channel counts.",
+                query_present=True,
+            )
+
+    for channel in expected_channels:
+        evidence = channel_evidence[channel]
+        bounded_match_count = int(evidence["bounded_match_count"])
+        if total_matches_known:
+            exact_count = (matches_by_type or {}).get(channel, 0)
+            inconsistent = (
+                evidence["complete"] and exact_count != bounded_match_count
+            ) or (
+                evidence["truncated"] and exact_count <= bounded_match_count
+            )
+        else:
+            inconsistent = returned_by_type[channel] > bounded_match_count
+        if inconsistent:
+            return blocked_objet_rediscovery_result(
+                diagnostic_code="index_search_evidence_invalid",
+                blocker="Objet rediscovery planning received inconsistent per-channel evidence.",
+                query_present=True,
+            )
+
+    raw_stale_reasons = health.get("stale_reasons")
+    stale_reason_codes = (
+        [
+            reason
+            for reason in raw_stale_reasons
+            if isinstance(reason, str)
+            and reason in OBJET_REDISCOVERY_INDEX_STALE_REASON_CODES
+        ]
+        if isinstance(raw_stale_reasons, list)
+        else []
+    )
+    if index_state != "current" and not stale_reason_codes:
+        stale_reason_codes = ["index_health_unavailable"]
+    zettel_identity_metadata_current = (
+        index_state == "current" and health.get("ok") is True
+    )
+
+    layers: list[dict[str, Any]] = []
+    for layer_id, channel, evidence_scope in OBJET_REDISCOVERY_INDEX_LAYERS:
+        evidence = channel_evidence[channel]
+        bounded_match_count = int(evidence["bounded_match_count"])
+        exact_count = (matches_by_type or {}).get(channel, 0)
+        if (total_matches_known and exact_count) or bounded_match_count:
+            match_state = "matches_found"
+        elif evidence["complete"]:
+            match_state = "no_match_in_checked_scope"
+        else:
+            match_state = "unknown"
+
+        if evidence["truncated"]:
+            check_state = "checked_truncated"
+            reason_codes = ["index_channel_result_set_truncated"]
+            if not total_matches_known or exact_count > bounded_match_count:
+                reason_codes.append("index_match_count_incomplete")
+        else:
+            check_state = "checked_snapshot_only"
+            reason_codes = ["source_freshness_not_proven"]
+            if layer_id == "indexed_zettels":
+                reason_codes = (
+                    ["searchable_zettel_content_freshness_not_proven"]
+                    if zettel_identity_metadata_current
+                    else ["index_freshness_not_current"]
+                )
+
+        freshness_proven = False
+        layers.append(
+            objet_rediscovery_layer(
+                layer_id,
+                applicability="applicable",
+                check_state=check_state,
+                match_state=match_state,
+                evidence_scope=evidence_scope,
+                freshness_proven=freshness_proven,
+                negative_claim_contribution=(
+                    check_state == "checked_complete"
+                    and match_state == "no_match_in_checked_scope"
+                ),
+                reason_codes=reason_codes,
+            )
+        )
+
+    layers.extend(
+        [
+            objet_rediscovery_layer(
+                "zettel_objet_edges",
+                applicability="unknown",
+                check_state="unchecked",
+                match_state="unknown",
+                evidence_scope=(
+                    "No zettel was selected for exact zettel-to-objet edge traversal."
+                ),
+                freshness_proven=False,
+                negative_claim_contribution=False,
+                reason_codes=["reviewed_zettel_selection_required"],
+            ),
+            objet_rediscovery_layer(
+                "private_original_name_metadata",
+                applicability="unknown",
+                check_state="not_implemented",
+                match_state="unknown",
+                evidence_scope=(
+                    "Private original-name metadata and normalization are reserved "
+                    "for the reviewed v0.3.295+ contracts."
+                ),
+                freshness_proven=False,
+                negative_claim_contribution=False,
+                reason_codes=["private_metadata_contract_not_implemented"],
+            ),
+            objet_rediscovery_layer(
+                "approved_external_local_store",
+                applicability="unknown",
+                check_state="not_implemented",
+                match_state="unknown",
+                evidence_scope=(
+                    "No approved out-of-archive local-store registration lifecycle exists."
+                ),
+                freshness_proven=False,
+                negative_claim_contribution=False,
+                reason_codes=["external_local_store_contract_not_implemented"],
+            ),
+            objet_rediscovery_layer(
+                "external_store_evidence",
+                applicability="unknown",
+                check_state="not_implemented",
+                match_state="unknown",
+                evidence_scope=(
+                    "No approved external-store evidence inspection contract exists."
+                ),
+                freshness_proven=False,
+                negative_claim_contribution=False,
+                reason_codes=["external_store_evidence_contract_not_implemented"],
+            ),
+            objet_rediscovery_layer(
+                "unrecovered_source_references",
+                applicability="unknown",
+                check_state="not_implemented",
+                match_state="unknown",
+                evidence_scope=(
+                    "Archive-wide unrecovered source-reference coverage is reserved "
+                    "for the v0.3.299 contract."
+                ),
+                freshness_proven=False,
+                negative_claim_contribution=False,
+                reason_codes=["source_reference_coverage_not_implemented"],
+            ),
+        ]
+    )
+
+    unchecked_or_unavailable_layer_count = sum(
+        1
+        for layer in layers
+        if layer["check_state"] in {
+            "unchecked",
+            "unavailable",
+            "not_implemented",
+            "blocked",
+        }
+    )
+    checked_match_count = (
+        total_matches
+        if total_matches_known
+        else sum(
+            int(evidence["bounded_match_count"])
+            for evidence in channel_evidence.values()
+        )
+    )
+    diagnostic_codes = ["search_layers_incomplete"]
+    if truncated:
+        diagnostic_codes.append("index_result_set_truncated")
+    if not zettel_identity_metadata_current:
+        diagnostic_codes.append("index_freshness_not_current")
+    diagnostic_codes.append("indexed_source_freshness_not_proven")
+
+    next_safe_commands: list[str] = []
+    if not zettel_identity_metadata_current:
+        next_safe_commands.append(
+            "archive index-health <archive-root> --dry-run --format json"
+        )
+    next_safe_commands.extend(
+        [
+            "archive search <archive-root> <query> --count-total --format json",
+            (
+                "archive zettel-objet-links <archive-root> "
+                "--zettel-id <reviewed-zettel-id> --dry-run --format json"
+            ),
+            (
+                "archive resolve-objet-ref <archive-root> "
+                "--object-id sha256:<hex> --dry-run --format json"
+            ),
+        ]
+    )
+
+    return {
+        "ok": True,
+        "dry_run": True,
+        "schema": OBJET_REDISCOVERY_SCHEMA,
+        "lifecycle_action": "objet_rediscovery_plan",
+        "status": "search_incomplete",
+        "query_present": True,
+        "query_echoed": False,
+        "rediscovery_complete": False,
+        "negative_claim_supported": False,
+        "checked_match_count": checked_match_count,
+        "checked_match_count_exact": total_matches_known,
+        "unchecked_or_unavailable_layer_count": unchecked_or_unavailable_layer_count,
+        "checked_layers": layers,
+        "index_search": {
+            "checked": True,
+            "complete": complete,
+            "truncated": truncated,
+            "returned": returned,
+            "total_matches": total_matches,
+            "total_matches_known": total_matches_known,
+            "matches_by_type": matches_by_type,
+            "limit_applied": limit_applied,
+            "limit_ceiling": SEARCH_LIMIT_CEILING,
+            "meaning": (
+                "Index search completeness concerns only the current generated "
+                "SQLite result set, never every rediscovery layer."
+            ),
+        },
+        "index_health": {
+            "checked": True,
+            "index_state": index_state,
+            "zettel_identity_metadata_current": zettel_identity_metadata_current,
+            "zettel_search_content_freshness_proven": False,
+            "non_zettel_source_freshness_proven": False,
+            "stale_reason_codes": stale_reason_codes,
+        },
+        "diagnostic_codes": diagnostic_codes,
+        "next_safe_commands": next_safe_commands,
+        "closed_actions": objet_rediscovery_closed_actions(),
+        "privacy": objet_rediscovery_privacy(),
+        "blockers": [],
+        "warnings": [
+            (
+                "Search incomplete. No global absence claim is supported until "
+                "every applicable rediscovery layer has complete evidence."
+            )
+        ],
+    }
 
 
 def search_archive(
@@ -107557,6 +108427,41 @@ def search_archive(
     limit: int = 20,
     *,
     count_total: bool = False,
+) -> dict[str, Any]:
+    return _search_archive_impl(
+        archive_root,
+        query,
+        limit=limit,
+        count_total=count_total,
+        immutable_index_read=False,
+    )
+
+
+def search_archive_immutable_snapshot(
+    archive_root: Path | str,
+    query: str,
+    limit: int = 20,
+    *,
+    count_total: bool = False,
+) -> dict[str, Any]:
+    """Plan-private index search that cannot create SQLite sidecar files."""
+
+    return _search_archive_impl(
+        archive_root,
+        query,
+        limit=limit,
+        count_total=count_total,
+        immutable_index_read=True,
+    )
+
+
+def _search_archive_impl(
+    archive_root: Path | str,
+    query: str,
+    limit: int,
+    *,
+    count_total: bool,
+    immutable_index_read: bool,
 ) -> dict[str, Any]:
     root = require_existing_archive_root(archive_root)
     if not query.strip():
@@ -107574,7 +108479,11 @@ def search_archive(
     probe_budget = limit + 1
     rows_seen = 0
     results: list[dict[str, Any]] = []
-    conn = connect_archive_index(db_path, row_factory=True)
+    conn = connect_archive_index(
+        db_path,
+        row_factory=True,
+        immutable_read=immutable_index_read,
+    )
     try:
         # One read transaction so the returned rows and any later count describe
         # the same database state even if a rebuild commits alongside.
@@ -107760,6 +108669,83 @@ def search_archive(
         "limit_ceiling": SEARCH_LIMIT_CEILING,
         "results": results,
     }
+
+
+def strict_local_zettel_paths(archive_root: Path) -> list[Path]:
+    """Enumerate local Markdown zettels without following symlinks or reparse points."""
+
+    paths: list[Path] = []
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+
+    def require_real_directory(path: Path) -> None:
+        try:
+            path_stat = os.lstat(path)
+        except FileNotFoundError:
+            raise
+        except OSError as exc:
+            raise ObjetRediscoveryArchiveBoundaryError(
+                "local zettel directory boundary is unreadable"
+            ) from exc
+        if (
+            stat.S_ISLNK(path_stat.st_mode)
+            or not stat.S_ISDIR(path_stat.st_mode)
+            or (
+                reparse_flag
+                and getattr(path_stat, "st_file_attributes", 0) & reparse_flag
+            )
+        ):
+            raise ObjetRediscoveryArchiveBoundaryError(
+                "local zettel directory boundary is unsafe"
+            )
+
+    for folder in ("zettels", "inbox"):
+        folder_root = archive_root / folder
+        try:
+            require_real_directory(folder_root)
+        except FileNotFoundError:
+            continue
+
+        pending = [folder_root]
+        while pending:
+            current = pending.pop()
+            require_real_directory(current)
+            try:
+                with os.scandir(current) as scanner:
+                    entries = list(scanner)
+            except OSError as exc:
+                raise ObjetRediscoveryArchiveBoundaryError(
+                    "local zettel directory boundary is unreadable"
+                ) from exc
+            for entry in entries:
+                path = Path(entry.path)
+                try:
+                    entry_stat = entry.stat(follow_symlinks=False)
+                except OSError as exc:
+                    raise ObjetRediscoveryArchiveBoundaryError(
+                        "local zettel directory entry is unreadable"
+                    ) from exc
+                if (
+                    stat.S_ISLNK(entry_stat.st_mode)
+                    or (
+                        reparse_flag
+                        and getattr(entry_stat, "st_file_attributes", 0)
+                        & reparse_flag
+                    )
+                ):
+                    raise ObjetRediscoveryArchiveBoundaryError(
+                        "local zettel directory contains an unsafe entry"
+                    )
+                if stat.S_ISDIR(entry_stat.st_mode):
+                    pending.append(path)
+                    continue
+                if not entry.name.casefold().endswith(".md"):
+                    continue
+                if not stat.S_ISREG(entry_stat.st_mode):
+                    raise ObjetRediscoveryArchiveBoundaryError(
+                        "local zettel directory contains an unsupported entry"
+                    )
+                paths.append(path)
+    return sorted(paths)
 
 
 def iter_zettel_paths(archive_root: Path) -> list[Path]:

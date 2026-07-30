@@ -160,13 +160,14 @@ MCP clients must not request `redact_local_paths: false` unless trusted local de
 
 ## AI Command-Path Routing
 
-Introduced in v0.3.278 and extended through v0.3.293, runtime-context,
+Introduced in v0.3.278 and extended through v0.3.294, runtime-context,
 ai-start-here, operational-context, and
 canonical entrypoint metadata return
-`wom-kit/ai-command-path-routing/v0.7`.
+`wom-kit/ai-command-path-routing/v0.8`.
 
 The routing object names official WOM commands for search, local version
-truth, saved-view inspection, conservative inbox pipeline-shape review,
+truth, checked-layer objet rediscovery before global absence claims,
+saved-view inspection, conservative inbox pipeline-shape review,
 explicit event-membership planning, command discovery, draft creation,
 minting, typed edges, source/objet intake, and operational-context updates. It
 marks raw grep and raw SQL as
@@ -176,7 +177,10 @@ The event-membership route supports exact reviewed additions and removals
 through separate digest-bound CLI writers and separate interruption recovery,
 but infers no member and exposes no MCP writer. v0.3.293 adds the
 operator-feedback plan, ledger, required human-review, record preview, and
-explicit approval sequence. Both operations refuse retained add or removal journals before and
+explicit approval sequence. v0.3.294 adds
+`objet-rediscovery-plan --dry-run`: index completeness remains snapshot-only,
+all ten evidence layers are visible, and an index zero never proves global
+absence. Both operations refuse retained add or removal journals before and
 under one shared lock, while their requests, journals, receipts, and recovery
 contracts stay separate. Mismatched evidence remains in forensic hold.
 

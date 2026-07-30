@@ -71,6 +71,11 @@ token-budget contract.
 - Search with `archive search <archive-root> <query> --count-total --format
   json`. Raw grep and raw SQL may help diagnose files or generated indexes, but
   they are not authoritative WOM search results.
+- Before saying that an objet, source file, or preserved original does not
+  exist, run `archive objet-rediscovery-plan <archive-root> <query> --dry-run
+  --count-total --format json`. A complete `archive search` page proves only
+  the current generated-index result set; if the rediscovery plan reports
+  `search_incomplete`, do not make a global absence claim.
 - Inspect possible historical direct inbox writes only with
   `archive inbox-pipeline-audit <archive-root> --dry-run --format json`.
   Treat its classes as review signals, not proof, and never repair a draft
