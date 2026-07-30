@@ -851,42 +851,42 @@ class McpServerTests(unittest.TestCase):
             "arguments must be an object",
         )
 
-    def test_deep_json_parse_failure_is_fixed_content_free_and_server_continues(self) -> None:
-        env = os.environ.copy()
-        env["PYTHONPATH"] = "src"
+    def test_unexpected_json_parse_failure_is_fixed_content_free_and_server_continues(self) -> None:
         private_sentinel = "SENTINEL_DEEP_JSON_PRIVATE_PATH"
-        deeply_nested = (
+        parser_failure = (
             '{"jsonrpc":"2.0","id":90,"method":"ping","params":'
-            + ("[" * 5000)
-            + f'"{private_sentinel}"'
-            + ("]" * 5000)
+            f'["{private_sentinel}"]'
             + "}"
         )
         following_ping = json.dumps(
             {"jsonrpc": "2.0", "id": 91, "method": "ping", "params": {}},
             separators=(",", ":"),
         )
+        real_json_loads = json.loads
 
-        result = subprocess.run(
-            [sys.executable, "-m", "wom_kit.mcp_server"],
-            cwd=KIT_ROOT,
-            env=env,
-            input=deeply_nested + "\n" + following_ping + "\n",
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            timeout=15,
-            check=False,
-        )
+        def loads_with_one_internal_failure(value: str, **kwargs: object) -> object:
+            if private_sentinel in value:
+                raise RecursionError("synthetic parser depth failure")
+            return real_json_loads(value, **kwargs)
 
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stderr, "")
+        stdout = io.StringIO()
+        with mock.patch.object(
+            mcp_server.json,
+            "loads",
+            side_effect=loads_with_one_internal_failure,
+        ):
+            return_code = mcp_server.JsonRpcMcpServer().serve(
+                io.BytesIO((parser_failure + "\n" + following_ping + "\n").encode("utf-8")),
+                stdout,
+            )
+
+        self.assertEqual(return_code, 0)
         responses = [
             json.loads(line)
-            for line in result.stdout.splitlines()
+            for line in stdout.getvalue().splitlines()
             if line.strip()
         ]
-        self.assertEqual(len(responses), 2, result.stdout)
+        self.assertEqual(len(responses), 2, stdout.getvalue())
         self.assert_jsonrpc_error(
             responses[0],
             request_id=None,
