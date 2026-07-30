@@ -33,7 +33,7 @@ archive notion-objet-link-plan <archive-root> --path inbox/example.md --dry-run
 ```
 
 ```powershell
-python wom-kit\cli\archive.py notion-objet-link-plan <archive-root> `
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli notion-objet-link-plan <archive-root> `
   --path inbox/example.md `
   --dry-run `
   --format json
@@ -42,7 +42,7 @@ python wom-kit\cli\archive.py notion-objet-link-plan <archive-root> `
 or:
 
 ```powershell
-python wom-kit\cli\archive.py notion-objet-link-plan <archive-root> `
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli notion-objet-link-plan <archive-root> `
   --zettel-id zet_20260617_example `
   --dry-run
 ```

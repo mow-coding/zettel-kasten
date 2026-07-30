@@ -63,7 +63,7 @@ live mailbox scans are still closed. Use `imap-mailbox-plan` to review safe
 provider, account, mailbox, and credential refs before any future IMAP work:
 
 ```powershell
-python cli\archive.py imap-mailbox-plan .\my-archive `
+$env:PYTHONPATH='src'; python -m wom_kit.archive_cli imap-mailbox-plan .\my-archive `
   --source-id imap:naver-personal `
   --provider naver `
   --account-ref imap:account:naver-personal `
@@ -81,7 +81,7 @@ attachments, send mail, delete mail, change flags, store secrets, or write files
 After a source map exists, use source intake to classify one item before creating an inbox draft:
 
 ```powershell
-python cli\archive.py source-intake .\my-archive `
+$env:PYTHONPATH='src'; python -m wom_kit.archive_cli source-intake .\my-archive `
   --dry-run `
   --source local:docs `
   --item-id sourceitem:local_docs:example `
@@ -97,13 +97,13 @@ It does not read file bodies, calculate full hashes, copy, upload, import, OCR, 
 List registered sources:
 
 ```powershell
-python cli\archive.py sources examples\fake-life-archive --format json
+$env:PYTHONPATH='src'; python -m wom_kit.archive_cli sources examples\fake-life-archive --format json
 ```
 
 Register a source without hand-editing YAML:
 
 ```powershell
-python cli\archive.py add-source .\my-archive `
+$env:PYTHONPATH='src'; python -m wom_kit.archive_cli add-source .\my-archive `
   --source-id local:desktop `
   --type local_folder `
   --local-root C:\Users\example\Desktop `
@@ -115,7 +115,7 @@ python cli\archive.py add-source .\my-archive `
 Apply after review:
 
 ```powershell
-python cli\archive.py add-source .\my-archive `
+$env:PYTHONPATH='src'; python -m wom_kit.archive_cli add-source .\my-archive `
   --source-id local:desktop `
   --type local_folder `
   --local-root C:\Users\example\Desktop `
@@ -129,7 +129,7 @@ This writes the safe source binding to `source-bindings.yml`. The real local pat
 Show Docker mount guidance:
 
 ```powershell
-python cli\archive.py source-mounts .\my-archive
+$env:PYTHONPATH='src'; python -m wom_kit.archive_cli source-mounts .\my-archive
 ```
 
 Docker scans need explicit read-only source mounts, usually under `/sources/<source-id>`. Host-native CLI can use ignored local profiles or `--source-root` directly.
@@ -137,7 +137,7 @@ Docker scans need explicit read-only source mounts, usually under `/sources/<sou
 Preview a scan:
 
 ```powershell
-python cli\archive.py scan-source .\my-archive `
+$env:PYTHONPATH='src'; python -m wom_kit.archive_cli scan-source .\my-archive `
   --source local:personal-documents `
   --source-root C:\Users\example\Documents `
   --dry-run `
@@ -147,7 +147,7 @@ python cli\archive.py scan-source .\my-archive `
 Apply after review:
 
 ```powershell
-python cli\archive.py scan-source .\my-archive `
+$env:PYTHONPATH='src'; python -m wom_kit.archive_cli scan-source .\my-archive `
   --source local:personal-documents `
   --source-root C:\Users\example\Documents `
   --approve `

@@ -43,16 +43,19 @@ docker compose run --rm archive-cli doctor examples/fake-life-archive --strict
 
 ## Flow 1: Start With Health Checks
 
+The commands in this guide use the normal source-tree module launcher from the
+repository root. Keep the `PYTHONPATH` prefix when copying a command.
+
 Run this before and after substantial work:
 
 ```powershell
-python wom-kit\cli\archive.py doctor wom-kit\examples\fake-life-archive --strict
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli doctor wom-kit\examples\fake-life-archive --strict
 ```
 
 Use JSON when an AI or script needs structured output:
 
 ```powershell
-python wom-kit\cli\archive.py validate wom-kit\examples\fake-life-archive --format json
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli validate wom-kit\examples\fake-life-archive --format json
 ```
 
 `doctor` checks:
@@ -70,10 +73,10 @@ unsafe local/provider paths in zettels
 secret-like files and values
 ```
 
-Host-native developer fallback:
+Normal source-tree developer command:
 
 ```powershell
-python wom-kit\cli\archive.py doctor wom-kit\examples\fake-life-archive --strict
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli doctor wom-kit\examples\fake-life-archive --strict
 ```
 
 ## Flow 1B: Plan A Real Personal/Team Pilot
@@ -81,7 +84,7 @@ python wom-kit\cli\archive.py doctor wom-kit\examples\fake-life-archive --strict
 Before connecting real files, plan the first pilot. This command writes nothing.
 
 ```powershell
-python wom-kit\cli\archive.py pilot-plan `
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli pilot-plan `
   --personal-root .\archives\personal-life `
   --team-root .\archives\team-archive `
   --personal-principal-id person:me `
@@ -93,27 +96,27 @@ The plan checks that the personal archive and team archive are not the same fold
 After an archive exists, run preflight before connecting real data:
 
 ```powershell
-python wom-kit\cli\archive.py preflight .\archives\personal-life --strict --check-docker
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli preflight .\archives\personal-life --strict --check-docker
 ```
 
 Run a restore drill before the first real source scan:
 
 ```powershell
-python wom-kit\cli\archive.py recovery-plan .\archives\personal-life --format json
-python wom-kit\cli\archive.py restore-drill .\archives\personal-life --target C:\tmp\personal-life-restore --dry-run --format json
-python wom-kit\cli\archive.py restore-drill .\archives\personal-life --target C:\tmp\personal-life-restore --approve --reviewed-by person:me
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli recovery-plan .\archives\personal-life --format json
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli restore-drill .\archives\personal-life --target C:\tmp\personal-life-restore --dry-run --format json
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli restore-drill .\archives\personal-life --target C:\tmp\personal-life-restore --approve --reviewed-by person:me
 ```
 
 Then preflight can require a successful restore receipt:
 
 ```powershell
-python wom-kit\cli\archive.py preflight .\archives\personal-life --strict --require-restore-drill
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli preflight .\archives\personal-life --strict --require-restore-drill
 ```
 
 For separation between personal and team archives:
 
 ```powershell
-python wom-kit\cli\archive.py preflight .\archives\personal-life --peer-archive .\archives\team-archive --strict
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli preflight .\archives\personal-life --peer-archive .\archives\team-archive --strict
 ```
 
 Preflight blocks drive roots, whole home folders, system folders, source roots that contain the archive itself, and overlapping personal/team archive roots.
@@ -179,7 +182,7 @@ docker compose run --rm archive-cli onboard \
 Host-native developer fallback:
 
 ```powershell
-python wom-kit\cli\archive.py onboard `
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli onboard `
   --target-root .\tmp-my-archive `
   --type personal `
   --archive-id archive:personal:me `
@@ -207,7 +210,7 @@ docker compose run --rm archive-cli onboard \
 Host-native developer fallback:
 
 ```powershell
-python wom-kit\cli\archive.py onboard `
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli onboard `
   --target-root .\tmp-my-archive `
   --type personal `
   --archive-id archive:personal:me `
@@ -249,13 +252,13 @@ Source maps let the archive draw a metadata-first map of files that remain where
 List registered sources:
 
 ```powershell
-python wom-kit\cli\archive.py sources .\tmp-my-archive --format json
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli sources .\tmp-my-archive --format json
 ```
 
 Register another source without hand-editing YAML:
 
 ```powershell
-python wom-kit\cli\archive.py add-source .\tmp-my-archive `
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli add-source .\tmp-my-archive `
   --source-id local:desktop `
   --type local_folder `
   --local-root $env:ARCHIVE_SOURCE_DESKTOP_ROOT `
@@ -267,7 +270,7 @@ python wom-kit\cli\archive.py add-source .\tmp-my-archive `
 When the plan looks right:
 
 ```powershell
-python wom-kit\cli\archive.py add-source .\tmp-my-archive `
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli add-source .\tmp-my-archive `
   --source-id local:desktop `
   --type local_folder `
   --local-root $env:ARCHIVE_SOURCE_DESKTOP_ROOT `
@@ -281,13 +284,13 @@ The safe source record goes into `source-bindings.yml`. The real local path goes
 For Docker, check how sources should be mounted read-only:
 
 ```powershell
-python wom-kit\cli\archive.py source-mounts .\tmp-my-archive
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli source-mounts .\tmp-my-archive
 ```
 
 Preview a local folder scan:
 
 ```powershell
-python wom-kit\cli\archive.py scan-source .\tmp-my-archive `
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli scan-source .\tmp-my-archive `
   --source local:personal-documents `
   --source-root $env:ARCHIVE_SOURCE_DOCUMENTS_ROOT `
   --dry-run `
@@ -297,7 +300,7 @@ python wom-kit\cli\archive.py scan-source .\tmp-my-archive `
 Apply only after review:
 
 ```powershell
-python wom-kit\cli\archive.py scan-source .\tmp-my-archive `
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli scan-source .\tmp-my-archive `
   --source local:personal-documents `
   --source-root $env:ARCHIVE_SOURCE_DOCUMENTS_ROOT `
   --approve `
@@ -311,7 +314,7 @@ The scan writes `source-maps/*.jsonl` and `receipts/sources/*.source-scan.json`.
 Use profile resolution before assuming the current archive is the target. Then plan the GitHub repository with dry-run:
 
 ```powershell
-python wom-kit\cli\archive.py github-repo .\tmp-my-archive `
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli github-repo .\tmp-my-archive `
   --dry-run `
   --profile-id profile:personal:username `
   --profile-slug username `
@@ -329,7 +332,7 @@ zettel-kasten-username
 Dry-run writes nothing. Approved mode writes only local `provider-bindings.yml` metadata and a setup receipt:
 
 ```powershell
-python wom-kit\cli\archive.py github-repo .\tmp-my-archive `
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli github-repo .\tmp-my-archive `
   --approve `
   --reviewed-by person:me `
   --profile-id profile:personal:username `
@@ -346,7 +349,7 @@ This flow does not create a GitHub repository, start OAuth, call GitHub APIs, ru
 Use profile resolution before assuming the current archive is the target. Then plan where source/original objets should live:
 
 ```powershell
-python wom-kit\cli\archive.py object-storage .\tmp-my-archive `
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli object-storage .\tmp-my-archive `
   --dry-run `
   --provider cloudflare-r2 `
   --profile-id profile:personal:username `
@@ -370,7 +373,7 @@ archives/<archive_id>/objets/
 Dry-run writes nothing. Approved mode writes only local `provider-bindings.yml` metadata and a setup receipt:
 
 ```powershell
-python wom-kit\cli\archive.py object-storage .\tmp-my-archive `
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli object-storage .\tmp-my-archive `
   --approve `
   --reviewed-by person:me `
   --provider cloudflare-r2 `
@@ -388,7 +391,7 @@ After approving GitHub repository or object storage setup metadata, check that
 `provider-bindings.yml` and local setup receipts still agree:
 
 ```powershell
-python wom-kit\cli\archive.py provider-status .\tmp-my-archive `
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli provider-status .\tmp-my-archive `
   --dry-run `
   --format json
 ```
@@ -407,7 +410,7 @@ AI should create draft zettels in `inbox/`.
 For AI-assisted profile-bound work, preview first:
 
 ```powershell
-python wom-kit\cli\archive.py create-draft .\tmp-my-archive `
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli create-draft .\tmp-my-archive `
   --title "Draft from conversation" `
   --body "# Draft from conversation`n`nThis is a rough note. It is not canonical memory yet." `
   --dry-run `
@@ -424,7 +427,7 @@ The dry-run writes nothing. It returns the proposed `inbox/` path, frontmatter p
 The older direct command remains compatible for simple local use:
 
 ```powershell
-python wom-kit\cli\archive.py create-draft .\tmp-my-archive `
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli create-draft .\tmp-my-archive `
   --title "Draft from conversation" `
   --body "# Draft from conversation`n`nThis is a rough note. It is not canonical memory yet."
 ```
@@ -448,7 +451,7 @@ Natural-language requests such as "올려줘" should mean "preview or create an 
 Always start with dry-run. Think of it as a rehearsal that tells you whether a draft is safe to make canonical.
 
 ```powershell
-python wom-kit\cli\archive.py mint-zettel .\tmp-my-archive `
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli mint-zettel .\tmp-my-archive `
   --path inbox\PUT-THE-DRAFT-FILENAME-HERE.md `
   --dry-run `
   --format json
@@ -476,7 +479,7 @@ If `ok` is false, the draft needs more human review or editing.
 If `ok` is true and you intentionally reviewed the draft, real minting is available through the CLI:
 
 ```powershell
-python wom-kit\cli\archive.py mint-zettel .\tmp-my-archive `
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli mint-zettel .\tmp-my-archive `
   --path inbox\PUT-THE-DRAFT-FILENAME-HERE.md `
   --approve `
   --reviewed-by person:me
@@ -491,13 +494,13 @@ If dry-run reports warnings, real minting stops unless you add `--allow-warnings
 Build the generated index:
 
 ```powershell
-python wom-kit\cli\archive.py index wom-kit\examples\fake-life-archive
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli index wom-kit\examples\fake-life-archive
 ```
 
 Search:
 
 ```powershell
-python wom-kit\cli\archive.py search wom-kit\examples\fake-life-archive "onboarding"
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli search wom-kit\examples\fake-life-archive "onboarding"
 ```
 
 The index is disposable. Rebuild it whenever needed. It includes zettels, object manifests, views, and source map entries.
@@ -507,7 +510,7 @@ The index is disposable. Rebuild it whenever needed. It includes zettels, object
 Pack from a saved view:
 
 ```powershell
-python wom-kit\cli\archive.py pack .\tmp-fake-life-archive `
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli pack .\tmp-fake-life-archive `
   --view view.fake.education.gilwon `
   --purpose "Share a small education context." `
   --mode reference
@@ -518,7 +521,7 @@ The workpack includes selected zettels and object manifest metadata.
 Preview import:
 
 ```powershell
-python wom-kit\cli\archive.py import .\tmp-my-archive `
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli import .\tmp-my-archive `
   .\tmp-fake-life-archive\workpacks\PUT-THE-WORKPACK-FOLDER-HERE `
   --dry-run `
   --format json
@@ -531,7 +534,7 @@ Real workpack import is not implemented yet.
 For Notion, export pages as Markdown and preview the import:
 
 ```powershell
-python wom-kit\cli\archive.py import-external .\tmp-my-archive `
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli import-external .\tmp-my-archive `
   --source notion `
   --export .\notion-export `
   --dry-run `
@@ -541,7 +544,7 @@ python wom-kit\cli\archive.py import-external .\tmp-my-archive `
 For Google Drive, export documents as Markdown/text and optionally make a manifest that keeps Drive ids and URLs. Preview:
 
 ```powershell
-python wom-kit\cli\archive.py import-external .\tmp-my-archive `
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli import-external .\tmp-my-archive `
   --source google_drive `
   --export .\google-drive-export\manifest.json `
   --dry-run `
@@ -551,7 +554,7 @@ python wom-kit\cli\archive.py import-external .\tmp-my-archive `
 Apply only after review:
 
 ```powershell
-python wom-kit\cli\archive.py import-external .\tmp-my-archive `
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli import-external .\tmp-my-archive `
   --source notion `
   --export .\notion-export `
   --approve `
@@ -563,7 +566,7 @@ This writes imported records as inbox drafts and records a receipt under `receip
 Before sharing a view with another archive, run the scope and trust dry-run:
 
 ```powershell
-python wom-kit\cli\archive.py share .\tmp-fake-life-archive `
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli share .\tmp-fake-life-archive `
   --view view.fake.company.derived `
   --target-archive archive:company:fake-blue `
   --counterparty-id archive:company:fake-blue `
@@ -579,7 +582,7 @@ This shows what would be included, what would be excluded, and whether the count
 Ownership transfer is real CLI-only functionality now. Always preview it first:
 
 ```powershell
-python wom-kit\cli\archive.py transfer-ownership .\tmp-fake-life-archive `
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli transfer-ownership .\tmp-fake-life-archive `
   --new-owner person:child `
   --new-owner-kind person `
   --new-owner-archive archive:personal:child `

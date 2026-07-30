@@ -23,7 +23,7 @@ archive index-health <archive-root> --dry-run
 ```
 
 ```powershell
-python wom-kit\cli\archive.py index-health <archive-root> `
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli index-health <archive-root> `
   --dry-run `
   --format json
 ```

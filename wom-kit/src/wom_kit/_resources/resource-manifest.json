@@ -1,8 +1,8 @@
 {
   "schema": "wom-kit/package-resource-manifest/v0.1",
-  "version": "0.3.290",
+  "version": "0.3.291",
   "source_of_truth": "wom-kit source resource directories",
-  "file_count": 102,
+  "file_count": 103,
   "files": [
     {
       "source": "schemas/activity-group-membership-receipt.schema.json",
@@ -159,6 +159,12 @@
       "packaged": "schemas/ownership-transfer-receipt.schema.json",
       "bytes": 2058,
       "sha256": "d099584291588b8231ad22f59650d17ec26d071804c238f0e029db1f81d4c0b3"
+    },
+    {
+      "source": "schemas/project-version-update-receipt-v0.2.schema.json",
+      "packaged": "schemas/project-version-update-receipt-v0.2.schema.json",
+      "bytes": 4663,
+      "sha256": "e435bcf8548a27c1fa7758e0996d622b9df7d512a5a9817513b40b47beb4f25e"
     },
     {
       "source": "schemas/project-version-update-receipt.schema.json",
@@ -337,8 +343,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/references/operator-contract.md",
       "packaged": "templates/ai-runtime/wom-archive/references/operator-contract.md",
-      "bytes": 53334,
-      "sha256": "c6794b6247d03e3c05d60a1829593246690d2f12fe94d5b8482edd42f2f6ca6d"
+      "bytes": 55731,
+      "sha256": "9ea4180b7804041db1924cf32240e0770cc3bb5930b6fec75e8c6dda7d80e5d6"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/reading-memory-and-revision.md",
@@ -355,14 +361,14 @@
     {
       "source": "templates/ai-runtime/wom-archive/references/startup-and-update.md",
       "packaged": "templates/ai-runtime/wom-archive/references/startup-and-update.md",
-      "bytes": 3081,
-      "sha256": "86f52feb4e81d878ecb5753838afac8224f3bdb087ada3746a1426d9e19139bd"
+      "bytes": 5459,
+      "sha256": "c4ce0354a42ee108c2aea37e6250fbe50e57fc85b6d51daddb17ab933d45033e"
     },
     {
       "source": "templates/company/AGENTS.md",
       "packaged": "templates/company/AGENTS.md",
-      "bytes": 8058,
-      "sha256": "c8280b18b5faf0048900366bf82f2a9307e55385a8069d236f33ea3603ab60fd"
+      "bytes": 8212,
+      "sha256": "0aef0f9451893b355f5d8cf5934adb7e1d091c423099c92089b9d81d80303ba1"
     },
     {
       "source": "templates/company/archive-identity.yml",
@@ -433,8 +439,8 @@
     {
       "source": "templates/family/AGENTS.md",
       "packaged": "templates/family/AGENTS.md",
-      "bytes": 8198,
-      "sha256": "1b6ece07e1cb4506ed52c54ad78f046bef94b839bf6ea152ec68a3d1e22ee0f1"
+      "bytes": 8352,
+      "sha256": "8b03253248743579dba7af153ea5c4543bf235b5b68f5dedb128c975c5e7241c"
     },
     {
       "source": "templates/family/archive-identity.yml",
@@ -505,8 +511,8 @@
     {
       "source": "templates/personal/AGENTS.md",
       "packaged": "templates/personal/AGENTS.md",
-      "bytes": 8167,
-      "sha256": "1602ced9ce0f2077e751de90f531d95e2bfd3ad2525582d1d7d8db7618efe4ad"
+      "bytes": 8321,
+      "sha256": "5af32b48950141a9dd15a444610ae1cc388d65f569e1e2903e24ecce6fe8400a"
     },
     {
       "source": "templates/personal/archive-identity.yml",
@@ -611,10 +617,10 @@
       "sha256": "d619dc26af3216498c8392dfe838b0fe752d4bad9da998a58ca682d668fc510c"
     },
     {
-      "source": "docs/releases/v0.3.290.md",
-      "packaged": "release-notes/v0.3.290.md",
-      "bytes": 4389,
-      "sha256": "5230c05200d7ce1110ef98a0c568d0ffeafb90b28af5c804e64953f7e3dbd1ca"
+      "source": "docs/releases/v0.3.291.md",
+      "packaged": "release-notes/v0.3.291.md",
+      "bytes": 17274,
+      "sha256": "eae23e8bfad267da3cd9c4f2e1c121e72f8f10a6032d4b99a5b75cf71b072e12"
     }
   ]
 }

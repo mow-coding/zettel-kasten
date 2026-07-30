@@ -10,25 +10,40 @@ It is not a website, SaaS app, dashboard, or visual note-taking product. The int
 
 ## Install The Command-Line Tool
 
-v0.3.290 provides a self-contained wheel on the exact GitHub release:
+v0.3.291 provides a self-contained wheel on the exact GitHub release:
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.290/wom_kit-0.3.290-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.291/wom_kit-0.3.291-py3-none-any.whl"
 archive --version
 ```
 
-v0.3.290 closes an endpoint-type gap in the existing `zettel-edge` safety
-gate. The writer now checks the resolved `Zettel` or `OriginalObject`
-endpoints against the selected active `types.yml` record's non-empty `from`
-and `to` lists before any source or receipt write. The policy batch inherits
-the same fail-closed check through its single-edge preflight. It changes no
-vocabulary, enables no sequence semantics, adds no MCP writer, and performs no
-automatic archive migration. The exact wheel-resource gate from v0.3.289
-remains in force. The v0.3.288 boundary is also unchanged:
-caller values do not enter error `message` or `data`.
+v0.3.291 makes runtime version alignment explicit. `archive version <root>`
+distinguishes an aligned runtime, project source that must be repaired or
+updated, and a self-consistent project mirror that differs from the running
+import. Under explicit local-path disclosure, the last case can return an
+exact one-invocation project-scoped bridge argv only when
+`runtime_alignment.integrity.verified` is true after local real-path,
+project-local Git-metadata, raw worktree/index/flag, exact source/resource-byte,
+closed-import-tree, annotated-tag, tagged-version, and `origin/main` ancestry
+checks. The Python `-I -S` bootstrap is bound to the expected commit, tag,
+wrapper blob, and all 103 synchronized resources, executes the wrapper from
+verified memory, and permits only the `version` command. `-S` blocks site,
+executable `.pth`, and `sitecustomize` processing; only after verification are
+stdlib-`sysconfig` `purelib`/`platlib` paths added. Project path aliases are
+purged, `wom-kit/src` is not added to `sys.path`, and an exact-OID finder loads
+only `wom_kit`, so post-gate top-level dependency shadows cannot execute from
+the project tree. Those checks use no network and read no origin URL value.
+The bridge does not replace the global Python tool,
+infer installer provenance, or install the runtime Agent Skill. Shareable
+version output exposes only exact stable labels; malformed local
+pin/source/pyproject values and non-release Git tag names become null
+fail-closed evidence instead of echoed payloads. The edge
+safety and exact wheel-resource gates from v0.3.290 and
+v0.3.289 remain in force. The v0.3.288 content-free error boundary also
+remains: caller values do not enter error `message` or `data`.
 A valid JSON-RPC request id still crosses the stdio boundary unchanged in the
 top-level `id` field. See
-[`docs/releases/v0.3.290.md`](docs/releases/v0.3.290.md).
+[`docs/releases/v0.3.291.md`](docs/releases/v0.3.291.md).
 
 Use a dedicated virtual environment when installing with plain `pip`. WOM-kit
 is not published to PyPI yet, so `pip install wom-kit` is not an official
@@ -244,8 +259,9 @@ Current commands:
 version
   Print the running WOM-kit CLI version and optional project pin/source mirror status. When an archive root is inspected, the command can also find a parent project installed-version pin and .zettel-kasten/source mirror, including source version and latest fetched tag drift when available. JSON output is available for AI/runtime checks and redacts local paths by default.
 
-project-version-update --dry-run|--approve --target vX.Y.Z
-  Preview locally, then approval-gate one configured-origin fetch, exact annotated-tag/main-ancestry/version verification, detached source-mirror checkout, recognized pin alignment, and schema-backed project receipt. Dirty or ambiguous state blocks; post-checkout failure rolls source and pins back. It never writes archive knowledge and requires a new process plus `archive version` verification after success. v0.3.215 is the one-time bootstrap boundary for older installs.
+project-version-update --dry-run --target vX.Y.Z
+project-version-update --approve --target vX.Y.Z --reviewed-by <actor> --affirm-external-writers-quiescent
+  Preview locally, then on Windows approval-gate one configured-origin fetch, exact annotated-tag/main-ancestry/version verification, manual complete commit-tree materialization, recognized pin alignment, and an O_EXCL v0.2 project receipt. Windows holds every source/.git/pin/lock/receipt directory path without FILE_SHARE_DELETE; missing receipt parents are created and held in order. Raw worktree/index/flag snapshots avoid git status and filters, but they are checkpointed detection rather than atomic file CAS. After dry-run, keep external editors, sync/backup clients, and other Git writers quiescent for the whole transaction and pass `--affirm-external-writers-quiescent` with the reviewer on every approval. Results say `external_writer_quiescence_required: true`, `external_writer_quiescence_affirmed: true`, `atomic_file_compare_and_swap: false`, and `checkpointed_change_detection: true`; the v0.2 receipt records `external_writer_quiescence: {affirmed: true, scope: complete_project_version_update_transaction}`. The config digest binds effective Git config plus exactly GIT_ASKPASS/GIT_PROXY_COMMAND/GIT_SSH/GIT_SSH_COMMAND; the selected Git executable, PATH, HTTP_PROXY, HTTPS_PROXY, SSL_CERT_FILE, CURL_CA_BUNDLE, SSH_AUTH_SOCK, HOME, and other non-GIT toolchain/transport environment are unbound trusted-stable prerequisites. Config drift immediately before rollback skips restore and preserves the lock. POSIX dry-run remains preview-only and POSIX approval blocks. Runtime scans stream under caps, and ignored `wom-kit/src` shadows block before mutation. v0.3.215 is the bootstrap boundary.
 
 onboard
   Plan or apply first archive setup. Dry-run writes nothing; --approve creates the archive, provider-bindings.yml, and runs strict doctor.
@@ -812,16 +828,21 @@ macOS/Linux dry-run setup:
 sh scripts/install-unix.sh --dry-run
 ```
 
-Host-native developer example:
+Normal source-tree developer example (run from the repository root):
 
 ```powershell
-python wom-kit\cli\archive.py doctor wom-kit\examples\fake-life-archive
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli doctor wom-kit\examples\fake-life-archive
 ```
+
+Keep using the module form for ordinary source-tree work. The direct
+`wom-kit\cli\archive.py` wrapper is reserved for the verified bridge and
+pristine-checkout recovery path; it may refuse once local import artifacts such
+as `__pycache__` exist.
 
 Runtime context example:
 
 ```powershell
-python wom-kit\cli\archive.py runtime-context wom-kit\examples\fake-life-archive --format json
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli runtime-context wom-kit\examples\fake-life-archive --format json
 ```
 
 Use `--expected-archive-id` and `--expected-type` when an AI runtime should confirm it is operating on a specific archive. Archive id mismatches block. Archive type mismatches warn by default and block with `--strict`. The command is read-only and writes no files.
@@ -829,7 +850,7 @@ Use `--expected-archive-id` and `--expected-type` when an AI runtime should conf
 Profile registry example:
 
 ```powershell
-python wom-kit\cli\archive.py profile-resolve `
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli profile-resolve `
   --registry wom-kit\templates\profiles\wom-profiles.example.yml `
   --target "영희&철수" `
   --format json
@@ -840,7 +861,7 @@ Use `profile-resolve` before `runtime-context` when the user asks for a named ta
 Profile wallet preview example:
 
 ```powershell
-python wom-kit\cli\archive.py profile-wallet wom-kit\examples\fake-life-archive `
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli profile-wallet wom-kit\examples\fake-life-archive `
   --registry wom-kit\templates\profiles\wom-profiles.example.yml `
   --profile profile:person:wallet-ready-example `
   --dry-run `
@@ -852,7 +873,7 @@ python wom-kit\cli\archive.py profile-wallet wom-kit\examples\fake-life-archive 
 Object storage / objet setup example:
 
 ```powershell
-python wom-kit\cli\archive.py object-storage wom-kit\examples\fake-life-archive `
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli object-storage wom-kit\examples\fake-life-archive `
   --dry-run `
   --provider cloudflare-r2 `
   --profile-id profile:personal:username `
@@ -913,7 +934,7 @@ Coverage is not considered complete when derived-text rows are missing
 metadata.
 
 ```powershell
-python wom-kit\cli\archive.py derive-text capture .\tmp-my-archive `
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli derive-text capture .\tmp-my-archive `
   --text-file .\workbench\example-extracted.txt `
   --source-object-id sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa `
   --derivation-kind parser `
@@ -994,7 +1015,7 @@ For Notion page/block exports, `recordMap` or `blocks` JSON is treated as a prov
 Preview a future quarantine decision path without recording it:
 
 ```powershell
-python wom-kit\cli\archive.py quarantine-decision wom-kit\examples\fake-life-archive `
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli quarantine-decision wom-kit\examples\fake-life-archive `
   --case-id case-review-001 `
   --dry-run `
   --format json
@@ -1005,7 +1026,7 @@ The preview can propose `keep_quarantined`, `reject_and_keep_record`, `eligible_
 Record an approved local quarantine decision after reviewing a saved decision preview:
 
 ```powershell
-python wom-kit\cli\archive.py record-quarantine-decision wom-kit\examples\fake-life-archive `
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli record-quarantine-decision wom-kit\examples\fake-life-archive `
   --decision-preview workbench\foreign-block-quarantine-decision.json `
   --approve `
   --reviewed-by person:me `
@@ -1017,7 +1038,7 @@ Approved mode writes exactly `quarantine/foreign-blocks/<case-id>/quarantine-dec
 Review recorded quarantine decisions:
 
 ```powershell
-python wom-kit\cli\archive.py quarantine-decision-review wom-kit\examples\fake-life-archive `
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli quarantine-decision-review wom-kit\examples\fake-life-archive `
   --format json
 ```
 
@@ -1026,7 +1047,7 @@ Use `--case-id <safe-id>` for one recorded decision, `--decision <decision-or-al
 Plan the next safe path from one recorded quarantine decision:
 
 ```powershell
-python wom-kit\cli\archive.py quarantine-decision-outcome wom-kit\examples\fake-life-archive `
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli quarantine-decision-outcome wom-kit\examples\fake-life-archive `
   --case-id case-review-001 `
   --dry-run `
   --format json
@@ -1037,7 +1058,7 @@ The outcome planner re-reads the current quarantine case, original quarantine re
 Plan a human attestation review candidate from an eligible decision:
 
 ```powershell
-python wom-kit\cli\archive.py attestation-review-candidate wom-kit\examples\fake-life-archive `
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli attestation-review-candidate wom-kit\examples\fake-life-archive `
   --case-id case-review-001 `
   --expected-decision eligible_for_attestation_review `
   --expected-outcome prepare_attestation_review_candidate `
@@ -1050,7 +1071,7 @@ The candidate planner re-reads the current quarantine case, original quarantine 
 Record an approved local candidate after reviewing a saved candidate plan:
 
 ```powershell
-python wom-kit\cli\archive.py record-attestation-review-candidate wom-kit\examples\fake-life-archive `
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli record-attestation-review-candidate wom-kit\examples\fake-life-archive `
   --candidate-plan workbench\foreign-block-attestation-review-candidate.json `
   --approve `
   --reviewed-by person:me `
@@ -1060,7 +1081,7 @@ python wom-kit\cli\archive.py record-attestation-review-candidate wom-kit\exampl
 Review recorded attestation review candidates:
 
 ```powershell
-python wom-kit\cli\archive.py attestation-candidate-review wom-kit\examples\fake-life-archive `
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli attestation-candidate-review wom-kit\examples\fake-life-archive `
   --format json
 ```
 
@@ -1069,7 +1090,7 @@ Use `--case-id <safe-id>` for one case, `--review-scope <scope-or-all>` for a di
 Preview a non-binding statement draft for one recorded candidate:
 
 ```powershell
-python wom-kit\cli\archive.py attestation-statement-draft wom-kit\examples\fake-life-archive `
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli attestation-statement-draft wom-kit\examples\fake-life-archive `
   --case-id case-review-001 `
   --dry-run `
   --statement-style human_readable `
@@ -1081,7 +1102,7 @@ The statement draft re-reads the current candidate, candidate receipt, quarantin
 Record an approved local statement draft after reviewing a saved draft preview:
 
 ```powershell
-python wom-kit\cli\archive.py record-attestation-statement-draft wom-kit\examples\fake-life-archive `
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli record-attestation-statement-draft wom-kit\examples\fake-life-archive `
   --draft-preview workbench\foreign-block-attestation-statement-draft.json `
   --approve `
   --reviewed-by person:me `
@@ -1093,7 +1114,7 @@ This records only an untrusted statement draft JSON and matching receipt. It sti
 Review recorded untrusted statement drafts and their receipts:
 
 ```powershell
-python wom-kit\cli\archive.py attestation-statement-draft-review wom-kit\examples\fake-life-archive `
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli attestation-statement-draft-review wom-kit\examples\fake-life-archive `
   --statement-style all `
   --review-scope all `
   --include-receipts `
@@ -1107,7 +1128,7 @@ The review index writes nothing, returns `index_status: indexed_not_modified`, k
 Preview a non-binding next review route for one recorded statement draft:
 
 ```powershell
-python wom-kit\cli\archive.py attestation-statement-draft-decision wom-kit\examples\fake-life-archive `
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli attestation-statement-draft-decision wom-kit\examples\fake-life-archive `
   --case-id case-review-001 `
   --dry-run `
   --decision-intent needs_more_review `
@@ -1121,7 +1142,7 @@ The preview revalidates the current statement draft review index, statement draf
 Real minting is CLI-only and intentionally explicit:
 
 ```powershell
-python wom-kit\cli\archive.py mint-zet wom-kit\examples\fake-life-archive `
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli mint-zet wom-kit\examples\fake-life-archive `
   --path inbox\zet_20260519_draft_ai_lunch_note.md `
   --approve `
   --reviewed-by person:me

@@ -22,7 +22,7 @@ imap_mailbox
 It also adds:
 
 ```powershell
-python cli\archive.py imap-mailbox-plan .\my-archive `
+$env:PYTHONPATH='src'; python -m wom_kit.archive_cli imap-mailbox-plan .\my-archive `
   --source-id imap:gmail-personal `
   --provider gmail `
   --account-ref imap:account:gmail-personal `
@@ -46,7 +46,7 @@ send no email, delete no email, and change no message flags.
 v0.3.46 adds a second dry-run step for the next gate:
 
 ```powershell
-python cli\archive.py imap-mailbox-operation-request-plan .\my-archive `
+$env:PYTHONPATH='src'; python -m wom_kit.archive_cli imap-mailbox-operation-request-plan .\my-archive `
   --source-id imap:gmail-personal `
   --provider gmail `
   --account-ref imap:account:gmail-personal `
@@ -75,7 +75,7 @@ files.
 v0.3.47 adds a read-only adapter readiness step:
 
 ```powershell
-python cli\archive.py imap-mailbox-adapter-readiness-plan .\my-archive `
+$env:PYTHONPATH='src'; python -m wom_kit.archive_cli imap-mailbox-adapter-readiness-plan .\my-archive `
   --source-id imap:gmail-personal `
   --provider gmail `
   --account-ref imap:account:gmail-personal `
@@ -102,7 +102,7 @@ mail.
 v0.3.49 adds a read-only mailbox selection planning step:
 
 ```powershell
-python cli\archive.py imap-mailbox-selection-plan .\my-archive `
+$env:PYTHONPATH='src'; python -m wom_kit.archive_cli imap-mailbox-selection-plan .\my-archive `
   --source-id imap:gmail-personal `
   --provider gmail `
   --account-ref imap:account:gmail-personal `
@@ -130,7 +130,7 @@ message ids, subjects, senders, headers, bodies, or attachments now.
 v0.3.50 adds a read-only adapter audit receipt preview:
 
 ```powershell
-python cli\archive.py imap-mailbox-adapter-audit-plan .\my-archive `
+$env:PYTHONPATH='src'; python -m wom_kit.archive_cli imap-mailbox-adapter-audit-plan .\my-archive `
   --adapter-id local-imap `
   --source-id imap:gmail-personal `
   --provider gmail `
@@ -163,7 +163,7 @@ v0.3.55 keeps the read-only adapter manifest preview, schema validation, and
 adds an approval-gated local manifest write:
 
 ```powershell
-python cli\archive.py imap-mailbox-adapter-manifest-plan .\my-archive `
+$env:PYTHONPATH='src'; python -m wom_kit.archive_cli imap-mailbox-adapter-manifest-plan .\my-archive `
   --adapter-id local-imap `
   --provider gmail `
   --provider naver `
@@ -279,7 +279,7 @@ After the plan is reviewed, the source type can be registered with the existing
 source registration flow:
 
 ```powershell
-python cli\archive.py add-source .\my-archive `
+$env:PYTHONPATH='src'; python -m wom_kit.archive_cli add-source .\my-archive `
   --source-id imap:gmail-personal `
   --type imap_mailbox `
   --root-ref imap:account:gmail-personal `

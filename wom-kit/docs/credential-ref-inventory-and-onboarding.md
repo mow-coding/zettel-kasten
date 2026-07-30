@@ -24,7 +24,7 @@ Which source/tool is allowed to reference it?
 v0.3.21 adds a read-only inventory command for that catalog:
 
 ```powershell
-python cli\archive.py credential-ref-inventory .\my-archive `
+$env:PYTHONPATH='src'; python -m wom_kit.archive_cli credential-ref-inventory .\my-archive `
   --dry-run `
   --format json
 ```

@@ -44,8 +44,11 @@ CI matrix
 
 From the project root on Windows PowerShell:
 
+Use the module launcher for normal source-tree work. Keep the `PYTHONPATH`
+prefix when copying later commands from this guide.
+
 ```powershell
-python wom-kit\cli\archive.py doctor wom-kit\examples\fake-life-archive --strict
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli doctor wom-kit\examples\fake-life-archive --strict
 ```
 
 Expected result:
@@ -73,7 +76,7 @@ all tests pass
 Use a temporary folder first. Do not start with real private data.
 
 ```powershell
-python wom-kit\cli\archive.py init .\tmp-my-archive `
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli init .\tmp-my-archive `
   --type personal `
   --archive-id archive:personal:me `
   --principal-id person:me `
@@ -84,7 +87,7 @@ python wom-kit\cli\archive.py init .\tmp-my-archive `
 Check it:
 
 ```powershell
-python wom-kit\cli\archive.py doctor .\tmp-my-archive --strict
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli doctor .\tmp-my-archive --strict
 ```
 
 ## 3. Create An AI Draft
@@ -92,7 +95,7 @@ python wom-kit\cli\archive.py doctor .\tmp-my-archive --strict
 AI-created notes go to `inbox/` first.
 
 ```powershell
-python wom-kit\cli\archive.py create-draft .\tmp-my-archive `
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli create-draft .\tmp-my-archive `
   --title "First safe draft" `
   --body "# First safe draft`n`nThis is a temporary inbox draft created during the quickstart."
 ```
@@ -100,7 +103,7 @@ python wom-kit\cli\archive.py create-draft .\tmp-my-archive `
 List drafts:
 
 ```powershell
-python wom-kit\cli\archive.py list-zettels .\tmp-my-archive --status draft
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli list-zettels .\tmp-my-archive --status draft
 ```
 
 ## 4. Preview Minting
@@ -110,7 +113,7 @@ Start with dry-run. It is the safe review step before canonical memory is writte
 Use the path printed by `create-draft`, then run:
 
 ```powershell
-python wom-kit\cli\archive.py mint-zettel .\tmp-my-archive `
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli mint-zettel .\tmp-my-archive `
   --path inbox\PUT-THE-DRAFT-FILENAME-HERE.md `
   --dry-run
 ```
@@ -149,7 +152,7 @@ Only mark an item `true` after reading the draft yourself. For old drafts,
 If dry-run passes and you have intentionally reviewed the draft, real minting is available through the CLI:
 
 ```powershell
-python wom-kit\cli\archive.py mint-zettel .\tmp-my-archive `
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli mint-zettel .\tmp-my-archive `
   --path inbox\PUT-THE-DRAFT-FILENAME-HERE.md `
   --approve `
   --reviewed-by person:me
@@ -172,8 +175,8 @@ Only use that flag after reading the warnings.
 The search index is a generated map. It is not canonical memory.
 
 ```powershell
-python wom-kit\cli\archive.py index wom-kit\examples\fake-life-archive
-python wom-kit\cli\archive.py search wom-kit\examples\fake-life-archive "lunch"
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli index wom-kit\examples\fake-life-archive
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli search wom-kit\examples\fake-life-archive "lunch"
 ```
 
 The generated file is:
@@ -195,7 +198,7 @@ Copy-Item -Recurse wom-kit\examples\fake-life-archive .\tmp-fake-life-archive
 Create a small workpack from a saved view:
 
 ```powershell
-python wom-kit\cli\archive.py pack .\tmp-fake-life-archive `
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli pack .\tmp-fake-life-archive `
   --view view.fake.education.gilwon `
   --purpose "Quickstart education context." `
   --mode reference
@@ -204,7 +207,7 @@ python wom-kit\cli\archive.py pack .\tmp-fake-life-archive `
 Preview importing the workpack into your temporary archive:
 
 ```powershell
-python wom-kit\cli\archive.py import .\tmp-my-archive `
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli import .\tmp-my-archive `
   .\tmp-fake-life-archive\workpacks\PUT-THE-WORKPACK-FOLDER-HERE `
   --dry-run
 ```

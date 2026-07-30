@@ -6,9 +6,11 @@ import json
 import copy
 import base64
 import binascii
+import ctypes
 import hashlib
 import hmac
 import fnmatch
+import importlib.machinery
 import importlib.util
 import imaplib
 import math
@@ -21,6 +23,9 @@ import shutil
 import sqlite3
 import stat
 import subprocess
+import sys
+import tempfile
+import threading
 import time
 import unicodedata
 import urllib.error
@@ -89877,6 +89882,27 @@ def normalize_version_label(value: str | None) -> str | None:
     return normalized or None
 
 
+def stable_version_value(
+    value: str | None,
+    *,
+    include_prefix: bool = False,
+) -> str | None:
+    """Return only a public, exact stable WOM version label.
+
+    Version files and local Git metadata are untrusted local inputs.  Keep
+    arbitrary payloads available only to the fail-closed validity decision;
+    never project them into shareable version results.
+    """
+
+    normalized = normalize_version_label(value)
+    if normalized is None:
+        return None
+    label = f"v{normalized}"
+    if not WOM_KIT_PROJECT_UPDATE_TAG_RE.fullmatch(label):
+        return None
+    return label if include_prefix else normalized
+
+
 def version_sort_key(value: str | None) -> tuple[int, int, int, str] | None:
     normalized = normalize_version_label(value)
     if not normalized:
@@ -89918,6 +89944,88 @@ def read_pyproject_version_text(text: str) -> str | None:
     return match.group(1) if match else None
 
 
+WOM_KIT_VERSION_METADATA_MAX_BYTES = 64 * 1024
+WOM_KIT_VERSION_PIN_MAX_BYTES = 1024
+
+
+def wom_kit_real_path_kind(root: Path, path: Path) -> str:
+    try:
+        path.relative_to(root)
+        path_stat = os.lstat(path)
+    except (OSError, ValueError):
+        return "missing"
+    if not wom_kit_path_components_are_real(root, path):
+        return "unsafe"
+    if stat.S_ISREG(path_stat.st_mode):
+        return "file"
+    if stat.S_ISDIR(path_stat.st_mode):
+        return "directory"
+    return "unsafe"
+
+
+def wom_kit_read_bounded_real_bytes(
+    root: Path,
+    path: Path,
+    *,
+    max_bytes: int,
+) -> bytes | None:
+    if max_bytes < 0 or wom_kit_real_path_kind(root, path) != "file":
+        return None
+    descriptor: int | None = None
+    try:
+        before = os.lstat(path)
+        if before.st_size < 0 or before.st_size > max_bytes:
+            return None
+        flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        descriptor = os.open(path, flags)
+        opened = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or opened.st_size != before.st_size
+            or (before.st_ino and opened.st_ino and before.st_ino != opened.st_ino)
+            or (before.st_dev and opened.st_dev and before.st_dev != opened.st_dev)
+        ):
+            return None
+        chunks: list[bytes] = []
+        total = 0
+        while total <= max_bytes:
+            chunk = os.read(descriptor, min(64 * 1024, max_bytes + 1 - total))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+        after = os.fstat(descriptor)
+        if (
+            total != opened.st_size
+            or after.st_size != opened.st_size
+            or after.st_mtime_ns != opened.st_mtime_ns
+        ):
+            return None
+        return b"".join(chunks)
+    except (OSError, OverflowError):
+        return None
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def wom_kit_read_bounded_real_text(
+    root: Path,
+    path: Path,
+    *,
+    max_bytes: int,
+) -> str | None:
+    value = wom_kit_read_bounded_real_bytes(root, path, max_bytes=max_bytes)
+    if value is None:
+        return None
+    try:
+        return value.decode("utf-8")
+    except UnicodeError:
+        return None
+
+
 def read_wom_kit_pyproject_version() -> str | None:
     service_path = Path(__file__).resolve()
     pyproject_path = service_path.parents[2] / "pyproject.toml"
@@ -89931,7 +90039,10 @@ def read_wom_kit_pyproject_version() -> str | None:
 
 def wom_kit_version_pin_search_roots(root: Path) -> list[tuple[str, Path]]:
     roots = [("inspection_root", root)]
-    if (root / "archive.yml").is_file() and root.parent != root:
+    if (
+        wom_kit_real_path_kind(root, root / "archive.yml") == "file"
+        and root.parent != root
+    ):
         roots.append(("parent_of_archive", root.parent))
     return roots
 
@@ -89954,27 +90065,21 @@ def wom_kit_project_source_mirror_location(root_label: str) -> str:
 
 
 def git_output_lines(cwd: Path, args: list[str]) -> list[str]:
-    try:
-        completed = subprocess.run(
-            ["git", "-C", str(cwd), *args],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-    except (OSError, subprocess.SubprocessError):
+    ok, output = wom_kit_project_update_git(cwd, args, timeout_seconds=5)
+    if not ok:
         return []
-    if completed.returncode != 0:
-        return []
-    return [line.strip() for line in completed.stdout.splitlines() if line.strip()]
+    return [line.strip() for line in output.splitlines() if line.strip()]
 
 
 def latest_semver_tag(labels: Iterable[str]) -> str | None:
     candidates: list[tuple[tuple[int, int, int, str], str]] = []
     for label in labels:
-        key = version_sort_key(label)
+        candidate = label.strip()
+        if not WOM_KIT_PROJECT_UPDATE_TAG_RE.fullmatch(candidate):
+            continue
+        key = version_sort_key(candidate)
         if key is not None:
-            candidates.append((key, label.strip()))
+            candidates.append((key, candidate))
     if not candidates:
         return None
     return max(candidates, key=lambda item: item[0])[1]
@@ -90003,8 +90108,15 @@ def wom_kit_project_source_mirror_info(
     }
     if inspection_root is None:
         return summary
-    if not inspection_root.exists():
+    inspection_kind = wom_kit_real_path_kind(inspection_root, inspection_root)
+    if inspection_kind == "missing":
         summary["status"] = "inspection_root_missing"
+        return summary
+    if inspection_kind != "directory":
+        summary["status"] = "unsafe_path"
+        warnings.append(
+            "WOM-kit version inspection refused an unsafe project path before reading version metadata."
+        )
         return summary
 
     mirror_path: Path | None = None
@@ -90012,7 +90124,14 @@ def wom_kit_project_source_mirror_info(
         logical_location = wom_kit_project_source_mirror_location(root_label)
         summary["checked_locations"].append(logical_location)
         candidate_path = search_root / ".zettel-kasten" / "source"
-        if candidate_path.is_dir():
+        candidate_kind = wom_kit_real_path_kind(search_root, candidate_path)
+        if candidate_kind == "unsafe":
+            summary["status"] = "unsafe_path"
+            warnings.append(
+                "WOM-kit project source mirror path is unsafe; no source metadata was read."
+            )
+            return summary
+        if candidate_kind == "directory":
             mirror_path = candidate_path
             summary["status"] = "present"
             summary["path"] = logical_location
@@ -90021,25 +90140,101 @@ def wom_kit_project_source_mirror_info(
         summary["status"] = "missing"
         return summary
 
-    source_version = (
-        read_version_from_init_file(mirror_path / "wom-kit" / "src" / "wom_kit" / "__init__.py")
-        or read_version_from_init_file(mirror_path / "wom_kit" / "__init__.py")
+    source_version: str | None = None
+    for source_init_path in (
+        mirror_path / "wom-kit" / "src" / "wom_kit" / "__init__.py",
+        mirror_path / "wom_kit" / "__init__.py",
+    ):
+        source_init_kind = wom_kit_real_path_kind(mirror_path, source_init_path)
+        if source_init_kind == "unsafe":
+            summary["status"] = "unsafe_path"
+            warnings.append(
+                "WOM-kit source version metadata path is unsafe; no source metadata was read."
+            )
+            return summary
+        if source_init_kind == "file":
+            source_init_text = wom_kit_read_bounded_real_text(
+                mirror_path,
+                source_init_path,
+                max_bytes=WOM_KIT_VERSION_METADATA_MAX_BYTES,
+            )
+            if source_init_text is None:
+                summary["status"] = "metadata_unreadable"
+                warnings.append("WOM-kit source version metadata is unreadable or too large.")
+                return summary
+            source_version = read_version_from_init_text(source_init_text)
+            if source_version is not None:
+                break
+    pyproject_path = mirror_path / "wom-kit" / "pyproject.toml"
+    pyproject_kind = wom_kit_real_path_kind(mirror_path, pyproject_path)
+    if pyproject_kind == "unsafe":
+        summary["status"] = "unsafe_path"
+        warnings.append(
+            "WOM-kit pyproject version metadata path is unsafe; no source metadata was read."
+        )
+        return summary
+    pyproject_text = (
+        wom_kit_read_bounded_real_text(
+            mirror_path,
+            pyproject_path,
+            max_bytes=WOM_KIT_VERSION_METADATA_MAX_BYTES,
+        )
+        if pyproject_kind == "file"
+        else None
     )
-    pyproject_version = read_pyproject_version_at(mirror_path / "wom-kit" / "pyproject.toml")
+    if pyproject_kind == "file" and pyproject_text is None:
+        summary["status"] = "metadata_unreadable"
+        warnings.append("WOM-kit pyproject version metadata is unreadable or too large.")
+        return summary
+    pyproject_version = (
+        read_pyproject_version_text(pyproject_text)
+        if pyproject_text is not None
+        else None
+    )
     pin_path = mirror_path / "installed-version.txt"
     installed_pin: str | None = None
-    if pin_path.is_file():
-        try:
-            installed_pin = pin_path.read_text(encoding="utf-8").strip().lstrip("\ufeff").strip()
-        except OSError:
-            installed_pin = None
-    summary["source_version"] = source_version
-    summary["pyproject_version"] = pyproject_version
-    summary["installed_pin"] = installed_pin
+    pin_kind = wom_kit_real_path_kind(mirror_path, pin_path)
+    if pin_kind == "unsafe":
+        summary["status"] = "unsafe_path"
+        warnings.append(
+            "WOM-kit source mirror pin path is unsafe; no pin content was read."
+        )
+        return summary
+    if pin_kind == "file":
+        pin_text = wom_kit_read_bounded_real_text(
+            mirror_path,
+            pin_path,
+            max_bytes=WOM_KIT_VERSION_PIN_MAX_BYTES,
+        )
+        if pin_text is None:
+            summary["status"] = "metadata_unreadable"
+            warnings.append("WOM-kit source mirror pin is unreadable or too large.")
+            return summary
+        installed_pin = pin_text.strip().lstrip("\ufeff").strip()
+    normalized_source = stable_version_value(source_version)
+    normalized_pyproject = stable_version_value(pyproject_version)
+    normalized_pin = stable_version_value(installed_pin)
+    summary["source_version"] = normalized_source
+    summary["pyproject_version"] = normalized_pyproject
+    summary["installed_pin"] = stable_version_value(
+        installed_pin,
+        include_prefix=True,
+    )
+    invalid_metadata = bool(
+        (source_version is not None and normalized_source is None)
+        or (
+            pyproject_version is not None
+            and normalized_pyproject is None
+        )
+        or (installed_pin is not None and normalized_pin is None)
+    )
+    if invalid_metadata:
+        summary["status"] = "metadata_invalid"
+        warnings.append(
+            "WOM-kit project source mirror version metadata is not an exact stable version label."
+        )
+        return summary
 
-    normalized_source = normalize_version_label(source_version)
-    normalized_pyproject = normalize_version_label(pyproject_version)
-    normalized_pin = normalize_version_label(installed_pin)
     if normalized_source is None and normalized_pyproject is None:
         summary["status"] = "metadata_only"
         return summary
@@ -90054,21 +90249,36 @@ def wom_kit_project_source_mirror_info(
             warnings.append(
                 "WOM-kit project source mirror differs from the running CLI version; the active "
                 "archive command is importing a different WOM-kit module than the project-local "
-                "source mirror. Run archive version <root> --no-redact-local-paths to inspect the "
-                "imported module path, or set PYTHONPATH to the intended source mirror before "
-                "running archive."
+                "source mirror. Inspect runtime_alignment and next_safe_actions for a verified "
+                "one-invocation project bridge; this read-only command did not replace archive "
+                "on PATH."
             )
     if normalized_pin is not None and normalized_source is not None:
         summary["pin_matches_source_version"] = normalized_pin == normalized_source
         if summary["pin_matches_source_version"] is False:
             warnings.append("WOM-kit project source mirror installed-version pin differs from the source mirror version.")
 
-    head_tags = git_output_lines(mirror_path, ["describe", "--tags", "--exact-match", "HEAD"])
-    if head_tags:
-        summary["head_tag"] = head_tags[0]
-    summary["latest_fetched_tag"] = latest_semver_tag(git_output_lines(mirror_path, ["tag", "--list", "v*"]))
+    # A `.git` file can redirect Git into a linked worktree or an unrelated
+    # repository.  Do not even read tag metadata until the mirror has proven
+    # that its conventional real `.git` directory stays inside this project.
+    if wom_kit_project_update_git_metadata_is_local_real(
+        search_root,
+        mirror_path,
+    ):
+        head_tags = git_output_lines(
+            mirror_path,
+            ["describe", "--tags", "--exact-match", "HEAD"],
+        )
+        if (
+            head_tags
+            and WOM_KIT_PROJECT_UPDATE_TAG_RE.fullmatch(head_tags[0])
+        ):
+            summary["head_tag"] = head_tags[0]
+        summary["latest_fetched_tag"] = latest_semver_tag(
+            git_output_lines(mirror_path, ["tag", "--list", "v*"])
+        )
     latest_key = version_sort_key(str(summary["latest_fetched_tag"] or ""))
-    source_key = version_sort_key(source_version)
+    source_key = version_sort_key(normalized_source)
     if latest_key is not None and source_key is not None:
         behind = source_key < latest_key
         summary["mirror_behind_latest_fetched_tag"] = behind
@@ -90078,6 +90288,1762 @@ def wom_kit_project_source_mirror_info(
     return summary
 
 
+def wom_kit_runtime_integrity_evidence(
+    *,
+    checked: bool = False,
+    reason_code: str = "not_checked",
+) -> dict[str, Any]:
+    return {
+        "checked": checked,
+        "verified": False,
+        "reason_code": reason_code,
+        "mirror_real_directory_inside_project": False,
+        "project_pin_path_components_real": False,
+        "wrapper_path_components_real": False,
+        "git_worktree_root_exact": False,
+        "git_metadata_local_real": False,
+        "worktree_clean_except_untracked_installed_version": False,
+        "installed_version_pin_untracked": False,
+        "wrapper_tracked_at_head": False,
+        "tracked_python_source_count": 0,
+        "tracked_python_source_set_complete": False,
+        "tracked_python_index_flags_safe": False,
+        "tracked_python_index_matches_head": False,
+        "tracked_python_path_components_real": False,
+        "tracked_python_worktree_bytes_match_head": False,
+        "all_tracked_index_entry_count": 0,
+        "all_tracked_index_flags_safe": False,
+        "runtime_resource_entry_count": 0,
+        "runtime_resource_manifest_verified": False,
+        "runtime_resource_index_matches_head": False,
+        "runtime_resource_path_components_real": False,
+        "runtime_resource_worktree_bytes_match_head": False,
+        "runtime_resources_verified": False,
+        "runtime_source_tree_entry_count": 0,
+        "runtime_python_filesystem_source_count": 0,
+        "runtime_source_root_top_level_isolated": False,
+        "runtime_source_tree_path_components_real": False,
+        "runtime_python_filesystem_source_set_exact": False,
+        "runtime_python_bytecode_absent": False,
+        "runtime_python_extension_modules_absent": False,
+        "runtime_python_filesystem_closed_world": False,
+        "tracked_python_sources_verified": False,
+        "origin_configured": False,
+        "origin_config_key_present": False,
+        "origin_config_value_read": False,
+        "head_commit_available": False,
+        "expected_source_tag": None,
+        "source_tag_available_locally": False,
+        "source_tag_annotated": False,
+        "source_tag_at_head": False,
+        "tag_source_versions_match": False,
+        "origin_main_available_locally": False,
+        "source_tag_reachable_from_origin_main": False,
+        "cryptographic_tag_signature_verified": False,
+        "origin_remote_contacted": False,
+        "network_used": False,
+    }
+
+
+def wom_kit_path_components_are_real(root: Path, path: Path) -> bool:
+    try:
+        lexical_relative = path.relative_to(root)
+    except ValueError:
+        return False
+    current = root
+    components = [root]
+    for part in lexical_relative.parts:
+        current = current / part
+        components.append(current)
+    for component in components:
+        try:
+            component_stat = os.lstat(component)
+        except OSError:
+            return False
+        if stat.S_ISLNK(component_stat.st_mode):
+            return False
+        reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+        if (
+            reparse_flag
+            and getattr(component_stat, "st_file_attributes", 0) & reparse_flag
+        ):
+            return False
+    return True
+
+
+WOM_KIT_RUNTIME_WRAPPER_GIT_PATH = "wom-kit/cli/archive.py"
+WOM_KIT_RUNTIME_PACKAGE_GIT_PREFIX = "wom-kit/src/wom_kit/"
+WOM_KIT_RUNTIME_REQUIRED_PYTHON_PATHS = {
+    WOM_KIT_RUNTIME_WRAPPER_GIT_PATH,
+    "wom-kit/src/wom_kit/__init__.py",
+    "wom-kit/src/wom_kit/archive_cli.py",
+}
+WOM_KIT_RUNTIME_MAX_TRACKED_PYTHON_SOURCES = 512
+WOM_KIT_RUNTIME_MAX_SOURCE_TREE_ENTRIES = 8192
+WOM_KIT_RUNTIME_MAX_PYTHON_SOURCE_BYTES = 32 * 1024 * 1024
+WOM_KIT_RUNTIME_MAX_TOTAL_PYTHON_SOURCE_BYTES = 128 * 1024 * 1024
+WOM_KIT_RUNTIME_FORBIDDEN_EXTENSION_SUFFIXES = tuple(
+    sorted(
+        {
+            ".dll",
+            ".dylib",
+            ".pyd",
+            ".so",
+            *(suffix.lower() for suffix in importlib.machinery.EXTENSION_SUFFIXES),
+        },
+        key=len,
+        reverse=True,
+    )
+)
+
+
+def wom_kit_runtime_head_python_entries(
+    mirror_path: Path,
+    *,
+    ref: str = "HEAD",
+) -> dict[str, tuple[str, str]] | None:
+    tree_ok, tree_text = wom_kit_project_update_git(
+        mirror_path,
+        [
+            "ls-tree",
+            "-r",
+            "-z",
+            ref,
+            "--",
+            WOM_KIT_RUNTIME_WRAPPER_GIT_PATH,
+            WOM_KIT_RUNTIME_PACKAGE_GIT_PREFIX.rstrip("/"),
+        ],
+    )
+    if not tree_ok:
+        return None
+
+    head_entries: dict[str, tuple[str, str]] = {}
+    for record in tree_text.split("\0"):
+        if not record:
+            continue
+        try:
+            metadata, relative_path = record.split("\t", 1)
+            mode, object_type, object_id = metadata.split(" ", 2)
+        except ValueError:
+            return None
+        is_runtime_python = (
+            relative_path == WOM_KIT_RUNTIME_WRAPPER_GIT_PATH
+            or (
+                relative_path.startswith(WOM_KIT_RUNTIME_PACKAGE_GIT_PREFIX)
+                and relative_path.endswith(".py")
+            )
+        )
+        if not is_runtime_python:
+            continue
+        pure_path = PurePosixPath(relative_path)
+        if (
+            pure_path.is_absolute()
+            or any(part in {"", ".", ".."} for part in pure_path.parts)
+            or object_type != "blob"
+            or mode not in {"100644", "100755"}
+            or not re.fullmatch(r"[0-9a-fA-F]{40,64}", object_id)
+            or relative_path in head_entries
+        ):
+            return None
+        head_entries[relative_path] = (mode, object_id.lower())
+    return head_entries
+
+
+def wom_kit_runtime_source_tree_inventory(
+    project_root: Path,
+    mirror_path: Path,
+    tracked_paths: set[str],
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "reason_code": "project_runtime_python_inventory_unavailable",
+        "runtime_source_tree_entry_count": 0,
+        "runtime_python_filesystem_source_count": 0,
+        "runtime_source_root_top_level_isolated": False,
+        "runtime_source_tree_path_components_real": False,
+        "runtime_python_filesystem_source_set_exact": False,
+        "runtime_python_bytecode_absent": False,
+        "runtime_python_extension_modules_absent": False,
+        "runtime_python_filesystem_closed_world": False,
+    }
+    source_root = mirror_path / "wom-kit" / "src"
+    expected_python_paths = {
+        relative_path
+        for relative_path in tracked_paths
+        if relative_path.startswith(WOM_KIT_RUNTIME_PACKAGE_GIT_PREFIX)
+    }
+    if (
+        not source_root.is_dir()
+        or not is_path_within_root(source_root, mirror_path)
+        or not wom_kit_path_components_are_real(project_root, source_root)
+    ):
+        result["reason_code"] = "project_runtime_source_tree_path_unsafe"
+        return result
+
+    stack = [source_root]
+    top_level_entries: list[tuple[str, bool]] = []
+    actual_python_paths: set[str] = set()
+    bytecode_absent = True
+    extension_modules_absent = True
+    entry_count = 0
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    try:
+        while stack:
+            directory = stack.pop()
+            with os.scandir(directory) as scanner:
+                for entry in scanner:
+                    entry_count += 1
+                    result["runtime_source_tree_entry_count"] = min(
+                        entry_count,
+                        WOM_KIT_RUNTIME_MAX_SOURCE_TREE_ENTRIES,
+                    )
+                    if (
+                        entry_count
+                        > WOM_KIT_RUNTIME_MAX_SOURCE_TREE_ENTRIES
+                    ):
+                        return result
+                    entry_path = Path(entry.path)
+                    entry_stat = entry.stat(follow_symlinks=False)
+                    is_reparse = bool(
+                        reparse_flag
+                        and getattr(
+                            entry_stat,
+                            "st_file_attributes",
+                            0,
+                        )
+                        & reparse_flag
+                    )
+                    is_directory = stat.S_ISDIR(entry_stat.st_mode)
+                    is_regular = stat.S_ISREG(entry_stat.st_mode)
+                    if (
+                        stat.S_ISLNK(entry_stat.st_mode)
+                        or is_reparse
+                        or not (is_directory or is_regular)
+                        or not is_path_within_root(
+                            entry_path,
+                            source_root,
+                        )
+                    ):
+                        result["reason_code"] = (
+                            "project_runtime_source_tree_path_unsafe"
+                        )
+                        return result
+                    if directory == source_root:
+                        top_level_entries.append(
+                            (entry.name, is_directory)
+                        )
+                    lower_name = entry.name.lower()
+                    if is_directory:
+                        if lower_name == "__pycache__":
+                            bytecode_absent = False
+                        stack.append(entry_path)
+                        continue
+                    relative_path = (
+                        entry_path.relative_to(mirror_path).as_posix()
+                    )
+                    if lower_name.endswith(".py"):
+                        actual_python_paths.add(relative_path)
+                    if lower_name.endswith((".pyc", ".pyo")):
+                        bytecode_absent = False
+                    if lower_name.endswith(
+                        WOM_KIT_RUNTIME_FORBIDDEN_EXTENSION_SUFFIXES
+                    ):
+                        extension_modules_absent = False
+    except (OSError, RuntimeError, ValueError):
+        return result
+
+    result["runtime_python_filesystem_source_count"] = min(
+        len(actual_python_paths),
+        WOM_KIT_RUNTIME_MAX_TRACKED_PYTHON_SOURCES,
+    )
+    top_level_isolated = top_level_entries == [("wom_kit", True)]
+    result["runtime_source_root_top_level_isolated"] = top_level_isolated
+    result["runtime_source_tree_path_components_real"] = True
+    source_set_exact = actual_python_paths == expected_python_paths
+    result["runtime_python_filesystem_source_set_exact"] = source_set_exact
+    result["runtime_python_bytecode_absent"] = bytecode_absent
+    result["runtime_python_extension_modules_absent"] = extension_modules_absent
+
+    if not top_level_isolated:
+        result["reason_code"] = "project_runtime_source_root_shadow_entry"
+        return result
+    if not source_set_exact:
+        result["reason_code"] = "project_runtime_python_source_set_mismatch"
+        return result
+    if not bytecode_absent:
+        result["reason_code"] = "project_runtime_python_bytecode_present"
+        return result
+    if not extension_modules_absent:
+        result["reason_code"] = "project_runtime_python_extension_present"
+        return result
+
+    result["runtime_python_filesystem_closed_world"] = True
+    result["reason_code"] = "verified"
+    return result
+
+
+def wom_kit_runtime_tracked_python_integrity(
+    project_root: Path,
+    mirror_path: Path,
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "reason_code": "project_tracked_python_source_set_unavailable",
+        "tracked_python_source_count": 0,
+        "tracked_python_source_set_complete": False,
+        "tracked_python_index_flags_safe": False,
+        "tracked_python_index_matches_head": False,
+        "tracked_python_path_components_real": False,
+        "tracked_python_worktree_bytes_match_head": False,
+        "runtime_source_tree_entry_count": 0,
+        "runtime_python_filesystem_source_count": 0,
+        "runtime_source_root_top_level_isolated": False,
+        "runtime_source_tree_path_components_real": False,
+        "runtime_python_filesystem_source_set_exact": False,
+        "runtime_python_bytecode_absent": False,
+        "runtime_python_extension_modules_absent": False,
+        "runtime_python_filesystem_closed_world": False,
+        "tracked_python_sources_verified": False,
+    }
+    head_entries = wom_kit_runtime_head_python_entries(mirror_path)
+    if head_entries is None:
+        return result
+
+    tracked_paths = set(head_entries)
+    result["tracked_python_source_count"] = len(tracked_paths)
+    source_set_complete = bool(
+        WOM_KIT_RUNTIME_REQUIRED_PYTHON_PATHS.issubset(tracked_paths)
+        and 0 < len(tracked_paths) <= WOM_KIT_RUNTIME_MAX_TRACKED_PYTHON_SOURCES
+    )
+    result["tracked_python_source_set_complete"] = source_set_complete
+    if not source_set_complete:
+        return result
+
+    flags_ok, flags_text = wom_kit_project_update_git(
+        mirror_path,
+        [
+            "ls-files",
+            "-v",
+            "-z",
+            "--",
+            WOM_KIT_RUNTIME_WRAPPER_GIT_PATH,
+            WOM_KIT_RUNTIME_PACKAGE_GIT_PREFIX.rstrip("/"),
+        ],
+    )
+    if not flags_ok:
+        result["reason_code"] = "project_tracked_python_index_flags_unavailable"
+        return result
+    flag_entries: dict[str, str] = {}
+    for record in flags_text.split("\0"):
+        if not record:
+            continue
+        if len(record) < 3 or record[1] != " ":
+            result["reason_code"] = "project_tracked_python_index_flags_unavailable"
+            return result
+        tag = record[0]
+        relative_path = record[2:]
+        is_runtime_python = (
+            relative_path == WOM_KIT_RUNTIME_WRAPPER_GIT_PATH
+            or (
+                relative_path.startswith(WOM_KIT_RUNTIME_PACKAGE_GIT_PREFIX)
+                and relative_path.endswith(".py")
+            )
+        )
+        if is_runtime_python:
+            if relative_path in flag_entries:
+                result["reason_code"] = "project_tracked_python_index_flags_unavailable"
+                return result
+            flag_entries[relative_path] = tag
+    if set(flag_entries) != tracked_paths:
+        result["reason_code"] = "project_tracked_python_index_flags_unavailable"
+        return result
+    flags_safe = all(tag == "H" for tag in flag_entries.values())
+    result["tracked_python_index_flags_safe"] = flags_safe
+    if not flags_safe:
+        result["reason_code"] = "project_tracked_python_index_flags_unsafe"
+        return result
+
+    index_ok, index_text = wom_kit_project_update_git(
+        mirror_path,
+        [
+            "ls-files",
+            "--stage",
+            "-z",
+            "--",
+            WOM_KIT_RUNTIME_WRAPPER_GIT_PATH,
+            WOM_KIT_RUNTIME_PACKAGE_GIT_PREFIX.rstrip("/"),
+        ],
+    )
+    if not index_ok:
+        result["reason_code"] = "project_tracked_python_index_unavailable"
+        return result
+    index_entries: dict[str, tuple[str, str]] = {}
+    for record in index_text.split("\0"):
+        if not record:
+            continue
+        try:
+            metadata, relative_path = record.split("\t", 1)
+            mode, object_id, stage = metadata.split(" ", 2)
+        except ValueError:
+            result["reason_code"] = "project_tracked_python_index_unavailable"
+            return result
+        is_runtime_python = (
+            relative_path == WOM_KIT_RUNTIME_WRAPPER_GIT_PATH
+            or (
+                relative_path.startswith(WOM_KIT_RUNTIME_PACKAGE_GIT_PREFIX)
+                and relative_path.endswith(".py")
+            )
+        )
+        if not is_runtime_python:
+            continue
+        if (
+            stage != "0"
+            or not re.fullmatch(r"[0-9a-fA-F]{40,64}", object_id)
+            or relative_path in index_entries
+        ):
+            result["reason_code"] = "project_tracked_python_index_unavailable"
+            return result
+        index_entries[relative_path] = (mode, object_id.lower())
+    index_matches_head = (
+        set(index_entries) == tracked_paths
+        and all(index_entries[path] == head_entries[path] for path in tracked_paths)
+    )
+    result["tracked_python_index_matches_head"] = index_matches_head
+    if not index_matches_head:
+        result["reason_code"] = "project_tracked_python_index_mismatch"
+        return result
+
+    for relative_path in sorted(tracked_paths):
+        path = mirror_path.joinpath(*PurePosixPath(relative_path).parts)
+        if (
+            not path.is_file()
+            or not is_path_within_root(path, mirror_path)
+            or not wom_kit_path_components_are_real(project_root, path)
+        ):
+            result["reason_code"] = "project_tracked_python_path_unsafe"
+            return result
+    result["tracked_python_path_components_real"] = True
+
+    inventory = wom_kit_runtime_source_tree_inventory(
+        project_root,
+        mirror_path,
+        tracked_paths,
+    )
+    inventory_fields = (
+        "runtime_source_tree_entry_count",
+        "runtime_python_filesystem_source_count",
+        "runtime_source_root_top_level_isolated",
+        "runtime_source_tree_path_components_real",
+        "runtime_python_filesystem_source_set_exact",
+        "runtime_python_bytecode_absent",
+        "runtime_python_extension_modules_absent",
+        "runtime_python_filesystem_closed_world",
+    )
+    for field_name in inventory_fields:
+        result[field_name] = inventory[field_name]
+    if not inventory["runtime_python_filesystem_closed_world"]:
+        result["reason_code"] = inventory["reason_code"]
+        return result
+
+    for relative_path in sorted(tracked_paths):
+        hash_ok, actual_object_id = wom_kit_project_update_git(
+            mirror_path,
+            ["hash-object", "--no-filters", "--", relative_path],
+        )
+        if (
+            not hash_ok
+            or not re.fullmatch(r"[0-9a-fA-F]{40,64}", actual_object_id)
+        ):
+            result["reason_code"] = "project_tracked_python_bytes_unavailable"
+            return result
+        if actual_object_id.lower() != head_entries[relative_path][1]:
+            result["reason_code"] = "project_tracked_python_bytes_mismatch"
+            return result
+    result["tracked_python_worktree_bytes_match_head"] = True
+    result["tracked_python_sources_verified"] = True
+    result["reason_code"] = "verified"
+    return result
+
+
+WOM_KIT_RUNTIME_RESOURCE_MANIFEST_GIT_PATH = (
+    "wom-kit/src/wom_kit/_resources/resource-manifest.json"
+)
+WOM_KIT_RUNTIME_RESOURCE_SOURCE_PREFIXES = {
+    "schemas": "wom-kit/schemas/",
+    "templates": "wom-kit/templates/",
+    "zettel-kasten": "wom-kit/zettel-kasten/",
+    "docs": "wom-kit/docs/",
+}
+WOM_KIT_RUNTIME_PACKAGED_RESOURCE_PREFIX = "wom-kit/src/wom_kit/_resources/"
+
+
+def wom_kit_runtime_all_tracked_index_flags(
+    mirror_path: Path,
+) -> tuple[bool, int]:
+    flags_ok, flags_text = wom_kit_project_update_git(
+        mirror_path,
+        ["ls-files", "-v", "-z"],
+    )
+    if not flags_ok:
+        return False, 0
+    count = 0
+    for record in flags_text.split("\0"):
+        if not record:
+            continue
+        if len(record) < 3 or record[0] != "H" or record[1] != " ":
+            return False, count
+        relative_path = PurePosixPath(record[2:])
+        if (
+            relative_path.is_absolute()
+            or any(part in {"", ".", ".."} for part in relative_path.parts)
+        ):
+            return False, count
+        count += 1
+        if count > WOM_KIT_RUNTIME_MAX_SOURCE_TREE_ENTRIES * 4:
+            return False, count
+    return count > 0, count
+
+
+def wom_kit_runtime_git_blob_at_ref(
+    mirror_path: Path,
+    ref: str,
+    relative_path: str,
+    *,
+    max_bytes: int,
+) -> tuple[str, bytes] | None:
+    tree_ok, tree_text = wom_kit_project_update_git(
+        mirror_path,
+        ["ls-tree", "-z", ref, "--", relative_path],
+        max_output_bytes=16 * 1024,
+    )
+    if not tree_ok:
+        return None
+    records = [record for record in tree_text.split("\0") if record]
+    if len(records) != 1:
+        return None
+    try:
+        metadata, actual_path = records[0].split("\t", 1)
+        mode, object_type, object_id = metadata.split(" ", 2)
+    except ValueError:
+        return None
+    if (
+        actual_path != relative_path
+        or mode not in {"100644", "100755"}
+        or object_type != "blob"
+        or not re.fullmatch(r"[0-9a-fA-F]{40,64}", object_id)
+    ):
+        return None
+    size_ok, size_text = wom_kit_project_update_git(
+        mirror_path,
+        ["cat-file", "-s", object_id],
+        max_output_bytes=256,
+    )
+    try:
+        blob_size = int(size_text) if size_ok else -1
+    except ValueError:
+        return None
+    if blob_size < 0 or blob_size > max_bytes:
+        return None
+    blob = wom_kit_project_update_git_blob(mirror_path, object_id, blob_size)
+    if blob is None:
+        return None
+    return object_id.lower(), blob
+
+
+def wom_kit_runtime_resource_integrity(
+    project_root: Path,
+    mirror_path: Path,
+    *,
+    ref: str = "HEAD",
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "reason_code": "project_runtime_resource_manifest_unavailable",
+        "all_tracked_index_entry_count": 0,
+        "all_tracked_index_flags_safe": False,
+        "runtime_resource_entry_count": 0,
+        "runtime_resource_manifest_verified": False,
+        "runtime_resource_index_matches_head": False,
+        "runtime_resource_path_components_real": False,
+        "runtime_resource_worktree_bytes_match_head": False,
+        "runtime_resources_verified": False,
+    }
+    flags_safe, tracked_count = wom_kit_runtime_all_tracked_index_flags(mirror_path)
+    result["all_tracked_index_entry_count"] = tracked_count
+    result["all_tracked_index_flags_safe"] = flags_safe
+    if not flags_safe:
+        result["reason_code"] = "project_tracked_index_flags_unsafe"
+        return result
+
+    manifest_blob = wom_kit_runtime_git_blob_at_ref(
+        mirror_path,
+        ref,
+        WOM_KIT_RUNTIME_RESOURCE_MANIFEST_GIT_PATH,
+        max_bytes=2 * 1024 * 1024,
+    )
+    if manifest_blob is None:
+        return result
+    manifest_object_id, manifest_bytes = manifest_blob
+    try:
+        manifest = json.loads(manifest_bytes.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError):
+        return result
+    files = manifest.get("files") if isinstance(manifest, dict) else None
+    if (
+        not isinstance(manifest, dict)
+        or manifest.get("schema") != "wom-kit/package-resource-manifest/v0.1"
+        or not isinstance(files, list)
+        or manifest.get("file_count") != len(files)
+        or not 0 < len(files) <= WOM_KIT_RUNTIME_MAX_SOURCE_TREE_ENTRIES
+    ):
+        return result
+
+    expected_specs: dict[str, tuple[int, str]] = {
+        WOM_KIT_RUNTIME_RESOURCE_MANIFEST_GIT_PATH: (
+            len(manifest_bytes),
+            hashlib.sha256(manifest_bytes).hexdigest(),
+        )
+    }
+    resource_pairs: list[tuple[str, str, int, str]] = []
+    seen_sources: set[str] = set()
+    seen_packaged: set[str] = set()
+    total_bytes = len(manifest_bytes)
+    for item in files:
+        if not isinstance(item, dict):
+            return result
+        source = item.get("source")
+        packaged = item.get("packaged")
+        expected_size = item.get("bytes")
+        expected_digest = item.get("sha256")
+        if (
+            not isinstance(source, str)
+            or not isinstance(packaged, str)
+            or isinstance(expected_size, bool)
+            or not isinstance(expected_size, int)
+            or expected_size < 0
+            or expected_size > WOM_KIT_RUNTIME_MAX_PYTHON_SOURCE_BYTES
+            or not isinstance(expected_digest, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", expected_digest)
+            or source in seen_sources
+            or packaged in seen_packaged
+        ):
+            return result
+        source_pure = PurePosixPath(source)
+        packaged_pure = PurePosixPath(packaged)
+        if (
+            source_pure.is_absolute()
+            or packaged_pure.is_absolute()
+            or any(part in {"", ".", ".."} for part in source_pure.parts)
+            or any(part in {"", ".", ".."} for part in packaged_pure.parts)
+        ):
+            return result
+        source_prefix = WOM_KIT_RUNTIME_RESOURCE_SOURCE_PREFIXES.get(
+            source_pure.parts[0]
+        )
+        if source_prefix is None:
+            return result
+        source_path = source_prefix + "/".join(source_pure.parts[1:])
+        packaged_path = (
+            WOM_KIT_RUNTIME_PACKAGED_RESOURCE_PREFIX + packaged_pure.as_posix()
+        )
+        expected_specs[source_path] = (expected_size, expected_digest)
+        expected_specs[packaged_path] = (expected_size, expected_digest)
+        resource_pairs.append(
+            (source_path, packaged_path, expected_size, expected_digest)
+        )
+        seen_sources.add(source)
+        seen_packaged.add(packaged)
+        total_bytes += expected_size * 2
+        if total_bytes > WOM_KIT_RUNTIME_MAX_TOTAL_PYTHON_SOURCE_BYTES:
+            return result
+
+    tree_ok, tree_text = wom_kit_project_update_git(
+        mirror_path,
+        [
+            "ls-tree",
+            "-z",
+            ref,
+            "--",
+            *sorted(expected_specs),
+        ],
+    )
+    if not tree_ok:
+        return result
+    tree_entries: dict[str, tuple[str, str]] = {}
+    for record in tree_text.split("\0"):
+        if not record:
+            continue
+        try:
+            metadata, relative_path = record.split("\t", 1)
+            mode, object_type, object_id = metadata.split(" ", 2)
+        except ValueError:
+            return result
+        if (
+            mode not in {"100644", "100755"}
+            or object_type != "blob"
+            or not re.fullmatch(r"[0-9a-fA-F]{40,64}", object_id)
+            or relative_path in tree_entries
+        ):
+            return result
+        tree_entries[relative_path] = (mode, object_id.lower())
+    if (
+        set(tree_entries) != set(expected_specs)
+        or tree_entries[WOM_KIT_RUNTIME_RESOURCE_MANIFEST_GIT_PATH][1]
+        != manifest_object_id
+    ):
+        return result
+
+    result["runtime_resource_entry_count"] = len(expected_specs)
+    result["runtime_resource_manifest_verified"] = True
+    index_ok, index_text = wom_kit_project_update_git(
+        mirror_path,
+        [
+            "ls-files",
+            "--stage",
+            "-z",
+            "--",
+            *sorted(expected_specs),
+        ],
+    )
+    if not index_ok:
+        result["reason_code"] = "project_runtime_resource_index_unavailable"
+        return result
+    index_entries: dict[str, tuple[str, str]] = {}
+    for record in index_text.split("\0"):
+        if not record:
+            continue
+        try:
+            metadata, relative_path = record.split("\t", 1)
+            mode, object_id, stage = metadata.split(" ", 2)
+        except ValueError:
+            result["reason_code"] = "project_runtime_resource_index_unavailable"
+            return result
+        if (
+            stage != "0"
+            or mode not in {"100644", "100755"}
+            or not re.fullmatch(r"[0-9a-fA-F]{40,64}", object_id)
+            or relative_path in index_entries
+        ):
+            result["reason_code"] = "project_runtime_resource_index_unavailable"
+            return result
+        index_entries[relative_path] = (mode, object_id.lower())
+    if (
+        set(index_entries) != set(expected_specs)
+        or any(
+            index_entries[path] != tree_entries[path]
+            for path in expected_specs
+        )
+    ):
+        result["reason_code"] = "project_runtime_resource_index_mismatch"
+        return result
+    result["runtime_resource_index_matches_head"] = True
+
+    actual_values: dict[str, bytes] = {}
+    for relative_path, (expected_size, expected_digest) in sorted(
+        expected_specs.items()
+    ):
+        path = mirror_path.joinpath(*PurePosixPath(relative_path).parts)
+        if (
+            not is_path_within_root(path, mirror_path)
+            or wom_kit_real_path_kind(project_root, path) != "file"
+        ):
+            result["reason_code"] = "project_runtime_resource_path_unsafe"
+            return result
+        actual_bytes = wom_kit_read_bounded_real_bytes(
+            project_root,
+            path,
+            max_bytes=(
+                2 * 1024 * 1024
+                if relative_path == WOM_KIT_RUNTIME_RESOURCE_MANIFEST_GIT_PATH
+                else WOM_KIT_RUNTIME_MAX_PYTHON_SOURCE_BYTES
+            ),
+        )
+        if (
+            actual_bytes is None
+            or len(actual_bytes) != expected_size
+            or hashlib.sha256(actual_bytes).hexdigest() != expected_digest
+        ):
+            result["reason_code"] = "project_runtime_resource_bytes_mismatch"
+            return result
+        object_id = tree_entries[relative_path][1]
+        object_hasher = (
+            hashlib.sha1()
+            if len(object_id) == 40
+            else hashlib.sha256()
+        )
+        object_hasher.update(
+            f"blob {len(actual_bytes)}\0".encode("ascii")
+        )
+        object_hasher.update(actual_bytes)
+        if object_hasher.hexdigest() != object_id:
+            result["reason_code"] = "project_runtime_resource_bytes_mismatch"
+            return result
+        actual_values[relative_path] = actual_bytes
+    if actual_values[WOM_KIT_RUNTIME_RESOURCE_MANIFEST_GIT_PATH] != manifest_bytes:
+        result["reason_code"] = "project_runtime_resource_bytes_mismatch"
+        return result
+    for source_path, packaged_path, _, _ in resource_pairs:
+        if actual_values[source_path] != actual_values[packaged_path]:
+            result["reason_code"] = "project_runtime_resource_bytes_mismatch"
+            return result
+    result["runtime_resource_path_components_real"] = True
+    result["runtime_resource_worktree_bytes_match_head"] = True
+    result["runtime_resources_verified"] = True
+    result["reason_code"] = "verified"
+    return result
+
+
+def wom_kit_runtime_mirror_integrity(
+    project_root: Path,
+    mirror_path: Path,
+    project_pin_path: Path | None,
+    wrapper_path: Path,
+    *,
+    source_version: str | None,
+) -> dict[str, Any]:
+    evidence = wom_kit_runtime_integrity_evidence(
+        checked=True,
+        reason_code="verification_incomplete",
+    )
+    evidence["mirror_real_directory_inside_project"] = bool(
+        mirror_path.is_dir()
+        and not mirror_path.is_symlink()
+        and is_path_within_root(mirror_path, project_root)
+        and wom_kit_path_components_are_real(project_root, mirror_path)
+    )
+    if not evidence["mirror_real_directory_inside_project"]:
+        evidence["reason_code"] = "project_mirror_not_real_inside_project"
+        return evidence
+
+    evidence["project_pin_path_components_real"] = bool(
+        project_pin_path is not None
+        and project_pin_path.is_file()
+        and is_path_within_root(project_pin_path, project_root)
+        and wom_kit_path_components_are_real(project_root, project_pin_path)
+    )
+    if not evidence["project_pin_path_components_real"]:
+        evidence["reason_code"] = "project_pin_path_unsafe"
+        return evidence
+
+    evidence["wrapper_path_components_real"] = bool(
+        wrapper_path.is_file()
+        and is_path_within_root(wrapper_path, mirror_path)
+        and wom_kit_path_components_are_real(project_root, wrapper_path)
+    )
+    if not evidence["wrapper_path_components_real"]:
+        evidence["reason_code"] = "project_wrapper_path_unsafe"
+        return evidence
+
+    inside_ok, inside_text = wom_kit_project_update_git(
+        mirror_path,
+        ["rev-parse", "--is-inside-work-tree"],
+    )
+    top_ok, top_text = wom_kit_project_update_git(
+        mirror_path,
+        ["rev-parse", "--show-toplevel"],
+    )
+    try:
+        exact_top = top_ok and Path(top_text).resolve() == mirror_path.resolve()
+    except (OSError, RuntimeError, ValueError):
+        exact_top = False
+    evidence["git_worktree_root_exact"] = bool(
+        inside_ok and inside_text == "true" and exact_top
+    )
+    if not evidence["git_worktree_root_exact"]:
+        evidence["reason_code"] = "project_git_worktree_root_unverified"
+        return evidence
+
+    evidence["git_metadata_local_real"] = (
+        wom_kit_project_update_git_metadata_is_local_real(
+            project_root,
+            mirror_path,
+        )
+    )
+    if not evidence["git_metadata_local_real"]:
+        evidence["reason_code"] = "project_git_metadata_not_local_real"
+        return evidence
+
+    runtime_snapshot = wom_kit_project_update_git_snapshot(mirror_path)
+    evidence["worktree_clean_except_untracked_installed_version"] = bool(
+        runtime_snapshot is not None
+        and runtime_snapshot.get("index_matches_head") is True
+        and runtime_snapshot.get("flags_safe") is True
+        and runtime_snapshot.get("raw_bytes_match_head") is True
+        and runtime_snapshot.get("untracked_paths")
+        in ([], ["installed-version.txt"])
+    )
+    if runtime_snapshot is None:
+        evidence["reason_code"] = "project_git_snapshot_unavailable"
+        return evidence
+    if not evidence["worktree_clean_except_untracked_installed_version"]:
+        evidence["reason_code"] = "project_git_worktree_dirty"
+        return evidence
+
+    pin_tracked, _ = wom_kit_project_update_git(
+        mirror_path,
+        ["ls-files", "--error-unmatch", "--", "installed-version.txt"],
+    )
+    evidence["installed_version_pin_untracked"] = not pin_tracked
+    if pin_tracked:
+        evidence["reason_code"] = "project_source_pin_tracked"
+        return evidence
+
+    origin_ok, origin_key_text = wom_kit_project_update_git(
+        mirror_path,
+        [
+            "config",
+            "--local",
+            "--no-includes",
+            "--name-only",
+            "--get-regexp",
+            r"^remote\.origin\.url$",
+        ],
+    )
+    origin_key_lines = [
+        line.strip().lower()
+        for line in origin_key_text.splitlines()
+        if line.strip()
+    ]
+    evidence["origin_config_key_present"] = bool(
+        origin_ok
+        and origin_key_lines == ["remote.origin.url"]
+    )
+    evidence["origin_configured"] = evidence["origin_config_key_present"]
+    if not evidence["origin_configured"]:
+        evidence["reason_code"] = "project_origin_not_configured"
+        return evidence
+
+    head_ok, head_text = wom_kit_project_update_git(
+        mirror_path,
+        ["rev-parse", "--verify", "HEAD"],
+    )
+    head_commit = (
+        head_text.lower()
+        if head_ok and re.fullmatch(r"[0-9a-fA-F]{40,64}", head_text)
+        else None
+    )
+    evidence["head_commit_available"] = head_commit is not None
+    if head_commit is None:
+        evidence["reason_code"] = "project_head_unavailable"
+        return evidence
+
+    tracked_python_evidence = wom_kit_runtime_tracked_python_integrity(
+        project_root,
+        mirror_path,
+    )
+    tracked_python_fields = (
+        "tracked_python_source_count",
+        "tracked_python_source_set_complete",
+        "tracked_python_index_flags_safe",
+        "tracked_python_index_matches_head",
+        "tracked_python_path_components_real",
+        "tracked_python_worktree_bytes_match_head",
+        "runtime_source_tree_entry_count",
+        "runtime_python_filesystem_source_count",
+        "runtime_source_root_top_level_isolated",
+        "runtime_source_tree_path_components_real",
+        "runtime_python_filesystem_source_set_exact",
+        "runtime_python_bytecode_absent",
+        "runtime_python_extension_modules_absent",
+        "runtime_python_filesystem_closed_world",
+        "tracked_python_sources_verified",
+    )
+    for field_name in tracked_python_fields:
+        evidence[field_name] = tracked_python_evidence[field_name]
+    evidence["wrapper_tracked_at_head"] = bool(
+        tracked_python_evidence["tracked_python_source_set_complete"]
+    )
+    if not tracked_python_evidence["tracked_python_sources_verified"]:
+        evidence["reason_code"] = tracked_python_evidence["reason_code"]
+        return evidence
+
+    resource_evidence = wom_kit_runtime_resource_integrity(
+        project_root,
+        mirror_path,
+        ref=head_commit,
+    )
+    resource_fields = (
+        "all_tracked_index_entry_count",
+        "all_tracked_index_flags_safe",
+        "runtime_resource_entry_count",
+        "runtime_resource_manifest_verified",
+        "runtime_resource_index_matches_head",
+        "runtime_resource_path_components_real",
+        "runtime_resource_worktree_bytes_match_head",
+        "runtime_resources_verified",
+    )
+    for field_name in resource_fields:
+        evidence[field_name] = resource_evidence[field_name]
+    if not resource_evidence["runtime_resources_verified"]:
+        evidence["reason_code"] = resource_evidence["reason_code"]
+        return evidence
+
+    normalized_source = normalize_version_label(source_version)
+    expected_source_tag = (
+        f"v{normalized_source}" if normalized_source is not None else None
+    )
+    evidence["expected_source_tag"] = expected_source_tag
+    if expected_source_tag is None:
+        evidence["reason_code"] = "project_source_version_missing_or_invalid"
+        return evidence
+
+    tag_evidence = wom_kit_project_update_target_evidence(
+        mirror_path,
+        expected_source_tag,
+    )
+    evidence["source_tag_available_locally"] = bool(
+        tag_evidence.get("tag_available_locally")
+    )
+    if not evidence["source_tag_available_locally"]:
+        evidence["reason_code"] = "project_source_tag_missing"
+        return evidence
+
+    evidence["source_tag_annotated"] = bool(
+        tag_evidence.get("annotated_tag_verified")
+    )
+    if not evidence["source_tag_annotated"]:
+        evidence["reason_code"] = "project_source_tag_not_annotated"
+        return evidence
+
+    tag_commit = tag_evidence.get("target_commit")
+    if not isinstance(tag_commit, str):
+        evidence["reason_code"] = "project_source_tag_commit_unavailable"
+        return evidence
+    evidence["source_tag_at_head"] = tag_commit.lower() == head_commit
+    if not evidence["source_tag_at_head"]:
+        evidence["reason_code"] = "project_source_tag_not_at_head"
+        return evidence
+
+    evidence["tag_source_versions_match"] = bool(
+        tag_evidence.get("all_source_versions_match_target")
+    )
+    if not evidence["tag_source_versions_match"]:
+        evidence["reason_code"] = "project_tag_source_versions_mismatch"
+        return evidence
+
+    evidence["origin_main_available_locally"] = bool(
+        tag_evidence.get("origin_main_available_locally")
+    )
+    if not evidence["origin_main_available_locally"]:
+        evidence["reason_code"] = "project_origin_main_unavailable"
+        return evidence
+
+    evidence["source_tag_reachable_from_origin_main"] = bool(
+        tag_evidence.get("target_reachable_from_origin_main")
+    )
+    if not evidence["source_tag_reachable_from_origin_main"]:
+        evidence["reason_code"] = (
+            "project_source_tag_not_reachable_from_origin_main"
+        )
+        return evidence
+
+    runtime_entries = wom_kit_runtime_head_python_entries(
+        mirror_path,
+        ref=head_commit,
+    )
+    wrapper_entry = (
+        runtime_entries.get(WOM_KIT_RUNTIME_WRAPPER_GIT_PATH)
+        if runtime_entries is not None
+        else None
+    )
+    if wrapper_entry is None:
+        evidence["reason_code"] = "project_wrapper_blob_unavailable"
+        return evidence
+    evidence["_verified_head_commit"] = head_commit
+    evidence["_verified_source_tag"] = expected_source_tag
+    evidence["_verified_wrapper_blob_oid"] = wrapper_entry[1]
+    evidence["verified"] = True
+    evidence["reason_code"] = "verified"
+    return evidence
+
+
+WOM_KIT_PROJECT_BRIDGE_BOOTSTRAP = r'''
+import hashlib
+import os
+import re
+import stat
+import subprocess
+import sys
+import sysconfig
+import threading
+import time
+from pathlib import Path
+
+def refuse():
+    print("WOM_BRIDGE_BOOTSTRAP_UNSAFE", file=sys.stderr)
+    raise SystemExit(1)
+
+def clean_env():
+    env = {k: v for k, v in os.environ.items() if not k.upper().startswith("GIT_")}
+    env["GIT_OPTIONAL_LOCKS"] = "0"
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    env["GIT_NO_REPLACE_OBJECTS"] = "1"
+    env["GIT_NO_LAZY_FETCH"] = "1"
+    return env
+
+def git(root, args, cap=4194304):
+    try:
+        process = subprocess.Popen(
+            [
+                "git",
+                "--no-optional-locks",
+                "--no-replace-objects",
+                "-c", "core.fsmonitor=false",
+                "-c", "core.hooksPath=" + os.devnull,
+                "-c", "core.attributesFile=" + os.devnull,
+                "-c", "core.excludesFile=" + os.devnull,
+                "-C", str(root),
+                *args,
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            env=clean_env(),
+        )
+    except BaseException:
+        return None
+    if process.stdout is None:
+        try:
+            process.kill()
+            process.wait()
+        except BaseException:
+            pass
+        return None
+    output_box = []
+    failed = threading.Event()
+    def read_once():
+        try:
+            chunks = []
+            total = 0
+            while total <= cap:
+                chunk = os.read(
+                    process.stdout.fileno(),
+                    min(65536, cap + 1 - total),
+                )
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                total += len(chunk)
+            output_box.append(b"".join(chunks))
+        except BaseException:
+            failed.set()
+    reader = threading.Thread(target=read_once, daemon=True)
+    reader.start()
+    deadline = time.monotonic() + 15
+    timed_out = False
+    while reader.is_alive():
+        reader.join(timeout=0.02)
+        if time.monotonic() >= deadline:
+            timed_out = True
+            try:
+                process.kill()
+                process.stdout.close()
+            except BaseException:
+                pass
+            break
+    reader.join(timeout=1)
+    output = output_box[0] if output_box else b""
+    overflow = len(output) > cap
+    if overflow or failed.is_set() or reader.is_alive():
+        try:
+            process.kill()
+        except BaseException:
+            pass
+    try:
+        return_code = process.wait(timeout=5)
+    except BaseException:
+        try:
+            process.kill()
+            process.wait()
+        except BaseException:
+            pass
+        return_code = -1
+    try:
+        process.stdout.close()
+    except BaseException:
+        pass
+    if (
+        timed_out
+        or overflow
+        or failed.is_set()
+        or reader.is_alive()
+        or return_code != 0
+    ):
+        return None
+    return output
+
+def real(root, path):
+    try:
+        relative = path.relative_to(root)
+    except ValueError:
+        return False
+    current = root
+    paths = [root]
+    for part in relative.parts:
+        current = current / part
+        paths.append(current)
+    reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    for candidate in paths:
+        try:
+            info = os.lstat(candidate)
+        except OSError:
+            return False
+        if stat.S_ISLNK(info.st_mode):
+            return False
+        if reparse and getattr(info, "st_file_attributes", 0) & reparse:
+            return False
+    return True
+
+def aliases_root(root, value):
+    if not isinstance(value, str) or not value:
+        return True
+    try:
+        candidate = Path(value)
+        if not candidate.is_absolute():
+            return True
+        lexical_candidate = Path(os.path.abspath(str(candidate)))
+        lexical_root = Path(os.path.abspath(str(root)))
+        resolved_candidate = candidate.resolve(strict=False)
+        resolved_root = root.resolve(strict=True)
+    except BaseException:
+        return True
+    return (
+        lexical_candidate == lexical_root
+        or lexical_candidate.is_relative_to(lexical_root)
+        or resolved_candidate == resolved_root
+        or resolved_candidate.is_relative_to(resolved_root)
+    )
+
+def git_metadata_real(mirror):
+    expected = mirror / ".git"
+    if not expected.is_dir() or not real(mirror, expected):
+        return False
+    git_dir = git(mirror, ["rev-parse", "--absolute-git-dir"], 65536)
+    common_dir = git(mirror, ["rev-parse", "--git-common-dir"], 65536)
+    if git_dir is None or common_dir is None:
+        return False
+    try:
+        reported_git = Path(git_dir.decode("utf-8").rstrip("\r\n"))
+        reported_common = Path(
+            common_dir.decode("utf-8").rstrip("\r\n")
+        )
+        if not reported_common.is_absolute():
+            reported_common = mirror / reported_common
+        if (
+            reported_git.resolve(strict=True) != expected.resolve(strict=True)
+            or reported_common.resolve(strict=True)
+            != expected.resolve(strict=True)
+        ):
+            return False
+    except BaseException:
+        return False
+    for forbidden_overlay in (
+        expected / "objects" / "info" / "alternates",
+        expected / "info" / "grafts",
+        expected / "refs" / "replace",
+    ):
+        try:
+            os.lstat(forbidden_overlay)
+            return False
+        except FileNotFoundError:
+            pass
+        except BaseException:
+            return False
+    packed_refs = expected / "packed-refs"
+    try:
+        packed_info = os.lstat(packed_refs)
+    except FileNotFoundError:
+        packed_info = None
+    except BaseException:
+        return False
+    if packed_info is not None:
+        if (
+            not stat.S_ISREG(packed_info.st_mode)
+            or packed_info.st_size > 4194304
+        ):
+            return False
+        try:
+            with packed_refs.open("rb") as handle:
+                packed_bytes = handle.read(4194305)
+        except BaseException:
+            return False
+        if len(packed_bytes) > 4194304 or b"refs/replace/" in packed_bytes:
+            return False
+    reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    stack = [expected]
+    seen = 0
+    try:
+        while stack:
+            directory = stack.pop()
+            with os.scandir(directory) as scanner:
+                for entry in scanner:
+                    seen += 1
+                    if seen > 100000:
+                        return False
+                    info = entry.stat(follow_symlinks=False)
+                    if stat.S_ISLNK(info.st_mode):
+                        return False
+                    if (
+                        reparse
+                        and getattr(
+                            info,
+                            "st_file_attributes",
+                            0,
+                        )
+                        & reparse
+                    ):
+                        return False
+                    if stat.S_ISDIR(info.st_mode):
+                        stack.append(Path(entry.path))
+                    elif not stat.S_ISREG(info.st_mode):
+                        return False
+    except BaseException:
+        return False
+    return True
+
+def blob_hash(value, expected):
+    if len(expected) == 40:
+        digest = hashlib.sha1()
+    elif len(expected) == 64:
+        digest = hashlib.sha256()
+    else:
+        return False
+    digest.update(("blob " + str(len(value)) + "\0").encode("ascii"))
+    digest.update(value)
+    return digest.hexdigest() == expected
+
+try:
+    if len(sys.argv) != 7 or sys.argv[1] != "--":
+        refuse()
+    mirror = Path(sys.argv[2])
+    expected_head = sys.argv[3].lower()
+    expected_tag = sys.argv[4]
+    expected_wrapper = sys.argv[5].lower()
+    inspection_root = sys.argv[6]
+    if (
+        not mirror.is_absolute()
+        or not real(mirror, mirror)
+        or not git_metadata_real(mirror)
+        or len(expected_head) not in (40, 64)
+        or not all(c in "0123456789abcdef" for c in expected_head)
+        or not re.fullmatch(r"v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", expected_tag)
+        or len(expected_wrapper) not in (40, 64)
+        or not all(c in "0123456789abcdef" for c in expected_wrapper)
+    ):
+        refuse()
+    top = git(mirror, ["rev-parse", "--show-toplevel"], 65536)
+    head = git(mirror, ["rev-parse", "--verify", "HEAD"], 256)
+    tag_type = git(mirror, ["cat-file", "-t", "refs/tags/" + expected_tag], 256)
+    tag_head = git(
+        mirror,
+        ["rev-parse", "--verify", "refs/tags/" + expected_tag + "^{commit}"],
+        256,
+    )
+    origin_key = git(
+        mirror,
+        ["config", "--local", "--no-includes", "--name-only", "--get-regexp", r"^remote\.origin\.url$"],
+        1024,
+    )
+    ancestor = git(
+        mirror,
+        ["merge-base", "--is-ancestor", expected_head, "refs/remotes/origin/main"],
+        256,
+    )
+    try:
+        top_matches_mirror = bool(
+            top is not None
+            and Path(
+                top.decode("utf-8").rstrip("\r\n")
+            ).resolve(strict=True)
+            == mirror.resolve(strict=True)
+        )
+    except BaseException:
+        top_matches_mirror = False
+    if (
+        top is None
+        or not top_matches_mirror
+        or head is None
+        or head.decode("ascii").strip().lower() != expected_head
+        or tag_type != b"tag\n"
+        or tag_head is None
+        or tag_head.decode("ascii").strip().lower() != expected_head
+        or origin_key is None
+        or [
+            line.strip().lower()
+            for line in origin_key.decode("utf-8").splitlines()
+            if line.strip()
+        ] != ["remote.origin.url"]
+        or ancestor is None
+    ):
+        refuse()
+    wrapper_relative = "wom-kit/cli/archive.py"
+    tree = git(mirror, ["ls-tree", "-z", expected_head, "--", wrapper_relative], 16384)
+    if tree is None:
+        refuse()
+    records = [record for record in tree.decode("utf-8").split("\0") if record]
+    if len(records) != 1:
+        refuse()
+    metadata, actual_path = records[0].split("\t", 1)
+    mode, object_type, object_id = metadata.split(" ", 2)
+    if (
+        actual_path != wrapper_relative
+        or mode not in ("100644", "100755")
+        or object_type != "blob"
+        or object_id.lower() != expected_wrapper
+    ):
+        refuse()
+    wrapper_bytes = git(
+        mirror,
+        ["cat-file", "blob", expected_wrapper],
+        33554432,
+    )
+    wrapper_path = mirror / "wom-kit" / "cli" / "archive.py"
+    if (
+        wrapper_bytes is None
+        or not blob_hash(wrapper_bytes, expected_wrapper)
+        or not real(mirror, wrapper_path)
+        or not git_metadata_real(mirror)
+    ):
+        refuse()
+    wrapper_info = os.lstat(wrapper_path)
+    if (
+        not stat.S_ISREG(wrapper_info.st_mode)
+        or wrapper_info.st_size > 33554432
+    ):
+        refuse()
+    compiled = compile(wrapper_bytes, str(wrapper_path), "exec")
+except SystemExit:
+    raise
+except BaseException:
+    refuse()
+
+if any(aliases_root(mirror, entry) for entry in sys.path):
+    refuse()
+
+namespace = {
+    "__name__": "__main__",
+    "__file__": str(wrapper_path),
+    "__package__": None,
+    "_WOM_BRIDGE_EXPECTED_HEAD": expected_head,
+    "_WOM_BRIDGE_EXPECTED_TAG": expected_tag,
+    "_WOM_BRIDGE_EXPECTED_WRAPPER_BLOB": expected_wrapper,
+    "_WOM_BRIDGE_PROJECT_ROOT": str(mirror),
+}
+for dependency_path in {
+    sysconfig.get_path("purelib"),
+    sysconfig.get_path("platlib"),
+}:
+    if (
+        isinstance(dependency_path, str)
+        and dependency_path
+        and dependency_path not in sys.path
+    ):
+        if aliases_root(mirror, dependency_path):
+            refuse()
+        # -S keeps sitecustomize and executable .pth lines out.  Declared
+        # third-party dependencies remain importable from their standard
+        # install directories without asking site.py to process either.
+        sys.path.append(dependency_path)
+sys.argv = [
+    str(wrapper_path),
+    "version",
+    inspection_root,
+    "--format",
+    "json",
+]
+try:
+    exec(compiled, namespace, namespace)
+except SystemExit:
+    raise
+except BaseException:
+    refuse()
+'''.strip()
+
+
+def wom_kit_runtime_alignment(
+    inspection_root: Path | None,
+    *,
+    package_version: str,
+    project_pin: dict[str, Any],
+    project_source_mirror: dict[str, Any],
+    redact_local_paths: bool,
+) -> tuple[dict[str, Any], list[str]]:
+    normalized_running = normalize_version_label(package_version)
+    raw_source_version = project_source_mirror.get("source_version")
+    raw_pyproject_version = project_source_mirror.get(
+        "pyproject_version"
+    )
+    raw_pin_version = project_pin.get("installed_version")
+    source_version = stable_version_value(
+        raw_source_version
+        if isinstance(raw_source_version, str)
+        else None
+    )
+    pyproject_version = stable_version_value(
+        raw_pyproject_version
+        if isinstance(raw_pyproject_version, str)
+        else None
+    )
+    pin_version = stable_version_value(
+        raw_pin_version if isinstance(raw_pin_version, str) else None,
+        include_prefix=True,
+    )
+    normalized_source = source_version
+    normalized_pyproject = pyproject_version
+    normalized_pin = stable_version_value(pin_version)
+    source_version_key = version_sort_key(source_version)
+    pyproject_version_key = version_sort_key(pyproject_version)
+    pin_version_key = version_sort_key(pin_version)
+
+    mirror_path: Path | None = None
+    mirror_logical_path: str | None = None
+    mirror_project_root: Path | None = None
+    if (
+        inspection_root is not None
+        and wom_kit_real_path_kind(inspection_root, inspection_root) == "directory"
+    ):
+        for root_label, search_root in wom_kit_project_source_mirror_search_roots(
+            inspection_root
+        ):
+            candidate_path = search_root / ".zettel-kasten" / "source"
+            if wom_kit_real_path_kind(search_root, candidate_path) == "directory":
+                mirror_path = candidate_path
+                mirror_logical_path = wom_kit_project_source_mirror_location(root_label)
+                mirror_project_root = search_root
+                break
+
+    project_pin_path: Path | None = None
+    project_pin_logical_path = project_pin.get("path")
+    if (
+        inspection_root is not None
+        and wom_kit_real_path_kind(inspection_root, inspection_root) == "directory"
+        and isinstance(project_pin_logical_path, str)
+    ):
+        for root_label, search_root in wom_kit_version_pin_search_roots(
+            inspection_root
+        ):
+            for candidate in WOM_KIT_VERSION_PIN_CANDIDATES:
+                if (
+                    wom_kit_version_pin_location(root_label, candidate)
+                    == project_pin_logical_path
+                ):
+                    project_pin_path = search_root / candidate
+                    break
+            if project_pin_path is not None:
+                break
+
+    wrapper_path = (
+        mirror_path / "wom-kit" / "cli" / "archive.py"
+        if mirror_path is not None
+        else None
+    )
+    wrapper_logical_path = (
+        f"{mirror_logical_path}/wom-kit/cli/archive.py"
+        if mirror_logical_path is not None
+        else None
+    )
+    wrapper_verified = bool(
+        wrapper_path is not None
+        and mirror_project_root is not None
+        and wom_kit_real_path_kind(mirror_project_root, wrapper_path) == "file"
+        and mirror_path is not None
+        and is_path_within_root(wrapper_path, mirror_path)
+    )
+
+    integrity = wom_kit_runtime_integrity_evidence()
+    if inspection_root is None:
+        integrity["reason_code"] = "not_inspected"
+        status = "not_inspected"
+        reason_code = "inspection_root_not_provided"
+    elif not inspection_root.exists():
+        integrity["reason_code"] = "inspection_root_missing"
+        status = "project_source_update_required"
+        reason_code = "inspection_root_missing"
+    elif project_source_mirror.get("status") == "unsafe_path":
+        integrity["reason_code"] = "project_source_metadata_path_unsafe"
+        status = "project_source_update_required"
+        reason_code = "project_source_metadata_path_unsafe"
+    elif project_source_mirror.get("status") == "metadata_unreadable":
+        integrity["reason_code"] = "project_source_metadata_unreadable"
+        status = "project_source_update_required"
+        reason_code = "project_source_metadata_unreadable"
+    elif project_source_mirror.get("status") == "missing":
+        integrity["reason_code"] = "project_source_mirror_missing"
+        status = "project_source_update_required"
+        reason_code = "project_source_mirror_missing"
+    elif normalized_source is None or source_version_key is None:
+        integrity["reason_code"] = "project_source_version_missing_or_invalid"
+        status = "project_source_update_required"
+        reason_code = "project_source_version_missing_or_invalid"
+    elif normalized_pyproject is None or pyproject_version_key is None:
+        integrity["reason_code"] = "project_pyproject_version_missing_or_invalid"
+        status = "project_source_update_required"
+        reason_code = "project_pyproject_version_missing_or_invalid"
+    elif normalized_source != normalized_pyproject:
+        integrity["reason_code"] = "project_source_pyproject_version_mismatch"
+        status = "project_source_update_required"
+        reason_code = "project_source_pyproject_version_mismatch"
+    elif project_pin.get("status") == "unsafe_path":
+        integrity["reason_code"] = "project_pin_path_unsafe"
+        status = "project_source_update_required"
+        reason_code = "project_pin_path_unsafe"
+    elif project_pin.get("status") == "unreadable":
+        integrity["reason_code"] = "project_pin_unreadable"
+        status = "project_source_update_required"
+        reason_code = "project_pin_unreadable"
+    elif normalized_pin is None or pin_version_key is None:
+        integrity["reason_code"] = "project_pin_missing_or_invalid"
+        status = "project_source_update_required"
+        reason_code = "project_pin_missing_or_invalid"
+    elif normalized_pin != normalized_source:
+        integrity["reason_code"] = "project_pin_source_version_mismatch"
+        status = "project_source_update_required"
+        reason_code = "project_pin_source_version_mismatch"
+    elif not wrapper_verified:
+        assert mirror_project_root is not None
+        assert mirror_path is not None
+        assert wrapper_path is not None
+        integrity = wom_kit_runtime_mirror_integrity(
+            mirror_project_root,
+            mirror_path,
+            project_pin_path,
+            wrapper_path,
+            source_version=source_version if isinstance(source_version, str) else None,
+        )
+        status = "project_source_update_required"
+        reason_code = "project_wrapper_missing_or_outside_mirror"
+    else:
+        assert mirror_project_root is not None
+        assert mirror_path is not None
+        assert wrapper_path is not None
+        integrity = wom_kit_runtime_mirror_integrity(
+            mirror_project_root,
+            mirror_path,
+            project_pin_path,
+            wrapper_path,
+            source_version=source_version if isinstance(source_version, str) else None,
+        )
+        if not integrity["verified"]:
+            status = "project_source_update_required"
+            reason_code = str(integrity["reason_code"])
+        elif normalized_running == normalized_source:
+            status = "aligned"
+            reason_code = "running_version_matches_project_source"
+        else:
+            status = "project_scoped_bridge_available"
+            reason_code = "running_version_differs_from_project_source"
+
+    verified_head_commit = integrity.pop("_verified_head_commit", None)
+    verified_source_tag = integrity.pop("_verified_source_tag", None)
+    verified_wrapper_blob_oid = integrity.pop(
+        "_verified_wrapper_blob_oid",
+        None,
+    )
+    bridge_binding_available = bool(
+        isinstance(verified_head_commit, str)
+        and isinstance(verified_source_tag, str)
+        and isinstance(verified_wrapper_blob_oid, str)
+    )
+    bridge_available = bool(
+        status == "project_scoped_bridge_available"
+        and bridge_binding_available
+    )
+    if status == "project_scoped_bridge_available" and not bridge_available:
+        status = "project_source_update_required"
+        reason_code = "project_bridge_binding_unavailable"
+    bridge_argv_included = bool(bridge_available and not redact_local_paths)
+    runtime_alignment: dict[str, Any] = {
+        "status": status,
+        "reason_code": reason_code,
+        "project_inspected": inspection_root is not None,
+        "running_version": package_version,
+        "project_source_version": source_version,
+        "project_pyproject_version": pyproject_version,
+        "project_pin_version": pin_version,
+        "integrity": integrity,
+        "project_scoped_bridge": {
+            "available": bridge_available,
+            "exact_argv_included": bridge_argv_included,
+            "integrity_verified": bool(integrity["verified"]),
+            "wrapper": wrapper_logical_path,
+            "invocation_scope": "selected_project_version_one_invocation",
+            "python_isolated_mode": bridge_available,
+            "python_site_initialization_disabled": bridge_available,
+            "pth_execution_disabled_before_bootstrap": bridge_available,
+            "runs_selected_project_source": bridge_available,
+            "expected_commit_bound": bridge_available,
+            "expected_annotated_tag_bound": bridge_available,
+            "expected_wrapper_blob_bound": bridge_available,
+            "expected_runtime_resources_bound": bridge_available,
+            "bootstrap_executes_verified_wrapper_blob_from_memory": bridge_available,
+            "version_command_only": True,
+            "general_write_command_bridge": False,
+            "replaces_archive_on_path": False,
+            "mutates_python_environment": False,
+            "infers_installer_provenance": False,
+            "restarts_imported_process": False,
+        },
+        "changes_made": {
+            "project_files": False,
+            "global_path_or_python_installation": False,
+            "runtime_skill_installation": False,
+        },
+    }
+    if (
+        bridge_argv_included
+        and mirror_path is not None
+        and inspection_root is not None
+        and isinstance(verified_head_commit, str)
+        and isinstance(verified_source_tag, str)
+        and isinstance(verified_wrapper_blob_oid, str)
+    ):
+        runtime_alignment["bridge_argv"] = [
+            sys.executable,
+            "-I",
+            "-S",
+            "-c",
+            WOM_KIT_PROJECT_BRIDGE_BOOTSTRAP,
+            "--",
+            str(mirror_path),
+            verified_head_commit,
+            verified_source_tag,
+            verified_wrapper_blob_oid,
+            str(inspection_root),
+        ]
+
+    if status == "not_inspected":
+        next_safe_actions = [
+            "Provide a project or archive root to archive version when project/runtime alignment must be checked.",
+            "No project was inspected, and this command changed neither the global PATH/Python installation nor the runtime Skill installation.",
+        ]
+    elif status == "aligned":
+        next_safe_actions = [
+            "Use the running archive command for this project; its imported version matches the integrity-verified project release checkout and pin.",
+            "No replacement or install action is needed; archive version changed neither the global PATH/Python installation nor the runtime Skill installation.",
+        ]
+    elif status == "project_scoped_bridge_available":
+        if bridge_argv_included:
+            first_action = (
+                "Use runtime_alignment.bridge_argv exactly for one project-scoped archive "
+                "version invocation; it is commit-, annotated-tag-, wrapper-blob-, Python-, "
+                "and runtime-resource-bound."
+            )
+        else:
+            first_action = (
+                "Run archive version <project-or-archive-root> --no-redact-local-paths "
+                "--format json to obtain runtime_alignment.bridge_argv for the verified "
+                "project-scoped bridge."
+            )
+        next_safe_actions = [
+            first_action,
+            "Treat the bridge as one selected-project version invocation only; it is not a general write-command router and does not replace archive on PATH, change the Python environment, infer installer provenance, restart this process, or modify the runtime Skill installation.",
+        ]
+    else:
+        next_safe_actions = [
+            "Do not invoke the project source while runtime_alignment.integrity.verified is false; repair or update the release checkout, version metadata, pin, wrapper, or local Git evidence indicated by the reason code, then rerun archive version.",
+            "Preview an intentional project update with archive project-version-update <project-or-archive-root> --target <vX.Y.Z> --dry-run --format json; this does not update the global archive command or runtime Skill installation.",
+        ]
+
+    return runtime_alignment, next_safe_actions
+
+
 def wom_kit_version_info(
     inspection_root: Path | str | None = None,
     *,
@@ -90085,16 +92051,24 @@ def wom_kit_version_info(
 ) -> dict[str, Any]:
     service_path = Path(__file__).resolve()
     kit_root = service_path.parents[2]
-    pyproject_version = read_wom_kit_pyproject_version()
+    raw_pyproject_version = read_wom_kit_pyproject_version()
+    pyproject_version = stable_version_value(raw_pyproject_version)
     package_version = WOM_KIT_VERSION
     normalized_package = normalize_version_label(package_version)
-    normalized_pyproject = normalize_version_label(pyproject_version)
+    normalized_pyproject = stable_version_value(pyproject_version)
     pyproject_matches = (
         normalized_pyproject == normalized_package
         if normalized_pyproject is not None
         else None
     )
     warnings: list[str] = []
+    if (
+        raw_pyproject_version is not None
+        and pyproject_version is None
+    ):
+        warnings.append(
+            "WOM-kit pyproject version metadata is not an exact stable version label."
+        )
     if pyproject_matches is False:
         warnings.append("WOM-kit package version and pyproject.toml version differ.")
 
@@ -90109,37 +92083,76 @@ def wom_kit_version_info(
     }
     root: Path | None = None
     if inspection_root is not None:
-        root = Path(inspection_root).expanduser().resolve()
+        root = Path(os.path.abspath(str(Path(inspection_root).expanduser())))
         pin_summary["checked"] = True
-        if not root.exists():
+        root_kind = wom_kit_real_path_kind(root, root)
+        if root_kind == "missing":
             pin_summary["status"] = "inspection_root_missing"
             warnings.append("Version inspection root does not exist.")
+        elif root_kind != "directory":
+            pin_summary["status"] = "unsafe_path"
+            warnings.append(
+                "Version inspection root is unsafe; no installed-version pin content was read."
+            )
         else:
             for root_label, search_root in wom_kit_version_pin_search_roots(root):
                 for candidate in WOM_KIT_VERSION_PIN_CANDIDATES:
                     logical_location = wom_kit_version_pin_location(root_label, candidate)
                     pin_summary["checked_locations"].append(logical_location)
                     candidate_path = search_root / candidate
-                    if candidate_path.is_file():
-                        try:
-                            installed_version = candidate_path.read_text(encoding="utf-8").strip()
-                        except OSError:
+                    candidate_kind = wom_kit_real_path_kind(search_root, candidate_path)
+                    if candidate_kind == "unsafe":
+                        pin_summary["status"] = "unsafe_path"
+                        pin_summary["path"] = logical_location
+                        pin_summary["pin_root"] = root_label
+                        warnings.append(
+                            "WOM-kit installed-version pin path is unsafe; no pin content was read."
+                        )
+                        break
+                    if candidate_kind == "file":
+                        installed_version = wom_kit_read_bounded_real_text(
+                            search_root,
+                            candidate_path,
+                            max_bytes=WOM_KIT_VERSION_PIN_MAX_BYTES,
+                        )
+                        if installed_version is None:
                             installed_version = None
                             pin_summary["status"] = "unreadable"
                             pin_summary["path"] = logical_location
                             pin_summary["pin_root"] = root_label
-                            warnings.append("WOM-kit installed-version pin could not be read.")
+                            warnings.append(
+                                "WOM-kit installed-version pin could not be read or exceeded the size limit."
+                            )
                         else:
-                            installed_version = installed_version.lstrip("\ufeff").strip()
-                            pin_summary["status"] = "present"
+                            installed_version = stable_version_value(
+                                installed_version,
+                                include_prefix=True,
+                            )
                             pin_summary["path"] = logical_location
                             pin_summary["pin_root"] = root_label
-                            pin_summary["installed_version"] = installed_version
-                            pin_summary["matches_package_version"] = (
-                                normalize_version_label(installed_version) == normalized_package
-                            )
-                            if pin_summary["matches_package_version"] is False:
-                                warnings.append("WOM-kit installed-version pin differs from the running CLI version.")
+                            if installed_version is None:
+                                pin_summary["status"] = "invalid"
+                                warnings.append(
+                                    "WOM-kit installed-version pin is not an exact stable version label."
+                                )
+                            else:
+                                pin_summary["status"] = "present"
+                                pin_summary["installed_version"] = installed_version
+                                pin_summary["matches_package_version"] = (
+                                    normalize_version_label(
+                                        installed_version
+                                    )
+                                    == normalized_package
+                                )
+                                if (
+                                    pin_summary[
+                                        "matches_package_version"
+                                    ]
+                                    is False
+                                ):
+                                    warnings.append(
+                                        "WOM-kit installed-version pin differs from the running CLI version."
+                                    )
                         break
                 if pin_summary["status"] != "not_checked":
                     break
@@ -90151,6 +92164,22 @@ def wom_kit_version_info(
         normalized_package=normalized_package,
         warnings=warnings,
     )
+    runtime_alignment, next_safe_actions = wom_kit_runtime_alignment(
+        root,
+        package_version=package_version,
+        project_pin=pin_summary,
+        project_source_mirror=source_mirror,
+        redact_local_paths=redact_local_paths,
+    )
+    if (
+        runtime_alignment["status"] == "project_source_update_required"
+        and source_mirror.get("status")
+        not in {"not_checked", "missing", "inspection_root_missing"}
+    ):
+        warnings.append(
+            "WOM-kit project source mirror integrity verification did not pass; inspect "
+            "runtime_alignment reason codes before using project source."
+        )
 
     consistency_state = "source_checkout_match"
     if pyproject_matches is False:
@@ -90185,6 +92214,7 @@ def wom_kit_version_info(
         },
         "project_pin": pin_summary,
         "project_source_mirror": source_mirror,
+        "runtime_alignment": runtime_alignment,
         "consistency_state": consistency_state,
         "canonical_checks": {
             "human_readable": "archive --version",
@@ -90203,7 +92233,10 @@ def wom_kit_version_info(
             "files_written": False,
             "provider_api_called": False,
             "secrets_read": False,
+            "global_path_or_python_installation_changed": False,
+            "runtime_skill_installation_changed": False,
         },
+        "next_safe_actions": next_safe_actions,
         "warnings": unique_preserve_order(warnings),
         "blockers": [],
     }
@@ -91644,33 +93677,1536 @@ def runtime_context(
     return result
 
 
+WOM_KIT_PROJECT_UPDATE_MAX_GIT_OUTPUT_BYTES = 4 * 1024 * 1024
+WOM_KIT_PROJECT_UPDATE_MAX_TRACKED_FILES = 20_000
+WOM_KIT_PROJECT_UPDATE_MAX_TRACKED_FILE_BYTES = 64 * 1024 * 1024
+WOM_KIT_PROJECT_UPDATE_MAX_TRACKED_TOTAL_BYTES = 512 * 1024 * 1024
+WOM_KIT_PROJECT_UPDATE_MAX_GIT_METADATA_ENTRIES = 100_000
+WOM_KIT_PROJECT_UPDATE_APPROVAL_PLATFORM_SUPPORTED = os.name == "nt"
+WOM_KIT_PROJECT_UPDATE_GIT_TRANSPORT_ENV_KEYS = {
+    "GIT_ASKPASS",
+    "GIT_PROXY_COMMAND",
+    "GIT_SSH",
+    "GIT_SSH_COMMAND",
+}
+
+
+class WomKitProjectUpdateDirectoryGuard:
+    """Hold verified directories stable for the duration of an approved update.
+
+    On Windows, directory handles deliberately omit FILE_SHARE_DELETE.  Once a
+    directory has been verified and held, another process cannot rename,
+    delete, or replace it with a junction while WOM resolves child paths.
+
+    POSIX directory descriptors do not prevent a pathname from being renamed.
+    They remain useful for identity inspection, but approved project updates
+    fail closed there until the Git and full-tree transaction can use bound
+    descriptor-relative operations end to end.
+    """
+
+    def __init__(self, project_root: Path) -> None:
+        self.project_root = project_root
+        self._handles: dict[str, int] = {}
+        self._identities: dict[str, tuple[int, int]] = {}
+        self._kernel32: Any = None
+        self._info_type: Any = None
+        if os.name == "nt":
+            from ctypes import wintypes
+
+            class FileTime(ctypes.Structure):
+                _fields_ = [
+                    ("low", wintypes.DWORD),
+                    ("high", wintypes.DWORD),
+                ]
+
+            class ByHandleFileInformation(ctypes.Structure):
+                _fields_ = [
+                    ("attributes", wintypes.DWORD),
+                    ("creation_time", FileTime),
+                    ("access_time", FileTime),
+                    ("write_time", FileTime),
+                    ("volume_serial", wintypes.DWORD),
+                    ("size_high", wintypes.DWORD),
+                    ("size_low", wintypes.DWORD),
+                    ("link_count", wintypes.DWORD),
+                    ("file_index_high", wintypes.DWORD),
+                    ("file_index_low", wintypes.DWORD),
+                ]
+
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.CreateFileW.argtypes = [
+                wintypes.LPCWSTR,
+                wintypes.DWORD,
+                wintypes.DWORD,
+                ctypes.c_void_p,
+                wintypes.DWORD,
+                wintypes.DWORD,
+                wintypes.HANDLE,
+            ]
+            kernel32.CreateFileW.restype = wintypes.HANDLE
+            kernel32.GetFileInformationByHandle.argtypes = [
+                wintypes.HANDLE,
+                ctypes.POINTER(ByHandleFileInformation),
+            ]
+            kernel32.GetFileInformationByHandle.restype = wintypes.BOOL
+            kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+            kernel32.CloseHandle.restype = wintypes.BOOL
+            self._kernel32 = kernel32
+            self._info_type = ByHandleFileInformation
+
+    @staticmethod
+    def _key(path: Path) -> str:
+        return os.path.normcase(os.path.abspath(str(path)))
+
+    def is_held(self, path: Path) -> bool:
+        return self._validate_held(path)
+
+    def _close_handle(self, handle: int) -> None:
+        if os.name == "nt":
+            self._kernel32.CloseHandle(handle)
+        else:
+            os.close(handle)
+
+    def _drop(self, key: str) -> None:
+        handle = self._handles.pop(key, None)
+        self._identities.pop(key, None)
+        if handle is None:
+            return
+        try:
+            self._close_handle(handle)
+        except OSError:
+            pass
+
+    def _windows_handle_information(
+        self,
+        handle: int,
+    ) -> tuple[int, tuple[int, int]] | None:
+        info = self._info_type()
+        if not self._kernel32.GetFileInformationByHandle(
+            handle,
+            ctypes.byref(info),
+        ):
+            return None
+        file_index = (info.file_index_high << 32) | info.file_index_low
+        return (
+            int(info.attributes),
+            (int(info.volume_serial), int(file_index)),
+        )
+
+    def _open_windows_directory(
+        self,
+        path: Path,
+    ) -> tuple[int, tuple[int, int]] | None:
+        handle = self._kernel32.CreateFileW(
+            str(path),
+            0x0001 | 0x0080,  # FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES
+            0x00000001 | 0x00000002,  # share read/write, never delete
+            None,
+            3,  # OPEN_EXISTING
+            0x02000000 | 0x00200000,  # BACKUP_SEMANTICS | OPEN_REPARSE_POINT
+            None,
+        )
+        invalid_handle = ctypes.c_void_p(-1).value
+        handle_value = (
+            handle
+            if isinstance(handle, int)
+            else getattr(handle, "value", None)
+        )
+        if handle_value in {None, invalid_handle}:
+            return None
+        opened = self._windows_handle_information(int(handle_value))
+        if opened is None:
+            self._kernel32.CloseHandle(handle)
+            return None
+        attributes, identity = opened
+        if (
+            attributes & 0x00000400  # FILE_ATTRIBUTE_REPARSE_POINT
+            or not attributes & 0x00000010  # FILE_ATTRIBUTE_DIRECTORY
+        ):
+            self._kernel32.CloseHandle(handle)
+            return None
+        return int(handle_value), identity
+
+    def _validate_held(self, path: Path) -> bool:
+        key = self._key(path)
+        handle = self._handles.get(key)
+        identity = self._identities.get(key)
+        if handle is None or identity is None:
+            self._drop(key)
+            return False
+        if (
+            wom_kit_real_path_kind(self.project_root, path) != "directory"
+            or not wom_kit_path_components_are_real(
+                self.project_root,
+                path,
+            )
+        ):
+            self._drop(key)
+            return False
+        try:
+            path_stat = os.lstat(path)
+        except OSError:
+            self._drop(key)
+            return False
+        if os.name != "nt":
+            try:
+                opened = os.fstat(handle)
+            except OSError:
+                self._drop(key)
+                return False
+            current_identity = (int(opened.st_dev), int(opened.st_ino))
+            path_identity = (int(path_stat.st_dev), int(path_stat.st_ino))
+            if (
+                not stat.S_ISDIR(opened.st_mode)
+                or not stat.S_ISDIR(path_stat.st_mode)
+                or current_identity != identity
+                or path_identity != identity
+            ):
+                self._drop(key)
+                return False
+            return True
+
+        held_information = self._windows_handle_information(handle)
+        verification = self._open_windows_directory(path)
+        if held_information is None or verification is None:
+            if verification is not None:
+                self._close_handle(verification[0])
+            self._drop(key)
+            return False
+        held_attributes, held_identity = held_information
+        verification_handle, verification_identity = verification
+        self._close_handle(verification_handle)
+        if (
+            held_attributes & 0x00000400
+            or not held_attributes & 0x00000010
+            or held_identity != identity
+            or verification_identity != identity
+            or (
+                path_stat.st_ino
+                and identity[1]
+                and int(path_stat.st_ino) != identity[1]
+            )
+        ):
+            self._drop(key)
+            return False
+        return True
+
+    def hold(self, path: Path) -> bool:
+        key = self._key(path)
+        if key in self._handles:
+            return self._validate_held(path)
+        if (
+            wom_kit_real_path_kind(self.project_root, path) != "directory"
+            or not wom_kit_path_components_are_real(
+                self.project_root,
+                path,
+            )
+        ):
+            return False
+        try:
+            before = os.lstat(path)
+        except OSError:
+            return False
+        if os.name != "nt":
+            flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+            if hasattr(os, "O_NOFOLLOW"):
+                flags |= os.O_NOFOLLOW
+            descriptor: int | None = None
+            try:
+                descriptor = os.open(path, flags)
+                opened = os.fstat(descriptor)
+            except OSError:
+                if descriptor is not None:
+                    os.close(descriptor)
+                return False
+            if (
+                not stat.S_ISDIR(opened.st_mode)
+                or (
+                    before.st_ino
+                    and opened.st_ino
+                    and before.st_ino != opened.st_ino
+                )
+                or (
+                    before.st_dev
+                    and opened.st_dev
+                    and before.st_dev != opened.st_dev
+                )
+            ):
+                os.close(descriptor)
+                return False
+            self._handles[key] = descriptor
+            self._identities[key] = (
+                int(opened.st_dev),
+                int(opened.st_ino),
+            )
+            return True
+
+        opened_directory = self._open_windows_directory(path)
+        if opened_directory is None:
+            return False
+        handle_value, identity = opened_directory
+        try:
+            after = os.lstat(path)
+        except OSError:
+            self._close_handle(handle_value)
+            return False
+        if (
+            (
+                before.st_ino
+                and identity[1]
+                and int(before.st_ino) != identity[1]
+            )
+            or (
+                after.st_ino
+                and identity[1]
+                and int(after.st_ino) != identity[1]
+            )
+            or (
+                before.st_ino
+                and after.st_ino
+                and before.st_ino != after.st_ino
+            )
+        ):
+            self._close_handle(handle_value)
+            return False
+        self._handles[key] = int(handle_value)
+        self._identities[key] = identity
+        return True
+
+    def release(self, path: Path) -> None:
+        self._drop(self._key(path))
+
+    def close(self) -> None:
+        for key in list(self._handles):
+            self._drop(key)
+
+    def hold_existing_tree(self, root: Path) -> bool:
+        if not self.hold(root):
+            return False
+        stack = [root]
+        seen = 0
+        while stack:
+            directory = stack.pop()
+            try:
+                with os.scandir(directory) as scanner:
+                    for child in scanner:
+                        seen += 1
+                        if (
+                            seen
+                            > WOM_KIT_PROJECT_UPDATE_MAX_GIT_METADATA_ENTRIES
+                        ):
+                            return False
+                        try:
+                            child_stat = child.stat(
+                                follow_symlinks=False
+                            )
+                        except OSError:
+                            return False
+                        if not stat.S_ISDIR(child_stat.st_mode):
+                            continue
+                        child_path = Path(child.path)
+                        if not self.hold(child_path):
+                            return False
+                        stack.append(child_path)
+            except OSError:
+                return False
+        return True
+
+    def ensure_directory(self, parent: Path, path: Path) -> bool:
+        if not self.is_held(parent) or path.parent != parent:
+            return False
+        kind = wom_kit_real_path_kind(self.project_root, path)
+        if kind == "missing":
+            try:
+                os.mkdir(path)
+            except FileExistsError:
+                pass
+            except OSError:
+                return False
+        return self.hold(path)
+
+
+def wom_kit_project_update_git_environment(
+    *,
+    allow_transport_environment: bool = False,
+    extra_environment: dict[str, str] | None = None,
+) -> dict[str, str]:
+    environment: dict[str, str] = {}
+    for key, value in os.environ.items():
+        upper_key = key.upper()
+        if upper_key.startswith("GIT_"):
+            if (
+                allow_transport_environment
+                and upper_key in WOM_KIT_PROJECT_UPDATE_GIT_TRANSPORT_ENV_KEYS
+            ):
+                environment[key] = value
+            continue
+        environment[key] = value
+    environment["GIT_OPTIONAL_LOCKS"] = "0"
+    environment["GIT_TERMINAL_PROMPT"] = "0"
+    environment["GIT_NO_REPLACE_OBJECTS"] = "1"
+    if not allow_transport_environment:
+        # Object inspection is a local-only operation.  In a partial clone,
+        # otherwise innocent cat-file/ls-tree calls may lazily invoke the
+        # promisor remote and credential helpers.
+        environment["GIT_NO_LAZY_FETCH"] = "1"
+    if extra_environment:
+        allowed_extra_keys = {"GIT_INDEX_FILE"}
+        if not set(extra_environment).issubset(allowed_extra_keys):
+            raise ValueError("unsafe_git_environment_override")
+        environment.update(extra_environment)
+    return environment
+
+
+def wom_kit_project_update_git_command(
+    mirror_path: Path,
+    args: list[str],
+) -> list[str]:
+    return [
+        "git",
+        "--no-optional-locks",
+        "--no-replace-objects",
+        "-c",
+        "core.fsmonitor=false",
+        "-c",
+        f"core.hooksPath={os.devnull}",
+        "-c",
+        f"core.attributesFile={os.devnull}",
+        "-c",
+        f"core.excludesFile={os.devnull}",
+        "-C",
+        str(mirror_path),
+        *args,
+    ]
+
+
+def wom_kit_project_update_run_capped(
+    command: list[str],
+    *,
+    environment: dict[str, str],
+    timeout_seconds: int,
+    max_output_bytes: int,
+    input_bytes: bytes | None = None,
+) -> tuple[int, bytes] | None:
+    if (
+        max_output_bytes < 0
+        or timeout_seconds <= 0
+        or (input_bytes is not None and len(input_bytes) > 1024 * 1024)
+    ):
+        return None
+    try:
+        process = subprocess.Popen(
+            command,
+            stdin=subprocess.PIPE if input_bytes is not None else subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            env=environment,
+        )
+    except (OSError, ValueError):
+        return None
+    if process.stdout is None:
+        process.kill()
+        process.wait()
+        return None
+    try:
+        if input_bytes is not None:
+            if process.stdin is None:
+                raise OSError("git_stdin_unavailable")
+            process.stdin.write(input_bytes)
+            process.stdin.close()
+    except (BrokenPipeError, OSError):
+        process.kill()
+        process.wait()
+        process.stdout.close()
+        return None
+
+    output_box: list[bytes] = []
+    read_failed = threading.Event()
+
+    def read_once() -> None:
+        try:
+            chunks: list[bytes] = []
+            total = 0
+            while total <= max_output_bytes:
+                chunk = os.read(
+                    process.stdout.fileno(),
+                    min(64 * 1024, max_output_bytes + 1 - total),
+                )
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                total += len(chunk)
+            output_box.append(b"".join(chunks))
+        except (OSError, ValueError):
+            read_failed.set()
+
+    reader = threading.Thread(target=read_once, daemon=True)
+    reader.start()
+    deadline = time.monotonic() + timeout_seconds
+    timed_out = False
+    while reader.is_alive():
+        reader.join(timeout=0.02)
+        if time.monotonic() >= deadline:
+            timed_out = True
+            try:
+                process.kill()
+            except OSError:
+                pass
+            break
+    if timed_out:
+        try:
+            process.stdout.close()
+        except OSError:
+            pass
+    reader.join(timeout=1.0)
+    output = output_box[0] if output_box else b""
+    overflow = len(output) > max_output_bytes
+    if overflow or read_failed.is_set() or reader.is_alive():
+        try:
+            process.kill()
+        except OSError:
+            pass
+    try:
+        return_code = process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        try:
+            process.kill()
+        except OSError:
+            pass
+        process.wait()
+        return_code = -1
+    try:
+        process.stdout.close()
+    except OSError:
+        pass
+    if timed_out or overflow or read_failed.is_set() or reader.is_alive():
+        return None
+    return return_code, output
+
+
 def wom_kit_project_update_git(
     mirror_path: Path,
     args: list[str],
     *,
     timeout_seconds: int = 10,
+    input_text: str | None = None,
+    max_output_bytes: int = WOM_KIT_PROJECT_UPDATE_MAX_GIT_OUTPUT_BYTES,
+    allow_transport_environment: bool = False,
+    extra_environment: dict[str, str] | None = None,
 ) -> tuple[bool, str]:
+    completed = wom_kit_project_update_run_capped(
+        wom_kit_project_update_git_command(mirror_path, args),
+        environment=wom_kit_project_update_git_environment(
+            allow_transport_environment=allow_transport_environment,
+            extra_environment=extra_environment,
+        ),
+        timeout_seconds=timeout_seconds,
+        max_output_bytes=max_output_bytes,
+        input_bytes=(
+            input_text.encode("utf-8") if input_text is not None else None
+        ),
+    )
+    if completed is None:
+        return False, ""
+    return_code, stdout = completed
+    if return_code != 0:
+        return False, ""
     try:
-        completed = subprocess.run(
-            ["git", "-C", str(mirror_path), *args],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=timeout_seconds,
+        decoded_stdout = stdout.decode("utf-8")
+    except UnicodeError:
+        return False, ""
+    # Preserve path/config payload whitespace.  In particular, NUL-delimited
+    # Git filenames may legally begin with a space; only Git's record-ending
+    # CR/LF is removed for scalar commands.
+    return True, decoded_stdout.rstrip("\r\n")
+
+
+def wom_kit_project_update_git_metadata_is_local_real(
+    project_root: Path,
+    mirror_path: Path,
+) -> bool:
+    """Require a conventional, project-contained, non-reparse Git metadata tree.
+
+    A linked worktree stores a text pointer at ``.git`` and a junction can make
+    an apparently project-local mirror read or update refs, the index, logs, or
+    objects somewhere else.  Both forms are outside the project update write
+    boundary, so this intentionally accepts only a real ``<mirror>/.git``
+    directory and scans that small source-mirror metadata tree without following
+    links.
+    """
+
+    expected_git_dir = mirror_path / ".git"
+    if (
+        not is_path_within_root(mirror_path, project_root)
+        or wom_kit_real_path_kind(project_root, expected_git_dir) != "directory"
+        or not wom_kit_path_components_are_real(project_root, expected_git_dir)
+    ):
+        return False
+
+    git_dir_ok, git_dir_text = wom_kit_project_update_git(
+        mirror_path,
+        ["rev-parse", "--absolute-git-dir"],
+        max_output_bytes=64 * 1024,
+    )
+    common_dir_ok, common_dir_text = wom_kit_project_update_git(
+        mirror_path,
+        ["rev-parse", "--git-common-dir"],
+        max_output_bytes=64 * 1024,
+    )
+    if not git_dir_ok or not common_dir_ok:
+        return False
+
+    def normalized_reported_path(value: str) -> Path | None:
+        try:
+            candidate = Path(value)
+            if not candidate.is_absolute():
+                candidate = mirror_path / candidate
+            return Path(os.path.abspath(str(candidate)))
+        except (OSError, RuntimeError, ValueError):
+            return None
+
+    reported_git_dir = normalized_reported_path(git_dir_text)
+    reported_common_dir = normalized_reported_path(common_dir_text)
+    expected_normalized = Path(os.path.abspath(str(expected_git_dir)))
+    try:
+        reported_paths_match = bool(
+            reported_git_dir is not None
+            and reported_common_dir is not None
+            and reported_git_dir.resolve(strict=True)
+            == expected_normalized.resolve(strict=True)
+            and reported_common_dir.resolve(strict=True)
+            == expected_normalized.resolve(strict=True)
         )
-    except (OSError, subprocess.SubprocessError):
-        return False, ""
-    if completed.returncode != 0:
-        return False, ""
-    return True, completed.stdout.strip()
+    except (OSError, RuntimeError, ValueError):
+        reported_paths_match = False
+    if not reported_paths_match:
+        return False
+
+    for ancestry_or_storage_overlay in (
+        expected_git_dir / "objects" / "info" / "alternates",
+        expected_git_dir / "info" / "grafts",
+        expected_git_dir / "refs" / "replace",
+    ):
+        if (
+            wom_kit_real_path_kind(
+                project_root,
+                ancestry_or_storage_overlay,
+            )
+            != "missing"
+        ):
+            return False
+    packed_refs = expected_git_dir / "packed-refs"
+    packed_refs_kind = wom_kit_real_path_kind(
+        project_root,
+        packed_refs,
+    )
+    if packed_refs_kind == "file":
+        packed_refs_bytes = wom_kit_read_bounded_real_bytes(
+            project_root,
+            packed_refs,
+            max_bytes=4 * 1024 * 1024,
+        )
+        if (
+            packed_refs_bytes is None
+            or b"refs/replace/" in packed_refs_bytes
+        ):
+            return False
+    elif packed_refs_kind != "missing":
+        return False
+
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    stack = [expected_git_dir]
+    seen = 0
+    try:
+        while stack:
+            directory = stack.pop()
+            with os.scandir(directory) as scanner:
+                for entry in scanner:
+                    seen += 1
+                    if (
+                        seen
+                        > WOM_KIT_PROJECT_UPDATE_MAX_GIT_METADATA_ENTRIES
+                    ):
+                        return False
+                    entry_stat = entry.stat(follow_symlinks=False)
+                    if (
+                        stat.S_ISLNK(entry_stat.st_mode)
+                        or (
+                            reparse_flag
+                            and getattr(
+                                entry_stat,
+                                "st_file_attributes",
+                                0,
+                            )
+                            & reparse_flag
+                        )
+                    ):
+                        return False
+                    if stat.S_ISDIR(entry_stat.st_mode):
+                        stack.append(Path(entry.path))
+                    elif not stat.S_ISREG(entry_stat.st_mode):
+                        return False
+    except OSError:
+        return False
+    return True
+
+
+def wom_kit_project_update_git_blob(
+    mirror_path: Path,
+    object_spec: str,
+    expected_size: int,
+) -> bytes | None:
+    if (
+        expected_size < 0
+        or expected_size > WOM_KIT_PROJECT_UPDATE_MAX_TRACKED_FILE_BYTES
+        or not object_spec
+        or "\0" in object_spec
+        or "\n" in object_spec
+        or "\r" in object_spec
+    ):
+        return None
+    completed = wom_kit_project_update_run_capped(
+        wom_kit_project_update_git_command(
+            mirror_path,
+            ["cat-file", "blob", object_spec],
+        ),
+        environment=wom_kit_project_update_git_environment(),
+        timeout_seconds=60,
+        max_output_bytes=expected_size,
+    )
+    if completed is None:
+        return None
+    return_code, stdout = completed
+    if return_code != 0 or len(stdout) != expected_size:
+        return None
+    return stdout
+
+
+def wom_kit_project_update_git_config_trust_digest(
+    mirror_path: Path,
+) -> str | None:
+    """Hash the effective Git config without exposing config values to Python.
+
+    ``git config`` streams directly into ``git hash-object``.  The parent sees
+    only the object-style digest, while local/global/system includes, URL
+    rewrites, TLS/proxy policy, and credential-helper configuration all become
+    part of the preflight-to-fetch compare-and-swap identity.
+    """
+
+    environment = wom_kit_project_update_git_environment(
+        allow_transport_environment=True,
+    )
+    config_process: subprocess.Popen[bytes] | None = None
+    digest_process: subprocess.Popen[bytes] | None = None
+    try:
+        config_process = subprocess.Popen(
+            wom_kit_project_update_git_command(
+                mirror_path,
+                [
+                    "config",
+                    "--includes",
+                    "--null",
+                    "--list",
+                    "--show-origin",
+                ],
+            ),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            env=environment,
+        )
+        if config_process.stdout is None:
+            raise OSError("git_config_stdout_unavailable")
+        digest_process = subprocess.Popen(
+            wom_kit_project_update_git_command(
+                mirror_path,
+                ["hash-object", "--stdin"],
+            ),
+            stdin=config_process.stdout,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            env=environment,
+        )
+        config_process.stdout.close()
+        digest_stdout, _ = digest_process.communicate(timeout=15)
+        config_return_code = config_process.wait(timeout=5)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        for process in (digest_process, config_process):
+            if process is None:
+                continue
+            try:
+                process.kill()
+            except OSError:
+                pass
+            try:
+                process.wait(timeout=5)
+            except (OSError, subprocess.SubprocessError):
+                pass
+        return None
+    if (
+        config_return_code != 0
+        or digest_process.returncode != 0
+        or not re.fullmatch(rb"[0-9a-fA-F]{40,64}\r?\n?", digest_stdout)
+    ):
+        return None
+    digest = hashlib.sha256()
+    digest.update(digest_stdout.strip().lower())
+    for key in sorted(WOM_KIT_PROJECT_UPDATE_GIT_TRANSPORT_ENV_KEYS):
+        value = next(
+            (
+                candidate_value
+                for candidate_key, candidate_value in os.environ.items()
+                if candidate_key.upper() == key
+            ),
+            None,
+        )
+        if value is None:
+            continue
+        digest.update(b"\0")
+        digest.update(key.encode("ascii"))
+        digest.update(b"\0")
+        digest.update(value.encode("utf-8", errors="surrogatepass"))
+    return digest.hexdigest()
+
+
+def wom_kit_existing_path_components_are_real(root: Path, path: Path) -> bool:
+    try:
+        relative = path.relative_to(root)
+    except ValueError:
+        return False
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    current = root
+    components = [root]
+    for part in relative.parts:
+        current = current / part
+        components.append(current)
+    for index, component in enumerate(components):
+        try:
+            component_stat = os.lstat(component)
+        except FileNotFoundError:
+            return True
+        except OSError:
+            return False
+        if (
+            stat.S_ISLNK(component_stat.st_mode)
+            or (
+                reparse_flag
+                and getattr(component_stat, "st_file_attributes", 0) & reparse_flag
+            )
+        ):
+            return False
+        if index < len(components) - 1 and not stat.S_ISDIR(component_stat.st_mode):
+            return False
+    return True
+
+
+WOM_KIT_PROJECT_UPDATE_WINDOWS_RESERVED_BASENAMES = {
+    "con",
+    "prn",
+    "aux",
+    "nul",
+    *(f"com{number}" for number in range(1, 10)),
+    *(f"lpt{number}" for number in range(1, 10)),
+}
+WOM_KIT_PROJECT_UPDATE_HFS_IGNORABLES = {
+    "\u200c",
+    "\u200d",
+    "\u200e",
+    "\u200f",
+    "\u202a",
+    "\u202b",
+    "\u202c",
+    "\u202d",
+    "\u202e",
+    "\u206a",
+    "\u206b",
+    "\u206c",
+    "\u206d",
+    "\u206e",
+    "\u206f",
+    "\ufeff",
+}
+
+
+def wom_kit_project_update_safe_worktree_paths(
+    relative_paths: Iterable[str],
+) -> bool:
+    """Prove that Git tree paths map injectively to safe worktree paths.
+
+    The manual exporter must be stricter than the host platform: a release tree
+    accepted on Linux must still be unable to address ``.git``, an NTFS stream,
+    a DOS device, or a case/Unicode alias when the same release is installed on
+    Windows or macOS.
+    """
+
+    canonical_files: set[str] = set()
+    canonical_directories: set[str] = set()
+    seen_original: set[str] = set()
+    for relative_path in relative_paths:
+        if (
+            not isinstance(relative_path, str)
+            or relative_path in seen_original
+            or not relative_path
+            or len(relative_path.encode("utf-8")) > 4096
+        ):
+            return False
+        seen_original.add(relative_path)
+        pure_path = PurePosixPath(relative_path)
+        if (
+            pure_path.is_absolute()
+            or pure_path.as_posix() != relative_path
+            or any(part in {"", ".", ".."} for part in pure_path.parts)
+        ):
+            return False
+        canonical_parts: list[str] = []
+        for component in pure_path.parts:
+            if (
+                len(component.encode("utf-8")) > 255
+                or component[-1] in {" ", "."}
+                or any(
+                    ord(character) < 32
+                    or ord(character) == 127
+                    or character in '<>:"\\|?*'
+                    for character in component
+                )
+            ):
+                return False
+            canonical = unicodedata.normalize("NFKC", component).casefold()
+            hfs_canonical = "".join(
+                character
+                for character in canonical
+                if character not in WOM_KIT_PROJECT_UPDATE_HFS_IGNORABLES
+            ).rstrip(" .")
+            if (
+                hfs_canonical == ".git"
+                or re.fullmatch(r"\.?git~[0-9]+", hfs_canonical)
+            ):
+                return False
+            windows_basename = hfs_canonical.split(".", 1)[0]
+            if (
+                not hfs_canonical
+                or windows_basename
+                in WOM_KIT_PROJECT_UPDATE_WINDOWS_RESERVED_BASENAMES
+            ):
+                return False
+            canonical_parts.append(hfs_canonical)
+        canonical_path = "/".join(canonical_parts)
+        canonical_prefixes = {
+            "/".join(canonical_parts[:index])
+            for index in range(1, len(canonical_parts))
+        }
+        if (
+            canonical_path in canonical_files
+            or canonical_path in canonical_directories
+            or any(prefix in canonical_files for prefix in canonical_prefixes)
+        ):
+            return False
+        canonical_directories.update(canonical_prefixes)
+        canonical_files.add(canonical_path)
+    return bool(canonical_files)
+
+
+def wom_kit_project_update_tree_blobs(
+    mirror_path: Path,
+    ref: str,
+) -> dict[str, tuple[str, str, bytes]] | None:
+    tree_ok, tree_text = wom_kit_project_update_git(
+        mirror_path,
+        ["ls-tree", "-r", "-z", ref],
+    )
+    if not tree_ok:
+        return None
+    raw_entries: list[tuple[str, str, str]] = []
+    raw_paths: set[str] = set()
+    for record in tree_text.split("\0"):
+        if not record:
+            continue
+        try:
+            metadata, relative_path = record.split("\t", 1)
+            mode, object_type, object_id = metadata.split(" ", 2)
+        except ValueError:
+            return None
+        pure_path = PurePosixPath(relative_path)
+        if (
+            pure_path.is_absolute()
+            or any(part in {"", ".", ".."} for part in pure_path.parts)
+            or object_type != "blob"
+            or mode not in {"100644", "100755"}
+            or not re.fullmatch(r"[0-9a-fA-F]{40,64}", object_id)
+            or relative_path in raw_paths
+        ):
+            return None
+        if len(raw_entries) >= WOM_KIT_PROJECT_UPDATE_MAX_TRACKED_FILES:
+            return None
+        raw_entries.append((relative_path, mode, object_id.lower()))
+        raw_paths.add(relative_path)
+    if not wom_kit_project_update_safe_worktree_paths(
+        relative_path for relative_path, _, _ in raw_entries
+    ):
+        return None
+
+    entries: dict[str, tuple[str, str, bytes]] = {}
+    total_bytes = 0
+    for relative_path, mode, object_id in raw_entries:
+        size_ok, size_text = wom_kit_project_update_git(
+            mirror_path,
+            ["cat-file", "-s", object_id],
+            max_output_bytes=256,
+        )
+        try:
+            blob_size = int(size_text) if size_ok else -1
+        except ValueError:
+            return None
+        if (
+            blob_size < 0
+            or blob_size > WOM_KIT_PROJECT_UPDATE_MAX_TRACKED_FILE_BYTES
+        ):
+            return None
+        total_bytes += blob_size
+        if total_bytes > WOM_KIT_PROJECT_UPDATE_MAX_TRACKED_TOTAL_BYTES:
+            return None
+        blob = wom_kit_project_update_git_blob(
+            mirror_path,
+            object_id,
+            blob_size,
+        )
+        if blob is None:
+            return None
+        entries[relative_path] = (mode, object_id.lower(), blob)
+    return entries if entries else None
+
+
+def wom_kit_project_update_worktree_allows_plan(
+    mirror_path: Path,
+    current_paths: set[str],
+    target_paths: set[str],
+) -> bool:
+    actual_files: set[str] = set()
+    actual_directories: set[str] = set()
+    stack = [mirror_path]
+    seen = 0
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    try:
+        while stack:
+            directory = stack.pop()
+            with os.scandir(directory) as scanner:
+                for entry in scanner:
+                    if directory == mirror_path and entry.name == ".git":
+                        continue
+                    seen += 1
+                    if (
+                        seen
+                        > WOM_KIT_PROJECT_UPDATE_MAX_TRACKED_FILES * 4
+                    ):
+                        return False
+                    entry_path = Path(entry.path)
+                    entry_stat = entry.stat(follow_symlinks=False)
+                    if (
+                        stat.S_ISLNK(entry_stat.st_mode)
+                        or (
+                            reparse_flag
+                            and getattr(entry_stat, "st_file_attributes", 0)
+                            & reparse_flag
+                        )
+                    ):
+                        return False
+                    relative_path = PurePosixPath(
+                        *entry_path.relative_to(mirror_path).parts
+                    ).as_posix()
+                    if stat.S_ISDIR(entry_stat.st_mode):
+                        actual_directories.add(relative_path)
+                        stack.append(entry_path)
+                    elif stat.S_ISREG(entry_stat.st_mode):
+                        actual_files.add(relative_path)
+                    else:
+                        return False
+    except (OSError, RuntimeError, ValueError):
+        return False
+
+    if not current_paths.issubset(actual_files):
+        return False
+    untracked_files = actual_files - current_paths
+    runtime_source_prefix = ("wom-kit", "src")
+    if any(
+        PurePosixPath(path).parts[:2] == runtime_source_prefix
+        for path in untracked_files
+    ):
+        return False
+    allowed_directories = {
+        PurePosixPath(*PurePosixPath(path).parts[:index]).as_posix()
+        for path in current_paths | target_paths
+        for index in range(1, len(PurePosixPath(path).parts))
+    }
+    if any(
+        PurePosixPath(path).parts[:2] == runtime_source_prefix
+        and path not in allowed_directories
+        for path in actual_directories
+    ):
+        return False
+    target_directories = {
+        PurePosixPath(*PurePosixPath(path).parts[:index]).as_posix()
+        for path in target_paths
+        for index in range(1, len(PurePosixPath(path).parts))
+    }
+
+    def is_beneath(path: str, parent: str) -> bool:
+        path_parts = PurePosixPath(path).parts
+        parent_parts = PurePosixPath(parent).parts
+        return (
+            len(path_parts) > len(parent_parts)
+            and path_parts[: len(parent_parts)] == parent_parts
+        )
+
+    for untracked_path in untracked_files:
+        if (
+            untracked_path in target_paths
+            or untracked_path in target_directories
+            or any(
+                is_beneath(untracked_path, target_path)
+                for target_path in target_paths
+            )
+        ):
+            return False
+
+    for actual_directory in actual_directories & target_paths:
+        current_descendants = {
+            path
+            for path in current_paths
+            if is_beneath(path, actual_directory)
+        }
+        untracked_descendants = {
+            path
+            for path in untracked_files
+            if is_beneath(path, actual_directory)
+        }
+        # A directory may become a file only when that directory exists solely
+        # to contain tracked current-tree files which the plan will remove.
+        if not current_descendants or untracked_descendants:
+            return False
+    return True
+
+
+def wom_kit_project_update_branch_points_to_commit(
+    mirror_path: Path,
+    branch_name: str,
+    expected_commit: str,
+) -> bool:
+    if (
+        not isinstance(branch_name, str)
+        or not branch_name
+        or not re.fullmatch(r"[0-9a-fA-F]{40,64}", expected_commit)
+    ):
+        return False
+    branch_ok, checked_branch = wom_kit_project_update_git(
+        mirror_path,
+        ["check-ref-format", "--branch", branch_name],
+        max_output_bytes=4096,
+    )
+    if not branch_ok or checked_branch != branch_name:
+        return False
+    ref_ok, ref_commit = wom_kit_project_update_git(
+        mirror_path,
+        [
+            "show-ref",
+            "--verify",
+            "--hash",
+            f"refs/heads/{branch_name}",
+        ],
+        max_output_bytes=256,
+    )
+    return bool(
+        ref_ok
+        and re.fullmatch(r"[0-9a-fA-F]{40,64}", ref_commit)
+        and ref_commit.lower() == expected_commit.lower()
+    )
+
+
+def wom_kit_project_update_symbolic_head_state(
+    mirror_path: Path,
+) -> tuple[str, str | None]:
+    """Return an exact branch, detached HEAD, or an unreadable unsafe state."""
+
+    completed = wom_kit_project_update_run_capped(
+        wom_kit_project_update_git_command(
+            mirror_path,
+            ["symbolic-ref", "--quiet", "HEAD"],
+        ),
+        environment=wom_kit_project_update_git_environment(),
+        timeout_seconds=10,
+        max_output_bytes=4096,
+    )
+    if completed is None:
+        return "invalid", None
+    return_code, stdout = completed
+    if return_code == 1:
+        return ("detached", None) if stdout == b"" else ("invalid", None)
+    if return_code != 0:
+        return "invalid", None
+    try:
+        text = stdout.decode("utf-8")
+    except UnicodeError:
+        return "invalid", None
+    full_ref = text.removesuffix("\r\n").removesuffix("\n")
+    if (
+        text not in {full_ref, full_ref + "\n", full_ref + "\r\n"}
+        or any(character in full_ref for character in "\0\r\n")
+        or not full_ref.startswith("refs/heads/")
+    ):
+        return "invalid", None
+    branch_name = full_ref.removeprefix("refs/heads/")
+    branch_ok, checked_branch = wom_kit_project_update_git(
+        mirror_path,
+        ["check-ref-format", "--branch", branch_name],
+        max_output_bytes=4096,
+    )
+    if (
+        not branch_name
+        or not branch_ok
+        or checked_branch != branch_name
+        or full_ref != f"refs/heads/{branch_name}"
+    ):
+        return "invalid", None
+    return "branch", branch_name
+
+
+def wom_kit_project_update_unlink_tracked_file(
+    mirror_path: Path,
+    path: Path,
+    *,
+    directory_guard: WomKitProjectUpdateDirectoryGuard | None,
+) -> bool:
+    if (
+        not is_path_within_root(path, mirror_path)
+        or (
+            directory_guard is not None
+            and not directory_guard.is_held(path.parent)
+        )
+        or not wom_kit_existing_path_components_are_real(mirror_path, path)
+    ):
+        return False
+    try:
+        path_stat = os.lstat(path)
+    except OSError:
+        return False
+    if not stat.S_ISREG(path_stat.st_mode):
+        return False
+    try:
+        path.unlink()
+    except OSError:
+        return False
+    return True
+
+
+def wom_kit_project_update_materialize_commit(
+    mirror_path: Path,
+    target_commit: str,
+    *,
+    attach_branch: str | None = None,
+    dry_run: bool = False,
+    directory_guard: WomKitProjectUpdateDirectoryGuard | None = None,
+) -> bool:
+    if not re.fullmatch(r"[0-9a-fA-F]{40,64}", target_commit):
+        return False
+    target_commit = target_commit.lower()
+    if (
+        attach_branch is not None
+        and not wom_kit_project_update_branch_points_to_commit(
+            mirror_path,
+            attach_branch,
+            target_commit,
+        )
+    ):
+        return False
+    target_entries = wom_kit_project_update_tree_blobs(
+        mirror_path,
+        target_commit,
+    )
+    current_entries = wom_kit_project_update_tree_blobs(mirror_path, "HEAD")
+    if target_entries is None or current_entries is None:
+        return False
+    target_paths = set(target_entries)
+    current_paths = set(current_entries)
+
+    if not wom_kit_project_update_worktree_allows_plan(
+        mirror_path,
+        current_paths,
+        target_paths,
+    ):
+        return False
+    for relative_path in sorted(current_paths):
+        path = mirror_path.joinpath(*PurePosixPath(relative_path).parts)
+        if (
+            not is_path_within_root(path, mirror_path)
+            or not wom_kit_existing_path_components_are_real(mirror_path, path)
+        ):
+            return False
+        try:
+            path_stat = os.lstat(path)
+        except FileNotFoundError:
+            if relative_path in current_paths:
+                return False
+            continue
+        except OSError:
+            return False
+        if not stat.S_ISREG(path_stat.st_mode):
+            return False
+
+    if dry_run:
+        return True
+    if (
+        os.name == "nt"
+        and (
+            directory_guard is None
+            or not directory_guard.is_held(mirror_path)
+        )
+    ):
+        return False
+
+    removed_paths = sorted(
+        current_paths - target_paths,
+        key=lambda value: (len(PurePosixPath(value).parts), value),
+        reverse=True,
+    )
+    try:
+        for relative_path in removed_paths:
+            path = mirror_path.joinpath(*PurePosixPath(relative_path).parts)
+            if not wom_kit_project_update_unlink_tracked_file(
+                mirror_path,
+                path,
+                directory_guard=directory_guard,
+            ):
+                return False
+        removed_parents = sorted(
+            {
+                parent
+                for relative_path in removed_paths
+                for parent in (
+                    mirror_path.joinpath(
+                        *PurePosixPath(relative_path).parts
+                    ).parents
+                )
+                if parent != mirror_path
+                and is_path_within_root(parent, mirror_path)
+            },
+            key=lambda value: len(value.parts),
+            reverse=True,
+        )
+        for directory in removed_parents:
+            if directory_guard is not None:
+                if (
+                    not directory_guard.is_held(directory)
+                    or not directory_guard.is_held(directory.parent)
+                ):
+                    return False
+                directory_guard.release(directory)
+            try:
+                directory.rmdir()
+            except OSError:
+                if (
+                    wom_kit_real_path_kind(mirror_path, directory)
+                    != "directory"
+                    or not wom_kit_path_components_are_real(
+                        mirror_path,
+                        directory,
+                    )
+                ):
+                    return False
+                try:
+                    with os.scandir(directory) as scanner:
+                        directory_nonempty = next(scanner, None) is not None
+                except OSError:
+                    return False
+                if (
+                    directory_guard is not None
+                    and not directory_guard.hold(directory)
+                ):
+                    return False
+                if not directory_nonempty:
+                    return False
+        target_directories = sorted(
+            {
+                parent
+                for relative_path in target_paths
+                for parent in (
+                    mirror_path.joinpath(
+                        *PurePosixPath(relative_path).parts
+                    ).parents
+                )
+                if parent != mirror_path
+                and is_path_within_root(parent, mirror_path)
+            },
+            key=lambda value: (len(value.parts), str(value)),
+        )
+        for directory in target_directories:
+            if directory_guard is None:
+                directory.mkdir(exist_ok=True)
+            elif not directory_guard.ensure_directory(
+                directory.parent,
+                directory,
+            ):
+                return False
+        for relative_path, (mode, _, blob) in sorted(target_entries.items()):
+            path = mirror_path.joinpath(*PurePosixPath(relative_path).parts)
+            if (
+                directory_guard is not None
+                and not directory_guard.is_held(path.parent)
+            ):
+                return False
+            if not wom_kit_existing_path_components_are_real(mirror_path, path):
+                return False
+            write_bytes_atomic(path, blob)
+            if os.name != "nt":
+                os.chmod(path, 0o755 if mode == "100755" else 0o644)
+    except OSError:
+        return False
+
+    index_ok, _ = wom_kit_project_update_git(
+        mirror_path,
+        ["read-tree", target_commit],
+        timeout_seconds=60,
+    )
+    if not index_ok:
+        return False
+    if attach_branch is None:
+        head_ok, _ = wom_kit_project_update_git(
+            mirror_path,
+            ["update-ref", "--no-deref", "HEAD", target_commit],
+        )
+    else:
+        if not wom_kit_project_update_branch_points_to_commit(
+            mirror_path,
+            attach_branch,
+            target_commit,
+        ):
+            return False
+        head_ok, _ = wom_kit_project_update_git(
+            mirror_path,
+            ["symbolic-ref", "HEAD", f"refs/heads/{attach_branch}"],
+        )
+    if not head_ok:
+        return False
+    verify_ok, verify_head = wom_kit_project_update_git(
+        mirror_path,
+        ["rev-parse", "--verify", "HEAD"],
+    )
+    symbolic_head_state, current_branch = (
+        wom_kit_project_update_symbolic_head_state(mirror_path)
+    )
+    branch_attached = bool(
+        (
+            attach_branch is None
+            and symbolic_head_state == "detached"
+            and current_branch is None
+        )
+        or (
+            attach_branch is not None
+            and symbolic_head_state == "branch"
+            and current_branch == attach_branch
+        )
+    )
+    return bool(
+        verify_ok
+        and verify_head.lower() == target_commit
+        and branch_attached
+    )
+
+
+def wom_kit_project_update_materialize_runtime_sources(
+    mirror_path: Path,
+) -> bool:
+    head_entries = wom_kit_runtime_head_python_entries(mirror_path)
+    if head_entries is None:
+        return False
+    tracked_paths = set(head_entries)
+    if (
+        not WOM_KIT_RUNTIME_REQUIRED_PYTHON_PATHS.issubset(tracked_paths)
+        or not 0 < len(tracked_paths) <= WOM_KIT_RUNTIME_MAX_TRACKED_PYTHON_SOURCES
+    ):
+        return False
+
+    source_blobs: dict[str, tuple[str, str, bytes]] = {}
+    total_source_bytes = 0
+    for relative_path, (mode, object_id) in sorted(head_entries.items()):
+        path = mirror_path.joinpath(*PurePosixPath(relative_path).parts)
+        if (
+            not path.is_file()
+            or not is_path_within_root(path, mirror_path)
+            or not wom_kit_path_components_are_real(mirror_path, path)
+        ):
+            return False
+        size_ok, size_text = wom_kit_project_update_git(
+            mirror_path,
+            ["cat-file", "-s", object_id],
+        )
+        try:
+            source_size = int(size_text) if size_ok else -1
+        except ValueError:
+            return False
+        if (
+            source_size < 0
+            or source_size > WOM_KIT_RUNTIME_MAX_PYTHON_SOURCE_BYTES
+        ):
+            return False
+        total_source_bytes += source_size
+        if total_source_bytes > WOM_KIT_RUNTIME_MAX_TOTAL_PYTHON_SOURCE_BYTES:
+            return False
+        source_bytes = wom_kit_project_update_git_blob(
+            mirror_path,
+            object_id,
+            source_size,
+        )
+        if source_bytes is None:
+            return False
+        source_blobs[relative_path] = (mode, object_id, source_bytes)
+
+    try:
+        for relative_path, (mode, _, source_bytes) in source_blobs.items():
+            path = mirror_path.joinpath(*PurePosixPath(relative_path).parts)
+            write_bytes_atomic(path, source_bytes)
+            if os.name != "nt":
+                os.chmod(path, 0o755 if mode == "100755" else 0o644)
+    except OSError:
+        return False
+    for relative_path, (mode, object_id, _) in sorted(source_blobs.items()):
+        indexed, _ = wom_kit_project_update_git(
+            mirror_path,
+            [
+                "update-index",
+                "--cacheinfo",
+                f"{mode},{object_id},{relative_path}",
+            ],
+        )
+        if not indexed:
+            return False
+    return True
 
 
 def wom_kit_project_update_source_versions(mirror_path: Path) -> dict[str, str | None]:
-    return {
-        "package": read_version_from_init_file(mirror_path / "wom-kit" / "src" / "wom_kit" / "__init__.py"),
-        "pyproject": read_pyproject_version_at(mirror_path / "wom-kit" / "pyproject.toml"),
-        "root_shim": read_version_from_init_file(mirror_path / "wom_kit" / "__init__.py"),
+    specs = {
+        "package": (
+            mirror_path / "wom-kit" / "src" / "wom_kit" / "__init__.py",
+            read_version_from_init_text,
+        ),
+        "pyproject": (
+            mirror_path / "wom-kit" / "pyproject.toml",
+            read_pyproject_version_text,
+        ),
+        "root_shim": (
+            mirror_path / "wom_kit" / "__init__.py",
+            read_version_from_init_text,
+        ),
     }
+    versions: dict[str, str | None] = {}
+    for label, (path, parser) in specs.items():
+        text = wom_kit_read_bounded_real_text(
+            mirror_path,
+            path,
+            max_bytes=WOM_KIT_VERSION_METADATA_MAX_BYTES,
+        )
+        versions[label] = stable_version_value(
+            parser(text) if text is not None else None
+        )
+    return versions
 
 
 def wom_kit_project_update_target_evidence(
@@ -91713,16 +95249,37 @@ def wom_kit_project_update_target_evidence(
     }
     source_versions: dict[str, str | None] = {}
     for label, (relative_path, parser) in blob_specs.items():
-        blob_ok, blob_text = wom_kit_project_update_git(
+        object_spec = f"{target_commit}:{relative_path}"
+        size_ok, size_text = wom_kit_project_update_git(
             mirror_path,
-            ["show", f"{target_commit}:{relative_path}"],
+            ["cat-file", "-s", object_spec],
+            max_output_bytes=256,
         )
-        source_versions[label] = parser(blob_text) if blob_ok else None
+        try:
+            blob_size = int(size_text) if size_ok else -1
+        except ValueError:
+            blob_size = -1
+        blob = (
+            wom_kit_project_update_git_blob(
+                mirror_path,
+                object_spec,
+                blob_size,
+            )
+            if 0 <= blob_size <= WOM_KIT_VERSION_METADATA_MAX_BYTES
+            else None
+        )
+        try:
+            blob_text = blob.decode("utf-8") if blob is not None else None
+        except UnicodeError:
+            blob_text = None
+        source_versions[label] = stable_version_value(
+            parser(blob_text) if blob_text is not None else None
+        )
     evidence["source_versions"] = source_versions
     target_version = normalize_version_label(target_tag)
     evidence["all_source_versions_match_target"] = bool(
         target_version
-        and all(normalize_version_label(value) == target_version for value in source_versions.values())
+        and all(value == target_version for value in source_versions.values())
     )
 
     main_ok, _ = wom_kit_project_update_git(
@@ -91737,6 +95294,51 @@ def wom_kit_project_update_target_evidence(
         )
         evidence["target_reachable_from_origin_main"] = ancestor_ok
     return evidence
+
+
+def wom_kit_project_update_target_ref_snapshot(
+    mirror_path: Path,
+    target_tag: str,
+) -> dict[str, str] | None:
+    tag_ref = f"refs/tags/{target_tag}"
+    tag_ok, tag_object = wom_kit_project_update_git(
+        mirror_path,
+        ["rev-parse", "--verify", tag_ref],
+        max_output_bytes=256,
+    )
+    tag_type_ok, tag_type = wom_kit_project_update_git(
+        mirror_path,
+        ["cat-file", "-t", tag_ref],
+        max_output_bytes=256,
+    )
+    commit_ok, target_commit = wom_kit_project_update_git(
+        mirror_path,
+        ["rev-parse", "--verify", f"{tag_ref}^{{commit}}"],
+        max_output_bytes=256,
+    )
+    main_ok, origin_main = wom_kit_project_update_git(
+        mirror_path,
+        ["rev-parse", "--verify", "refs/remotes/origin/main"],
+        max_output_bytes=256,
+    )
+    values = (tag_object, target_commit, origin_main)
+    if (
+        not tag_ok
+        or not tag_type_ok
+        or tag_type != "tag"
+        or not commit_ok
+        or not main_ok
+        or any(
+            not re.fullmatch(r"[0-9a-fA-F]{40,64}", value)
+            for value in values
+        )
+    ):
+        return None
+    return {
+        "tag_object": tag_object.lower(),
+        "target_commit": target_commit.lower(),
+        "origin_main": origin_main.lower(),
+    }
 
 
 def write_bytes_atomic(path: Path, value: bytes) -> None:
@@ -91775,17 +95377,794 @@ def write_bytes_atomic(path: Path, value: bytes) -> None:
             temporary_path.unlink()
 
 
-def wom_kit_project_update_receipt_path(project_root: Path, target_tag: str, timestamp: str) -> tuple[Path, str]:
+class WomKitProjectUpdateReceiptUncertainError(OSError):
+    pass
+
+
+WOM_KIT_PROJECT_UPDATE_LOCK_BYTES = (
+    b"wom-kit project version update in progress\n"
+)
+
+
+def wom_kit_project_update_remove_exclusive_receipt_if_owned(
+    project_root: Path,
+    candidate: Path,
+    created_identity: tuple[int, int] | None,
+) -> bool:
+    if created_identity is None:
+        return wom_kit_real_path_kind(project_root, candidate) == "missing"
+    try:
+        current = os.lstat(candidate)
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    if (
+        not stat.S_ISREG(current.st_mode)
+        or (
+            created_identity[0]
+            and current.st_dev
+            and created_identity[0] != current.st_dev
+        )
+        or (
+            created_identity[1]
+            and current.st_ino
+            and created_identity[1] != current.st_ino
+        )
+    ):
+        return False
+    try:
+        candidate.unlink()
+    except OSError:
+        return False
+    return wom_kit_real_path_kind(project_root, candidate) == "missing"
+
+
+def wom_kit_project_update_acquire_lock_exclusive(
+    project_root: Path,
+    metadata_root: Path,
+    lock_path: Path,
+    *,
+    reservation_callback: Callable[[tuple[int, int]], None],
+) -> tuple[int, int]:
+    if (
+        wom_kit_real_path_kind(project_root, metadata_root) != "directory"
+        or wom_kit_real_path_kind(project_root, lock_path) != "missing"
+        or not wom_kit_existing_path_components_are_real(
+            project_root,
+            lock_path,
+        )
+    ):
+        raise OSError("unsafe_or_existing_project_update_lock")
+    descriptor: int | None = None
+    identity: tuple[int, int] | None = None
+    try:
+        descriptor = os.open(
+            lock_path,
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | getattr(os, "O_BINARY", 0),
+            0o600,
+        )
+        opened = os.fstat(descriptor)
+        if not stat.S_ISREG(opened.st_mode):
+            raise OSError("project_update_lock_not_regular")
+        identity = (opened.st_dev, opened.st_ino)
+        try:
+            reserved = os.lstat(lock_path)
+        except OSError as error:
+            raise OSError(
+                "project_update_lock_path_changed_before_reservation"
+            ) from error
+        if (
+            wom_kit_real_path_kind(project_root, metadata_root) != "directory"
+            or not wom_kit_existing_path_components_are_real(
+                project_root,
+                lock_path,
+            )
+            or not stat.S_ISREG(reserved.st_mode)
+            or (
+                identity[0]
+                and reserved.st_dev
+                and identity[0] != reserved.st_dev
+            )
+            or (
+                identity[1]
+                and reserved.st_ino
+                and identity[1] != reserved.st_ino
+            )
+        ):
+            raise OSError(
+                "project_update_lock_path_changed_before_reservation"
+            )
+        reservation_callback(identity)
+        offset = 0
+        while offset < len(WOM_KIT_PROJECT_UPDATE_LOCK_BYTES):
+            written = os.write(
+                descriptor,
+                WOM_KIT_PROJECT_UPDATE_LOCK_BYTES[offset:],
+            )
+            if written <= 0:
+                raise OSError("project_update_lock_write_incomplete")
+            offset += written
+        os.fsync(descriptor)
+        after = os.fstat(descriptor)
+        if (
+            after.st_size != len(WOM_KIT_PROJECT_UPDATE_LOCK_BYTES)
+            or (
+                opened.st_dev
+                and after.st_dev
+                and opened.st_dev != after.st_dev
+            )
+            or (
+                opened.st_ino
+                and after.st_ino
+                and opened.st_ino != after.st_ino
+            )
+        ):
+            raise OSError("project_update_lock_write_unverified")
+    except FileExistsError:
+        raise
+    except BaseException as failure:
+        if descriptor is not None:
+            os.close(descriptor)
+            descriptor = None
+        if not wom_kit_project_update_remove_exclusive_receipt_if_owned(
+            project_root,
+            lock_path,
+            identity,
+        ):
+            raise WomKitProjectUpdateReceiptUncertainError(
+                "project_update_lock_cleanup_unverified"
+            ) from failure
+        raise
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+    lock_bytes = wom_kit_read_bounded_real_bytes(
+        project_root,
+        lock_path,
+        max_bytes=len(WOM_KIT_PROJECT_UPDATE_LOCK_BYTES),
+    )
+    try:
+        lock_stat = os.lstat(lock_path)
+    except OSError as error:
+        raise WomKitProjectUpdateReceiptUncertainError(
+            "project_update_lock_path_disappeared"
+        ) from error
+    if (
+        identity is None
+        or lock_bytes != WOM_KIT_PROJECT_UPDATE_LOCK_BYTES
+        or not stat.S_ISREG(lock_stat.st_mode)
+        or (
+            identity[0]
+            and lock_stat.st_dev
+            and identity[0] != lock_stat.st_dev
+        )
+        or (
+            identity[1]
+            and lock_stat.st_ino
+            and identity[1] != lock_stat.st_ino
+        )
+    ):
+        if not wom_kit_project_update_remove_exclusive_receipt_if_owned(
+            project_root,
+            lock_path,
+            identity,
+        ):
+            raise WomKitProjectUpdateReceiptUncertainError(
+                "project_update_lock_verification_and_cleanup_unverified"
+            )
+        raise OSError("project_update_lock_verification_failed")
+    return identity
+
+
+def wom_kit_project_update_release_owned_lock(
+    project_root: Path,
+    lock_path: Path,
+    identity: tuple[int, int] | None,
+) -> bool:
+    if not wom_kit_project_update_owned_lock_present(
+        project_root,
+        lock_path,
+        identity,
+    ):
+        return False
+    return wom_kit_project_update_remove_exclusive_receipt_if_owned(
+        project_root,
+        lock_path,
+        identity,
+    )
+
+
+def wom_kit_project_update_owned_lock_present(
+    project_root: Path,
+    lock_path: Path,
+    identity: tuple[int, int] | None,
+) -> bool:
+    if (
+        identity is None
+        or wom_kit_read_bounded_real_bytes(
+            project_root,
+            lock_path,
+            max_bytes=len(WOM_KIT_PROJECT_UPDATE_LOCK_BYTES),
+        )
+        != WOM_KIT_PROJECT_UPDATE_LOCK_BYTES
+    ):
+        return False
+    try:
+        lock_stat = os.lstat(lock_path)
+    except OSError:
+        return False
+    return bool(
+        stat.S_ISREG(lock_stat.st_mode)
+        and (
+            not identity[0]
+            or not lock_stat.st_dev
+            or identity[0] == lock_stat.st_dev
+        )
+        and (
+            not identity[1]
+            or not lock_stat.st_ino
+            or identity[1] == lock_stat.st_ino
+        )
+    )
+
+
+def wom_kit_project_update_write_receipt_exclusive(
+    project_root: Path,
+    target_tag: str,
+    timestamp: str,
+    receipt_bytes: bytes,
+    *,
+    directory_guard: WomKitProjectUpdateDirectoryGuard | None = None,
+    reservation_callback: (
+        Callable[[Path, str, tuple[int, int]], None] | None
+    ) = None,
+) -> tuple[Path, str]:
     receipts_root = project_root / WOM_KIT_PROJECT_UPDATE_RECEIPTS_RELATIVE
+    if (
+        len(receipt_bytes) > 2 * 1024 * 1024
+        or not wom_kit_existing_path_components_are_real(
+            project_root,
+            receipts_root,
+        )
+        or directory_guard is None
+        or not directory_guard.is_held(receipts_root)
+    ):
+        raise OSError("unsafe_receipts_root")
+    if wom_kit_real_path_kind(project_root, receipts_root) != "directory":
+        raise OSError("unsafe_receipts_root")
     timestamp_slug = re.sub(r"[^0-9TZ]", "", timestamp)
     base_name = f"{timestamp_slug}-{target_tag}.project-version-update.json"
-    candidate = receipts_root / base_name
-    suffix = 2
-    while candidate.exists():
-        candidate = receipts_root / f"{timestamp_slug}-{target_tag}-{suffix}.project-version-update.json"
-        suffix += 1
-    relative = PurePosixPath(*candidate.relative_to(project_root).parts).as_posix()
-    return candidate, relative
+    for attempt in range(1, 1001):
+        name = (
+            base_name
+            if attempt == 1
+            else (
+                f"{timestamp_slug}-{target_tag}-{attempt}."
+                "project-version-update.json"
+            )
+        )
+        candidate = receipts_root / name
+        if not wom_kit_existing_path_components_are_real(
+            project_root,
+            candidate,
+        ):
+            raise OSError("unsafe_receipt_path")
+        descriptor: int | None = None
+        created_identity: tuple[int, int] | None = None
+        try:
+            descriptor = os.open(
+                candidate,
+                os.O_WRONLY
+                | os.O_CREAT
+                | os.O_EXCL
+                | getattr(os, "O_BINARY", 0),
+                0o600,
+            )
+        except FileExistsError:
+            continue
+        try:
+            opened = os.fstat(descriptor)
+            if not stat.S_ISREG(opened.st_mode):
+                raise OSError("receipt_not_regular")
+            created_identity = (opened.st_dev, opened.st_ino)
+            try:
+                reserved = os.lstat(candidate)
+            except OSError as error:
+                raise OSError(
+                    "receipt_path_changed_before_reservation"
+                ) from error
+            if (
+                not directory_guard.is_held(receipts_root)
+                or not wom_kit_existing_path_components_are_real(
+                    project_root,
+                    candidate,
+                )
+                or not stat.S_ISREG(reserved.st_mode)
+                or (
+                    created_identity[0]
+                    and reserved.st_dev
+                    and created_identity[0] != reserved.st_dev
+                )
+                or (
+                    created_identity[1]
+                    and reserved.st_ino
+                    and created_identity[1] != reserved.st_ino
+                )
+            ):
+                raise OSError(
+                    "receipt_path_changed_before_reservation"
+                )
+            relative = PurePosixPath(
+                *candidate.relative_to(project_root).parts
+            ).as_posix()
+            if reservation_callback is not None:
+                reservation_callback(
+                    candidate,
+                    relative,
+                    created_identity,
+                )
+            offset = 0
+            while offset < len(receipt_bytes):
+                written = os.write(descriptor, receipt_bytes[offset:])
+                if written <= 0:
+                    raise OSError("receipt_write_incomplete")
+                offset += written
+            os.fsync(descriptor)
+            after_write = os.fstat(descriptor)
+            if (
+                after_write.st_size != len(receipt_bytes)
+                or (
+                    opened.st_dev
+                    and after_write.st_dev
+                    and opened.st_dev != after_write.st_dev
+                )
+                or (
+                    opened.st_ino
+                    and after_write.st_ino
+                    and opened.st_ino != after_write.st_ino
+                )
+            ):
+                raise OSError("receipt_write_verification_failed")
+        except BaseException as failure:
+            if descriptor is not None:
+                os.close(descriptor)
+                descriptor = None
+            if not wom_kit_project_update_remove_exclusive_receipt_if_owned(
+                project_root,
+                candidate,
+                created_identity,
+            ):
+                raise WomKitProjectUpdateReceiptUncertainError(
+                    "receipt_cleanup_unverified"
+                ) from failure
+            raise
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+        try:
+            candidate_stat = os.lstat(candidate)
+        except OSError as error:
+            raise OSError("receipt_path_disappeared") from error
+        receipt_verified = bool(
+            wom_kit_existing_path_components_are_real(
+                project_root,
+                candidate,
+            )
+            and stat.S_ISREG(candidate_stat.st_mode)
+            and (
+                created_identity is None
+                or not created_identity[0]
+                or not candidate_stat.st_dev
+                or created_identity[0] == candidate_stat.st_dev
+            )
+            and (
+                created_identity is None
+                or not created_identity[1]
+                or not candidate_stat.st_ino
+                or created_identity[1] == candidate_stat.st_ino
+            )
+            and wom_kit_read_bounded_real_bytes(
+                project_root,
+                candidate,
+                max_bytes=2 * 1024 * 1024,
+            )
+            == receipt_bytes
+        )
+        if not receipt_verified:
+            if not wom_kit_project_update_remove_exclusive_receipt_if_owned(
+                project_root,
+                candidate,
+                created_identity,
+            ):
+                raise WomKitProjectUpdateReceiptUncertainError(
+                    "receipt_verification_and_cleanup_unverified"
+                )
+            raise OSError("receipt_verification_failed")
+        return candidate, relative
+    raise OSError("receipt_name_space_exhausted")
+
+
+def wom_kit_project_update_git_snapshot(
+    mirror_path: Path,
+) -> dict[str, Any] | None:
+    head_ok, head = wom_kit_project_update_git(
+        mirror_path,
+        ["rev-parse", "--verify", "HEAD"],
+    )
+    symbolic_head_state, branch = (
+        wom_kit_project_update_symbolic_head_state(mirror_path)
+    )
+    tree_ok, tree_value = wom_kit_project_update_git(
+        mirror_path,
+        ["ls-tree", "-r", "-z", "HEAD"],
+    )
+    index_ok, index_value = wom_kit_project_update_git(
+        mirror_path,
+        ["ls-files", "--stage", "-z"],
+    )
+    flags_ok, flags_value = wom_kit_project_update_git(
+        mirror_path,
+        ["ls-files", "-v", "-z"],
+    )
+    eol_ok, eol_value = wom_kit_project_update_git(
+        mirror_path,
+        ["ls-files", "--eol", "-z"],
+    )
+    untracked_ok, untracked_value = wom_kit_project_update_git(
+        mirror_path,
+        ["ls-files", "--others", "--exclude-standard", "-z"],
+    )
+    autocrlf_ok, autocrlf_value = wom_kit_project_update_git(
+        mirror_path,
+        [
+            "config",
+            "--type=bool",
+            "--get",
+            "core.autocrlf",
+        ],
+        max_output_bytes=64,
+    )
+    local_autocrlf_true = bool(
+        autocrlf_ok and autocrlf_value.strip().casefold() == "true"
+    )
+    if (
+        not head_ok
+        or not re.fullmatch(r"[0-9a-fA-F]{40,64}", head)
+        or symbolic_head_state == "invalid"
+        or not tree_ok
+        or not index_ok
+        or not flags_ok
+        or not eol_ok
+        or not untracked_ok
+    ):
+        return None
+
+    def nul_records(value: str) -> list[str] | None:
+        if value == "":
+            return []
+        if not value.endswith("\0"):
+            return None
+        records = value[:-1].split("\0")
+        if any(record == "" for record in records):
+            return None
+        return records
+
+    tree_records = nul_records(tree_value)
+    index_records = nul_records(index_value)
+    flag_records = nul_records(flags_value)
+    eol_records = nul_records(eol_value)
+    untracked_records = nul_records(untracked_value)
+    if (
+        tree_records is None
+        or index_records is None
+        or flag_records is None
+        or eol_records is None
+        or untracked_records is None
+    ):
+        return None
+    tree_entries: dict[str, tuple[str, str]] = {}
+    for record in tree_records:
+        try:
+            metadata, relative_path = record.split("\t", 1)
+            mode, object_type, object_id = metadata.split(" ", 2)
+        except ValueError:
+            return None
+        pure_path = PurePosixPath(relative_path)
+        if (
+            pure_path.is_absolute()
+            or any(part in {"", ".", ".."} for part in pure_path.parts)
+            or mode not in {"100644", "100755"}
+            or object_type != "blob"
+            or not re.fullmatch(r"[0-9a-fA-F]{40,64}", object_id)
+            or relative_path in tree_entries
+            or len(tree_entries) >= WOM_KIT_PROJECT_UPDATE_MAX_TRACKED_FILES
+        ):
+            return None
+        tree_entries[relative_path] = (mode, object_id.lower())
+    if not wom_kit_project_update_safe_worktree_paths(tree_entries):
+        return None
+
+    index_entries: dict[str, tuple[str, str]] = {}
+    for record in index_records:
+        try:
+            metadata, relative_path = record.split("\t", 1)
+            mode, object_id, stage = metadata.split(" ", 2)
+        except ValueError:
+            return None
+        if (
+            stage != "0"
+            or mode not in {"100644", "100755"}
+            or not re.fullmatch(r"[0-9a-fA-F]{40,64}", object_id)
+            or relative_path in index_entries
+        ):
+            return None
+        index_entries[relative_path] = (mode, object_id.lower())
+
+    flag_entries: dict[str, str] = {}
+    for record in flag_records:
+        if len(record) < 3 or record[1] != " ":
+            return None
+        relative_path = record[2:]
+        if relative_path in flag_entries:
+            return None
+        flag_entries[relative_path] = record[0]
+    flags_safe = bool(
+        set(flag_entries) == set(tree_entries)
+        and all(value == "H" for value in flag_entries.values())
+    )
+    eol_entries: dict[str, tuple[str, str, str]] = {}
+    for record in eol_records:
+        try:
+            metadata, relative_path = record.split("\t", 1)
+        except ValueError:
+            return None
+        matched_eol = re.fullmatch(
+            r"i/(\S+)[ ]+w/(\S+)[ ]+attr/([\x20-\x7e]*)",
+            metadata,
+        )
+        if (
+            matched_eol is None
+            or matched_eol.group(1)
+            not in {"-text", "none", "lf", "crlf", "mixed"}
+            or matched_eol.group(2)
+            not in {"-text", "none", "lf", "crlf", "mixed"}
+            or relative_path in eol_entries
+        ):
+            return None
+        eol_entries[relative_path] = (
+            matched_eol.group(1),
+            matched_eol.group(2),
+            matched_eol.group(3).strip(),
+        )
+    if set(eol_entries) != set(tree_entries):
+        return None
+    index_matches_head = index_entries == tree_entries
+
+    worktree_hasher = hashlib.sha256()
+    raw_bytes_match_head = True
+    eol_overrides: dict[str, dict[str, Any]] = {}
+    eol_override_total_bytes = 0
+    total_bytes = 0
+    for relative_path, (_, object_id) in sorted(tree_entries.items()):
+        path = mirror_path.joinpath(*PurePosixPath(relative_path).parts)
+        if (
+            wom_kit_real_path_kind(mirror_path, path) != "file"
+            or not wom_kit_path_components_are_real(mirror_path, path)
+        ):
+            return None
+        try:
+            path_size = os.lstat(path).st_size
+        except OSError:
+            return None
+        if (
+            path_size < 0
+            or path_size > WOM_KIT_PROJECT_UPDATE_MAX_TRACKED_FILE_BYTES
+        ):
+            return None
+        total_bytes += path_size
+        if total_bytes > WOM_KIT_PROJECT_UPDATE_MAX_TRACKED_TOTAL_BYTES:
+            return None
+        raw_bytes = wom_kit_read_bounded_real_bytes(
+            mirror_path,
+            path,
+            max_bytes=WOM_KIT_PROJECT_UPDATE_MAX_TRACKED_FILE_BYTES,
+        )
+        if raw_bytes is None:
+            return None
+
+        def matches_object(value: bytes) -> bool:
+            object_hasher = (
+                hashlib.sha1()
+                if len(object_id) == 40
+                else hashlib.sha256()
+            )
+            object_hasher.update(f"blob {len(value)}\0".encode("ascii"))
+            object_hasher.update(value)
+            return object_hasher.hexdigest() == object_id
+
+        if not matches_object(raw_bytes):
+            normalized_line_endings = raw_bytes.replace(b"\r\n", b"\n")
+            index_eol, worktree_eol, eol_attributes = eol_entries[
+                relative_path
+            ]
+            safe_text_eol_candidate = bool(
+                local_autocrlf_true
+                and index_eol == "lf"
+                and worktree_eol == "crlf"
+                and eol_attributes != "-text"
+                and normalized_line_endings != raw_bytes
+                and b"\r" not in normalized_line_endings
+                and b"\0" not in raw_bytes
+            )
+            try:
+                raw_bytes.decode("utf-8-sig")
+            except UnicodeError:
+                safe_text_eol_candidate = False
+            if not safe_text_eol_candidate or not matches_object(
+                normalized_line_endings
+            ):
+                raw_bytes_match_head = False
+            else:
+                eol_override_total_bytes += len(raw_bytes)
+                if (
+                    eol_override_total_bytes
+                    > WOM_KIT_PROJECT_UPDATE_MAX_TRACKED_TOTAL_BYTES
+                ):
+                    return None
+                eol_overrides[relative_path] = {
+                    "raw_bytes": raw_bytes,
+                    "head_bytes_sha256": hashlib.sha256(
+                        normalized_line_endings
+                    ).hexdigest(),
+                }
+        path_bytes = relative_path.encode("utf-8")
+        worktree_hasher.update(len(path_bytes).to_bytes(4, "big"))
+        worktree_hasher.update(path_bytes)
+        worktree_hasher.update(len(raw_bytes).to_bytes(8, "big"))
+        worktree_hasher.update(hashlib.sha256(raw_bytes).digest())
+
+    untracked_paths = sorted(untracked_records)
+    return {
+        "head": head.lower(),
+        "branch": branch if symbolic_head_state == "branch" else None,
+        "index_sha256": hashlib.sha256(
+            index_value.encode("utf-8")
+        ).hexdigest(),
+        "index_matches_head": index_matches_head,
+        "flags_sha256": hashlib.sha256(
+            flags_value.encode("utf-8")
+        ).hexdigest(),
+        "eol_sha256": hashlib.sha256(
+            eol_value.encode("utf-8")
+        ).hexdigest(),
+        "flags_safe": flags_safe,
+        "raw_bytes_match_head": raw_bytes_match_head,
+        "worktree_sha256": worktree_hasher.hexdigest(),
+        "tracked_file_count": len(tree_entries),
+        "untracked_paths": untracked_paths,
+        "eol_overrides": eol_overrides,
+    }
+
+
+def wom_kit_project_update_snapshot_is_clean(
+    snapshot: dict[str, Any] | None,
+    *,
+    expected_head: str | None,
+    expected_branch: str | None,
+) -> bool:
+    return bool(
+        snapshot is not None
+        and isinstance(expected_head, str)
+        and snapshot.get("head") == expected_head
+        and snapshot.get("branch") == expected_branch
+        and snapshot.get("index_matches_head") is True
+        and snapshot.get("flags_safe") is True
+        and snapshot.get("raw_bytes_match_head") is True
+        and snapshot.get("untracked_paths") in ([], ["installed-version.txt"])
+    )
+
+
+def wom_kit_project_update_source_matches_snapshot(
+    project_root: Path,
+    mirror_path: Path,
+    expected_snapshot: dict[str, Any] | None,
+) -> bool:
+    return bool(
+        expected_snapshot is not None
+        and wom_kit_project_update_git_metadata_is_local_real(
+            project_root,
+            mirror_path,
+        )
+        and wom_kit_project_update_git_snapshot(mirror_path)
+        == expected_snapshot
+    )
+
+
+def wom_kit_project_update_restore_eol_overrides(
+    project_root: Path,
+    mirror_path: Path,
+    snapshot: dict[str, Any] | None,
+) -> bool:
+    overrides = (
+        snapshot.get("eol_overrides")
+        if isinstance(snapshot, dict)
+        else None
+    )
+    if not isinstance(overrides, dict):
+        return False
+    for relative_path, spec in sorted(overrides.items()):
+        if (
+            not isinstance(relative_path, str)
+            or not isinstance(spec, dict)
+            or not isinstance(spec.get("raw_bytes"), bytes)
+            or not isinstance(spec.get("head_bytes_sha256"), str)
+        ):
+            return False
+        path = mirror_path.joinpath(*PurePosixPath(relative_path).parts)
+        current_bytes = wom_kit_read_bounded_real_bytes(
+            project_root,
+            path,
+            max_bytes=WOM_KIT_PROJECT_UPDATE_MAX_TRACKED_FILE_BYTES,
+        )
+        if (
+            current_bytes is None
+            or hashlib.sha256(current_bytes).hexdigest()
+            != spec["head_bytes_sha256"]
+            or not wom_kit_existing_path_components_are_real(
+                project_root,
+                path,
+            )
+        ):
+            return False
+        try:
+            write_bytes_atomic(path, spec["raw_bytes"])
+        except BaseException:
+            return False
+        if (
+            wom_kit_read_bounded_real_bytes(
+                project_root,
+                path,
+                max_bytes=WOM_KIT_PROJECT_UPDATE_MAX_TRACKED_FILE_BYTES,
+            )
+            != spec["raw_bytes"]
+        ):
+            return False
+    return True
+
+
+def wom_kit_project_update_pin_matches_snapshot(
+    project_root: Path,
+    spec: dict[str, Any],
+) -> bool:
+    path = spec["path"]
+    kind = wom_kit_real_path_kind(project_root, path)
+    if spec.get("existed"):
+        if kind != "file":
+            return False
+        current = wom_kit_read_bounded_real_bytes(
+            project_root,
+            path,
+            max_bytes=WOM_KIT_VERSION_PIN_MAX_BYTES,
+        )
+        return current == spec.get("previous_bytes")
+    return kind == "missing" and wom_kit_existing_path_components_are_real(
+        project_root,
+        path,
+    )
+
+
+def wom_kit_project_update_all_pins_match_snapshot(
+    project_root: Path,
+    pin_specs: list[dict[str, Any]],
+) -> bool:
+    return all(
+        wom_kit_project_update_pin_matches_snapshot(project_root, spec)
+        for spec in pin_specs
+    )
 
 
 def wom_kit_project_version_update(
@@ -91795,6 +96174,7 @@ def wom_kit_project_version_update(
     dry_run: bool = False,
     approve: bool = False,
     reviewed_by: str | None = None,
+    affirm_external_writers_quiescent: bool = False,
     progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
 ) -> dict[str, Any]:
     blockers: list[str] = []
@@ -91802,15 +96182,17 @@ def wom_kit_project_version_update(
     target_tag = str(target or "").strip()
     target_version = normalize_version_label(target_tag)
     reviewer = safe_foreign_quarantine_actor_id(reviewed_by)
-    inspection = Path(inspection_root).expanduser().resolve()
+    inspection = Path(os.path.abspath(str(Path(inspection_root).expanduser())))
     local_metadata_root = inspection / ".zettel-kasten"
     parent_metadata_root = inspection.parent / ".zettel-kasten"
     project_root = (
         inspection.parent
         if (
-            not local_metadata_root.exists()
-            and (inspection / "archive.yml").is_file()
-            and parent_metadata_root.exists()
+            wom_kit_real_path_kind(inspection, local_metadata_root) == "missing"
+            and wom_kit_real_path_kind(inspection, inspection / "archive.yml")
+            == "file"
+            and wom_kit_real_path_kind(inspection.parent, parent_metadata_root)
+            == "directory"
         )
         else inspection
     )
@@ -91828,29 +96210,60 @@ def wom_kit_project_version_update(
 
     if dry_run is approve:
         blockers.append("Choose exactly one mode: --dry-run or --approve.")
+    if approve and not WOM_KIT_PROJECT_UPDATE_APPROVAL_PLATFORM_SUPPORTED:
+        blockers.append(
+            "Approved project-version-update is currently supported only on Windows, where every write-path directory can be held against rename or reparse replacement; POSIX approval fails closed."
+        )
+    elif dry_run and not WOM_KIT_PROJECT_UPDATE_APPROVAL_PLATFORM_SUPPORTED:
+        warnings.append(
+            "This read-only preview can run here, but approval is currently supported only on Windows; POSIX approval fails closed until the Git and full-tree transaction is descriptor-relative end to end."
+        )
+    if (
+        (dry_run or approve)
+        and WOM_KIT_PROJECT_UPDATE_APPROVAL_PLATFORM_SUPPORTED
+    ):
+        warnings.append(
+            "Approved project-version-update requires external writers to stay quiescent for the whole transaction; close editors and pause sync, backup, and other Git processes before approval."
+        )
     if not WOM_KIT_PROJECT_UPDATE_TAG_RE.fullmatch(target_tag):
         blockers.append("target must be an exact stable release tag such as v0.3.215.")
     if approve and reviewer is None:
         blockers.append("project-version-update approve requires a safe --reviewed-by actor id.")
+    if approve and not affirm_external_writers_quiescent:
+        blockers.append(
+            "project-version-update approve requires --affirm-external-writers-quiescent after editors and sync, backup, and other Git processes have been paused for the complete transaction."
+        )
     if reviewed_by and reviewer is None:
         blockers.append("reviewed_by must be a safe non-secret actor id.")
-    if not inspection.exists() or not inspection.is_dir():
+    inspection_kind = wom_kit_real_path_kind(inspection, inspection)
+    project_root_kind = wom_kit_real_path_kind(project_root, project_root)
+    metadata_kind = wom_kit_real_path_kind(project_root, metadata_root)
+    mirror_kind = wom_kit_real_path_kind(project_root, mirror_path)
+    if inspection_kind != "directory":
         blockers.append("The project/archive inspection root must be an existing directory.")
-    if not project_root.exists() or not project_root.is_dir():
+    if project_root_kind != "directory":
         blockers.append("The resolved project root must be an existing directory.")
-    if metadata_root.is_symlink():
-        blockers.append("The project .zettel-kasten directory must not be a symbolic link.")
+    if metadata_kind not in {"directory", "missing"}:
+        blockers.append(
+            "The project .zettel-kasten directory must be a real directory, not a symlink or reparse point."
+        )
     if (
-        (metadata_root / "receipts").is_symlink()
-        or receipts_root.is_symlink()
+        not wom_kit_existing_path_components_are_real(project_root, receipts_parent)
+        or not wom_kit_existing_path_components_are_real(project_root, receipts_root)
         or not is_path_within_root(receipts_root, project_root)
     ):
-        blockers.append("The project version-update receipt directory must stay inside the project root.")
-    if not mirror_path.is_dir():
+        blockers.append(
+            "The project version-update receipt directory must stay real and inside the project root."
+        )
+    if mirror_kind == "missing":
         blockers.append("The project-local .zettel-kasten/source mirror is missing.")
-    elif mirror_path.is_symlink() or not is_path_within_root(mirror_path, project_root):
-        blockers.append("The project source mirror must be a real directory inside the project root.")
-    if lock_path.exists():
+    elif mirror_kind != "directory" or not is_path_within_root(mirror_path, project_root):
+        blockers.append(
+            "The project source mirror must be a real directory without a symlink or reparse component inside the project root."
+        )
+    if not wom_kit_existing_path_components_are_real(project_root, lock_path):
+        blockers.append("The project version-update lock path is unsafe.")
+    if wom_kit_real_path_kind(project_root, lock_path) != "missing":
         blockers.append("A project version update lock already exists; review the prior run before continuing.")
 
     git_repo_verified = False
@@ -91863,16 +96276,26 @@ def wom_kit_project_version_update(
     original_branch: str | None = None
     current_versions: dict[str, str | None] = {"package": None, "pyproject": None, "root_shim": None}
 
-    if mirror_path.is_dir() and not mirror_path.is_symlink():
+    if mirror_kind == "directory":
         inside_ok, inside_text = wom_kit_project_update_git(mirror_path, ["rev-parse", "--is-inside-work-tree"])
         top_ok, top_text = wom_kit_project_update_git(mirror_path, ["rev-parse", "--show-toplevel"])
         try:
             exact_top = top_ok and Path(top_text).resolve() == mirror_path.resolve()
         except (OSError, RuntimeError, ValueError):
             exact_top = False
-        git_repo_verified = inside_ok and inside_text == "true" and exact_top
+        git_repo_verified = bool(
+            inside_ok
+            and inside_text == "true"
+            and exact_top
+            and wom_kit_project_update_git_metadata_is_local_real(
+                project_root,
+                mirror_path,
+            )
+        )
         if not git_repo_verified:
-            blockers.append("The project source mirror must be the exact root of a Git working tree.")
+            blockers.append(
+                "The project source mirror must be the exact root of a Git working tree whose real .git metadata stays inside that mirror."
+            )
         else:
             head_ok, head_text = wom_kit_project_update_git(mirror_path, ["rev-parse", "--verify", "HEAD"])
             if head_ok and re.fullmatch(r"[0-9a-fA-F]{40,64}", head_text):
@@ -91880,23 +96303,60 @@ def wom_kit_project_version_update(
                 head_after = head_before
             else:
                 blockers.append("The project source mirror has no valid HEAD commit.")
-            branch_ok, branch_text = wom_kit_project_update_git(
-                mirror_path,
-                ["symbolic-ref", "--quiet", "--short", "HEAD"],
+            symbolic_head_state, branch_text = (
+                wom_kit_project_update_symbolic_head_state(mirror_path)
             )
-            original_branch = branch_text if branch_ok and branch_text else None
-            status_ok, status_text = wom_kit_project_update_git(
-                mirror_path,
-                ["status", "--porcelain=v1", "--untracked-files=all"],
+            original_branch = (
+                branch_text
+                if symbolic_head_state == "branch"
+                else None
             )
-            status_lines = [line for line in status_text.splitlines() if line]
-            unexpected_lines = [line for line in status_lines if line != "?? installed-version.txt"]
-            unexpected_worktree_entry_count = len(unexpected_lines)
-            worktree_clean = status_ok and not unexpected_lines
-            if not status_ok:
-                blockers.append("The project source mirror worktree status could not be read.")
-            elif unexpected_lines:
-                blockers.append("The project source mirror has tracked changes or unknown untracked files.")
+            if symbolic_head_state == "invalid":
+                blockers.append(
+                    "The project source mirror symbolic HEAD state could not be read safely."
+                )
+            if (
+                original_branch is not None
+                and (
+                    head_before is None
+                    or not wom_kit_project_update_branch_points_to_commit(
+                        mirror_path,
+                        original_branch,
+                        head_before,
+                    )
+                )
+            ):
+                blockers.append(
+                    "The original project source branch cannot be restored safely with Git's branch-name rules."
+                )
+            initial_snapshot = wom_kit_project_update_git_snapshot(mirror_path)
+            unexpected_worktree_entry_count = (
+                len(
+                    [
+                        path
+                        for path in initial_snapshot.get(
+                            "untracked_paths",
+                            [],
+                        )
+                        if path != "installed-version.txt"
+                    ]
+                )
+                if initial_snapshot is not None
+                else 0
+            )
+            worktree_clean = wom_kit_project_update_snapshot_is_clean(
+                initial_snapshot,
+                expected_head=head_before,
+                expected_branch=original_branch,
+            )
+            if initial_snapshot is None:
+                blockers.append(
+                    "The project source mirror worktree snapshot could not be read safely."
+                )
+            elif not worktree_clean:
+                blockers.append(
+                    "The project source mirror has changed bytes, an unsafe index, or unknown untracked files."
+                )
             tracked_pin_ok, _ = wom_kit_project_update_git(
                 mirror_path,
                 ["ls-files", "--error-unmatch", "--", "installed-version.txt"],
@@ -91904,11 +96364,26 @@ def wom_kit_project_version_update(
             mirror_pin_tracked = tracked_pin_ok
             if mirror_pin_tracked:
                 blockers.append("The source-mirror installed-version pin must not be Git-tracked.")
-            origin_ok, origin_text = wom_kit_project_update_git(
+            origin_ok, origin_key_text = wom_kit_project_update_git(
                 mirror_path,
-                ["config", "--get", "remote.origin.url"],
+                [
+                    "config",
+                    "--local",
+                    "--no-includes",
+                    "--name-only",
+                    "--get-regexp",
+                    r"^remote\.origin\.url$",
+                ],
             )
-            origin_configured = origin_ok and bool(origin_text)
+            origin_key_lines = [
+                line.strip().lower()
+                for line in origin_key_text.splitlines()
+                if line.strip()
+            ]
+            origin_configured = bool(
+                origin_ok
+                and origin_key_lines == ["remote.origin.url"]
+            )
             if not origin_configured:
                 blockers.append("The project source mirror must have a configured origin remote.")
             current_versions = wom_kit_project_update_source_versions(mirror_path)
@@ -91927,7 +96402,8 @@ def wom_kit_project_version_update(
         }
     )
     mirror_pin_path = mirror_path / "installed-version.txt"
-    if mirror_pin_path.exists() or mirror_pin_path.is_symlink():
+    mirror_pin_kind = wom_kit_real_path_kind(project_root, mirror_pin_path)
+    if mirror_pin_kind != "missing":
         pin_specs.append(
             {
                 "path": mirror_pin_path,
@@ -91936,7 +96412,8 @@ def wom_kit_project_version_update(
             }
         )
     legacy_pin_path = project_root / "installed-version.txt"
-    if legacy_pin_path.exists() or legacy_pin_path.is_symlink():
+    legacy_pin_kind = wom_kit_real_path_kind(project_root, legacy_pin_path)
+    if legacy_pin_kind != "missing":
         pin_specs.append(
             {
                 "path": legacy_pin_path,
@@ -91947,18 +96424,32 @@ def wom_kit_project_version_update(
 
     for spec in pin_specs:
         path = spec["path"]
-        spec["existed"] = path.exists()
+        path_kind = wom_kit_real_path_kind(project_root, path)
+        spec["existed"] = path_kind == "file"
         spec["previous_bytes"] = None
         spec["previous_version"] = None
-        if path.is_symlink():
-            blockers.append("Recognized installed-version pins must not be symbolic links.")
+        if (
+            path_kind not in {"file", "missing"}
+            or not wom_kit_existing_path_components_are_real(project_root, path)
+        ):
+            blockers.append(
+                "Recognized installed-version pins must not contain a symlink, junction, or reparse path component."
+            )
             continue
-        if path.exists():
+        if path_kind == "file":
             try:
-                previous_bytes = path.read_bytes()
+                previous_bytes = wom_kit_read_bounded_real_bytes(
+                    project_root,
+                    path,
+                    max_bytes=WOM_KIT_VERSION_PIN_MAX_BYTES,
+                )
+                if previous_bytes is None:
+                    raise OSError("pin_unreadable_or_too_large")
                 previous_text = previous_bytes.decode("utf-8-sig").strip()
             except (OSError, UnicodeError):
-                blockers.append("A recognized installed-version pin is unreadable.")
+                blockers.append(
+                    "A recognized installed-version pin is unreadable or exceeds the size limit."
+                )
                 continue
             previous_version = normalize_version_label(previous_text)
             if previous_version is None or not WOM_KIT_PROJECT_UPDATE_TAG_RE.fullmatch(f"v{previous_version}"):
@@ -91966,6 +96457,33 @@ def wom_kit_project_version_update(
                 continue
             spec["previous_bytes"] = previous_bytes
             spec["previous_version"] = f"v{previous_version}"
+
+    preflight_git_snapshot = (
+        wom_kit_project_update_git_snapshot(mirror_path)
+        if git_repo_verified
+        else None
+    )
+    preflight_git_config_digest = (
+        wom_kit_project_update_git_config_trust_digest(mirror_path)
+        if git_repo_verified
+        else None
+    )
+    if git_repo_verified and preflight_git_snapshot is None:
+        blockers.append(
+            "The project source mirror state snapshot could not be captured safely."
+        )
+    if git_repo_verified and preflight_git_config_digest is None:
+        blockers.append(
+            "The effective configured-origin Git trust settings could not be bound safely."
+        )
+    elif not wom_kit_project_update_snapshot_is_clean(
+        preflight_git_snapshot,
+        expected_head=head_before,
+        expected_branch=original_branch,
+    ):
+        blockers.append(
+            "The project source mirror changed during preflight; rerun the dry-run."
+        )
 
     if target_version:
         target_key = version_sort_key(target_version)
@@ -91994,10 +96512,15 @@ def wom_kit_project_version_update(
     fetch_attempted = False
     fetch_succeeded = False
     source_checkout_changed = False
+    runtime_source_rematerialization_attempted = False
+    runtime_source_rematerialization_succeeded: bool | None = None
+    target_runtime_source_integrity_verified = False
     pin_write_attempted_paths: list[str] = []
     pins_written: list[str] = []
     receipt_relative: str | None = None
     receipt_written = False
+    receipt_bytes: bytes | None = None
+    receipt_reservation: dict[str, Any] | None = None
     rollback = {
         "attempted": False,
         "succeeded": None,
@@ -92007,6 +96530,14 @@ def wom_kit_project_version_update(
         "fetched_refs_may_remain": False,
     }
     lock_acquired = False
+    lock_reservation: dict[str, Any] | None = None
+    lock_release_state = "not_acquired"
+    lock_release_intent_status: str | None = None
+    directory_guard: WomKitProjectUpdateDirectoryGuard | None = None
+    preserve_lock = False
+    target_git_snapshot: dict[str, Any] | None = None
+    trusted_target_ref_snapshot: dict[str, str] | None = None
+    source_materialization_completed = False
 
     def validate_target_evidence(*, require_local: bool, require_origin_ancestry: bool) -> None:
         if require_local and not target_evidence.get("tag_available_locally"):
@@ -92038,9 +96569,15 @@ def wom_kit_project_version_update(
 
     def result_payload(status: str) -> dict[str, Any]:
         target_commit = target_evidence.get("target_commit")
-        rolled_back = status == "failed_rolled_back" and rollback.get("succeeded") is True
+        rolled_back = (
+            status in {"failed_rolled_back", "interrupted_rolled_back"}
+            and rollback.get("succeeded") is True
+        )
         final_pins_written = [] if rolled_back else list(pins_written)
-        source_is_target = status == "updated_restart_required" and head_after == target_commit
+        source_is_target = bool(
+            head_after == target_commit
+            and target_runtime_source_integrity_verified
+        )
         display_receipt_relative = (
             f"{root_label}/{receipt_relative}"
             if receipt_relative and root_label != "inspection_root"
@@ -92061,13 +96598,28 @@ def wom_kit_project_version_update(
         restart_required = status == "updated_restart_required"
         if status == "blocked":
             next_actions = ["Resolve every blocker before running project-version-update again."]
-        elif status in {"failed_rolled_back", "failed_rollback_incomplete"}:
+        elif status == "preview_only_platform_unsupported":
+            next_actions = [
+                "Review this preview, then run the approved project-version-update from Windows.",
+                "Before approval, close editors and pause sync, backup, and other Git processes for the complete transaction, then pass --affirm-external-writers-quiescent.",
+            ]
+        elif status in {
+            "failed_before_mutation",
+            "failed_rolled_back",
+            "failed_rollback_incomplete",
+            "interrupted_rolled_back",
+            "interrupted_rollback_incomplete",
+        }:
             next_actions = [
                 "Do not claim the target runtime is active.",
                 (
-                    "Review and restore the project source mirror and pins from backup before retrying."
-                    if status == "failed_rollback_incomplete"
-                    else "Review the generic failure stage, then rerun the dry-run before another approval."
+                    "Preserve the version-update lock and review the source mirror and pins before any retry."
+                    if status
+                    in {
+                        "failed_rollback_incomplete",
+                        "interrupted_rollback_incomplete",
+                    }
+                    else "Review the generic failure or interruption stage, then rerun the dry-run before another approval."
                 ),
             ]
         elif status == "no_change":
@@ -92080,11 +96632,20 @@ def wom_kit_project_version_update(
             ]
         else:
             next_actions = [
-                "Review this preview, then rerun with --approve --reviewed-by <actor>.",
+                "Review this preview, then rerun with --approve --reviewed-by <actor> --affirm-external-writers-quiescent.",
+                "Pass that affirmation only after editors and sync, backup, and other Git processes are paused for the complete transaction.",
                 "Approval will fetch and verify the exact tag before changing the source mirror or pins.",
             ]
         return {
-            "ok": not blockers and status not in {"failed_rolled_back", "failed_rollback_incomplete"},
+            "ok": not blockers
+            and status
+            not in {
+                "failed_before_mutation",
+                "failed_rolled_back",
+                "failed_rollback_incomplete",
+                "interrupted_rolled_back",
+                "interrupted_rollback_incomplete",
+            },
             "schema": "wom-kit/project-version-update/v0.1",
             "lifecycle_action": "project_version_update",
             "status": status,
@@ -92110,11 +96671,20 @@ def wom_kit_project_version_update(
                 "head_commit_after": head_after,
                 "source_checkout_change_attempted": source_checkout_changed,
                 "source_checkout_is_verified_target": source_is_target,
+                "runtime_source_rematerialization_attempted": (
+                    runtime_source_rematerialization_attempted
+                ),
+                "runtime_source_rematerialization_succeeded": (
+                    runtime_source_rematerialization_succeeded
+                ),
+                "target_runtime_source_integrity_verified": (
+                    target_runtime_source_integrity_verified
+                ),
                 "checkout_mode_after_result": (
-                    "detached_exact_tag"
-                    if source_is_target
-                    else "restored_original"
+                    "restored_original"
                     if rolled_back
+                    else "detached_exact_tag"
+                    if source_is_target
                     else "unchanged"
                 ),
             },
@@ -92136,10 +96706,13 @@ def wom_kit_project_version_update(
                 "fetched_refs_may_remain_after_result": fetch_succeeded,
                 "raw_git_stderr_echoed": False,
                 "remote_url_echoed": False,
-                "configured_git_transport_may_use_credential_helper": approve,
+                "configured_git_transport_may_use_credential_helper": (
+                    approve
+                    and WOM_KIT_PROJECT_UPDATE_APPROVAL_PLATFORM_SUPPORTED
+                ),
             },
             "receipt": {
-                "schema": "wom-kit/project-version-update-receipt/v0.1",
+                "schema": "wom-kit/project-version-update-receipt/v0.2",
                 "path": display_receipt_relative,
                 "written": receipt_written,
             },
@@ -92160,13 +96733,37 @@ def wom_kit_project_version_update(
                 ),
             },
             "write_boundary": {
+                "approval_platform_supported": (
+                    WOM_KIT_PROJECT_UPDATE_APPROVAL_PLATFORM_SUPPORTED
+                ),
+                "external_writer_quiescence_required": (
+                    WOM_KIT_PROJECT_UPDATE_APPROVAL_PLATFORM_SUPPORTED
+                ),
+                "external_writer_quiescence_affirmed": bool(
+                    approve and affirm_external_writers_quiescent
+                ),
+                "atomic_file_compare_and_swap": False,
+                "checkpointed_change_detection": True,
                 "archive_zets_written": False,
                 "archive_objets_written": False,
                 "archive_manifests_written": False,
                 "provider_state_written": False,
-                "project_source_checkout_may_change": approve,
-                "recognized_version_pins_may_change": approve,
-                "project_update_receipt_may_be_written": approve,
+                "project_source_checkout_may_change": (
+                    approve
+                    and WOM_KIT_PROJECT_UPDATE_APPROVAL_PLATFORM_SUPPORTED
+                ),
+                "project_runtime_source_materialization_may_change": (
+                    approve
+                    and WOM_KIT_PROJECT_UPDATE_APPROVAL_PLATFORM_SUPPORTED
+                ),
+                "recognized_version_pins_may_change": (
+                    approve
+                    and WOM_KIT_PROJECT_UPDATE_APPROVAL_PLATFORM_SUPPORTED
+                ),
+                "project_update_receipt_may_be_written": (
+                    approve
+                    and WOM_KIT_PROJECT_UPDATE_APPROVAL_PLATFORM_SUPPORTED
+                ),
             },
             "would_change": (
                 []
@@ -92191,7 +96788,8 @@ def wom_kit_project_version_update(
             "privacy_guards": {
                 "local_absolute_paths_echoed": False,
                 "remote_urls_echoed": False,
-                "credential_values_read_by_wom_kit": False,
+                "credential_access_may_occur": fetch_attempted,
+                "credential_config_values_exposed_to_python_result": False,
                 "credential_values_echoed": False,
                 "archive_body_text_read": False,
                 "objet_bytes_read": False,
@@ -92204,7 +96802,9 @@ def wom_kit_project_version_update(
         return result_payload("blocked")
     if dry_run:
         status = (
-            "ready_to_fetch_on_approve"
+            "preview_only_platform_unsupported"
+            if not WOM_KIT_PROJECT_UPDATE_APPROVAL_PLATFORM_SUPPORTED
+            else "ready_to_fetch_on_approve"
             if not target_evidence.get("tag_available_locally")
             else "ready_for_approval"
         )
@@ -92215,21 +96815,232 @@ def wom_kit_project_version_update(
     if progress_callback is not None:
         progress_callback("project-preflight", "done", None, None)
 
-    try:
-        metadata_root.mkdir(parents=True, exist_ok=True)
-        with lock_path.open("x", encoding="utf-8") as handle:
-            handle.write("wom-kit project version update in progress\n")
-        lock_acquired = True
-    except FileExistsError:
-        blockers.append("A concurrent project version update acquired the lock first.")
-        return result_payload("blocked")
-    except OSError:
-        blockers.append("The project version update lock could not be created.")
+    directory_guard = WomKitProjectUpdateDirectoryGuard(project_root)
+    guard_ready = bool(
+        directory_guard.hold(project_root)
+        and directory_guard.hold(metadata_root)
+        and directory_guard.hold_existing_tree(mirror_path)
+    )
+    if (
+        guard_ready
+        and wom_kit_real_path_kind(project_root, receipts_parent)
+        == "directory"
+    ):
+        guard_ready = directory_guard.hold_existing_tree(receipts_parent)
+    if not guard_ready:
+        directory_guard.close()
+        blockers.append(
+            "The project update could not hold every existing write-path directory stable against rename or reparse replacement."
+        )
         return result_payload("blocked")
 
+    def register_lock_reservation(identity: tuple[int, int]) -> None:
+        nonlocal lock_reservation
+        lock_reservation = {"identity": identity}
+
     try:
+        wom_kit_project_update_acquire_lock_exclusive(
+            project_root,
+            metadata_root,
+            lock_path,
+            reservation_callback=register_lock_reservation,
+        )
+        lock_acquired = True
+        lock_release_state = "held"
+    except FileExistsError:
+        directory_guard.close()
+        blockers.append("A concurrent project version update acquired the lock first.")
+        return result_payload("blocked")
+    except WomKitProjectUpdateReceiptUncertainError:
+        lock_acquired = bool(
+            wom_kit_real_path_kind(project_root, lock_path) != "missing"
+        )
+        preserve_lock = lock_acquired
+        rollback["attempted"] = lock_acquired
+        rollback["succeeded"] = False
+        rollback["source_restored"] = True
+        rollback["pins_restored"] = True
+        rollback["lock_removed"] = False
+        blockers.append(
+            "The project version update lock ownership could not be verified; the uncertain path was preserved for review."
+        )
+        directory_guard.close()
+        return result_payload("failed_rollback_incomplete")
+    except OSError:
+        directory_guard.close()
+        blockers.append("The project version update lock could not be created.")
+        return result_payload("blocked")
+    except BaseException:
+        lock_removed = bool(
+            wom_kit_real_path_kind(project_root, lock_path) == "missing"
+            or (
+                lock_reservation is not None
+                and wom_kit_project_update_release_owned_lock(
+                    project_root,
+                    lock_path,
+                    lock_reservation.get("identity"),
+                )
+            )
+        )
+        lock_acquired = not lock_removed
+        preserve_lock = not lock_removed
+        rollback["attempted"] = False
+        rollback["succeeded"] = lock_removed
+        rollback["source_restored"] = True
+        rollback["pins_restored"] = True
+        rollback["lock_removed"] = lock_removed
+        blockers.append(
+            "The project version update was interrupted while acquiring its lock; an uncertain lock was preserved for review."
+            if not lock_removed
+            else "The project version update was interrupted before local mutation."
+        )
+        directory_guard.close()
+        return result_payload(
+            "interrupted_rollback_incomplete"
+            if not lock_removed
+            else "interrupted_rolled_back"
+        )
+
+    def release_current_lock_or_raise(intent_status: str) -> None:
+        nonlocal lock_acquired, lock_release_intent_status
+        nonlocal lock_release_state, preserve_lock
+        if not lock_acquired:
+            return
+        lock_release_intent_status = intent_status
+        lock_release_state = "releasing"
+        identity = (
+            lock_reservation.get("identity")
+            if lock_reservation is not None
+            else None
+        )
+        if not wom_kit_project_update_release_owned_lock(
+            project_root,
+            lock_path,
+            identity,
+        ):
+            preserve_lock = True
+            raise RuntimeError("project_update_lock_ownership_changed")
+        lock_release_state = "released"
+        lock_acquired = False
+
+    def reserved_receipt_matches() -> bool:
+        if (
+            receipt_reservation is None
+            or receipt_bytes is None
+            or not receipt_written
+        ):
+            return False
+        path = receipt_reservation.get("path")
+        identity = receipt_reservation.get("identity")
+        if not isinstance(path, Path) or not isinstance(identity, tuple):
+            return False
+        try:
+            path_stat = os.lstat(path)
+        except OSError:
+            return False
+        return bool(
+            stat.S_ISREG(path_stat.st_mode)
+            and len(identity) == 2
+            and (
+                not identity[0]
+                or not path_stat.st_dev
+                or identity[0] == path_stat.st_dev
+            )
+            and (
+                not identity[1]
+                or not path_stat.st_ino
+                or identity[1] == path_stat.st_ino
+            )
+            and wom_kit_read_bounded_real_bytes(
+                project_root,
+                path,
+                max_bytes=2 * 1024 * 1024,
+            )
+            == receipt_bytes
+        )
+
+    def unlocked_terminal_state_verified(status: str) -> bool:
+        if status in {"blocked", "no_change"}:
+            return bool(
+                wom_kit_project_update_source_matches_snapshot(
+                    project_root,
+                    mirror_path,
+                    preflight_git_snapshot,
+                )
+                and wom_kit_project_update_all_pins_match_snapshot(
+                    project_root,
+                    pin_specs,
+                )
+                and (
+                    status == "blocked"
+                    or wom_kit_project_update_target_ref_snapshot(
+                        mirror_path,
+                        target_tag,
+                    )
+                    == trusted_target_ref_snapshot
+                )
+            )
+        if status != "updated_restart_required":
+            return False
+        target_pin_bytes = (target_tag + "\n").encode("utf-8")
+        return bool(
+            target_runtime_source_integrity_verified
+            and wom_kit_project_update_source_matches_snapshot(
+                project_root,
+                mirror_path,
+                target_git_snapshot,
+            )
+            and all(
+                wom_kit_read_bounded_real_bytes(
+                    project_root,
+                    spec["path"],
+                    max_bytes=WOM_KIT_VERSION_PIN_MAX_BYTES,
+                )
+                == target_pin_bytes
+                for spec in pin_specs
+            )
+            and reserved_receipt_matches()
+            and wom_kit_project_update_git_config_trust_digest(mirror_path)
+            == preflight_git_config_digest
+            and wom_kit_project_update_target_ref_snapshot(
+                mirror_path,
+                target_tag,
+            )
+            == trusted_target_ref_snapshot
+        )
+
+    try:
+        post_lock_snapshot = wom_kit_project_update_git_snapshot(mirror_path)
+        if (
+            preflight_git_snapshot is None
+            or post_lock_snapshot != preflight_git_snapshot
+            or wom_kit_project_update_git_config_trust_digest(mirror_path)
+            != preflight_git_config_digest
+            or not wom_kit_project_update_git_metadata_is_local_real(
+                project_root,
+                mirror_path,
+            )
+            or not wom_kit_project_update_all_pins_match_snapshot(
+                project_root,
+                pin_specs,
+            )
+        ):
+            blockers.append(
+                "The project source mirror or a recognized pin changed before the lock boundary; no fetch or project mutation was attempted."
+            )
+            release_current_lock_or_raise("blocked")
+            return result_payload("blocked")
         if progress_callback is not None:
             progress_callback("fetch-release", "start", None, None)
+        if (
+            wom_kit_project_update_git_config_trust_digest(mirror_path)
+            != preflight_git_config_digest
+        ):
+            blockers.append(
+                "The effective configured-origin Git trust settings changed before fetch."
+            )
+            release_current_lock_or_raise("blocked")
+            return result_payload("blocked")
         fetch_attempted = True
         fetch_ok, _ = wom_kit_project_update_git(
             mirror_path,
@@ -92246,78 +97057,205 @@ def wom_kit_project_version_update(
                 f"refs/tags/{target_tag}:refs/tags/{target_tag}",
             ],
             timeout_seconds=180,
+            allow_transport_environment=True,
         )
         fetch_succeeded = fetch_ok
+        post_fetch_config_matches = bool(
+            wom_kit_project_update_git_config_trust_digest(mirror_path)
+            == preflight_git_config_digest
+        )
         if progress_callback is not None:
             progress_callback("fetch-release", "done", None, None)
+        post_fetch_callback_config_matches = bool(
+            wom_kit_project_update_git_config_trust_digest(mirror_path)
+            == preflight_git_config_digest
+        )
         if not fetch_ok:
             blockers.append("The atomic configured-origin fetch failed; no source checkout or pin write was attempted.")
+            release_current_lock_or_raise("blocked")
+            return result_payload("blocked")
+        if (
+            not post_fetch_config_matches
+            or not post_fetch_callback_config_matches
+        ):
+            blockers.append(
+                "The effective configured-origin Git trust settings changed during fetch; fetched refs were not trusted or materialized."
+            )
+            release_current_lock_or_raise("blocked")
             return result_payload("blocked")
 
         if progress_callback is not None:
             progress_callback("verify-release", "start", None, None)
         target_evidence = wom_kit_project_update_target_evidence(mirror_path, target_tag)
         validate_target_evidence(require_local=True, require_origin_ancestry=True)
+        trusted_target_ref_snapshot = (
+            wom_kit_project_update_target_ref_snapshot(
+                mirror_path,
+                target_tag,
+            )
+        )
+        if (
+            trusted_target_ref_snapshot is None
+            or trusted_target_ref_snapshot.get("target_commit")
+            != target_evidence.get("target_commit")
+        ):
+            blockers.append(
+                "The exact target tag and origin/main ref snapshot could not be bound after fetch."
+            )
         if progress_callback is not None:
             progress_callback("verify-release", "done", None, None)
         if blockers:
+            release_current_lock_or_raise("blocked")
+            return result_payload("blocked")
+
+        before_mutation_snapshot = wom_kit_project_update_git_snapshot(
+            mirror_path
+        )
+        if (
+            before_mutation_snapshot != preflight_git_snapshot
+            or wom_kit_project_update_git_config_trust_digest(mirror_path)
+            != preflight_git_config_digest
+            or not wom_kit_project_update_git_metadata_is_local_real(
+                project_root,
+                mirror_path,
+            )
+            or not wom_kit_project_update_all_pins_match_snapshot(
+                project_root,
+                pin_specs,
+            )
+            or wom_kit_project_update_target_ref_snapshot(
+                mirror_path,
+                target_tag,
+            )
+            != trusted_target_ref_snapshot
+            or (
+                original_branch is not None
+                and (
+                    head_before is None
+                    or not wom_kit_project_update_branch_points_to_commit(
+                        mirror_path,
+                        original_branch,
+                        head_before,
+                    )
+                )
+            )
+        ):
+            blockers.append(
+                "The project source mirror or a recognized pin changed after fetch but before local mutation."
+            )
+            release_current_lock_or_raise("blocked")
             return result_payload("blocked")
 
         target_commit = str(target_evidence["target_commit"])
         pins_already_target = all(spec.get("previous_version") == target_tag for spec in pin_specs)
-        if head_before == target_commit and pins_already_target:
+        runtime_source_before = wom_kit_runtime_tracked_python_integrity(
+            project_root,
+            mirror_path,
+        )
+        runtime_source_before_verified = bool(
+            runtime_source_before["tracked_python_sources_verified"]
+        )
+        runtime_resources_before = wom_kit_runtime_resource_integrity(
+            project_root,
+            mirror_path,
+            ref=head_before or "HEAD",
+        )
+        target_runtime_source_integrity_verified = bool(
+            head_before == target_commit
+            and runtime_source_before_verified
+            and runtime_resources_before["runtime_resources_verified"]
+        )
+        checkout_required = bool(
+            head_before != target_commit
+            or original_branch is not None
+        )
+        if (
+            head_before == target_commit
+            and pins_already_target
+            and target_runtime_source_integrity_verified
+            and not checkout_required
+        ):
             head_after = head_before
-            lock_path.unlink()
-            lock_acquired = False
+            release_current_lock_or_raise("no_change")
             return result_payload("no_change")
 
         if progress_callback is not None:
             progress_callback("checkout-release", "start", None, None)
-        if head_before != target_commit:
-            checkout_ok, _ = wom_kit_project_update_git(
+        rematerialization_required = bool(
+            checkout_required
+            or not target_runtime_source_integrity_verified
+        )
+        if rematerialization_required:
+            if not wom_kit_project_update_materialize_commit(
                 mirror_path,
-                ["checkout", "--detach", "--quiet", "--no-overwrite-ignore", f"refs/tags/{target_tag}"],
-                timeout_seconds=60,
-            )
-            if not checkout_ok:
-                probe_ok, probe_head = wom_kit_project_update_git(mirror_path, ["rev-parse", "--verify", "HEAD"])
-                probe_status_ok, probe_status_text = wom_kit_project_update_git(
-                    mirror_path,
-                    ["status", "--porcelain=v1", "--untracked-files=all"],
+                target_commit,
+                dry_run=True,
+                directory_guard=directory_guard,
+            ):
+                blockers.append(
+                    "The verified target cannot be materialized without overwriting an ignored or unsafe filesystem entry; no source or pin mutation was attempted."
                 )
-                probe_unexpected = [
-                    line
-                    for line in probe_status_text.splitlines()
-                    if line and line != "?? installed-version.txt"
-                ]
-                if (
-                    not probe_ok
-                    or not probe_status_ok
-                    or bool(probe_unexpected)
-                    or (head_before and probe_head.lower() != head_before)
-                ):
-                    source_checkout_changed = True
-                    head_after = probe_head.lower() if probe_ok else None
-                    raise RuntimeError("checkout_failed_after_head_change")
-                blockers.append("The verified target checkout failed before any pin write.")
+                release_current_lock_or_raise("blocked")
                 return result_payload("blocked")
+            runtime_source_rematerialization_attempted = True
+            runtime_source_rematerialization_succeeded = False
             source_checkout_changed = True
-        head_ok, checked_out_head = wom_kit_project_update_git(mirror_path, ["rev-parse", "--verify", "HEAD"])
+            if not wom_kit_project_update_materialize_commit(
+                mirror_path,
+                target_commit,
+                directory_guard=directory_guard,
+            ):
+                raise RuntimeError("verified_source_materialization_failed")
+            source_materialization_completed = True
+            runtime_source_rematerialization_succeeded = True
+        head_ok, checked_out_head = wom_kit_project_update_git(
+            mirror_path,
+            ["rev-parse", "--verify", "HEAD"],
+        )
         head_after = checked_out_head.lower() if head_ok else None
         if not head_ok or head_after != target_commit:
             raise RuntimeError("checkout_verification_failed")
+        target_git_snapshot = wom_kit_project_update_git_snapshot(mirror_path)
+        if not wom_kit_project_update_snapshot_is_clean(
+            target_git_snapshot,
+            expected_head=target_commit,
+            expected_branch=None,
+        ):
+            target_git_snapshot = None
+            raise RuntimeError("target_source_compare_and_swap_unavailable")
+
         after_versions = wom_kit_project_update_source_versions(mirror_path)
         if not all(normalize_version_label(value) == target_version for value in after_versions.values()):
             raise RuntimeError("source_version_verification_failed")
-        status_ok, status_text = wom_kit_project_update_git(
+        runtime_source_after = wom_kit_runtime_tracked_python_integrity(
+            project_root,
             mirror_path,
-            ["status", "--porcelain=v1", "--untracked-files=all"],
         )
-        unexpected_after = [
-            line for line in status_text.splitlines() if line and line != "?? installed-version.txt"
-        ]
-        if not status_ok or unexpected_after:
-            raise RuntimeError("post_checkout_worktree_not_clean")
+        runtime_resources_after = wom_kit_runtime_resource_integrity(
+            project_root,
+            mirror_path,
+            ref=target_commit,
+        )
+        target_runtime_source_integrity_verified = bool(
+            runtime_source_after["tracked_python_sources_verified"]
+            and runtime_resources_after["runtime_resources_verified"]
+        )
+        if not target_runtime_source_integrity_verified:
+            raise RuntimeError("runtime_source_integrity_verification_failed")
+        if (
+            wom_kit_project_update_target_ref_snapshot(
+                mirror_path,
+                target_tag,
+            )
+            != trusted_target_ref_snapshot
+        ):
+            raise RuntimeError("target_ref_snapshot_changed")
+        if not wom_kit_project_update_source_matches_snapshot(
+            project_root,
+            mirror_path,
+            target_git_snapshot,
+        ):
+            raise RuntimeError("target_source_snapshot_unavailable")
         if progress_callback is not None:
             progress_callback("checkout-release", "done", None, None)
 
@@ -92326,22 +97264,74 @@ def wom_kit_project_version_update(
         target_pin_bytes = (target_tag + "\n").encode("utf-8")
         for index, spec in enumerate(pin_specs, start=1):
             path = spec["path"]
+            if (
+                not wom_kit_project_update_source_matches_snapshot(
+                    project_root,
+                    mirror_path,
+                    target_git_snapshot,
+                )
+                or not wom_kit_project_update_pin_matches_snapshot(
+                    project_root,
+                    spec,
+                )
+            ):
+                raise RuntimeError("project_update_compare_and_swap_failed")
             if spec.get("previous_bytes") != target_pin_bytes:
                 pin_write_attempted_paths.append(spec["logical"])
+                if not wom_kit_existing_path_components_are_real(
+                    project_root,
+                    path,
+                ):
+                    raise RuntimeError("pin_path_became_unsafe")
                 path.parent.mkdir(parents=True, exist_ok=True)
+                if not wom_kit_existing_path_components_are_real(
+                    project_root,
+                    path,
+                ):
+                    raise RuntimeError("pin_parent_became_unsafe")
                 write_bytes_atomic(path, target_pin_bytes)
                 pins_written.append(spec["logical"])
-            if path.read_bytes() != target_pin_bytes:
+            if (
+                wom_kit_read_bounded_real_bytes(
+                    project_root,
+                    path,
+                    max_bytes=WOM_KIT_VERSION_PIN_MAX_BYTES,
+                )
+                != target_pin_bytes
+            ):
                 raise RuntimeError("pin_verification_failed")
             if progress_callback is not None:
                 progress_callback("write-pins", "written", index, len(pin_specs))
         if progress_callback is not None:
             progress_callback("write-pins", "done", len(pin_specs), len(pin_specs))
+        if not wom_kit_project_update_source_matches_snapshot(
+            project_root,
+            mirror_path,
+            target_git_snapshot,
+        ):
+            raise RuntimeError("project_source_changed_during_pin_write")
+        if (
+            wom_kit_project_update_target_ref_snapshot(
+                mirror_path,
+                target_tag,
+            )
+            != trusted_target_ref_snapshot
+        ):
+            raise RuntimeError("target_ref_snapshot_changed_during_pin_write")
+        for spec in pin_specs:
+            if (
+                wom_kit_read_bounded_real_bytes(
+                    project_root,
+                    spec["path"],
+                    max_bytes=WOM_KIT_VERSION_PIN_MAX_BYTES,
+                )
+                != target_pin_bytes
+            ):
+                raise RuntimeError("pin_compare_and_swap_verification_failed")
 
         timestamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-        receipt_path, receipt_relative = wom_kit_project_update_receipt_path(project_root, target_tag, timestamp)
         receipt = {
-            "schema": "wom-kit/project-version-update-receipt/v0.1",
+            "schema": "wom-kit/project-version-update-receipt/v0.2",
             "action": "project_version_update",
             "status": "updated_restart_required",
             "timestamp": timestamp,
@@ -92352,6 +97342,19 @@ def wom_kit_project_version_update(
             "head_commit_before": head_before,
             "head_commit_after": head_after,
             "source_checkout_changed": source_checkout_changed,
+            "runtime_source_materialization": {
+                "attempted": runtime_source_rematerialization_attempted,
+                "succeeded": runtime_source_rematerialization_succeeded,
+                "target_integrity_verified": (
+                    target_runtime_source_integrity_verified
+                ),
+            },
+            "external_writer_quiescence": {
+                "affirmed": True,
+                "scope": (
+                    "complete_project_version_update_transaction"
+                ),
+            },
             "pins_written": list(pins_written),
             "configured_origin": {
                 "remote_name": "origin",
@@ -92374,107 +97377,385 @@ def wom_kit_project_version_update(
                 "objet_bytes_read": False,
             },
         }
-        schema_issues = validate_schema(receipt, "project-version-update-receipt.schema.json")
+        schema_issues = validate_schema(
+            receipt,
+            "project-version-update-receipt-v0.2.schema.json",
+        )
         if schema_issues:
             raise RuntimeError("receipt_schema_validation_failed")
         if progress_callback is not None:
             progress_callback("write-receipt", "start", None, None)
-        receipt_path.parent.mkdir(parents=True, exist_ok=True)
-        write_bytes_atomic(
-            receipt_path,
-            (json.dumps(receipt, indent=2, ensure_ascii=False) + "\n").encode("utf-8"),
+        receipt_bytes = (
+            json.dumps(receipt, indent=2, ensure_ascii=False) + "\n"
+        ).encode("utf-8")
+
+        def register_receipt_reservation(
+            reserved_path: Path,
+            reserved_relative: str,
+            reserved_identity: tuple[int, int],
+        ) -> None:
+            nonlocal receipt_reservation
+            # One state assignment is the ownership handoff.  If an asynchronous
+            # interruption lands before it, the exclusive helper still owns and
+            # removes the file; after it, outer rollback has the full CAS journal.
+            receipt_reservation = {
+                "path": reserved_path,
+                "relative": reserved_relative,
+                "identity": reserved_identity,
+            }
+
+        if (
+            not directory_guard.ensure_directory(
+                metadata_root,
+                receipts_parent,
+            )
+            or not directory_guard.ensure_directory(
+                receipts_parent,
+                receipts_root,
+            )
+        ):
+            raise RuntimeError("receipt_directory_stability_unavailable")
+        receipt_path, receipt_relative = (
+            wom_kit_project_update_write_receipt_exclusive(
+                project_root,
+                target_tag,
+                timestamp,
+                receipt_bytes,
+                directory_guard=directory_guard,
+                reservation_callback=register_receipt_reservation,
+            )
         )
         receipt_written = True
         if progress_callback is not None:
             progress_callback("write-receipt", "done", None, None)
-        lock_path.unlink()
-        lock_acquired = False
+        if (
+            wom_kit_project_update_target_ref_snapshot(
+                mirror_path,
+                target_tag,
+            )
+            != trusted_target_ref_snapshot
+        ):
+            raise RuntimeError("target_ref_snapshot_changed_before_commit")
+        release_current_lock_or_raise("updated_restart_required")
         return result_payload("updated_restart_required")
-    except Exception:
-        rollback["attempted"] = source_checkout_changed or bool(pin_write_attempted_paths)
+    except BaseException as failure:
+        interrupted = not isinstance(failure, Exception)
+        potential_mutation_attempted = bool(
+            source_checkout_changed
+            or pin_write_attempted_paths
+            or receipt_written
+            or receipt_reservation is not None
+            or isinstance(
+                failure,
+                WomKitProjectUpdateReceiptUncertainError,
+            )
+        )
+        lock_kind_after_failure = wom_kit_real_path_kind(
+            project_root,
+            lock_path,
+        )
+        if (
+            lock_release_state in {"releasing", "released"}
+            and lock_kind_after_failure == "missing"
+            and lock_release_intent_status is not None
+        ):
+            lock_acquired = False
+            lock_release_state = "released"
+            if unlocked_terminal_state_verified(
+                lock_release_intent_status
+            ):
+                warnings.append(
+                    "The operation had already crossed its verified lock-release commit boundary before the interruption."
+                )
+                return result_payload(lock_release_intent_status)
+            preserve_lock = False
+            rollback["attempted"] = False
+            rollback["succeeded"] = False
+            rollback["source_restored"] = None
+            rollback["pins_restored"] = None
+            rollback["lock_removed"] = True
+            rollback["fetched_refs_may_remain"] = fetch_attempted
+            blockers.append(
+                "The owned update lock was already absent when a terminal-state check failed; automatic rollback was skipped because it could no longer run under the lock."
+            )
+            return result_payload(
+                "interrupted_rollback_incomplete"
+                if interrupted
+                else "failed_rollback_incomplete"
+            )
+
+        lock_identity = (
+            lock_reservation.get("identity")
+            if lock_reservation is not None
+            else None
+        )
+        if lock_acquired and not wom_kit_project_update_owned_lock_present(
+            project_root,
+            lock_path,
+            lock_identity,
+        ):
+            lock_missing = lock_kind_after_failure == "missing"
+            lock_acquired = not lock_missing
+            preserve_lock = not lock_missing
+            rollback["attempted"] = False
+            rollback["succeeded"] = False
+            rollback["source_restored"] = None
+            rollback["pins_restored"] = None
+            rollback["lock_removed"] = lock_missing
+            rollback["fetched_refs_may_remain"] = fetch_attempted
+            blockers.append(
+                "The project update lock was removed or replaced before rollback; automatic rollback was skipped to avoid running without the owned lock."
+            )
+            return result_payload(
+                "interrupted_rollback_incomplete"
+                if interrupted
+                else "failed_rollback_incomplete"
+            )
+
+        if (
+            wom_kit_project_update_git_config_trust_digest(mirror_path)
+            != preflight_git_config_digest
+        ):
+            preserve_lock = True
+            target_runtime_source_integrity_verified = False
+            rollback["attempted"] = False
+            rollback["succeeded"] = False
+            rollback["source_restored"] = None
+            rollback["pins_restored"] = None
+            rollback["lock_removed"] = False
+            rollback["fetched_refs_may_remain"] = fetch_attempted
+            blockers.append(
+                "The effective Git configuration changed before rollback; automatic rollback was skipped and the owned lock was preserved for review."
+            )
+            return result_payload(
+                "interrupted_rollback_incomplete"
+                if interrupted
+                else "failed_rollback_incomplete"
+            )
+
+        preserve_lock = True
+        target_runtime_source_integrity_verified = False
+        uncertain_receipt_mutation = isinstance(
+            failure,
+            WomKitProjectUpdateReceiptUncertainError,
+        )
+        mutation_attempted = potential_mutation_attempted
+        rollback["attempted"] = mutation_attempted
         rollback["fetched_refs_may_remain"] = fetch_attempted
         source_restored = True
-        pins_restored = True
+        source_restore_operation_ok = True
+        pins_restored = not uncertain_receipt_mutation
         if source_checkout_changed and head_before:
-            restore_args = (
-                ["checkout", "--quiet", "--no-overwrite-ignore", original_branch]
-                if original_branch
-                else ["checkout", "--detach", "--quiet", "--no-overwrite-ignore", head_before]
-            )
-            restored_ok, _ = wom_kit_project_update_git(mirror_path, restore_args, timeout_seconds=60)
-            verify_ok, restored_head = wom_kit_project_update_git(mirror_path, ["rev-parse", "--verify", "HEAD"])
-            restored_status_ok, restored_status_text = wom_kit_project_update_git(
+            current_ok, current_head = wom_kit_project_update_git(
                 mirror_path,
-                ["status", "--porcelain=v1", "--untracked-files=all"],
+                ["rev-parse", "--verify", "HEAD"],
             )
-            restored_unexpected = [
-                line
-                for line in restored_status_text.splitlines()
-                if line and line != "?? installed-version.txt"
-            ]
-            source_restored = (
+            current_git_snapshot = wom_kit_project_update_git_snapshot(
+                mirror_path
+            )
+            rollback_head_safe = bool(
+                current_ok
+                and current_head.lower()
+                in {
+                    head_before,
+                    str(target_evidence.get("target_commit") or "").lower(),
+                }
+                and (
+                    source_materialization_completed
+                    and target_git_snapshot is not None
+                    and current_git_snapshot == target_git_snapshot
+                )
+            )
+            try:
+                restored_ok = bool(
+                    rollback_head_safe
+                    and wom_kit_project_update_materialize_commit(
+                        mirror_path,
+                        head_before,
+                        attach_branch=original_branch,
+                        directory_guard=directory_guard,
+                    )
+                )
+            except BaseException:
+                restored_ok = False
+            verify_ok, restored_head = wom_kit_project_update_git(mirror_path, ["rev-parse", "--verify", "HEAD"])
+            source_restore_operation_ok = (
                 restored_ok
                 and verify_ok
                 and restored_head.lower() == head_before
-                and restored_status_ok
-                and not restored_unexpected
             )
+            if source_restore_operation_ok:
+                source_restore_operation_ok = (
+                    wom_kit_project_update_restore_eol_overrides(
+                        project_root,
+                        mirror_path,
+                        preflight_git_snapshot,
+                    )
+                )
+            source_restored = source_restore_operation_ok
             head_after = restored_head.lower() if verify_ok else None
         for spec in pin_specs:
+            if spec["logical"] not in pin_write_attempted_paths:
+                if not wom_kit_project_update_pin_matches_snapshot(
+                    project_root,
+                    spec,
+                ):
+                    pins_restored = False
+                continue
             path = spec["path"]
             try:
+                path_kind = wom_kit_real_path_kind(project_root, path)
+                current_bytes = (
+                    wom_kit_read_bounded_real_bytes(
+                        project_root,
+                        path,
+                        max_bytes=WOM_KIT_VERSION_PIN_MAX_BYTES,
+                    )
+                    if path_kind == "file"
+                    else None
+                )
                 if spec.get("existed"):
                     previous_bytes = spec.get("previous_bytes")
                     if not isinstance(previous_bytes, bytes):
                         raise OSError("missing_pin_snapshot")
+                    if current_bytes == previous_bytes:
+                        continue
+                    if current_bytes != target_pin_bytes:
+                        raise OSError("pin_compare_and_swap_failed")
+                    if not wom_kit_existing_path_components_are_real(
+                        project_root,
+                        path,
+                    ):
+                        raise OSError("pin_path_unsafe")
                     path.parent.mkdir(parents=True, exist_ok=True)
                     write_bytes_atomic(path, previous_bytes)
-                elif path.exists():
+                    if (
+                        wom_kit_read_bounded_real_bytes(
+                            project_root,
+                            path,
+                            max_bytes=WOM_KIT_VERSION_PIN_MAX_BYTES,
+                        )
+                        != previous_bytes
+                    ):
+                        raise OSError("pin_restore_verification_failed")
+                elif path_kind == "missing":
+                    continue
+                elif current_bytes == target_pin_bytes:
                     path.unlink()
-            except OSError:
+                    if wom_kit_real_path_kind(project_root, path) != "missing":
+                        raise OSError("pin_removal_verification_failed")
+                else:
+                    raise OSError("pin_compare_and_swap_failed")
+            except BaseException:
                 pins_restored = False
-        if receipt_relative:
-            receipt_candidate = project_root.joinpath(*PurePosixPath(receipt_relative).parts)
+        if receipt_reservation is not None:
+            receipt_candidate = receipt_reservation["path"]
+            receipt_identity = receipt_reservation["identity"]
             try:
-                if receipt_candidate.exists():
-                    receipt_candidate.unlink()
+                receipt_kind = wom_kit_real_path_kind(
+                    project_root,
+                    receipt_candidate,
+                )
+                if receipt_kind == "file":
+                    current_receipt = wom_kit_read_bounded_real_bytes(
+                        project_root,
+                        receipt_candidate,
+                        max_bytes=2 * 1024 * 1024,
+                    )
+                    if receipt_bytes is None or current_receipt != receipt_bytes:
+                        raise OSError("receipt_compare_and_swap_failed")
+                    if not wom_kit_project_update_remove_exclusive_receipt_if_owned(
+                        project_root,
+                        receipt_candidate,
+                        receipt_identity,
+                    ):
+                        raise OSError("receipt_removal_verification_failed")
+                elif receipt_kind != "missing":
+                    raise OSError("receipt_path_unsafe")
                 receipt_written = False
-            except OSError:
+            except BaseException:
                 pins_restored = False
         for directory, existed_before in (
             (receipts_root, receipts_root_existed_before),
             (receipts_parent, receipts_parent_existed_before),
         ):
-            if existed_before or not directory.exists():
+            if (
+                existed_before
+                or wom_kit_real_path_kind(project_root, directory) == "missing"
+            ):
                 continue
             try:
+                directory_guard.release(directory)
                 directory.rmdir()
-            except OSError:
+            except BaseException:
                 pins_restored = False
+        if source_checkout_changed:
+            source_restored = bool(
+                source_restore_operation_ok
+                and preflight_git_snapshot is not None
+                and wom_kit_project_update_git_metadata_is_local_real(
+                    project_root,
+                    mirror_path,
+                )
+                and wom_kit_project_update_git_snapshot(mirror_path)
+                == preflight_git_snapshot
+            )
         rollback["source_restored"] = source_restored
         rollback["pins_restored"] = pins_restored
-        lock_removed = True
-        if lock_acquired:
+        lock_removed = False
+        if source_restored and pins_restored and lock_acquired:
+            identity = (
+                lock_reservation.get("identity")
+                if lock_reservation is not None
+                else None
+            )
             try:
-                lock_path.unlink()
-                lock_acquired = False
-            except OSError:
-                lock_removed = False
+                lock_removed = wom_kit_project_update_release_owned_lock(
+                    project_root,
+                    lock_path,
+                    identity,
+                )
+                if lock_removed:
+                    lock_acquired = False
+            except BaseException:
+                lock_removed = (
+                    wom_kit_real_path_kind(project_root, lock_path)
+                    == "missing"
+                )
+                if lock_removed:
+                    lock_acquired = False
+        elif not lock_acquired:
+            lock_removed = True
         rollback["lock_removed"] = lock_removed
         rollback["succeeded"] = source_restored and pins_restored and lock_removed
+        preserve_lock = not bool(rollback["succeeded"])
         blockers.append(
-            "The project version update failed after local mutation and was rolled back."
-            if rollback["succeeded"]
-            else "The project version update failed and rollback could not be fully verified."
+            (
+                "The project version update was interrupted and its local mutation was rolled back."
+                if interrupted and rollback["succeeded"]
+                else "The project version update was interrupted and rollback could not be fully verified; the lock was preserved."
+                if interrupted
+                else "The project version update failed after local mutation and was rolled back."
+                if mutation_attempted and rollback["succeeded"]
+                else "The project version update failed before local mutation."
+                if rollback["succeeded"]
+                else "The project version update failed and rollback could not be fully verified; the lock was preserved."
+            )
         )
-        status = "failed_rolled_back" if rollback["succeeded"] else "failed_rollback_incomplete"
+        status = (
+            "interrupted_rolled_back"
+            if interrupted and rollback["succeeded"]
+            else "interrupted_rollback_incomplete"
+            if interrupted
+            else "failed_rolled_back"
+            if mutation_attempted and rollback["succeeded"]
+            else "failed_before_mutation"
+            if rollback["succeeded"]
+            else "failed_rollback_incomplete"
+        )
         return result_payload(status)
     finally:
-        if lock_acquired:
-            try:
-                lock_path.unlink()
-            except OSError:
-                pass
+        directory_guard.close()
 
 
 def ai_start_here(

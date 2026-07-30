@@ -28,7 +28,7 @@ shared-updates/incoming/example-update.json
 ## 2. Run the dry-run preview
 
 ```powershell
-python wom-kit\cli\archive.py shared-update-route-preview <archive-root> --record shared-updates/incoming/example-update.json --dry-run --format json
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli shared-update-route-preview <archive-root> --record shared-updates/incoming/example-update.json --dry-run --format json
 ```
 
 ## 3. A representative output snippet
