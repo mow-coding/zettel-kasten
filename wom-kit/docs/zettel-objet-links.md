@@ -73,6 +73,39 @@ position hints such as:
 - `source: body`
 - `line: 12`
 
+## Count Scope Compared With Overview And Catalog
+
+`zettel-objet-links.count` is the number of distinct normalized objet IDs
+discovered across the valid frontmatter and body of one non-redacted zettel.
+This is deliberately broader than the v0.3.292 overview and catalog
+`tie_summary.referenced_objets_count`.
+
+```text
+tie_summary.referenced_objets_count
+  = distinct structured frontmatter objet relationships
+
+zettel-objet-links.count
+  = distinct objet IDs discovered across valid frontmatter and body
+```
+
+The tie summary recognizes structured frontmatter sources and exact canonical
+edge target fields without reading the body; catalog output therefore keeps
+`body_read: false`. This link preview performs the broader read-only scan, so a
+body-only objet ID can increase its count without increasing the tie summary.
+
+The link preview deliberately performs a broader recursive token scan across
+valid frontmatter plus body text. It can discover a canonical object-ID token
+inside arbitrary nested edge metadata, a URL string, or a path string. Such a
+discovery is a token occurrence for this link command; it does not make that
+location a structured relationship target and does not increase the tie
+summary.
+
+Overview and catalog also replace malformed object-shaped or non-string direct
+edge targets with the fixed `<redacted-reference>` placeholder. A target that
+does not count therefore cannot leak through the neighboring edge preview.
+This does not change the broader body/frontmatter scan performed by this
+read-only link command.
+
 ## Output Shape
 
 For each distinct objet ref, the preview returns:
@@ -119,7 +152,10 @@ It does not:
 - prove remote availability,
 - decide whether local originals can be deleted.
 
-Redacted zettels are blocked and do not expose link previews.
+Redacted zettels are blocked before the frontmatter/body scan and do not expose
+a count, private relationship existence, or link previews. Redacted overview
+and catalog surfaces independently return zero ties, empty edges, and
+`body_read: false`.
 
 ## Relationship To `resolve-objet-ref`
 

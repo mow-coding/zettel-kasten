@@ -2,6 +2,49 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.3.292 objet 연결 수 일관성
+
+v0.3.292는 아카이브 이관이 필요하지 않으며 기존 zet 파일을 다시 쓰지
+않습니다.
+
+overview와 catalog의 `tie_summary.referenced_objets_count`는 이제 기존
+`assets`, `source_refs`, `source_intake`뿐 아니라 정식 edge target 필드인
+`target`, `target_id`, `zettel_id`에 적힌 구조화된 frontmatter objet 관계도
+서로 다른 object ID별로 셉니다. 값 전체가 정확한
+`sha256:<64 hex>` 또는 `objet:sha256:<64 hex>`일 때만 인정하고, 두 형식은
+소문자 `sha256:<64 hex>`로 정규화한 뒤 digest별로 중복을 제거합니다.
+
+두 count의 범위는 의도적으로 다릅니다.
+
+```text
+tie_summary.referenced_objets_count
+  = 구조화된 frontmatter objet 관계의 고유 개수
+
+zettel-objet-links.count
+  = 올바른 frontmatter와 본문에서 찾은 objet ID의 고유 개수
+```
+
+따라서 본문에만 있는 참조가 있으면 `zettel-objet-links.count`가 overview나
+catalog count보다 클 수 있습니다. catalog는 계속 `body_read: false`이고,
+redacted overview와 catalog는 비공개 관계의 존재를 읽거나 드러내기 전에
+count 0을 유지합니다.
+
+object ID 표시는 들어 있지만 값 전체가 하나의 정식 object ID가 아닌 edge
+target은 overview와 catalog 미리보기에서 고정
+`<redacted-reference>`로 바뀝니다. partial, suffix, URL/경로 포함,
+대문자 prefix, 비문자열 값을 count에서 제외한 뒤 미리보기로 다시 노출하는
+일을 막습니다. 올바른 object ID, 올바른 zettel target, 일반적인 안전
+label은 그대로 볼 수 있습니다.
+
+새 명령, MCP 도구, writer, migration, index rebuild, provider 호출,
+아카이브 변경은 없습니다. `tie_summary.referenced_objets_count`를 본문 검색
+결과로 해석하던 자동화는 더 넓은 읽기 전용 질문에
+`zettel-objet-links`를 사용해야 합니다.
+
+자세한 내용은
+[`wom-kit/docs/releases/v0.3.292.md`](wom-kit/docs/releases/v0.3.292.md)를
+보세요.
+
 ## v0.3.291 runtime 버전 정렬
 
 v0.3.291은 아카이브 데이터를 바꾸지 않으며 아카이브 이관도 필요하지
