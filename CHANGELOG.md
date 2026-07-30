@@ -26,6 +26,10 @@ This project uses semantic versioning for public compatibility checkpoints.
 - Made an existing directory without a readable WOM `archive.yml` return a
   content-free `invalid_archive` blocked result and exit 1 instead of allowing
   an exception or absolute path to cross the CLI boundary.
+- Extended that archive-identity boundary to malformed YAML, invalid UTF-8,
+  expected local read failures, non-string values, and empty or
+  whitespace-only `archive_id` values. These cases stop before any host
+  inspection and return valid structured JSON with no stderr traceback.
 
 ## v0.3.292 - 2026-07-31
 
