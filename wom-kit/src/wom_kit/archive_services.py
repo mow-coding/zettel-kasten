@@ -95451,6 +95451,33 @@ def wom_kit_project_update_acquire_lock_exclusive(
         if not stat.S_ISREG(opened.st_mode):
             raise OSError("project_update_lock_not_regular")
         identity = (opened.st_dev, opened.st_ino)
+        try:
+            reserved = os.lstat(lock_path)
+        except OSError as error:
+            raise OSError(
+                "project_update_lock_path_changed_before_reservation"
+            ) from error
+        if (
+            wom_kit_real_path_kind(project_root, metadata_root) != "directory"
+            or not wom_kit_existing_path_components_are_real(
+                project_root,
+                lock_path,
+            )
+            or not stat.S_ISREG(reserved.st_mode)
+            or (
+                identity[0]
+                and reserved.st_dev
+                and identity[0] != reserved.st_dev
+            )
+            or (
+                identity[1]
+                and reserved.st_ino
+                and identity[1] != reserved.st_ino
+            )
+        ):
+            raise OSError(
+                "project_update_lock_path_changed_before_reservation"
+            )
         reservation_callback(identity)
         offset = 0
         while offset < len(WOM_KIT_PROJECT_UPDATE_LOCK_BYTES):
@@ -95644,6 +95671,33 @@ def wom_kit_project_update_write_receipt_exclusive(
             if not stat.S_ISREG(opened.st_mode):
                 raise OSError("receipt_not_regular")
             created_identity = (opened.st_dev, opened.st_ino)
+            try:
+                reserved = os.lstat(candidate)
+            except OSError as error:
+                raise OSError(
+                    "receipt_path_changed_before_reservation"
+                ) from error
+            if (
+                not directory_guard.is_held(receipts_root)
+                or not wom_kit_existing_path_components_are_real(
+                    project_root,
+                    candidate,
+                )
+                or not stat.S_ISREG(reserved.st_mode)
+                or (
+                    created_identity[0]
+                    and reserved.st_dev
+                    and created_identity[0] != reserved.st_dev
+                )
+                or (
+                    created_identity[1]
+                    and reserved.st_ino
+                    and created_identity[1] != reserved.st_ino
+                )
+            ):
+                raise OSError(
+                    "receipt_path_changed_before_reservation"
+                )
             relative = PurePosixPath(
                 *candidate.relative_to(project_root).parts
             ).as_posix()

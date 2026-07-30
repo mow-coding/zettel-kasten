@@ -531,3 +531,40 @@ The v0.3.291 branch was pushed and opened as GitHub PR #33 against `main`.
 The PR head initially matched the exact full-suite commit above. This
 chronological record is a documentation-only follow-up; PR CI must pass again
 on the final head before merge.
+
+### First PR CI correction
+
+PR CI run `30560892869` passed the release-readiness gate but failed the two
+Ubuntu jobs with the same four focused regressions; the Windows job was still
+running when diagnosis began. The release remained blocked and no merge, tag,
+wheel, or public-release action was taken.
+
+The four failures separated into three cross-platform fixture/expectation
+problems and one real just-in-time validation-order defect:
+
+- the wrapper-symlink test incorrectly required the public generic reason and
+  the internal specific integrity reason to be identical;
+- the mirror-symlink test incorrectly expected the deeper mirror-integrity
+  gate even though the earlier path gate correctly refused the unsafe mirror
+  before reading any metadata;
+- the lock-replacement test unlinked and recreated the same filename, allowing
+  Linux to reuse the just-freed inode and therefore failing to create the
+  different identity the test claimed to exercise; and
+- exclusive lock/receipt creation invoked its reservation callback before
+  revalidating the newly opened file against the current pathname, so a POSIX
+  parent swap could be reported as reserved before the later refusal.
+
+The tests now assert the actual layered public/internal reason-code contract,
+prove the unsafe mirror caused no bounded metadata read, and construct a
+deterministically different replacement file before `os.replace`. Production
+lock and receipt helpers now revalidate real components, regular-file type,
+and opened/current file identity before the reservation callback; receipt
+creation also revalidates the held receipt root. Focused Windows verification
+passed 11 tests with two expected unprivileged-symlink skips, plus Python
+compilation and diff checks. The supervisor independently reran the eight
+runtime-integrity tests, two lock tests, and one receipt-reservation test with
+the same 11-pass/two-skip result, then passed the v0.3.291 documentation
+contract, all seven package-resource tests, deterministic synchronization of
+103 package resources, and all four release-readiness child checks. Ubuntu
+3.10 and 3.12 remain the required final verification for the corrected branch,
+so a new exact-head PR CI run must pass before merge.

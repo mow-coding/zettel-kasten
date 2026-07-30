@@ -6062,12 +6062,40 @@ class ArchiveCliTests(unittest.TestCase):
             except OSError as exc:
                 self.skipTest(f"file symlinks are unavailable: {exc}")
 
-            alignment = self.assert_runtime_alignment_integrity_failure(
-                fixture["project_root"],
+            code, output = self.run_cli(
+                [
+                    "version",
+                    str(fixture["project_root"]),
+                    "--no-redact-local-paths",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+
+            self.assertEqual(code, 1, output)
+            self.assertFalse(result["ok"])
+            alignment = result["runtime_alignment"]
+            self.assertEqual(
+                alignment["status"],
+                "project_source_update_required",
+            )
+            self.assertEqual(
+                alignment["reason_code"],
+                "project_wrapper_missing_or_outside_mirror",
+            )
+            self.assertTrue(alignment["integrity"]["checked"])
+            self.assertFalse(alignment["integrity"]["verified"])
+            self.assertEqual(
+                alignment["integrity"]["reason_code"],
                 "project_wrapper_path_unsafe",
             )
             self.assertFalse(
                 alignment["integrity"]["wrapper_path_components_real"]
+            )
+            self.assertFalse(alignment["project_scoped_bridge"]["available"])
+            self.assertFalse(
+                alignment["project_scoped_bridge"]["exact_argv_included"]
             )
 
     def test_version_runtime_alignment_integrity_rejects_symlinked_mirror_when_supported(self) -> None:
@@ -6089,12 +6117,73 @@ class ArchiveCliTests(unittest.TestCase):
             except OSError as exc:
                 self.skipTest(f"directory symlinks are unavailable: {exc}")
 
-            alignment = self.assert_runtime_alignment_integrity_failure(
-                fixture["project_root"],
-                "project_mirror_not_real_inside_project",
+            bounded_read_paths: list[Path] = []
+            real_bounded_read = (
+                archive_services.wom_kit_read_bounded_real_bytes
+            )
+
+            def record_bounded_read(
+                root: Path,
+                path: Path,
+                *,
+                max_bytes: int,
+            ) -> bytes | None:
+                bounded_read_paths.append(path)
+                return real_bounded_read(
+                    root,
+                    path,
+                    max_bytes=max_bytes,
+                )
+
+            with patch.object(
+                archive_services,
+                "wom_kit_read_bounded_real_bytes",
+                side_effect=record_bounded_read,
+            ):
+                code, output = self.run_cli(
+                    [
+                        "version",
+                        str(fixture["project_root"]),
+                        "--no-redact-local-paths",
+                        "--format",
+                        "json",
+                    ]
+                )
+            result = json.loads(output)
+
+            self.assertEqual(code, 1, output)
+            self.assertFalse(result["ok"])
+            self.assertEqual(
+                result["project_source_mirror"]["status"],
+                "unsafe_path",
+            )
+            alignment = result["runtime_alignment"]
+            self.assertEqual(
+                alignment["status"],
+                "project_source_update_required",
+            )
+            self.assertEqual(
+                alignment["reason_code"],
+                "project_source_metadata_path_unsafe",
+            )
+            self.assertFalse(alignment["integrity"]["checked"])
+            self.assertFalse(alignment["integrity"]["verified"])
+            self.assertEqual(
+                alignment["integrity"]["reason_code"],
+                "project_source_metadata_path_unsafe",
             )
             self.assertFalse(
                 alignment["integrity"]["mirror_real_directory_inside_project"]
+            )
+            self.assertFalse(alignment["project_scoped_bridge"]["available"])
+            self.assertFalse(
+                alignment["project_scoped_bridge"]["exact_argv_included"]
+            )
+            self.assertFalse(
+                any(
+                    path == mirror_path or mirror_path in path.parents
+                    for path in bounded_read_paths
+                )
             )
 
     def test_version_path_gate_rejects_symlinked_pin_without_reading_external_sentinel(
@@ -9474,10 +9563,19 @@ class ArchiveCliTests(unittest.TestCase):
                 )
             )
             self.assertEqual(captured_identity, [identity])
-            lock_path.unlink()
-            lock_path.write_bytes(
+            replacement_path = lock_path.with_name(
+                "version-update-replacement.lock"
+            )
+            replacement_path.write_bytes(
                 archive_services.WOM_KIT_PROJECT_UPDATE_LOCK_BYTES
             )
+            replacement_stat = os.lstat(replacement_path)
+            replacement_identity = (
+                replacement_stat.st_dev,
+                replacement_stat.st_ino,
+            )
+            self.assertNotEqual(replacement_identity, identity)
+            os.replace(replacement_path, lock_path)
             self.assertFalse(
                 archive_services.wom_kit_project_update_owned_lock_present(
                     project_root,
