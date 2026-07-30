@@ -628,14 +628,11 @@ raise SystemExit(70)
                     str(target),
                 ],
                 check=False,
-                capture_output=True,
-                text=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
             )
             if completed.returncode != 0:
-                raise OSError(
-                    "Windows junction creation failed: "
-                    + completed.stderr.strip()
-                )
+                raise OSError("Windows junction creation failed")
             return
         link.symlink_to(target, target_is_directory=True)
 

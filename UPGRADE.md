@@ -24,6 +24,48 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.292 Objet Tie-Count Consistency
+
+v0.3.292 requires no archive migration and rewrites no zettel.
+
+Overview and catalog `tie_summary.referenced_objets_count` now count distinct
+structured frontmatter objet relationships from the existing `assets`,
+`source_refs`, and `source_intake` fields plus canonical edge target fields
+`target`, `target_id`, and `zettel_id`. Only a complete
+`sha256:<64 hex>` or `objet:sha256:<64 hex>` target is accepted; aliases are
+normalized and deduplicated by digest.
+
+The count intentionally does not scan the body:
+
+```text
+tie_summary.referenced_objets_count
+  = distinct structured frontmatter objet relationships
+
+zettel-objet-links.count
+  = distinct objet IDs discovered across valid frontmatter and body
+```
+
+Therefore a body-only reference can make `zettel-objet-links.count` larger
+than the overview or catalog count. Catalog output remains `body_read: false`.
+Redacted overview and catalog results remain zero before private relationship
+existence is inspected or exposed.
+
+An edge target that contains an object-ID marker but is not one complete
+canonical object ID is also rendered as the fixed `<redacted-reference>`
+placeholder in overview and catalog edge previews. This prevents partial,
+suffixed, URL/path-contained, uppercase-prefix, or non-string target values
+from being excluded from the count while still leaking through the preview.
+Valid object IDs, valid zettel targets, and ordinary safe labels remain
+available.
+
+No command, MCP tool, writer, migration, index rebuild, provider call, or
+archive mutation is added. Existing automation that interpreted
+`tie_summary.referenced_objets_count` as a body-search count should use
+`zettel-objet-links` for that broader read-only question instead.
+
+See
+[`wom-kit/docs/releases/v0.3.292.md`](wom-kit/docs/releases/v0.3.292.md).
+
 ## v0.3.291 Runtime Version Alignment
 
 v0.3.291 changes no archive data and requires no archive migration.
