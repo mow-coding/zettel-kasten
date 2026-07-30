@@ -124,7 +124,11 @@ are recorded; an unexposed backend identity is not guessed.
   `not_exposed`;
 - model transition or fallback observed in this task: `not_observed`;
 - input commit: `f8e209f21179a769bde3abf0526473b2ea5d41fd`;
-- implementation output commit: pending the final local implementation commit;
+- implementation output commit:
+  `c688f545feffe63182392f10727cd3ab6876c8e7`;
+- provenance/evidence follow-up commit: this record-only update follows the
+  implementation commit; its SHA is captured in the release-supervisor
+  handoff rather than self-referenced inside its own commit;
 - test reference: exact-worktree focused, ordinary-regression, non-CLI, CLI,
   release-readiness, and clean-wheel evidence recorded in this file;
 - human authority: the human project owner and release supervisor retain final
