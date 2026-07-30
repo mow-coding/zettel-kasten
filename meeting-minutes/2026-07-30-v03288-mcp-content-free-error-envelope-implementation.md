@@ -123,8 +123,22 @@ Completed local gates so far:
 - resource synchronization: 102 files for v0.3.288;
 - `py_compile`, staged/unstaged `git diff --check`: passed;
 - independent P1/P2 code and test review after all corrections: no remaining
-  finding.
+  finding;
+- initial candidate commit:
+  `7a99931e40cf94f070229384039e844eca5d5ed1`;
+- clean candidate wheel:
+  `wom_kit-0.3.288-py3-none-any.whl`, 1,205,792 bytes,
+  SHA-256
+  `9fcb35bd2ff4b3f939d770b429ee712caac9015993e44374a44463cf069aac45`;
+- clean-wheel contents and lifecycle: 102 manifested resources, 117 wheel
+  files, all four entrypoints, runtime Agent Skill lifecycle, onboarding
+  preview/write, and strict Doctor passed;
+- preserved local candidate artifact:
+  `C:\Users\mylifeisbusy\Documents\dev\zettel-kasten-release-artifacts\v0.3.288-candidate-7a99931e`.
 
-The clean wheel, exact candidate commit, and remote release gates are still
-pending. No wheel checksum, remote CI result, tag, GitHub Release, public
-artifact result, or beta validation is claimed yet.
+This evidence update follows the initial product candidate commit. The
+supervisor must rerun the clean-wheel gate on the final evidence-bearing tree
+before treating it as the exact PR candidate.
+
+Remote PR, CI, merge, tag, GitHub Release, public artifact, and beta
+validation remain pending and are not claimed here.
