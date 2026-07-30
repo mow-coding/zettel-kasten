@@ -54,7 +54,7 @@ jobs:
   tests:
     name: Tests ${{ matrix.os }} py${{ matrix.python-version }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: ${{ matrix.timeout-minutes }}
     strategy:
       # One platform failing must not hide the result on the other.
       fail-fast: false
@@ -64,12 +64,17 @@ jobs:
           # one the local Windows development machine never exercises.
           - os: ubuntu-latest
             python-version: '3.12'
+            timeout-minutes: 45
           # Lowest supported interpreter (requires-python = ">=3.10").
           - os: ubuntu-latest
             python-version: '3.10'
+            timeout-minutes: 45
           # Keeps parity with the machine releases are currently cut on.
+          # The full Windows suite normally takes 37-44 minutes and can take
+          # about 55 minutes on a slow hosted runner, so keep real headroom.
           - os: windows-latest
             python-version: '3.12'
+            timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
 
