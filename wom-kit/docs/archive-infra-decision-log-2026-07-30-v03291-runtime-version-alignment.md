@@ -85,6 +85,10 @@ decision.
   identities. Source, pin, lock, receipt, and config snapshots detect drift at
   checkpoints. They are not atomic file CAS and do not provide a general
   never-clobber guarantee.
+- After each exclusive lock or receipt open, revalidate the real pathname,
+  regular-file type, and opened-descriptor identity before invoking the
+  reservation callback. Receipt creation also revalidates the held receipt
+  root. A swapped parent must fail before a reservation or payload write.
 - External editors, sync/backup tools, and other Git writers must remain
   quiescent through the complete approval. After dry-run, every Windows
   approval must include the reviewer plus
