@@ -6,6 +6,31 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.289 - 2026-07-30
+
+- Strengthened release-wheel checking from resource-name presence to exact
+  installed-resource integrity.
+- Required the wheel's packaged resource manifest to match the reviewed
+  repository manifest byte for byte.
+- Required the wheel resource set to match the manifest exactly, with no
+  missing or undeclared packaged resources.
+- Verified every declared resource against its manifest byte count and
+  SHA-256, its ZIP member size, and the exact bytes of the repository's
+  packaged resource mirror.
+- Rejected duplicate ZIP members, unsafe or non-normalized paths, malformed
+  ZIP/UTF-8/JSON input, duplicate JSON keys, and invalid manifest schemas
+  through one bounded `WheelCheckError` boundary instead of raw tracebacks.
+- Rejected Windows extraction aliases caused by case-insensitive paths,
+  forbidden characters, trailing dots/spaces, and reserved device names,
+  including COM/LPT superscript-digit variants.
+- Rejected every top-level wheel `.data` scheme member in this pure-wheel
+  contract so `purelib` or `platlib` relocation cannot overwrite a verified
+  installed resource.
+- Added focused adversarial fixtures for archive, path, manifest, set,
+  byte-count, digest, and mirror mismatches.
+- Changed no archive format, runtime command behavior, MCP wire contract,
+  provider integration, archive content, or beta archive.
+
 ## v0.3.288 - 2026-07-30
 
 - Replaced every failed MCP tool response with one exact content-free envelope:

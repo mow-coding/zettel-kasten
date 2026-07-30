@@ -1,6 +1,6 @@
 # WOM-kit Python 도구 설치
 
-상태: v0.3.288 GitHub wheel 및 내용 없는 MCP 오류 체크포인트
+상태: v0.3.289 GitHub wheel 및 정확한 packaged-resource 무결성 체크포인트
 
 WOM-kit은 명령줄 도구입니다. 일반 앱 프로젝트의 Python 의존성과 섞지 말고
 별도의 격리된 Python 환경에 설치하는 것이 좋습니다.
@@ -10,7 +10,7 @@ WOM-kit은 명령줄 도구입니다. 일반 앱 프로젝트의 Python 의존�
 정확한 WOM 릴리스에 붙은 검증된 wheel을 `uv`로 설치합니다.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.288/wom_kit-0.3.288-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.289/wom_kit-0.3.289-py3-none-any.whl"
 archive --version
 ```
 
@@ -28,7 +28,7 @@ archive --version
 
 ```powershell
 py -m venv "$HOME\.wom-tools\wom-kit"
-& "$HOME\.wom-tools\wom-kit\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.288/wom_kit-0.3.288-py3-none-any.whl"
+& "$HOME\.wom-tools\wom-kit\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.289/wom_kit-0.3.289-py3-none-any.whl"
 & "$HOME\.wom-tools\wom-kit\Scripts\archive.exe" --version
 ```
 
@@ -47,6 +47,9 @@ wheel에는 Python 명령과 그 명령이 실행될 때 필요한 자원이 함
 
 저장소의 원본 파일이 계속 정본입니다. 결정적으로 생성되는 manifest가 패키지
 사본 각각의 정확한 바이트 길이와 SHA-256을 묶습니다.
+릴리스 전 wheel 검사는 그 manifest가 검토된 저장소 manifest와 byte 단위로
+같은지, packaged resource 집합이 정확한지, 각 리소스가 선언된 digest와 저장소
+packaged mirror 모두에 정확히 일치하는지도 검증합니다.
 
 ## 설치가 하지 않는 일
 
