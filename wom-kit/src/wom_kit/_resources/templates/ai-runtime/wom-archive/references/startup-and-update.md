@@ -57,7 +57,7 @@ report the last completed phase and do not present partial output as success.
 From a source checkout, use the repository entry point only as a fallback:
 
 ```text
-python wom-kit/archive.py ai-start-here <archive-root> --dry-run --progress --format json
+python wom-kit/cli/archive.py ai-start-here <archive-root> --dry-run --progress --format json
 ```
 
 An installed wheel should normally expose `archive`, `wom`, `archive-mcp`, and
@@ -68,16 +68,48 @@ An installed wheel should normally expose `archive`, `wom`, `archive-mcp`, and
 Inspect the update plan first:
 
 ```text
-archive project-version-update <archive-root> --dry-run --format json
+archive project-version-update <project-or-archive-root> --target vX.Y.Z --dry-run --format json
 ```
 
 Apply only the command's explicit approval path after reviewing the expected
-version, package source, changed paths, and rollback boundary. Never edit WOM
-version markers or packaged runtime resources by hand.
+version, package source, changed paths, and rollback boundary. Pause editors,
+sync/backup clients, and other Git writers for the complete transaction, then
+use the required Windows approval form:
 
-After an update, rerun `archive version --format json` and quick
+```text
+archive project-version-update <project-or-archive-root> --target vX.Y.Z --approve --reviewed-by <actor> --affirm-external-writers-quiescent --format json
+```
+
+The result must report `external_writer_quiescence_required: true`,
+`external_writer_quiescence_affirmed: true`,
+`atomic_file_compare_and_swap: false`, and
+`checkpointed_change_detection: true`; the v0.2 receipt binds
+`external_writer_quiescence: {affirmed: true, scope:
+complete_project_version_update_transaction}`. Never edit WOM version markers
+or packaged runtime resources by hand.
+
+On v0.3.291 or later, an approved update may rematerialize tracked runtime
+Python files from exact target `HEAD` blobs so an existing Windows CRLF mirror
+meets the raw-byte integrity gate. Treat
+`source_mirror.target_runtime_source_integrity_verified: true` and the durable
+receipt's `runtime_source_materialization` facts as required evidence. A
+matching version string alone is not `no_change`.
+
+After an update, rerun
+`archive version <project-or-archive-root> --format json` and quick
 `ai-start-here`. A package install succeeding does not prove that the intended
-archive or runtime entry point is active.
+archive or runtime entry point is active. If `archive version` reports a
+`project_scoped_bridge_available` state with
+`runtime_alignment.integrity.verified: true`, use its structured bridge argv
+only as an isolated Python `-I -S` one-invocation path to the verified project
+source. It does not add the project source root to `sys.path`; it purges project
+aliases and an exact-object-ID finder loads only `wom_kit`, preventing post-gate
+top-level dependency shadows. Safe index state, exact tagged source bytes, a
+closed import tree, and all synchronized resources must remain verified. The
+local integrity evidence uses no network, reads no origin URL value, and does
+not prove current remote freshness or a cryptographic signature. That bridge
+does not replace the global `archive` command, change `PATH` or a Python
+environment, or install this Agent Skill.
 
 `archive version` is authoritative for the current local runtime, source
 mirror, project pin, and tags that are already fetched locally. It does not

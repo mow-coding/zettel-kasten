@@ -157,6 +157,20 @@ _FAKE_SHA_B = "9dabf9b965a3f789b1b36100f3f70515ce8dfd81b411b1503e1e2c3304303647"
 
 
 class ArchiveCliTests(unittest.TestCase):
+    def setUp(self) -> None:
+        # Production approval intentionally fails closed outside Windows.
+        # Cross-platform CI still exercises the approval transaction algorithm
+        # under a test-only capability injection; the dedicated platform test
+        # patches this back to False and owns the real POSIX UX contract.
+        if os.name != "nt":
+            platform_patcher = patch.object(
+                archive_services,
+                "WOM_KIT_PROJECT_UPDATE_APPROVAL_PLATFORM_SUPPORTED",
+                True,
+            )
+            platform_patcher.start()
+            self.addCleanup(platform_patcher.stop)
+
     def run_cli(self, args: list[str], stdin_text: str | None = None) -> tuple[int, str]:
         buffer = io.StringIO()
         old_stdin = sys.stdin
@@ -373,6 +387,252 @@ class ArchiveCliTests(unittest.TestCase):
             f'__version__ = "{root_shim_version or version}"\n',
             encoding="utf-8",
         )
+        self.write_runtime_resource_fixture(repository, version)
+
+    def write_runtime_resource_fixture(
+        self,
+        repository: Path,
+        version: str,
+    ) -> None:
+        resource_bytes = b'{"fixture":true}\n'
+        source_relative = "schemas/runtime-fixture.schema.json"
+        packaged_relative = "schemas/runtime-fixture.schema.json"
+        source_path = repository / "wom-kit" / source_relative
+        packaged_path = (
+            repository
+            / "wom-kit"
+            / "src"
+            / "wom_kit"
+            / "_resources"
+            / packaged_relative
+        )
+        source_path.parent.mkdir(parents=True, exist_ok=True)
+        packaged_path.parent.mkdir(parents=True, exist_ok=True)
+        source_path.write_bytes(resource_bytes)
+        packaged_path.write_bytes(resource_bytes)
+        manifest_path = (
+            repository
+            / "wom-kit"
+            / "src"
+            / "wom_kit"
+            / "_resources"
+            / "resource-manifest.json"
+        )
+        manifest_path.write_text(
+            json.dumps(
+                {
+                    "schema": "wom-kit/package-resource-manifest/v0.1",
+                    "version": version,
+                    "source_of_truth": "wom-kit source resource directories",
+                    "file_count": 1,
+                    "files": [
+                        {
+                            "source": source_relative,
+                            "packaged": packaged_relative,
+                            "bytes": len(resource_bytes),
+                            "sha256": hashlib.sha256(resource_bytes).hexdigest(),
+                        }
+                    ],
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+    def create_runtime_alignment_fixture(
+        self,
+        tmp_root: Path,
+        *,
+        source_version: str | None,
+        pyproject_version: str | None,
+        pin_version: str | None,
+        include_wrapper: bool = True,
+        root_shim_version: str | None = None,
+        include_runtime_sources: bool = False,
+    ) -> dict[str, Any]:
+        if shutil.which("git") is None:
+            self.skipTest("git is required for the runtime alignment fixture")
+
+        valid_versions = [
+            version
+            for version in (source_version, pyproject_version, pin_version)
+            if isinstance(version, str)
+            and re.fullmatch(r"\d+\.\d+\.\d+", version)
+        ]
+        tag_version = valid_versions[0] if valid_versions else archive_cli.__version__
+        effective_root_shim_version = (
+            root_shim_version
+            if root_shim_version is not None
+            else source_version
+        )
+
+        upstream = tmp_root / "runtime-origin"
+        upstream.mkdir(parents=True)
+        self.git_fixture_command(upstream, "init", "-b", "main")
+        self.git_fixture_command(upstream, "config", "user.name", "archive-test")
+        self.git_fixture_command(
+            upstream,
+            "config",
+            "user.email",
+            "archive-test.invalid",
+        )
+        (upstream / ".gitattributes").write_text(
+            "*.py -text\n",
+            encoding="utf-8",
+        )
+
+        upstream_package_dir = upstream / "wom-kit" / "src" / "wom_kit"
+        upstream_package_dir.mkdir(parents=True)
+        if include_runtime_sources:
+            for source_path in (SRC_ROOT / "wom_kit").rglob("*.py"):
+                relative_path = source_path.relative_to(SRC_ROOT / "wom_kit")
+                destination = upstream_package_dir / relative_path
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source_path, destination)
+        else:
+            (upstream_package_dir / "archive_cli.py").write_text(
+                "def main(argv=None):\n"
+                "    return 0\n",
+                encoding="utf-8",
+            )
+        if source_version is not None:
+            (upstream_package_dir / "__init__.py").write_text(
+                f'__version__ = "{source_version}"\n',
+                encoding="utf-8",
+            )
+        upstream_pyproject_dir = upstream / "wom-kit"
+        if pyproject_version is not None:
+            (upstream_pyproject_dir / "pyproject.toml").write_text(
+                f'[project]\nname = "wom-kit"\nversion = "{pyproject_version}"\n',
+                encoding="utf-8",
+            )
+        if effective_root_shim_version is not None:
+            upstream_shim_dir = upstream / "wom_kit"
+            upstream_shim_dir.mkdir()
+            (upstream_shim_dir / "__init__.py").write_text(
+                f'__version__ = "{effective_root_shim_version}"\n',
+                encoding="utf-8",
+            )
+        upstream_wrapper_path = upstream / "wom-kit" / "cli" / "archive.py"
+        if include_wrapper:
+            upstream_wrapper_path.parent.mkdir(parents=True)
+            shutil.copy2(KIT_ROOT / "cli" / "archive.py", upstream_wrapper_path)
+        self.write_runtime_resource_fixture(upstream, tag_version)
+
+        self.git_fixture_command(upstream, "add", ".")
+        self.git_fixture_command(upstream, "commit", "-m", "runtime fixture")
+        tag_name = f"v{tag_version}"
+        self.git_fixture_command(
+            upstream,
+            "tag",
+            "-a",
+            tag_name,
+            "-m",
+            tag_name,
+        )
+
+        project_root = tmp_root / "project"
+        metadata_root = project_root / ".zettel-kasten"
+        metadata_root.mkdir(parents=True)
+        mirror_root = metadata_root / "source"
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "protocol.file.allow=always",
+                "-c",
+                "core.autocrlf=false",
+                "clone",
+                "--quiet",
+                str(upstream),
+                str(mirror_root),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.git_fixture_command(mirror_root, "config", "core.autocrlf", "false")
+        self.git_fixture_command(mirror_root, "config", "user.name", "archive-test")
+        self.git_fixture_command(
+            mirror_root,
+            "config",
+            "user.email",
+            "archive-test.invalid",
+        )
+
+        if pin_version is not None:
+            (mirror_root / "installed-version.txt").write_text(
+                f"v{pin_version}\n",
+                encoding="utf-8",
+            )
+
+        wrapper_path = mirror_root / "wom-kit" / "cli" / "archive.py"
+        source_root = mirror_root / "wom-kit" / "src"
+
+        return {
+            "project_root": project_root,
+            "mirror_root": mirror_root,
+            "wrapper_path": wrapper_path,
+            "source_root": source_root,
+            "package_init_path": source_root / "wom_kit" / "__init__.py",
+            "archive_cli_path": source_root / "wom_kit" / "archive_cli.py",
+            "archive_services_path": (
+                source_root / "wom_kit" / "archive_services.py"
+            ),
+            "upstream": upstream,
+            "tag_name": tag_name,
+            "tag_version": tag_version,
+        }
+
+    def assert_runtime_alignment_integrity_failure(
+        self,
+        project_root: Path,
+        expected_reason: str,
+    ) -> dict[str, Any]:
+        code, output = self.run_cli(
+            [
+                "version",
+                str(project_root),
+                "--no-redact-local-paths",
+                "--format",
+                "json",
+            ]
+        )
+        result = json.loads(output)
+
+        self.assertEqual(code, 1, output)
+        self.assertFalse(result["ok"])
+        alignment = result["runtime_alignment"]
+        self.assertEqual(alignment["status"], "project_source_update_required")
+        self.assertEqual(alignment["reason_code"], expected_reason)
+        integrity = alignment["integrity"]
+        self.assertTrue(integrity["checked"])
+        self.assertFalse(integrity["verified"])
+        self.assertEqual(integrity["reason_code"], expected_reason)
+        self.assertFalse(integrity["cryptographic_tag_signature_verified"])
+        self.assertFalse(integrity["origin_remote_contacted"])
+        self.assertFalse(integrity["network_used"])
+        self.assertFalse(alignment["project_scoped_bridge"]["available"])
+        self.assertFalse(
+            alignment["project_scoped_bridge"]["python_isolated_mode"]
+        )
+        self.assertFalse(
+            alignment["project_scoped_bridge"]["integrity_verified"]
+        )
+        self.assertFalse(
+            alignment["project_scoped_bridge"]["exact_argv_included"]
+        )
+        self.assertNotIn("bridge_argv", alignment)
+        self.assertIn(
+            "WOM-kit project source mirror integrity verification did not pass",
+            "\n".join(result["warnings"]),
+        )
+        self.assertIn(
+            "Do not invoke the project source",
+            result["next_safe_actions"][0],
+        )
+        return alignment
 
     def create_project_version_update_fixture(
         self,
@@ -380,6 +640,7 @@ class ArchiveCliTests(unittest.TestCase):
         *,
         invalid_target_metadata: bool = False,
         ignored_checkout_collision: bool = False,
+        crlf_runtime_transition: bool = False,
     ) -> dict[str, Any]:
         version_parts = [int(part) for part in archive_cli.__version__.split(".")]
         self.assertGreater(version_parts[2], 0)
@@ -393,6 +654,21 @@ class ArchiveCliTests(unittest.TestCase):
         self.git_fixture_command(upstream, "init", "-b", "main")
         self.git_fixture_command(upstream, "config", "user.name", "archive-test")
         self.git_fixture_command(upstream, "config", "user.email", "archive-test.invalid")
+        self.git_fixture_command(upstream, "config", "core.autocrlf", "false")
+        runtime_package = upstream / "wom-kit" / "src" / "wom_kit"
+        runtime_package.mkdir(parents=True)
+        (runtime_package / "archive_cli.py").write_bytes(
+            b"def main(argv=None):\n"
+            b"    return 0\n"
+        )
+        runtime_wrapper = upstream / "wom-kit" / "cli" / "archive.py"
+        runtime_wrapper.parent.mkdir(parents=True)
+        runtime_wrapper.write_bytes(
+            b"from wom_kit.archive_cli import main\n"
+            b"\n"
+            b"if __name__ == \"__main__\":\n"
+            b"    raise SystemExit(main())\n"
+        )
         self.write_project_update_fixture_version(upstream, old_version)
         collision_name = "future-ignored-tool.txt"
         if ignored_checkout_collision:
@@ -407,10 +683,30 @@ class ArchiveCliTests(unittest.TestCase):
         metadata_root.mkdir(parents=True)
         mirror = metadata_root / "source"
         subprocess.run(
-            ["git", "-c", "protocol.file.allow=always", "clone", "--quiet", str(upstream), str(mirror)],
+            [
+                "git",
+                "-c",
+                "protocol.file.allow=always",
+                "-c",
+                (
+                    "core.autocrlf=true"
+                    if crlf_runtime_transition
+                    else "core.autocrlf=false"
+                ),
+                "clone",
+                "--quiet",
+                str(upstream),
+                str(mirror),
+            ],
             check=True,
             capture_output=True,
             text=True,
+        )
+        self.git_fixture_command(
+            mirror,
+            "config",
+            "core.autocrlf",
+            "true" if crlf_runtime_transition else "false",
         )
         self.git_fixture_command(mirror, "checkout", "--detach", "--quiet", old_tag)
         (mirror / "installed-version.txt").write_text(old_tag + "\n", encoding="utf-8")
@@ -422,6 +718,11 @@ class ArchiveCliTests(unittest.TestCase):
             encoding="utf-8",
         )
 
+        if crlf_runtime_transition:
+            (upstream / ".gitattributes").write_bytes(
+                b"wom-kit/cli/archive.py text eol=lf\n"
+                b"wom-kit/src/wom_kit/**/*.py text eol=lf\n"
+            )
         self.write_project_update_fixture_version(
             upstream,
             target_version,
@@ -448,6 +749,17 @@ class ArchiveCliTests(unittest.TestCase):
             "target_tag": target_tag,
             "target_commit": target_commit,
             "collision_name": collision_name,
+            "runtime_paths": [
+                mirror / "wom-kit" / "cli" / "archive.py",
+                mirror / "wom-kit" / "src" / "wom_kit" / "__init__.py",
+                mirror / "wom-kit" / "src" / "wom_kit" / "archive_cli.py",
+            ],
+            "unchanged_runtime_path": (
+                mirror / "wom-kit" / "src" / "wom_kit" / "archive_cli.py"
+            ),
+            "unchanged_runtime_git_path": (
+                "wom-kit/src/wom_kit/archive_cli.py"
+            ),
         }
 
     def test_command_progress_reporter_emits_content_free_heartbeat(self) -> None:
@@ -2488,7 +2800,7 @@ class ArchiveCliTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             project_root = Path(tmp) / "project"
-            pin_dir = project_root / ".zettel-kasten" / "source"
+            pin_dir = project_root / ".zettel-kasten"
             pin_dir.mkdir(parents=True)
             (pin_dir / "installed-version.txt").write_text("\ufeffv0.0.1\n", encoding="utf-8")
 
@@ -2504,12 +2816,12 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertTrue(result["import_origin"]["module_path_redacted"])
             self.assertNotIn("module_path", result["import_origin"])
             self.assertEqual(result["project_pin"]["status"], "present")
-            self.assertEqual(result["project_pin"]["path"], ".zettel-kasten/source/installed-version.txt")
+            self.assertEqual(result["project_pin"]["path"], ".zettel-kasten/installed-version.txt")
             self.assertEqual(result["project_pin"]["pin_root"], "inspection_root")
             self.assertEqual(result["project_pin"]["installed_version"], "v0.0.1")
             self.assertFalse(result["project_pin"]["matches_package_version"])
             self.assertIn(
-                ".zettel-kasten/source/installed-version.txt",
+                ".zettel-kasten/installed-version.txt",
                 result["project_pin"]["checked_locations"],
             )
             self.assertEqual(result["consistency_state"], "project_pin_mismatch")
@@ -3716,6 +4028,2340 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertIn("Import module:", visible_output)
             self.assertIn("archive_services.py", visible_output)
 
+    def test_version_runtime_alignment_default_redaction_and_opt_in_bridge_argv(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = self.create_runtime_alignment_fixture(
+                Path(tmp),
+                source_version="9.8.7",
+                pyproject_version="9.8.7",
+                pin_version="9.8.7",
+            )
+            project_root = fixture["project_root"].resolve()
+            mirror_root = fixture["mirror_root"].resolve()
+            wrapper_path = fixture["wrapper_path"].resolve()
+            self.assertEqual(
+                wrapper_path.read_bytes(),
+                (KIT_ROOT / "cli" / "archive.py").read_bytes(),
+            )
+
+            code, output = self.run_cli(
+                ["version", str(project_root), "--format", "json"]
+            )
+            result = json.loads(output)
+
+            self.assertEqual(code, 1, output)
+            alignment = result["runtime_alignment"]
+            self.assertEqual(alignment["status"], "project_scoped_bridge_available")
+            self.assertEqual(
+                alignment["reason_code"],
+                "running_version_differs_from_project_source",
+            )
+            integrity = alignment["integrity"]
+            self.assertTrue(integrity["checked"])
+            self.assertTrue(integrity["verified"])
+            self.assertEqual(integrity["reason_code"], "verified")
+            for evidence_key in (
+                "mirror_real_directory_inside_project",
+                "project_pin_path_components_real",
+                "wrapper_path_components_real",
+                "git_worktree_root_exact",
+                "worktree_clean_except_untracked_installed_version",
+                "installed_version_pin_untracked",
+                "wrapper_tracked_at_head",
+                "tracked_python_source_set_complete",
+                "tracked_python_index_flags_safe",
+                "tracked_python_index_matches_head",
+                "tracked_python_path_components_real",
+                "tracked_python_worktree_bytes_match_head",
+                "tracked_python_sources_verified",
+                "all_tracked_index_flags_safe",
+                "runtime_resource_manifest_verified",
+                "runtime_resource_index_matches_head",
+                "runtime_resource_path_components_real",
+                "runtime_resource_worktree_bytes_match_head",
+                "runtime_resources_verified",
+                "runtime_source_root_top_level_isolated",
+                "runtime_source_tree_path_components_real",
+                "runtime_python_filesystem_source_set_exact",
+                "runtime_python_bytecode_absent",
+                "runtime_python_extension_modules_absent",
+                "runtime_python_filesystem_closed_world",
+                "origin_configured",
+                "origin_config_key_present",
+                "head_commit_available",
+                "source_tag_available_locally",
+                "source_tag_annotated",
+                "source_tag_at_head",
+                "tag_source_versions_match",
+                "origin_main_available_locally",
+                "source_tag_reachable_from_origin_main",
+            ):
+                with self.subTest(integrity_evidence=evidence_key):
+                    self.assertTrue(integrity[evidence_key])
+            self.assertGreaterEqual(integrity["tracked_python_source_count"], 2)
+            self.assertGreater(integrity["runtime_source_tree_entry_count"], 0)
+            self.assertGreaterEqual(
+                integrity["runtime_python_filesystem_source_count"],
+                2,
+            )
+            self.assertFalse(integrity["origin_config_value_read"])
+            self.assertFalse(integrity["network_used"])
+            self.assertFalse(integrity["cryptographic_tag_signature_verified"])
+            self.assertFalse(integrity["origin_remote_contacted"])
+            bridge = alignment["project_scoped_bridge"]
+            self.assertTrue(bridge["available"])
+            self.assertFalse(bridge["exact_argv_included"])
+            self.assertTrue(bridge["integrity_verified"])
+            self.assertTrue(bridge["python_isolated_mode"])
+            self.assertEqual(
+                bridge["invocation_scope"],
+                "selected_project_version_one_invocation",
+            )
+            self.assertTrue(bridge["runs_selected_project_source"])
+            self.assertTrue(bridge["expected_commit_bound"])
+            self.assertTrue(bridge["expected_annotated_tag_bound"])
+            self.assertTrue(bridge["expected_wrapper_blob_bound"])
+            self.assertTrue(bridge["expected_runtime_resources_bound"])
+            self.assertTrue(bridge["version_command_only"])
+            self.assertTrue(
+                bridge["bootstrap_executes_verified_wrapper_blob_from_memory"]
+            )
+            self.assertFalse(bridge["general_write_command_bridge"])
+            self.assertFalse(bridge["replaces_archive_on_path"])
+            self.assertFalse(bridge["mutates_python_environment"])
+            self.assertFalse(bridge["infers_installer_provenance"])
+            self.assertFalse(bridge["restarts_imported_process"])
+            self.assertFalse(alignment["changes_made"]["project_files"])
+            self.assertFalse(
+                alignment["changes_made"]["global_path_or_python_installation"]
+            )
+            self.assertFalse(
+                alignment["changes_made"]["runtime_skill_installation"]
+            )
+            self.assertNotIn("bridge_argv", alignment)
+            self.assertTrue(result["next_safe_actions"])
+            self.assertIn(
+                "--no-redact-local-paths",
+                result["next_safe_actions"][0],
+            )
+            default_disclosure_text = output.replace("\\\\", "\\").casefold()
+            for private_path in (
+                project_root,
+                mirror_root,
+                wrapper_path,
+                Path(sys.executable),
+            ):
+                with self.subTest(default_redaction=private_path):
+                    self.assertNotIn(
+                        str(private_path).casefold(),
+                        default_disclosure_text,
+                    )
+
+            text_code, text_output = self.run_cli(["version", str(project_root)])
+            self.assertEqual(text_code, 1, text_output)
+            self.assertIn(
+                "Runtime alignment: project_scoped_bridge_available",
+                text_output,
+            )
+            self.assertIn(
+                "Alignment reason: running_version_differs_from_project_source",
+                text_output,
+            )
+            self.assertIn("Project bridge:", text_output)
+            self.assertIn("Changes made:", text_output)
+            self.assertIn("Next safe actions:", text_output)
+            self.assertNotIn("Bridge argv:", text_output)
+            for private_path in (project_root, mirror_root, wrapper_path):
+                with self.subTest(default_text_redaction=private_path):
+                    self.assertNotIn(str(private_path), text_output)
+
+            visible_code, visible_output = self.run_cli(
+                [
+                    "version",
+                    str(project_root),
+                    "--no-redact-local-paths",
+                    "--format",
+                    "json",
+                ]
+            )
+            visible_result = json.loads(visible_output)
+            self.assertEqual(visible_code, 1, visible_output)
+            visible_alignment = visible_result["runtime_alignment"]
+            self.assertTrue(
+                visible_alignment["project_scoped_bridge"]["exact_argv_included"]
+            )
+            visible_bridge_argv = visible_alignment["bridge_argv"]
+            self.assertEqual(
+                visible_bridge_argv[:6],
+                [
+                    sys.executable,
+                    "-I",
+                    "-S",
+                    "-c",
+                    archive_services.WOM_KIT_PROJECT_BRIDGE_BOOTSTRAP,
+                    "--",
+                ],
+            )
+            self.assertEqual(visible_bridge_argv[6], str(mirror_root))
+            self.assertEqual(
+                visible_bridge_argv[7],
+                self.git_fixture_command(mirror_root, "rev-parse", "HEAD"),
+            )
+            self.assertEqual(visible_bridge_argv[8], fixture["tag_name"])
+            self.assertEqual(
+                visible_bridge_argv[9],
+                self.git_fixture_command(
+                    mirror_root,
+                    "rev-parse",
+                    "HEAD:wom-kit/cli/archive.py",
+                ),
+            )
+            self.assertEqual(visible_bridge_argv[10], str(project_root))
+            self.assertIn(
+                "Use runtime_alignment.bridge_argv exactly",
+                visible_result["next_safe_actions"][0],
+            )
+
+            visible_text_code, visible_text_output = self.run_cli(
+                [
+                    "version",
+                    str(project_root),
+                    "--no-redact-local-paths",
+                ]
+            )
+            self.assertEqual(visible_text_code, 1, visible_text_output)
+            self.assertIn("Bridge argv:", visible_text_output)
+            visible_text_disclosure = visible_text_output.replace("\\\\", "\\")
+            self.assertIn(str(mirror_root), visible_text_disclosure)
+            self.assertIn(str(project_root), visible_text_disclosure)
+
+    def test_version_runtime_alignment_bridge_isolated_subprocess_prefers_selected_source(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            fixture = self.create_runtime_alignment_fixture(
+                tmp_root,
+                source_version="9.8.7",
+                pyproject_version="9.8.7",
+                pin_version="9.8.7",
+                include_runtime_sources=True,
+            )
+            project_root = fixture["project_root"].resolve()
+            mirror_root = fixture["mirror_root"].resolve()
+            wrapper_path = fixture["wrapper_path"].resolve()
+
+            code, output = self.run_cli(
+                [
+                    "version",
+                    str(project_root),
+                    "--no-redact-local-paths",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            self.assertEqual(code, 1, output)
+            self.assertEqual(
+                result["runtime_alignment"]["status"],
+                "project_scoped_bridge_available",
+                output,
+            )
+            self.assertIn(
+                "bridge_argv",
+                result["runtime_alignment"],
+                output,
+            )
+            bridge_argv = result["runtime_alignment"]["bridge_argv"]
+            self.assertEqual(
+                bridge_argv[:6],
+                [
+                    sys.executable,
+                    "-I",
+                    "-S",
+                    "-c",
+                    archive_services.WOM_KIT_PROJECT_BRIDGE_BOOTSTRAP,
+                    "--",
+                ],
+            )
+            self.assertEqual(bridge_argv[6], str(mirror_root))
+            self.assertEqual(
+                bridge_argv[7],
+                self.git_fixture_command(mirror_root, "rev-parse", "HEAD"),
+            )
+            self.assertEqual(bridge_argv[8], fixture["tag_name"])
+            self.assertEqual(
+                bridge_argv[9],
+                self.git_fixture_command(
+                    mirror_root,
+                    "rev-parse",
+                    "HEAD:wom-kit/cli/archive.py",
+                ),
+            )
+            self.assertEqual(bridge_argv[10], str(project_root))
+
+            fake_root = tmp_root / "fake-pythonpath"
+            fake_package = fake_root / "wom_kit"
+            fake_package.mkdir(parents=True)
+            fake_marker = tmp_root / "fake-wom-kit-imported.txt"
+            fake_sentinel = "FAKE_WOM_KIT_MUST_NOT_EXECUTE"
+            (fake_package / "__init__.py").write_text(
+                "from pathlib import Path\n"
+                f"Path({str(fake_marker)!r}).write_text("
+                f"{fake_sentinel!r}, encoding='utf-8')\n"
+                '__version__ = "66.66.66"\n',
+                encoding="utf-8",
+            )
+            (fake_package / "archive_cli.py").write_text(
+                f"raise RuntimeError({fake_sentinel!r})\n",
+                encoding="utf-8",
+            )
+            isolated_environment = os.environ.copy()
+            isolated_environment["PYTHONPATH"] = str(fake_root)
+
+            completed = subprocess.run(
+                bridge_argv,
+                cwd=fake_root,
+                env=isolated_environment,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            self.assertEqual(
+                completed.returncode,
+                0,
+                completed.stdout + completed.stderr,
+            )
+            bridged_result = json.loads(completed.stdout)
+            self.assertEqual(bridged_result["version"], "9.8.7")
+            self.assertEqual(
+                bridged_result["runtime_alignment"]["status"],
+                "aligned",
+            )
+            self.assertTrue(
+                bridged_result["runtime_alignment"]["integrity"]["verified"]
+            )
+            self.assertNotIn(fake_sentinel, completed.stdout)
+            self.assertNotIn(fake_sentinel, completed.stderr)
+            self.assertFalse(fake_marker.exists())
+
+            probe_source = (
+                "import json, runpy\n"
+                f"runpy.run_path({str(wrapper_path)!r}, "
+                "run_name='wom_bridge_import_probe')\n"
+                "import wom_kit\n"
+                "import wom_kit.archive_cli\n"
+                "print(json.dumps({"
+                "'package_file': wom_kit.__file__, "
+                "'archive_cli_file': wom_kit.archive_cli.__file__"
+                "}))\n"
+            )
+            probe = subprocess.run(
+                [sys.executable, "-I", "-c", probe_source],
+                cwd=fake_root,
+                env=isolated_environment,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            self.assertEqual(probe.returncode, 0, probe.stderr)
+            imported_paths = json.loads(probe.stdout)
+            self.assertEqual(
+                Path(imported_paths["package_file"]).resolve(),
+                fixture["package_init_path"].resolve(),
+            )
+            self.assertEqual(
+                Path(imported_paths["archive_cli_file"]).resolve(),
+                fixture["archive_cli_path"].resolve(),
+            )
+            self.assertFalse(fake_marker.exists())
+
+            preloaded_probe = (
+                "import runpy, sys, types\n"
+                "sys.modules['wom_kit'] = types.ModuleType('wom_kit')\n"
+                f"runpy.run_path({str(wrapper_path)!r}, run_name='__main__')\n"
+            )
+            preloaded = subprocess.run(
+                [sys.executable, "-I", "-c", preloaded_probe],
+                cwd=fake_root,
+                env=isolated_environment,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            self.assertNotEqual(preloaded.returncode, 0)
+            self.assertIn("WOM_BRIDGE_PRELOADED_MODULE", preloaded.stderr)
+            self.assertNotIn(fake_sentinel, preloaded.stderr)
+            self.assertFalse(fake_marker.exists())
+            self.assertFalse(
+                any(
+                    path.name == "__pycache__"
+                    for path in fixture["source_root"].rglob("__pycache__")
+                )
+            )
+
+    def test_version_runtime_alignment_bridge_disables_site_pth_before_bootstrap(
+        self,
+    ) -> None:
+        if shutil.which("git") is None:
+            self.skipTest("git is required for the runtime alignment fixture")
+        import venv
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            fixture = self.create_runtime_alignment_fixture(
+                tmp_root,
+                source_version="9.8.7",
+                pyproject_version="9.8.7",
+                pin_version="9.8.7",
+                include_runtime_sources=True,
+            )
+            project_root = fixture["project_root"].resolve()
+            code, output = self.run_cli(
+                [
+                    "version",
+                    str(project_root),
+                    "--no-redact-local-paths",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            self.assertEqual(code, 1, output)
+            bridge = result["runtime_alignment"][
+                "project_scoped_bridge"
+            ]
+            bridge_argv = result["runtime_alignment"]["bridge_argv"]
+            self.assertTrue(bridge["python_isolated_mode"])
+            self.assertTrue(
+                bridge["python_site_initialization_disabled"]
+            )
+            self.assertTrue(
+                bridge["pth_execution_disabled_before_bootstrap"]
+            )
+            self.assertEqual(bridge_argv[1:4], ["-I", "-S", "-c"])
+
+            venv_root = tmp_root / "pth-canary-venv"
+            venv.EnvBuilder(
+                with_pip=False,
+                system_site_packages=True,
+            ).create(venv_root)
+            venv_python = (
+                venv_root / "Scripts" / "python.exe"
+                if os.name == "nt"
+                else venv_root / "bin" / "python"
+            )
+            site_probe = subprocess.run(
+                [
+                    str(venv_python),
+                    "-c",
+                    (
+                        "import sysconfig; "
+                        "print(sysconfig.get_path('purelib'))"
+                    ),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            site_packages = Path(site_probe.stdout.strip())
+            canary_path = tmp_root / "pth-executed.txt"
+            canary_sentinel = "PTH_MUST_NOT_EXECUTE_BEFORE_BOOTSTRAP"
+            (site_packages / "wom_bridge_canary.pth").write_text(
+                "import pathlib; "
+                f"pathlib.Path({str(canary_path)!r}).write_text("
+                f"{canary_sentinel!r}, encoding='utf-8')\n",
+                encoding="utf-8",
+            )
+
+            control = subprocess.run(
+                [
+                    str(venv_python),
+                    "-I",
+                    "-c",
+                    "print('site-control')",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            self.assertEqual(
+                control.returncode,
+                0,
+                control.stdout + control.stderr,
+            )
+            self.assertEqual(
+                canary_path.read_text(encoding="utf-8"),
+                canary_sentinel,
+            )
+            canary_path.unlink()
+
+            isolated_bridge_argv = [
+                str(venv_python),
+                *bridge_argv[1:],
+            ]
+            bridged = subprocess.run(
+                isolated_bridge_argv,
+                cwd=project_root,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            self.assertEqual(
+                bridged.returncode,
+                0,
+                bridged.stdout + bridged.stderr,
+            )
+            bridged_result = json.loads(bridged.stdout)
+            self.assertEqual(bridged_result["version"], "9.8.7")
+            self.assertEqual(
+                bridged_result["runtime_alignment"]["status"],
+                "aligned",
+            )
+            self.assertFalse(canary_path.exists())
+            self.assertNotIn(canary_sentinel, bridged.stderr)
+
+    def test_version_runtime_alignment_bridge_does_not_import_post_gate_top_level_alias(
+        self,
+    ) -> None:
+        if shutil.which("git") is None:
+            self.skipTest("git is required for the runtime alignment fixture")
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            fixture = self.create_runtime_alignment_fixture(
+                tmp_root,
+                source_version="9.8.7",
+                pyproject_version="9.8.7",
+                pin_version="9.8.7",
+                include_runtime_sources=True,
+            )
+            project_root = fixture["project_root"].resolve()
+            mirror = fixture["mirror_root"].resolve()
+            archive_cli_path = fixture["archive_cli_path"].resolve()
+            canary_marker = tmp_root / "sqlite3-alias-executed.txt"
+            canary_sentinel = (
+                "POST_GATE_TOP_LEVEL_ALIAS_MUST_NOT_EXECUTE"
+            )
+            source_text = archive_cli_path.read_text(encoding="utf-8")
+            self.assertIn("import sqlite3\n", source_text)
+            injection = (
+                "_wom_alias_path = ("
+                "__import__('pathlib').Path(__file__).resolve().parents[1] "
+                "/ 'sqlite3.py')\n"
+                "_wom_alias_path.write_text("
+                "\"from pathlib import Path\\n\""
+                f"\"Path({str(canary_marker)!r}).write_text("
+                f"{canary_sentinel!r}, encoding='utf-8')\\n\", "
+                "encoding='utf-8')\n"
+                "import sqlite3\n"
+                "_wom_alias_path.unlink()\n"
+            )
+            archive_cli_path.write_text(
+                source_text.replace(
+                    "import sqlite3\n",
+                    injection,
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            archive_cli_relative = archive_cli_path.relative_to(
+                mirror
+            ).as_posix()
+            self.git_fixture_command(
+                mirror,
+                "add",
+                "--",
+                archive_cli_relative,
+            )
+            self.git_fixture_command(
+                mirror,
+                "commit",
+                "-m",
+                "post-gate top-level alias regression",
+            )
+            self.git_fixture_command(
+                mirror,
+                "tag",
+                "-d",
+                fixture["tag_name"],
+            )
+            self.git_fixture_command(
+                mirror,
+                "tag",
+                "-a",
+                fixture["tag_name"],
+                "-m",
+                fixture["tag_name"],
+            )
+            injected_head = self.git_fixture_command(
+                mirror,
+                "rev-parse",
+                "HEAD",
+            )
+            self.git_fixture_command(
+                mirror,
+                "update-ref",
+                "refs/remotes/origin/main",
+                injected_head,
+            )
+
+            direct = subprocess.run(
+                [
+                    sys.executable,
+                    str(fixture["wrapper_path"].resolve()),
+                    "version",
+                    str(project_root),
+                    "--format",
+                    "json",
+                ],
+                cwd=project_root,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            self.assertEqual(
+                direct.returncode,
+                0,
+                direct.stdout + direct.stderr,
+            )
+            direct_result = json.loads(direct.stdout)
+            self.assertEqual(direct_result["version"], "9.8.7")
+            self.assertEqual(
+                direct_result["runtime_alignment"]["status"],
+                "aligned",
+            )
+            self.assertFalse(canary_marker.exists())
+            self.assertFalse(
+                (mirror / "wom-kit" / "src" / "sqlite3.py").exists()
+            )
+
+            code, output = self.run_cli(
+                [
+                    "version",
+                    str(project_root),
+                    "--no-redact-local-paths",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            self.assertEqual(code, 1, output)
+            self.assertEqual(
+                result["runtime_alignment"]["status"],
+                "project_scoped_bridge_available",
+            )
+            bridge_argv = result["runtime_alignment"]["bridge_argv"]
+
+            bridged = subprocess.run(
+                bridge_argv,
+                cwd=project_root,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+
+            self.assertEqual(
+                bridged.returncode,
+                0,
+                bridged.stdout + bridged.stderr,
+            )
+            bridged_result = json.loads(bridged.stdout)
+            self.assertEqual(bridged_result["version"], "9.8.7")
+            self.assertEqual(
+                bridged_result["runtime_alignment"]["status"],
+                "aligned",
+            )
+            self.assertFalse(canary_marker.exists())
+            self.assertFalse(
+                (mirror / "wom-kit" / "src" / "sqlite3.py").exists()
+            )
+            self.assertNotIn(canary_sentinel, bridged.stderr)
+
+    def test_version_runtime_alignment_bridge_argv_rejects_clean_mirror_swap_before_canary(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            fixture = self.create_runtime_alignment_fixture(
+                tmp_root,
+                source_version="9.8.7",
+                pyproject_version="9.8.7",
+                pin_version="9.8.7",
+                include_runtime_sources=True,
+            )
+            project_root = fixture["project_root"].resolve()
+            mirror_root = fixture["mirror_root"].resolve()
+            wrapper_path = mirror_root / "wom-kit" / "cli" / "archive.py"
+            code, output = self.run_cli(
+                [
+                    "version",
+                    str(project_root),
+                    "--no-redact-local-paths",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            self.assertEqual(code, 1, output)
+            self.assertEqual(
+                result["runtime_alignment"]["status"],
+                "project_scoped_bridge_available",
+                output,
+            )
+            self.assertIn(
+                "bridge_argv",
+                result["runtime_alignment"],
+                output,
+            )
+            bridge = result["runtime_alignment"]["project_scoped_bridge"]
+            self.assertTrue(bridge["version_command_only"])
+            self.assertTrue(bridge["expected_commit_bound"])
+            self.assertTrue(bridge["expected_annotated_tag_bound"])
+            self.assertTrue(bridge["expected_wrapper_blob_bound"])
+            self.assertTrue(bridge["expected_runtime_resources_bound"])
+            self.assertTrue(
+                bridge["bootstrap_executes_verified_wrapper_blob_from_memory"]
+            )
+            self.assertFalse(bridge["general_write_command_bridge"])
+            bridge_argv = result["runtime_alignment"]["bridge_argv"]
+            self.assertEqual(len(bridge_argv), 11)
+            self.assertEqual(bridge_argv[1:4], ["-I", "-S", "-c"])
+            original_commit = bridge_argv[7]
+            original_wrapper_bytes = wrapper_path.read_bytes()
+            canary_path = tmp_root / "swapped-wrapper-executed.txt"
+            canary_sentinel = "SWAPPED_WRAPPER_MUST_NOT_EXECUTE"
+            wrapper_text = original_wrapper_bytes.decode("utf-8")
+            wrapper_text = wrapper_text.replace(
+                "from __future__ import annotations\n",
+                "from __future__ import annotations\n"
+                "from pathlib import Path as _WomSwapCanaryPath\n"
+                f"_WomSwapCanaryPath({str(canary_path)!r}).write_text("
+                f"{canary_sentinel!r}, encoding='utf-8')\n",
+                1,
+            )
+            self.assertNotEqual(
+                wrapper_text.encode("utf-8"),
+                original_wrapper_bytes,
+            )
+            wrapper_path.write_text(wrapper_text, encoding="utf-8")
+            wrapper_relative = wrapper_path.relative_to(
+                mirror_root
+            ).as_posix()
+            self.git_fixture_command(
+                mirror_root,
+                "add",
+                "--",
+                wrapper_relative,
+            )
+            self.git_fixture_command(
+                mirror_root,
+                "commit",
+                "-m",
+                "clean swapped wrapper canary",
+            )
+            self.git_fixture_command(
+                mirror_root,
+                "tag",
+                "-a",
+                "v0.0.1",
+                "-m",
+                "v0.0.1",
+            )
+            self.assertEqual(
+                self.git_fixture_command(
+                    mirror_root,
+                    "status",
+                    "--porcelain=v1",
+                    "--untracked-files=all",
+                ),
+                "?? installed-version.txt",
+            )
+
+            swapped = subprocess.run(
+                bridge_argv,
+                cwd=project_root,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            self.assertEqual(swapped.returncode, 1)
+            self.assertEqual(swapped.stdout, "")
+            self.assertEqual(
+                swapped.stderr.strip(),
+                "WOM_BRIDGE_BOOTSTRAP_UNSAFE",
+            )
+            self.assertFalse(canary_path.exists())
+            self.assertNotIn(canary_sentinel, swapped.stderr)
+
+            self.git_fixture_command(
+                mirror_root,
+                "checkout",
+                "--detach",
+                "--quiet",
+                original_commit,
+            )
+            self.assertEqual(wrapper_path.read_bytes(), original_wrapper_bytes)
+            restored = subprocess.run(
+                bridge_argv,
+                cwd=project_root,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            self.assertEqual(
+                restored.returncode,
+                0,
+                restored.stdout + restored.stderr,
+            )
+            restored_result = json.loads(restored.stdout)
+            self.assertEqual(restored_result["version"], "9.8.7")
+            self.assertEqual(
+                restored_result["runtime_alignment"]["status"],
+                "aligned",
+            )
+            self.assertFalse(canary_path.exists())
+            self.assertNotIn(canary_sentinel, restored.stderr)
+
+    def test_version_runtime_alignment_fails_closed_for_unverified_project_mirrors(self) -> None:
+        invalid_cases = (
+            (
+                "source_version_missing",
+                {
+                    "source_version": None,
+                    "pyproject_version": "9.8.7",
+                    "pin_version": "9.8.7",
+                },
+                "project_source_version_missing_or_invalid",
+            ),
+            (
+                "source_version_malformed",
+                {
+                    "source_version": "not-a-version",
+                    "pyproject_version": "9.8.7",
+                    "pin_version": "9.8.7",
+                },
+                "project_source_version_missing_or_invalid",
+            ),
+            (
+                "pyproject_version_missing",
+                {
+                    "source_version": "9.8.7",
+                    "pyproject_version": None,
+                    "pin_version": "9.8.7",
+                },
+                "project_pyproject_version_missing_or_invalid",
+            ),
+            (
+                "pyproject_version_malformed",
+                {
+                    "source_version": "9.8.7",
+                    "pyproject_version": "not-a-version",
+                    "pin_version": "9.8.7",
+                },
+                "project_pyproject_version_missing_or_invalid",
+            ),
+            (
+                "source_pyproject_disagreement",
+                {
+                    "source_version": "9.8.7",
+                    "pyproject_version": "9.8.8",
+                    "pin_version": "9.8.7",
+                },
+                "project_source_pyproject_version_mismatch",
+            ),
+            (
+                "pin_missing",
+                {
+                    "source_version": "9.8.7",
+                    "pyproject_version": "9.8.7",
+                    "pin_version": None,
+                },
+                "project_pin_missing_or_invalid",
+            ),
+            (
+                "pin_malformed",
+                {
+                    "source_version": "9.8.7",
+                    "pyproject_version": "9.8.7",
+                    "pin_version": "not-a-version",
+                },
+                "project_pin_missing_or_invalid",
+            ),
+            (
+                "source_pin_disagreement",
+                {
+                    "source_version": "9.8.7",
+                    "pyproject_version": "9.8.7",
+                    "pin_version": "9.8.8",
+                },
+                "project_pin_source_version_mismatch",
+            ),
+            (
+                "wrapper_missing",
+                {
+                    "source_version": "9.8.7",
+                    "pyproject_version": "9.8.7",
+                    "pin_version": "9.8.7",
+                    "include_wrapper": False,
+                },
+                "project_wrapper_missing_or_outside_mirror",
+            ),
+        )
+
+        for case_name, fixture_kwargs, expected_reason in invalid_cases:
+            with self.subTest(case=case_name), tempfile.TemporaryDirectory() as tmp:
+                fixture = self.create_runtime_alignment_fixture(
+                    Path(tmp),
+                    **fixture_kwargs,
+                )
+                code, output = self.run_cli(
+                    [
+                        "version",
+                        str(fixture["project_root"]),
+                        "--no-redact-local-paths",
+                        "--format",
+                        "json",
+                    ]
+                )
+                result = json.loads(output)
+
+                self.assertEqual(code, 1, output)
+                alignment = result["runtime_alignment"]
+                self.assertEqual(
+                    alignment["status"],
+                    "project_source_update_required",
+                )
+                self.assertEqual(alignment["reason_code"], expected_reason)
+                self.assertFalse(
+                    alignment["project_scoped_bridge"]["available"]
+                )
+                self.assertFalse(
+                    alignment["project_scoped_bridge"]["exact_argv_included"]
+                )
+                self.assertNotIn("bridge_argv", alignment)
+                self.assertTrue(result["next_safe_actions"])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp) / "project-without-mirror"
+            project_root.mkdir()
+            code, output = self.run_cli(
+                [
+                    "version",
+                    str(project_root),
+                    "--no-redact-local-paths",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            alignment = result["runtime_alignment"]
+            self.assertEqual(
+                alignment["status"],
+                "project_source_update_required",
+            )
+            self.assertEqual(
+                alignment["reason_code"],
+                "project_source_mirror_missing",
+            )
+            self.assertFalse(alignment["project_scoped_bridge"]["available"])
+            self.assertFalse(
+                alignment["project_scoped_bridge"]["python_isolated_mode"]
+            )
+            self.assertNotIn("bridge_argv", alignment)
+
+    def test_version_invalid_project_version_metadata_does_not_echo_raw_payloads(
+        self,
+    ) -> None:
+        invalid_cases = (
+            (
+                "source",
+                {
+                    "source_version": "PRIVATE_SOURCE_PAYLOAD",
+                    "pyproject_version": archive_cli.__version__,
+                    "pin_version": archive_cli.__version__,
+                },
+                "PRIVATE_SOURCE_PAYLOAD",
+                "project_source_version_missing_or_invalid",
+                "source_version",
+                "project_source_version",
+            ),
+            (
+                "pyproject",
+                {
+                    "source_version": archive_cli.__version__,
+                    "pyproject_version": "PRIVATE_PYPROJECT_PAYLOAD",
+                    "pin_version": archive_cli.__version__,
+                },
+                "PRIVATE_PYPROJECT_PAYLOAD",
+                "project_pyproject_version_missing_or_invalid",
+                "pyproject_version",
+                "project_pyproject_version",
+            ),
+            (
+                "pin",
+                {
+                    "source_version": archive_cli.__version__,
+                    "pyproject_version": archive_cli.__version__,
+                    "pin_version": "PRIVATE_PIN_PAYLOAD",
+                },
+                "PRIVATE_PIN_PAYLOAD",
+                "project_pin_missing_or_invalid",
+                "installed_pin",
+                "project_pin_version",
+            ),
+        )
+
+        for (
+            case_name,
+            fixture_kwargs,
+            private_marker,
+            expected_reason,
+            mirror_field,
+            alignment_field,
+        ) in invalid_cases:
+            with self.subTest(case=case_name), tempfile.TemporaryDirectory() as tmp:
+                fixture = self.create_runtime_alignment_fixture(
+                    Path(tmp),
+                    **fixture_kwargs,
+                )
+
+                code, stdout, stderr = self.run_cli_split(
+                    [
+                        "version",
+                        str(fixture["project_root"]),
+                        "--format",
+                        "json",
+                    ]
+                )
+                result = json.loads(stdout)
+                serialized = json.dumps(result, ensure_ascii=False)
+
+                self.assertEqual(code, 1, stdout + stderr)
+                mirror_summary = result["project_source_mirror"]
+                self.assertEqual(mirror_summary["status"], "metadata_invalid")
+                self.assertIsNone(mirror_summary[mirror_field])
+                alignment = result["runtime_alignment"]
+                self.assertEqual(
+                    alignment["status"],
+                    "project_source_update_required",
+                )
+                self.assertEqual(
+                    alignment["reason_code"],
+                    expected_reason,
+                )
+                self.assertIsNone(alignment[alignment_field])
+                self.assertFalse(
+                    alignment["project_scoped_bridge"]["available"]
+                )
+                if case_name == "pin":
+                    self.assertEqual(
+                        result["project_pin"]["status"],
+                        "invalid",
+                    )
+                    self.assertIsNone(
+                        result["project_pin"]["installed_version"]
+                    )
+                self.assertNotIn(private_marker, stdout)
+                self.assertNotIn(private_marker, stderr)
+                self.assertNotIn(private_marker, serialized)
+
+    def test_version_invalid_running_pyproject_metadata_does_not_echo_raw_payload(
+        self,
+    ) -> None:
+        private_marker = "PRIVATE_RUNNING_PYPROJECT_PAYLOAD"
+        with patch.object(
+            archive_services,
+            "read_wom_kit_pyproject_version",
+            return_value=private_marker,
+        ):
+            code, stdout, stderr = self.run_cli_split(
+                ["version", "--format", "json"]
+            )
+        result = json.loads(stdout)
+        serialized = json.dumps(result, ensure_ascii=False)
+
+        self.assertEqual(code, 1, stdout + stderr)
+        self.assertFalse(result["ok"])
+        self.assertIsNone(result["pyproject_version"])
+        self.assertIsNone(
+            result["pyproject_matches_package_version"]
+        )
+        self.assertIsNone(result["paths"]["pyproject"])
+        self.assertEqual(
+            result["consistency_state"],
+            "package_version_only",
+        )
+        self.assertTrue(
+            any(
+                "pyproject version metadata is not an exact stable version label"
+                in warning
+                for warning in result["warnings"]
+            )
+        )
+        self.assertNotIn(private_marker, stdout)
+        self.assertNotIn(private_marker, stderr)
+        self.assertNotIn(private_marker, serialized)
+
+    def test_version_runtime_alignment_reports_aligned_without_replacement_claims(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = self.create_runtime_alignment_fixture(
+                Path(tmp),
+                source_version=archive_cli.__version__,
+                pyproject_version=archive_cli.__version__,
+                pin_version=archive_cli.__version__,
+            )
+            project_root = fixture["project_root"].resolve()
+            wrapper_path = fixture["wrapper_path"].resolve()
+
+            code, output = self.run_cli(
+                [
+                    "version",
+                    str(project_root),
+                    "--no-redact-local-paths",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+
+            self.assertEqual(code, 0, output)
+            alignment = result["runtime_alignment"]
+            self.assertEqual(alignment["status"], "aligned")
+            self.assertEqual(
+                alignment["reason_code"],
+                "running_version_matches_project_source",
+            )
+            self.assertTrue(alignment["integrity"]["verified"])
+            self.assertEqual(
+                alignment["integrity"]["reason_code"],
+                "verified",
+            )
+            self.assertFalse(alignment["integrity"]["network_used"])
+            self.assertTrue(
+                alignment["integrity"]["tracked_python_sources_verified"]
+            )
+            self.assertFalse(
+                alignment["integrity"]["origin_config_value_read"]
+            )
+            self.assertFalse(
+                alignment["integrity"]["cryptographic_tag_signature_verified"]
+            )
+            self.assertFalse(alignment["integrity"]["origin_remote_contacted"])
+            self.assertFalse(alignment["project_scoped_bridge"]["available"])
+            self.assertFalse(
+                alignment["project_scoped_bridge"]["python_isolated_mode"]
+            )
+            self.assertTrue(
+                alignment["project_scoped_bridge"]["integrity_verified"]
+            )
+            self.assertFalse(
+                alignment["project_scoped_bridge"]["exact_argv_included"]
+            )
+            self.assertFalse(
+                alignment["project_scoped_bridge"]["runs_selected_project_source"]
+            )
+            self.assertFalse(
+                alignment["project_scoped_bridge"]["replaces_archive_on_path"]
+            )
+            self.assertFalse(
+                alignment["project_scoped_bridge"]["mutates_python_environment"]
+            )
+            self.assertNotIn("bridge_argv", alignment)
+            self.assertFalse(
+                alignment["changes_made"]["global_path_or_python_installation"]
+            )
+            self.assertFalse(
+                alignment["changes_made"]["runtime_skill_installation"]
+            )
+            self.assertTrue(result["next_safe_actions"])
+
+            text_code, text_output = self.run_cli(["version", str(project_root)])
+            self.assertEqual(text_code, 0, text_output)
+            self.assertIn("Runtime alignment: aligned", text_output)
+            self.assertIn(
+                "Alignment reason: running_version_matches_project_source",
+                text_output,
+            )
+            self.assertIn("Project bridge:", text_output)
+            self.assertIn("Changes made:", text_output)
+            self.assertIn("Next safe actions:", text_output)
+            self.assertNotIn("Bridge argv:", text_output)
+            self.assertNotIn(str(project_root), text_output)
+            self.assertNotIn(str(wrapper_path), text_output)
+
+    def test_version_runtime_alignment_without_project_is_not_inspected(self) -> None:
+        code, output = self.run_cli(["version", "--format", "json"])
+        result = json.loads(output)
+
+        self.assertEqual(code, 0, output)
+        alignment = result["runtime_alignment"]
+        self.assertEqual(alignment["status"], "not_inspected")
+        self.assertEqual(
+            alignment["reason_code"],
+            "inspection_root_not_provided",
+        )
+        self.assertFalse(alignment["project_inspected"])
+        self.assertFalse(alignment["project_scoped_bridge"]["available"])
+        self.assertNotIn("bridge_argv", alignment)
+        self.assertFalse(
+            alignment["changes_made"]["global_path_or_python_installation"]
+        )
+        self.assertFalse(
+            alignment["changes_made"]["runtime_skill_installation"]
+        )
+
+    def test_version_runtime_alignment_integrity_rejects_non_git_and_dirty_wrapper(self) -> None:
+        cases = (
+            (
+                "non_git_mirror",
+                "project_git_worktree_root_unverified",
+                "git_worktree_root_exact",
+            ),
+            (
+                "dirty_wrapper",
+                "project_git_worktree_dirty",
+                "worktree_clean_except_untracked_installed_version",
+            ),
+            (
+                "tracked_pin",
+                "project_source_pin_tracked",
+                "installed_version_pin_untracked",
+            ),
+        )
+        for case_name, expected_reason, failed_evidence in cases:
+            with self.subTest(case=case_name), tempfile.TemporaryDirectory() as tmp:
+                fixture = self.create_runtime_alignment_fixture(
+                    Path(tmp),
+                    source_version=archive_cli.__version__,
+                    pyproject_version=archive_cli.__version__,
+                    pin_version=archive_cli.__version__,
+                )
+                if case_name == "non_git_mirror":
+                    git_directory = fixture["mirror_root"] / ".git"
+                    git_directory.rename(fixture["mirror_root"] / ".git-disabled")
+                elif case_name == "dirty_wrapper":
+                    wrapper_path = fixture["wrapper_path"]
+                    wrapper_path.write_text(
+                        wrapper_path.read_text(encoding="utf-8")
+                        + "\n# dirty runtime wrapper fixture\n",
+                        encoding="utf-8",
+                    )
+                else:
+                    self.git_fixture_command(
+                        fixture["mirror_root"],
+                        "add",
+                        "installed-version.txt",
+                    )
+                    self.git_fixture_command(
+                        fixture["mirror_root"],
+                        "commit",
+                        "-m",
+                        "incorrectly track installed-version pin",
+                    )
+
+                alignment = self.assert_runtime_alignment_integrity_failure(
+                    fixture["project_root"],
+                    expected_reason,
+                )
+                self.assertEqual(
+                    alignment["project_source_version"],
+                    archive_cli.__version__,
+                )
+                self.assertFalse(alignment["integrity"][failed_evidence])
+
+    def test_version_runtime_alignment_integrity_rejects_concealed_execution_source_changes(self) -> None:
+        cases = (
+            ("wrapper_assume_unchanged", "wrapper_path", "--assume-unchanged"),
+            ("wrapper_skip_worktree", "wrapper_path", "--skip-worktree"),
+            (
+                "archive_cli_assume_unchanged",
+                "archive_cli_path",
+                "--assume-unchanged",
+            ),
+            (
+                "archive_cli_skip_worktree",
+                "archive_cli_path",
+                "--skip-worktree",
+            ),
+        )
+        for case_name, target_key, index_flag in cases:
+            with self.subTest(case=case_name), tempfile.TemporaryDirectory() as tmp:
+                fixture = self.create_runtime_alignment_fixture(
+                    Path(tmp),
+                    source_version=archive_cli.__version__,
+                    pyproject_version=archive_cli.__version__,
+                    pin_version=archive_cli.__version__,
+                    include_runtime_sources=True,
+                )
+                mirror_root = fixture["mirror_root"]
+                target_path = fixture[target_key]
+                target_relative = target_path.relative_to(mirror_root).as_posix()
+                clean_snapshot = (
+                    archive_services.wom_kit_project_update_git_snapshot(
+                        mirror_root.resolve()
+                    )
+                )
+                self.assertIsNotNone(clean_snapshot)
+                assert clean_snapshot is not None
+                self.assertTrue(clean_snapshot["raw_bytes_match_head"])
+                self.assertTrue(clean_snapshot["flags_safe"])
+                self.git_fixture_command(
+                    mirror_root,
+                    "update-index",
+                    index_flag,
+                    "--",
+                    target_relative,
+                )
+                target_path.write_bytes(
+                    target_path.read_bytes()
+                    + f"\n# concealed bytes: {case_name}\n".encode("utf-8")
+                )
+                concealed_status = self.git_fixture_command(
+                    mirror_root,
+                    "--no-optional-locks",
+                    "-c",
+                    "core.fsmonitor=false",
+                    "status",
+                    "--porcelain=v1",
+                    "--untracked-files=all",
+                )
+                self.assertNotIn(target_relative, concealed_status)
+
+                with patch.object(
+                    archive_services,
+                    "wom_kit_project_update_git_snapshot",
+                    return_value=clean_snapshot,
+                ):
+                    alignment = self.assert_runtime_alignment_integrity_failure(
+                        fixture["project_root"],
+                        "project_tracked_python_index_flags_unsafe",
+                    )
+                integrity = alignment["integrity"]
+                self.assertTrue(integrity["tracked_python_source_set_complete"])
+                self.assertGreaterEqual(integrity["tracked_python_source_count"], 3)
+                self.assertFalse(integrity["tracked_python_index_flags_safe"])
+                self.assertFalse(integrity["tracked_python_sources_verified"])
+
+    def test_version_runtime_alignment_integrity_rejects_concealed_runtime_resource_changes(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = self.create_runtime_alignment_fixture(
+                Path(tmp),
+                source_version=archive_cli.__version__,
+                pyproject_version=archive_cli.__version__,
+                pin_version=archive_cli.__version__,
+            )
+            mirror_root = fixture["mirror_root"]
+            resource_relative = (
+                "wom-kit/schemas/runtime-fixture.schema.json"
+            )
+            resource_path = mirror_root.joinpath(
+                *PurePosixPath(resource_relative).parts
+            )
+            clean_snapshot = (
+                archive_services.wom_kit_project_update_git_snapshot(
+                    mirror_root.resolve()
+                )
+            )
+            self.assertIsNotNone(clean_snapshot)
+            assert clean_snapshot is not None
+            self.assertTrue(clean_snapshot["raw_bytes_match_head"])
+            self.assertTrue(clean_snapshot["flags_safe"])
+            resource_path.write_bytes(
+                resource_path.read_bytes()
+                + b"RUNTIME_RESOURCE_RAW_BYTES_CHANGED\n"
+            )
+            with patch.object(
+                archive_services,
+                "wom_kit_project_update_git_snapshot",
+                return_value=clean_snapshot,
+            ):
+                alignment = self.assert_runtime_alignment_integrity_failure(
+                    fixture["project_root"].resolve(),
+                    "project_runtime_resource_bytes_mismatch",
+                )
+
+            integrity = alignment["integrity"]
+            self.assertTrue(integrity["all_tracked_index_flags_safe"])
+            self.assertTrue(integrity["runtime_resource_manifest_verified"])
+            self.assertTrue(
+                integrity["runtime_resource_index_matches_head"]
+            )
+            self.assertFalse(
+                integrity["runtime_resource_worktree_bytes_match_head"]
+            )
+            self.assertFalse(integrity["runtime_resources_verified"])
+            self.assertNotIn(
+                "RUNTIME_RESOURCE_RAW_BYTES_CHANGED",
+                json.dumps(alignment, ensure_ascii=False),
+            )
+
+        flag_cases = (
+            (
+                "source_assume_unchanged",
+                "wom-kit/schemas/runtime-fixture.schema.json",
+                "--assume-unchanged",
+            ),
+            (
+                "packaged_skip_worktree",
+                (
+                    "wom-kit/src/wom_kit/_resources/schemas/"
+                    "runtime-fixture.schema.json"
+                ),
+                "--skip-worktree",
+            ),
+        )
+        for case_name, resource_relative, index_flag in flag_cases:
+            with self.subTest(case=case_name), tempfile.TemporaryDirectory() as tmp:
+                fixture = self.create_runtime_alignment_fixture(
+                    Path(tmp),
+                    source_version=archive_cli.__version__,
+                    pyproject_version=archive_cli.__version__,
+                    pin_version=archive_cli.__version__,
+                )
+                clean_snapshot = (
+                    archive_services.wom_kit_project_update_git_snapshot(
+                        fixture["mirror_root"].resolve()
+                    )
+                )
+                self.assertIsNotNone(clean_snapshot)
+                assert clean_snapshot is not None
+                self.assertTrue(clean_snapshot["raw_bytes_match_head"])
+                self.assertTrue(clean_snapshot["flags_safe"])
+                self.git_fixture_command(
+                    fixture["mirror_root"],
+                    "update-index",
+                    index_flag,
+                    "--",
+                    resource_relative,
+                )
+
+                with patch.object(
+                    archive_services,
+                    "wom_kit_project_update_git_snapshot",
+                    return_value=clean_snapshot,
+                ):
+                    alignment = (
+                        self.assert_runtime_alignment_integrity_failure(
+                            fixture["project_root"].resolve(),
+                            "project_tracked_index_flags_unsafe",
+                        )
+                    )
+                integrity = alignment["integrity"]
+                self.assertFalse(
+                    integrity["all_tracked_index_flags_safe"]
+                )
+                self.assertFalse(integrity["runtime_resources_verified"])
+
+    def test_version_runtime_alignment_integrity_rechecks_execution_bytes_after_clean_snapshot(
+        self,
+    ) -> None:
+        for target_key in ("wrapper_path", "archive_cli_path"):
+            with self.subTest(target=target_key), tempfile.TemporaryDirectory() as tmp:
+                fixture = self.create_runtime_alignment_fixture(
+                    Path(tmp),
+                    source_version=archive_cli.__version__,
+                    pyproject_version=archive_cli.__version__,
+                    pin_version=archive_cli.__version__,
+                    include_runtime_sources=True,
+                )
+                target_path = fixture[target_key]
+                clean_snapshot = (
+                    archive_services.wom_kit_project_update_git_snapshot(
+                        fixture["mirror_root"].resolve()
+                    )
+                )
+                self.assertIsNotNone(clean_snapshot)
+                assert clean_snapshot is not None
+                self.assertTrue(clean_snapshot["raw_bytes_match_head"])
+                self.assertTrue(clean_snapshot["flags_safe"])
+                target_path.write_bytes(
+                    target_path.read_bytes()
+                    + b"\n# changed after the clean full-tree snapshot\n"
+                )
+                target_relative = target_path.relative_to(
+                    fixture["mirror_root"]
+                ).as_posix()
+                head_object_id = self.git_fixture_command(
+                    fixture["mirror_root"],
+                    "rev-parse",
+                    f"HEAD:{target_relative}",
+                )
+                tag_object_id = self.git_fixture_command(
+                    fixture["mirror_root"],
+                    "rev-parse",
+                    f"{fixture['tag_name']}:{target_relative}",
+                )
+                worktree_object_id = self.git_fixture_command(
+                    fixture["mirror_root"],
+                    "hash-object",
+                    "--no-filters",
+                    "--",
+                    target_relative,
+                )
+                self.assertEqual(head_object_id, tag_object_id)
+                self.assertNotEqual(worktree_object_id, head_object_id)
+
+                with patch.object(
+                    archive_services,
+                    "wom_kit_project_update_git_snapshot",
+                    return_value=clean_snapshot,
+                ):
+                    alignment = self.assert_runtime_alignment_integrity_failure(
+                        fixture["project_root"],
+                        "project_tracked_python_bytes_mismatch",
+                    )
+
+                integrity = alignment["integrity"]
+                self.assertTrue(integrity["tracked_python_index_flags_safe"])
+                self.assertTrue(integrity["tracked_python_index_matches_head"])
+                self.assertFalse(
+                    integrity["tracked_python_worktree_bytes_match_head"]
+                )
+                self.assertFalse(integrity["tracked_python_sources_verified"])
+
+    def test_version_runtime_alignment_rejects_ignored_runtime_import_shadows(self) -> None:
+        cases = (
+            (
+                "src_top_level_shadow",
+                "project_runtime_source_root_shadow_entry",
+                "runtime_source_root_top_level_isolated",
+            ),
+            (
+                "untracked_python_shadow",
+                "project_runtime_python_source_set_mismatch",
+                "runtime_python_filesystem_source_set_exact",
+            ),
+            (
+                "ignored_bytecode",
+                "project_runtime_python_bytecode_present",
+                "runtime_python_bytecode_absent",
+            ),
+            (
+                "ignored_extension",
+                "project_runtime_python_extension_present",
+                "runtime_python_extension_modules_absent",
+            ),
+        )
+        for case_name, expected_reason, failed_evidence in cases:
+            with self.subTest(case=case_name), tempfile.TemporaryDirectory() as tmp:
+                fixture = self.create_runtime_alignment_fixture(
+                    Path(tmp),
+                    source_version=archive_cli.__version__,
+                    pyproject_version=archive_cli.__version__,
+                    pin_version=archive_cli.__version__,
+                    include_runtime_sources=True,
+                )
+                source_root = fixture["source_root"]
+                package_root = source_root / "wom_kit"
+                if case_name == "src_top_level_shadow":
+                    shadow_path = source_root / "wom_kit.py"
+                    shadow_bytes = b"raise RuntimeError('src shadow executed')\n"
+                elif case_name == "untracked_python_shadow":
+                    shadow_path = package_root / "shadow_runtime.py"
+                    shadow_bytes = b"raise RuntimeError('package shadow executed')\n"
+                elif case_name == "ignored_bytecode":
+                    shadow_path = (
+                        package_root
+                        / "__pycache__"
+                        / "archive_cli.cpython-310.pyc"
+                    )
+                    shadow_bytes = b"FAKE_PYC_MUST_NOT_LOAD"
+                else:
+                    shadow_path = package_root / "archive_cli.pyd"
+                    shadow_bytes = b"FAKE_EXTENSION_MUST_NOT_LOAD"
+
+                shadow_path.parent.mkdir(parents=True, exist_ok=True)
+                shadow_relative = shadow_path.relative_to(
+                    fixture["mirror_root"]
+                ).as_posix()
+                exclude_path = (
+                    fixture["mirror_root"] / ".git" / "info" / "exclude"
+                )
+                exclude_path.write_text(
+                    exclude_path.read_text(encoding="utf-8")
+                    + f"\n/{shadow_relative}\n",
+                    encoding="utf-8",
+                )
+                shadow_path.write_bytes(shadow_bytes)
+                self.git_fixture_command(
+                    fixture["mirror_root"],
+                    "check-ignore",
+                    "--quiet",
+                    "--",
+                    shadow_relative,
+                )
+                concealed_status = self.git_fixture_command(
+                    fixture["mirror_root"],
+                    "--no-optional-locks",
+                    "-c",
+                    "core.fsmonitor=false",
+                    "status",
+                    "--porcelain=v1",
+                    "--untracked-files=all",
+                )
+                self.assertNotIn(shadow_relative, concealed_status)
+
+                alignment = self.assert_runtime_alignment_integrity_failure(
+                    fixture["project_root"],
+                    expected_reason,
+                )
+                integrity = alignment["integrity"]
+                self.assertGreater(integrity["runtime_source_tree_entry_count"], 0)
+                self.assertFalse(integrity[failed_evidence])
+                self.assertFalse(
+                    integrity["runtime_python_filesystem_closed_world"]
+                )
+
+                direct_wrapper = subprocess.run(
+                    [
+                        sys.executable,
+                        "-I",
+                        str(fixture["wrapper_path"]),
+                        "--version",
+                    ],
+                    cwd=fixture["project_root"],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+                self.assertEqual(direct_wrapper.returncode, 1)
+                self.assertEqual(
+                    direct_wrapper.stderr.strip(),
+                    "WOM_BRIDGE_SOURCE_TREE_UNSAFE",
+                )
+                self.assertEqual(direct_wrapper.stdout, "")
+
+    def test_version_runtime_alignment_integrity_requires_exact_annotated_source_tag(self) -> None:
+        alternate_version = (
+            "0.0.0"
+            if archive_cli.__version__ != "0.0.0"
+            else "0.0.1"
+        )
+        cases = (
+            (
+                "wrong_tag",
+                "project_source_tag_missing",
+                "source_tag_available_locally",
+            ),
+            (
+                "lightweight_tag",
+                "project_source_tag_not_annotated",
+                "source_tag_annotated",
+            ),
+            (
+                "tag_not_at_head",
+                "project_source_tag_not_at_head",
+                "source_tag_at_head",
+            ),
+            (
+                "tagged_root_shim_mismatch",
+                "project_tag_source_versions_mismatch",
+                "tag_source_versions_match",
+            ),
+        )
+        for case_name, expected_reason, failed_evidence in cases:
+            with self.subTest(case=case_name), tempfile.TemporaryDirectory() as tmp:
+                fixture = self.create_runtime_alignment_fixture(
+                    Path(tmp),
+                    source_version=archive_cli.__version__,
+                    pyproject_version=archive_cli.__version__,
+                    pin_version=archive_cli.__version__,
+                    root_shim_version=(
+                        alternate_version
+                        if case_name == "tagged_root_shim_mismatch"
+                        else None
+                    ),
+                )
+                mirror_root = fixture["mirror_root"]
+                tag_name = fixture["tag_name"]
+                if case_name == "wrong_tag":
+                    self.git_fixture_command(mirror_root, "tag", "-d", tag_name)
+                    alternate_tag = f"v{alternate_version}"
+                    self.git_fixture_command(
+                        mirror_root,
+                        "tag",
+                        "-a",
+                        alternate_tag,
+                        "-m",
+                        alternate_tag,
+                    )
+                elif case_name == "lightweight_tag":
+                    self.git_fixture_command(mirror_root, "tag", "-d", tag_name)
+                    self.git_fixture_command(mirror_root, "tag", tag_name, "HEAD")
+                elif case_name == "tag_not_at_head":
+                    marker = mirror_root / "post-tag-marker.txt"
+                    marker.write_text("post-tag commit\n", encoding="utf-8")
+                    self.git_fixture_command(
+                        mirror_root,
+                        "add",
+                        marker.name,
+                    )
+                    self.git_fixture_command(
+                        mirror_root,
+                        "commit",
+                        "-m",
+                        "post-tag commit",
+                    )
+
+                alignment = self.assert_runtime_alignment_integrity_failure(
+                    fixture["project_root"],
+                    expected_reason,
+                )
+                self.assertFalse(alignment["integrity"][failed_evidence])
+
+    def test_version_runtime_alignment_integrity_requires_origin_main_ancestry(self) -> None:
+        cases = (
+            (
+                "missing_origin",
+                "project_origin_not_configured",
+                "origin_configured",
+            ),
+            (
+                "missing_origin_main",
+                "project_origin_main_unavailable",
+                "origin_main_available_locally",
+            ),
+            (
+                "non_ancestor_origin_main",
+                "project_source_tag_not_reachable_from_origin_main",
+                "source_tag_reachable_from_origin_main",
+            ),
+        )
+        for case_name, expected_reason, failed_evidence in cases:
+            with self.subTest(case=case_name), tempfile.TemporaryDirectory() as tmp:
+                fixture = self.create_runtime_alignment_fixture(
+                    Path(tmp),
+                    source_version=archive_cli.__version__,
+                    pyproject_version=archive_cli.__version__,
+                    pin_version=archive_cli.__version__,
+                )
+                mirror_root = fixture["mirror_root"]
+                if case_name == "missing_origin":
+                    self.git_fixture_command(mirror_root, "remote", "remove", "origin")
+                elif case_name == "missing_origin_main":
+                    self.git_fixture_command(
+                        mirror_root,
+                        "update-ref",
+                        "-d",
+                        "refs/remotes/origin/main",
+                    )
+                else:
+                    tree = self.git_fixture_command(
+                        mirror_root,
+                        "rev-parse",
+                        "HEAD^{tree}",
+                    )
+                    unrelated_commit = self.git_fixture_command(
+                        mirror_root,
+                        "commit-tree",
+                        tree,
+                        "-m",
+                        "unrelated runtime root",
+                    )
+                    self.git_fixture_command(
+                        mirror_root,
+                        "tag",
+                        "-d",
+                        fixture["tag_name"],
+                    )
+                    self.git_fixture_command(
+                        mirror_root,
+                        "checkout",
+                        "--detach",
+                        "--quiet",
+                        unrelated_commit,
+                    )
+                    self.git_fixture_command(
+                        mirror_root,
+                        "tag",
+                        "-a",
+                        fixture["tag_name"],
+                        "-m",
+                        fixture["tag_name"],
+                    )
+
+                alignment = self.assert_runtime_alignment_integrity_failure(
+                    fixture["project_root"],
+                    expected_reason,
+                )
+                self.assertFalse(alignment["integrity"][failed_evidence])
+
+    def test_version_runtime_alignment_origin_probe_reads_fixed_key_name_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = self.create_runtime_alignment_fixture(
+                Path(tmp),
+                source_version=archive_cli.__version__,
+                pyproject_version=archive_cli.__version__,
+                pin_version=archive_cli.__version__,
+                include_runtime_sources=True,
+            )
+            credential_sentinel = (
+                "https://sentinel-user:SENTINEL_ORIGIN_CREDENTIAL"
+                "@example.invalid/private.git"
+            )
+            self.git_fixture_command(
+                fixture["mirror_root"],
+                "remote",
+                "set-url",
+                "origin",
+                credential_sentinel,
+            )
+
+            real_git = archive_services.wom_kit_project_update_git
+            observed_git_results: list[tuple[list[str], tuple[bool, str]]] = []
+
+            def record_git_result(
+                mirror_path: Path,
+                args: list[str],
+                **kwargs: Any,
+            ) -> tuple[bool, str]:
+                git_result = real_git(mirror_path, args, **kwargs)
+                observed_git_results.append((list(args), git_result))
+                return git_result
+
+            with patch.object(
+                archive_services,
+                "wom_kit_project_update_git",
+                side_effect=record_git_result,
+            ):
+                code, stdout, stderr = self.run_cli_split(
+                    [
+                        "version",
+                        str(fixture["project_root"]),
+                        "--no-redact-local-paths",
+                        "--format",
+                        "json",
+                    ]
+                )
+
+            self.assertEqual(code, 0, stdout + stderr)
+            result = json.loads(stdout)
+            integrity = result["runtime_alignment"]["integrity"]
+            self.assertTrue(integrity["verified"])
+            self.assertTrue(integrity["origin_config_key_present"])
+            self.assertFalse(integrity["origin_config_value_read"])
+            self.assertFalse(integrity["origin_remote_contacted"])
+            self.assertFalse(integrity["network_used"])
+
+            expected_origin_probe = [
+                "config",
+                "--local",
+                "--no-includes",
+                "--name-only",
+                "--get-regexp",
+                r"^remote\.origin\.url$",
+            ]
+            expected_autocrlf_probe = [
+                "config",
+                "--type=bool",
+                "--get",
+                "core.autocrlf",
+            ]
+            origin_probe_calls = [
+                args
+                for args, _git_result in observed_git_results
+                if args and args[0] == "config"
+            ]
+            self.assertEqual(
+                origin_probe_calls,
+                [expected_autocrlf_probe, expected_origin_probe],
+            )
+            origin_probe_results = [
+                git_result
+                for args, git_result in observed_git_results
+                if args == expected_origin_probe
+            ]
+            self.assertEqual(origin_probe_results, [(True, "remote.origin.url")])
+            self.assertFalse(
+                any(
+                    args == ["config", "--get", "remote.origin.url"]
+                    for args, _git_result in observed_git_results
+                )
+            )
+
+            returned_memory_boundary = repr(observed_git_results)
+            for exposed_boundary in (
+                stdout,
+                stderr,
+                json.dumps(result, ensure_ascii=False),
+                returned_memory_boundary,
+            ):
+                with self.subTest(boundary=exposed_boundary[:40]):
+                    self.assertNotIn(
+                        "SENTINEL_ORIGIN_CREDENTIAL",
+                        exposed_boundary,
+                    )
+                    self.assertNotIn(credential_sentinel, exposed_boundary)
+
+    def test_version_runtime_alignment_rejects_global_only_origin_without_reading_url_value(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            fixture = self.create_runtime_alignment_fixture(
+                tmp_root,
+                source_version=archive_cli.__version__,
+                pyproject_version=archive_cli.__version__,
+                pin_version=archive_cli.__version__,
+                include_runtime_sources=True,
+            )
+            self.git_fixture_command(
+                fixture["mirror_root"],
+                "remote",
+                "remove",
+                "origin",
+            )
+            credential_sentinel = (
+                "https://global-user:GLOBAL_ONLY_ORIGIN_SECRET"
+                "@example.invalid/private.git"
+            )
+            isolated_home = tmp_root / "isolated-global-git-home"
+            isolated_home.mkdir()
+            (isolated_home / ".gitconfig").write_text(
+                "[remote \"origin\"]\n"
+                f"\turl = {credential_sentinel}\n",
+                encoding="utf-8",
+            )
+            real_git = archive_services.wom_kit_project_update_git
+            observed_git_results: list[
+                tuple[list[str], tuple[bool, str]]
+            ] = []
+
+            def record_git_result(
+                mirror_path: Path,
+                args: list[str],
+                **kwargs: Any,
+            ) -> tuple[bool, str]:
+                git_result = real_git(mirror_path, args, **kwargs)
+                observed_git_results.append((list(args), git_result))
+                return git_result
+
+            with (
+                patch.dict(
+                    os.environ,
+                    {
+                        "HOME": str(isolated_home),
+                        "XDG_CONFIG_HOME": str(isolated_home),
+                    },
+                ),
+                patch.object(
+                    archive_services,
+                    "wom_kit_project_update_git",
+                    side_effect=record_git_result,
+                ),
+            ):
+                code, stdout, stderr = self.run_cli_split(
+                    [
+                        "version",
+                        str(fixture["project_root"]),
+                        "--no-redact-local-paths",
+                        "--format",
+                        "json",
+                    ]
+                )
+
+            self.assertEqual(code, 1, stdout + stderr)
+            result = json.loads(stdout)
+            alignment = result["runtime_alignment"]
+            self.assertEqual(
+                alignment["reason_code"],
+                "project_origin_not_configured",
+            )
+            integrity = alignment["integrity"]
+            self.assertFalse(integrity["verified"])
+            self.assertFalse(integrity["origin_configured"])
+            self.assertFalse(integrity["origin_config_key_present"])
+            self.assertFalse(integrity["origin_config_value_read"])
+            expected_origin_probe = [
+                "config",
+                "--local",
+                "--no-includes",
+                "--name-only",
+                "--get-regexp",
+                r"^remote\.origin\.url$",
+            ]
+            expected_autocrlf_probe = [
+                "config",
+                "--type=bool",
+                "--get",
+                "core.autocrlf",
+            ]
+            origin_probe_calls = [
+                args
+                for args, _git_result in observed_git_results
+                if args and args[0] == "config"
+            ]
+            self.assertEqual(
+                origin_probe_calls,
+                [expected_autocrlf_probe, expected_origin_probe],
+            )
+            origin_probe_results = [
+                git_result
+                for args, git_result in observed_git_results
+                if args == expected_origin_probe
+            ]
+            self.assertEqual(origin_probe_results, [(False, "")])
+
+            returned_memory_boundary = repr(observed_git_results)
+            for exposed_boundary in (
+                stdout,
+                stderr,
+                json.dumps(result, ensure_ascii=False),
+                returned_memory_boundary,
+            ):
+                with self.subTest(boundary=exposed_boundary[:40]):
+                    self.assertNotIn(
+                        "GLOBAL_ONLY_ORIGIN_SECRET",
+                        exposed_boundary,
+                    )
+                    self.assertNotIn(
+                        credential_sentinel,
+                        exposed_boundary,
+                    )
+
+    def test_version_runtime_alignment_integrity_rejects_symlinked_wrapper_when_supported(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = self.create_runtime_alignment_fixture(
+                Path(tmp),
+                source_version=archive_cli.__version__,
+                pyproject_version=archive_cli.__version__,
+                pin_version=archive_cli.__version__,
+            )
+            wrapper_path = fixture["wrapper_path"]
+            target_path = wrapper_path.with_name("archive-target.py")
+            shutil.copy2(wrapper_path, target_path)
+            wrapper_path.unlink()
+            try:
+                wrapper_path.symlink_to(target_path.name)
+            except OSError as exc:
+                self.skipTest(f"file symlinks are unavailable: {exc}")
+
+            alignment = self.assert_runtime_alignment_integrity_failure(
+                fixture["project_root"],
+                "project_wrapper_path_unsafe",
+            )
+            self.assertFalse(
+                alignment["integrity"]["wrapper_path_components_real"]
+            )
+
+    def test_version_runtime_alignment_integrity_rejects_symlinked_mirror_when_supported(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = self.create_runtime_alignment_fixture(
+                Path(tmp),
+                source_version=archive_cli.__version__,
+                pyproject_version=archive_cli.__version__,
+                pin_version=archive_cli.__version__,
+            )
+            mirror_path = fixture["mirror_root"]
+            real_mirror_path = mirror_path.with_name("real-source")
+            mirror_path.rename(real_mirror_path)
+            try:
+                mirror_path.symlink_to(
+                    real_mirror_path.name,
+                    target_is_directory=True,
+                )
+            except OSError as exc:
+                self.skipTest(f"directory symlinks are unavailable: {exc}")
+
+            alignment = self.assert_runtime_alignment_integrity_failure(
+                fixture["project_root"],
+                "project_mirror_not_real_inside_project",
+            )
+            self.assertFalse(
+                alignment["integrity"]["mirror_real_directory_inside_project"]
+            )
+
+    def test_version_path_gate_rejects_symlinked_pin_without_reading_external_sentinel(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            fixture = self.create_runtime_alignment_fixture(
+                tmp_root,
+                source_version=archive_cli.__version__,
+                pyproject_version=archive_cli.__version__,
+                pin_version=archive_cli.__version__,
+            )
+            (fixture["mirror_root"] / "installed-version.txt").unlink()
+            sentinel = "SYMLINKED_PIN_CONTENT_MUST_NOT_BE_READ"
+            external_pin = tmp_root / "external-installed-version.txt"
+            external_pin.write_text(
+                f"v0.0.0\n{sentinel}\n",
+                encoding="utf-8",
+            )
+            project_pin = (
+                fixture["project_root"]
+                / ".zettel-kasten"
+                / "installed-version.txt"
+            )
+            try:
+                project_pin.symlink_to(external_pin)
+            except OSError as exc:
+                self.skipTest(f"file symlinks are unavailable: {exc}")
+            bounded_read_paths: list[Path] = []
+            real_bounded_read = (
+                archive_services.wom_kit_read_bounded_real_bytes
+            )
+
+            def record_bounded_read(
+                root: Path,
+                path: Path,
+                *,
+                max_bytes: int,
+            ) -> bytes | None:
+                bounded_read_paths.append(path)
+                return real_bounded_read(
+                    root,
+                    path,
+                    max_bytes=max_bytes,
+                )
+
+            with patch.object(
+                archive_services,
+                "wom_kit_read_bounded_real_bytes",
+                side_effect=record_bounded_read,
+            ):
+                code, stdout, stderr = self.run_cli_split(
+                    [
+                        "version",
+                        str(fixture["project_root"]),
+                        "--no-redact-local-paths",
+                        "--format",
+                        "json",
+                    ]
+                )
+
+            self.assertEqual(code, 1, stdout + stderr)
+            result = json.loads(stdout)
+            self.assertEqual(result["project_pin"]["status"], "unsafe_path")
+            self.assertEqual(
+                result["runtime_alignment"]["reason_code"],
+                "project_pin_path_unsafe",
+            )
+            self.assertNotIn(project_pin, bounded_read_paths)
+            self.assertNotIn(external_pin, bounded_read_paths)
+            combined = stdout + stderr + json.dumps(
+                result,
+                ensure_ascii=False,
+            )
+            self.assertNotIn(sentinel, combined)
+            self.assertNotIn(str(external_pin), combined)
+
+    def test_version_path_gate_rejects_junctioned_mirror_without_reading_external_sentinel(
+        self,
+    ) -> None:
+        if os.name != "nt":
+            self.skipTest("Windows directory junction regression")
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            fixture = self.create_runtime_alignment_fixture(
+                tmp_root,
+                source_version=archive_cli.__version__,
+                pyproject_version=archive_cli.__version__,
+                pin_version=archive_cli.__version__,
+            )
+            mirror_path = fixture["mirror_root"]
+            external_mirror = tmp_root / "external-mirror-target"
+            mirror_path.rename(external_mirror)
+            sentinel = "JUNCTIONED_MIRROR_METADATA_MUST_NOT_BE_READ"
+            (
+                external_mirror
+                / "wom-kit"
+                / "src"
+                / "wom_kit"
+                / "__init__.py"
+            ).write_text(
+                f'__version__ = "{sentinel}"\n',
+                encoding="utf-8",
+            )
+            junction_created = False
+            created = subprocess.run(
+                [
+                    "cmd",
+                    "/d",
+                    "/c",
+                    "mklink",
+                    "/J",
+                    str(mirror_path),
+                    str(external_mirror),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if created.returncode != 0:
+                external_mirror.rename(mirror_path)
+                self.skipTest(
+                    "Windows directory junctions are unavailable: "
+                    f"exit {created.returncode}"
+                )
+            junction_created = True
+            bounded_read_paths: list[Path] = []
+            real_bounded_read = (
+                archive_services.wom_kit_read_bounded_real_bytes
+            )
+
+            def record_bounded_read(
+                root: Path,
+                path: Path,
+                *,
+                max_bytes: int,
+            ) -> bytes | None:
+                bounded_read_paths.append(path)
+                return real_bounded_read(
+                    root,
+                    path,
+                    max_bytes=max_bytes,
+                )
+
+            try:
+                with patch.object(
+                    archive_services,
+                    "wom_kit_read_bounded_real_bytes",
+                    side_effect=record_bounded_read,
+                ):
+                    code, stdout, stderr = self.run_cli_split(
+                        [
+                            "version",
+                            str(fixture["project_root"]),
+                            "--no-redact-local-paths",
+                            "--format",
+                            "json",
+                        ]
+                    )
+
+                self.assertEqual(code, 1, stdout + stderr)
+                result = json.loads(stdout)
+                self.assertEqual(
+                    result["project_source_mirror"]["status"],
+                    "unsafe_path",
+                )
+                self.assertEqual(
+                    result["runtime_alignment"]["reason_code"],
+                    "project_source_metadata_path_unsafe",
+                )
+                self.assertFalse(
+                    any(
+                        path == mirror_path
+                        or external_mirror in path.parents
+                        for path in bounded_read_paths
+                    )
+                )
+                combined = stdout + stderr + json.dumps(
+                    result,
+                    ensure_ascii=False,
+                )
+                self.assertNotIn(sentinel, combined)
+                self.assertNotIn(str(external_mirror), combined)
+            finally:
+                if junction_created:
+                    mirror_path.rmdir()
+
+    def test_version_path_gate_bounds_oversize_pin_and_mirror_metadata_without_opening_bytes(
+        self,
+    ) -> None:
+        cases = (
+            (
+                "project_pin",
+                "project_pin_unreadable",
+                "unreadable",
+            ),
+            (
+                "source_version_metadata",
+                "project_source_metadata_unreadable",
+                "metadata_unreadable",
+            ),
+        )
+        for case_name, expected_reason, expected_status in cases:
+            with self.subTest(case=case_name), tempfile.TemporaryDirectory() as tmp:
+                fixture = self.create_runtime_alignment_fixture(
+                    Path(tmp),
+                    source_version=archive_cli.__version__,
+                    pyproject_version=archive_cli.__version__,
+                    pin_version=archive_cli.__version__,
+                )
+                sentinel = f"OVERSIZE_{case_name.upper()}_MUST_NOT_BE_READ"
+                if case_name == "project_pin":
+                    (fixture["mirror_root"] / "installed-version.txt").unlink()
+                    target_path = (
+                        fixture["project_root"]
+                        / ".zettel-kasten"
+                        / "installed-version.txt"
+                    )
+                    max_bytes = archive_services.WOM_KIT_VERSION_PIN_MAX_BYTES
+                else:
+                    target_path = fixture["package_init_path"]
+                    max_bytes = (
+                        archive_services.WOM_KIT_VERSION_METADATA_MAX_BYTES
+                    )
+                sentinel_bytes = sentinel.encode("utf-8")
+                target_path.write_bytes(
+                    sentinel_bytes
+                    + b"X" * (max_bytes + 1 - len(sentinel_bytes))
+                )
+                opened_paths: list[Path] = []
+                real_os_open = archive_services.os.open
+
+                def record_os_open(
+                    path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+                    flags: int,
+                    *args: Any,
+                    **kwargs: Any,
+                ) -> int:
+                    opened_paths.append(Path(os.fsdecode(path)))
+                    return real_os_open(path, flags, *args, **kwargs)
+
+                with patch.object(
+                    archive_services.os,
+                    "open",
+                    side_effect=record_os_open,
+                ):
+                    code, stdout, stderr = self.run_cli_split(
+                        [
+                            "version",
+                            str(fixture["project_root"]),
+                            "--no-redact-local-paths",
+                            "--format",
+                            "json",
+                        ]
+                    )
+
+                self.assertEqual(code, 1, stdout + stderr)
+                result = json.loads(stdout)
+                self.assertEqual(
+                    result["runtime_alignment"]["reason_code"],
+                    expected_reason,
+                )
+                if case_name == "project_pin":
+                    self.assertEqual(
+                        result["project_pin"]["status"],
+                        expected_status,
+                    )
+                else:
+                    self.assertEqual(
+                        result["project_source_mirror"]["status"],
+                        expected_status,
+                    )
+                self.assertNotIn(target_path, opened_paths)
+                combined = stdout + stderr + json.dumps(
+                    result,
+                    ensure_ascii=False,
+                )
+                self.assertNotIn(sentinel, combined)
+
     def test_project_version_update_dry_run_defers_unfetched_tag_without_writes(self) -> None:
         if shutil.which("git") is None:
             self.skipTest("git is required for the project update fixture")
@@ -3837,6 +6483,7 @@ class ArchiveCliTests(unittest.TestCase):
                 "--target",
                 fixture["target_tag"],
                 "--approve",
+                "--affirm-external-writers-quiescent",
                 "--reviewed-by",
                 "human:archive-test",
                 "--progress",
@@ -3877,12 +6524,34 @@ class ArchiveCliTests(unittest.TestCase):
             receipts = list((metadata_root / "receipts" / "version-updates").glob("*.json"))
             self.assertEqual(len(receipts), 1)
             receipt = json.loads(receipts[0].read_text(encoding="utf-8"))
-            self.assertEqual(receipt["schema"], "wom-kit/project-version-update-receipt/v0.1")
+            self.assertEqual(receipt["schema"], "wom-kit/project-version-update-receipt/v0.2")
             self.assertEqual(receipt["head_commit_after"], fixture["target_commit"])
+            self.assertEqual(
+                receipt["external_writer_quiescence"],
+                {
+                    "affirmed": True,
+                    "scope": "complete_project_version_update_transaction",
+                },
+            )
             self.assertTrue(receipt["configured_origin"]["target_reachable_from_origin_main"])
             self.assertFalse(receipt["configured_origin"]["remote_url_echoed"])
             self.assertFalse((metadata_root / "version-update.lock").exists())
             self.assertEqual(preexisting_temp.read_bytes(), preexisting_temp_bytes)
+            self.assertTrue(
+                result["write_boundary"][
+                    "external_writer_quiescence_required"
+                ]
+            )
+            self.assertFalse(
+                result["write_boundary"][
+                    "atomic_file_compare_and_swap"
+                ]
+            )
+            self.assertTrue(
+                result["write_boundary"][
+                    "checkpointed_change_detection"
+                ]
+            )
             self.assertNotIn("PRIVATE PREEXISTING TEMP CONTENT", stdout + stderr)
             self.assertNotIn(str(fixture["project_root"]), stdout + stderr)
             self.assertNotIn(str(fixture["upstream"]), stdout + stderr)
@@ -3897,6 +6566,554 @@ class ArchiveCliTests(unittest.TestCase):
                 1,
             )
             self.assertFalse((metadata_root / "version-update.lock").exists())
+
+    def test_project_version_update_rematerializes_crlf_runtime_sources_after_lf_attribute_transition(
+        self,
+    ) -> None:
+        if shutil.which("git") is None:
+            self.skipTest("git is required for the project update fixture")
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = self.create_project_version_update_fixture(
+                Path(tmp),
+                crlf_runtime_transition=True,
+            )
+            mirror = fixture["mirror"]
+            unchanged_path = fixture["unchanged_runtime_path"]
+            unchanged_git_path = fixture["unchanged_runtime_git_path"]
+
+            for runtime_path in fixture["runtime_paths"]:
+                self.assertIn(b"\r\n", runtime_path.read_bytes())
+            before_raw_oid = self.git_fixture_command(
+                mirror,
+                "hash-object",
+                "--no-filters",
+                unchanged_git_path,
+            )
+            before_head_oid = self.git_fixture_command(
+                mirror,
+                "rev-parse",
+                f"HEAD:{unchanged_git_path}",
+            )
+            self.assertNotEqual(before_raw_oid, before_head_oid)
+
+            code, output = self.run_cli(
+                [
+                    "project-version-update",
+                    str(fixture["project_root"]),
+                    "--target",
+                    fixture["target_tag"],
+                    "--approve",
+                    "--affirm-external-writers-quiescent",
+                    "--reviewed-by",
+                    "human:archive-test",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+
+            self.assertEqual(code, 0, output)
+            self.assertEqual(result["status"], "updated_restart_required")
+            self.assertTrue(
+                result["source_mirror"][
+                    "runtime_source_rematerialization_attempted"
+                ]
+            )
+            self.assertTrue(
+                result["source_mirror"][
+                    "runtime_source_rematerialization_succeeded"
+                ]
+            )
+            self.assertTrue(
+                result["source_mirror"][
+                    "target_runtime_source_integrity_verified"
+                ]
+            )
+            self.assertTrue(
+                result["write_boundary"][
+                    "project_runtime_source_materialization_may_change"
+                ]
+            )
+            self.assertEqual(
+                self.git_fixture_command(mirror, "rev-parse", "HEAD"),
+                fixture["target_commit"],
+            )
+            for runtime_path in fixture["runtime_paths"]:
+                runtime_git_path = runtime_path.relative_to(mirror).as_posix()
+                self.assertNotIn(b"\r\n", runtime_path.read_bytes())
+                self.assertEqual(
+                    self.git_fixture_command(
+                        mirror,
+                        "hash-object",
+                        "--no-filters",
+                        runtime_git_path,
+                    ),
+                    self.git_fixture_command(
+                        mirror,
+                        "rev-parse",
+                        f"HEAD:{runtime_git_path}",
+                    ),
+                )
+            self.assertNotIn(b"\r\n", unchanged_path.read_bytes())
+            self.assertTrue(result["receipt"]["written"])
+            self.assertEqual(
+                result["receipt"]["schema"],
+                "wom-kit/project-version-update-receipt/v0.2",
+            )
+            receipts = list(
+                (
+                    fixture["metadata_root"]
+                    / "receipts"
+                    / "version-updates"
+                ).glob("*.json")
+            )
+            self.assertEqual(len(receipts), 1)
+            receipt = json.loads(receipts[0].read_text(encoding="utf-8"))
+            self.assertEqual(
+                archive_cli.validate_schema(
+                    receipt,
+                    "project-version-update-receipt-v0.2.schema.json",
+                ),
+                [],
+            )
+            self.assertEqual(
+                receipt["runtime_source_materialization"],
+                {
+                    "attempted": True,
+                    "succeeded": True,
+                    "target_integrity_verified": True,
+                },
+            )
+            self.assertFalse(
+                (fixture["metadata_root"] / "version-update.lock").exists()
+            )
+
+    def test_project_version_update_receipt_schema_preserves_v01_and_requires_truthful_v02_materialization(
+        self,
+    ) -> None:
+        receipt = {
+            "schema": "wom-kit/project-version-update-receipt/v0.2",
+            "action": "project_version_update",
+            "status": "updated_restart_required",
+            "timestamp": "2026-07-30T00:00:00Z",
+            "reviewed_by": "human:archive-test",
+            "target_tag": "v0.3.291",
+            "target_version": "0.3.291",
+            "source_mirror": ".zettel-kasten/source",
+            "head_commit_before": "a" * 40,
+            "head_commit_after": "a" * 40,
+            "source_checkout_changed": False,
+            "runtime_source_materialization": {
+                "attempted": False,
+                "succeeded": None,
+                "target_integrity_verified": True,
+            },
+            "external_writer_quiescence": {
+                "affirmed": True,
+                "scope": (
+                    "complete_project_version_update_transaction"
+                ),
+            },
+            "pins_written": [
+                ".zettel-kasten/installed-version.txt",
+            ],
+            "configured_origin": {
+                "remote_name": "origin",
+                "atomic_fetch_succeeded": True,
+                "target_reachable_from_origin_main": True,
+                "annotated_tag_verified": True,
+                "cryptographic_tag_signature_verified": False,
+                "remote_url_echoed": False,
+            },
+            "runtime": {
+                "running_version_before": archive_cli.__version__,
+                "running_process_reloaded": False,
+                "restart_required": True,
+            },
+            "privacy_guards": {
+                "local_absolute_paths_echoed": False,
+                "remote_urls_echoed": False,
+                "credential_values_echoed": False,
+                "archive_body_text_read": False,
+                "objet_bytes_read": False,
+            },
+        }
+        legacy_receipt = copy.deepcopy(receipt)
+        legacy_receipt["schema"] = (
+            "wom-kit/project-version-update-receipt/v0.1"
+        )
+        del legacy_receipt["runtime_source_materialization"]
+        self.assertEqual(
+            archive_cli.validate_schema(
+                legacy_receipt,
+                "project-version-update-receipt.schema.json",
+            ),
+            [],
+        )
+
+        schema_name = "project-version-update-receipt-v0.2.schema.json"
+
+        self.assertEqual(
+            archive_cli.validate_schema(receipt, schema_name),
+            [],
+        )
+        rematerialized = copy.deepcopy(receipt)
+        rematerialized["source_checkout_changed"] = True
+        rematerialized["runtime_source_materialization"] = {
+            "attempted": True,
+            "succeeded": True,
+            "target_integrity_verified": True,
+        }
+        self.assertEqual(
+            archive_cli.validate_schema(rematerialized, schema_name),
+            [],
+        )
+
+        invalid_receipts: list[tuple[str, dict[str, Any]]] = []
+        missing_block = copy.deepcopy(receipt)
+        del missing_block["runtime_source_materialization"]
+        invalid_receipts.append(("missing_block", missing_block))
+
+        missing_quiescence = copy.deepcopy(receipt)
+        del missing_quiescence["external_writer_quiescence"]
+        invalid_receipts.append(
+            ("missing_external_writer_quiescence", missing_quiescence)
+        )
+
+        quiescence_not_affirmed = copy.deepcopy(receipt)
+        quiescence_not_affirmed["external_writer_quiescence"][
+            "affirmed"
+        ] = False
+        invalid_receipts.append(
+            ("external_writer_quiescence_not_affirmed", quiescence_not_affirmed)
+        )
+
+        for field_name in (
+            "attempted",
+            "succeeded",
+            "target_integrity_verified",
+        ):
+            missing_nested_field = copy.deepcopy(receipt)
+            del missing_nested_field["runtime_source_materialization"][
+                field_name
+            ]
+            invalid_receipts.append(
+                (f"missing_{field_name}", missing_nested_field)
+            )
+
+        target_integrity_false = copy.deepcopy(receipt)
+        target_integrity_false["runtime_source_materialization"][
+            "target_integrity_verified"
+        ] = False
+        invalid_receipts.append(
+            ("target_integrity_false", target_integrity_false)
+        )
+
+        attempted_true_succeeded_null = copy.deepcopy(receipt)
+        attempted_true_succeeded_null["runtime_source_materialization"][
+            "attempted"
+        ] = True
+        invalid_receipts.append(
+            (
+                "attempted_true_succeeded_null",
+                attempted_true_succeeded_null,
+            )
+        )
+
+        attempted_false_succeeded_true = copy.deepcopy(receipt)
+        attempted_false_succeeded_true["runtime_source_materialization"][
+            "succeeded"
+        ] = True
+        invalid_receipts.append(
+            (
+                "attempted_false_succeeded_true",
+                attempted_false_succeeded_true,
+            )
+        )
+
+        for case_name, invalid_receipt in invalid_receipts:
+            with self.subTest(case=case_name):
+                self.assertTrue(
+                    archive_cli.validate_schema(
+                        invalid_receipt,
+                        schema_name,
+                    )
+                )
+
+    def test_project_version_update_repairs_same_target_crlf_runtime_instead_of_no_change(
+        self,
+    ) -> None:
+        if shutil.which("git") is None:
+            self.skipTest("git is required for the project update fixture")
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = self.create_project_version_update_fixture(
+                Path(tmp),
+                crlf_runtime_transition=True,
+            )
+            mirror = fixture["mirror"]
+            unchanged_path = fixture["unchanged_runtime_path"]
+            unchanged_git_path = fixture["unchanged_runtime_git_path"]
+            self.git_fixture_command(
+                mirror,
+                "fetch",
+                "--quiet",
+                "--no-tags",
+                "origin",
+                "refs/heads/main:refs/remotes/origin/main",
+                (
+                    f"refs/tags/{fixture['target_tag']}:"
+                    f"refs/tags/{fixture['target_tag']}"
+                ),
+            )
+            self.git_fixture_command(
+                mirror,
+                "checkout",
+                "--detach",
+                "--quiet",
+                fixture["target_tag"],
+            )
+            target_lf_bytes = unchanged_path.read_bytes().replace(
+                b"\r\n",
+                b"\n",
+            )
+            unchanged_path.write_bytes(
+                target_lf_bytes.replace(b"\n", b"\r\n")
+            )
+            target_pin_bytes = (fixture["target_tag"] + "\n").encode("utf-8")
+            (fixture["metadata_root"] / "installed-version.txt").write_bytes(
+                target_pin_bytes
+            )
+            (mirror / "installed-version.txt").write_bytes(target_pin_bytes)
+
+            self.assertEqual(
+                self.git_fixture_command(mirror, "status", "--porcelain=v1"),
+                "?? installed-version.txt",
+            )
+            self.assertNotEqual(
+                self.git_fixture_command(
+                    mirror,
+                    "hash-object",
+                    "--no-filters",
+                    unchanged_git_path,
+                ),
+                self.git_fixture_command(
+                    mirror,
+                    "rev-parse",
+                    f"HEAD:{unchanged_git_path}",
+                ),
+            )
+
+            code, output = self.run_cli(
+                [
+                    "project-version-update",
+                    str(fixture["project_root"]),
+                    "--target",
+                    fixture["target_tag"],
+                    "--approve",
+                    "--affirm-external-writers-quiescent",
+                    "--reviewed-by",
+                    "human:archive-test",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+
+            self.assertEqual(code, 0, output)
+            self.assertEqual(result["status"], "updated_restart_required")
+            self.assertNotEqual(result["status"], "no_change")
+            self.assertEqual(
+                result["source_mirror"]["head_commit_before"],
+                fixture["target_commit"],
+            )
+            self.assertEqual(
+                result["source_mirror"]["head_commit_after"],
+                fixture["target_commit"],
+            )
+            self.assertTrue(
+                result["source_mirror"]["source_checkout_change_attempted"]
+            )
+            self.assertTrue(
+                result["source_mirror"][
+                    "runtime_source_rematerialization_attempted"
+                ]
+            )
+            self.assertTrue(
+                result["source_mirror"][
+                    "runtime_source_rematerialization_succeeded"
+                ]
+            )
+            self.assertTrue(
+                result["source_mirror"][
+                    "target_runtime_source_integrity_verified"
+                ]
+            )
+            self.assertEqual(result["pins"]["write_attempted_paths"], [])
+            self.assertEqual(result["pins"]["written_paths"], [])
+            self.assertTrue(result["receipt"]["written"])
+            self.assertNotIn(b"\r\n", unchanged_path.read_bytes())
+            self.assertEqual(
+                self.git_fixture_command(
+                    mirror,
+                    "hash-object",
+                    "--no-filters",
+                    unchanged_git_path,
+                ),
+                self.git_fixture_command(
+                    mirror,
+                    "rev-parse",
+                    f"HEAD:{unchanged_git_path}",
+                ),
+            )
+
+    def test_project_version_update_partial_materialization_failure_preserves_lock_without_blind_restore(
+        self,
+    ) -> None:
+        if shutil.which("git") is None:
+            self.skipTest("git is required for the project update fixture")
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = self.create_project_version_update_fixture(
+                Path(tmp),
+                crlf_runtime_transition=True,
+            )
+            mirror = fixture["mirror"]
+            real_materialize = (
+                archive_services
+                .wom_kit_project_update_materialize_runtime_sources
+            )
+            self.assertTrue(real_materialize(mirror))
+            before_integrity = (
+                archive_services.wom_kit_runtime_tracked_python_integrity(
+                    fixture["project_root"],
+                    mirror,
+                )
+            )
+            self.assertTrue(
+                before_integrity["tracked_python_sources_verified"]
+            )
+            before_source_bytes = {
+                path.relative_to(mirror).as_posix(): path.read_bytes()
+                for path in fixture["runtime_paths"]
+            }
+            before_pin_bytes = {
+                path: path.read_bytes()
+                for path in (
+                    fixture["metadata_root"] / "installed-version.txt",
+                    mirror / "installed-version.txt",
+                )
+            }
+            materialize_calls = 0
+            real_materialize_commit = (
+                archive_services.wom_kit_project_update_materialize_commit
+            )
+
+            def fail_target_materialization_then_restore(
+                source_mirror: Path,
+                target_commit: str,
+                *,
+                attach_branch: str | None = None,
+                dry_run: bool = False,
+                directory_guard: object = None,
+            ) -> bool:
+                nonlocal materialize_calls
+                if dry_run:
+                    return real_materialize_commit(
+                        source_mirror,
+                        target_commit,
+                        attach_branch=attach_branch,
+                        dry_run=True,
+                        directory_guard=directory_guard,
+                    )
+                materialize_calls += 1
+                if materialize_calls == 1:
+                    return False
+                return real_materialize_commit(
+                    source_mirror,
+                    target_commit,
+                    attach_branch=attach_branch,
+                    directory_guard=directory_guard,
+                )
+
+            with patch.object(
+                archive_services,
+                "wom_kit_project_update_materialize_commit",
+                side_effect=fail_target_materialization_then_restore,
+            ):
+                result = archive_services.wom_kit_project_version_update(
+                    fixture["project_root"],
+                    target=fixture["target_tag"],
+                    approve=True,
+                    affirm_external_writers_quiescent=True,
+                    reviewed_by="human:archive-test",
+                )
+
+            self.assertEqual(materialize_calls, 1)
+            self.assertFalse(result["ok"])
+            self.assertEqual(
+                result["status"],
+                "failed_rollback_incomplete",
+            )
+            self.assertEqual(
+                result["blockers"],
+                [
+                    "The project version update failed and rollback could not "
+                    "be fully verified; the lock was preserved."
+                ],
+            )
+            self.assertTrue(
+                result["source_mirror"][
+                    "runtime_source_rematerialization_attempted"
+                ]
+            )
+            self.assertFalse(
+                result["source_mirror"][
+                    "runtime_source_rematerialization_succeeded"
+                ]
+            )
+            self.assertFalse(
+                result["source_mirror"][
+                    "target_runtime_source_integrity_verified"
+                ]
+            )
+            self.assertFalse(
+                result["source_mirror"]["source_checkout_is_verified_target"]
+            )
+            self.assertEqual(
+                result["source_mirror"]["checkout_mode_after_result"],
+                "unchanged",
+            )
+            self.assertTrue(result["rollback"]["attempted"])
+            self.assertFalse(result["rollback"]["succeeded"])
+            self.assertFalse(result["rollback"]["source_restored"])
+            self.assertTrue(result["rollback"]["pins_restored"])
+            self.assertFalse(result["rollback"]["lock_removed"])
+            self.assertFalse(result["receipt"]["written"])
+            self.assertEqual(result["files_written"], [])
+            self.assertFalse(result["runtime"]["restart_required"])
+            self.assertEqual(
+                self.git_fixture_command(mirror, "rev-parse", "HEAD"),
+                fixture["old_commit"],
+            )
+            self.assertEqual(
+                {
+                    path.relative_to(mirror).as_posix(): path.read_bytes()
+                    for path in fixture["runtime_paths"]
+                },
+                before_source_bytes,
+            )
+            self.assertEqual(
+                {
+                    path: path.read_bytes()
+                    for path in before_pin_bytes
+                },
+                before_pin_bytes,
+            )
+            self.assertFalse(
+                (fixture["metadata_root"] / "receipts" / "version-updates").exists()
+            )
+            self.assertTrue(
+                (fixture["metadata_root"] / "version-update.lock").exists()
+            )
 
     def test_project_version_update_blocks_dirty_source_without_echoing_entry(self) -> None:
         if shutil.which("git") is None:
@@ -3922,7 +7139,13 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(code, 1, output)
             self.assertEqual(result["status"], "blocked")
             self.assertEqual(result["source_mirror"]["unexpected_worktree_entry_count"], 1)
-            self.assertTrue(any("tracked changes or unknown untracked files" in item for item in result["blockers"]))
+            self.assertTrue(
+                any(
+                    "changed bytes, an unsafe index, or unknown untracked files"
+                    in item
+                    for item in result["blockers"]
+                )
+            )
             self.assertNotIn(private_marker, output)
             self.assertNotIn(str(fixture["project_root"]), output)
 
@@ -3940,6 +7163,7 @@ class ArchiveCliTests(unittest.TestCase):
                     "--target",
                     fixture["target_tag"],
                     "--approve",
+                    "--affirm-external-writers-quiescent",
                     "--reviewed-by",
                     "human:archive-test",
                     "--format",
@@ -3993,6 +7217,7 @@ class ArchiveCliTests(unittest.TestCase):
                     "--target",
                     fixture["target_tag"],
                     "--approve",
+                    "--affirm-external-writers-quiescent",
                     "--format",
                     "json",
                 ]
@@ -4091,6 +7316,7 @@ class ArchiveCliTests(unittest.TestCase):
                     "--target",
                     fixture["target_tag"],
                     "--approve",
+                    "--affirm-external-writers-quiescent",
                     "--reviewed-by",
                     "human:archive-test",
                     "--format",
@@ -4139,6 +7365,7 @@ class ArchiveCliTests(unittest.TestCase):
                     "--target",
                     fixture["target_tag"],
                     "--approve",
+                    "--affirm-external-writers-quiescent",
                     "--reviewed-by",
                     "human:archive-test",
                     "--format",
@@ -4151,39 +7378,308 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(result["status"], "blocked")
             self.assertTrue(result["fetch"]["succeeded"])
             self.assertFalse(result["source_mirror"]["source_checkout_change_attempted"])
-            self.assertTrue(any("checkout failed before any pin write" in item for item in result["blockers"]))
+            self.assertTrue(
+                any(
+                    "without overwriting an ignored or unsafe filesystem entry"
+                    in item
+                    for item in result["blockers"]
+                )
+            )
             self.assertEqual(
                 self.git_fixture_command(fixture["mirror"], "rev-parse", "HEAD"), fixture["old_commit"]
             )
             self.assertEqual(collision_path.read_bytes(), private_bytes)
             self.assertEqual((metadata_root / "installed-version.txt").read_bytes(), before_pin)
+            self.assertFalse((metadata_root / "receipts").exists())
             self.assertFalse((metadata_root / "receipts" / "version-updates").exists())
             self.assertFalse((metadata_root / "version-update.lock").exists())
             self.assertNotIn(fixture["collision_name"], output)
             self.assertNotIn("PRIVATE LOCAL IGNORED CONTENT", output)
             self.assertNotIn(str(fixture["project_root"]), output)
 
+    def test_project_version_update_blocks_ignored_runtime_shadow_before_mutation(
+        self,
+    ) -> None:
+        if shutil.which("git") is None:
+            self.skipTest("git is required for the project update fixture")
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = self.create_project_version_update_fixture(Path(tmp))
+            mirror = fixture["mirror"]
+            metadata_root = fixture["metadata_root"]
+            shadow_relative = "wom-kit/src/yaml.py"
+            shadow_path = mirror.joinpath(
+                *PurePosixPath(shadow_relative).parts
+            )
+            shadow_sentinel = (
+                "PRIVATE_IGNORED_RUNTIME_SHADOW_MUST_SURVIVE"
+            )
+            (mirror / ".git" / "info" / "exclude").write_text(
+                shadow_relative + "\n",
+                encoding="utf-8",
+            )
+            shadow_path.write_text(
+                shadow_sentinel + "\n",
+                encoding="utf-8",
+            )
+            before_head = self.git_fixture_command(
+                mirror,
+                "rev-parse",
+                "HEAD",
+            )
+            tracked_paths = [
+                path
+                for path in self.git_fixture_command(
+                    mirror,
+                    "ls-files",
+                ).splitlines()
+                if path
+            ]
+            before_source = {
+                relative_path: (
+                    mirror
+                    .joinpath(*PurePosixPath(relative_path).parts)
+                    .read_bytes()
+                )
+                for relative_path in tracked_paths
+            }
+            before_pins = {
+                path: path.read_bytes()
+                for path in (
+                    metadata_root / "installed-version.txt",
+                    mirror / "installed-version.txt",
+                )
+            }
+
+            result = archive_services.wom_kit_project_version_update(
+                fixture["project_root"],
+                target=fixture["target_tag"],
+                approve=True,
+                affirm_external_writers_quiescent=True,
+                reviewed_by="human:archive-test",
+            )
+
+            serialized = json.dumps(result, ensure_ascii=False)
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["status"], "blocked")
+            self.assertTrue(result["fetch"]["succeeded"])
+            self.assertFalse(
+                result["source_mirror"][
+                    "source_checkout_change_attempted"
+                ]
+            )
+            self.assertTrue(
+                any(
+                    "ignored or unsafe filesystem entry"
+                    in blocker
+                    for blocker in result["blockers"]
+                )
+            )
+            self.assertEqual(
+                self.git_fixture_command(mirror, "rev-parse", "HEAD"),
+                before_head,
+            )
+            self.assertEqual(
+                {
+                    relative_path: (
+                        mirror
+                        .joinpath(
+                            *PurePosixPath(relative_path).parts
+                        )
+                        .read_bytes()
+                    )
+                    for relative_path in tracked_paths
+                },
+                before_source,
+            )
+            self.assertEqual(
+                {path: path.read_bytes() for path in before_pins},
+                before_pins,
+            )
+            self.assertEqual(
+                shadow_path.read_text(encoding="utf-8"),
+                shadow_sentinel + "\n",
+            )
+            self.assertFalse((metadata_root / "receipts").exists())
+            self.assertFalse(
+                (metadata_root / "version-update.lock").exists()
+            )
+            self.assertNotIn(shadow_sentinel, serialized)
+            self.assertNotIn(shadow_relative, serialized)
+            self.assertNotIn(str(fixture["project_root"]), serialized)
+
+    def test_project_version_update_no_change_leaves_first_run_receipts_tree_absent(
+        self,
+    ) -> None:
+        if shutil.which("git") is None:
+            self.skipTest("git is required for the project update fixture")
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = self.create_project_version_update_fixture(Path(tmp))
+            mirror = fixture["mirror"]
+            metadata_root = fixture["metadata_root"]
+            self.git_fixture_command(
+                mirror,
+                "fetch",
+                "--quiet",
+                "--no-tags",
+                "origin",
+                "refs/heads/main:refs/remotes/origin/main",
+                (
+                    f"refs/tags/{fixture['target_tag']}:"
+                    f"refs/tags/{fixture['target_tag']}"
+                ),
+            )
+            self.git_fixture_command(
+                mirror,
+                "checkout",
+                "--detach",
+                "--quiet",
+                fixture["target_tag"],
+            )
+            target_pin_bytes = (
+                fixture["target_tag"] + "\n"
+            ).encode("utf-8")
+            (metadata_root / "installed-version.txt").write_bytes(
+                target_pin_bytes
+            )
+            (mirror / "installed-version.txt").write_bytes(
+                target_pin_bytes
+            )
+            self.assertFalse((metadata_root / "receipts").exists())
+
+            result = archive_services.wom_kit_project_version_update(
+                fixture["project_root"],
+                target=fixture["target_tag"],
+                approve=True,
+                affirm_external_writers_quiescent=True,
+                reviewed_by="human:archive-test",
+            )
+
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["status"], "no_change")
+            self.assertTrue(result["fetch"]["attempted"])
+            self.assertEqual(result["files_written"], [])
+            self.assertFalse((metadata_root / "receipts").exists())
+            self.assertFalse(
+                (metadata_root / "receipts" / "version-updates").exists()
+            )
+            self.assertFalse(
+                (metadata_root / "version-update.lock").exists()
+            )
+
+    def test_project_version_update_receipt_exclusive_preserves_preclaimed_basename_and_uses_suffix(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp) / "project"
+            receipts_root = (
+                project_root
+                / ".zettel-kasten"
+                / "receipts"
+                / "version-updates"
+            )
+            receipts_root.mkdir(parents=True)
+            timestamp = "2026-07-30T12:34:56Z"
+            target_tag = "v0.3.291"
+            timestamp_slug = "20260730T123456Z"
+            base_name = (
+                f"{timestamp_slug}-{target_tag}."
+                "project-version-update.json"
+            )
+            suffix_name = (
+                f"{timestamp_slug}-{target_tag}-2."
+                "project-version-update.json"
+            )
+            preclaimed_path = receipts_root / base_name
+            preclaimed_bytes = b"PREEXISTING_RECEIPT_MUST_BE_PRESERVED\n"
+            preclaimed_path.write_bytes(preclaimed_bytes)
+            receipt_bytes = b'{"schema":"exclusive-receipt-test"}\n'
+            directory_guard = (
+                archive_services.WomKitProjectUpdateDirectoryGuard(
+                    project_root
+                )
+            )
+            self.assertTrue(directory_guard.hold(receipts_root))
+            try:
+                receipt_path, receipt_relative = (
+                    archive_services
+                    .wom_kit_project_update_write_receipt_exclusive(
+                        project_root,
+                        target_tag,
+                        timestamp,
+                        receipt_bytes,
+                        directory_guard=directory_guard,
+                    )
+                )
+            finally:
+                directory_guard.close()
+
+            expected_path = receipts_root / suffix_name
+            self.assertEqual(receipt_path, expected_path)
+            self.assertEqual(
+                receipt_relative,
+                (
+                    ".zettel-kasten/receipts/version-updates/"
+                    f"{suffix_name}"
+                ),
+            )
+            self.assertEqual(preclaimed_path.read_bytes(), preclaimed_bytes)
+            self.assertEqual(expected_path.read_bytes(), receipt_bytes)
+            self.assertEqual(
+                sorted(path.name for path in receipts_root.iterdir()),
+                sorted((base_name, suffix_name)),
+            )
+
     def test_project_version_update_rolls_back_checkout_and_pins_when_receipt_write_fails(self) -> None:
         if shutil.which("git") is None:
             self.skipTest("git is required for the project update fixture")
         with tempfile.TemporaryDirectory() as tmp:
             fixture = self.create_project_version_update_fixture(Path(tmp))
-            real_atomic_write = archive_services.write_bytes_atomic
+            receipt_write_calls: list[tuple[Path, str, str, int]] = []
 
-            def fail_receipt_write(path: Path, value: bytes) -> None:
-                if path.suffix == ".json":
-                    raise OSError("PRIVATE_RECEIPT_FAILURE_PATH")
-                real_atomic_write(path, value)
+            def fail_receipt_write(
+                project_root: Path,
+                target_tag: str,
+                timestamp: str,
+                receipt_bytes: bytes,
+                *,
+                directory_guard: object = None,
+                reservation_callback: object = None,
+            ) -> tuple[Path, str]:
+                del directory_guard, reservation_callback
+                receipt_write_calls.append(
+                    (
+                        project_root,
+                        target_tag,
+                        timestamp,
+                        len(receipt_bytes),
+                    )
+                )
+                raise OSError("PRIVATE_RECEIPT_FAILURE_PATH")
 
-            with patch.object(archive_services, "write_bytes_atomic", side_effect=fail_receipt_write):
+            with patch.object(
+                archive_services,
+                "wom_kit_project_update_write_receipt_exclusive",
+                side_effect=fail_receipt_write,
+            ):
                 result = archive_services.wom_kit_project_version_update(
                     fixture["project_root"],
                     target=fixture["target_tag"],
                     approve=True,
+                    affirm_external_writers_quiescent=True,
                     reviewed_by="human:archive-test",
                 )
 
             serialized = json.dumps(result, ensure_ascii=False)
+            self.assertEqual(len(receipt_write_calls), 1)
+            self.assertEqual(
+                receipt_write_calls[0][:2],
+                (fixture["project_root"], fixture["target_tag"]),
+            )
+            self.assertRegex(
+                receipt_write_calls[0][2],
+                r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$",
+            )
+            self.assertGreater(receipt_write_calls[0][3], 0)
             self.assertFalse(result["ok"])
             self.assertEqual(result["status"], "failed_rolled_back")
             self.assertTrue(result["rollback"]["attempted"])
@@ -4192,6 +7688,24 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertTrue(result["rollback"]["pins_restored"])
             self.assertTrue(result["rollback"]["lock_removed"])
             self.assertTrue(result["rollback"]["fetched_refs_may_remain"])
+            self.assertTrue(
+                result["source_mirror"][
+                    "runtime_source_rematerialization_attempted"
+                ]
+            )
+            self.assertTrue(
+                result["source_mirror"][
+                    "runtime_source_rematerialization_succeeded"
+                ]
+            )
+            self.assertFalse(
+                result["source_mirror"][
+                    "target_runtime_source_integrity_verified"
+                ]
+            )
+            self.assertFalse(
+                result["source_mirror"]["source_checkout_is_verified_target"]
+            )
             self.assertEqual(result["source_mirror"]["checkout_mode_after_result"], "restored_original")
             self.assertEqual(result["pins"]["written_paths"], [])
             self.assertTrue(result["pins"]["write_attempted_paths"])
@@ -4212,6 +7726,1972 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertFalse((fixture["metadata_root"] / "receipts" / "version-updates").exists())
             self.assertNotIn("PRIVATE_RECEIPT_FAILURE_PATH", serialized)
             self.assertNotIn(str(fixture["project_root"]), serialized)
+
+    def test_project_version_update_rolls_back_to_git_valid_non_ascii_and_plus_branches(
+        self,
+    ) -> None:
+        if shutil.which("git") is None:
+            self.skipTest("git is required for the project update fixture")
+        for branch_name in ("feature+rollback", "기능/복구"):
+            with (
+                self.subTest(branch=branch_name),
+                tempfile.TemporaryDirectory() as tmp,
+            ):
+                fixture = self.create_project_version_update_fixture(
+                    Path(tmp)
+                )
+                mirror = fixture["mirror"]
+                self.git_fixture_command(
+                    mirror,
+                    "checkout",
+                    "-b",
+                    branch_name,
+                )
+                original_head = self.git_fixture_command(
+                    mirror,
+                    "rev-parse",
+                    "HEAD",
+                )
+                original_snapshot = (
+                    archive_services.wom_kit_project_update_git_snapshot(
+                        mirror
+                    )
+                )
+                self.assertIsNotNone(original_snapshot)
+                self.assertEqual(
+                    original_snapshot["branch"],
+                    branch_name,
+                )
+                original_pin_bytes = {
+                    path: path.read_bytes()
+                    for path in (
+                        fixture["metadata_root"]
+                        / "installed-version.txt",
+                        mirror / "installed-version.txt",
+                    )
+                }
+                receipt_write_attempted = False
+
+                def fail_after_materialization(
+                    project_root: Path,
+                    target_tag: str,
+                    timestamp: str,
+                    receipt_bytes: bytes,
+                    *,
+                    directory_guard: object = None,
+                    reservation_callback: object = None,
+                ) -> tuple[Path, str]:
+                    nonlocal receipt_write_attempted
+                    del (
+                        project_root,
+                        target_tag,
+                        timestamp,
+                        receipt_bytes,
+                        directory_guard,
+                        reservation_callback,
+                    )
+                    receipt_write_attempted = True
+                    raise OSError(
+                        "PRIVATE_SPECIAL_BRANCH_ROLLBACK_FAILURE"
+                    )
+
+                with patch.object(
+                    archive_services,
+                    "wom_kit_project_update_write_receipt_exclusive",
+                    side_effect=fail_after_materialization,
+                ):
+                    result = (
+                        archive_services.wom_kit_project_version_update(
+                            fixture["project_root"],
+                            target=fixture["target_tag"],
+                            approve=True,
+                            affirm_external_writers_quiescent=True,
+                            reviewed_by="human:archive-test",
+                        )
+                    )
+
+                self.assertTrue(receipt_write_attempted)
+                self.assertFalse(result["ok"])
+                self.assertEqual(
+                    result["status"],
+                    "failed_rolled_back",
+                )
+                self.assertTrue(result["rollback"]["attempted"])
+                self.assertTrue(result["rollback"]["succeeded"])
+                self.assertTrue(result["rollback"]["source_restored"])
+                self.assertTrue(result["rollback"]["pins_restored"])
+                self.assertTrue(
+                    result["source_mirror"][
+                        "runtime_source_rematerialization_succeeded"
+                    ]
+                )
+                branch_ok, restored_branch = (
+                    archive_services.wom_kit_project_update_git(
+                        mirror,
+                        [
+                            "symbolic-ref",
+                            "--quiet",
+                            "--short",
+                            "HEAD",
+                        ],
+                        max_output_bytes=4096,
+                    )
+                )
+                self.assertTrue(branch_ok)
+                self.assertEqual(
+                    restored_branch,
+                    branch_name,
+                )
+                self.assertEqual(
+                    self.git_fixture_command(
+                        mirror,
+                        "rev-parse",
+                        "HEAD",
+                    ),
+                    original_head,
+                )
+                self.assertEqual(
+                    archive_services.wom_kit_project_update_git_snapshot(
+                        mirror
+                    ),
+                    original_snapshot,
+                )
+                self.assertEqual(
+                    {
+                        path: path.read_bytes()
+                        for path in original_pin_bytes
+                    },
+                    original_pin_bytes,
+                )
+                self.assertNotIn(
+                    "PRIVATE_SPECIAL_BRANCH_ROLLBACK_FAILURE",
+                    json.dumps(result, ensure_ascii=False),
+                )
+
+    def test_project_update_branch_restore_validation_uses_git_rules_and_preserves_argv_boundaries(
+        self,
+    ) -> None:
+        if shutil.which("git") is None:
+            self.skipTest("git is required for the project update fixture")
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = self.create_project_version_update_fixture(Path(tmp))
+            mirror = fixture["mirror"]
+            head = self.git_fixture_command(
+                mirror,
+                "rev-parse",
+                "HEAD",
+            )
+            for branch_name in ("feature+rollback", "기능/복구"):
+                self.git_fixture_command(
+                    mirror,
+                    "branch",
+                    branch_name,
+                    head,
+                )
+                self.assertTrue(
+                    archive_services.wom_kit_project_update_branch_points_to_commit(
+                        mirror,
+                        branch_name,
+                        head,
+                    )
+                )
+
+            before = (
+                archive_services.wom_kit_project_update_git_snapshot(
+                    mirror
+                )
+            )
+            self.assertIsNotNone(before)
+            for invalid_branch in (
+                "--help",
+                "-c",
+                "bad..branch",
+                "bad\nbranch",
+                "bad@{branch",
+            ):
+                with self.subTest(branch=invalid_branch):
+                    self.assertFalse(
+                        archive_services.wom_kit_project_update_branch_points_to_commit(
+                            mirror,
+                            invalid_branch,
+                            head,
+                        )
+                    )
+                    self.assertFalse(
+                        archive_services.wom_kit_project_update_materialize_commit(
+                            mirror,
+                            head,
+                            attach_branch=invalid_branch,
+                        )
+                    )
+                    self.assertEqual(
+                        archive_services.wom_kit_project_update_git_snapshot(
+                            mirror
+                        ),
+                        before,
+                    )
+
+    def test_project_update_symbolic_head_state_distinguishes_branch_detached_and_errors(
+        self,
+    ) -> None:
+        cases = (
+            (
+                "branch",
+                (0, b"refs/heads/feature+rollback\n"),
+                (True, "feature+rollback"),
+                ("branch", "feature+rollback"),
+            ),
+            (
+                "detached",
+                (1, b""),
+                (False, ""),
+                ("detached", None),
+            ),
+            (
+                "abnormal_return_code",
+                (128, b""),
+                (False, ""),
+                ("invalid", None),
+            ),
+            (
+                "detached_code_with_output",
+                (1, b"unexpected"),
+                (False, ""),
+                ("invalid", None),
+            ),
+            (
+                "symbolic_ref_outside_heads",
+                (0, b"refs/tags/v0.3.291\n"),
+                (False, ""),
+                ("invalid", None),
+            ),
+            (
+                "invalid_utf8",
+                (0, b"refs/heads/\xff\n"),
+                (False, ""),
+                ("invalid", None),
+            ),
+            (
+                "multiple_lines",
+                (0, b"refs/heads/main\nrefs/heads/other\n"),
+                (False, ""),
+                ("invalid", None),
+            ),
+            (
+                "branch_rejected_by_git",
+                (0, b"refs/heads/main\n"),
+                (False, ""),
+                ("invalid", None),
+            ),
+            (
+                "runner_failure",
+                None,
+                (False, ""),
+                ("invalid", None),
+            ),
+        )
+        for case_name, completed, git_result, expected in cases:
+            observed_commands: list[list[str]] = []
+
+            def fake_run(
+                command: list[str],
+                **_kwargs: Any,
+            ) -> tuple[int, bytes] | None:
+                observed_commands.append(command)
+                return completed
+
+            with (
+                self.subTest(case=case_name),
+                patch.object(
+                    archive_services,
+                    "wom_kit_project_update_run_capped",
+                    side_effect=fake_run,
+                ),
+                patch.object(
+                    archive_services,
+                    "wom_kit_project_update_git",
+                    return_value=git_result,
+                ) as git_call,
+            ):
+                actual = (
+                    archive_services
+                    .wom_kit_project_update_symbolic_head_state(
+                        Path("unused-mirror")
+                    )
+                )
+
+            self.assertEqual(actual, expected)
+            self.assertEqual(
+                observed_commands[0][-3:],
+                ["symbolic-ref", "--quiet", "HEAD"],
+            )
+            if case_name == "branch":
+                git_call.assert_called_once_with(
+                    Path("unused-mirror"),
+                    [
+                        "check-ref-format",
+                        "--branch",
+                        "feature+rollback",
+                    ],
+                    max_output_bytes=4096,
+                )
+            elif case_name == "branch_rejected_by_git":
+                git_call.assert_called_once()
+            else:
+                git_call.assert_not_called()
+
+    def test_project_version_update_blocks_unreadable_symbolic_head_before_fetch_or_write(
+        self,
+    ) -> None:
+        if shutil.which("git") is None:
+            self.skipTest("git is required for the project update fixture")
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = self.create_project_version_update_fixture(Path(tmp))
+            head_before = self.git_fixture_command(
+                fixture["mirror"],
+                "rev-parse",
+                "HEAD",
+            )
+            pin_paths = (
+                fixture["metadata_root"] / "installed-version.txt",
+                fixture["mirror"] / "installed-version.txt",
+            )
+            pin_bytes_before = {
+                path: path.read_bytes()
+                for path in pin_paths
+            }
+            real_git = archive_services.wom_kit_project_update_git
+            git_calls: list[list[str]] = []
+
+            def record_git(
+                mirror_path: Path,
+                args: list[str],
+                **kwargs: Any,
+            ) -> tuple[bool, str]:
+                git_calls.append(list(args))
+                return real_git(mirror_path, args, **kwargs)
+
+            with (
+                patch.object(
+                    archive_services,
+                    "wom_kit_project_update_symbolic_head_state",
+                    return_value=("invalid", None),
+                ),
+                patch.object(
+                    archive_services,
+                    "wom_kit_project_update_git",
+                    side_effect=record_git,
+                ),
+            ):
+                result = archive_services.wom_kit_project_version_update(
+                    fixture["project_root"],
+                    target=fixture["target_tag"],
+                    approve=True,
+                    affirm_external_writers_quiescent=True,
+                    reviewed_by="human:archive-test",
+                )
+
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["status"], "blocked")
+            self.assertTrue(
+                any(
+                    "symbolic HEAD state" in blocker
+                    for blocker in result["blockers"]
+                )
+            )
+            self.assertFalse(
+                any(args and args[0] == "fetch" for args in git_calls)
+            )
+            self.assertEqual(
+                self.git_fixture_command(
+                    fixture["mirror"],
+                    "rev-parse",
+                    "HEAD",
+                ),
+                head_before,
+            )
+            self.assertEqual(
+                {path: path.read_bytes() for path in pin_paths},
+                pin_bytes_before,
+            )
+            self.assertFalse(
+                (fixture["metadata_root"] / "version-update.lock").exists()
+            )
+
+    def test_project_version_update_detached_head_failure_restores_exact_detached_state(
+        self,
+    ) -> None:
+        if shutil.which("git") is None:
+            self.skipTest("git is required for the project update fixture")
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = self.create_project_version_update_fixture(Path(tmp))
+            mirror = fixture["mirror"]
+            self.git_fixture_command(
+                mirror,
+                "checkout",
+                "--detach",
+                "--quiet",
+                fixture["old_commit"],
+            )
+            original_snapshot = (
+                archive_services.wom_kit_project_update_git_snapshot(mirror)
+            )
+            self.assertIsNotNone(original_snapshot)
+            self.assertIsNone(original_snapshot["branch"])
+            original_pin_bytes = {
+                path: path.read_bytes()
+                for path in (
+                    fixture["metadata_root"] / "installed-version.txt",
+                    mirror / "installed-version.txt",
+                )
+            }
+
+            with patch.object(
+                archive_services,
+                "wom_kit_project_update_write_receipt_exclusive",
+                side_effect=OSError("PRIVATE_DETACHED_ROLLBACK_FAILURE"),
+            ):
+                result = archive_services.wom_kit_project_version_update(
+                    fixture["project_root"],
+                    target=fixture["target_tag"],
+                    approve=True,
+                    affirm_external_writers_quiescent=True,
+                    reviewed_by="human:archive-test",
+                )
+
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["status"], "failed_rolled_back")
+            self.assertTrue(result["rollback"]["succeeded"])
+            self.assertTrue(result["rollback"]["source_restored"])
+            self.assertEqual(
+                archive_services.wom_kit_project_update_symbolic_head_state(
+                    mirror
+                ),
+                ("detached", None),
+            )
+            self.assertEqual(
+                archive_services.wom_kit_project_update_git_snapshot(mirror),
+                original_snapshot,
+            )
+            self.assertEqual(
+                {
+                    path: path.read_bytes()
+                    for path in original_pin_bytes
+                },
+                original_pin_bytes,
+            )
+            self.assertNotIn(
+                "PRIVATE_DETACHED_ROLLBACK_FAILURE",
+                json.dumps(result, ensure_ascii=False),
+            )
+
+    def test_project_update_git_metadata_rejects_replace_refs_and_grafts_without_using_them(
+        self,
+    ) -> None:
+        if shutil.which("git") is None:
+            self.skipTest("git is required for the project update fixture")
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = self.create_project_version_update_fixture(Path(tmp))
+            mirror = fixture["mirror"]
+            original_head = self.git_fixture_command(
+                mirror,
+                "rev-parse",
+                "HEAD",
+            )
+            original_tree = self.git_fixture_command(
+                mirror,
+                "rev-parse",
+                "HEAD^{tree}",
+            )
+            replacement_subject = "REPLACE_OBJECT_SENTINEL_MUST_NOT_EXECUTE"
+            replacement_commit = self.git_fixture_command(
+                mirror,
+                "-c",
+                "user.name=archive-test",
+                "-c",
+                "user.email=archive-test.invalid",
+                "commit-tree",
+                original_tree,
+                "-m",
+                replacement_subject,
+            )
+            self.git_fixture_command(
+                mirror,
+                "replace",
+                original_head,
+                replacement_commit,
+            )
+
+            subject_ok, observed_subject = (
+                archive_services.wom_kit_project_update_git(
+                    mirror,
+                    ["show", "-s", "--format=%s", "HEAD"],
+                )
+            )
+            self.assertTrue(subject_ok)
+            self.assertEqual(observed_subject, "old release")
+            self.assertNotIn(replacement_subject, observed_subject)
+            self.assertFalse(
+                archive_services.wom_kit_project_update_git_metadata_is_local_real(
+                    fixture["project_root"],
+                    mirror,
+                )
+            )
+
+            self.git_fixture_command(
+                mirror,
+                "replace",
+                "-d",
+                original_head,
+            )
+            packed_refs_path = mirror / ".git" / "packed-refs"
+            with packed_refs_path.open("a", encoding="ascii", newline="\n") as handle:
+                handle.write(
+                    f"{replacement_commit} refs/replace/{original_head}\n"
+                )
+            self.assertFalse(
+                archive_services.wom_kit_project_update_git_metadata_is_local_real(
+                    fixture["project_root"],
+                    mirror,
+                )
+            )
+            packed_refs_path.write_text(
+                "\n".join(
+                    line
+                    for line in packed_refs_path.read_text(
+                        encoding="ascii",
+                    ).splitlines()
+                    if f"refs/replace/{original_head}" not in line
+                )
+                + "\n",
+                encoding="ascii",
+            )
+            grafts_path = mirror / ".git" / "info" / "grafts"
+            grafts_path.write_text(original_head + "\n", encoding="ascii")
+            self.assertFalse(
+                archive_services.wom_kit_project_update_git_metadata_is_local_real(
+                    fixture["project_root"],
+                    mirror,
+                )
+            )
+
+    def test_project_update_git_metadata_rejects_gitfile_and_reparse_metadata(
+        self,
+    ) -> None:
+        if shutil.which("git") is None:
+            self.skipTest("git is required for the project update fixture")
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = self.create_project_version_update_fixture(Path(tmp))
+            mirror = fixture["mirror"]
+            git_path = mirror / ".git"
+            real_git_path = mirror / ".git-real"
+            git_path.rename(real_git_path)
+            git_path.write_text(
+                f"gitdir: {real_git_path}\n",
+                encoding="utf-8",
+            )
+            self.assertFalse(
+                archive_services.wom_kit_project_update_git_metadata_is_local_real(
+                    fixture["project_root"],
+                    mirror,
+                )
+            )
+
+            git_path.unlink()
+            try:
+                git_path.symlink_to(
+                    real_git_path.name,
+                    target_is_directory=True,
+                )
+            except OSError:
+                return
+            self.assertFalse(
+                archive_services.wom_kit_project_update_git_metadata_is_local_real(
+                    fixture["project_root"],
+                    mirror,
+                )
+            )
+
+    def test_version_conventional_git_does_not_echo_non_release_local_tag_payload(
+        self,
+    ) -> None:
+        if shutil.which("git") is None:
+            self.skipTest("git is required for the runtime alignment fixture")
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = self.create_runtime_alignment_fixture(
+                Path(tmp),
+                source_version=archive_cli.__version__,
+                pyproject_version=archive_cli.__version__,
+                pin_version=archive_cli.__version__,
+                include_runtime_sources=True,
+            )
+            mirror = fixture["mirror_root"]
+            private_tag = (
+                "v0.3.291-PRIVATE_LOCAL_TAG_PAYLOAD_MUST_NOT_ESCAPE_VERSION_JSON"
+            )
+            self.git_fixture_command(
+                mirror,
+                "tag",
+                "--delete",
+                fixture["tag_name"],
+            )
+            self.git_fixture_command(
+                mirror,
+                "tag",
+                "-a",
+                private_tag,
+                "-m",
+                private_tag,
+            )
+            self.assertIn(
+                private_tag,
+                self.git_fixture_command(mirror, "tag", "--list"),
+            )
+
+            code, stdout, stderr = self.run_cli_split(
+                [
+                    "version",
+                    str(fixture["project_root"]),
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(stdout)
+
+            self.assertEqual(code, 1, stdout + stderr)
+            mirror_summary = result["project_source_mirror"]
+            self.assertIsNone(mirror_summary["head_tag"])
+            self.assertIsNone(mirror_summary["latest_fetched_tag"])
+            self.assertIsNone(
+                mirror_summary["mirror_behind_latest_fetched_tag"]
+            )
+            exposed = (
+                stdout
+                + stderr
+                + json.dumps(result, ensure_ascii=False)
+            )
+            self.assertNotIn(private_tag, exposed)
+
+    def test_version_linked_gitfile_does_not_probe_or_echo_external_repository_tags(
+        self,
+    ) -> None:
+        if shutil.which("git") is None:
+            self.skipTest("git is required for the runtime alignment fixture")
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            fixture = self.create_runtime_alignment_fixture(
+                tmp_root,
+                source_version=archive_cli.__version__,
+                pyproject_version=archive_cli.__version__,
+                pin_version=archive_cli.__version__,
+                include_runtime_sources=True,
+            )
+            external_repository = tmp_root / "external-repository"
+            external_repository.mkdir()
+            self.git_fixture_command(
+                external_repository,
+                "init",
+                "-b",
+                "main",
+            )
+            self.git_fixture_command(
+                external_repository,
+                "config",
+                "user.name",
+                "archive-test",
+            )
+            self.git_fixture_command(
+                external_repository,
+                "config",
+                "user.email",
+                "archive-test.invalid",
+            )
+            (external_repository / "external.txt").write_text(
+                "PRIVATE_EXTERNAL_REPOSITORY_CONTENT\n",
+                encoding="utf-8",
+            )
+            self.git_fixture_command(external_repository, "add", ".")
+            self.git_fixture_command(
+                external_repository,
+                "commit",
+                "-m",
+                "external repository",
+            )
+            external_tag = "v99.88.77"
+            self.git_fixture_command(
+                external_repository,
+                "tag",
+                "-a",
+                external_tag,
+                "-m",
+                external_tag,
+            )
+
+            mirror = fixture["mirror_root"]
+            real_mirror_git = mirror / ".git-real"
+            (mirror / ".git").rename(real_mirror_git)
+            (mirror / ".git").write_text(
+                f"gitdir: {external_repository / '.git'}\n",
+                encoding="utf-8",
+            )
+            self.assertIn(
+                external_tag,
+                self.git_fixture_command(mirror, "tag", "--list"),
+            )
+
+            code, stdout, stderr = self.run_cli_split(
+                [
+                    "version",
+                    str(fixture["project_root"]),
+                    "--no-redact-local-paths",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(stdout)
+
+            self.assertEqual(code, 1, stdout + stderr)
+            mirror_summary = result["project_source_mirror"]
+            self.assertIsNone(mirror_summary["head_tag"])
+            self.assertIsNone(mirror_summary["latest_fetched_tag"])
+            self.assertIsNone(
+                mirror_summary["mirror_behind_latest_fetched_tag"]
+            )
+            self.assertEqual(
+                result["runtime_alignment"]["reason_code"],
+                "project_git_metadata_not_local_real",
+            )
+            exposed = (
+                stdout
+                + stderr
+                + json.dumps(result, ensure_ascii=False)
+            )
+            self.assertNotIn(external_tag, exposed)
+            self.assertNotIn(
+                "PRIVATE_EXTERNAL_REPOSITORY_CONTENT",
+                exposed,
+            )
+            self.assertNotIn(str(external_repository), exposed)
+
+    def test_project_update_tree_loader_rejects_cross_platform_unsafe_paths(
+        self,
+    ) -> None:
+        object_id = "a" * 40
+        unsafe_path_sets = {
+            "git_metadata": [".git/config"],
+            "git_short_name": ["GIT~1/config"],
+            "ntfs_ads": ["safe.txt:payload"],
+            "dos_device": ["CON.txt"],
+            "case_collision": ["Readme.md", "README.md"],
+            "file_directory_collision": ["entry", "entry/child.txt"],
+        }
+        for case_name, relative_paths in unsafe_path_sets.items():
+            records = "".join(
+                f"100644 blob {object_id}\t{relative_path}\0"
+                for relative_path in relative_paths
+            )
+            with (
+                self.subTest(case=case_name),
+                patch.object(
+                    archive_services,
+                    "wom_kit_project_update_git",
+                    return_value=(True, records),
+                ),
+            ):
+                self.assertIsNone(
+                    archive_services.wom_kit_project_update_tree_blobs(
+                        Path("unused-mirror"),
+                        "b" * 40,
+                    )
+                )
+
+    def test_project_update_manual_materializer_allows_file_directory_transitions(
+        self,
+    ) -> None:
+        if shutil.which("git") is None:
+            self.skipTest("git is required for the materializer regression")
+        with tempfile.TemporaryDirectory() as tmp:
+            repository = Path(tmp) / "repository"
+            repository.mkdir()
+            self.git_fixture_command(repository, "init", "-b", "main")
+            self.git_fixture_command(
+                repository,
+                "config",
+                "user.name",
+                "archive-test",
+            )
+            self.git_fixture_command(
+                repository,
+                "config",
+                "user.email",
+                "archive-test.invalid",
+            )
+            (repository / ".gitignore").write_text(
+                "local-ignored.txt\n",
+                encoding="utf-8",
+            )
+            (repository / "file-to-dir").write_text(
+                "old file\n",
+                encoding="utf-8",
+            )
+            old_directory = repository / "dir-to-file"
+            old_directory.mkdir()
+            (old_directory / "child.txt").write_text(
+                "old child\n",
+                encoding="utf-8",
+            )
+            self.git_fixture_command(repository, "add", ".")
+            self.git_fixture_command(repository, "commit", "-m", "old shape")
+            old_commit = self.git_fixture_command(
+                repository,
+                "rev-parse",
+                "HEAD",
+            )
+
+            (repository / "file-to-dir").unlink()
+            (repository / "file-to-dir").mkdir()
+            (repository / "file-to-dir" / "child.txt").write_text(
+                "new child\n",
+                encoding="utf-8",
+            )
+            (old_directory / "child.txt").unlink()
+            old_directory.rmdir()
+            (repository / "dir-to-file").write_text(
+                "new file\n",
+                encoding="utf-8",
+            )
+            self.git_fixture_command(repository, "add", "-A")
+            self.git_fixture_command(repository, "commit", "-m", "new shape")
+            target_commit = self.git_fixture_command(
+                repository,
+                "rev-parse",
+                "HEAD",
+            )
+            self.git_fixture_command(
+                repository,
+                "checkout",
+                "--detach",
+                "--quiet",
+                old_commit,
+            )
+            ignored_path = repository / "local-ignored.txt"
+            ignored_bytes = b"PRIVATE_IGNORED_CONTENT_MUST_SURVIVE\n"
+            ignored_path.write_bytes(ignored_bytes)
+
+            self.assertTrue(
+                archive_services.wom_kit_project_update_materialize_commit(
+                    repository,
+                    target_commit,
+                    dry_run=True,
+                )
+            )
+            self.assertTrue(
+                archive_services.wom_kit_project_update_materialize_commit(
+                    repository,
+                    target_commit,
+                )
+            )
+            self.assertEqual(
+                self.git_fixture_command(repository, "rev-parse", "HEAD"),
+                target_commit,
+            )
+            self.assertEqual(
+                (repository / "file-to-dir" / "child.txt").read_text(
+                    encoding="utf-8",
+                ),
+                "new child\n",
+            )
+            self.assertEqual(
+                (repository / "dir-to-file").read_text(encoding="utf-8"),
+                "new file\n",
+            )
+            self.assertEqual(ignored_path.read_bytes(), ignored_bytes)
+
+    def test_project_update_capped_runner_rejects_oversized_stdout_promptly(
+        self,
+    ) -> None:
+        started = time.monotonic()
+        completed = archive_services.wom_kit_project_update_run_capped(
+            [
+                sys.executable,
+                "-c",
+                "import os; os.write(1, b'x' * (8 * 1024 * 1024))",
+            ],
+            environment=os.environ.copy(),
+            timeout_seconds=20,
+            max_output_bytes=1024,
+        )
+        elapsed = time.monotonic() - started
+        self.assertIsNone(completed)
+        self.assertLess(elapsed, 5.0)
+
+    def test_project_update_directory_traversals_fail_closed_at_cap_plus_one(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp) / "project"
+            guarded_root = project_root / "guarded"
+            guarded_root.mkdir(parents=True)
+            for index in range(3):
+                (guarded_root / f"entry-{index}.txt").write_text(
+                    "bounded traversal\n",
+                    encoding="utf-8",
+                )
+            directory_guard = (
+                archive_services.WomKitProjectUpdateDirectoryGuard(
+                    project_root
+                )
+            )
+            try:
+                with patch.object(
+                    archive_services,
+                    "WOM_KIT_PROJECT_UPDATE_MAX_GIT_METADATA_ENTRIES",
+                    2,
+                ):
+                    self.assertFalse(
+                        directory_guard.hold_existing_tree(
+                            guarded_root
+                        )
+                    )
+            finally:
+                directory_guard.close()
+
+            mirror = project_root / "mirror"
+            (mirror / ".git").mkdir(parents=True)
+            for index in range(5):
+                (mirror / f"untracked-{index}.txt").write_text(
+                    "bounded traversal\n",
+                    encoding="utf-8",
+                )
+            with patch.object(
+                archive_services,
+                "WOM_KIT_PROJECT_UPDATE_MAX_TRACKED_FILES",
+                1,
+            ):
+                self.assertFalse(
+                    archive_services
+                    .wom_kit_project_update_worktree_allows_plan(
+                        mirror,
+                        set(),
+                        {"target.txt"},
+                    )
+                )
+
+            source_root = (
+                project_root / "runtime" / "wom-kit" / "src"
+            )
+            package_root = source_root / "wom_kit"
+            package_root.mkdir(parents=True)
+            tracked_paths: set[str] = set()
+            for index in range(3):
+                relative_path = (
+                    f"wom-kit/src/wom_kit/module_{index}.py"
+                )
+                tracked_paths.add(relative_path)
+                (package_root / f"module_{index}.py").write_text(
+                    "VALUE = 1\n",
+                    encoding="utf-8",
+                )
+            runtime_project = project_root / "runtime"
+            with patch.object(
+                archive_services,
+                "WOM_KIT_RUNTIME_MAX_SOURCE_TREE_ENTRIES",
+                2,
+            ):
+                inventory = (
+                    archive_services
+                    .wom_kit_runtime_source_tree_inventory(
+                        runtime_project,
+                        runtime_project,
+                        tracked_paths,
+                    )
+                )
+            self.assertFalse(
+                inventory["runtime_python_filesystem_closed_world"]
+            )
+            self.assertLessEqual(
+                inventory["runtime_source_tree_entry_count"],
+                2,
+            )
+
+    def test_project_version_update_blocks_origin_change_from_fetch_progress_callback(
+        self,
+    ) -> None:
+        if shutil.which("git") is None:
+            self.skipTest("git is required for the project update fixture")
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = self.create_project_version_update_fixture(Path(tmp))
+            before_head = self.git_fixture_command(
+                fixture["mirror"],
+                "rev-parse",
+                "HEAD",
+            )
+            before_pins = {
+                path: path.read_bytes()
+                for path in (
+                    fixture["metadata_root"] / "installed-version.txt",
+                    fixture["mirror"] / "installed-version.txt",
+                )
+            }
+            changed = False
+
+            def change_origin_before_fetch(
+                stage: str,
+                message: str,
+                current: int | None,
+                total: int | None,
+            ) -> None:
+                nonlocal changed
+                del current, total
+                if (
+                    not changed
+                    and stage == "fetch-release"
+                    and message == "start"
+                ):
+                    changed = True
+                    self.git_fixture_command(
+                        fixture["mirror"],
+                        "config",
+                        "--local",
+                        "remote.origin.url",
+                        "PRIVATE_CHANGED_ORIGIN_MUST_NOT_BE_FETCHED",
+                    )
+
+            result = archive_services.wom_kit_project_version_update(
+                fixture["project_root"],
+                target=fixture["target_tag"],
+                approve=True,
+                affirm_external_writers_quiescent=True,
+                reviewed_by="human:archive-test",
+                progress_callback=change_origin_before_fetch,
+            )
+
+            serialized = json.dumps(result, ensure_ascii=False)
+            self.assertTrue(changed)
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["status"], "blocked")
+            self.assertFalse(result["fetch"]["attempted"])
+            self.assertFalse(result["fetch"]["git_transport_called"])
+            self.assertEqual(
+                self.git_fixture_command(
+                    fixture["mirror"],
+                    "rev-parse",
+                    "HEAD",
+                ),
+                before_head,
+            )
+            self.assertEqual(
+                {path: path.read_bytes() for path in before_pins},
+                before_pins,
+            )
+            self.assertFalse(
+                (fixture["metadata_root"] / "version-update.lock").exists()
+            )
+            self.assertFalse(
+                (
+                    fixture["metadata_root"]
+                    / "receipts"
+                    / "version-updates"
+                ).exists()
+            )
+            self.assertNotIn(
+                "PRIVATE_CHANGED_ORIGIN_MUST_NOT_BE_FETCHED",
+                serialized,
+            )
+
+    def test_project_version_update_approval_without_external_writer_affirmation_blocks_before_fetch(
+        self,
+    ) -> None:
+        if shutil.which("git") is None:
+            self.skipTest("git is required for the project update fixture")
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = self.create_project_version_update_fixture(Path(tmp))
+            before_head = self.git_fixture_command(
+                fixture["mirror"],
+                "rev-parse",
+                "HEAD",
+            )
+            before_pins = {
+                path: path.read_bytes()
+                for path in (
+                    fixture["metadata_root"] / "installed-version.txt",
+                    fixture["mirror"] / "installed-version.txt",
+                )
+            }
+
+            result = archive_services.wom_kit_project_version_update(
+                fixture["project_root"],
+                target=fixture["target_tag"],
+                approve=True,
+                reviewed_by="human:archive-test",
+            )
+
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["status"], "blocked")
+            self.assertTrue(
+                any(
+                    "--affirm-external-writers-quiescent" in blocker
+                    for blocker in result["blockers"]
+                )
+            )
+            self.assertFalse(
+                result["write_boundary"][
+                    "external_writer_quiescence_affirmed"
+                ]
+            )
+            self.assertFalse(result["fetch"]["attempted"])
+            self.assertFalse(result["fetch"]["git_transport_called"])
+            self.assertEqual(result["files_written"], [])
+            self.assertEqual(
+                self.git_fixture_command(
+                    fixture["mirror"],
+                    "rev-parse",
+                    "HEAD",
+                ),
+                before_head,
+            )
+            self.assertEqual(
+                {path: path.read_bytes() for path in before_pins},
+                before_pins,
+            )
+            self.assertFalse(
+                (fixture["metadata_root"] / "version-update.lock").exists()
+            )
+            self.assertFalse(
+                (
+                    fixture["metadata_root"]
+                    / "receipts"
+                    / "version-updates"
+                ).exists()
+            )
+
+    def test_project_version_update_platform_capability_keeps_preview_but_blocks_approval(
+        self,
+    ) -> None:
+        if shutil.which("git") is None:
+            self.skipTest("git is required for the project update fixture")
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = self.create_project_version_update_fixture(Path(tmp))
+            before_head = self.git_fixture_command(
+                fixture["mirror"],
+                "rev-parse",
+                "HEAD",
+            )
+            before_pins = {
+                path: path.read_bytes()
+                for path in (
+                    fixture["metadata_root"] / "installed-version.txt",
+                    fixture["mirror"] / "installed-version.txt",
+                )
+            }
+
+            with patch.object(
+                archive_services,
+                "WOM_KIT_PROJECT_UPDATE_APPROVAL_PLATFORM_SUPPORTED",
+                False,
+            ):
+                preview = (
+                    archive_services.wom_kit_project_version_update(
+                        fixture["project_root"],
+                        target=fixture["target_tag"],
+                        dry_run=True,
+                    )
+                )
+                approval = (
+                    archive_services.wom_kit_project_version_update(
+                        fixture["project_root"],
+                        target=fixture["target_tag"],
+                        approve=True,
+                        affirm_external_writers_quiescent=True,
+                        reviewed_by="human:archive-test",
+                    )
+                )
+
+            self.assertTrue(preview["ok"])
+            self.assertEqual(
+                preview["status"],
+                "preview_only_platform_unsupported",
+            )
+            self.assertEqual(preview["blockers"], [])
+            self.assertFalse(
+                preview["write_boundary"][
+                    "approval_platform_supported"
+                ]
+            )
+            self.assertTrue(
+                any(
+                    "read-only preview can run here"
+                    in warning
+                    for warning in preview["warnings"]
+                )
+            )
+            self.assertFalse(preview["fetch"]["attempted"])
+            self.assertEqual(preview["files_written"], [])
+
+            self.assertFalse(approval["ok"])
+            self.assertEqual(approval["status"], "blocked")
+            self.assertFalse(
+                approval["write_boundary"][
+                    "approval_platform_supported"
+                ]
+            )
+            self.assertTrue(
+                any(
+                    "supported only on Windows"
+                    in blocker
+                    and "POSIX approval fails closed"
+                    in blocker
+                    for blocker in approval["blockers"]
+                )
+            )
+            self.assertFalse(approval["fetch"]["attempted"])
+            self.assertEqual(approval["files_written"], [])
+            self.assertEqual(
+                self.git_fixture_command(
+                    fixture["mirror"],
+                    "rev-parse",
+                    "HEAD",
+                ),
+                before_head,
+            )
+            self.assertEqual(
+                {path: path.read_bytes() for path in before_pins},
+                before_pins,
+            )
+            self.assertFalse(
+                (fixture["metadata_root"] / "version-update.lock").exists()
+            )
+
+    def test_project_version_update_rejects_preclaimed_receipts_parent_junction_on_windows(
+        self,
+    ) -> None:
+        if os.name != "nt":
+            self.skipTest("Windows junction approval regression")
+        if shutil.which("git") is None:
+            self.skipTest("git is required for the project update fixture")
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            fixture = self.create_project_version_update_fixture(tmp_root)
+            receipts_parent = fixture["metadata_root"] / "receipts"
+            external_receipts = tmp_root / "external-receipts"
+            external_receipts.mkdir()
+            created = subprocess.run(
+                [
+                    "cmd",
+                    "/d",
+                    "/c",
+                    "mklink",
+                    "/J",
+                    str(receipts_parent),
+                    str(external_receipts),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if created.returncode != 0:
+                self.skipTest(
+                    "Windows directory junctions are unavailable: "
+                    f"exit {created.returncode}"
+                )
+            before_head = self.git_fixture_command(
+                fixture["mirror"],
+                "rev-parse",
+                "HEAD",
+            )
+            before_pins = {
+                path: path.read_bytes()
+                for path in (
+                    fixture["metadata_root"] / "installed-version.txt",
+                    fixture["mirror"] / "installed-version.txt",
+                )
+            }
+
+            result = archive_services.wom_kit_project_version_update(
+                fixture["project_root"],
+                target=fixture["target_tag"],
+                approve=True,
+                affirm_external_writers_quiescent=True,
+                reviewed_by="human:archive-test",
+            )
+
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["status"], "blocked")
+            self.assertTrue(
+                any(
+                    "receipt directory must stay real"
+                    in blocker
+                    for blocker in result["blockers"]
+                )
+            )
+            self.assertFalse(result["fetch"]["attempted"])
+            self.assertEqual(result["files_written"], [])
+            self.assertEqual(list(external_receipts.iterdir()), [])
+            self.assertEqual(
+                self.git_fixture_command(
+                    fixture["mirror"],
+                    "rev-parse",
+                    "HEAD",
+                ),
+                before_head,
+            )
+            self.assertEqual(
+                {path: path.read_bytes() for path in before_pins},
+                before_pins,
+            )
+            self.assertFalse(
+                (fixture["metadata_root"] / "version-update.lock").exists()
+            )
+
+    def test_project_update_snapshot_honors_effective_global_autocrlf_for_text_only(
+        self,
+    ) -> None:
+        if shutil.which("git") is None:
+            self.skipTest("git is required for the snapshot regression")
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            repository = tmp_root / "repository"
+            repository.mkdir()
+            isolated_home = tmp_root / "git-home"
+            isolated_home.mkdir()
+            (isolated_home / ".gitconfig").write_text(
+                "[core]\n\tautocrlf = true\n",
+                encoding="utf-8",
+            )
+            environment_patch = {
+                "HOME": str(isolated_home),
+                "USERPROFILE": str(isolated_home),
+                "XDG_CONFIG_HOME": str(isolated_home),
+            }
+            with patch.dict(os.environ, environment_patch):
+                self.git_fixture_command(repository, "init", "-b", "main")
+                self.git_fixture_command(
+                    repository,
+                    "config",
+                    "user.name",
+                    "archive-test",
+                )
+                self.git_fixture_command(
+                    repository,
+                    "config",
+                    "user.email",
+                    "archive-test.invalid",
+                )
+                text_path = repository / "notes.txt"
+                text_path.write_bytes(b"line-one\nline-two\n")
+                self.git_fixture_command(repository, "add", ".")
+                self.git_fixture_command(
+                    repository,
+                    "commit",
+                    "-m",
+                    "global autocrlf fixture",
+                )
+                expected_head = self.git_fixture_command(
+                    repository,
+                    "rev-parse",
+                    "HEAD",
+                )
+                text_path.write_bytes(b"line-one\r\nline-two\r\n")
+
+                snapshot = (
+                    archive_services.wom_kit_project_update_git_snapshot(
+                        repository,
+                    )
+                )
+
+            self.assertIsNotNone(snapshot)
+            self.assertTrue(snapshot["raw_bytes_match_head"])
+            self.assertIn("notes.txt", snapshot["eol_overrides"])
+            self.assertTrue(
+                archive_services.wom_kit_project_update_snapshot_is_clean(
+                    snapshot,
+                    expected_head=expected_head,
+                    expected_branch="main",
+                )
+            )
+
+    def test_project_update_lock_rejects_reparse_and_identity_replacement(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp) / "project"
+            metadata_root = project_root / ".zettel-kasten"
+            metadata_root.mkdir(parents=True)
+            lock_path = metadata_root / "version-update.lock"
+            captured_identity: list[tuple[int, int]] = []
+            identity = (
+                archive_services
+                .wom_kit_project_update_acquire_lock_exclusive(
+                    project_root,
+                    metadata_root,
+                    lock_path,
+                    reservation_callback=captured_identity.append,
+                )
+            )
+            self.assertEqual(captured_identity, [identity])
+            lock_path.unlink()
+            lock_path.write_bytes(
+                archive_services.WOM_KIT_PROJECT_UPDATE_LOCK_BYTES
+            )
+            self.assertFalse(
+                archive_services.wom_kit_project_update_owned_lock_present(
+                    project_root,
+                    lock_path,
+                    identity,
+                )
+            )
+            self.assertFalse(
+                archive_services.wom_kit_project_update_release_owned_lock(
+                    project_root,
+                    lock_path,
+                    identity,
+                )
+            )
+            self.assertEqual(
+                lock_path.read_bytes(),
+                archive_services.WOM_KIT_PROJECT_UPDATE_LOCK_BYTES,
+            )
+            lock_path.unlink()
+
+            external_lock = Path(tmp) / "external-lock"
+            external_bytes = b"EXTERNAL_LOCK_MUST_NOT_BE_TOUCHED\n"
+            external_lock.write_bytes(external_bytes)
+            try:
+                lock_path.symlink_to(external_lock)
+            except OSError:
+                return
+            with self.assertRaises(OSError):
+                archive_services.wom_kit_project_update_acquire_lock_exclusive(
+                    project_root,
+                    metadata_root,
+                    lock_path,
+                    reservation_callback=lambda _identity: None,
+                )
+            self.assertEqual(external_lock.read_bytes(), external_bytes)
+
+    def test_project_update_lock_and_receipt_reject_parent_reparse_swap_before_reservation(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            project_root = tmp_root / "project"
+            metadata_root = project_root / ".zettel-kasten"
+            metadata_root.mkdir(parents=True)
+            external_metadata = tmp_root / "external-metadata"
+            external_metadata.mkdir()
+            lock_path = metadata_root / "version-update.lock"
+            lock_reservations: list[tuple[int, int]] = []
+            real_open = os.open
+            metadata_backup = project_root / ".zettel-kasten-real"
+            swapped_lock_parent = False
+
+            def swap_lock_parent_then_open(
+                path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+                flags: int,
+                mode: int = 0o777,
+            ) -> int:
+                nonlocal swapped_lock_parent
+                candidate = Path(path)
+                if candidate == lock_path and not swapped_lock_parent:
+                    metadata_root.rename(metadata_backup)
+                    try:
+                        metadata_root.symlink_to(
+                            external_metadata,
+                            target_is_directory=True,
+                        )
+                    except OSError:
+                        metadata_backup.rename(metadata_root)
+                        raise
+                    swapped_lock_parent = True
+                return real_open(path, flags, mode)
+
+            try:
+                with patch.object(
+                    archive_services.os,
+                    "open",
+                    side_effect=swap_lock_parent_then_open,
+                ):
+                    with self.assertRaises(OSError):
+                        (
+                            archive_services
+                            .wom_kit_project_update_acquire_lock_exclusive(
+                                project_root,
+                                metadata_root,
+                                lock_path,
+                                reservation_callback=(
+                                    lock_reservations.append
+                                ),
+                            )
+                        )
+            except OSError as exc:
+                if not swapped_lock_parent:
+                    self.skipTest(
+                        f"directory symlinks are unavailable: {exc}"
+                    )
+                raise
+            self.assertEqual(lock_reservations, [])
+            self.assertEqual(list(external_metadata.iterdir()), [])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            project_root = tmp_root / "project"
+            project_root.mkdir()
+            receipts_root = (
+                project_root
+                / ".zettel-kasten"
+                / "receipts"
+                / "version-updates"
+            )
+            receipts_root.mkdir(parents=True)
+            external_receipts = tmp_root / "external-receipts"
+            external_receipts.mkdir()
+            receipts_backup = receipts_root.with_name(
+                "version-updates-real"
+            )
+            receipt_reservations: list[
+                tuple[Path, str, tuple[int, int]]
+            ] = []
+            real_open = os.open
+            swapped_receipt_parent = False
+            receipt_parent_rename_blocked = False
+            directory_guard = (
+                archive_services.WomKitProjectUpdateDirectoryGuard(
+                    project_root
+                )
+            )
+            self.assertTrue(
+                directory_guard.hold_existing_tree(project_root)
+            )
+
+            def swap_receipt_parent_then_open(
+                path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+                flags: int,
+                mode: int = 0o777,
+            ) -> int:
+                nonlocal swapped_receipt_parent
+                nonlocal receipt_parent_rename_blocked
+                candidate = Path(path)
+                if (
+                    candidate.parent == receipts_root
+                    and not swapped_receipt_parent
+                ):
+                    try:
+                        receipts_root.rename(receipts_backup)
+                    except OSError:
+                        receipt_parent_rename_blocked = True
+                        raise
+                    try:
+                        receipts_root.symlink_to(
+                            external_receipts,
+                            target_is_directory=True,
+                        )
+                    except OSError:
+                        receipts_backup.rename(receipts_root)
+                        raise
+                    swapped_receipt_parent = True
+                return real_open(path, flags, mode)
+
+            try:
+                try:
+                    with patch.object(
+                        archive_services.os,
+                        "open",
+                        side_effect=swap_receipt_parent_then_open,
+                    ):
+                        with self.assertRaises(OSError):
+                            (
+                                archive_services
+                                .wom_kit_project_update_write_receipt_exclusive(
+                                    project_root,
+                                    "v0.3.291",
+                                    "2026-07-30T12:34:56Z",
+                                    b'{"receipt":"parent-swap"}\n',
+                                    directory_guard=directory_guard,
+                                    reservation_callback=(
+                                        lambda path, relative, identity: (
+                                            receipt_reservations.append(
+                                                (
+                                                    path,
+                                                    relative,
+                                                    identity,
+                                                )
+                                            )
+                                        )
+                                    ),
+                                )
+                            )
+                except OSError as exc:
+                    if (
+                        not swapped_receipt_parent
+                        and not receipt_parent_rename_blocked
+                    ):
+                        self.skipTest(
+                            f"directory symlinks are unavailable: {exc}"
+                        )
+                    raise
+            finally:
+                directory_guard.close()
+            self.assertEqual(receipt_reservations, [])
+            self.assertEqual(list(external_receipts.iterdir()), [])
+
+    def test_project_update_receipt_reservation_keyboard_interrupt_cleans_owned_file(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp) / "project"
+            receipts_root = (
+                project_root
+                / ".zettel-kasten"
+                / "receipts"
+                / "version-updates"
+            )
+            receipts_root.mkdir(parents=True)
+            reservations: list[tuple[Path, str, tuple[int, int]]] = []
+            directory_guard = (
+                archive_services.WomKitProjectUpdateDirectoryGuard(
+                    project_root
+                )
+            )
+            self.assertTrue(directory_guard.hold(receipts_root))
+
+            def interrupt_after_reservation(
+                path: Path,
+                relative: str,
+                identity: tuple[int, int],
+            ) -> None:
+                reservations.append((path, relative, identity))
+                raise KeyboardInterrupt()
+
+            try:
+                with self.assertRaises(KeyboardInterrupt):
+                    (
+                        archive_services
+                        .wom_kit_project_update_write_receipt_exclusive(
+                            project_root,
+                            "v0.3.291",
+                            "2026-07-30T12:34:56Z",
+                            b'{"receipt":"must-not-survive"}\n',
+                            directory_guard=directory_guard,
+                            reservation_callback=(
+                                interrupt_after_reservation
+                            ),
+                        )
+                    )
+            finally:
+                directory_guard.close()
+            self.assertEqual(len(reservations), 1)
+            self.assertFalse(reservations[0][0].exists())
+            self.assertEqual(
+                list(receipts_root.iterdir()) if receipts_root.exists() else [],
+                [],
+            )
+
+    def test_project_version_update_interrupt_after_unlock_returns_verified_terminal_state(
+        self,
+    ) -> None:
+        if shutil.which("git") is None:
+            self.skipTest("git is required for the project update fixture")
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = self.create_project_version_update_fixture(Path(tmp))
+            real_release = (
+                archive_services.wom_kit_project_update_release_owned_lock
+            )
+            interrupted = False
+
+            def release_then_interrupt(
+                project_root: Path,
+                lock_path: Path,
+                identity: tuple[int, int] | None,
+            ) -> bool:
+                nonlocal interrupted
+                released = real_release(
+                    project_root,
+                    lock_path,
+                    identity,
+                )
+                if released and not interrupted:
+                    interrupted = True
+                    raise KeyboardInterrupt()
+                return released
+
+            with patch.object(
+                archive_services,
+                "wom_kit_project_update_release_owned_lock",
+                side_effect=release_then_interrupt,
+            ):
+                result = archive_services.wom_kit_project_version_update(
+                    fixture["project_root"],
+                    target=fixture["target_tag"],
+                    approve=True,
+                    affirm_external_writers_quiescent=True,
+                    reviewed_by="human:archive-test",
+                )
+
+            self.assertTrue(interrupted)
+            self.assertTrue(result["ok"])
+            self.assertEqual(
+                result["status"],
+                "updated_restart_required",
+            )
+            self.assertTrue(result["receipt"]["written"])
+            self.assertFalse(result["rollback"]["attempted"])
+            self.assertIsNone(result["rollback"]["lock_removed"])
+            self.assertTrue(
+                any(
+                    "verified lock-release commit boundary"
+                    in warning
+                    for warning in result["warnings"]
+                )
+            )
+            self.assertFalse(
+                (fixture["metadata_root"] / "version-update.lock").exists()
+            )
+
+    def test_project_version_update_crlf_rollback_restores_every_tracked_raw_byte(
+        self,
+    ) -> None:
+        if shutil.which("git") is None:
+            self.skipTest("git is required for the project update fixture")
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = self.create_project_version_update_fixture(
+                Path(tmp),
+                crlf_runtime_transition=True,
+            )
+            tracked_paths = [
+                relative_path
+                for relative_path in self.git_fixture_command(
+                    fixture["mirror"],
+                    "ls-files",
+                ).splitlines()
+                if relative_path
+            ]
+            before_bytes = {
+                relative_path: (
+                    fixture["mirror"]
+                    .joinpath(*PurePosixPath(relative_path).parts)
+                    .read_bytes()
+                )
+                for relative_path in tracked_paths
+            }
+            self.assertTrue(
+                any(b"\r\n" in value for value in before_bytes.values())
+            )
+
+            with patch.object(
+                archive_services,
+                "wom_kit_project_update_write_receipt_exclusive",
+                side_effect=OSError("PRIVATE_CRLF_ROLLBACK_RECEIPT_FAILURE"),
+            ):
+                result = archive_services.wom_kit_project_version_update(
+                    fixture["project_root"],
+                    target=fixture["target_tag"],
+                    approve=True,
+                    affirm_external_writers_quiescent=True,
+                    reviewed_by="human:archive-test",
+                )
+
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["status"], "failed_rolled_back")
+            self.assertTrue(result["rollback"]["source_restored"])
+            self.assertEqual(
+                self.git_fixture_command(
+                    fixture["mirror"],
+                    "rev-parse",
+                    "HEAD",
+                ),
+                fixture["old_commit"],
+            )
+            self.assertEqual(
+                {
+                    relative_path: (
+                        fixture["mirror"]
+                        .joinpath(*PurePosixPath(relative_path).parts)
+                        .read_bytes()
+                    )
+                    for relative_path in tracked_paths
+                },
+                before_bytes,
+            )
+            self.assertNotIn(
+                "PRIVATE_CRLF_ROLLBACK_RECEIPT_FAILURE",
+                json.dumps(result, ensure_ascii=False),
+            )
+
+    def test_project_version_update_config_change_after_source_mutation_preserves_lock_without_restore(
+        self,
+    ) -> None:
+        if shutil.which("git") is None:
+            self.skipTest("git is required for the project update fixture")
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = self.create_project_version_update_fixture(Path(tmp))
+            mirror = fixture["mirror"]
+            private_config_value = (
+                "PRIVATE_CHANGED_CONFIG_MUST_NOT_BE_ECHOED"
+            )
+            materialize_calls: list[tuple[str, bool]] = []
+            real_materialize = (
+                archive_services.wom_kit_project_update_materialize_commit
+            )
+            config_changed = False
+
+            def record_materialize(
+                source_mirror: Path,
+                target_commit: str,
+                *,
+                attach_branch: str | None = None,
+                dry_run: bool = False,
+                directory_guard: object = None,
+            ) -> bool:
+                materialize_calls.append((target_commit, dry_run))
+                return real_materialize(
+                    source_mirror,
+                    target_commit,
+                    attach_branch=attach_branch,
+                    dry_run=dry_run,
+                    directory_guard=directory_guard,
+                )
+
+            def change_config_then_fail(
+                stage: str,
+                message: str,
+                current: int | None,
+                total: int | None,
+            ) -> None:
+                nonlocal config_changed
+                del current, total
+                if (
+                    not config_changed
+                    and stage == "write-pins"
+                    and message == "start"
+                ):
+                    self.git_fixture_command(
+                        mirror,
+                        "config",
+                        "--local",
+                        "wom.private-test-value",
+                        private_config_value,
+                    )
+                    config_changed = True
+                    raise RuntimeError(
+                        "PRIVATE_FORCED_POST_MUTATION_FAILURE"
+                    )
+
+            with patch.object(
+                archive_services,
+                "wom_kit_project_update_materialize_commit",
+                side_effect=record_materialize,
+            ):
+                result = archive_services.wom_kit_project_version_update(
+                    fixture["project_root"],
+                    target=fixture["target_tag"],
+                    approve=True,
+                    affirm_external_writers_quiescent=True,
+                    reviewed_by="human:archive-test",
+                    progress_callback=change_config_then_fail,
+                )
+
+            serialized = json.dumps(result, ensure_ascii=False)
+            self.assertTrue(config_changed)
+            self.assertFalse(result["ok"])
+            self.assertEqual(
+                result["status"],
+                "failed_rollback_incomplete",
+            )
+            self.assertFalse(result["rollback"]["attempted"])
+            self.assertFalse(result["rollback"]["succeeded"])
+            self.assertIsNone(result["rollback"]["source_restored"])
+            self.assertIsNone(result["rollback"]["pins_restored"])
+            self.assertFalse(result["rollback"]["lock_removed"])
+            self.assertEqual(
+                [
+                    call
+                    for call in materialize_calls
+                    if not call[1]
+                ],
+                [(fixture["target_commit"], False)],
+            )
+            self.assertEqual(
+                self.git_fixture_command(mirror, "rev-parse", "HEAD"),
+                fixture["target_commit"],
+            )
+            self.assertTrue(
+                (fixture["metadata_root"] / "version-update.lock").exists()
+            )
+            self.assertFalse(
+                (fixture["metadata_root"] / "receipts").exists()
+            )
+            self.assertNotIn(private_config_value, serialized)
+            self.assertNotIn(
+                "PRIVATE_FORCED_POST_MUTATION_FAILURE",
+                serialized,
+            )
+            self.assertNotIn(str(fixture["project_root"]), serialized)
+
+    def test_project_update_snapshot_rejects_binary_crlf_equivalence(
+        self,
+    ) -> None:
+        if shutil.which("git") is None:
+            self.skipTest("git is required for the snapshot regression")
+        with tempfile.TemporaryDirectory() as tmp:
+            repository = Path(tmp) / "repository"
+            repository.mkdir()
+            self.git_fixture_command(repository, "init", "-b", "main")
+            self.git_fixture_command(
+                repository,
+                "config",
+                "user.name",
+                "archive-test",
+            )
+            self.git_fixture_command(
+                repository,
+                "config",
+                "user.email",
+                "archive-test.invalid",
+            )
+            self.git_fixture_command(
+                repository,
+                "config",
+                "core.autocrlf",
+                "true",
+            )
+            (repository / ".gitattributes").write_text(
+                "*.bin -text\n",
+                encoding="utf-8",
+            )
+            binary_path = repository / "payload.bin"
+            binary_path.write_bytes(b"binary-line-one\nbinary-line-two\n")
+            self.git_fixture_command(repository, "add", ".")
+            self.git_fixture_command(
+                repository,
+                "commit",
+                "-m",
+                "binary fixture",
+            )
+            expected_head = self.git_fixture_command(
+                repository,
+                "rev-parse",
+                "HEAD",
+            )
+            binary_path.write_bytes(
+                b"binary-line-one\r\nbinary-line-two\r\n"
+            )
+
+            snapshot = (
+                archive_services.wom_kit_project_update_git_snapshot(
+                    repository,
+                )
+            )
+            self.assertIsNotNone(snapshot)
+            self.assertFalse(snapshot["raw_bytes_match_head"])
+            self.assertNotIn("payload.bin", snapshot["eol_overrides"])
+            self.assertFalse(
+                archive_services.wom_kit_project_update_snapshot_is_clean(
+                    snapshot,
+                    expected_head=expected_head,
+                    expected_branch="main",
+                )
+            )
 
     def test_tiro_import_plan_manifest_preserves_structure_without_echoing_text(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

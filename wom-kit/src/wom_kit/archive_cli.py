@@ -4060,10 +4060,60 @@ def command_version(args: argparse.Namespace) -> int:
         if project_pin.get("checked"):
             installed = project_pin.get("installed_version") or "-"
             print(f"Project pin: {project_pin.get('status') or '-'} ({installed})")
+        runtime_alignment = (
+            result.get("runtime_alignment")
+            if isinstance(result.get("runtime_alignment"), dict)
+            else {}
+        )
+        if runtime_alignment:
+            print(f"Runtime alignment: {runtime_alignment.get('status') or '-'}")
+            print(f"Alignment reason: {runtime_alignment.get('reason_code') or '-'}")
+            integrity = (
+                runtime_alignment.get("integrity")
+                if isinstance(runtime_alignment.get("integrity"), dict)
+                else {}
+            )
+            if integrity:
+                integrity_state = "verified" if integrity.get("verified") else "not verified"
+                print(
+                    f"Project integrity: {integrity_state} "
+                    f"({integrity.get('reason_code') or '-'})"
+                )
+            project_bridge = (
+                runtime_alignment.get("project_scoped_bridge")
+                if isinstance(runtime_alignment.get("project_scoped_bridge"), dict)
+                else {}
+            )
+            bridge_state = "available" if project_bridge.get("available") else "not available"
+            print(f"Project bridge: {bridge_state}")
+            if project_bridge.get("python_isolated_mode"):
+                print("Bridge Python mode: isolated (-I)")
+            if project_bridge.get("wrapper"):
+                print(f"Bridge wrapper: {project_bridge['wrapper']}")
+            if isinstance(runtime_alignment.get("bridge_argv"), list):
+                print(
+                    "Bridge argv: "
+                    + json.dumps(runtime_alignment["bridge_argv"], ensure_ascii=False)
+                )
+            changes_made = (
+                runtime_alignment.get("changes_made")
+                if isinstance(runtime_alignment.get("changes_made"), dict)
+                else {}
+            )
+            print(
+                "Changes made: global PATH/Python installation="
+                f"{bool(changes_made.get('global_path_or_python_installation'))}; "
+                "runtime Skill installation="
+                f"{bool(changes_made.get('runtime_skill_installation'))}"
+            )
         if result.get("warnings"):
             print("Warnings:")
             for warning in result["warnings"]:
                 print(f"- {warning}")
+        if result.get("next_safe_actions"):
+            print("Next safe actions:")
+            for action in result["next_safe_actions"]:
+                print(f"- {action}")
     return 0 if result.get("ok", True) else 1
 
 
@@ -4159,6 +4209,9 @@ def command_project_version_update(args: argparse.Namespace) -> int:
             dry_run=bool(args.dry_run),
             approve=bool(args.approve),
             reviewed_by=args.reviewed_by,
+            affirm_external_writers_quiescent=bool(
+                args.affirm_external_writers_quiescent
+            ),
             progress_callback=reporter.progress,
         )
     except (OSError, ValueError):
@@ -19401,11 +19454,19 @@ def build_parser() -> argparse.ArgumentParser:
     project_version_update_mode.add_argument(
         "--approve",
         action="store_true",
-        help="Atomically fetch origin/main plus the exact tag, verify, checkout, align pins, and write a receipt.",
+        help="Fetch origin/main plus the exact tag atomically, verify, materialize, align pins, and write a receipt.",
     )
     project_version_update.add_argument(
         "--reviewed-by",
         help="Safe non-secret reviewer actor id; required with --approve.",
+    )
+    project_version_update.add_argument(
+        "--affirm-external-writers-quiescent",
+        action="store_true",
+        help=(
+            "Required with --approve: affirm that editors and sync, backup, "
+            "and other Git writers are paused for the complete transaction."
+        ),
     )
     project_version_update.add_argument(
         "--progress",
