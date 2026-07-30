@@ -10,24 +10,23 @@ It is not a website, SaaS app, dashboard, or visual note-taking product. The int
 
 ## Install The Command-Line Tool
 
-v0.3.288 provides a self-contained wheel on the exact GitHub release:
+v0.3.289 provides a self-contained wheel on the exact GitHub release:
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.288/wom_kit-0.3.288-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.289/wom_kit-0.3.289-py3-none-any.whl"
 archive --version
 ```
 
-v0.3.288 gives every failed MCP tool one exact content-free
-`tool_execution_failed` envelope and gives JSON-RPC failures fixed category
-messages. Raw exception text, paths, identifiers, validation details, unknown
-method/tool names, and caller values do not enter error `message` or `data`.
+v0.3.289 strengthens the release-wheel resource gate. A wheel is accepted only
+when its manifest is the exact reviewed manifest, its resource set is exact,
+and every declared byte count, SHA-256, and packaged mirror byte matches.
+Duplicate or unsafe ZIP members, malformed or ambiguous manifests, and
+content mismatches fail through a bounded checker error instead of a raw
+traceback. Runtime commands, archive behavior, and the v0.3.288 content-free
+MCP boundary is unchanged: caller values do not enter error `message` or `data`.
 A valid JSON-RPC request id still crosses the stdio boundary unchanged in the
-top-level `id` field so the client can correlate the protocol response.
-Only `null` and objects are accepted for request parameters and tool
-arguments; falsey non-object values are rejected. Successful tool results,
-archive-service behavior, and existing dry-run, approval, allowed-root, and
-redaction checks are unchanged. See
-[`docs/releases/v0.3.288.md`](docs/releases/v0.3.288.md).
+top-level `id` field, where it serves only as protocol correlation data. See
+[`docs/releases/v0.3.289.md`](docs/releases/v0.3.289.md).
 
 Use a dedicated virtual environment when installing with plain `pip`. WOM-kit
 is not published to PyPI yet, so `pip install wom-kit` is not an official
@@ -1585,7 +1584,8 @@ archive-mcp
 ```
 
 Since v0.3.288, every failed tool returns the exact content-free
-`tool_execution_failed` envelope documented in the current release note.
+`tool_execution_failed` envelope documented in
+[`docs/releases/v0.3.288.md`](docs/releases/v0.3.288.md).
 JSON-RPC failures use fixed category messages, and only `null` or an object is
 accepted for request `params` and tool `arguments`. Raw exception text remains
 inside the local process and is not part of the MCP wire contract.
