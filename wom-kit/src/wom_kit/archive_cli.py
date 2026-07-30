@@ -4170,12 +4170,29 @@ def command_runtime_skill_status(args: argparse.Namespace) -> int:
 
 
 def command_runtime_guidance_readiness(args: argparse.Namespace) -> int:
-    result = runtime_guidance.runtime_guidance_readiness(
-        Path(args.archive_root),
-        host=args.host,
-        scope=args.scope,
-        repo_root=Path(args.repo_root) if args.repo_root else None,
-    )
+    try:
+        result = runtime_guidance.runtime_guidance_readiness(
+            Path(args.archive_root),
+            host=args.host,
+            scope=args.scope,
+            repo_root=Path(args.repo_root) if args.repo_root else None,
+        )
+    except (
+        archive_services.ArchiveServiceError,
+        OSError,
+        UnicodeError,
+        ValueError,
+    ):
+        result = runtime_guidance.blocked_runtime_guidance_result(
+            Path(args.archive_root),
+            host=args.host,
+            scope=args.scope,
+            diagnostic_code="runtime_guidance_inspection_failed",
+            blocker=(
+                "Runtime guidance readiness could not complete a safe local "
+                "inspection."
+            ),
+        )
     print_json(result)
     return 0 if result.get("ok") else 1
 

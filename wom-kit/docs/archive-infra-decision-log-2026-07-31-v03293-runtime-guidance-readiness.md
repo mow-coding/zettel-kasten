@@ -61,3 +61,20 @@ evidence remain required before v0.3.293 is called release-ready.
 
 Implementation evidence is recorded in
 `meeting-minutes/2026-07-31-v03293-runtime-guidance-readiness-implementation.md`.
+
+## Independent Review Correction
+
+Two P1 findings were corrected before handoff:
+
+- Ownership-manifest `package_version` is an untrusted local scalar. The
+  runtime Skill parser and readiness projection now reuse the same exact
+  stable-version validator as public project-version results. Invalid values
+  are never echoed, become `null` with `invalid_or_untrusted`, and classify
+  the managed target as invalid.
+- A directory that exists but is not a readable WOM archive now returns the
+  content-free `invalid_archive` blocked result. CLI dispatch also normalizes
+  expected local inspection failures, so no traceback or absolute path crosses
+  the command boundary.
+
+Both corrections preserve read-only behavior and add no write, install,
+`AGENTS.md` rewrite, network, provider, model, or credential action.
