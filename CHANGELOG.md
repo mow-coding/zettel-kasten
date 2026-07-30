@@ -6,6 +6,32 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.292 - 2026-07-31
+
+- Made overview and catalog `tie_summary.referenced_objets_count` include
+  distinct objet relationships expressed through canonical structured edge
+  targets as well as the existing `assets`, `source_refs`, and
+  `source_intake` frontmatter fields.
+- Limited structured edge recognition to exact `target`, `target_id`, and
+  `zettel_id` fields whose complete string value is a valid
+  `sha256:<64 hex>` or `objet:sha256:<64 hex>` identifier.
+- Normalized both accepted forms to lowercase `sha256:<64 hex>` and
+  deduplicated aliases and repeated occurrences by normalized object ID.
+- Kept `tie_summary.referenced_objets_count` frontmatter-only. A reference
+  found only in the zettel body does not count there, and catalog output keeps
+  `body_read: false`.
+- Kept `zettel-objet-links.count` as the broader count of distinct object IDs
+  discovered across valid frontmatter and body text. It may therefore be
+  larger than the overview or catalog tie count.
+- Kept redacted overview and catalog surfaces at zero relationships with no
+  edge, title, body, digest, or private relationship-existence exposure.
+- Redacted malformed object-shaped direct edge targets to the fixed
+  `<redacted-reference>` placeholder in overview and catalog previews, rather
+  than echoing partial, suffixed, URL/path-contained, uppercase-prefix, or
+  non-string values that were excluded from the count.
+- Changed no command, MCP tool, archive schema, writer, migration, index,
+  provider call, object resolution behavior, archive content, or beta archive.
+
 ## v0.3.291 - 2026-07-31
 
 - Extended the read-only `archive version <root>` result with a bounded

@@ -56954,6 +56954,351 @@ archive_services.zet_abstract_backfill_recover(
         self.assertEqual(result["overview"]["facets"]["domain"], "personal")
         self.assertEqual(result["overview"]["tie_summary"]["edge_count"], 0)
 
+    def test_tie_summary_objet_ids_include_structured_sources_and_direct_edge_targets(self) -> None:
+        digest_a = hashlib.sha256(b"tie-summary-structured-a").hexdigest()
+        digest_b = hashlib.sha256(b"tie-summary-edge-only-b").hexdigest()
+        digest_c = hashlib.sha256(b"tie-summary-edge-only-c").hexdigest()
+        frontmatter = {
+            "id": "zet_tie_summary_structured_sources",
+            "status": "draft",
+            "assets": [
+                {"object_id": f"sha256:{digest_a}"},
+                {"nested": {"objet_ref": f"objet:sha256:{digest_a.upper()}"}},
+            ],
+            "source_refs": [
+                {"type": "objet_ref", "value": f"objet:sha256:{digest_a.upper()}"},
+            ],
+            "source_intake": {
+                "primary": {"object_id": f"sha256:{digest_a}"},
+            },
+            "edges": [
+                {"target": f"  objet:sha256:{digest_b.upper()}  "},
+                {"target_id": f"sha256:{digest_b}"},
+                {"zettel_id": f"objet:sha256:{digest_c.upper()}"},
+                {"target": f"sha256:{digest_a}"},
+            ],
+        }
+
+        object_ids = archive_services.collect_tie_summary_objet_ids(frontmatter)
+        unchanged_refs = json.dumps(
+            archive_services.collect_referenced_objets(frontmatter),
+            ensure_ascii=False,
+        )
+        summary, warnings = archive_services.zettel_first_read_summary(
+            frontmatter,
+            "Body text is irrelevant to the structured tie count.",
+        )
+
+        self.assertEqual(
+            object_ids,
+            [
+                f"sha256:{digest_a}",
+                f"sha256:{digest_b}",
+                f"sha256:{digest_c}",
+            ],
+        )
+        self.assertIn(digest_a, unchanged_refs)
+        self.assertNotIn(digest_b, unchanged_refs)
+        self.assertNotIn(digest_c, unchanged_refs)
+        self.assertEqual(summary["tie_summary"]["referenced_objets_count"], 3)
+        self.assertEqual(warnings, [])
+
+    def test_tie_summary_objet_ids_ignore_malformed_indirect_and_private_edge_values(self) -> None:
+        valid_digest = hashlib.sha256(b"tie-summary-valid-target").hexdigest()
+        partial_digest = "1" * 63
+        suffixed_digest = "2" * 64
+        url_digest = "3" * 64
+        path_digest = "4" * 64
+        indirect_digest = "5" * 64
+        nested_digest = "6" * 64
+        uppercase_prefix_digest = "7" * 64
+        private_canary = "PRIVATE_TIE_EDGE_CANARY_4D8A"
+        invalid_values = [
+            f"sha256:{partial_digest}",
+            f"objet:sha256:{suffixed_digest}-suffix",
+            f"https://private.example/object/sha256:{url_digest}",
+            f"private/path/sha256:{path_digest}",
+            f"sha256:{indirect_digest}",
+            f"sha256:{nested_digest}",
+            private_canary,
+            f"OBJET:SHA256:{uppercase_prefix_digest}",
+        ]
+        frontmatter = {
+            "edges": [
+                {"target": invalid_values[0]},
+                {"target_id": invalid_values[1]},
+                {"target": invalid_values[2]},
+                {"target": invalid_values[3]},
+                {"target": invalid_values[7]},
+                {"zettel_id": "zet_private_relationship"},
+                {"target": f"  sha256:{valid_digest.upper()}  "},
+                {"target": "ordinary-safe-external-label"},
+                None,
+                "not-an-edge-row",
+                [],
+                {"target": 123},
+                {"target_id": {"private": private_canary}},
+                {"zettel_id": ["sha256:" + indirect_digest]},
+                {"ref": invalid_values[4]},
+                {"object_id": invalid_values[4]},
+                {"target_object_id": invalid_values[4]},
+                {"edge_id": private_canary},
+                {"metadata": {"target": invalid_values[5], "private": private_canary}},
+            ],
+        }
+
+        object_ids = archive_services.collect_tie_summary_objet_ids(frontmatter)
+        summary, _warnings = archive_services.zettel_first_read_summary(
+            frontmatter,
+            "Body content is outside the structured tie count.",
+        )
+        summary_targets = [
+            edge["target"]
+            for edge in summary["edges_preview"]
+            if "target" in edge
+        ]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "archive"
+            zettel_path = archive_root / "zettels" / "zet_malformed_tie_targets.md"
+            zettel_path.parent.mkdir(parents=True)
+            catalog_frontmatter = {
+                **frontmatter,
+                "id": "zet_malformed_tie_targets",
+                "title": "Malformed tie target fixture",
+                "status": "canonical",
+                "kind": "note",
+                "abstract": "Malformed digest-bearing targets stay private.",
+            }
+            zettel_path.write_text(
+                "---\n"
+                + archive_cli.dump_yaml(catalog_frontmatter)
+                + "---\n\n"
+                + "CATALOG_BODY_CANARY_MUST_NOT_BE_READ\n",
+                encoding="utf-8",
+            )
+            catalog_item = archive_services.zet_catalog_item(
+                zettel_path,
+                archive_root,
+                "canonical",
+            )
+
+        serialized = json.dumps(
+            {
+                "object_ids": object_ids,
+                "summary": summary,
+                "catalog_item": catalog_item,
+            },
+            ensure_ascii=False,
+        )
+
+        self.assertEqual(object_ids, [f"sha256:{valid_digest}"])
+        self.assertEqual(summary["tie_summary"]["referenced_objets_count"], 1)
+        self.assertEqual(catalog_item["tie_summary"]["referenced_objets_count"], 1)
+        self.assertEqual(summary_targets.count("<redacted-reference>"), 7)
+        self.assertIn(f"sha256:{valid_digest.upper()}", summary_targets)
+        self.assertIn("zet_private_relationship", summary_targets)
+        self.assertIn("ordinary-safe-external-label", summary_targets)
+        self.assertFalse(catalog_item["body_read"])
+        self.assertNotIn("CATALOG_BODY_CANARY_MUST_NOT_BE_READ", serialized)
+        for invalid_value in invalid_values:
+            self.assertNotIn(invalid_value, serialized)
+
+    def test_tie_summary_redacted_overview_and_catalog_hide_relationships_and_private_text(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            secret_title = "PRIVATE REDACTED TIE TITLE 6B77"
+            secret_body = "PRIVATE REDACTED TIE BODY 8C21"
+            secret_digest = hashlib.sha256(b"private-redacted-tie-digest").hexdigest()
+            relative = "zettels/zet_redacted_tie_summary.md"
+            frontmatter = {
+                "id": "zet_redacted_tie_summary",
+                "title": secret_title,
+                "status": "redacted",
+                "kind": "private_note",
+                "abstract": secret_title,
+                "assets": [{"object_id": f"sha256:{secret_digest}"}],
+                "edges": [
+                    {
+                        "type": "references",
+                        "target": f"objet:sha256:{secret_digest}",
+                    }
+                ],
+            }
+            (archive_root / relative).write_text(
+                "---\n"
+                + archive_cli.dump_yaml(frontmatter)
+                + "---\n\n"
+                + secret_body
+                + "\n",
+                encoding="utf-8",
+            )
+
+            original_helper = archive_services.collect_tie_summary_objet_ids
+
+            def fail_if_redacted_relationships_are_inspected(
+                candidate: dict[str, Any],
+            ) -> list[str]:
+                if candidate.get("status") == "redacted":
+                    raise AssertionError(
+                        "redacted surfaces must return before inspecting objet relationships"
+                    )
+                return original_helper(candidate)
+
+            with patch.object(
+                archive_services,
+                "collect_tie_summary_objet_ids",
+                side_effect=fail_if_redacted_relationships_are_inspected,
+            ):
+                overview_code, overview_output = self.run_cli(
+                    [
+                        "read-zettel",
+                        str(archive_root),
+                        "--path",
+                        relative,
+                        "--section",
+                        "overview",
+                        "--format",
+                        "json",
+                    ]
+                )
+                catalog_code, catalog_output = self.run_cli(
+                    [
+                        "zet-catalog",
+                        str(archive_root),
+                        "--status",
+                        "all",
+                        "--page-size",
+                        "500",
+                        "--dry-run",
+                        "--format",
+                        "json",
+                    ]
+                )
+
+            self.assertEqual(overview_code, 0, overview_output)
+            overview = json.loads(overview_output)
+            self.assertTrue(overview["redacted"])
+            self.assertEqual(overview["body"], "")
+            self.assertEqual(
+                overview["overview"]["tie_summary"]["referenced_objets_count"],
+                0,
+            )
+            self.assertEqual(overview["overview"]["edges_preview"], [])
+            self.assertTrue(overview["overview"]["body_omitted"])
+
+            self.assertEqual(catalog_code, 0, catalog_output)
+            catalog = json.loads(catalog_output)
+            item = next(entry for entry in catalog["items"] if entry["path"] == relative)
+            self.assertTrue(item["redacted"])
+            self.assertEqual(item["tie_summary"]["referenced_objets_count"], 0)
+            self.assertEqual(item["edges"], [])
+            self.assertFalse(item["body_read"])
+
+            serialized = overview_output + catalog_output
+            self.assertNotIn(secret_title, serialized)
+            self.assertNotIn(secret_body, serialized)
+            self.assertNotIn(secret_digest, serialized)
+
+    def test_tie_summary_structured_a_b_and_body_only_c_keep_surface_count_boundary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            digest_a = hashlib.sha256(b"tie-boundary-structured-a").hexdigest()
+            digest_b = hashlib.sha256(b"tie-boundary-structured-b").hexdigest()
+            digest_c = hashlib.sha256(b"tie-boundary-body-only-c").hexdigest()
+            body_canary = "PRIVATE_BODY_CANARY_TIE_BOUNDARY_91AE"
+            zettel_id = "zet_tie_summary_a_b_c_boundary"
+            relative = f"zettels/{zettel_id}.md"
+            frontmatter = {
+                "id": zettel_id,
+                "title": "Structured objet tie boundary fixture",
+                "status": "canonical",
+                "kind": "note",
+                "abstract": "Structured objet A and B are catalog-visible relationships.",
+                "assets": [{"object_id": f"sha256:{digest_a}"}],
+                "edges": [
+                    {
+                        "type": "references",
+                        "target": f"objet:sha256:{digest_b.upper()}",
+                    }
+                ],
+            }
+            (archive_root / relative).write_text(
+                "---\n"
+                + archive_cli.dump_yaml(frontmatter)
+                + "---\n\n"
+                + body_canary
+                + f" objet:sha256:{digest_c}\n",
+                encoding="utf-8",
+            )
+
+            overview_code, overview_output = self.run_cli(
+                [
+                    "read-zettel",
+                    str(archive_root),
+                    "--path",
+                    relative,
+                    "--section",
+                    "overview",
+                    "--format",
+                    "json",
+                ]
+            )
+            catalog_code, catalog_output = self.run_cli(
+                [
+                    "zet-catalog",
+                    str(archive_root),
+                    "--status",
+                    "canonical",
+                    "--page-size",
+                    "500",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            links_code, links_output = self.run_cli(
+                [
+                    "zettel-objet-links",
+                    str(archive_root),
+                    "--path",
+                    relative,
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            self.assertEqual(overview_code, 0, overview_output)
+            overview = json.loads(overview_output)
+            self.assertEqual(
+                overview["overview"]["tie_summary"]["referenced_objets_count"],
+                2,
+            )
+            self.assertEqual(overview["body"], "")
+            self.assertTrue(overview["body_omitted"])
+
+            self.assertEqual(catalog_code, 0, catalog_output)
+            catalog = json.loads(catalog_output)
+            item = next(entry for entry in catalog["items"] if entry["id"] == zettel_id)
+            self.assertEqual(item["tie_summary"]["referenced_objets_count"], 2)
+            self.assertFalse(item["body_read"])
+
+            self.assertEqual(links_code, 0, links_output)
+            links = json.loads(links_output)
+            self.assertEqual(links["count"], 3)
+            self.assertEqual(
+                {entry["object_id"] for entry in links["links"]},
+                {
+                    f"sha256:{digest_a}",
+                    f"sha256:{digest_b}",
+                    f"sha256:{digest_c}",
+                },
+            )
+
+            serialized = overview_output + catalog_output + links_output
+            self.assertNotIn(body_canary, serialized)
+
     def test_read_zettel_document_section_hides_frontmatter_for_human_view(self) -> None:
         archive_root = KIT_ROOT / "examples" / "fake-life-archive"
         zettel_id = "zet_20240504_fake_lunch_thought"

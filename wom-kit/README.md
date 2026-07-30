@@ -10,10 +10,10 @@ It is not a website, SaaS app, dashboard, or visual note-taking product. The int
 
 ## Install The Command-Line Tool
 
-v0.3.291 provides a self-contained wheel on the exact GitHub release:
+v0.3.292 provides a self-contained wheel on the exact GitHub release:
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.291/wom_kit-0.3.291-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.292/wom_kit-0.3.292-py3-none-any.whl"
 archive --version
 ```
 
@@ -44,6 +44,10 @@ remains: caller values do not enter error `message` or `data`.
 A valid JSON-RPC request id still crosses the stdio boundary unchanged in the
 top-level `id` field. See
 [`docs/releases/v0.3.291.md`](docs/releases/v0.3.291.md).
+
+v0.3.292 keeps those runtime safeguards and makes objet relationship counts
+honest across overview and catalog surfaces. See
+[`docs/releases/v0.3.292.md`](docs/releases/v0.3.292.md).
 
 Use a dedicated virtual environment when installing with plain `pip`. WOM-kit
 is not published to PyPI yet, so `pip install wom-kit` is not an official

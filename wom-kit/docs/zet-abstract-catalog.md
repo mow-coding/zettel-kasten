@@ -86,6 +86,40 @@ Every response includes:
   projection, and tie counts;
 - privacy and closed-action fields.
 
+## Objet Tie-Count Scope
+
+Since v0.3.292, each non-redacted catalog item's
+`tie_summary.referenced_objets_count` is the number of distinct structured
+frontmatter objet relationships. It recognizes object IDs already carried by
+`assets`, `source_refs`, and `source_intake`, plus complete object-ID strings
+in canonical edge target fields `target`, `target_id`, and `zettel_id`.
+
+Only a complete `sha256:<64 hex>` or `objet:sha256:<64 hex>` string is
+accepted. Both forms normalize to lowercase `sha256:<64 hex>`, and repeated
+aliases count once per digest. Other edge fields, nested metadata, URLs, paths,
+partial or suffixed digests, and zettel targets do not contribute.
+
+If a direct target contains an object-ID marker but is not one complete
+accepted ID, the catalog edge preview uses the fixed
+`<redacted-reference>` placeholder instead of echoing that malformed value.
+Non-string direct targets follow the same rule. Valid object IDs, valid zettel
+targets, and ordinary safe labels remain available.
+
+The catalog does not read the body for this count:
+
+```text
+tie_summary.referenced_objets_count
+  = distinct structured frontmatter objet relationships
+
+zettel-objet-links.count
+  = distinct objet IDs discovered across valid frontmatter and body
+```
+
+Consequently, a body-only object reference can make
+`zettel-objet-links.count` larger. The catalog preserves `body_read: false`.
+A redacted item reports a zero tie count and no edges before inspecting or
+exposing whether a private relationship exists.
+
 Continue a multi-page read with both values from the prior page:
 
 ```powershell
