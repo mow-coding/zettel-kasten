@@ -9,6 +9,21 @@ operator is running an archive for a human. Those records are meaningful, but
 they are not the user's own knowledge objects. They should not be tracked only
 as loose files in user content folders.
 
+## Runtime Route (v0.3.293)
+
+`runtime-context`, `ai-start-here`, `operational-context`, and
+`operator-feedback-plan` now expose one exact workflow:
+
+1. Preview `operator-feedback-plan`.
+2. Inspect `operator-feedback-ledger`.
+3. Stop for required human review.
+4. Preview `operator-feedback-record`.
+5. Approve the same record with `--reviewed-by`.
+
+The route does not read feedback bodies, submit anything externally, infer
+approval, or treat `delivered` as proof of either external submission or
+human receipt. User knowledge objets are not the canonical feedback tracker.
+
 ## Commands
 
 Preview the policy:

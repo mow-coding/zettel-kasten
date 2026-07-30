@@ -24,6 +24,31 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.293 Runtime Guidance Readiness
+
+v0.3.293 requires no archive migration and rewrites no zettel or `AGENTS.md`.
+To check one Codex repository explicitly, run:
+
+```text
+archive runtime-guidance-readiness <archive-root> --host codex --scope repo --repo-root <repo-root> --format json
+```
+
+Ordinary `runtime-context` and `ai-start-here` deliberately return
+`not_checked`; they do not inspect host installation state. A ready file check
+still reports host consumption as `not_proven`. When Skill work is needed,
+preview the reported `runtime-skill-install --dry-run` command and keep its
+existing approval lifecycle separate.
+
+Operator feedback guidance now follows plan dry-run, ledger dry-run, human
+review, record dry-run, and explicit reviewed approval. No external delivery
+or human receipt is inferred.
+
+Before public release, rebase this candidate onto the exact public v0.3.292
+predecessor and rerun full and clean-wheel verification.
+
+See
+[`wom-kit/docs/releases/v0.3.293.md`](wom-kit/docs/releases/v0.3.293.md).
+
 ## v0.3.292 Objet Tie-Count Consistency
 
 v0.3.292 requires no archive migration and rewrites no zettel.

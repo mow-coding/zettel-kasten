@@ -1,6 +1,6 @@
 # Runtime Canonical Entry Points
 
-Status: v0.3.292 objet tie-count consistency, runtime version alignment, edge-writer entity-type enforcement, exact installed-wheel resource integrity, read-only Notion locator evidence routing, content-free MCP error boundary, quick start, session handoff, local backup evidence, and philosophy implementation traceability checkpoint
+Status: v0.3.293 explicit runtime-guidance readiness, operator-feedback routing, and prior runtime safeguards checkpoint
 
 When an AI runtime enters a WOM archive, it needs a small, explicit "start
 here" map. The archive may contain zets, source bindings, provider metadata,
@@ -31,10 +31,29 @@ a terminal-capable AI can discover both the operational handoff and the
 official read/write command paths without waiting for the human to mention
 them.
 
+## Explicit Host Guidance Readiness
+
+Ordinary `runtime-context` and `ai-start-here` do not inspect a host
+installation or a repository's `AGENTS.md`. They return
+`runtime_guidance_readiness.status: not_checked` and the exact opt-in command:
+
+```powershell
+archive runtime-guidance-readiness <archive-root> --host codex --scope repo --repo-root <repo-root> --format json
+```
+
+The explicit command checks the current Codex runtime Skill state and the
+repository-level routing anchors without writing either location. Missing
+Skill installation and missing legacy `AGENTS.md` routing are separate
+diagnostics. Unreadable or unsupported inputs fail closed. If installation is
+needed, the result offers only the exact `runtime-skill-install --dry-run`
+command; it never installs automatically and never rewrites `AGENTS.md`.
+Successful inspection still reports host guidance consumption as
+`not_proven`.
+
 ## Official Action Routing
 
-Introduced in v0.3.278 and extended through v0.3.284, `action_routing` uses
-`wom-kit/ai-command-path-routing/v0.6`. It tells an AI which official command
+Introduced in v0.3.278 and extended in v0.3.293, `action_routing` uses
+`wom-kit/ai-command-path-routing/v0.7`. It tells an AI which official command
 handles session entry, search, local version truth, saved-view inspection,
 inbox pipeline-shape review, explicit event-membership add/removal planning, command
 discovery, draft creation, minting, typed edges, source capture, and
