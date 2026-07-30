@@ -1186,6 +1186,7 @@ NOTION_PROVIDER_LOCATOR_RE = re.compile(
 )
 ZETTEL_EDGE_ZETTEL_ID_RE = re.compile(r"^zet_[A-Za-z0-9][A-Za-z0-9_-]{0,159}$")
 ZETTEL_EDGE_FILENAME_SEGMENT_RE = re.compile(r"[^A-Za-z0-9._-]+")
+ZETTEL_EDGE_ENTITY_TYPE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,79}$")
 DRAFT_CREATION_MODES = {"human_written", "ai_assisted", "ai_generated", "imported", "derived"}
 SOURCE_INTAKE_ROLES = {"primary_source", "context", "attachment", "derived_context"}
 SOURCE_INTAKE_DEFAULT_ROLE = "primary_source"
@@ -62486,12 +62487,122 @@ def zettel_edge_receipt_relative_path(source_zettel_id: str, edge_type: str, tar
     )
 
 
+def safe_zettel_edge_entity_types(value: Any) -> tuple[bool, frozenset[str]]:
+    if not isinstance(value, list) or not value:
+        return False, frozenset()
+    entity_types: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            return False, frozenset()
+        entity_type = item.strip()
+        if entity_type != item or not ZETTEL_EDGE_ENTITY_TYPE_RE.fullmatch(entity_type):
+            return False, frozenset()
+        entity_types.append(entity_type)
+    return True, frozenset(entity_types)
+
+
+def zettel_edge_entity_type_contract(
+    root: Path,
+    edge_type: str,
+    target_summary: dict[str, Any],
+) -> tuple[dict[str, Any], list[str]]:
+    local_registry_path = archive_internal_path(root, "zettel-kasten/types.yml")
+    registry_source = "archive_local" if local_registry_path.exists() else "packaged_kit"
+    registry_path = local_registry_path if registry_source == "archive_local" else KIT_ZETTEL_KASTEN_ROOT / "types.yml"
+    target_entity_type = (
+        {"zettel": "Zettel", "objet": "OriginalObject"}.get(str(target_summary.get("kind") or ""))
+        if target_summary.get("verified") is True
+        else None
+    )
+    contract: dict[str, Any] = {
+        "registry_source": registry_source,
+        "source_entity_type": "Zettel",
+        "target_entity_type": target_entity_type,
+        "from_allowed": None,
+        "to_allowed": None,
+        "status": "unavailable",
+        "blocker_codes": [],
+    }
+    blockers: list[str] = []
+    blocker_codes: list[str] = []
+
+    if not edge_type:
+        contract["blocker_codes"] = ["edge_type_required"]
+        return contract, blockers
+
+    try:
+        registry = load_yaml(registry_path.read_text(encoding="utf-8"))
+    except Exception:
+        # Registry failures cross a machine-output privacy boundary: collapse
+        # every reader/parser exception instead of exposing its text or path.
+        blocker_codes.append("link_type_contract_unavailable")
+        blockers.append("Active link type contract is unavailable.")
+        contract["blocker_codes"] = blocker_codes
+        return contract, blockers
+
+    link_types = registry.get("link_types") if isinstance(registry, dict) else None
+    if not isinstance(link_types, list):
+        blocker_codes.append("link_type_contract_unavailable")
+        blockers.append("Active link type contract is unavailable.")
+        contract["blocker_codes"] = blocker_codes
+        return contract, blockers
+
+    matching_definitions = [
+        item
+        for item in link_types
+        if isinstance(item, dict) and isinstance(item.get("id"), str) and item.get("id") == edge_type
+    ]
+    if not matching_definitions:
+        blocker_codes.append("edge_type_not_defined")
+        blockers.append("edge_type must be defined in zettel-kasten/types.yml.")
+        contract["blocker_codes"] = blocker_codes
+        return contract, blockers
+    if len(matching_definitions) != 1:
+        blocker_codes.append("link_type_contract_unavailable")
+        blockers.append("Active link type contract is unavailable.")
+        contract["blocker_codes"] = blocker_codes
+        return contract, blockers
+
+    definition = matching_definitions[0]
+    from_valid, from_entity_types = safe_zettel_edge_entity_types(definition.get("from"))
+    to_valid, to_entity_types = safe_zettel_edge_entity_types(definition.get("to"))
+    if not from_valid:
+        blocker_codes.append("link_type_contract_from_invalid")
+        blockers.append("Active link type contract must define a non-empty safe from list.")
+    else:
+        contract["from_allowed"] = "Zettel" in from_entity_types
+        if not contract["from_allowed"]:
+            blocker_codes.append("source_entity_type_disallowed")
+            blockers.append("Active link type contract does not allow the writer source entity type.")
+    if not to_valid:
+        blocker_codes.append("link_type_contract_to_invalid")
+        blockers.append("Active link type contract must define a non-empty safe to list.")
+    elif target_entity_type is not None:
+        contract["to_allowed"] = target_entity_type in to_entity_types
+        if not contract["to_allowed"]:
+            blocker_codes.append("target_entity_type_disallowed")
+            blockers.append("Active link type contract does not allow the resolved target entity type.")
+
+    if not from_valid or not to_valid:
+        status = "malformed"
+    elif contract["from_allowed"] is False or contract["to_allowed"] is False:
+        status = "blocked"
+    elif target_entity_type is None:
+        status = "target_unresolved"
+    else:
+        status = "allowed"
+    contract["status"] = status
+    contract["blocker_codes"] = blocker_codes
+    return contract, blockers
+
+
 def zettel_edge_result(
     *,
     archive_id: str,
     dry_run: bool,
     source_summary: dict[str, Any] | None,
     target_summary: dict[str, Any],
+    entity_type_contract: dict[str, Any],
     edge_type: str,
     visibility: str,
     proposed_edge: dict[str, Any] | None,
@@ -62511,6 +62622,7 @@ def zettel_edge_result(
         "write_status": "blocked" if blockers else "would_write" if dry_run else "written",
         "source": source_summary or {},
         "target": target_summary,
+        "entity_type_contract": entity_type_contract,
         "edge_type": edge_type,
         "visibility": visibility,
         "edge_id": edge_id,
@@ -62589,11 +62701,8 @@ def zettel_edge_write(
         blockers.append("reviewed_by must be a safe non-secret scalar.")
 
     normalized_edge_type = str(edge_type or "").strip().lower().replace("-", "_")
-    allowed_link_types = load_allowed_link_types(root)
     if not normalized_edge_type:
         blockers.append("edge_type is required.")
-    elif normalized_edge_type not in allowed_link_types:
-        blockers.append("edge_type must be defined in zettel-kasten/types.yml.")
 
     normalized_visibility = str(visibility or "private").strip().lower().replace("-", "_")
     if not safe_source_intake_plan_scalar(normalized_visibility):
@@ -62628,6 +62737,12 @@ def zettel_edge_write(
         manifest_records_by_object_id=manifest_records_by_object_id,
         zettel_path_index=zettel_path_index,
     )
+    entity_type_contract, entity_type_blockers = zettel_edge_entity_type_contract(
+        root,
+        normalized_edge_type,
+        target_summary,
+    )
+    blockers.extend(entity_type_blockers)
     normalized_target_ref = str(target_summary.get("ref") or target_ref or "").strip()
     if source_zettel_id and normalized_target_ref == source_zettel_id:
         blockers.append("source and target must be different.")
@@ -62701,6 +62816,7 @@ def zettel_edge_write(
             dry_run=bool(dry_run),
             source_summary=source_summary,
             target_summary=target_summary,
+            entity_type_contract=entity_type_contract,
             edge_type=normalized_edge_type,
             visibility=normalized_visibility,
             proposed_edge=proposed_edge if proposed_edge else None,
@@ -62719,6 +62835,7 @@ def zettel_edge_write(
             dry_run=True,
             source_summary=source_summary,
             target_summary=target_summary,
+            entity_type_contract=entity_type_contract,
             edge_type=normalized_edge_type,
             visibility=normalized_visibility,
             proposed_edge=proposed_edge,
@@ -62800,6 +62917,7 @@ def zettel_edge_write(
         dry_run=False,
         source_summary=source_summary,
         target_summary=target_summary,
+        entity_type_contract=entity_type_contract,
         edge_type=normalized_edge_type,
         visibility=normalized_visibility,
         proposed_edge=proposed_edge,
@@ -63285,6 +63403,7 @@ def zettel_edge_batch_write(
                         "write_status": "skipped_existing",
                         "source": dry_result.get("source"),
                         "target": dry_result.get("target"),
+                        "entity_type_contract": dry_result.get("entity_type_contract"),
                         "edge_type": dry_result.get("edge_type"),
                         "visibility": dry_result.get("visibility"),
                         "edge_id": dry_result.get("edge_id"),
@@ -63305,6 +63424,7 @@ def zettel_edge_batch_write(
                     "write_status": dry_result.get("write_status"),
                     "source": dry_result.get("source"),
                     "target": dry_result.get("target"),
+                    "entity_type_contract": dry_result.get("entity_type_contract"),
                     "edge_type": dry_result.get("edge_type"),
                     "visibility": dry_result.get("visibility"),
                     "edge_id": dry_result.get("edge_id"),
@@ -63419,6 +63539,7 @@ def zettel_edge_batch_write(
                     "write_status": write_result.get("write_status"),
                     "source": write_result.get("source"),
                     "target": write_result.get("target"),
+                    "entity_type_contract": write_result.get("entity_type_contract"),
                     "edge_type": write_result.get("edge_type"),
                     "visibility": write_result.get("visibility"),
                     "edge_id": write_result.get("edge_id"),
