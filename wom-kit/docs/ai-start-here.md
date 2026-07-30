@@ -4,7 +4,8 @@ Status: quick/default and explicit full-Doctor contract implemented in v0.3.222;
 safe full-Doctor receipt phase and callback coalescing added in v0.3.223;
 no-repeat runtime-context handoff added in v0.3.224; identity consistency and
 review routing added in v0.3.226; aggregate edge-receipt progress added in
-v0.3.227; official AI command-path routing added in v0.3.278
+v0.3.227; official AI command-path routing added in v0.3.278; explicit
+runtime-guidance readiness and feedback routing added in v0.3.293
 
 ## Purpose
 
@@ -41,10 +42,24 @@ The source operational-context record remains unchanged. If its default next
 list says `Run runtime-context first.`, start-here does not copy that already
 satisfied sentence into `next_safe_steps`.
 
+## Host Guidance Is An Explicit Check
+
+Quick and full start-here modes both leave host guidance at `not_checked`.
+They do not inspect the Codex Skill install or repository `AGENTS.md`
+implicitly. Run the following only when that host-specific question matters:
+
+```powershell
+archive runtime-guidance-readiness <archive-root> --host codex --scope repo --repo-root <repo-root> --format json
+```
+
+The result may prove that files and required routing anchors are present. It
+cannot prove the host actually consumed them, so
+`host_guidance_consumption` remains `not_proven`.
+
 ## Official Read And Write Paths
 
-Introduced in v0.3.278 and extended through v0.3.284, JSON output includes
-`wom-kit/ai-command-path-routing/v0.6`, and Markdown output renders
+Introduced in v0.3.278 and extended through v0.3.293, JSON output includes
+`wom-kit/ai-command-path-routing/v0.7`, and Markdown output renders
 `Official Read Command Paths` and `Official Write Command Paths`.
 
 The routes require `archive search --count-total --format json` for

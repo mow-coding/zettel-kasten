@@ -42,7 +42,7 @@ archive operational-context <archive-root> --dry-run --format json
 
 Introduced in v0.3.278 and extended through v0.3.284, this read-only output also
 returns the same official
-`wom-kit/ai-command-path-routing/v0.6` object as runtime-context and
+`wom-kit/ai-command-path-routing/v0.7` object as runtime-context and
 ai-start-here. It routes search through `archive search`, conservative inbox
 shape review through `archive inbox-pipeline-audit`, AI draft creation through
 `archive create-draft`, and other writes through their dedicated

@@ -1,6 +1,6 @@
 # WOM-kit Python 도구 설치
 
-상태: v0.3.292 GitHub wheel 및 objet 연결 수 일관성 체크포인트
+상태: v0.3.293 GitHub wheel 및 runtime-guidance 준비 상태 체크포인트
 
 WOM-kit은 명령줄 도구입니다. 일반 앱 프로젝트의 Python 의존성과 섞지 말고
 별도의 격리된 Python 환경에 설치하는 것이 좋습니다.
@@ -12,7 +12,7 @@ WOM-kit은 명령줄 도구입니다. 일반 앱 프로젝트의 Python 의존�
 증거가 되지는 않습니다.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.292/wom_kit-0.3.292-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.293/wom_kit-0.3.293-py3-none-any.whl"
 archive --version
 ```
 
@@ -30,7 +30,7 @@ archive --version
 
 ```powershell
 py -m venv "$HOME\.wom-tools\wom-kit"
-& "$HOME\.wom-tools\wom-kit\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.292/wom_kit-0.3.292-py3-none-any.whl"
+& "$HOME\.wom-tools\wom-kit\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.293/wom_kit-0.3.293-py3-none-any.whl"
 & "$HOME\.wom-tools\wom-kit\Scripts\archive.exe" --version
 ```
 

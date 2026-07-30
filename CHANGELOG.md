@@ -6,6 +6,20 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.293 - 2026-07-31
+
+- Added explicit read-only `runtime-guidance-readiness` for the Codex
+  repository scope with required host, scope, and repository-root selectors.
+- Distinguished missing runtime Skill material from missing legacy
+  `AGENTS.md` routing; unreadable, unsafe, and unsupported evidence fails
+  closed.
+- Kept ordinary runtime entry host-neutral with `not_checked`, an exact opt-in
+  command, and host consumption permanently `not_proven`.
+- Added the exact operator-feedback plan, ledger, human-review, preview, and
+  approval sequence to action routing v0.7.
+- Added no automatic Skill install, `AGENTS.md` rewrite, external feedback
+  submission, archive migration, provider call, or beta archive mutation.
+
 ## v0.3.292 - 2026-07-31
 
 - Made overview and catalog `tie_summary.referenced_objets_count` include

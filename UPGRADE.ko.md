@@ -2,6 +2,24 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.3.293 runtime guidance 준비 상태
+
+v0.3.293은 아카이브 마이그레이션이 필요하지 않으며 zet이나
+`AGENTS.md`를 자동으로 다시 쓰지 않습니다.
+
+```text
+archive runtime-guidance-readiness <archive-root> --host codex --scope repo --repo-root <repo-root> --format json
+```
+
+`runtime-context`와 `ai-start-here`는 호스트별 검사를 자동 실행하지
+않고 `not_checked`를 반환합니다. 파일 준비 상태가 통과해도 실제
+호스트 소비 여부는 `not_proven`입니다. 피드백은 plan dry-run, ledger
+dry-run, 사람 검토, record dry-run, `--reviewed-by` 승인 순서를 지켜야
+하며 외부 전달이나 사람 수신을 추정하지 않습니다.
+
+공개 릴리스 전에는 정확한 공개 v0.3.292 선행 버전에 rebase한 뒤 전체
+테스트와 clean-wheel 검증을 다시 실행해야 합니다.
+
 ## v0.3.292 objet 연결 수 일관성
 
 v0.3.292는 아카이브 이관이 필요하지 않으며 기존 zet 파일을 다시 쓰지
