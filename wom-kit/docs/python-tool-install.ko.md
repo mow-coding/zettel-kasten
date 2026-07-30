@@ -7,7 +7,9 @@ WOM-kit은 명령줄 도구입니다. 일반 앱 프로젝트의 Python 의존�
 
 ## 권장 설치
 
-정확한 WOM 릴리스에 붙은 검증된 wheel을 `uv`로 설치합니다.
+정확한 WOM GitHub Release가 실제로 존재하고 검증된 wheel을 자산으로 나열한
+뒤에만 `uv`로 설치하세요. 버전이 들어간 URL만으로 파일이 실제 공개되었다는
+증거가 되지는 않습니다.
 
 ```powershell
 uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.292/wom_kit-0.3.292-py3-none-any.whl"

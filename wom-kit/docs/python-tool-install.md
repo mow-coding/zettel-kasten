@@ -7,7 +7,9 @@ instead of being mixed into an application project's dependencies.
 
 ## Recommended Install
 
-Install the verified wheel attached to the exact WOM release with `uv`:
+Install with `uv` only after the exact WOM GitHub Release exists and lists the
+verified wheel. The versioned URL alone is not proof that the asset is
+available:
 
 ```powershell
 uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.292/wom_kit-0.3.292-py3-none-any.whl"

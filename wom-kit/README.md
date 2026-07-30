@@ -10,7 +10,9 @@ It is not a website, SaaS app, dashboard, or visual note-taking product. The int
 
 ## Install The Command-Line Tool
 
-v0.3.292 provides a self-contained wheel on the exact GitHub release:
+The exact v0.3.292 GitHub Release, when present, uses the self-contained wheel
+below. Confirm that the release exists and lists the wheel before installing
+it. The versioned URL alone is not proof that the asset is available.
 
 ```powershell
 uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.292/wom_kit-0.3.292-py3-none-any.whl"

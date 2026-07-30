@@ -10305,6 +10305,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             resource_manifest_path.read_text(encoding="utf-8")
         )
         release_flat = " ".join(release_text.split())
+        links_flat = " ".join(links_text.split())
 
         self.assertEqual(__version__, "0.3.292")
         self.assertEqual(CURRENT_VERSION, "v0.3.292")
@@ -10361,6 +10362,24 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(contract_phrase=phrase):
                 self.assertIn(phrase, release_flat)
 
+        for phrase in (
+            "broader recursive token scan",
+            "arbitrary nested edge metadata",
+            "a URL string",
+            "a path string",
+            "does not make that location a structured relationship target",
+        ):
+            with self.subTest(link_scope_phrase=phrase):
+                self.assertIn(phrase, links_flat)
+        self.assertNotIn(
+            "Neither surface recursively treats arbitrary edge metadata",
+            links_text,
+        )
+        self.assertIn(
+            "recursively token-scans valid frontmatter and body",
+            release_flat,
+        )
+
         self.assertIn(
             "Status: v0.3.292 objet tie-count consistency checkpoint",
             matrix_text,
@@ -10374,13 +10393,25 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         )
         for text in (
             root_readme_text,
-            root_readme_ko_text,
             kit_readme_text,
             install_text,
-            install_ko_text,
         ):
             with self.subTest(document="v03292-current-install"):
                 self.assertIn(current_wheel_url, text)
+                self.assertIn(
+                    "The versioned URL alone is not proof that the asset is available",
+                    " ".join(text.split()),
+                )
+        for text in (
+            root_readme_ko_text,
+            install_ko_text,
+        ):
+            with self.subTest(document="v03292-current-install-ko"):
+                self.assertIn(current_wheel_url, text)
+                self.assertIn(
+                    "버전이 들어간 URL만으로 파일이 실제 공개되었다는 증거가 되지는 않습니다",
+                    " ".join(text.split()),
+                )
 
         for phrase in (
             "v0.3.293-v0.3.299",
