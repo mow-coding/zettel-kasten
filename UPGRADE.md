@@ -24,6 +24,39 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.290 Edge Writer Entity-Type Enforcement
+
+v0.3.290 fixes the existing `zettel-edge` safety gate. It requires no archive
+migration and does not rewrite an existing edge.
+
+Before this release, the writer confirmed that an edge type ID was active and
+that the target existed, but it did not enforce the selected type record's
+`from` and `to` entity types. It now treats the source as `Zettel`, a zet
+target as `Zettel`, and a manifested objet target as `OriginalObject`, then
+requires those endpoint types to match non-empty lists in the active
+`types.yml` record.
+
+This means, for example:
+
+```text
+continues      accepts a Zettel target
+embed          accepts an OriginalObject target
+format_variant accepts either target kind
+```
+
+Incompatible, missing, malformed, or empty contracts fail before a zettel or
+receipt is written. If your archive vendors its own
+`zettel-kasten/types.yml`, that file remains authoritative; an invalid local
+record is not silently replaced with the packaged definition.
+
+The batch writer inherits the same preflight. No policy change is needed, and
+an incompatible candidate cannot become an approved batch write.
+
+Upgrade the WOM-kit wheel normally. Then preview the same human-reviewed edge
+with `--dry-run` before approval. See
+[`wom-kit/docs/releases/v0.3.290.md`](wom-kit/docs/releases/v0.3.290.md) and
+[`wom-kit/docs/zettel-edge-write.md`](wom-kit/docs/zettel-edge-write.md).
+
 ## v0.3.289 Exact Wheel Resource Integrity
 
 v0.3.289 strengthens the release gate used before a WOM-kit wheel is

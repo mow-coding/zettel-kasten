@@ -1,6 +1,6 @@
 # Runtime Canonical Entry Points
 
-Status: v0.3.289 exact installed-wheel resource integrity, read-only Notion locator evidence routing, content-free MCP error boundary, quick start, session handoff, local backup evidence, and philosophy implementation traceability checkpoint
+Status: v0.3.290 edge-writer entity-type enforcement, exact installed-wheel resource integrity, read-only Notion locator evidence routing, content-free MCP error boundary, quick start, session handoff, local backup evidence, and philosophy implementation traceability checkpoint
 
 When an AI runtime enters a WOM archive, it needs a small, explicit "start
 here" map. The archive may contain zets, source bindings, provider metadata,

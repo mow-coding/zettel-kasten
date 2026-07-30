@@ -10,23 +10,25 @@ It is not a website, SaaS app, dashboard, or visual note-taking product. The int
 
 ## Install The Command-Line Tool
 
-v0.3.289 provides a self-contained wheel on the exact GitHub release:
+v0.3.290 provides a self-contained wheel on the exact GitHub release:
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.289/wom_kit-0.3.289-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.290/wom_kit-0.3.290-py3-none-any.whl"
 archive --version
 ```
 
-v0.3.289 strengthens the release-wheel resource gate. A wheel is accepted only
-when its manifest is the exact reviewed manifest, its resource set is exact,
-and every declared byte count, SHA-256, and packaged mirror byte matches.
-Duplicate or unsafe ZIP members, malformed or ambiguous manifests, and
-content mismatches fail through a bounded checker error instead of a raw
-traceback. Runtime commands, archive behavior, and the v0.3.288 content-free
-MCP boundary is unchanged: caller values do not enter error `message` or `data`.
+v0.3.290 closes an endpoint-type gap in the existing `zettel-edge` safety
+gate. The writer now checks the resolved `Zettel` or `OriginalObject`
+endpoints against the selected active `types.yml` record's non-empty `from`
+and `to` lists before any source or receipt write. The policy batch inherits
+the same fail-closed check through its single-edge preflight. It changes no
+vocabulary, enables no sequence semantics, adds no MCP writer, and performs no
+automatic archive migration. The exact wheel-resource gate from v0.3.289
+remains in force. The v0.3.288 boundary is also unchanged:
+caller values do not enter error `message` or `data`.
 A valid JSON-RPC request id still crosses the stdio boundary unchanged in the
-top-level `id` field, where it serves only as protocol correlation data. See
-[`docs/releases/v0.3.289.md`](docs/releases/v0.3.289.md).
+top-level `id` field. See
+[`docs/releases/v0.3.290.md`](docs/releases/v0.3.290.md).
 
 Use a dedicated virtual environment when installing with plain `pip`. WOM-kit
 is not published to PyPI yet, so `pip install wom-kit` is not an official
@@ -345,10 +347,10 @@ notion-client-fixture-request-plan
   Package the sanitized fixture request contract for client Notion issue verification. Dry-run only; lists accepted fixture kinds, required safe fields, redaction rules, and next verification commands without sending messages, calling providers, reading page titles or bodies, writing fixtures, writing zets, writing edges, or writing receipts.
 
 zettel-edge
-  Preview or approve one typed edge from a source zet to one verified target zet or manifested objet. Dry-run previews first; approve requires --reviewed-by and writes only one source zettel frontmatter edge plus one receipts/edges/*.zettel-edge.json receipt. Since v0.3.286 this existing gate accepts `format_variant` when a human explicitly reviews an alternate rendition of the same intellectual content; its source is a review anchor only, and the writer creates no reciprocal edge. `revert-edge` can later remove that exact edge from the receipt and write receipts/edges/reverts/*.zettel-edge-revert.json while preserving the original write receipt. It is not a bulk connection importer, exposes no MCP write tool, calls no providers, reads no real exports, writes no candidate records, updates no object manifests, and echoes no zettel body text, zettel titles, provider URLs, local paths, page titles, comment bodies, account ids, emails, tokens, or secret values.
+  Preview or approve one typed edge from a source zet to one verified target zet or manifested objet. Dry-run previews first; approve requires --reviewed-by and writes only one source zettel frontmatter edge plus one receipts/edges/*.zettel-edge.json receipt. Since v0.3.290 the gate also requires the resolved `Zettel`/`OriginalObject` endpoints to satisfy the selected active `types.yml` record's non-empty `from` and `to` entity-type lists; malformed or incompatible contracts fail before any write. Since v0.3.286 this existing gate accepts `format_variant` when a human explicitly reviews an alternate rendition of the same intellectual content; its source is a review anchor only, and the writer creates no reciprocal edge. `revert-edge` can later remove that exact edge from the receipt and write receipts/edges/reverts/*.zettel-edge-revert.json while preserving the original write receipt. It is not a bulk connection importer, exposes no MCP write tool, calls no providers, reads no real exports, writes no candidate records, updates no object manifests, and echoes no zettel body text, zettel titles, provider URLs, local paths, page titles, comment bodies, account ids, emails, tokens, or secret values.
 
 zettel-edge-batch
-  Preview or approve policy-gated typed edge batches from a reviewed JSON plan. Dry-run validates policy-writable rows through the single-edge gate without writing and preloads the object manifest once when batch rows target manifested objets. --plan resolves archive-relative first, then CWD-relative for compatibility. Approve requires --reviewed-by, writes only policy-matching new edges, writes receipts/edges/*.zettel-edge.json plus one receipts/edges/batches/*.zettel-edge-batch.json receipt when new rows are written, returns low-confidence or policy-mismatched rows in human_review_queue, and --skip-existing can separate already-written rows into skipped_existing_edges. `format_variant` is a deliberate exception: every such row is returned with `manual_single_edge_review_required`, even if the policy lists it as auto-writable, and the batch path never writes it. `revert-batch` can later replay the batch receipt in reverse, remove all listed edges, write per-edge revert receipts plus one receipts/edges/batches/reverts/*.zettel-edge-batch-revert.json receipt, and preserve the original write receipts. It is not a real export parser, exposes no MCP write tool, calls no providers, reads no real exports, writes no candidate records, updates no object manifests, and echoes no zettel body text, zettel titles, provider URLs, local paths, page titles, comment bodies, account ids, emails, tokens, or secret values.
+  Preview or approve policy-gated typed edge batches from a reviewed JSON plan. Dry-run validates policy-writable rows through the single-edge gate without writing and therefore also inherits the v0.3.290 endpoint-type contract; incompatible or malformed registry rows cannot be written. It preloads the object manifest once when batch rows target manifested objets. --plan resolves archive-relative first, then CWD-relative for compatibility. Approve requires --reviewed-by, writes only policy-matching new edges, writes receipts/edges/*.zettel-edge.json plus one receipts/edges/batches/*.zettel-edge-batch.json receipt when new rows are written, returns low-confidence or policy-mismatched rows in human_review_queue, and --skip-existing can separate already-written rows into skipped_existing_edges. `format_variant` is a deliberate exception: every such row is returned with `manual_single_edge_review_required`, even if the policy lists it as auto-writable, and the batch path never writes it. `revert-batch` can later replay the batch receipt in reverse, remove all listed edges, write per-edge revert receipts plus one receipts/edges/batches/reverts/*.zettel-edge-batch-revert.json receipt, and preserve the original write receipts. It is not a real export parser, exposes no MCP write tool, calls no providers, reads no real exports, writes no candidate records, updates no object manifests, and echoes no zettel body text, zettel titles, provider URLs, local paths, page titles, comment bodies, account ids, emails, tokens, or secret values.
 
 revert-edge
   Preview or approve removing one previously approved edge using receipts/edges/*.zettel-edge.json. Approve requires --reviewed-by, removes the matching edge_id from source zettel frontmatter, updates updated_at, writes receipts/edges/reverts/*.zettel-edge-revert.json, preserves the original edge receipt, exposes no MCP write tool, calls no providers, reads no real exports or zettel bodies, and echoes no zettel body text, zettel titles, provider URLs, local paths, page titles, comment bodies, account ids, emails, tokens, or secret values.
