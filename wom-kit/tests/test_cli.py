@@ -24468,6 +24468,29 @@ state:
                     self.assertNotIn(str(archive_root), output)
                     self.assertNotIn("Traceback", output)
 
+    def test_notion_locator_evidence_parser_classifies_decoder_recursion_as_depth_limit(
+        self,
+    ) -> None:
+        blocker_codes: list[str] = []
+        with patch.object(
+            archive_services.json,
+            "loads",
+            side_effect=RecursionError(
+                "PRIVATE-DECODER-RECURSION-MUST-NOT-ECHO"
+            ),
+        ):
+            parsed = archive_services._parse_notion_locator_evidence_json(
+                b'{"PRIVATE-PARSER-ROW-MUST-NOT-ECHO":0}\n',
+                first_line=True,
+                blocker_codes=blocker_codes,
+            )
+
+        self.assertIsNone(parsed)
+        self.assertEqual(
+            blocker_codes,
+            ["row_json_depth_or_node_limit_exceeded"],
+        )
+
     def test_notion_import_locator_evidence_plan_validates_exact_row_schema_and_scalars(
         self,
     ) -> None:

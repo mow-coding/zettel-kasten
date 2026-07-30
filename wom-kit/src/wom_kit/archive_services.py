@@ -30687,7 +30687,10 @@ def _parse_notion_locator_evidence_json(
     except NotionLocatorEvidenceDuplicateKeyError:
         blocker_codes.append("row_json_duplicate_key")
         return None
-    except (json.JSONDecodeError, ValueError, RecursionError):
+    except RecursionError:
+        blocker_codes.append("row_json_depth_or_node_limit_exceeded")
+        return None
+    except (json.JSONDecodeError, ValueError):
         blocker_codes.append("row_json_invalid")
         return None
     if not _notion_locator_json_within_limits(value):

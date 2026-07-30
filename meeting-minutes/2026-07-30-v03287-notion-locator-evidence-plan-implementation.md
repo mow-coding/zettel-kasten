@@ -138,6 +138,25 @@ assertions. This was a local test-environment contamination, not a product
 failure. Re-running with this worktree's `wom-kit/src` explicitly first on
 `PYTHONPATH` produced the green 175-test result above.
 
+## Python 3.10 JSON Depth Classification Correction
+
+PR CI exposed one cross-version classification difference in the valid
+1,200-level nested JSON regression. Python 3.12 decoded that row and allowed
+WOM's explicit 32-level structural limit to return
+`row_json_depth_or_node_limit_exceeded`. Python 3.10 raised `RecursionError`
+inside `json.loads` first. The original shared exception handler classified
+that parser guard as `row_json_invalid`.
+
+Parser `RecursionError` now maps directly to the same content-free
+`row_json_depth_or_node_limit_exceeded` blocker. JSON syntax/value failures
+remain `row_json_invalid`. A direct regression injects the earlier-decoder
+behavior so the branch is exercised even on Python 3.12, without retaining or
+echoing the exception text or private row content.
+
+Correction verification: all 20 CLI evidence-plan tests plus the direct
+decoder-recursion regression passed on Python 3.12; `py_compile` and
+`git diff --check` also passed.
+
 ## Pending Release Gates
 
 - exact reparenting onto the eventual v0.3.286 merge commit if needed;
