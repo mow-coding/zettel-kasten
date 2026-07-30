@@ -20,7 +20,9 @@ archive --version
 v0.3.288 gives every failed MCP tool one exact content-free
 `tool_execution_failed` envelope and gives JSON-RPC failures fixed category
 messages. Raw exception text, paths, identifiers, validation details, unknown
-method/tool names, and caller values do not cross the stdio wire boundary.
+method/tool names, and caller values do not enter error `message` or `data`.
+A valid JSON-RPC request id still crosses the stdio boundary unchanged in the
+top-level `id` field so the client can correlate the protocol response.
 Only `null` and objects are accepted for request parameters and tool
 arguments; falsey non-object values are rejected. Successful tool results,
 archive-service behavior, and existing dry-run, approval, allowed-root, and

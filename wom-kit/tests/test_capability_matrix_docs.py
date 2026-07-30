@@ -9718,6 +9718,22 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         self.assertNotIn("tool_error_result(str(exc))", server_text)
         self.assertNotIn('f"Internal error: {exc}"', server_text)
         self.assertNotIn('f"Method not found: {method}"', server_text)
+        self.assertIn(
+            "caller values do not enter error `message` or `data`",
+            kit_readme_text,
+        )
+        self.assertIn(
+            "A valid JSON-RPC request id still crosses the stdio boundary",
+            kit_readme_text,
+        )
+        self.assertIn(
+            "호출자 값을 오류 `message`/`data`에 넣지 않고",
+            root_readme_ko_text,
+        )
+        self.assertIn(
+            "유효한 JSON-RPC request id",
+            root_readme_ko_text,
+        )
 
         current_wheel_url = (
             "releases/download/v0.3.288/"

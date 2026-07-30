@@ -13,7 +13,8 @@ This project uses semantic versioning for public compatibility checkpoints.
   `tool_execution_failed`, and `isError: true`.
 - Removed raw exception messages, paths, identifiers, frontmatter values,
   provider details, validation text, unknown method/tool names, and
-  caller-controlled values from MCP error wire responses.
+  caller-controlled values from MCP error `message` and `data`; valid JSON-RPC
+  request ids remain unchanged in the top-level correlation field.
 - Normalized JSON-RPC parse, invalid-request, method-not-found,
   invalid-params, and internal failures to fixed category messages.
 - Changed request parsing so only literal `null` and objects are accepted for
@@ -22,7 +23,8 @@ This project uses semantic versioning for public compatibility checkpoints.
 - Added strict per-line UTF-8 handling, bounded failure for excessive JSON
   nesting, non-finite input/output number rejection, JSON-RPC id type checks,
   ASCII-safe string escaping, and quiet closed-stdout handling so transport
-  failures do not print raw tracebacks or local paths.
+  failures do not print raw tracebacks or local paths. A failed stdout while
+  reporting invalid UTF-8 now stops before any later tool request is handled.
 - Kept unexpected executed-tool and tool-result serialization failures inside
   the exact failed-tool envelope; unexpected non-tool server failures remain
   fixed JSON-RPC `Internal error`.

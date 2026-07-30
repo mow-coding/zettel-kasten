@@ -88,7 +88,9 @@ archive runtime-skill-install --dry-run --format json
 - 내용 없는 MCP 실패 경계: 실패한 도구는 하나의 고정
   `tool_execution_failed` 응답을 반환하고 JSON-RPC 오류는 고정된 분류
   문구만 사용합니다. 잘못된 거짓값 비객체 인자는 예외 문구·경로·식별자·
-  검증 상세·메서드/도구 이름·호출자 값을 되돌려 주지 않고 거부합니다.
+  검증 상세·메서드/도구 이름·호출자 값을 오류 `message`/`data`에 넣지 않고
+  거부합니다. 다만 유효한 JSON-RPC request id는 프로토콜 응답을 서로
+  연결할 수 있도록 최상위 `id` 필드에 그대로 반환합니다.
 - 깨끗한 환경에서 온보딩과 엄격한 검진에 필요한 runtime 스키마·템플릿·기본 규칙·릴리스 신원 문서를 정확한 GitHub 릴리스 파일 하나에 담은 v0.3.242 자체 완결 Python wheel. 격리된 `uv tool install`을 권장하고 전용 `pip` 가상환경도 지원하지만 PyPI 공개는 아직 미래 작업으로 명시합니다.
 - doctor, draft, mint, delegate, receipt, search, metadata review 같은 private archive lifecycle 도구. draft 생성은 forward-only draft-id 위생을 갖춰 제목이 없거나 한글뿐인 제목이 더 이상 오해를 주는 `_draft` id로 떨어지지 않고, draft 시점에 `--kind`를 검증해 경고와 함께 유효한 kind 목록을 보여줍니다. mint는 attributed `--affirm` 플래그로 두 human-review 체크리스트 항목을 raw YAML 편집 대신 검토자 귀속(attributed)·감사 가능한 CLI 행위로 충족합니다(mint receipt에 기록, `--reviewed-by` 없으면 무효, machine-enforced 항목은 절대 덮어쓰지 않음).
 - 정직한 `archive remint-reconcile`(그리고 retire receipt용 형제 명령 `archive retire-draft-reconcile`): zet의 바이트가 디스크에서 드리프트한 뒤(CRLF/BOM 재체크아웃 또는 사람의 내용 수정) receipt에 기록된 sha256을 재발급합니다. draft 스냅샷 자체가 드리프트한 경우에도 드리프트를 개행/BOM만인 `format_drift`나 `content_change`로 분류하되, 모든 content frontmatter 필드를 검사(전체 필드 재구성 + mint receipt의 `id`/`title` 대조)하므로 어떤 필드를 수정하거나 내용이 변조된 스냅샷도 절대 `format_drift`의 앵커가 되지 않습니다. 항상 디스크의 현재 내용을 보여주고, 승인하려면 reviewer가 필요하며, 내용 변경 ack 게이트를 절대 우회하지 않는 opt-in `--strip-bom`을 제공하고(그리고 v0.3.172부터 dry-run에서도 approve 실행이 기록하는 것과 동일한 strip 의도 메타데이터를 미리 보여줍니다 — 분류에는 전혀 영향이 없는 no-op이며 `content_change`를 절대 세탁하지 않습니다), v0.3.176부터는 BOM/개행 정규화 이후에도 본문이 여전히 다른 `content_change`에 대해 내용을 노출하지 않는 `body_diff_diagnostic`(카테고리 라벨 + 정규화 형태에서의 바이트 오프셋 + 길이 델타뿐, 본문 텍스트는 절대 없음)을 함께 보여주고, dry-run JSON `--diagnostic-only`로 canonical 본문 텍스트와 초록 데이터 값을 빼고도 그 drift 숫자를 볼 수 있게 합니다. v0.3.230부터 모든 `content_change`는 내용을 싣지 않은 순서형 사람 검토 계획을 함께 반환하고 승인 때 그 SHA-256을 다시 요구하므로, 검토 뒤 바이트나 영수증 참조가 바뀌면 아무것도 쓰기 전에 오래된 승인을 막습니다. 손상을 절대 가리지 않으며, in-place receipt 갱신과 별도의 불변 audit receipt를 함께 씁니다.
