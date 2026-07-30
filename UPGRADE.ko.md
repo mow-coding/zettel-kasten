@@ -2,6 +2,39 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.3.290 edge writer entity-type 강제
+
+v0.3.290은 기존 `zettel-edge` 안전 관문을 고칩니다. 보관소 이관이 필요
+없고 이미 저장된 edge를 다시 쓰지 않습니다.
+
+이전 writer는 edge type ID가 active인지와 target이 존재하는지는
+확인했지만, 선택된 type 항목의 `from`·`to` entity type까지 강제하지는
+않았습니다. 이제 source는 `Zettel`, zet target은 `Zettel`, manifest에
+등록된 objet target은 `OriginalObject`로 판정하고, active `types.yml`
+항목의 비어 있지 않은 목록이 두 endpoint를 모두 허용해야 합니다.
+
+예를 들면 다음과 같습니다.
+
+```text
+continues      -> Zettel target
+embed          -> OriginalObject target
+format_variant -> 두 target 모두
+```
+
+호환되지 않거나 `from`·`to`가 없고, 잘못됐거나, 빈 contract는 zettel 또는
+receipt를 쓰기 전에 실패합니다. 보관소가 자체
+`zettel-kasten/types.yml`을 가지고 있다면 그 파일이 계속 authoritative
+합니다. 잘못된 로컬 항목을 packaged 정의로 조용히 대체하지 않습니다.
+
+batch writer도 같은 single-edge preflight를 사용하므로 별도 policy 변경은
+필요하지 않고, 호환되지 않는 후보는 승인 batch write가 될 수 없습니다.
+
+WOM-kit wheel을 평소처럼 업그레이드하고, 사람이 검토한 edge를 승인하기
+전에 `--dry-run`으로 먼저 확인하세요. 자세한 내용은
+[`wom-kit/docs/releases/v0.3.290.md`](wom-kit/docs/releases/v0.3.290.md)와
+[`wom-kit/docs/zettel-edge-write.md`](wom-kit/docs/zettel-edge-write.md)를
+보세요.
+
 ## v0.3.289 정확한 wheel 리소스 무결성
 
 v0.3.289는 WOM-kit wheel을 공개하기 전에 사용하는 릴리스 관문을

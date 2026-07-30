@@ -1,6 +1,6 @@
 # Zettel Edge Write
 
-Status: v0.3.286 manual-only `format_variant` write contract
+Status: v0.3.290 active-registry endpoint type enforcement contract
 Previous checkpoint: Status: v0.3.108 approval-gated zettel edge write and revert checkpoint
 Rollback checkpoint: Status: v0.3.108 receipt-based edge revert checkpoint
 Batch checkpoint: Status: v0.3.102 approval-gated policy batch zettel edge write ergonomics checkpoint
@@ -107,6 +107,27 @@ open Notion or read an export. Object targets are resolved against
 `objects/manifests/files.jsonl`.
 
 `--edge-type` must already be defined in `zettel-kasten/types.yml`.
+
+Since v0.3.290, an active ID alone is not enough. The selected record must
+declare non-empty `from` and `to` lists of safe entity-type strings. The
+writer treats its source as `Zettel`, maps a resolved zet target to `Zettel`,
+and maps a resolved manifested objet target to `OriginalObject`. Both endpoint
+types must be permitted by the selected record before either the source file
+or edge receipt can be written.
+
+For example:
+
+```text
+continues: Zettel -> Zettel
+embed: Zettel -> OriginalObject
+format_variant: Zettel -> Zettel | OriginalObject
+```
+
+Therefore `continues` cannot target an objet, `embed` cannot target a zet, and
+`format_variant` still accepts either reviewed target kind. Missing, malformed,
+or empty endpoint lists fail closed. When an archive has its own
+`zettel-kasten/types.yml`, that registry remains authoritative; the packaged
+base is used only when the archive-local file is absent.
 
 ## `format_variant` Manual-Only Contract
 

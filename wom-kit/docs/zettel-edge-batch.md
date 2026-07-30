@@ -1,6 +1,7 @@
 # Zettel Edge Batch
 
-Status: v0.3.108 approval-gated policy batch zettel edge write scale and rollback checkpoint
+Status: v0.3.290 policy batch endpoint type enforcement checkpoint
+Scale checkpoint: Status: v0.3.108 approval-gated policy batch zettel edge write scale and rollback checkpoint
 Previous checkpoint: Status: v0.3.102 approval-gated policy batch zettel edge write ergonomics checkpoint
 
 `archive zettel-edge-batch` is the policy approval companion to
@@ -164,6 +165,15 @@ The batch receipt records the policy id, reviewer id, written edge receipts,
 skipped-existing count, and review queue count. If an approved batch write fails
 partway through, WOM-kit restores the touched zettel and receipt files from
 in-process snapshots.
+
+Since v0.3.290, the reused single-edge preflight also enforces the selected
+active `types.yml` record's `from` and `to` entity-type lists. A row whose
+resolved `Zettel`/`OriginalObject` endpoints are incompatible, or whose
+selected registry contract is malformed, cannot become an approved write and
+is reported deterministically. The new contract field and fixed blockers copy
+no target content, registry payload, path, or exception text; existing safe
+source archive-relative paths, target refs, manifest path, and receipt paths
+remain part of the established result.
 
 ## Reverts
 

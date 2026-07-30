@@ -6,12 +6,13 @@ The filesystem folder is `wom-kit/`, the Python import package is `wom_kit`, and
 
 See `wom-kit/docs/concepts/naming-and-terminology.md` for the naming baseline.
 
-v0.3.289 strengthens the release-wheel resource gate. The checker requires an
-exact manifest, exact declared resource set, verified byte counts and
-SHA-256 digests, and byte-for-byte agreement with the repository packaged
-mirror. Duplicate or unsafe ZIP members and malformed or ambiguous manifests
-are rejected without raw checker tracebacks. Runtime CLI/MCP behavior is
-unchanged. See `wom-kit/docs/releases/v0.3.289.md`.
+v0.3.290 makes the existing `zettel-edge` single-write gate enforce the
+selected active `types.yml` record's `from` and `to` entity-type lists. The
+source is `Zettel`; a resolved target is `Zettel` or `OriginalObject`.
+Malformed, empty, or incompatible endpoint contracts fail before zettel or
+receipt writes, and `zettel-edge-batch` inherits the same preflight. This
+activates no new edge type or sequence behavior and adds no MCP writer. See
+`wom-kit/docs/releases/v0.3.290.md`.
 
 v0.3.0 opens the first narrow receiver-side write boundary: an approval-gated shared update attestation/review record and receipt. See `wom-kit/docs/shared-update-attestation-review-write.md`.
 
