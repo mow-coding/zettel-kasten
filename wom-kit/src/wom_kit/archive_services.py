@@ -51,6 +51,11 @@ from .paths import (
 )
 from .resource_paths import runtime_resource_root
 from .schema_validator import validate_schema
+from .version_policy import (
+    STABLE_VERSION_TAG_RE,
+    normalize_version_label,
+    stable_version_value,
+)
 
 try:
     import yaml
@@ -685,7 +690,7 @@ WOM_KIT_VERSION_PIN_CANDIDATES = (
     ".zettel-kasten/installed-version.txt",
     "installed-version.txt",
 )
-WOM_KIT_PROJECT_UPDATE_TAG_RE = re.compile(r"^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
+WOM_KIT_PROJECT_UPDATE_TAG_RE = STABLE_VERSION_TAG_RE
 WOM_KIT_PROJECT_UPDATE_RECEIPTS_RELATIVE = ".zettel-kasten/receipts/version-updates"
 WOM_KIT_PROJECT_UPDATE_LOCK_RELATIVE = ".zettel-kasten/version-update.lock"
 PROFILE_WALLET_NODE_KINDS = {"person", "organization", "team", "family", "project", "agent"}
@@ -89995,36 +90000,6 @@ def redact_profile_archive_root(archive_root: str | None, *, redact_local_paths:
 
 def redacted_path_value(path: Path, *, redact_local_paths: bool) -> str:
     return "<local-path-redacted>" if redact_local_paths else str(path)
-
-
-def normalize_version_label(value: str | None) -> str | None:
-    if value is None:
-        return None
-    normalized = value.strip().lstrip("\ufeff").strip()
-    if normalized.lower().startswith("v"):
-        normalized = normalized[1:]
-    return normalized or None
-
-
-def stable_version_value(
-    value: str | None,
-    *,
-    include_prefix: bool = False,
-) -> str | None:
-    """Return only a public, exact stable WOM version label.
-
-    Version files and local Git metadata are untrusted local inputs.  Keep
-    arbitrary payloads available only to the fail-closed validity decision;
-    never project them into shareable version results.
-    """
-
-    normalized = normalize_version_label(value)
-    if normalized is None:
-        return None
-    label = f"v{normalized}"
-    if not WOM_KIT_PROJECT_UPDATE_TAG_RE.fullmatch(label):
-        return None
-    return label if include_prefix else normalized
 
 
 def version_sort_key(value: str | None) -> tuple[int, int, int, str] | None:

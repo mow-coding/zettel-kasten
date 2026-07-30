@@ -76,6 +76,40 @@ class RuntimeGuidanceReadinessTests(unittest.TestCase):
         )
         self.assertTrue(installed["ok"], installed)
 
+    def rewrite_repo_skill_manifest_version(
+        self,
+        repo: Path,
+        value: str,
+    ) -> None:
+        manifest_path = (
+            repo
+            / ".agents"
+            / "skills"
+            / runtime_skill_install.SKILL_NAME
+            / runtime_skill_install.INSTALL_MANIFEST_NAME
+        )
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["package_version"] = value
+        payload = {
+            key: item
+            for key, item in manifest.items()
+            if key != "manifest_payload_sha256"
+        }
+        manifest["manifest_payload_sha256"] = (
+            runtime_skill_install.canonical_sha256(payload)
+        )
+        manifest_path.write_text(
+            json.dumps(
+                manifest,
+                ensure_ascii=True,
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+
     def tree_digest(self, root: Path) -> dict[str, str]:
         return {
             path.relative_to(root).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
@@ -117,6 +151,16 @@ class RuntimeGuidanceReadinessTests(unittest.TestCase):
             "wom-kit/runtime-guidance-readiness/v0.1",
         )
         self.assertEqual(result["runtime_skill"]["status"], "managed_current")
+        self.assertEqual(
+            result["runtime_skill"]["installation"]["installed_version"],
+            "0.3.293",
+        )
+        self.assertEqual(
+            result["runtime_skill"]["installation"][
+                "installed_version_status"
+            ],
+            "valid",
+        )
         self.assertEqual(result["agents_routing"]["status"], "current")
         self.assertEqual(result["agents_routing"]["missing_routes"], [])
         self.assertEqual(
@@ -134,6 +178,170 @@ class RuntimeGuidanceReadinessTests(unittest.TestCase):
         self.assertFalse(result["privacy"]["agents_body_exposed"])
         self.assertNotIn(str(repo), output)
         self.assertNotIn(str(archive_root), output)
+
+    def test_untrusted_manifest_versions_never_echo_and_fail_closed_without_writes(
+        self,
+    ) -> None:
+        unsafe_versions = (
+            r"C:\private\version.txt",
+            "../private/version.txt",
+            "0.3",
+            "0.3.293-dev",
+            "PRIVATE_VERSION_CANARY",
+        )
+        for unsafe_version in unsafe_versions:
+            with self.subTest(unsafe_version=unsafe_version):
+                with tempfile.TemporaryDirectory() as tmp:
+                    repo, archive_root = self.make_repo(Path(tmp))
+                    self.install_repo_skill(repo)
+                    self.rewrite_repo_skill_manifest_version(
+                        repo,
+                        unsafe_version,
+                    )
+                    before = self.tree_digest(repo)
+
+                    readiness_code, readiness_output = self.run_cli(
+                        [
+                            "runtime-guidance-readiness",
+                            str(archive_root),
+                            "--host",
+                            "codex",
+                            "--scope",
+                            "repo",
+                            "--repo-root",
+                            str(repo),
+                            "--format",
+                            "json",
+                        ]
+                    )
+                    status_json_code, status_json_output = self.run_cli(
+                        [
+                            "runtime-skill-status",
+                            "--host",
+                            "codex",
+                            "--scope",
+                            "repo",
+                            "--repo-root",
+                            str(repo),
+                            "--format",
+                            "json",
+                        ]
+                    )
+                    status_text_code, status_text_output = self.run_cli(
+                        [
+                            "runtime-skill-status",
+                            "--host",
+                            "codex",
+                            "--scope",
+                            "repo",
+                            "--repo-root",
+                            str(repo),
+                            "--format",
+                            "text",
+                        ]
+                    )
+                    after = self.tree_digest(repo)
+
+                self.assertEqual(before, after)
+                self.assertEqual(readiness_code, 1, readiness_output)
+                self.assertEqual(status_json_code, 1, status_json_output)
+                self.assertEqual(status_text_code, 1, status_text_output)
+                readiness = json.loads(readiness_output)
+                status = json.loads(status_json_output)
+                self.assertFalse(readiness["ok"])
+                self.assertEqual(readiness["status"], "blocked")
+                self.assertIn(
+                    "runtime_skill_manifest_version_invalid",
+                    readiness["diagnostic_codes"],
+                )
+                self.assertEqual(
+                    readiness["runtime_skill"]["status"],
+                    "managed_invalid",
+                )
+                readiness_installation = readiness["runtime_skill"][
+                    "installation"
+                ]
+                self.assertIsNone(
+                    readiness_installation["installed_version"]
+                )
+                self.assertEqual(
+                    readiness_installation["installed_version_status"],
+                    "invalid_or_untrusted",
+                )
+                self.assertFalse(
+                    readiness_installation[
+                        "untrusted_manifest_values_exposed"
+                    ]
+                )
+                self.assertFalse(
+                    readiness["privacy"][
+                        "untrusted_manifest_values_exposed"
+                    ]
+                )
+                self.assertEqual(
+                    status["installation"]["state"],
+                    "managed_invalid",
+                )
+                self.assertIsNone(
+                    status["installation"]["installed_version"]
+                )
+                self.assertEqual(
+                    status["installation"]["installed_version_status"],
+                    "invalid_or_untrusted",
+                )
+                combined_output = (
+                    readiness_output
+                    + status_json_output
+                    + status_text_output
+                )
+                self.assertNotIn(
+                    json.dumps(unsafe_version, ensure_ascii=True),
+                    readiness_output + status_json_output,
+                )
+                self.assertNotIn(
+                    f"Installed version: {unsafe_version}",
+                    status_text_output,
+                )
+                self.assertNotIn(str(repo), combined_output)
+                self.assertNotIn("Traceback", combined_output)
+
+    def test_existing_non_archive_root_returns_content_free_blocked_json(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, archive_root = self.make_repo(Path(tmp))
+            (archive_root / "archive.yml").unlink()
+            before = self.tree_digest(repo)
+
+            code, output = self.run_cli(
+                [
+                    "runtime-guidance-readiness",
+                    str(archive_root),
+                    "--host",
+                    "codex",
+                    "--scope",
+                    "repo",
+                    "--repo-root",
+                    str(repo),
+                    "--format",
+                    "json",
+                ]
+            )
+            after = self.tree_digest(repo)
+
+        self.assertEqual(code, 1, output)
+        self.assertEqual(before, after)
+        result = json.loads(output)
+        self.assertFalse(result["ok"])
+        self.assertFalse(result["ready"])
+        self.assertEqual(result["status"], "blocked")
+        self.assertIsNone(result["archive_id"])
+        self.assertEqual(result["diagnostic_codes"], ["invalid_archive"])
+        self.assertFalse(result["closed_actions"]["files_written"])
+        self.assertTrue(result["privacy"]["local_paths_redacted"])
+        self.assertNotIn(str(repo), output)
+        self.assertNotIn(str(archive_root), output)
+        self.assertNotIn("Traceback", output)
 
     def test_absent_skill_and_incomplete_agents_have_distinct_diagnostics(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

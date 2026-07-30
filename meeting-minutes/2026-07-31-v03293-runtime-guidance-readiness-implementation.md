@@ -75,6 +75,39 @@ not counted as a completed full-suite pass. Exact public-predecessor CI/full
 verification therefore remains required. A green local subset or clean wheel
 is engineering evidence only.
 
+## Independent Review P1 Corrections
+
+The first local commit was independently reviewed before any push or release.
+Two P1 issues were found and fixed in one follow-up batch.
+
+1. A hand-edited ownership manifest could place arbitrary text in
+   `package_version`. The runtime Skill status projection copied that string
+   into `installed_version`, and readiness copied the nested projection. The
+   parser now uses the shared exact stable-version policy, invalid values
+   become `null`, the state becomes `managed_invalid`, and both JSON and text
+   explicitly report `invalid_or_untrusted` without echoing the source value.
+2. An existing directory without `archive.yml` passed the directory check and
+   later raised while reading `archive_id`. Archive validation now happens
+   before host inspection and returns a structured `invalid_archive` blocked
+   result. CLI dispatch normalizes expected local inspection failures to the
+   same content-free result family.
+
+Regression coverage uses path-like, traversal-like, partial, prerelease, and
+sensitive-like version canaries, preserves normal `0.3.293`, checks JSON and
+text non-echo, verifies exit 1 for the invalid archive, asserts no traceback or
+absolute path, and compares complete test trees before/after to prove no write.
+
+Follow-up verification passed 32 focused runtime-guidance/Skill lifecycle
+tests with 1 environment-permission skip, three existing exact-version
+redaction tests, 187 resource/document/readiness/Skill tests with the same
+single skip, and all four release-readiness checks. The post-correction clean
+wheel contains 120 files, verifies 103/103 packaged resources and 333,089
+resource bytes, passes runtime Skill lifecycle, onboarding, and strict Doctor,
+and has SHA-256
+`9fe60140054a5035eb111fc4b11a9b4b81b9b509c2cbdbe8db5657fc1c2226f1`.
+This supersedes the pre-review candidate wheel for any later local comparison;
+it is still not public-artifact evidence.
+
 ## Release Boundary
 
 v0.3.292 is currently a local candidate lineage, not a proven public

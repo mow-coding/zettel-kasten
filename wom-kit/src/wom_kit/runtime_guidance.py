@@ -30,6 +30,16 @@ AGENTS_ROUTING_MARKERS = (
         "raw grep and raw sql are not authoritative",
     ),
 )
+SAFE_SKILL_STATES = {
+    "absent",
+    "managed_current",
+    "managed_outdated",
+    "managed_invalid",
+    "managed_drift",
+    "unmanaged_conflict",
+    "blocked_symlink",
+    "blocked_not_directory",
+}
 
 
 def _safe_target(host: str, scope: str) -> dict[str, str]:
@@ -98,6 +108,109 @@ def _blocked_result(
         "blockers": [blocker],
         "warnings": [],
     }
+
+
+def blocked_runtime_guidance_result(
+    archive_root: Path | str,
+    *,
+    host: str,
+    scope: str,
+    diagnostic_code: str,
+    blocker: str,
+) -> dict[str, Any]:
+    """Build one content-free CLI/service failure result."""
+
+    return _blocked_result(
+        archive_root,
+        host=host,
+        scope=scope,
+        diagnostic_code=diagnostic_code,
+        blocker=blocker,
+    )
+
+
+def _safe_runtime_skill_projection(
+    skill_result: dict[str, Any],
+) -> tuple[str, dict[str, Any], dict[str, Any], bool]:
+    raw_target = (
+        skill_result.get("target")
+        if isinstance(skill_result.get("target"), dict)
+        else {}
+    )
+    raw_installation = (
+        skill_result.get("installation")
+        if isinstance(skill_result.get("installation"), dict)
+        else {}
+    )
+    raw_state = skill_result.get("status")
+    state = (
+        raw_state
+        if isinstance(raw_state, str) and raw_state in SAFE_SKILL_STATES
+        else "managed_invalid"
+    )
+    raw_version = raw_installation.get("installed_version")
+    installed_version = archive_services.stable_version_value(
+        raw_version if isinstance(raw_version, str) else None
+    )
+    version_invalid = bool(
+        raw_version is not None and installed_version is None
+    )
+    raw_source_sha256 = raw_installation.get(
+        "installed_source_package_sha256"
+    )
+    installed_source_sha256 = (
+        raw_source_sha256
+        if isinstance(raw_source_sha256, str)
+        and runtime_skill_install.SHA256_RE.fullmatch(raw_source_sha256)
+        is not None
+        else None
+    )
+    raw_manifest_sha256 = raw_installation.get("install_manifest_sha256")
+    manifest_sha256 = (
+        raw_manifest_sha256
+        if isinstance(raw_manifest_sha256, str)
+        and runtime_skill_install.SHA256_RE.fullmatch(raw_manifest_sha256)
+        is not None
+        else None
+    )
+    if version_invalid:
+        state = "managed_invalid"
+    target = {
+        "host": "codex",
+        "scope": "repo",
+        "skill_name": runtime_skill_install.SKILL_NAME,
+        "path": None,
+        "path_redacted": True,
+        "path_hint": "repo/.agents/skills/wom-archive",
+        "target_path_sha256": (
+            raw_target.get("target_path_sha256")
+            if isinstance(raw_target.get("target_path_sha256"), str)
+            and runtime_skill_install.SHA256_RE.fullmatch(
+                raw_target["target_path_sha256"]
+            )
+            is not None
+            else None
+        ),
+    }
+    installation = {
+        "state": state,
+        "managed": state.startswith("managed_"),
+        "installed_version": installed_version,
+        "installed_version_status": (
+            "invalid_or_untrusted"
+            if version_invalid
+            or raw_installation.get("installed_version_status")
+            == "invalid_or_untrusted"
+            else "valid"
+            if installed_version is not None
+            else "not_available"
+        ),
+        "installed_source_package_sha256": installed_source_sha256,
+        "install_manifest_sha256": manifest_sha256,
+        "file_bodies_exposed": False,
+        "untrusted_manifest_values_exposed": False,
+    }
+    return state, target, installation, version_invalid
 
 
 def _inspect_agents_routing(repo_root: Path) -> dict[str, Any]:
@@ -198,6 +311,25 @@ def runtime_guidance_readiness(
 
     try:
         root = archive_services.require_existing_archive_root(archive_root)
+        archive_id = archive_services.read_archive_id(root)
+    except (
+        archive_services.ArchiveServiceError,
+        OSError,
+        UnicodeError,
+        ValueError,
+    ):
+        return _blocked_result(
+            archive_root,
+            host=host,
+            scope=scope,
+            diagnostic_code="invalid_archive",
+            blocker=(
+                "Runtime guidance readiness requires a readable WOM archive "
+                "with a valid archive identity."
+            ),
+        )
+
+    try:
         resolved_repo = Path(os.path.abspath(os.fspath(repo_root.expanduser())))
         runtime_skill_install.resolve_target_location(
             host=normalized_host,
@@ -224,12 +356,25 @@ def runtime_guidance_readiness(
         package_version=__version__,
     )
     agents_routing = _inspect_agents_routing(resolved_repo)
-    skill_status = str(skill_result.get("status") or "blocked")
+    (
+        skill_status,
+        skill_target,
+        skill_installation,
+        installed_version_invalid,
+    ) = _safe_runtime_skill_projection(skill_result)
     diagnostic_codes: list[str] = []
     blockers: list[str] = []
     warnings: list[str] = []
 
-    if not skill_result.get("ok"):
+    if installed_version_invalid or (
+        skill_installation["installed_version_status"]
+        == "invalid_or_untrusted"
+    ):
+        diagnostic_codes.append("runtime_skill_manifest_version_invalid")
+        blockers.append(
+            "Runtime Skill ownership manifest version is invalid or untrusted."
+        )
+    elif not skill_result.get("ok"):
         diagnostic_codes.append("runtime_skill_inspection_blocked")
         blockers.append("Runtime Skill state could not be inspected safely.")
     elif skill_status == "absent":
@@ -272,7 +417,7 @@ def runtime_guidance_readiness(
         "schema": READINESS_SCHEMA,
         "lifecycle_action": "runtime_guidance_readiness",
         "status": status,
-        "archive_id": archive_services.read_archive_id(root),
+        "archive_id": archive_id,
         "target": {
             "host": normalized_host,
             "scope": normalized_scope,
@@ -280,8 +425,8 @@ def runtime_guidance_readiness(
         "runtime_skill": {
             "status": skill_status,
             "checked": True,
-            "target": skill_result.get("target"),
-            "installation": skill_result.get("installation"),
+            "target": skill_target,
+            "installation": skill_installation,
         },
         "agents_routing": agents_routing,
         "host_guidance_consumption": {
@@ -302,6 +447,7 @@ def runtime_guidance_readiness(
             "local_paths_redacted": True,
             "agents_body_exposed": False,
             "secret_values_exposed": False,
+            "untrusted_manifest_values_exposed": False,
         },
         "blockers": blockers,
         "warnings": warnings,
