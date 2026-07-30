@@ -5978,7 +5978,27 @@ def safe_overview_facets(frontmatter: dict[str, Any], warnings: list[str]) -> di
 
 def safe_overview_edge_preview(edge: dict[str, Any], warnings: list[str], index: int) -> dict[str, Any]:
     edge_type = safe_zettel_overview_string(edge.get("type"), warnings, f"$.first_read.edges_preview[{index}].type")
-    target = safe_zettel_overview_string(edge.get("target") or edge.get("zettel_id") or edge.get("target_id"), warnings, f"$.first_read.edges_preview[{index}].target")
+    raw_target = edge.get("target") or edge.get("zettel_id") or edge.get("target_id")
+    if raw_target is not None and not isinstance(raw_target, str):
+        warnings.append(
+            f"Redacted non-string edge target in $.first_read.edges_preview[{index}].target."
+        )
+        target = "<redacted-reference>"
+    elif (
+        isinstance(raw_target, str)
+        and "sha256:" in raw_target.casefold()
+        and OBJET_REF_TOKEN_RE.fullmatch(raw_target.strip()) is None
+    ):
+        warnings.append(
+            f"Redacted incomplete or malformed objet reference in $.first_read.edges_preview[{index}].target."
+        )
+        target = "<redacted-reference>"
+    else:
+        target = safe_zettel_overview_string(
+            raw_target,
+            warnings,
+            f"$.first_read.edges_preview[{index}].target",
+        )
     if target is None and any(edge.get(key) for key in ("target", "zettel_id", "target_id")):
         target = "<redacted-reference>"
     target_kind = None
@@ -6032,7 +6052,7 @@ def zettel_first_read_summary(frontmatter: dict[str, Any], body: str, *, redacte
         }
     )
     referenced_zets = collect_referenced_zets(frontmatter)
-    referenced_objets = collect_referenced_objets(frontmatter)
+    tie_summary_objet_ids = collect_tie_summary_objet_ids(frontmatter)
     referenced_receipts = collect_referenced_receipts(frontmatter)
     return (
         {
@@ -6048,7 +6068,7 @@ def zettel_first_read_summary(frontmatter: dict[str, Any], body: str, *, redacte
                 "edge_count": len(edge_dicts),
                 "edge_types": edge_types,
                 "referenced_zets_count": len(referenced_zets),
-                "referenced_objets_count": len(referenced_objets),
+                "referenced_objets_count": len(tie_summary_objet_ids),
                 "referenced_receipts_count": len(referenced_receipts),
             },
             "edges_preview": [safe_overview_edge_preview(edge, warnings, index) for index, edge in enumerate(edge_dicts[:10])],
@@ -6329,7 +6349,7 @@ def zet_catalog_item(path: Path, root: Path, expected_status: str) -> dict[str, 
         }
     )
     referenced_zets = collect_referenced_zets(safe_frontmatter)
-    referenced_objets = collect_referenced_objets(safe_frontmatter)
+    tie_summary_objet_ids = collect_tie_summary_objet_ids(safe_frontmatter)
     referenced_receipts = collect_referenced_receipts(safe_frontmatter)
     safe_edges = [safe_overview_edge_preview(edge, warnings, index) for index, edge in enumerate(edge_dicts)]
     return {
@@ -6350,7 +6370,7 @@ def zet_catalog_item(path: Path, root: Path, expected_status: str) -> dict[str, 
             "edge_count": len(edge_dicts),
             "edge_types": edge_types,
             "referenced_zets_count": len(referenced_zets),
-            "referenced_objets_count": len(referenced_objets),
+            "referenced_objets_count": len(tie_summary_objet_ids),
             "referenced_receipts_count": len(referenced_receipts),
         },
         "edges": safe_edges,
@@ -54375,6 +54395,38 @@ def collect_referenced_objets(frontmatter: dict[str, Any]) -> list[dict[str, Any
     if isinstance(source_intake, dict):
         collect_object_refs_from_value(source_intake, "source_intake", refs)
     return unique_dicts(refs)
+
+
+def collect_tie_summary_objet_ids(frontmatter: dict[str, Any]) -> list[str]:
+    candidate_values = [
+        ref.get("value")
+        for ref in collect_referenced_objets(frontmatter)
+        if isinstance(ref, dict)
+    ]
+    edges = frontmatter.get("edges")
+    if isinstance(edges, list):
+        for edge in edges:
+            if not isinstance(edge, dict):
+                continue
+            for field in ("target", "target_id", "zettel_id"):
+                value = edge.get(field)
+                if isinstance(value, str):
+                    candidate_values.append(value)
+
+    object_ids: list[str] = []
+    seen: set[str] = set()
+    for value in candidate_values:
+        if not isinstance(value, str):
+            continue
+        match = OBJET_REF_TOKEN_RE.fullmatch(value.strip())
+        if match is None:
+            continue
+        object_id = f"sha256:{match.group('digest').lower()}"
+        if object_id in seen:
+            continue
+        seen.add(object_id)
+        object_ids.append(object_id)
+    return object_ids
 
 
 def collect_referenced_zets(frontmatter: dict[str, Any]) -> list[dict[str, Any]]:
