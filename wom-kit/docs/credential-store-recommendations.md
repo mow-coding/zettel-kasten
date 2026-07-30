@@ -29,7 +29,7 @@ OS keyring, or developer secret manager.
 v0.3.22 adds:
 
 ```powershell
-python cli\archive.py credential-store-recommendation .\my-archive `
+$env:PYTHONPATH='src'; python -m wom_kit.archive_cli credential-store-recommendation .\my-archive `
   --scenario personal_local_first `
   --platform windows `
   --dry-run `

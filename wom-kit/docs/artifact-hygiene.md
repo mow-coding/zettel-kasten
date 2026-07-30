@@ -151,8 +151,8 @@ Use the approval-gated repair command to append missing safe defaults while
 preserving existing entries:
 
 ```powershell
-python wom-kit\cli\archive.py repair-gitignore <archive-root> --dry-run --format json
-python wom-kit\cli\archive.py repair-gitignore <archive-root> --approve --reviewed-by person:me --format json
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli repair-gitignore <archive-root> --dry-run --format json
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli repair-gitignore <archive-root> --approve --reviewed-by person:me --format json
 ```
 
 `repair-gitignore` does not delete existing `.gitignore` lines, inspect source
@@ -250,9 +250,9 @@ folder is safe to remove, and WOM-kit still never deletes it for you.
 The current local cleanup flow is:
 
 ```powershell
-python wom-kit\cli\archive.py zet-self-contained-check <archive-root> --path inbox/example.md --dry-run --format json
-python wom-kit\cli\archive.py ai-scratch-gc <archive-root> --path inbox/example.md --dry-run --format json
-python wom-kit\cli\archive.py ai-scratch-gc <archive-root> --path inbox/example.md --approve --reviewed-by person:me --format json
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli zet-self-contained-check <archive-root> --path inbox/example.md --dry-run --format json
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli ai-scratch-gc <archive-root> --path inbox/example.md --dry-run --format json
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli ai-scratch-gc <archive-root> --path inbox/example.md --approve --reviewed-by person:me --format json
 ```
 
 When `mint-zet --approve` sees explicit `.wom-scratch/` or

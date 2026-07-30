@@ -6,7 +6,7 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
-## v0.3.291 - 2026-07-30
+## v0.3.291 - 2026-07-31
 
 - Extended the read-only `archive version <root>` result with a bounded
   `runtime_alignment` decision and deterministic `next_safe_actions`.
@@ -89,12 +89,32 @@ This project uses semantic versioning for public compatibility checkpoints.
   `preview_only_platform_unsupported` and
   `write_boundary.approval_platform_supported: false`; POSIX approval blocks
   until Git and complete-tree work are descriptor-relative end to end.
+- Strengthened the Windows hold from attribute-only access to directory-list
+  access, bound every retained handle to its volume/file identity, revalidated
+  the current pathname against that identity before use, and rechecked
+  containment, real components, held parent, and regular-file type immediately
+  before each tracked unlink. Incomplete internal handle/identity cache state
+  is now purged and any surviving handle is closed fail-closed.
+- Replaced extension/name guesses for CRLF-equivalent tracked text with the
+  exact bounded `git ls-files --eol -z` set, including extensionless
+  `Dockerfile`, `.dockerignore`, and `.gitkeep` paths. All five NUL-delimited
+  Git inventories now require canonical framing, nonempty records, known EOL
+  tokens, exact path-set agreement, and safe metadata whitespace before an
+  approved update can proceed.
 - Made the bridge boundary explicit: one invocation of verified project
   source, not replacement of `archive` on `PATH`, Python environment mutation,
   installer-provenance inference, process restart, or runtime Skill install.
-- Corrected the packaged runtime Skill source fallback from the nonexistent
-  `wom-kit/archive.py` to `wom-kit/cli/archive.py` and added the required
-  `--target` to its project-update preview.
+- Corrected ordinary source-checkout guidance to use `PYTHONPATH=src` plus
+  `python -m wom_kit.archive_cli`; the direct `wom-kit/cli/archive.py` wrapper
+  is now documented only as an exact verified bridge or pristine-checkout
+  recovery entrypoint. Updated both packaged runtime references, the current
+  CLI guide, and English/Korean quick verification so a preceding test run
+  cannot make the next Doctor command fail only because of `__pycache__`.
+- Documented the six stable external `WOM_BRIDGE_*` refusal codes. Every
+  direct-wrapper refusal now prints its code plus the fixed content-free
+  `WOM_BRIDGE_RECOVERY_DOC=https://github.com/mow-coding/zettel-kasten/blob/main/wom-kit/docs/version-truth-source.md#wom-bridge-refusal-codes`
+  pointer, without inspected paths, payloads, or raw exception text.
+- Kept the required `--target` in packaged project-update previews.
 - Added no global self-updater, pip/uv/pipx operation, automatic project
   update, archive mutation, provider/model/MCP write, or beta-archive
   operation. The existing project updater still fetches only after its

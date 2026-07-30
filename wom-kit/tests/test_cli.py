@@ -4392,6 +4392,12 @@ class ArchiveCliTests(unittest.TestCase):
             )
             self.assertNotEqual(preloaded.returncode, 0)
             self.assertIn("WOM_BRIDGE_PRELOADED_MODULE", preloaded.stderr)
+            self.assertIn(
+                "WOM_BRIDGE_RECOVERY_DOC=https://github.com/"
+                "mow-coding/zettel-kasten/blob/main/wom-kit/docs/"
+                "version-truth-source.md#wom-bridge-refusal-codes",
+                preloaded.stderr,
+            )
             self.assertNotIn(fake_sentinel, preloaded.stderr)
             self.assertFalse(fake_marker.exists())
             self.assertFalse(
@@ -5638,8 +5644,16 @@ class ArchiveCliTests(unittest.TestCase):
                 )
                 self.assertEqual(direct_wrapper.returncode, 1)
                 self.assertEqual(
-                    direct_wrapper.stderr.strip(),
-                    "WOM_BRIDGE_SOURCE_TREE_UNSAFE",
+                    direct_wrapper.stderr.strip().splitlines(),
+                    [
+                        "WOM_BRIDGE_SOURCE_TREE_UNSAFE",
+                        (
+                            "WOM_BRIDGE_RECOVERY_DOC=https://github.com/"
+                            "mow-coding/zettel-kasten/blob/main/wom-kit/docs/"
+                            "version-truth-source.md#"
+                            "wom-bridge-refusal-codes"
+                        ),
+                    ],
                 )
                 self.assertEqual(direct_wrapper.stdout, "")
 
@@ -8585,12 +8599,50 @@ class ArchiveCliTests(unittest.TestCase):
                     dry_run=True,
                 )
             )
-            self.assertTrue(
-                archive_services.wom_kit_project_update_materialize_commit(
-                    repository,
-                    target_commit,
+            if os.name == "nt":
+                self.assertFalse(
+                    archive_services.wom_kit_project_update_materialize_commit(
+                        repository,
+                        target_commit,
+                    )
                 )
+                self.assertEqual(
+                    self.git_fixture_command(
+                        repository,
+                        "rev-parse",
+                        "HEAD",
+                    ),
+                    old_commit,
+                )
+            directory_guard = (
+                archive_services.WomKitProjectUpdateDirectoryGuard(repository)
             )
+            try:
+                self.assertTrue(
+                    directory_guard.hold_existing_tree(repository)
+                )
+                for expected_commit in (
+                    target_commit,
+                    old_commit,
+                    target_commit,
+                ):
+                    self.assertTrue(
+                        archive_services.wom_kit_project_update_materialize_commit(
+                            repository,
+                            expected_commit,
+                            directory_guard=directory_guard,
+                        )
+                    )
+                    self.assertEqual(
+                        self.git_fixture_command(
+                            repository,
+                            "rev-parse",
+                            "HEAD",
+                        ),
+                        expected_commit,
+                    )
+            finally:
+                directory_guard.close()
             self.assertEqual(
                 self.git_fixture_command(repository, "rev-parse", "HEAD"),
                 target_commit,
@@ -8606,6 +8658,147 @@ class ArchiveCliTests(unittest.TestCase):
                 "new file\n",
             )
             self.assertEqual(ignored_path.read_bytes(), ignored_bytes)
+
+    def test_project_update_directory_guard_revalidates_identity_and_blocks_windows_rename(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp) / "project"
+            held_directory = project_root / "held"
+            held_directory.mkdir(parents=True)
+            guard = archive_services.WomKitProjectUpdateDirectoryGuard(
+                project_root
+            )
+            try:
+                self.assertTrue(guard.hold(project_root))
+                self.assertTrue(guard.hold(held_directory))
+                (held_directory / "normal-write.txt").write_bytes(
+                    b"normal child writes remain available\n"
+                )
+                replacement = project_root / "replacement"
+                if os.name == "nt":
+                    renamed = subprocess.run(
+                        [
+                            sys.executable,
+                            "-c",
+                            (
+                                "import os, sys; "
+                                "os.rename(sys.argv[1], sys.argv[2])"
+                            ),
+                            str(held_directory),
+                            str(replacement),
+                        ],
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                        timeout=30,
+                    )
+                    self.assertNotEqual(renamed.returncode, 0)
+                    self.assertTrue(held_directory.is_dir())
+                    self.assertFalse(replacement.exists())
+                    self.assertTrue(guard.is_held(held_directory))
+                else:
+                    held_directory.rename(replacement)
+                    held_directory.mkdir()
+                    self.assertFalse(guard.is_held(held_directory))
+            finally:
+                guard.close()
+
+    def test_project_update_directory_guard_drops_incomplete_cached_state(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp) / "project"
+            held_directory = project_root / "held"
+            held_directory.mkdir(parents=True)
+            guard = archive_services.WomKitProjectUpdateDirectoryGuard(
+                project_root
+            )
+            key = guard._key(held_directory)
+            try:
+                self.assertTrue(guard.hold(held_directory))
+                self.assertIn(key, guard._handles)
+                guard._identities.pop(key)
+
+                with patch.object(
+                    guard,
+                    "_close_handle",
+                    wraps=guard._close_handle,
+                ) as close_handle:
+                    self.assertFalse(guard.is_held(held_directory))
+                    close_handle.assert_called_once()
+                    guard.close()
+                    close_handle.assert_called_once()
+                self.assertNotIn(key, guard._handles)
+                self.assertNotIn(key, guard._identities)
+
+                guard._identities[key] = (1, 2)
+                self.assertFalse(guard.is_held(held_directory))
+                self.assertNotIn(key, guard._handles)
+                self.assertNotIn(key, guard._identities)
+            finally:
+                guard.close()
+
+    def test_project_update_unlink_gate_preserves_file_behind_reparse_parent(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            project_root = tmp_root / "project"
+            project_root.mkdir()
+            external_root = tmp_root / "external"
+            external_root.mkdir()
+            external_file = external_root / "outside.txt"
+            external_bytes = b"OUTSIDE_FILE_MUST_NOT_CHANGE\n"
+            external_file.write_bytes(external_bytes)
+            routed_parent = project_root / "routed"
+            if os.name == "nt":
+                created = subprocess.run(
+                    [
+                        "cmd",
+                        "/d",
+                        "/c",
+                        "mklink",
+                        "/J",
+                        str(routed_parent),
+                        str(external_root),
+                    ],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+                if created.returncode != 0:
+                    self.skipTest(
+                        "Windows directory junctions are unavailable"
+                    )
+            else:
+                try:
+                    routed_parent.symlink_to(
+                        external_root,
+                        target_is_directory=True,
+                    )
+                except OSError:
+                    self.skipTest("directory symlinks are unavailable")
+            guard = archive_services.WomKitProjectUpdateDirectoryGuard(
+                project_root
+            )
+            try:
+                self.assertTrue(guard.hold(project_root))
+                self.assertFalse(
+                    archive_services.wom_kit_project_update_unlink_tracked_file(
+                        project_root,
+                        routed_parent / external_file.name,
+                        directory_guard=guard,
+                    )
+                )
+                self.assertEqual(external_file.read_bytes(), external_bytes)
+            finally:
+                guard.close()
+                if os.name == "nt" and routed_parent.exists():
+                    routed_parent.rmdir()
+                elif routed_parent.is_symlink():
+                    routed_parent.unlink()
 
     def test_project_update_capped_runner_rejects_oversized_stdout_promptly(
         self,
@@ -9078,8 +9271,21 @@ class ArchiveCliTests(unittest.TestCase):
                     "user.email",
                     "archive-test.invalid",
                 )
-                text_path = repository / "notes.txt"
-                text_path.write_bytes(b"line-one\nline-two\n")
+                text_paths = [
+                    repository / "notes.txt",
+                    repository / "wom-kit" / "Dockerfile",
+                    repository / "wom-kit" / ".dockerignore",
+                    repository
+                    / "wom-kit"
+                    / "examples"
+                    / "fake-life-archive"
+                    / "receipts"
+                    / "sources"
+                    / ".gitkeep",
+                ]
+                for text_path in text_paths:
+                    text_path.parent.mkdir(parents=True, exist_ok=True)
+                    text_path.write_bytes(b"line-one\nline-two\n")
                 self.git_fixture_command(repository, "add", ".")
                 self.git_fixture_command(
                     repository,
@@ -9092,7 +9298,8 @@ class ArchiveCliTests(unittest.TestCase):
                     "rev-parse",
                     "HEAD",
                 )
-                text_path.write_bytes(b"line-one\r\nline-two\r\n")
+                for text_path in text_paths:
+                    text_path.write_bytes(b"line-one\r\nline-two\r\n")
 
                 snapshot = (
                     archive_services.wom_kit_project_update_git_snapshot(
@@ -9102,7 +9309,11 @@ class ArchiveCliTests(unittest.TestCase):
 
             self.assertIsNotNone(snapshot)
             self.assertTrue(snapshot["raw_bytes_match_head"])
-            self.assertIn("notes.txt", snapshot["eol_overrides"])
+            for text_path in text_paths:
+                self.assertIn(
+                    text_path.relative_to(repository).as_posix(),
+                    snapshot["eol_overrides"],
+                )
             self.assertTrue(
                 archive_services.wom_kit_project_update_snapshot_is_clean(
                     snapshot,
@@ -9110,6 +9321,139 @@ class ArchiveCliTests(unittest.TestCase):
                     expected_branch="main",
                 )
             )
+
+    def test_project_update_snapshot_rejects_noncanonical_nul_records(
+        self,
+    ) -> None:
+        if shutil.which("git") is None:
+            self.skipTest("git is required for the snapshot regression")
+        with tempfile.TemporaryDirectory() as tmp:
+            repository = Path(tmp) / "repository"
+            repository.mkdir()
+            self.git_fixture_command(repository, "init", "-b", "main")
+            self.git_fixture_command(
+                repository,
+                "config",
+                "user.name",
+                "archive-test",
+            )
+            self.git_fixture_command(
+                repository,
+                "config",
+                "user.email",
+                "archive-test.invalid",
+            )
+            (repository / "tracked.txt").write_text(
+                "tracked\n",
+                encoding="utf-8",
+            )
+            self.git_fixture_command(repository, "add", "tracked.txt")
+            self.git_fixture_command(
+                repository,
+                "commit",
+                "-m",
+                "NUL record fixture",
+            )
+            (repository / "untracked.txt").write_text(
+                "untracked\n",
+                encoding="utf-8",
+            )
+            real_git = archive_services.wom_kit_project_update_git
+            nul_commands = (
+                ("ls-tree", "-r", "-z", "HEAD"),
+                ("ls-files", "--stage", "-z"),
+                ("ls-files", "-v", "-z"),
+                ("ls-files", "--eol", "-z"),
+                (
+                    "ls-files",
+                    "--others",
+                    "--exclude-standard",
+                    "-z",
+                ),
+            )
+            for target_args in nul_commands:
+                for corruption in ("missing_terminator", "empty_record"):
+                    with self.subTest(
+                        command=target_args,
+                        corruption=corruption,
+                    ):
+
+                        def corrupt_git_output(
+                            mirror_path: Path,
+                            args: list[str],
+                            **kwargs: Any,
+                        ) -> tuple[bool, str]:
+                            ok, value = real_git(
+                                mirror_path,
+                                args,
+                                **kwargs,
+                            )
+                            if tuple(args) != target_args or not ok:
+                                return ok, value
+                            self.assertTrue(value.endswith("\0"))
+                            if corruption == "missing_terminator":
+                                return True, value[:-1]
+                            return True, value + "\0"
+
+                        with patch.object(
+                            archive_services,
+                            "wom_kit_project_update_git",
+                            side_effect=corrupt_git_output,
+                        ):
+                            self.assertIsNone(
+                                archive_services
+                                .wom_kit_project_update_git_snapshot(
+                                    repository
+                                )
+                            )
+
+            for corruption in ("unknown_token", "control_whitespace"):
+                with self.subTest(
+                    command=("ls-files", "--eol", "-z"),
+                    corruption=corruption,
+                ):
+
+                    def corrupt_eol_output(
+                        mirror_path: Path,
+                        args: list[str],
+                        **kwargs: Any,
+                    ) -> tuple[bool, str]:
+                        ok, value = real_git(
+                            mirror_path,
+                            args,
+                            **kwargs,
+                        )
+                        if tuple(args) != (
+                            "ls-files",
+                            "--eol",
+                            "-z",
+                        ) or not ok:
+                            return ok, value
+                        if corruption == "unknown_token":
+                            return True, re.sub(
+                                r"^i/\S+",
+                                "i/unknown",
+                                value,
+                                count=1,
+                            )
+                        return True, re.sub(
+                            r"^(i/\S+)[ ]+(w/\S+)",
+                            "\\1\v\\2",
+                            value,
+                            count=1,
+                        )
+
+                    with patch.object(
+                        archive_services,
+                        "wom_kit_project_update_git",
+                        side_effect=corrupt_eol_output,
+                    ):
+                        self.assertIsNone(
+                            archive_services
+                            .wom_kit_project_update_git_snapshot(
+                                repository
+                            )
+                        )
 
     def test_project_update_lock_rejects_reparse_and_identity_replacement(
         self,
@@ -9656,11 +10000,17 @@ class ArchiveCliTests(unittest.TestCase):
                 "true",
             )
             (repository / ".gitattributes").write_text(
-                "*.bin -text\n",
+                "*.bin -text\nDockerfile -text\n",
                 encoding="utf-8",
             )
-            binary_path = repository / "payload.bin"
-            binary_path.write_bytes(b"binary-line-one\nbinary-line-two\n")
+            binary_paths = [
+                repository / "payload.bin",
+                repository / "Dockerfile",
+            ]
+            for binary_path in binary_paths:
+                binary_path.write_bytes(
+                    b"binary-line-one\nbinary-line-two\n"
+                )
             self.git_fixture_command(repository, "add", ".")
             self.git_fixture_command(
                 repository,
@@ -9673,9 +10023,10 @@ class ArchiveCliTests(unittest.TestCase):
                 "rev-parse",
                 "HEAD",
             )
-            binary_path.write_bytes(
-                b"binary-line-one\r\nbinary-line-two\r\n"
-            )
+            for binary_path in binary_paths:
+                binary_path.write_bytes(
+                    b"binary-line-one\r\nbinary-line-two\r\n"
+                )
 
             snapshot = (
                 archive_services.wom_kit_project_update_git_snapshot(
@@ -9684,7 +10035,11 @@ class ArchiveCliTests(unittest.TestCase):
             )
             self.assertIsNotNone(snapshot)
             self.assertFalse(snapshot["raw_bytes_match_head"])
-            self.assertNotIn("payload.bin", snapshot["eol_overrides"])
+            for binary_path in binary_paths:
+                self.assertNotIn(
+                    binary_path.relative_to(repository).as_posix(),
+                    snapshot["eol_overrides"],
+                )
             self.assertFalse(
                 archive_services.wom_kit_project_update_snapshot_is_clean(
                     snapshot,
@@ -65752,8 +66107,9 @@ archive_services.zet_abstract_backfill_recover(
         ) -> tuple[int, bytes, bytes]:
             env = dict(os.environ)
             env["PYTHONDONTWRITEBYTECODE"] = "1"
+            env["PYTHONPATH"] = str(SRC_ROOT)
             with subprocess.Popen(
-                [sys.executable, str(KIT_ROOT / "cli" / "archive.py"), *args],
+                [sys.executable, "-m", "wom_kit.archive_cli", *args],
                 cwd=KIT_ROOT,
                 env=env,
                 stdout=subprocess.PIPE,
@@ -76017,10 +76373,14 @@ class ObjetCaptureTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self._facet_archive(tmp)
             output_relative = ".wom-scratch/diagnostics/index-health-subprocess.json"
+            child_env = dict(os.environ)
+            child_env["PYTHONDONTWRITEBYTECODE"] = "1"
+            child_env["PYTHONPATH"] = str(SRC_ROOT)
             completed = subprocess.run(
                 [
                     sys.executable,
-                    str(KIT_ROOT / "cli" / "archive.py"),
+                    "-m",
+                    "wom_kit.archive_cli",
                     "index-health",
                     str(archive_root),
                     "--dry-run",
@@ -76033,6 +76393,8 @@ class ObjetCaptureTests(unittest.TestCase):
                 stderr=subprocess.PIPE,
                 text=True,
                 check=False,
+                cwd=KIT_ROOT,
+                env=child_env,
             )
 
             self.assertEqual(completed.returncode, 0, completed.stderr)
@@ -76171,10 +76533,20 @@ class ObjetCaptureTests(unittest.TestCase):
             env = dict(os_module.environ)
             env.pop("PYTHONUTF8", None)
             env["PYTHONIOENCODING"] = "cp949"
+            env["PYTHONDONTWRITEBYTECODE"] = "1"
+            env["PYTHONPATH"] = str(SRC_ROOT)
             result = subprocess.run(
-                [sys.executable, str(KIT_ROOT / "cli" / "archive.py"), "search", str(archive_root), "snowman"],
+                [
+                    sys.executable,
+                    "-m",
+                    "wom_kit.archive_cli",
+                    "search",
+                    str(archive_root),
+                    "snowman",
+                ],
                 capture_output=True,
                 env=env,
+                cwd=KIT_ROOT,
             )
             stderr_text = result.stderr.decode("utf-8", errors="replace")
             self.assertEqual(result.returncode, 0, stderr_text)

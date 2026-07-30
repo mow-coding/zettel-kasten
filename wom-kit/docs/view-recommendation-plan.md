@@ -23,7 +23,7 @@ archive view-recommendation-plan <archive-root> --dry-run
 ```
 
 ```powershell
-python wom-kit\cli\archive.py view-recommendation-plan <archive-root> `
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli view-recommendation-plan <archive-root> `
   --dry-run `
   --format json
 ```

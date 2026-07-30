@@ -52,16 +52,27 @@ Progress lines are liveness evidence, not the result. Make the final decision
 from the captured JSON result and exit code. If the command is interrupted,
 report the last completed phase and do not present partial output as success.
 
-## Fallback When The Console Script Is Missing
+## Development Fallback When The Console Script Is Missing
 
-From a source checkout, use the repository entry point only as a fallback:
+From an active source checkout, use the package module. In PowerShell from
+inside `wom-kit/`:
 
-```text
-python wom-kit/cli/archive.py ai-start-here <archive-root> --dry-run --progress --format json
+```powershell
+$env:PYTHONPATH = "src"
+python -m wom_kit.archive_cli ai-start-here <archive-root> --dry-run --progress --format json
+```
+
+In a POSIX shell from inside `wom-kit/`:
+
+```bash
+PYTHONPATH=src python -m wom_kit.archive_cli ai-start-here <archive-root> --dry-run --progress --format json
 ```
 
 An installed wheel should normally expose `archive`, `wom`, `archive-mcp`, and
-`wom-mcp` directly.
+`wom-mcp` directly. Do not substitute `python wom-kit/cli/archive.py` in an
+active development tree. That direct wrapper is reserved for a verified
+`bridge_argv` or a pristine-checkout recovery attempt and may intentionally
+refuse caches, extra source, or modified tracked bytes.
 
 ## Update Without Hand Editing
 

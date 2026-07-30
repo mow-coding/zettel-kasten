@@ -23,7 +23,7 @@ delegate, attest, anchor, none 중 무엇인가?
 ## CLI
 
 ```powershell
-python wom-kit\cli\archive.py shared-update-route-preview <archive-root> --record <archive-relative-json> --dry-run --format json
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli shared-update-route-preview <archive-root> --record <archive-relative-json> --dry-run --format json
 ```
 
 `--record` 경로는 archive root 안에 있는 archive-relative 경로여야

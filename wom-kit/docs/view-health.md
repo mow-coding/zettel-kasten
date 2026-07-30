@@ -28,7 +28,7 @@ archive view-health <archive-root> --dry-run
 ```
 
 ```powershell
-python wom-kit\cli\archive.py view-health <archive-root> `
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli view-health <archive-root> `
   --dry-run `
   --format json
 ```

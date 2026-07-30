@@ -20,7 +20,7 @@ archive notion-objet-link-convert <archive-root> --path inbox/example.md --locat
 ```
 
 ```powershell
-python wom-kit\cli\archive.py notion-objet-link-convert <archive-root> `
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli notion-objet-link-convert <archive-root> `
   --path inbox/example.md `
   --locator-fingerprint sha256:<64 lowercase hex characters> `
   --object-id sha256:<64 lowercase hex characters> `

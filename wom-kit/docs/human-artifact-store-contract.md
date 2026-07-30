@@ -37,7 +37,7 @@ playing for this archive, this project, and this action.
 ## CLI Preview
 
 ```powershell
-python wom-kit\cli\archive.py human-artifact-store wom-kit\examples\fake-life-archive `
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli human-artifact-store wom-kit\examples\fake-life-archive `
   --dry-run `
   --surface-kind joplin `
   --surface-ref joplin:notebook:work `

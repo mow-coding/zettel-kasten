@@ -385,3 +385,121 @@ Still required after independent review and the exact v0.3.290 rebase:
 This branch starts from the local v0.3.290 checkpoint. It cannot be published
 until v0.3.287 through v0.3.290 are public and this candidate is rebased onto
 their exact final chain.
+
+## 2026-07-31 Independent Audit Correction And Resumed Release Work
+
+The operator returned after repeated Codex Desktop interruptions and explicitly
+asked the release work to continue while they slept. They were frustrated that
+the application displayed `Task encountered a system error` and a
+cybersecurity-risk explanation even though WOM is being built to make AI use
+safer and more auditable.
+
+The observable failure in this thread came from one delegated review prompt
+that described the already-reported Windows junction race in detailed
+reproduction terms. The delegated agent was stopped by an automated
+cybersecurity classifier. This was not evidence that the operator, WOM, or the
+repository had been classified as malicious, and the primary implementation
+thread remained usable. The working mitigation is to keep the existing local
+defensive regression and invariant verification in the primary thread and to
+delegate only bounded defensive-code, documentation, and release-honesty
+reviews. No security boundary is being weakened to avoid the classifier.
+
+The independent Claude follow-up audit was read in full from the canonical
+project record:
+
+```text
+meeting-minutes/2026-07-30-claude-followup-audit-agent-identity-provenance-and-release-evidence-report.md
+```
+
+Observed file evidence:
+
+```text
+bytes: 88021
+sha256: ebfdfe2d212bfda9e40f5a69cf540c5b757febc60e7f3981d359864153a0a542
+```
+
+The Claude client transcript recorded two explicit
+`claude-fable-5` to `claude-opus-5` fallback events. This supports describing
+that audit as a mixed-client-model workflow, not as the product of one model.
+It does not attest which hidden backend served every token. The current Codex
+turn metadata was inspected directly and exposed requested model label
+`gpt-5.6-sol` with reasoning effort `ultra`. That is request/runtime metadata,
+not cryptographic backend attestation. Public AI-contribution provenance will
+therefore be handled as a separate evidence-focused release batch rather than
+guessed from UI labels or role names.
+
+### Corrected release state
+
+- v0.3.289 was built from exact commit
+  `20e794f7aeaf8c3b9c5711f5fec18542380d4143`, published, downloaded
+  anonymously, and verified against wheel SHA-256
+  `8f773baf8c31b82496965bb77ac68662a0f3129d861e7cbca315cd3f7fe975ee`.
+  Its tag CI completed successfully.
+- PR #32 was merged at exact commit
+  `1c7223c75639679db7064ed6b623b45a1de9f99a`. v0.3.290 was built from
+  that detached commit, published, anonymously downloaded, and matched to
+  wheel SHA-256
+  `3fee602b5cfef5ce33b87ae96dde68dad488ab37764910e0a738bd57304586af`.
+  Main CI passed; tag CI run `30556109131` was still in progress at this
+  checkpoint and must not be reported as complete early.
+- The v0.3.291 branch was rebased onto that exact v0.3.290 merge. Its current
+  replayed head before the audit fixes is
+  `b5fa5b5dbf0b6b7bf74f9157de59343f6ffeb8aa`.
+
+### v0.3.291 audit correction
+
+The follow-up audit reproduced a release-blocking directory-identity defect in
+the v0.3.291-only updater. The corrected implementation now holds Windows
+directories without delete sharing, requests directory-list access, binds and
+revalidates directory identity, validates parent identity immediately before
+tracked-file unlink, and refuses an approved Windows mutation without a valid
+held root. The preserved local regression changed from four outside-tree
+deletions in four trials to four blocked directory renames and zero outside
+deletions. Focused project-update and runtime-alignment selections pass.
+
+The Git snapshot now derives its exact tracked-file set from bounded
+`git ls-files --eol -z` output instead of an extension/name allowlist. This
+includes extensionless tracked text such as `Dockerfile`, `.dockerignore`, and
+`.gitkeep`, while permitting CRLF equivalence only under the narrowly verified
+Git/autocrlf and blob-normalization contract.
+
+The source-process tests and normal developer guidance are being aligned on
+the source module launcher:
+
+```text
+PYTHONPATH=src python -m wom_kit.archive_cli
+```
+
+The direct `wom-kit\cli\archive.py` wrapper remains only a verified
+source-isolated bridge/pristine-recovery path and emits six stable external
+`WOM_BRIDGE_*` refusal codes plus a content-free recovery pointer.
+
+An independent release-honesty scan then found a new P1: 137 ordinary
+direct-wrapper invocations remained across 34 active public documents,
+including the package/PyPI README and beginner walkthroughs. Historical
+release records, work logs, the dated security audit, and true bridge/negative
+examples must remain unchanged. The 34 active files and their three legacy
+documentation assertions are being corrected before the complete suite,
+commit, PR, or v0.3.291 release. This prevents a green test subset from
+supporting a public documentation claim that is not yet repo-wide true.
+
+The 34 active files were corrected without rewriting 61 historical command
+examples or true bridge/negative descriptions. A new 34-file documentation
+regression protects the distinction. Capability/documentation plus package
+resource verification passed 153 tests, and active ordinary direct-wrapper
+invocations are zero.
+
+The final defensive review found no additional P0 or P1. Two P2 hardening
+items were fixed before the complete suite:
+
+- incomplete handle/identity cache state now drops both entries and closes a
+  surviving handle exactly once; and
+- tree, index, flag, EOL, and untracked `-z` output now requires canonical NUL
+  termination, rejects empty interior records, control whitespace, and unknown
+  EOL tokens, and fails closed before snapshot use.
+
+The combined Windows `project*update` regression selection then passed 44
+tests in 411.630 seconds. The first invocation selected zero tests because its
+name filter lacked the leading/trailing wildcards; it was an execution-filter
+mistake, not a code result, and the corrected rerun above is the accepted
+evidence.

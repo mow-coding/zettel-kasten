@@ -32,7 +32,7 @@ source map writes: only after --approve --reviewed-by
 From inside `wom-kit/`:
 
 ```powershell
-python cli\archive.py pilot-plan `
+$env:PYTHONPATH='src'; python -m wom_kit.archive_cli pilot-plan `
   --personal-root .\archives\personal-life `
   --team-root .\archives\team-archive `
   --personal-principal-id person:me `
@@ -62,13 +62,13 @@ team archive:
 After creating an archive, run:
 
 ```powershell
-python cli\archive.py preflight .\archives\personal-life --strict --check-docker
+$env:PYTHONPATH='src'; python -m wom_kit.archive_cli preflight .\archives\personal-life --strict --check-docker
 ```
 
 For team/personal separation:
 
 ```powershell
-python cli\archive.py preflight .\archives\personal-life --peer-archive .\archives\team-archive --strict
+$env:PYTHONPATH='src'; python -m wom_kit.archive_cli preflight .\archives\personal-life --peer-archive .\archives\team-archive --strict
 ```
 
 Preflight checks:
@@ -107,15 +107,15 @@ Preflight warns about broad but sometimes intentional folders, such as Desktop, 
 Before connecting real sources, verify that the archive control plane can be restored:
 
 ```powershell
-python cli\archive.py recovery-plan .\archives\personal-life --format json
-python cli\archive.py restore-drill .\archives\personal-life --target C:\tmp\personal-life-restore --dry-run --format json
-python cli\archive.py restore-drill .\archives\personal-life --target C:\tmp\personal-life-restore --approve --reviewed-by person:me
+$env:PYTHONPATH='src'; python -m wom_kit.archive_cli recovery-plan .\archives\personal-life --format json
+$env:PYTHONPATH='src'; python -m wom_kit.archive_cli restore-drill .\archives\personal-life --target C:\tmp\personal-life-restore --dry-run --format json
+$env:PYTHONPATH='src'; python -m wom_kit.archive_cli restore-drill .\archives\personal-life --target C:\tmp\personal-life-restore --approve --reviewed-by person:me
 ```
 
 After a successful drill, preflight can require it:
 
 ```powershell
-python cli\archive.py preflight .\archives\personal-life --strict --require-restore-drill
+$env:PYTHONPATH='src'; python -m wom_kit.archive_cli preflight .\archives\personal-life --strict --require-restore-drill
 ```
 
 The restore drill copies only the archive control plane. It does not copy every PC, SSD, SaaS, or object-storage original.
@@ -125,12 +125,12 @@ The restore drill copies only the archive control plane. It does not copy every 
 Use this order:
 
 ```powershell
-python cli\archive.py onboard --target-root .\archives\personal-life --type personal --archive-id archive:personal:life --principal-id person:me --dry-run
-python cli\archive.py onboard --target-root .\archives\personal-life --type personal --archive-id archive:personal:life --principal-id person:me --approve
-python cli\archive.py preflight .\archives\personal-life --strict
-python cli\archive.py restore-drill .\archives\personal-life --target C:\tmp\personal-life-restore --dry-run
-python cli\archive.py add-source .\archives\personal-life --source-id local:first-folder --type local_folder --dry-run
-python cli\archive.py scan-source .\archives\personal-life --source local:first-folder --source-root <narrow-folder> --dry-run
+$env:PYTHONPATH='src'; python -m wom_kit.archive_cli onboard --target-root .\archives\personal-life --type personal --archive-id archive:personal:life --principal-id person:me --dry-run
+$env:PYTHONPATH='src'; python -m wom_kit.archive_cli onboard --target-root .\archives\personal-life --type personal --archive-id archive:personal:life --principal-id person:me --approve
+$env:PYTHONPATH='src'; python -m wom_kit.archive_cli preflight .\archives\personal-life --strict
+$env:PYTHONPATH='src'; python -m wom_kit.archive_cli restore-drill .\archives\personal-life --target C:\tmp\personal-life-restore --dry-run
+$env:PYTHONPATH='src'; python -m wom_kit.archive_cli add-source .\archives\personal-life --source-id local:first-folder --type local_folder --dry-run
+$env:PYTHONPATH='src'; python -m wom_kit.archive_cli scan-source .\archives\personal-life --source local:first-folder --source-root <narrow-folder> --dry-run
 ```
 
 Only approve a scan after the dry-run item count and source root look right.

@@ -27,7 +27,7 @@ does not read, store, print, or retrieve the real secret value.
 ## Preview
 
 ```powershell
-python cli\archive.py credential-access-approval-plan .\my-archive `
+$env:PYTHONPATH='src'; python -m wom_kit.archive_cli credential-access-approval-plan .\my-archive `
   --credential-id cred:openai-api `
   --credential-ref secret:keepassxc-openai-api `
   --action-kind model_api_call `
@@ -39,7 +39,7 @@ python cli\archive.py credential-access-approval-plan .\my-archive `
 ## Record A Reviewed Receipt
 
 ```powershell
-python cli\archive.py credential-access-approval .\my-archive `
+$env:PYTHONPATH='src'; python -m wom_kit.archive_cli credential-access-approval .\my-archive `
   --credential-id cred:openai-api `
   --credential-ref secret:keepassxc-openai-api `
   --action-kind plaintext_secret_migration `

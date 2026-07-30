@@ -15,7 +15,7 @@ regenerable layer that records how the text was produced.
 ## Single-File Command
 
 ```powershell
-python wom-kit\cli\archive.py derive-text capture <archive-root> `
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli derive-text capture <archive-root> `
   --text-file <utf8-text-file> `
   --source-object-id sha256:<64-hex> `
   --derivation-kind parser `
@@ -31,7 +31,7 @@ Use `--approve --reviewed-by <actor>` only after reviewing the dry-run.
 Before claiming extraction is complete, run the read-only coverage gate:
 
 ```powershell
-python wom-kit\cli\archive.py derive-text coverage <archive-root> `
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli derive-text coverage <archive-root> `
   --dry-run `
   --format json
 ```
@@ -41,7 +41,7 @@ See [Derived Text Coverage And Toolchain](derived-text-coverage-and-toolchain.md
 Before choosing extraction tools, run the read-only local readiness doctor:
 
 ```powershell
-python wom-kit\cli\archive.py derive-text doctor <archive-root> `
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli derive-text doctor <archive-root> `
   --dry-run `
   --format json
 ```
@@ -49,7 +49,7 @@ python wom-kit\cli\archive.py derive-text doctor <archive-root> `
 If an extractor is installed outside `PATH`, pass a local hint file:
 
 ```powershell
-python wom-kit\cli\archive.py derive-text doctor <archive-root> `
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli derive-text doctor <archive-root> `
   --tool-hints local-tool-hints.json `
   --dry-run `
   --format json
@@ -64,7 +64,7 @@ the hint file path or executable paths.
 For hundreds or thousands of already extracted text files, use a JSONL manifest:
 
 ```powershell
-python wom-kit\cli\archive.py derive-text capture <archive-root> `
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli derive-text capture <archive-root> `
   --from-manifest derived-text-ledger.jsonl `
   --dry-run `
   --format json
@@ -149,7 +149,7 @@ example Samsung Voice Recorder's `.m4a` + UTF-16 `.txt`), ONE reviewed
 selection manifest can approve both halves:
 
 ```powershell
-python wom-kit\cli\archive.py objet-capture-selection <archive-root> `
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli objet-capture-selection <archive-root> `
   --staged-path staging/incoming/call-2026-07-01.m4a `
   --source-intake-receipt receipts/sources/<plan>.json `
   --derived-text-staged-path staging/incoming/call-2026-07-01.txt `

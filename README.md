@@ -556,7 +556,7 @@ Start with [Public Documentation Map](wom-kit/docs/public-documentation-map.md) 
 ```bash
 cd wom-kit
 python -m unittest discover -s tests
-python cli/archive.py doctor examples/fake-life-archive --strict
+PYTHONPATH=src python -m wom_kit.archive_cli doctor examples/fake-life-archive --strict
 ```
 
 Expected result:
@@ -565,6 +565,11 @@ Expected result:
 tests pass
 doctor reports 0 errors and 0 warnings
 ```
+
+The direct `wom-kit/cli/archive.py` wrapper is a verified bridge and pristine
+checkout recovery entrypoint, not the normal development launcher. Use the
+module form above in an active source tree, including after tests have created
+bytecode caches.
 
 ## Privacy Boundary
 
