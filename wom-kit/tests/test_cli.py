@@ -10374,6 +10374,318 @@ state:
             self.assertTrue(object_result["target"]["verified"])
             self.assertEqual(object_result["target"]["manifest_path"], "objects/manifests/files.jsonl")
 
+    def test_zettel_edge_type_contract_blocks_incompatible_targets_without_mutation_or_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            source_id = "zet_20240504_fake_lunch_thought"
+            zettel_target = "zet_20240505_fake_company_onboarding_insight"
+            object_target = f"sha256:{_FAKE_SHA_A}"
+            before = self.snapshot_archive_files(archive_root)
+
+            incompatible_cases = (
+                ("continues", object_target, "objet", "OriginalObject"),
+                ("embed", zettel_target, "zettel", "Zettel"),
+            )
+            for edge_type, target_ref, target_kind, target_entity_type in incompatible_cases:
+                for mode in ("dry-run", "approve"):
+                    with self.subTest(edge_type=edge_type, target_kind=target_kind, mode=mode):
+                        args = [
+                            "zettel-edge",
+                            str(archive_root),
+                            "--from-zettel",
+                            source_id,
+                            "--target",
+                            target_ref,
+                            "--edge-type",
+                            edge_type,
+                            f"--{mode}",
+                        ]
+                        if mode == "approve":
+                            args.extend(["--reviewed-by", "person:type-contract-reviewer"])
+                        args.extend(["--format", "json"])
+
+                        code, output = self.run_cli(args)
+                        result = json.loads(output)
+
+                        self.assertEqual(code, 1, output)
+                        self.assertFalse(result["ok"])
+                        self.assertEqual(result["write_status"], "blocked")
+                        self.assertEqual(result["target"]["kind"], target_kind)
+                        self.assertEqual(
+                            result["entity_type_contract"],
+                            {
+                                "registry_source": "archive_local",
+                                "source_entity_type": "Zettel",
+                                "target_entity_type": target_entity_type,
+                                "from_allowed": True,
+                                "to_allowed": False,
+                                "status": "blocked",
+                                "blocker_codes": ["target_entity_type_disallowed"],
+                            },
+                        )
+                        self.assertEqual(result["files_written"], [])
+                        self.assertFalse(result["closed_actions"]["zettel_frontmatter_written"])
+                        self.assertFalse(result["closed_actions"]["receipt_written"])
+                        self.assertEqual(self.snapshot_archive_files(archive_root), before)
+                        self.assertFalse((archive_root / result["receipt_path"]).exists())
+
+    def test_zettel_edge_type_contract_missing_malformed_empty_and_disallowed_fields_fail_closed(self) -> None:
+        missing = object()
+        private_registry_value = "PRIVATE_REGISTRY_VALUE_C:\\private\\types-secret.yml"
+        cases = (
+            ("source_disallowed", "from", ["View"], "blocked", "source_entity_type_disallowed", False),
+            ("from_missing", "from", missing, "malformed", "link_type_contract_from_invalid", None),
+            ("from_empty", "from", [], "malformed", "link_type_contract_from_invalid", None),
+            (
+                "from_malformed",
+                "from",
+                private_registry_value,
+                "malformed",
+                "link_type_contract_from_invalid",
+                None,
+            ),
+            ("to_missing", "to", missing, "malformed", "link_type_contract_to_invalid", None),
+            ("to_empty", "to", [], "malformed", "link_type_contract_to_invalid", None),
+            (
+                "to_malformed",
+                "to",
+                {"private_path": private_registry_value},
+                "malformed",
+                "link_type_contract_to_invalid",
+                None,
+            ),
+        )
+
+        for case_name, field, value, status, blocker_code, invalid_dimension_value in cases:
+            for mode in ("dry-run", "approve"):
+                with self.subTest(case=case_name, mode=mode), tempfile.TemporaryDirectory() as tmp:
+                    archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+                    types_path = archive_root / "zettel-kasten" / "types.yml"
+                    types_data = archive_cli.load_yaml(types_path.read_text(encoding="utf-8"))
+                    continues_contract = next(
+                        item
+                        for item in types_data["link_types"]
+                        if isinstance(item, dict) and item.get("id") == "continues"
+                    )
+                    if value is missing:
+                        continues_contract.pop(field, None)
+                    else:
+                        continues_contract[field] = copy.deepcopy(value)
+                    types_path.write_text(archive_cli.dump_yaml(types_data), encoding="utf-8")
+                    before = self.snapshot_archive_files(archive_root)
+
+                    args = [
+                        "zettel-edge",
+                        str(archive_root),
+                        "--from-zettel",
+                        "zet_20240504_fake_lunch_thought",
+                        "--target",
+                        "zet_20240505_fake_company_onboarding_insight",
+                        "--edge-type",
+                        "continues",
+                        f"--{mode}",
+                    ]
+                    if mode == "approve":
+                        args.extend(["--reviewed-by", "person:type-contract-reviewer"])
+                    args.extend(["--format", "json"])
+
+                    code, output = self.run_cli(args)
+                    result = json.loads(output)
+                    serialized_contract_error = json.dumps(
+                        {
+                            "entity_type_contract": result["entity_type_contract"],
+                            "blockers": result["blockers"],
+                        },
+                        ensure_ascii=False,
+                    )
+
+                    self.assertEqual(code, 1, output)
+                    self.assertFalse(result["ok"])
+                    self.assertEqual(result["write_status"], "blocked")
+                    self.assertEqual(result["files_written"], [])
+                    self.assertEqual(self.snapshot_archive_files(archive_root), before)
+                    contract = result["entity_type_contract"]
+                    self.assertEqual(contract["registry_source"], "archive_local")
+                    self.assertEqual(contract["source_entity_type"], "Zettel")
+                    self.assertEqual(contract["target_entity_type"], "Zettel")
+                    self.assertEqual(contract["status"], status)
+                    self.assertEqual(contract["blocker_codes"], [blocker_code])
+                    if field == "from":
+                        self.assertEqual(contract["from_allowed"], invalid_dimension_value)
+                    else:
+                        self.assertEqual(contract["to_allowed"], invalid_dimension_value)
+                    self.assertNotIn(private_registry_value, serialized_contract_error)
+                    self.assertFalse((archive_root / result["receipt_path"]).exists())
+
+    def test_zettel_edge_type_contract_archive_local_authority_and_packaged_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            types_path = archive_root / "zettel-kasten" / "types.yml"
+            types_data = archive_cli.load_yaml(types_path.read_text(encoding="utf-8"))
+            continues_contract = next(
+                item
+                for item in types_data["link_types"]
+                if isinstance(item, dict) and item.get("id") == "continues"
+            )
+            continues_contract["to"] = ["OriginalObject"]
+            types_path.write_text(archive_cli.dump_yaml(types_data), encoding="utf-8")
+            source_id = "zet_20240504_fake_lunch_thought"
+            object_target = f"sha256:{_FAKE_SHA_A}"
+
+            local_before = self.snapshot_archive_files(archive_root)
+            local_code, local_output = self.run_cli(
+                [
+                    "zettel-edge",
+                    str(archive_root),
+                    "--from-zettel",
+                    source_id,
+                    "--target",
+                    object_target,
+                    "--edge-type",
+                    "continues",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            local_result = json.loads(local_output)
+            self.assertEqual(local_code, 0, local_output)
+            self.assertTrue(local_result["ok"])
+            self.assertEqual(
+                local_result["entity_type_contract"],
+                {
+                    "registry_source": "archive_local",
+                    "source_entity_type": "Zettel",
+                    "target_entity_type": "OriginalObject",
+                    "from_allowed": True,
+                    "to_allowed": True,
+                    "status": "allowed",
+                    "blocker_codes": [],
+                },
+            )
+            self.assertEqual(local_result["files_written"], [])
+            self.assertEqual(self.snapshot_archive_files(archive_root), local_before)
+
+            types_path.unlink()
+            fallback_before = self.snapshot_archive_files(archive_root)
+            fallback_code, fallback_output = self.run_cli(
+                [
+                    "zettel-edge",
+                    str(archive_root),
+                    "--from-zettel",
+                    source_id,
+                    "--target",
+                    object_target,
+                    "--edge-type",
+                    "continues",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            fallback_result = json.loads(fallback_output)
+            self.assertEqual(fallback_code, 1, fallback_output)
+            self.assertFalse(fallback_result["ok"])
+            self.assertEqual(
+                fallback_result["entity_type_contract"],
+                {
+                    "registry_source": "packaged_kit",
+                    "source_entity_type": "Zettel",
+                    "target_entity_type": "OriginalObject",
+                    "from_allowed": True,
+                    "to_allowed": False,
+                    "status": "blocked",
+                    "blocker_codes": ["target_entity_type_disallowed"],
+                },
+            )
+            self.assertEqual(fallback_result["files_written"], [])
+            self.assertEqual(self.snapshot_archive_files(archive_root), fallback_before)
+            self.assertFalse((archive_root / fallback_result["receipt_path"]).exists())
+
+    def test_zettel_edge_type_contract_parse_failure_is_content_free_and_does_not_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            target_id = "zet_20260730_private_contract_target"
+            private_filename = "PRIVATE-TARGET-FILENAME.md"
+            private_title = "PRIVATE TARGET TITLE MUST NOT ECHO"
+            private_body = "PRIVATE TARGET BODY MUST NOT ECHO"
+            private_registry_value = "PRIVATE_REGISTRY_PARSE_TRIGGER"
+            private_exception = "PRIVATE YAML EXCEPTION MUST NOT ECHO"
+            private_target_path = archive_root / "inbox" / private_filename
+            fixture_path = archive_root / "zettels" / "zet_20240505_fake_company_onboarding_insight.md"
+            target_frontmatter, _target_body = archive_services.split_zettel_text(
+                fixture_path.read_text(encoding="utf-8")
+            )
+            target_frontmatter["id"] = target_id
+            target_frontmatter["title"] = private_title
+            private_target_path.write_text(
+                "---\n"
+                + archive_cli.dump_yaml(target_frontmatter)
+                + "---\n\n"
+                + private_body
+                + "\n",
+                encoding="utf-8",
+            )
+            types_path = archive_root / "zettel-kasten" / "types.yml"
+            types_path.write_text(f"{private_registry_value}: true\n", encoding="utf-8")
+            absolute_private_path = str(private_target_path.resolve())
+            original_load_yaml = archive_services.load_yaml
+
+            def fail_only_private_registry(text: str) -> Any:
+                if private_registry_value in text:
+                    raise ValueError(f"{private_exception}: {absolute_private_path}")
+                return original_load_yaml(text)
+
+            before = self.snapshot_archive_files(archive_root)
+            with patch.object(archive_services, "load_yaml", side_effect=fail_only_private_registry):
+                code, output = self.run_cli(
+                    [
+                        "zettel-edge",
+                        str(archive_root),
+                        "--from-zettel",
+                        "zet_20240504_fake_lunch_thought",
+                        "--target",
+                        target_id,
+                        "--edge-type",
+                        "continues",
+                        "--approve",
+                        "--reviewed-by",
+                        "person:type-contract-reviewer",
+                        "--format",
+                        "json",
+                    ]
+                )
+            result = json.loads(output)
+            serialized = json.dumps(result, ensure_ascii=False)
+
+            self.assertEqual(code, 1, output)
+            self.assertFalse(result["ok"])
+            self.assertEqual(
+                result["entity_type_contract"],
+                {
+                    "registry_source": "archive_local",
+                    "source_entity_type": "Zettel",
+                    "target_entity_type": "Zettel",
+                    "from_allowed": None,
+                    "to_allowed": None,
+                    "status": "unavailable",
+                    "blocker_codes": ["link_type_contract_unavailable"],
+                },
+            )
+            self.assertEqual(result["files_written"], [])
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+            self.assertFalse((archive_root / result["receipt_path"]).exists())
+            for private_value in (
+                private_filename,
+                private_title,
+                private_body,
+                private_registry_value,
+                private_exception,
+                absolute_private_path,
+                str(archive_root.resolve()),
+            ):
+                self.assertNotIn(private_value, serialized)
+
     def test_format_variant_manual_zettel_edge_accepts_zettel_and_manifested_objet_targets(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
@@ -10432,6 +10744,21 @@ state:
                     self.assertEqual(dry_result["edge_type"], "format_variant")
                     self.assertEqual(dry_result["target"]["kind"], expected_kind)
                     self.assertTrue(dry_result["target"]["verified"])
+                    expected_target_entity_type = (
+                        "Zettel" if expected_kind == "zettel" else "OriginalObject"
+                    )
+                    self.assertEqual(
+                        dry_result["entity_type_contract"],
+                        {
+                            "registry_source": "archive_local",
+                            "source_entity_type": "Zettel",
+                            "target_entity_type": expected_target_entity_type,
+                            "from_allowed": True,
+                            "to_allowed": True,
+                            "status": "allowed",
+                            "blocker_codes": [],
+                        },
+                    )
                     self.assertEqual(dry_result["proposed_edge"]["type"], "format_variant")
                     self.assertEqual(dry_result["proposed_edge"]["target"], target_ref)
                     self.assertEqual(dry_result["files_written"], [])
@@ -10461,6 +10788,10 @@ state:
                     self.assertTrue(approve_result["ok"])
                     self.assertEqual(approve_result["write_status"], "written")
                     self.assertEqual(approve_result["target"]["kind"], expected_kind)
+                    self.assertEqual(
+                        approve_result["entity_type_contract"],
+                        dry_result["entity_type_contract"],
+                    )
                     self.assertEqual(approve_result["reviewed_by"], reviewer)
                     self.assertEqual(approve_result["receipt_path"], dry_result["receipt_path"])
                     self.assertIn(
@@ -10686,6 +11017,146 @@ state:
                 source_path.read_text(encoding="utf-8")
             )
             self.assertEqual(final_frontmatter["edges"], [existing_reference])
+
+    def test_zettel_edge_batch_type_incompatible_item_is_deterministically_blocked_and_never_written(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            plan_path = Path(tmp) / "zettel-edge-batch-type-contract.plan.json"
+            source_id = "zet_20240504_fake_lunch_thought"
+            compatible_target = "zet_20240505_fake_company_onboarding_insight"
+            incompatible_target = f"sha256:{_FAKE_SHA_A}"
+            plan = {
+                "schema": "wom-kit/zettel-edge-batch/v0.1",
+                "policy": {
+                    "policy_id": "policy:fixture-type-contract",
+                    "auto_write_edge_types": ["material", "continues"],
+                    "minimum_confidence": "high",
+                },
+                "edges": [
+                    {
+                        "candidate_id": "candidate:type-compatible",
+                        "from_zettel": source_id,
+                        "target": compatible_target,
+                        "edge_type": "material",
+                        "visibility": "private",
+                        "confidence": "high",
+                        "review_status": "policy_candidate",
+                    },
+                    {
+                        "candidate_id": "candidate:type-incompatible",
+                        "from_zettel": source_id,
+                        "target": incompatible_target,
+                        "edge_type": "continues",
+                        "visibility": "private",
+                        "confidence": "high",
+                        "review_status": "policy_candidate",
+                    },
+                ],
+            }
+            plan_path.write_text(json.dumps(plan, indent=2), encoding="utf-8")
+            before = self.snapshot_archive_files(archive_root)
+            deterministic_results: dict[str, Any] = {}
+
+            for mode in ("dry-run", "approve"):
+                args = [
+                    "zettel-edge-batch",
+                    str(archive_root),
+                    "--plan",
+                    str(plan_path),
+                    f"--{mode}",
+                ]
+                if mode == "approve":
+                    args.extend(["--reviewed-by", "person:type-contract-reviewer"])
+                args.extend(["--format", "json"])
+
+                code, output = self.run_cli(args)
+                result = json.loads(output)
+                serialized = json.dumps(result, ensure_ascii=False)
+                items = {
+                    item["candidate_id"]: item
+                    for item in result["policy_writable_edges"]
+                }
+
+                self.assertEqual(code, 1, output)
+                self.assertFalse(result["ok"])
+                self.assertEqual(result["write_status"], "blocked")
+                self.assertEqual(result["summary"]["policy_writable_edge_count"], 2)
+                self.assertEqual(result["summary"]["policy_matched_edge_count"], 2)
+                self.assertEqual(result["summary"]["review_queue_count"], 0)
+                self.assertEqual(result["summary"]["written_edge_count"], 0)
+                self.assertFalse(result["summary"]["batch_receipt_written"])
+                self.assertEqual(result["files_written"], [])
+                self.assertFalse(result["closed_actions"]["zettel_frontmatter_written"])
+                self.assertEqual(result["closed_actions"]["individual_edge_receipts_written"], 0)
+                self.assertFalse(result["closed_actions"]["batch_receipt_written"])
+                self.assertTrue(result["current_capability"]["uses_single_zettel_edge_gate_per_item"])
+                self.assertEqual(set(items), {"candidate:type-compatible", "candidate:type-incompatible"})
+                self.assertEqual(items["candidate:type-compatible"]["policy_reason"], "matches_policy")
+                self.assertEqual(items["candidate:type-compatible"]["write_status"], "would_write")
+                self.assertEqual(
+                    items["candidate:type-compatible"]["entity_type_contract"],
+                    {
+                        "registry_source": "archive_local",
+                        "source_entity_type": "Zettel",
+                        "target_entity_type": "Zettel",
+                        "from_allowed": True,
+                        "to_allowed": True,
+                        "status": "allowed",
+                        "blocker_codes": [],
+                    },
+                )
+                self.assertEqual(items["candidate:type-incompatible"]["policy_reason"], "matches_policy")
+                self.assertEqual(items["candidate:type-incompatible"]["write_status"], "blocked")
+                self.assertEqual(
+                    items["candidate:type-incompatible"]["entity_type_contract"],
+                    {
+                        "registry_source": "archive_local",
+                        "source_entity_type": "Zettel",
+                        "target_entity_type": "OriginalObject",
+                        "from_allowed": True,
+                        "to_allowed": False,
+                        "status": "blocked",
+                        "blocker_codes": ["target_entity_type_disallowed"],
+                    },
+                )
+                self.assertEqual(self.snapshot_archive_files(archive_root), before)
+                for item in items.values():
+                    self.assertFalse((archive_root / item["receipt_path"]).exists())
+                self.assertFalse((archive_root / result["receipt_path"]).exists())
+                self.assertNotIn(str(archive_root.resolve()), serialized)
+                self.assertNotIn("Fake thought while eating alone", serialized)
+                error_surface = json.dumps(
+                    {
+                        "blockers": result["blockers"],
+                        "contracts": [
+                            item["entity_type_contract"]
+                            for item in result["policy_writable_edges"]
+                        ],
+                    },
+                    ensure_ascii=False,
+                )
+                self.assertNotIn(_FAKE_SHA_A, error_surface)
+                deterministic_results[mode] = {
+                    "batch_id": result["batch_id"],
+                    "receipt_path": result["receipt_path"],
+                    "blockers": result["blockers"],
+                    "would_change": result["would_change"],
+                    "items": [
+                        {
+                            "candidate_id": item["candidate_id"],
+                            "policy_reason": item["policy_reason"],
+                            "write_status": item["write_status"],
+                            "entity_type_contract": item["entity_type_contract"],
+                            "blockers": item["blockers"],
+                        }
+                        for item in result["policy_writable_edges"]
+                    ],
+                }
+
+            self.assertEqual(
+                deterministic_results["dry-run"],
+                deterministic_results["approve"],
+            )
 
     def test_zettel_edge_batch_policy_dry_run_and_approval_write_receipts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

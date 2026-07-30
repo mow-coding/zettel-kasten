@@ -32,10 +32,10 @@ wom-kit/docs/releases/에만 쌓고, baseline 사다리와 tag 목록을 여기�
 현재 공개 기준:
 
 ```text
-v0.3.289 pre-release
+v0.3.290 pre-release
 ```
 
-이전 공개 기준: v0.3.288 pre-release.
+이전 공개 기준: v0.3.289 pre-release.
 
 전체 릴리스 이력은 [CHANGELOG.md](CHANGELOG.md)와 [wom-kit/docs/releases/](wom-kit/docs/releases/)를 보세요.
 
@@ -52,7 +52,7 @@ Roadmap 요약: `v0.1.x`는 아이디어/프로토콜 언어 라인, `v0.2.x`는
 정확한 릴리스 파일을 격리된 명령줄 도구로 설치합니다.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.289/wom_kit-0.3.289-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.290/wom_kit-0.3.290-py3-none-any.whl"
 archive --version
 ```
 
@@ -175,7 +175,7 @@ Notion:
 
 Zettel edge write:
 
-- approval-gated single-edge zettel edge write(reviewed zet-to-zet/zet-to-objet, `zet:notion:<id>` 안전 해소)와, 고신뢰 policy 매치만 게이트로 보내고 나머지는 human review 큐에 남기는 approval-gated policy batch write. v0.3.286은 사람이 같은 지적 내용을 다른 형식으로 표현한 한 쌍이라고 직접 판단했을 때만 쓰는 WOM-local `format_variant`를 활성화합니다. source 방향은 검토 anchor일 뿐 더 오래되거나 원본이거나 canonical이라는 뜻이 아니며, reciprocal edge·제목/파일명/provider 기반 추론·기존 corpus 자동 이관은 만들지 않습니다. `zettel-edge-batch`는 policy가 이 유형을 허용해도 항상 `manual_single_edge_review_required`로 사람 검토 큐에 보내며 쓰지 않습니다.
+- approval-gated single-edge zettel edge write(reviewed zet-to-zet/zet-to-objet, `zet:notion:<id>` 안전 해소)와, 고신뢰 policy 매치만 게이트로 보내고 나머지는 human review 큐에 남기는 approval-gated policy batch write. v0.3.286은 사람이 같은 지적 내용을 다른 형식으로 표현한 한 쌍이라고 직접 판단했을 때만 쓰는 WOM-local `format_variant`를 활성화합니다. source 방향은 검토 anchor일 뿐 더 오래되거나 원본이거나 canonical이라는 뜻이 아니며, reciprocal edge·제목/파일명/provider 기반 추론·기존 corpus 자동 이관은 만들지 않습니다. `zettel-edge-batch`는 policy가 이 유형을 허용해도 항상 `manual_single_edge_review_required`로 사람 검토 큐에 보내며 쓰지 않습니다. v0.3.290부터 공용 single-edge gate는 해소된 `Zettel`/`OriginalObject` endpoint가 선택한 active `types.yml` 항목의 비어 있지 않은 `from`·`to` entity-type 목록을 만족하지 않으면 쓰기 전에 닫힌 상태로 실패합니다.
 - 원본 receipt를 지우지 않는 receipt 기반 `revert-edge`/`revert-batch` edge 롤백,
 
 Object storage:
@@ -401,7 +401,7 @@ WOM, `zettel-kasten`, `zet`, `ZET`는 버전이 있는 protocol family로 관리
 Release tag는 compatibility checkpoint입니다.
 
 ```text
-v0.3.289 (현재 checkpoint)
+v0.3.290 (현재 checkpoint)
 ```
 
 `v0.2.5` 이후의 공개 릴리스에는 compatibility checkpoint tag가 붙습니다. 전체

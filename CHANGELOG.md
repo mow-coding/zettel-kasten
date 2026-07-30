@@ -6,6 +6,29 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.290 - 2026-07-30
+
+- Made the generic `zettel-edge` writer enforce the selected active
+  `types.yml` record's endpoint entity types before any source or receipt
+  write.
+- Mapped the writer source to `Zettel`, resolved zet targets to `Zettel`, and
+  manifested objet targets to `OriginalObject`.
+- Required non-empty safe-string `from` and `to` lists and failed closed for a
+  missing, malformed, empty, or incompatible contract.
+- Kept an archive-local type registry authoritative when present; packaged
+  definitions remain fallback only when the local registry is absent.
+- Applied the same rule to `zettel-edge-batch` through its existing
+  single-edge preflight so an incompatible policy row cannot become a write.
+- Preserved valid `format_variant` zettel and objet targets and its existing
+  manual-only batch policy.
+- Added bounded endpoint-contract result facts and blockers. Those new fields
+  copy no private target content, titles, bodies, registry payloads, paths, or
+  raw exception text; the existing safe refs and archive-relative result paths
+  are unchanged.
+- Added no vocabulary change, sequence activation, relationship inference,
+  provider/AI/Notion/MCP writer, historical-edge migration, or beta-archive
+  operation.
+
 ## v0.3.289 - 2026-07-30
 
 - Strengthened release-wheel checking from resource-name presence to exact
