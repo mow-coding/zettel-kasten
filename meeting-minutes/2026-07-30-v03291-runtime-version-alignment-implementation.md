@@ -503,3 +503,31 @@ tests in 411.630 seconds. The first invocation selected zero tests because its
 name filter lacked the leading/trailing wildcards; it was an execution-filter
 mistake, not a code result, and the corrected rerun above is the accepted
 evidence.
+
+### Exact candidate and PR checkpoint
+
+The complete audit correction was committed as:
+
+```text
+0767fd872b6dab6ed68ca878e66943af998cabff
+fix: close v0.3.291 audit findings
+```
+
+The worktree was clean before and after running the CI-equivalent Windows
+suite from that exact commit:
+
+```text
+python -m unittest discover -s wom-kit/tests -v
+Ran 1869 tests in 1543.512s
+OK (skipped=22)
+```
+
+All skips were already-declared environment-dependent POSIX, Docker, or
+unprivileged-symlink cases; there were zero failures. v0.3.290 tag CI run
+`30556109131` also completed with all four jobs successful, closing that
+release's remaining CI evidence.
+
+The v0.3.291 branch was pushed and opened as GitHub PR #33 against `main`.
+The PR head initially matched the exact full-suite commit above. This
+chronological record is a documentation-only follow-up; PR CI must pass again
+on the final head before merge.
