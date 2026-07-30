@@ -6,6 +6,13 @@ The filesystem folder is `wom-kit/`, the Python import package is `wom_kit`, and
 
 See `wom-kit/docs/concepts/naming-and-terminology.md` for the naming baseline.
 
+v0.3.288 replaces every failed MCP tool response with one exact content-free
+`tool_execution_failed` envelope and gives JSON-RPC failures fixed category
+messages. It also rejects falsey non-object `params` and tool `arguments`
+instead of silently treating them as empty objects. Successful tool behavior
+and archive safety checks remain unchanged. See
+`wom-kit/docs/releases/v0.3.288.md`.
+
 v0.3.0 opens the first narrow receiver-side write boundary: an approval-gated shared update attestation/review record and receipt. See `wom-kit/docs/shared-update-attestation-review-write.md`.
 
 v0.3.1 adds a read-only shared update route preview. It points to an existing candidate route surface and writes nothing. See `wom-kit/docs/shared-update-route-preview.md`.
