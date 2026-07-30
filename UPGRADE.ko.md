@@ -2,6 +2,34 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.3.289 정확한 wheel 리소스 무결성
+
+v0.3.289는 WOM-kit wheel을 공개하기 전에 사용하는 릴리스 관문을
+강화합니다. 설치된 보관소의 내용을 바꾸지 않으며 마이그레이션도 필요하지
+않습니다.
+
+wheel 검사는 이제 다음을 증명합니다.
+
+- wheel의 packaged resource manifest가 검토된 저장소 manifest와 byte 단위로
+  정확히 같습니다.
+- manifest가 선언한 리소스가 모두 있고 선언되지 않은 리소스는 없습니다.
+- 각 리소스의 byte 수와 SHA-256이 manifest 및 wheel의 실제 byte와
+  일치합니다.
+- 각 리소스가 저장소 packaged mirror와 byte 단위로 같습니다.
+- ZIP member 경로와 manifest JSON이 모호하지 않고 안전합니다.
+
+깨진 archive, 중복 member 또는 JSON key, 위험한 경로, schema 오류와 내용
+불일치는 Python traceback 대신 제한된 `WheelCheckError` 경계에서
+실패합니다.
+Windows 대소문자 별칭, 금지 문자, 끝 점/공백, 예약 장치명과 wheel `.data`
+이동 member도 설치 과정에서 검증된 리소스와 겹치기 전에 실패합니다.
+
+이 변경은 릴리스 엔지니어링 안전성만 강화합니다. 보관소 쓰기, 이관, 명령
+동작, provider 호출, MCP 응답은 바꾸지 않습니다. 새 exact wheel을 평소처럼
+설치하면 됩니다. 자세한 내용은
+[`wom-kit/docs/releases/v0.3.289.md`](wom-kit/docs/releases/v0.3.289.md)를
+보세요.
+
 ## v0.3.288 내용 없는 MCP 오류 경계
 
 v0.3.288은 `archive-mcp` 또는 `wom-mcp`를 사용하는 클라이언트를 위한

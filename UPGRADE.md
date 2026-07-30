@@ -24,6 +24,31 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.289 Exact Wheel Resource Integrity
+
+v0.3.289 strengthens the release gate used before a WOM-kit wheel is
+published. It does not change an installed archive or require migration.
+
+The wheel checker now proves that:
+
+- the packaged resource manifest is exactly the reviewed repository manifest;
+- the packaged resource set contains every declared resource and no extra one;
+- every declared byte count and SHA-256 matches the bytes in the wheel;
+- every resource matches the repository's packaged mirror byte for byte; and
+- ZIP member paths and manifest JSON are unambiguous and safe.
+
+Malformed archives, duplicate members or JSON keys, unsafe paths, schema
+errors, and content mismatches fail through a bounded `WheelCheckError`
+instead of exposing a raw Python traceback.
+Windows case aliases, forbidden characters, trailing dots/spaces, reserved
+device names, and wheel `.data` relocation members also fail closed before
+installation can map them onto a verified resource.
+
+This is a release-engineering safety change. It adds no archive write,
+migration, command behavior, provider call, or MCP response change. Install
+the new exact wheel normally. See
+[`wom-kit/docs/releases/v0.3.289.md`](wom-kit/docs/releases/v0.3.289.md).
+
 ## v0.3.288 Content-Free MCP Error Boundary
 
 v0.3.288 is a privacy-hardening release for clients that use `archive-mcp` or
