@@ -127,6 +127,24 @@ candidate was held again and both became regressions:
    broad wording. Both were corrected and added to the documentation
    regression so every public summary now carries the same exception.
 
+## Pull Request CI Portability Correction
+
+PR #30 exposed one test-only portability assumption on Ubuntu Python 3.12.
+The regression for unexpected JSON parser failures constructed a valid JSON
+request with 5,000 nested arrays and assumed that every Python/OS combination
+would raise `RecursionError`. Windows did, but the Ubuntu runner parsed the
+request successfully and the server correctly classified its list-valued
+`params` as fixed `Invalid params`.
+
+The production parser boundary was not changed. The regression now injects
+one deterministic `RecursionError` from `json.loads`, proves that `serve()`
+returns the fixed content-free `Internal error` envelope with id `null`, and
+then proves that the following ping is still processed. This preserves the
+actual contract without depending on native stack depth. The corrected single
+test and all 156 MCP tests pass locally. An independent portability review
+found no Medium-or-higher issue and independently repeated both the single
+test and the 156-test module successfully. The PR CI rerun remains required.
+
 ## Verification Status
 
 Completed local gates so far:
