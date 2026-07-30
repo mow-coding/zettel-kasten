@@ -8,3 +8,9 @@ wom-kit/templates/** text eol=lf
 wom-kit/zettel-kasten/** text eol=lf
 wom-kit/docs/releases/*.md text eol=lf
 wom-kit/src/wom_kit/_resources/** text eol=lf
+
+# The project-scoped runtime bridge verifies executed source bytes against the
+# exact release tag, so these Python sources must materialize identically on
+# Windows and POSIX checkouts.
+wom-kit/cli/archive.py text eol=lf
+wom-kit/src/wom_kit/**/*.py text eol=lf

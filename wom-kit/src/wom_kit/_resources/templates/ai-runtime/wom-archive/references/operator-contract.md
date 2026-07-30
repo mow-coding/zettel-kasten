@@ -131,11 +131,43 @@ edit installed-version pins. Preview first:
 archive project-version-update <project-or-archive-root> --target vX.Y.Z --dry-run --progress --format json
 ```
 
-Only after human review, use `--approve --reviewed-by <actor>`. Treat
-`updated_restart_required` as an update applied to disk, not proof that this
-already-running Python process changed version. Start a new process and require
-`archive version <project-or-archive-root> --format json` to show import,
-source, pin, and exact-tag agreement before saying the new runtime is active.
+Only after human review, pause editors, sync/backup clients, and other Git
+writers for the complete transaction. Windows approval requires:
+
+```bash
+archive project-version-update <project-or-archive-root> --target vX.Y.Z --approve --reviewed-by <actor> --affirm-external-writers-quiescent --progress --format json
+```
+
+The result must report `external_writer_quiescence_required: true`,
+`external_writer_quiescence_affirmed: true`,
+`atomic_file_compare_and_swap: false`, and
+`checkpointed_change_detection: true`; the v0.2 receipt binds
+`external_writer_quiescence: {affirmed: true, scope:
+complete_project_version_update_transaction}`. This is checkpointed drift
+detection, not a never-clobber guarantee. The config digest binds effective Git
+config plus exactly `GIT_ASKPASS`, `GIT_PROXY_COMMAND`, `GIT_SSH`, and
+`GIT_SSH_COMMAND`; the selected Git executable, `PATH`, `HTTP_PROXY`,
+`HTTPS_PROXY`, `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `SSH_AUTH_SOCK`, `HOME`, and
+other non-Git toolchain/transport environment are unbound trusted-stable
+prerequisites.
+
+Treat `updated_restart_required` as an update applied to disk, not proof that
+this already-running Python process changed version. Start a new process and
+require `archive version <project-or-archive-root> --format json` to show
+import, source, pin, and exact-tag agreement before saying the new runtime is
+active.
+When that check reports `project_scoped_bridge_available` and
+`runtime_alignment.integrity.verified: true`, the exact argv returned under
+explicit `--no-redact-local-paths` may run the verified project-local
+`wom-kit/cli/archive.py` for one isolated `-I -S` invocation. The gate binds the
+expected commit, tag, wrapper, and synchronized resources. It never places the
+project source root on `sys.path`: project aliases are purged and an
+exact-object-ID finder loads only `wom_kit`, so post-gate top-level dependency
+shadows cannot execute. The integrity evidence is local and network-free,
+reads no origin URL value, and proves neither current remote freshness nor a
+cryptographic signature. It is a bridge, not proof that the global `archive`
+on `PATH`, its Python environment, or the runtime Agent Skill was updated. Do
+not infer pip, uv, pipx, or editable installation provenance.
 Never bypass a dirty-worktree, origin/tag, metadata, lock, or rollback blocker.
 Releases before v0.3.215 require one final prior/manual bootstrap update because
 they do not contain this command.

@@ -6,13 +6,15 @@ The filesystem folder is `wom-kit/`, the Python import package is `wom_kit`, and
 
 See `wom-kit/docs/concepts/naming-and-terminology.md` for the naming baseline.
 
-v0.3.290 makes the existing `zettel-edge` single-write gate enforce the
-selected active `types.yml` record's `from` and `to` entity-type lists. The
-source is `Zettel`; a resolved target is `Zettel` or `OriginalObject`.
-Malformed, empty, or incompatible endpoint contracts fail before zettel or
-receipt writes, and `zettel-edge-batch` inherits the same preflight. This
-activates no new edge type or sequence behavior and adds no MCP writer. See
-`wom-kit/docs/releases/v0.3.290.md`.
+v0.3.291 adds a bounded `runtime_alignment` decision to the read-only version
+report. A self-consistent project source mirror that differs from the running
+import can expose an exact project-scoped bridge argv only under explicit
+local-path disclosure and when `runtime_alignment.integrity.verified` is true.
+The local integrity gate requires real paths, clean Git and exact annotated-tag
+evidence, matching tagged versions, and local `origin/main` ancestry without a
+network call. The bridge runs that source once; it does not replace the global
+Python tool, guess installer provenance, or install the runtime Agent Skill.
+See `wom-kit/docs/releases/v0.3.291.md`.
 
 v0.3.0 opens the first narrow receiver-side write boundary: an approval-gated shared update attestation/review record and receipt. See `wom-kit/docs/shared-update-attestation-review-write.md`.
 

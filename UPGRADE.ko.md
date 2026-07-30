@@ -2,6 +2,97 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.3.291 runtime 버전 정렬
+
+v0.3.291은 아카이브 데이터를 바꾸지 않으며 아카이브 이관도 필요하지
+않습니다.
+
+프로젝트 업데이트 뒤에도 프로젝트 소스 미러와 버전 핀은 최신인데 전역
+`archive` 명령은 다른 Python checkout을 import할 수 있습니다. 다음 명령으로
+확인합니다.
+
+```powershell
+archive version <project-or-archive-root> --format json
+```
+
+새 `runtime_alignment` 블록은 실행 버전이 정렬된 경우, 프로젝트 소스를 먼저
+수리·업데이트해야 하는 경우, 서로 일치하는 프로젝트 소스를 한 번 실행하는
+bridge로 사용할 수 있는 경우를 구분합니다. 로컬 경로는 기본적으로 가립니다.
+
+신뢰할 수 있는 컴퓨터에서 명시적으로 `--no-redact-local-paths`를 사용했을
+때만 구조화된 exact bridge argv를 받을 수 있습니다. 로컬 real-path,
+project-local Git metadata, 원본 worktree byte·stage-zero index·flag, 닫힌
+runtime import tree, 정확한 annotated version tag, 태그 안 버전,
+`origin/main` 계보, 동기화 리소스 103개가 모두 맞아
+`runtime_alignment.integrity.verified`가 true여야 합니다.
+
+bridge는 Python `-I -S`를 사용하고 예상 commit·tag·wrapper blob·resource
+blob을 묶은 뒤 검증한 wrapper를 메모리에서 실행합니다. 프로젝트
+`wom-kit/src`를 `sys.path`에 넣지 않습니다. project alias를 지우고
+exact-object-ID finder가 `wom_kit`만 불러오므로, 관문 뒤 생긴 최상위
+`yaml` 또는 `sqlite3` shadow는 프로젝트 tree에서 실행될 수 없습니다.
+`-S`는 `site` 초기화, 실행 가능한 `.pth`, `sitecustomize`를 막고, 검증
+뒤에는 stdlib `sysconfig`의 `purelib`·`platlib`만 `site.py` 처리 없이
+추가합니다. 이 검사는 네트워크나 origin URL 값을 읽지 않습니다. bridge는
+프로젝트 소스를 한 번 실행할 뿐이며 `PATH`의 `archive` 교체, Python 환경
+업데이트, pip/uv/pipx/editable 소유권 추측, 프로세스 재시작, runtime Agent
+Skill 설치를 하지 않습니다.
+
+기존 Windows 소스 미러에는 전환 안전장치가 하나 더 필요합니다.
+예전 checkout이 `core.autocrlf=true`를 사용했다면 새 저장소 속성이 LF를
+요구한 뒤에도 변경되지 않은 `.py` 파일이 CRLF로 남을 수 있습니다. 승인된
+`project-version-update`는 cross-platform 경로와 안전한 파일/폴더 전환을
+검사한 뒤 전체 tracked target commit tree를 `git checkout` 없이 정확한
+blob으로 직접 만듭니다. stage-zero index를 다시 만들고 raw byte·flag·닫힌
+source tree·동기화 리소스를 pin보다 먼저 검증합니다. 폴더 scan은 entry
+상한을 둔 streaming 방식이며, ignore된 비충돌 `wom-kit/src` shadow도 첫
+쓰기 전에 차단합니다. 이미 target을 가리키는 mirror도 정확한 tree,
+resource, 모든 알려진 pin 검증이 끝난 경우에만 `no_change`입니다.
+
+먼저 쓰기 없는 dry-run을 검토합니다.
+
+```powershell
+archive project-version-update <project-or-archive-root> --target vX.Y.Z --dry-run --format json
+```
+
+그 다음 editor, 동기화 client, backup 도구, 다른 모든 Git writer를 전체
+transaction 동안 멈춥니다. 멈춘 상태에서 reviewer와 필수 확인 flag를 함께
+지정해야 Windows 승인이 시작됩니다.
+
+```powershell
+archive project-version-update <project-or-archive-root> --target vX.Y.Z --approve --reviewed-by <actor> --affirm-external-writers-quiescent --format json
+```
+
+승인 쓰기는 v0.3.291에서 Windows 전용입니다. WOM은 project,
+source/`.git`, pin, lock, receipt 경로의 directory handle을
+`FILE_SHARE_DELETE` 없이 유지해 rename·delete·junction 교체를 막습니다.
+POSIX dry-run은 `preview_only_platform_unsupported`와
+`write_boundary.approval_platform_supported: false`를 반환하고, POSIX
+승인은 차단됩니다.
+
+source·pin snapshot은 checkpoint drift 감지이지 파일 단위 원자적
+compare-and-swap이 아닙니다. 결과에는
+`external_writer_quiescence_required: true`,
+`external_writer_quiescence_affirmed: true`,
+`atomic_file_compare_and_swap: false`,
+`checkpointed_change_detection: true`가 기록됩니다. v0.2 영수증에는
+`external_writer_quiescence: {affirmed: true, scope:
+complete_project_version_update_transaction}`가 남고, 기존 v0.1 영수증은
+호환됩니다. 진짜 file-handle/descriptor 기반 CAS는 향후 과제입니다.
+
+설정 digest는 effective Git config와 정확히 `GIT_ASKPASS`,
+`GIT_PROXY_COMMAND`, `GIT_SSH`, `GIT_SSH_COMMAND`만 환경 변수로 묶습니다.
+선택된 Git 실행 파일, `PATH`, `HTTP_PROXY`, `HTTPS_PROXY`,
+`SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `SSH_AUTH_SOCK`, `HOME`, 그 밖의
+비-Git toolchain·transport 환경은 묶지 않는 신뢰·안정 운영 전제조건입니다.
+rollback 직전 묶인 설정 digest가 달라지면 source/pin 복원을 건너뛰고 소유한
+lock을 보존하며 incomplete rollback을 보고합니다.
+
+자세한 내용은
+[`wom-kit/docs/releases/v0.3.291.md`](wom-kit/docs/releases/v0.3.291.md)와
+[`wom-kit/docs/version-truth-source.md`](wom-kit/docs/version-truth-source.md)를
+보세요.
+
 ## v0.3.290 edge writer entity-type 강제
 
 v0.3.290은 기존 `zettel-edge` 안전 관문을 고칩니다. 보관소 이관이 필요
@@ -2398,15 +2489,19 @@ archive project-version-update <project-or-archive-root> --target vX.Y.Z --dry-r
 미리보기의 차단 항목이 없음을 확인한 뒤 한 번의 승인 명령을 실행합니다.
 
 ```text
-archive project-version-update <project-or-archive-root> --target vX.Y.Z --approve --reviewed-by <actor> --progress --format json
+archive project-version-update <project-or-archive-root> --target vX.Y.Z --approve --reviewed-by <actor> --affirm-external-writers-quiescent --progress --format json
 ```
 
-승인하면 설정된 `origin/main`과 정확한 대상 태그만 한 번에 받습니다. 그
-태그가 main 이력에 포함된 annotated tag인지, 세 버전 파일이 모두 대상과
-일치하는지 확인한 다음 detached checkout, 알려진 핀 갱신, 프로젝트 영수증
-쓰기를 수행합니다. 작업 폴더가 더럽거나 상태가 모호하면 멈춥니다. checkout
-이후 실패하면 이전 checkout과 핀의 원래 바이트를 복구합니다. 받아 둔 Git
-ref는 정본이 아닌 발견 상태이므로 남을 수 있습니다.
+현재 CLI에서는 먼저 editor, 동기화·backup client, 다른 Git writer를 전체
+transaction 동안 멈춰야 하며, 위 확인 flag는 모든 승인에 필수입니다.
+원래 v0.3.215 경계는 설정된 `origin/main`과 정확한 대상 태그만 받고, 그
+태그가 main 이력의 annotated tag인지와 세 버전 파일이 모두 대상과
+일치하는지 확인한 뒤 알려진 pin과 프로젝트 영수증을 갱신했습니다. 현재
+v0.3.291 updater도 이 제한된 fetch를 유지하지만 `git checkout` 없이 전체
+target commit tree를 직접 만듭니다. rollback은 checkpoint drift 감지를
+사용하며 incomplete 상태로 소유한 lock이 남을 수 있습니다. 위 v0.3.291
+절이 현재 운영 계약입니다. 받아 둔 Git ref는 정본이 아닌 발견 상태이므로
+남을 수 있습니다.
 
 이 명령을 실행한 현재 Python 프로세스는 자동으로 새 버전이 되지 않습니다.
 성공 뒤 새 프로세스를 시작하고 `archive version <root> --format json`으로

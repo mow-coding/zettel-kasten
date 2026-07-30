@@ -1,6 +1,6 @@
 # Install WOM-kit As A Python Tool
 
-Status: v0.3.290 GitHub wheel and edge-writer entity-type enforcement checkpoint
+Status: v0.3.291 GitHub wheel and runtime version alignment checkpoint
 
 WOM-kit is a command-line tool. It should live in its own Python environment
 instead of being mixed into an application project's dependencies.
@@ -10,7 +10,7 @@ instead of being mixed into an application project's dependencies.
 Install the verified wheel attached to the exact WOM release with `uv`:
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.290/wom_kit-0.3.290-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.291/wom_kit-0.3.291-py3-none-any.whl"
 archive --version
 ```
 
@@ -28,7 +28,7 @@ Plain `pip` works when it is placed inside a dedicated virtual environment:
 
 ```powershell
 py -m venv "$HOME\.wom-tools\wom-kit"
-& "$HOME\.wom-tools\wom-kit\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.290/wom_kit-0.3.290-py3-none-any.whl"
+& "$HOME\.wom-tools\wom-kit\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.291/wom_kit-0.3.291-py3-none-any.whl"
 & "$HOME\.wom-tools\wom-kit\Scripts\archive.exe" --version
 ```
 
@@ -63,6 +63,83 @@ Installation does not:
 - read credentials,
 - install the packaged Agent Skill into an AI host's configuration directory,
 - make a generated graph canonical.
+
+## When The Project And Global Command Differ
+
+`archive version <project-or-archive-root> --format json` compares the running
+import with the project's source mirror and version pin. A project update does
+not silently replace the Python tool selected by `PATH`.
+
+Since v0.3.291, a self-consistent project mirror that differs from the running
+import can report `project_scoped_bridge_available`. Trusted local debugging
+may use `--no-redact-local-paths` to obtain its exact structured bridge argv.
+The argv exists only when `runtime_alignment.integrity.verified` is true after
+local real-path, project-local Git-metadata, raw worktree/index/flag, exact
+source/resource-byte, closed-import, annotated-tag, tagged-version, and
+`origin/main` ancestry checks. Its Python `-I -S` bootstrap binds the expected
+commit, tag, wrapper blob, and all 103 synchronized resources, executes the
+wrapper from verified memory, and permits only the read-only `version`
+command. It does not put the project source root on `sys.path`: it purges
+project aliases and an exact-object-id custom finder loads only `wom_kit`, so
+a post-gate top-level `yaml` or `sqlite3` shadow cannot execute. `-S` blocks
+site initialization, executable `.pth` lines, and `sitecustomize`; after
+verification, only stdlib-`sysconfig` `purelib` and `platlib` paths are added
+without `site.py` processing. It uses no network and reads no origin URL
+value. That argv runs the
+verified project source for one invocation. It does not update, reinstall, or
+remove the global tool, and WOM does not guess whether pip, uv, pipx, or an
+editable checkout owns that tool.
+
+For existing Windows project mirrors, approved `project-version-update` also
+manually materializes the complete tracked target commit tree when prior CRLF
+bytes or other exact-tree drift would fail the gate. It validates
+cross-platform paths, rebuilds the index, avoids `git status` and repository
+filters, streams directory scans with entry caps, and blocks even an ignored
+noncolliding `wom-kit/src` shadow before mutation. Exclusive lock and receipt
+ownership plus source/pin checkpoints detect observed drift, but they are not
+atomic file compare-and-swap and cannot guarantee that an external writer will
+never clobber a file.
+
+Before every approval, run the dry-run, then pause editors, sync clients,
+backup tools, and every other Git writer for the complete update transaction.
+Approve only while they remain paused:
+
+```powershell
+archive project-version-update <project-or-archive-root> --target vX.Y.Z --approve --reviewed-by <actor> --affirm-external-writers-quiescent --format json
+```
+
+The result reports `external_writer_quiescence_required: true`,
+`external_writer_quiescence_affirmed: true`,
+`atomic_file_compare_and_swap: false`, and
+`checkpointed_change_detection: true`. The v0.2 receipt records
+`external_writer_quiescence: {affirmed: true, scope:
+complete_project_version_update_transaction}`; old v0.1 receipts remain
+compatible. True file-handle/descriptor-bound CAS is future work. This
+project-scoped update does not reinstall or replace the global console tool.
+
+The configuration checkpoint binds effective Git configuration plus exactly
+`GIT_ASKPASS`, `GIT_PROXY_COMMAND`, `GIT_SSH`, and `GIT_SSH_COMMAND`. It does
+not bind the selected Git executable, `PATH`, `HTTP_PROXY`, `HTTPS_PROXY`,
+`SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `SSH_AUTH_SOCK`, `HOME`, or other non-Git
+toolchain and transport environment. Keep those trusted operational
+prerequisites stable too. If the bound configuration digest changes
+immediately before rollback, WOM skips restoration, preserves its owned lock,
+and reports incomplete rollback.
+
+In v0.3.291, approval is available only on Windows. WOM holds the verified
+project, source/`.git`, pin, lock, and receipt directory chains without
+`FILE_SHARE_DELETE`, preventing rename, deletion, or junction replacement. A
+missing receipt parent and root are created and held in order, and the receipt
+writer rejects an unheld root.
+
+POSIX users can still run the complete read-only preview. It returns
+`preview_only_platform_unsupported` and
+`write_boundary.approval_platform_supported: false`; POSIX `--approve` is
+blocked until the Git/full-tree transaction is descriptor-relative end to end.
+
+The runtime Agent Skill is a third, separate lifecycle. Installing or updating
+the Python tool does not automatically install the Skill, and
+`runtime-skill-install` does not replace the Python CLI.
 
 Archive creation remains a separate dry-run-first operation:
 
