@@ -108,6 +108,42 @@ and has SHA-256
 This supersedes the pre-review candidate wheel for any later local comparison;
 it is still not public-artifact evidence.
 
+## Re-review Archive Identity Correction
+
+A second independent check found that malformed `archive.yml` YAML still
+escaped the initial correction. PyYAML's parser exception was not part of the
+expected local error boundary, and the content-free blocked-result builder
+retried the same identity read. This could emit a traceback containing the
+absolute archive path. The same check also found that an empty or
+whitespace-only string `archive_id` passed the earlier type-only validation and
+entered host inspection.
+
+The correction now:
+
+- treats PyYAML parser failures, Unicode decoding failures, expected local
+  read errors, and path-resolution failures as invalid archive identity
+  evidence;
+- validates that the string identity contains at least one non-whitespace
+  character while preserving a normal non-empty identity;
+- uses the same safe error boundary during the blocked-result identity retry;
+- returns only the static `invalid_archive` blocked result with exit 1; and
+- stops before host target resolution, runtime Skill inspection, or
+  `AGENTS.md` inspection.
+
+Regression cases cover missing, null, list, empty, whitespace-only, malformed
+YAML, invalid UTF-8, and simulated permission-denied identity input. Each case
+separately captures stdout and stderr, parses stdout as valid JSON, requires
+empty stderr, rejects traceback/parser/decoder/path/body/error canaries,
+asserts all three host-inspection functions were never called, and compares
+the complete repository tree digest before and after to prove zero writes.
+
+The focused runtime-guidance module passed all 10 tests. The combined
+runtime-guidance, Runtime Skill lifecycle, packaged resource, and release
+readiness selection passed 50 tests with one Windows symlink-privilege skip.
+The standalone package-resource check confirmed all 103 v0.3.293 resources
+were synchronized, and the release-readiness gate passed public links, Korean
+product language, public privacy, and Runtime Skill package checks.
+
 ## Release Boundary
 
 v0.3.292 is currently a local candidate lineage, not a proven public

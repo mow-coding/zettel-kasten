@@ -10,6 +10,11 @@ from . import __version__
 from . import archive_services
 from . import runtime_skill_install
 
+try:
+    import yaml
+except ImportError:  # pragma: no cover - exercised only when dependency is absent.
+    yaml = None
+
 
 READINESS_SCHEMA = "wom-kit/runtime-guidance-readiness/v0.1"
 MAX_AGENTS_BYTES = 512 * 1024
@@ -40,6 +45,17 @@ SAFE_SKILL_STATES = {
     "blocked_symlink",
     "blocked_not_directory",
 }
+EXPECTED_LOCAL_INSPECTION_ERRORS: tuple[type[BaseException], ...] = (
+    archive_services.ArchiveServiceError,
+    OSError,
+    UnicodeError,
+    ValueError,
+)
+if yaml is not None:
+    EXPECTED_LOCAL_INSPECTION_ERRORS += (yaml.YAMLError,)  # type: ignore[union-attr]
+EXPECTED_ARCHIVE_IDENTITY_ERRORS = EXPECTED_LOCAL_INSPECTION_ERRORS + (
+    RuntimeError,
+)
 
 
 def _safe_target(host: str, scope: str) -> dict[str, str]:
@@ -53,6 +69,15 @@ def _safe_target(host: str, scope: str) -> dict[str, str]:
     }
 
 
+def _read_valid_archive_id(root: Path) -> str:
+    archive_id = archive_services.read_archive_id(root)
+    if not archive_id.strip():
+        raise archive_services.ArchiveServiceError(
+            "archive.yml archive_id must not be empty."
+        )
+    return archive_id
+
+
 def _blocked_result(
     archive_root: Path | str,
     *,
@@ -64,8 +89,8 @@ def _blocked_result(
     archive_id: str | None = None
     try:
         root = archive_services.require_existing_archive_root(archive_root)
-        archive_id = archive_services.read_archive_id(root)
-    except (archive_services.ArchiveServiceError, OSError, ValueError):
+        archive_id = _read_valid_archive_id(root)
+    except EXPECTED_ARCHIVE_IDENTITY_ERRORS:
         pass
     return {
         "ok": False,
@@ -311,13 +336,8 @@ def runtime_guidance_readiness(
 
     try:
         root = archive_services.require_existing_archive_root(archive_root)
-        archive_id = archive_services.read_archive_id(root)
-    except (
-        archive_services.ArchiveServiceError,
-        OSError,
-        UnicodeError,
-        ValueError,
-    ):
+        archive_id = _read_valid_archive_id(root)
+    except EXPECTED_ARCHIVE_IDENTITY_ERRORS:
         return _blocked_result(
             archive_root,
             host=host,

@@ -25,6 +25,13 @@ class RuntimeGuidanceReadinessTests(unittest.TestCase):
             code = archive_cli.main(args)
         return code, output.getvalue()
 
+    def run_cli_streams(self, args: list[str]) -> tuple[int, str, str]:
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            code = archive_cli.main(args)
+        return code, stdout.getvalue(), stderr.getvalue()
+
     def make_repo(self, root: Path, *, complete_agents: bool = True) -> tuple[Path, Path]:
         repo = root / "repo"
         archive_root = repo / "archive"
@@ -146,6 +153,7 @@ class RuntimeGuidanceReadinessTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertTrue(result["ready"])
         self.assertEqual(result["status"], "ready")
+        self.assertEqual(result["archive_id"], "archive:personal:fake-life")
         self.assertEqual(
             result["schema"],
             "wom-kit/runtime-guidance-readiness/v0.1",
@@ -342,6 +350,170 @@ class RuntimeGuidanceReadinessTests(unittest.TestCase):
         self.assertNotIn(str(repo), output)
         self.assertNotIn(str(archive_root), output)
         self.assertNotIn("Traceback", output)
+
+    def test_invalid_archive_identity_variants_stop_before_host_inspection_without_writes(
+        self,
+    ) -> None:
+        private_canary = "PRIVATE_ARCHIVE_IDENTITY_CANARY"
+        cases: tuple[tuple[str, bytes | None], ...] = (
+            ("missing", None),
+            ("null", b"archive_id:\n"),
+            ("list", b"archive_id:\n  - private\n"),
+            ("empty", b'archive_id: ""\n'),
+            ("whitespace", b'archive_id: "   "\n'),
+            (
+                "malformed_yaml",
+                (
+                    "archive_id: [\n"
+                    f"private_value: {private_canary}\n"
+                ).encode("utf-8"),
+            ),
+            (
+                "invalid_utf8",
+                b"archive_id: archive:personal:" + b"\xff" + private_canary.encode(),
+            ),
+        )
+        for label, archive_yml_bytes in cases:
+            with self.subTest(label=label):
+                with tempfile.TemporaryDirectory() as tmp:
+                    repo, archive_root = self.make_repo(Path(tmp))
+                    archive_yml = archive_root / "archive.yml"
+                    if archive_yml_bytes is None:
+                        archive_yml.unlink()
+                    else:
+                        archive_yml.write_bytes(archive_yml_bytes)
+                    before = self.tree_digest(repo)
+
+                    with (
+                        mock.patch.object(
+                            runtime_skill_install,
+                            "resolve_target_location",
+                            side_effect=AssertionError(
+                                "invalid archive entered host target resolution"
+                            ),
+                        ) as resolve_target,
+                        mock.patch.object(
+                            runtime_skill_install,
+                            "runtime_skill_status",
+                            side_effect=AssertionError(
+                                "invalid archive entered Runtime Skill inspection"
+                            ),
+                        ) as inspect_skill,
+                        mock.patch.object(
+                            runtime_guidance,
+                            "_inspect_agents_routing",
+                            side_effect=AssertionError(
+                                "invalid archive entered AGENTS.md inspection"
+                            ),
+                        ) as inspect_agents,
+                    ):
+                        code, stdout, stderr = self.run_cli_streams(
+                            [
+                                "runtime-guidance-readiness",
+                                str(archive_root),
+                                "--host",
+                                "codex",
+                                "--scope",
+                                "repo",
+                                "--repo-root",
+                                str(repo),
+                                "--format",
+                                "json",
+                            ]
+                        )
+                    after = self.tree_digest(repo)
+
+                self.assertEqual(code, 1, stdout + stderr)
+                self.assertEqual(stderr, "")
+                self.assertEqual(before, after)
+                resolve_target.assert_not_called()
+                inspect_skill.assert_not_called()
+                inspect_agents.assert_not_called()
+                result = json.loads(stdout)
+                self.assertFalse(result["ok"])
+                self.assertFalse(result["ready"])
+                self.assertEqual(result["status"], "blocked")
+                self.assertIsNone(result["archive_id"])
+                self.assertEqual(
+                    result["diagnostic_codes"],
+                    ["invalid_archive"],
+                )
+                self.assertFalse(result["closed_actions"]["files_written"])
+                self.assertTrue(result["privacy"]["local_paths_redacted"])
+                self.assertNotIn(private_canary, stdout)
+                self.assertNotIn(str(repo), stdout)
+                self.assertNotIn(str(archive_root), stdout)
+                self.assertNotIn("Traceback", stdout)
+                self.assertNotIn("ParserError", stdout)
+                self.assertNotIn("UnicodeDecodeError", stdout)
+
+    def test_unreadable_archive_identity_error_is_content_free_and_read_only(
+        self,
+    ) -> None:
+        private_error = PermissionError(
+            r"C:\private\PRIVATE_ARCHIVE_IDENTITY_PERMISSION_CANARY.yml"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, archive_root = self.make_repo(Path(tmp))
+            before = self.tree_digest(repo)
+
+            with (
+                mock.patch.object(
+                    archive_services,
+                    "read_archive_text",
+                    side_effect=private_error,
+                ),
+                mock.patch.object(
+                    runtime_skill_install,
+                    "resolve_target_location",
+                    side_effect=AssertionError(
+                        "unreadable archive entered host target resolution"
+                    ),
+                ) as resolve_target,
+                mock.patch.object(
+                    runtime_skill_install,
+                    "runtime_skill_status",
+                    side_effect=AssertionError(
+                        "unreadable archive entered Runtime Skill inspection"
+                    ),
+                ) as inspect_skill,
+                mock.patch.object(
+                    runtime_guidance,
+                    "_inspect_agents_routing",
+                    side_effect=AssertionError(
+                        "unreadable archive entered AGENTS.md inspection"
+                    ),
+                ) as inspect_agents,
+            ):
+                code, stdout, stderr = self.run_cli_streams(
+                    [
+                        "runtime-guidance-readiness",
+                        str(archive_root),
+                        "--host",
+                        "codex",
+                        "--scope",
+                        "repo",
+                        "--repo-root",
+                        str(repo),
+                        "--format",
+                        "json",
+                    ]
+                )
+            after = self.tree_digest(repo)
+
+        self.assertEqual(code, 1, stdout + stderr)
+        self.assertEqual(stderr, "")
+        self.assertEqual(before, after)
+        resolve_target.assert_not_called()
+        inspect_skill.assert_not_called()
+        inspect_agents.assert_not_called()
+        result = json.loads(stdout)
+        self.assertEqual(result["diagnostic_codes"], ["invalid_archive"])
+        self.assertIsNone(result["archive_id"])
+        self.assertNotIn(str(private_error), stdout)
+        self.assertNotIn(str(repo), stdout)
+        self.assertNotIn(str(archive_root), stdout)
+        self.assertNotIn("Traceback", stdout)
 
     def test_absent_skill_and_incomplete_agents_have_distinct_diagnostics(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

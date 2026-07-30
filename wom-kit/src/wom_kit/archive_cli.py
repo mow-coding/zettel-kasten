@@ -4177,12 +4177,7 @@ def command_runtime_guidance_readiness(args: argparse.Namespace) -> int:
             scope=args.scope,
             repo_root=Path(args.repo_root) if args.repo_root else None,
         )
-    except (
-        archive_services.ArchiveServiceError,
-        OSError,
-        UnicodeError,
-        ValueError,
-    ):
+    except runtime_guidance.EXPECTED_LOCAL_INSPECTION_ERRORS:
         result = runtime_guidance.blocked_runtime_guidance_result(
             Path(args.archive_root),
             host=args.host,

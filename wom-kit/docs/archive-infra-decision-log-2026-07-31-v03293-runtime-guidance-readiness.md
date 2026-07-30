@@ -75,6 +75,11 @@ Two P1 findings were corrected before handoff:
   content-free `invalid_archive` blocked result. CLI dispatch also normalizes
   expected local inspection failures, so no traceback or absolute path crosses
   the command boundary.
+- The same boundary covers malformed YAML, invalid text decoding, expected
+  local read errors, missing/null/list identities, and empty or
+  whitespace-only string identities. All are rejected before target
+  resolution, runtime Skill inspection, or `AGENTS.md` inspection; a normal
+  non-empty string identity is preserved.
 
-Both corrections preserve read-only behavior and add no write, install,
+These corrections preserve read-only behavior and add no write, install,
 `AGENTS.md` rewrite, network, provider, model, or credential action.
