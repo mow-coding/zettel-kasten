@@ -2,6 +2,96 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.3.286 사람 검토 전용 `format_variant` edge
+
+v0.3.286은 한 가지 좁은 경우를 위한 base link type을 추가합니다. 사람이 두
+기록을 직접 살펴보고, 한쪽이 같은 지적 내용을 다른 형식이나 표현으로 담은
+것이라고 판단한 경우입니다. zet와 manifest에 등록된 원본 objet의 관계나,
+같은 내용을 서로 다른 형식으로 보존한 두 zet의 관계가 여기에 들어갈 수
+있습니다.
+
+저장되는 source는 사람이 고른 **검토 anchor**일 뿐입니다. source가 더
+오래되었거나 원본이거나 canonical이라는 뜻이 아닙니다. WOM-local
+`format_variant`는 DCMI `hasFormat` / `isFormatOf`와 개념적으로 가깝지만,
+어느 자원이 먼저 존재했는지 이번 근거가 확정하지 않으므로 두 방향 속성 중
+하나와 정확히 같다고 선언하지 않습니다.
+
+보관함에 자체 `zettel-kasten/types.yml`이 없다면 adoption 명령은 필요하지
+않습니다. 설치된 kit의 새 base type을 그대로 상속합니다.
+
+자체 `zettel-kasten/types.yml`을 vendoring한 보관함이라면 기존 base-type
+sync를 먼저 미리보기로 실행하세요.
+
+```powershell
+archive migrate <archive-root> `
+  --target base-link-types `
+  --dry-run --format json
+```
+
+`appended_link_type_ids`와 `present_not_overwritten`를 확인한 뒤 결과가
+맞을 때만 승인합니다.
+
+```powershell
+archive migrate <archive-root> `
+  --target base-link-types `
+  --approve --reviewed-by <safe-reviewer-id> --format json
+```
+
+이 sync는 append-only, no-clobber입니다. 빠진 base record만 덧붙이고 같은
+id의 local record는 덮어쓰지 않습니다. 의도적으로 revert가 없습니다.
+기존 migration 계약처럼 승인 시 YAML 전체의 comment, anchor, flow style,
+key 순서가 정규화될 수 있으므로 dry-run과 결과를 검토한 뒤 보관함을
+commit하세요.
+
+사람이 검토한 한 쌍은 기존 single-edge writer로 먼저 미리봅니다.
+
+```powershell
+archive zettel-edge <archive-root> `
+  --from-zettel <review-anchor-zet> `
+  --target <alternate-zet-or-objet> `
+  --edge-type format_variant `
+  --dry-run --format json
+```
+
+두 기록과 방향을 확인한 뒤 `--approve --reviewed-by
+<safe-reviewer-id>`로 다시 실행합니다. assertion은 한 번만 저장하세요.
+WOM은 reciprocal edge를 자동 생성하지 않습니다.
+
+되돌릴 때는 기존 edge receipt가 보상 작업의 권위 있는 근거입니다.
+
+```powershell
+archive revert-edge <archive-root> `
+  --receipt receipts/edges/<edge>.zettel-edge.json `
+  --dry-run --format json
+```
+
+generated index가 current 상태가 된 뒤 기존 reader는 `Zettel -> Zettel`
+관계의 양쪽 zet endpoint에서 관계를 찾을 수 있습니다.
+
+```powershell
+archive related-zets <archive-root> `
+  --zettel-id <zet-id> `
+  --edge-type format_variant
+```
+
+`zettel-edge-batch`는 이 유형을 자동으로 쓸 수 없습니다. 검토된 policy가
+`auto_write_edge_types`에 `format_variant`를 넣어도 해당 행은
+`manual_single_edge_review_required` 사유와 함께 `human_review_queue`로
+돌아갑니다. 검토한 각 쌍은 위의 단일 edge preview와 approve 경로를
+사용하십시오.
+
+이번 릴리스는 제목, 파일명, node 종류, provider, 기존 `references` edge,
+model 결과에서 `format_variant`를 추론하지 않습니다. 기존 edge를
+재분류하거나 이관하지 않고, reciprocal assertion을 쓰지 않으며, provider를
+읽거나 beta 보관함을 수정하거나 MCP writer를 추가하지 않습니다. 자세한
+내용은 [`wom-kit/docs/zettel-edge-write.md`](wom-kit/docs/zettel-edge-write.md)와
+[`wom-kit/docs/releases/v0.3.286.md`](wom-kit/docs/releases/v0.3.286.md)를
+보세요.
+
+`related-zets`는 zettel id를 입력으로 받습니다. `format_variant`의 target이
+`OriginalObject`일 수는 있지만, 이번 릴리스는 object id를 이 reader의
+subject로 추가하지 않습니다.
+
 ## v0.3.285 Notion manifest index-title fallback
 
 아카이브 마이그레이션은 필요하지 않습니다. v0.3.285는 JSON 또는 YAML
