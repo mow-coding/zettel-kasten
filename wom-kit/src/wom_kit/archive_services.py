@@ -30336,6 +30336,1149 @@ def notion_import_locator_loss_audit(
     }
 
 
+NOTION_LOCATOR_EVIDENCE_SCHEMA = (
+    "wom-kit/notion-locator-occurrence-evidence/v0.1"
+)
+NOTION_LOCATOR_EVIDENCE_PLAN_SCHEMA = (
+    "wom-kit/notion-locator-evidence-plan/v0.1"
+)
+NOTION_LOCATOR_EVIDENCE_PREFIX = (
+    ".wom-scratch/notion-locator-evidence/"
+)
+NOTION_LOCATOR_EVIDENCE_MAX_FILE_BYTES = 64 * 1024 * 1024
+NOTION_LOCATOR_EVIDENCE_MAX_LINE_BYTES = 1024 * 1024
+NOTION_LOCATOR_EVIDENCE_MAX_ROWS = 5000
+NOTION_LOCATOR_EVIDENCE_MAX_CANONICAL_FILE_BYTES = 16 * 1024 * 1024
+NOTION_LOCATOR_EVIDENCE_MAX_MATCHED_CANONICAL_BYTES = 256 * 1024 * 1024
+NOTION_LOCATOR_EVIDENCE_MAX_SOURCE_PAGE_ID_CHARS = 512
+NOTION_LOCATOR_EVIDENCE_MAX_LOCATOR_CHARS = 8192
+NOTION_LOCATOR_EVIDENCE_MAX_DECLARED_OMITTED_COUNT = (
+    NOTION_LOCATOR_EVIDENCE_MAX_CANONICAL_FILE_BYTES
+    // len(NOTION_IMPORT_LOCATOR_OMISSION_MARKER.encode("utf-8"))
+)
+NOTION_LOCATOR_EVIDENCE_MAX_JSON_DEPTH = 32
+NOTION_LOCATOR_EVIDENCE_MAX_JSON_NODES = 20000
+NOTION_LOCATOR_EVIDENCE_ROW_KEYS = {
+    "schema",
+    "source_page_id",
+    "basis",
+    "source_snapshot_sha256",
+    "expected_canonical_sha256",
+    "occurrences",
+}
+NOTION_LOCATOR_EVIDENCE_OCCURRENCE_KEYS = {
+    "source_occurrence_ordinal",
+    "marker_ordinal",
+    "locator",
+}
+NOTION_LOCATOR_UUID_COMPACT_RE = re.compile(r"^[0-9a-fA-F]{32}$")
+NOTION_LOCATOR_UUID_DASHED_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+
+
+class NotionLocatorEvidenceDuplicateKeyError(ValueError):
+    """Raised when a private evidence JSON object repeats a key."""
+
+
+def _notion_locator_evidence_public_item(
+    row: dict[str, Any],
+) -> dict[str, Any]:
+    """Return the exact content-free item shape allowed by the plan contract."""
+
+    return {
+        "row_number": int(row["row_number"]),
+        "status": str(row["status"]),
+        "source_occurrence_count": row.get("source_occurrence_count"),
+        "body_marker_count": row.get("body_marker_count"),
+        "frontmatter_omitted_count": row.get("frontmatter_omitted_count"),
+        "expected_canonical_sha256_matches": int(
+            row.get("expected_canonical_sha256_matches") or 0
+        ),
+        "blocker_codes": unique_preserve_order(
+            [str(code) for code in row.get("blocker_codes") or []]
+        ),
+        "warning_codes": unique_preserve_order(
+            [str(code) for code in row.get("warning_codes") or []]
+        ),
+    }
+
+
+def _notion_locator_evidence_result(
+    *,
+    archive_id: str,
+    dry_run: bool,
+    evidence_file_sha256: str | None,
+    row_results: list[dict[str, Any]],
+    evidence_row_count: int,
+    aligned_count: int,
+    blocked_count: int,
+    affected_canonical_count: int,
+    covered_affected_count: int,
+    coverage_complete: bool,
+    max_items: int,
+    canonical_snapshot_sha256s: list[str],
+    plan_rows: list[dict[str, Any]],
+    global_blocker_codes: list[str],
+    global_warning_codes: list[str],
+    blocker_code_count_overrides: dict[str, int] | None = None,
+) -> dict[str, Any]:
+    """Build one privacy-safe result without exposing private join material."""
+
+    returned_rows = row_results[:max_items]
+    returned_items = [
+        _notion_locator_evidence_public_item(row) for row in returned_rows
+    ]
+    returned_item_count = len(returned_items)
+    truncated_item_count = max(0, evidence_row_count - returned_item_count)
+    uncovered_affected_count = max(
+        0, affected_canonical_count - covered_affected_count
+    )
+
+    all_blocker_codes = list(global_blocker_codes)
+    all_warning_codes = list(global_warning_codes)
+    for row in row_results:
+        all_blocker_codes.extend(
+            str(code) for code in row.get("blocker_codes") or []
+        )
+        all_warning_codes.extend(
+            str(code) for code in row.get("warning_codes") or []
+        )
+    if uncovered_affected_count and "partial_coverage" not in all_warning_codes:
+        all_warning_codes.append("partial_coverage")
+    blocker_code_counts: dict[str, int] = {}
+    for code in all_blocker_codes:
+        blocker_code_counts[code] = blocker_code_counts.get(code, 0) + 1
+    for code, count in (blocker_code_count_overrides or {}).items():
+        blocker_code_counts[str(code)] = max(0, int(count))
+
+    blocker_codes = unique_preserve_order(all_blocker_codes)
+    warning_codes = unique_preserve_order(all_warning_codes)
+    if blocker_codes:
+        state = "blocked"
+    elif aligned_count:
+        state = "aligned_for_human_review"
+    else:
+        state = "no_aligned_evidence"
+
+    plan_digest = None
+    if evidence_file_sha256 is not None:
+        plan_digest = sha256_json_value(
+            {
+                "schema": NOTION_LOCATOR_EVIDENCE_PLAN_SCHEMA,
+                "archive_id": archive_id,
+                "evidence_file_sha256": evidence_file_sha256,
+                "canonical_snapshot_sha256s": sorted(
+                    canonical_snapshot_sha256s
+                ),
+                "rows": plan_rows,
+            }
+        )
+
+    return {
+        "ok": not blocker_codes,
+        "schema": NOTION_LOCATOR_EVIDENCE_PLAN_SCHEMA,
+        "lifecycle_action": "notion_import_locator_evidence_plan",
+        "state": state,
+        "dry_run": bool(dry_run),
+        "evidence_file_sha256": evidence_file_sha256,
+        "plan_digest": plan_digest,
+        "affected_canonical_count": affected_canonical_count,
+        "covered_affected_count": covered_affected_count,
+        "uncovered_affected_count": uncovered_affected_count,
+        "coverage_complete": bool(coverage_complete),
+        "evidence_row_count": evidence_row_count,
+        "aligned_count": aligned_count,
+        "blocked_count": blocked_count,
+        "returned_item_count": returned_item_count,
+        "truncated_item_count": truncated_item_count,
+        "items": returned_items,
+        "blocker_code_counts": dict(sorted(blocker_code_counts.items())),
+        "blocker_codes": blocker_codes,
+        "warning_codes": warning_codes,
+        "capabilities": {
+            "canonical_writer_available": False,
+            "receipt_writer_available": False,
+            "provider_api_called": False,
+            "raw_record_map_parser_available": False,
+            "pages_index_jsonl_parser_available": False,
+            "coordinate_77_variants_handled": False,
+        },
+        "claim_boundary": {
+            "explicit_ordinal_pairs_are_alignment_authority": True,
+            "count_equality_alone_proves_alignment": False,
+            "uncovered_means_no_unique_join_and_sha_selected_evidence_row": True,
+            "permanent_loss_claimed": False,
+        },
+        "resource_limits": {
+            "evidence_file_bytes": NOTION_LOCATOR_EVIDENCE_MAX_FILE_BYTES,
+            "evidence_line_bytes": NOTION_LOCATOR_EVIDENCE_MAX_LINE_BYTES,
+            "evidence_rows": NOTION_LOCATOR_EVIDENCE_MAX_ROWS,
+            "canonical_file_bytes": (
+                NOTION_LOCATOR_EVIDENCE_MAX_CANONICAL_FILE_BYTES
+            ),
+            "matched_canonical_bytes": (
+                NOTION_LOCATOR_EVIDENCE_MAX_MATCHED_CANONICAL_BYTES
+            ),
+        },
+        "privacy_guards": {
+            "source_page_id_echoed": False,
+            "source_page_id_fingerprint_echoed": False,
+            "locator_echoed": False,
+            "locator_fingerprint_echoed": False,
+            "title_echoed": False,
+            "body_echoed": False,
+            "context_echoed": False,
+            "zettel_id_echoed": False,
+            "filename_or_path_echoed": False,
+            "source_snapshot_contents_echoed": False,
+            "individual_occurrence_digest_echoed": False,
+            "provider_api_called": False,
+            "writes": False,
+        },
+        "would_change": [],
+    }
+
+
+def _normalize_notion_locator_source_page_id(value: Any) -> str | None:
+    """Normalize UUID forms while preserving arbitrary-id case exactly."""
+
+    if isinstance(value, bool) or not isinstance(value, (str, int)):
+        return None
+    text = str(value)
+    if (
+        not text
+        or text != text.strip()
+        or len(text) > NOTION_LOCATOR_EVIDENCE_MAX_SOURCE_PAGE_ID_CHARS
+        or any(unicodedata.category(character).startswith("C") for character in text)
+    ):
+        return None
+    if NOTION_LOCATOR_UUID_COMPACT_RE.fullmatch(text):
+        return text.lower()
+    if NOTION_LOCATOR_UUID_DASHED_RE.fullmatch(text):
+        return text.replace("-", "").lower()
+    return text
+
+
+def _notion_locator_exact_source_page_id(
+    frontmatter: dict[str, Any],
+) -> tuple[str | None, str, set[str]]:
+    """Read only facets.source_page_id and reject missing/conflicting shapes."""
+
+    facets = frontmatter.get("facets")
+    if not isinstance(facets, dict) or "source_page_id" not in facets:
+        return None, "missing", set()
+    raw_value = facets.get("source_page_id")
+    raw_values = raw_value if isinstance(raw_value, list) else [raw_value]
+    if not raw_values:
+        return None, "missing", set()
+    normalized_values: set[str] = set()
+    invalid_value_present = False
+    for value in raw_values:
+        normalized = _normalize_notion_locator_source_page_id(value)
+        if normalized is None:
+            invalid_value_present = True
+        else:
+            normalized_values.add(normalized)
+    if invalid_value_present:
+        return None, "invalid", normalized_values
+    if len(normalized_values) != 1:
+        return None, "conflicting", normalized_values
+    return next(iter(normalized_values)), "exact", normalized_values
+
+
+def _notion_locator_strict_omitted_count(
+    frontmatter: dict[str, Any],
+) -> int | None:
+    """Return one unambiguous integer import-time omission count."""
+
+    values: list[int] = []
+    invalid_value_present = False
+
+    def walk(value: Any) -> None:
+        nonlocal invalid_value_present
+        if isinstance(value, dict):
+            for key, child in value.items():
+                if (
+                    notion_source_map_normalized_key(key)
+                    in NOTION_IMPORT_OMISSION_COUNT_KEYS
+                ):
+                    if isinstance(child, bool) or not isinstance(child, int):
+                        invalid_value_present = True
+                    else:
+                        values.append(child)
+                if isinstance(child, (dict, list)):
+                    walk(child)
+        elif isinstance(value, list):
+            for child in value:
+                walk(child)
+
+    try:
+        walk(frontmatter)
+    except RecursionError:
+        return None
+    if invalid_value_present:
+        return None
+    if not values:
+        return 0
+    if len(values) != 1:
+        return None
+    count = values[0]
+    if (
+        count < 0
+        or count > NOTION_LOCATOR_EVIDENCE_MAX_DECLARED_OMITTED_COUNT
+    ):
+        return None
+    return count
+
+
+def _notion_locator_json_within_limits(value: Any) -> bool:
+    pending: list[tuple[Any, int]] = [(value, 0)]
+    visited = 0
+    while pending:
+        item, depth = pending.pop()
+        visited += 1
+        if (
+            visited > NOTION_LOCATOR_EVIDENCE_MAX_JSON_NODES
+            or depth > NOTION_LOCATOR_EVIDENCE_MAX_JSON_DEPTH
+        ):
+            return False
+        if isinstance(item, dict):
+            pending.extend((child, depth + 1) for child in item.values())
+        elif isinstance(item, list):
+            pending.extend((child, depth + 1) for child in item)
+    return True
+
+
+def _parse_notion_locator_evidence_json(
+    raw_line: bytes,
+    *,
+    first_line: bool,
+    blocker_codes: list[str],
+) -> dict[str, Any] | None:
+    def reject_duplicate_pairs(
+        pairs: list[tuple[str, Any]],
+    ) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise NotionLocatorEvidenceDuplicateKeyError(
+                    "row_json_duplicate_key"
+                )
+            result[key] = value
+        return result
+
+    def reject_non_finite_number(value: str) -> None:
+        raise ValueError("row_json_non_finite_number")
+
+    try:
+        encoding = "utf-8-sig" if first_line else "utf-8"
+        text = raw_line.decode(encoding)
+    except UnicodeDecodeError:
+        blocker_codes.append("row_not_valid_utf8")
+        return None
+    try:
+        value = json.loads(
+            text,
+            object_pairs_hook=reject_duplicate_pairs,
+            parse_constant=reject_non_finite_number,
+        )
+    except NotionLocatorEvidenceDuplicateKeyError:
+        blocker_codes.append("row_json_duplicate_key")
+        return None
+    except RecursionError:
+        blocker_codes.append("row_json_depth_or_node_limit_exceeded")
+        return None
+    except (json.JSONDecodeError, ValueError):
+        blocker_codes.append("row_json_invalid")
+        return None
+    if not _notion_locator_json_within_limits(value):
+        blocker_codes.append("row_json_depth_or_node_limit_exceeded")
+        return None
+    if not isinstance(value, dict):
+        blocker_codes.append("row_not_object")
+        return None
+    return value
+
+
+def _notion_locator_is_valid(value: Any) -> bool:
+    if (
+        not isinstance(value, str)
+        or not value
+        or len(value) > NOTION_LOCATOR_EVIDENCE_MAX_LOCATOR_CHARS
+        or "\\" in value
+        or re.search(r"%(?![0-9A-Fa-f]{2})", value) is not None
+        or any(character.isspace() for character in value)
+        or any(
+            unicodedata.category(character).startswith("C")
+            for character in value
+        )
+    ):
+        return False
+    try:
+        parsed = urllib.parse.urlsplit(value)
+        _ = parsed.port
+    except (TypeError, ValueError):
+        return False
+    return bool(
+        parsed.scheme.lower() in {"http", "https"}
+        and parsed.netloc
+        and parsed.hostname
+        and parsed.username is None
+        and parsed.password is None
+    )
+
+
+def _read_notion_locator_evidence_snapshot(
+    path: Path,
+    blocker_codes: list[str],
+) -> bytes | None:
+    try:
+        before = os.lstat(path)
+        reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+        if stat.S_ISLNK(before.st_mode) or (
+            reparse_flag
+            and getattr(before, "st_file_attributes", 0) & reparse_flag
+        ):
+            blocker_codes.append(
+                "evidence_path_contains_symlink_or_reparse"
+            )
+            return None
+        if not stat.S_ISREG(before.st_mode):
+            blocker_codes.append("evidence_file_missing_or_not_regular")
+            return None
+        if before.st_size > NOTION_LOCATOR_EVIDENCE_MAX_FILE_BYTES:
+            blocker_codes.append("evidence_file_exceeds_64_mib")
+            return None
+        with path.open("rb") as handle:
+            opened = os.fstat(handle.fileno())
+            if (
+                not stat.S_ISREG(opened.st_mode)
+                or (opened.st_dev, opened.st_ino)
+                != (before.st_dev, before.st_ino)
+                or opened.st_size != before.st_size
+            ):
+                blocker_codes.append(
+                    "evidence_file_changed_during_read"
+                )
+                return None
+            raw = handle.read(NOTION_LOCATOR_EVIDENCE_MAX_FILE_BYTES + 1)
+            opened_after = os.fstat(handle.fileno())
+    except OSError:
+        blocker_codes.append("evidence_file_unreadable")
+        return None
+    try:
+        after = os.lstat(path)
+    except OSError:
+        blocker_codes.append("evidence_file_changed_during_read")
+        return None
+    before_identity = (
+        before.st_dev,
+        before.st_ino,
+        before.st_size,
+        before.st_mtime_ns,
+    )
+    opened_identity = (
+        opened.st_dev,
+        opened.st_ino,
+        opened.st_size,
+        opened.st_mtime_ns,
+    )
+    opened_after_identity = (
+        opened_after.st_dev,
+        opened_after.st_ino,
+        opened_after.st_size,
+        opened_after.st_mtime_ns,
+    )
+    after_identity = (
+        after.st_dev,
+        after.st_ino,
+        after.st_size,
+        after.st_mtime_ns,
+    )
+    if (
+        before_identity != opened_identity
+        or opened_identity != opened_after_identity
+        or opened_after_identity != after_identity
+        or len(raw) != before.st_size
+    ):
+        blocker_codes.append("evidence_file_changed_during_read")
+        return None
+    if len(raw) > NOTION_LOCATOR_EVIDENCE_MAX_FILE_BYTES:
+        blocker_codes.append("evidence_file_exceeds_64_mib")
+        return None
+    return raw
+
+
+def _resolve_notion_locator_evidence_path(
+    root: Path,
+    raw_path: Any,
+    blocker_codes: list[str],
+) -> Path | None:
+    if (
+        not isinstance(raw_path, str)
+        or raw_path != raw_path.strip()
+        or re.match(r"^[A-Za-z]:", raw_path)
+    ):
+        blocker_codes.append("evidence_path_not_archive_relative")
+        return None
+    try:
+        normalized = normalize_archive_relative_path(raw_path)
+    except (ArchivePathError, TypeError, ValueError):
+        blocker_codes.append("evidence_path_not_archive_relative")
+        return None
+    if not normalized.startswith(NOTION_LOCATOR_EVIDENCE_PREFIX):
+        blocker_codes.append("evidence_path_outside_private_scratch")
+        return None
+    if not normalized.lower().endswith(".jsonl"):
+        blocker_codes.append("evidence_path_wrong_suffix")
+        return None
+    lexical_path = root.joinpath(*PurePosixPath(normalized).parts)
+    if zet_revision_path_has_symlink_component(root, lexical_path):
+        blocker_codes.append(
+            "evidence_path_contains_symlink_or_reparse"
+        )
+        return None
+    try:
+        path = resolve_archive_relative_path(root, normalized)
+        file_stat = os.lstat(path)
+    except (
+        ArchivePathError,
+        FileNotFoundError,
+        OSError,
+        RuntimeError,
+        ValueError,
+    ):
+        blocker_codes.append("evidence_file_missing_or_not_regular")
+        return None
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    if stat.S_ISLNK(file_stat.st_mode) or (
+        reparse_flag
+        and getattr(file_stat, "st_file_attributes", 0) & reparse_flag
+    ):
+        blocker_codes.append(
+            "evidence_path_contains_symlink_or_reparse"
+        )
+        return None
+    if not stat.S_ISREG(file_stat.st_mode):
+        blocker_codes.append("evidence_file_missing_or_not_regular")
+        return None
+    return path
+
+
+def _read_notion_locator_canonical_snapshot(
+    root: Path,
+    path: Path,
+    *,
+    expected_archive_id: str | None = None,
+) -> tuple[bytes | None, str | None]:
+    if zet_revision_path_has_symlink_component(root, path):
+        return None, "canonical_path_contains_symlink_or_reparse"
+    snapshot = validated_approval_zettel_snapshot(
+        path,
+        max_bytes=NOTION_LOCATOR_EVIDENCE_MAX_CANONICAL_FILE_BYTES,
+        expected_zettel_id=None,
+        expected_archive_id=expected_archive_id,
+        expected_status="canonical",
+    )
+    if snapshot.get("ok") is True and isinstance(
+        snapshot.get("bytes"), bytes
+    ):
+        return snapshot["bytes"], None
+
+    issues = {
+        str(issue) for issue in snapshot.get("issue_codes", []) if issue
+    }
+    if "zettel_size_limit_exceeded" in issues:
+        return None, "canonical_file_exceeds_16_mib"
+    if "zettel_snapshot_changed" in issues:
+        return None, "canonical_file_changed_during_read"
+    if issues & {"frontmatter_io_error", "zettel_not_regular_file"}:
+        return None, "canonical_file_unreadable"
+    if "frontmatter_unicode_error" in issues:
+        return None, "canonical_file_not_utf8"
+    if "frontmatter_archive_identity_mismatch" in issues:
+        return None, "canonical_archive_identity_mismatch"
+    if issues & {
+        "frontmatter_identity_invalid",
+        "frontmatter_identity_mismatch",
+    }:
+        return None, "canonical_frontmatter_identity_invalid"
+    if "frontmatter_schema_invalid" in issues:
+        return None, "canonical_frontmatter_schema_invalid"
+    if "frontmatter_duplicate_key" in issues:
+        return None, "canonical_frontmatter_duplicate_key"
+    if issues == {"frontmatter_status_mismatch"}:
+        return None, "canonical_not_current"
+    return None, "canonical_frontmatter_invalid"
+
+
+def _notion_locator_evidence_lines(raw: bytes) -> list[bytes]:
+    if not raw:
+        return []
+    lines = raw.split(b"\n")
+    if raw.endswith(b"\n"):
+        lines.pop()
+    return lines
+
+
+def _notion_locator_evidence_row_count(raw: bytes) -> int:
+    if not raw:
+        return 0
+    return raw.count(b"\n") + (0 if raw.endswith(b"\n") else 1)
+
+
+def _validate_notion_locator_evidence_row(
+    raw_line: bytes,
+    *,
+    row_number: int,
+) -> dict[str, Any]:
+    blocker_codes: list[str] = []
+    result: dict[str, Any] = {
+        "row_number": row_number,
+        "status": "blocked",
+        "source_occurrence_count": None,
+        "body_marker_count": None,
+        "frontmatter_omitted_count": None,
+        "expected_canonical_sha256_matches": 0,
+        "blocker_codes": blocker_codes,
+        "warning_codes": [],
+        "_source_page_id": None,
+        "_source_snapshot_sha256": None,
+        "_expected_canonical_sha256": None,
+        "_ordinal_pairs": [],
+    }
+    if len(raw_line) > NOTION_LOCATOR_EVIDENCE_MAX_LINE_BYTES:
+        blocker_codes.append("evidence_line_exceeds_1_mib")
+        return result
+    payload = _parse_notion_locator_evidence_json(
+        raw_line,
+        first_line=row_number == 1,
+        blocker_codes=blocker_codes,
+    )
+    if payload is None:
+        return result
+
+    payload_keys = set(payload)
+    if payload_keys - NOTION_LOCATOR_EVIDENCE_ROW_KEYS:
+        blocker_codes.append("row_unsupported_fields")
+    if NOTION_LOCATOR_EVIDENCE_ROW_KEYS - payload_keys:
+        blocker_codes.append("row_required_fields_missing")
+    if payload.get("schema") != NOTION_LOCATOR_EVIDENCE_SCHEMA:
+        blocker_codes.append("schema_invalid")
+    if payload.get("basis") != "reviewed_local_mirror":
+        blocker_codes.append("basis_invalid")
+
+    raw_source_page_id = payload.get("source_page_id")
+    source_page_id = (
+        _normalize_notion_locator_source_page_id(raw_source_page_id)
+        if isinstance(raw_source_page_id, str)
+        else None
+    )
+    if source_page_id is None:
+        blocker_codes.append("source_page_id_invalid")
+    else:
+        result["_source_page_id"] = source_page_id
+
+    source_snapshot_sha256 = payload.get("source_snapshot_sha256")
+    if (
+        not isinstance(source_snapshot_sha256, str)
+        or not OBJECT_ID_RE.fullmatch(source_snapshot_sha256)
+    ):
+        blocker_codes.append("source_snapshot_sha256_invalid")
+    else:
+        result["_source_snapshot_sha256"] = source_snapshot_sha256
+
+    expected_canonical_sha256 = payload.get(
+        "expected_canonical_sha256"
+    )
+    if (
+        not isinstance(expected_canonical_sha256, str)
+        or not OBJECT_ID_RE.fullmatch(expected_canonical_sha256)
+    ):
+        blocker_codes.append("expected_canonical_sha256_invalid")
+    else:
+        result["_expected_canonical_sha256"] = (
+            expected_canonical_sha256
+        )
+
+    occurrences = payload.get("occurrences")
+    if not isinstance(occurrences, list) or not occurrences:
+        blocker_codes.append("occurrences_invalid")
+        result["source_occurrence_count"] = (
+            len(occurrences) if isinstance(occurrences, list) else None
+        )
+        return result
+
+    occurrence_count = len(occurrences)
+    result["source_occurrence_count"] = occurrence_count
+    source_ordinals: list[int] = []
+    marker_ordinals: list[int] = []
+    ordinal_pairs: list[list[int]] = []
+    for occurrence in occurrences:
+        if not isinstance(occurrence, dict):
+            blocker_codes.append("occurrence_not_object")
+            continue
+        occurrence_keys = set(occurrence)
+        if occurrence_keys - NOTION_LOCATOR_EVIDENCE_OCCURRENCE_KEYS:
+            blocker_codes.append("occurrence_unsupported_fields")
+        if NOTION_LOCATOR_EVIDENCE_OCCURRENCE_KEYS - occurrence_keys:
+            blocker_codes.append("occurrence_required_fields_missing")
+
+        source_ordinal = occurrence.get("source_occurrence_ordinal")
+        if isinstance(source_ordinal, bool) or not isinstance(
+            source_ordinal, int
+        ):
+            blocker_codes.append("source_occurrence_ordinal_invalid")
+        elif source_ordinal <= 0:
+            blocker_codes.append(
+                "source_occurrence_ordinal_not_positive"
+            )
+        else:
+            source_ordinals.append(source_ordinal)
+            if source_ordinal > occurrence_count:
+                blocker_codes.append(
+                    "source_occurrence_ordinal_out_of_range"
+                )
+
+        marker_ordinal = occurrence.get("marker_ordinal")
+        if isinstance(marker_ordinal, bool) or not isinstance(
+            marker_ordinal, int
+        ):
+            blocker_codes.append("marker_ordinal_invalid")
+        elif marker_ordinal <= 0:
+            blocker_codes.append("marker_ordinal_not_positive")
+        else:
+            marker_ordinals.append(marker_ordinal)
+            if marker_ordinal > occurrence_count:
+                blocker_codes.append("marker_ordinal_out_of_range")
+
+        if isinstance(source_ordinal, int) and not isinstance(
+            source_ordinal, bool
+        ) and isinstance(marker_ordinal, int) and not isinstance(
+            marker_ordinal, bool
+        ):
+            ordinal_pairs.append([source_ordinal, marker_ordinal])
+
+        if not _notion_locator_is_valid(occurrence.get("locator")):
+            blocker_codes.append("locator_invalid")
+
+    expected_ordinals = list(range(1, occurrence_count + 1))
+    if sorted(source_ordinals) != expected_ordinals:
+        blocker_codes.append(
+            "source_occurrence_ordinals_not_exact_range"
+        )
+    if sorted(marker_ordinals) != expected_ordinals:
+        blocker_codes.append("marker_ordinals_not_exact_range")
+    result["_ordinal_pairs"] = ordinal_pairs
+    return result
+
+
+def _scan_notion_locator_canonical_snapshots(
+    root: Path,
+    evidence_source_page_ids: set[str],
+    *,
+    expected_archive_id: str,
+) -> tuple[
+    list[dict[str, Any]],
+    dict[str, list[dict[str, Any]]],
+    set[str],
+    list[str],
+    int,
+]:
+    records: list[dict[str, Any]] = []
+    source_page_index: dict[str, list[dict[str, Any]]] = {}
+    conflicting_source_page_ids: set[str] = set()
+    blocker_codes: list[str] = []
+    matched_bytes = 0
+
+    try:
+        zettel_paths = iter_zettel_paths(root)
+    except (OSError, RuntimeError, ValueError):
+        return (
+            records,
+            source_page_index,
+            conflicting_source_page_ids,
+            ["canonical_scan_incomplete"],
+            matched_bytes,
+        )
+
+    for path in zettel_paths:
+        raw, read_blocker = _read_notion_locator_canonical_snapshot(
+            root,
+            path,
+            expected_archive_id=expected_archive_id,
+        )
+        if read_blocker == "canonical_not_current":
+            continue
+        if read_blocker is not None or raw is None:
+            blocker_codes.append(
+                read_blocker or "canonical_file_unreadable"
+            )
+            continue
+        try:
+            text = raw.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            blocker_codes.append("canonical_file_not_utf8")
+            continue
+        boundary = parse_approval_zettel_content_boundary(text)
+        if boundary.get("state") == "blocked":
+            reason = str(boundary.get("reason") or "")
+            if reason == "frontmatter_duplicate_key":
+                blocker_codes.append("canonical_frontmatter_duplicate_key")
+            else:
+                blocker_codes.append("canonical_frontmatter_invalid")
+            continue
+        frontmatter = boundary.get("frontmatter")
+        if not isinstance(frontmatter, dict):
+            blocker_codes.append("canonical_frontmatter_invalid")
+            continue
+        if frontmatter.get("status") != "canonical":
+            continue
+        if not notion_import_frontmatter_is_notion(frontmatter):
+            continue
+
+        body = str(boundary.get("body") or "")
+        marker_count = body.count(NOTION_IMPORT_LOCATOR_OMISSION_MARKER)
+        declared_count = _notion_locator_strict_omitted_count(
+            frontmatter
+        )
+        if declared_count is None:
+            blocker_codes.append(
+                "canonical_frontmatter_omitted_count_invalid"
+            )
+        source_page_id, source_state, source_candidates = (
+            _notion_locator_exact_source_page_id(frontmatter)
+        )
+        canonical_sha256 = "sha256:" + hashlib.sha256(raw).hexdigest()
+        record = {
+            "_path": path,
+            "canonical_sha256": canonical_sha256,
+            "body_marker_count": marker_count,
+            "frontmatter_omitted_count": declared_count,
+            "source_page_id": source_page_id,
+            "source_page_id_state": source_state,
+        }
+        records.append(record)
+        if source_state in {"conflicting", "invalid"}:
+            conflicting_source_page_ids.update(source_candidates)
+        if source_page_id is None:
+            continue
+        if source_page_id in evidence_source_page_ids:
+            matched_bytes += len(raw)
+        source_page_index.setdefault(source_page_id, []).append(record)
+
+    if matched_bytes > NOTION_LOCATOR_EVIDENCE_MAX_MATCHED_CANONICAL_BYTES:
+        blocker_codes.append(
+            "canonical_matched_bytes_exceeds_256_mib"
+        )
+    if blocker_codes:
+        blocker_codes.append("canonical_scan_incomplete")
+    return (
+        records,
+        source_page_index,
+        conflicting_source_page_ids,
+        unique_preserve_order(blocker_codes),
+        matched_bytes,
+    )
+
+
+def notion_import_locator_evidence_plan(
+    archive_root: Path | str,
+    *,
+    evidence_path: str,
+    dry_run: bool = True,
+    max_items: int = 200,
+) -> dict[str, Any]:
+    """Validate reviewed private locator occurrences without writing or echoing them."""
+
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    global_blocker_codes: list[str] = []
+    global_warning_codes: list[str] = []
+    try:
+        effective_max_items = int(max_items)
+    except (TypeError, ValueError, OverflowError):
+        effective_max_items = 200
+        global_blocker_codes.append("max_items_invalid")
+    if effective_max_items < 0:
+        effective_max_items = 0
+        global_blocker_codes.append("max_items_invalid")
+    effective_max_items = min(
+        effective_max_items, NOTION_LOCATOR_EVIDENCE_MAX_ROWS
+    )
+    if not dry_run:
+        global_blocker_codes.append("dry_run_required")
+        return _notion_locator_evidence_result(
+            archive_id=archive_id,
+            dry_run=False,
+            evidence_file_sha256=None,
+            row_results=[],
+            evidence_row_count=0,
+            aligned_count=0,
+            blocked_count=0,
+            affected_canonical_count=0,
+            covered_affected_count=0,
+            coverage_complete=False,
+            max_items=effective_max_items,
+            canonical_snapshot_sha256s=[],
+            plan_rows=[],
+            global_blocker_codes=global_blocker_codes,
+            global_warning_codes=global_warning_codes,
+        )
+
+    evidence_file = _resolve_notion_locator_evidence_path(
+        root, evidence_path, global_blocker_codes
+    )
+    if evidence_file is None:
+        return _notion_locator_evidence_result(
+            archive_id=archive_id,
+            dry_run=True,
+            evidence_file_sha256=None,
+            row_results=[],
+            evidence_row_count=0,
+            aligned_count=0,
+            blocked_count=0,
+            affected_canonical_count=0,
+            covered_affected_count=0,
+            coverage_complete=False,
+            max_items=effective_max_items,
+            canonical_snapshot_sha256s=[],
+            plan_rows=[],
+            global_blocker_codes=global_blocker_codes,
+            global_warning_codes=global_warning_codes,
+        )
+
+    raw_evidence = _read_notion_locator_evidence_snapshot(
+        evidence_file, global_blocker_codes
+    )
+    if raw_evidence is None:
+        return _notion_locator_evidence_result(
+            archive_id=archive_id,
+            dry_run=True,
+            evidence_file_sha256=None,
+            row_results=[],
+            evidence_row_count=0,
+            aligned_count=0,
+            blocked_count=0,
+            affected_canonical_count=0,
+            covered_affected_count=0,
+            coverage_complete=False,
+            max_items=effective_max_items,
+            canonical_snapshot_sha256s=[],
+            plan_rows=[],
+            global_blocker_codes=global_blocker_codes,
+            global_warning_codes=global_warning_codes,
+        )
+
+    evidence_file_sha256 = (
+        "sha256:" + hashlib.sha256(raw_evidence).hexdigest()
+    )
+    evidence_row_count = _notion_locator_evidence_row_count(raw_evidence)
+    if evidence_row_count > NOTION_LOCATOR_EVIDENCE_MAX_ROWS:
+        global_blocker_codes.append("evidence_row_limit_exceeded")
+        generic_rows = [
+            {
+                "row_number": row_number,
+                "status": "blocked",
+                "source_occurrence_count": None,
+                "body_marker_count": None,
+                "frontmatter_omitted_count": None,
+                "expected_canonical_sha256_matches": 0,
+                "blocker_codes": ["evidence_row_limit_exceeded"],
+                "warning_codes": [],
+            }
+            for row_number in range(
+                1, min(evidence_row_count, effective_max_items) + 1
+            )
+        ]
+        return _notion_locator_evidence_result(
+            archive_id=archive_id,
+            dry_run=True,
+            evidence_file_sha256=evidence_file_sha256,
+            row_results=generic_rows,
+            evidence_row_count=evidence_row_count,
+            aligned_count=0,
+            blocked_count=evidence_row_count,
+            affected_canonical_count=0,
+            covered_affected_count=0,
+            coverage_complete=False,
+            max_items=effective_max_items,
+            canonical_snapshot_sha256s=[],
+            plan_rows=[],
+            global_blocker_codes=global_blocker_codes,
+            global_warning_codes=global_warning_codes,
+            blocker_code_count_overrides={
+                "evidence_row_limit_exceeded": evidence_row_count
+            },
+        )
+    raw_lines = _notion_locator_evidence_lines(raw_evidence)
+    if not raw_lines:
+        global_blocker_codes.append("evidence_rows_missing")
+
+    row_results = [
+        _validate_notion_locator_evidence_row(
+            raw_line,
+            row_number=row_number,
+        )
+        for row_number, raw_line in enumerate(raw_lines, start=1)
+    ]
+    evidence_source_page_ids = {
+        str(row["_source_page_id"])
+        for row in row_results
+        if row.get("_source_page_id") is not None
+    }
+    (
+        canonical_records,
+        source_page_index,
+        conflicting_source_page_ids,
+        canonical_blocker_codes,
+        _matched_bytes,
+    ) = _scan_notion_locator_canonical_snapshots(
+        root,
+        evidence_source_page_ids,
+        expected_archive_id=archive_id,
+    )
+    global_blocker_codes.extend(canonical_blocker_codes)
+
+    covered_paths: set[Path] = set()
+    plan_rows: list[dict[str, Any]] = []
+    canonical_scan_incomplete = (
+        "canonical_scan_incomplete" in canonical_blocker_codes
+    )
+    canonical_limit_exceeded = (
+        "canonical_matched_bytes_exceeds_256_mib"
+        in canonical_blocker_codes
+    )
+    for row in row_results:
+        blocker_codes = row["blocker_codes"]
+        source_page_id = row.get("_source_page_id")
+        expected_sha256 = row.get("_expected_canonical_sha256")
+        selected: dict[str, Any] | None = None
+        if source_page_id is not None and expected_sha256 is not None:
+            candidates = source_page_index.get(source_page_id, [])
+            hash_matches = [
+                candidate
+                for candidate in candidates
+                if candidate["canonical_sha256"] == expected_sha256
+            ]
+            row["expected_canonical_sha256_matches"] = len(hash_matches)
+            if not candidates:
+                if source_page_id in conflicting_source_page_ids:
+                    blocker_codes.append(
+                        "source_page_join_conflicting"
+                    )
+                else:
+                    blocker_codes.append("source_page_join_not_found")
+            elif not hash_matches:
+                blocker_codes.append("canonical_sha256_no_match")
+            elif len(hash_matches) > 1:
+                blocker_codes.append("canonical_sha256_ambiguous")
+            else:
+                selected = hash_matches[0]
+                row["body_marker_count"] = selected[
+                    "body_marker_count"
+                ]
+                row["frontmatter_omitted_count"] = selected[
+                    "frontmatter_omitted_count"
+                ]
+                if int(selected["body_marker_count"]) > 0:
+                    covered_paths.add(selected["_path"])
+
+        if selected is not None:
+            marker_count = int(selected["body_marker_count"])
+            raw_declared_count = selected[
+                "frontmatter_omitted_count"
+            ]
+            occurrence_count = row.get("source_occurrence_count")
+            if marker_count <= 0:
+                blocker_codes.append("body_marker_count_not_positive")
+            if not isinstance(raw_declared_count, int):
+                blocker_codes.append(
+                    "canonical_frontmatter_omitted_count_invalid"
+                )
+            else:
+                declared_count = raw_declared_count
+                if declared_count <= 0:
+                    blocker_codes.append(
+                        "frontmatter_omitted_count_not_positive"
+                    )
+                if marker_count != declared_count:
+                    blocker_codes.append(
+                        "body_frontmatter_count_mismatch"
+                    )
+            if (
+                not isinstance(occurrence_count, int)
+                or marker_count != occurrence_count
+            ):
+                blocker_codes.append("body_evidence_count_mismatch")
+
+        if canonical_scan_incomplete:
+            blocker_codes.append("canonical_scan_incomplete")
+        if canonical_limit_exceeded:
+            blocker_codes.append(
+                "canonical_matched_bytes_exceeds_256_mib"
+            )
+        row["blocker_codes"] = unique_preserve_order(blocker_codes)
+        row["status"] = (
+            "aligned_for_human_review"
+            if not row["blocker_codes"]
+            else "blocked"
+        )
+        plan_rows.append(
+            {
+                "row_number": row["row_number"],
+                "status": row["status"],
+                "selected_canonical_sha256": (
+                    selected["canonical_sha256"]
+                    if selected is not None
+                    else None
+                ),
+                "ordinal_pairs": row.get("_ordinal_pairs") or [],
+            }
+        )
+
+    affected_records = [
+        record
+        for record in canonical_records
+        if int(record["body_marker_count"]) > 0
+    ]
+    affected_paths = {record["_path"] for record in affected_records}
+    covered_affected_count = len(covered_paths & affected_paths)
+    affected_canonical_count = len(affected_records)
+    coverage_complete = bool(
+        not canonical_scan_incomplete
+        and covered_affected_count == affected_canonical_count
+    )
+    aligned_count = sum(
+        1
+        for row in row_results
+        if row["status"] == "aligned_for_human_review"
+    )
+    blocked_count = evidence_row_count - aligned_count
+    canonical_snapshot_sha256s = [
+        str(record["canonical_sha256"]) for record in affected_records
+    ]
+    return _notion_locator_evidence_result(
+        archive_id=archive_id,
+        dry_run=True,
+        evidence_file_sha256=evidence_file_sha256,
+        row_results=row_results,
+        evidence_row_count=evidence_row_count,
+        aligned_count=aligned_count,
+        blocked_count=blocked_count,
+        affected_canonical_count=affected_canonical_count,
+        covered_affected_count=covered_affected_count,
+        coverage_complete=coverage_complete,
+        max_items=effective_max_items,
+        canonical_snapshot_sha256s=canonical_snapshot_sha256s,
+        plan_rows=plan_rows,
+        global_blocker_codes=global_blocker_codes,
+        global_warning_codes=global_warning_codes,
+    )
+
+
 NOTION_OBJET_LINK_REWRITE_TARGET_MODES = {
     "objet_ref_rewrite",
     "embed_edge",
@@ -70372,6 +71515,10 @@ def ai_response_concept_guide(
                 "command": "archive notion-import-locator-loss-audit <archive-root> --dry-run --format json",
             },
             {
+                "human_intent": "validate reviewed private Notion locator occurrences against exact current canonical snapshots",
+                "command": "archive notion-import-locator-evidence-plan <archive-root> --evidence .wom-scratch/notion-locator-evidence/<private>.jsonl --dry-run --format json",
+            },
+            {
                 "human_intent": "audit imported Notion zettels for missing material clues after provider locator omission",
                 "command": "archive notion-objet-import-clue-audit <archive-root> --source-map source-maps/<source>.jsonl --ledger receipts/import/<ledger>.jsonl --dry-run --format json",
             },
@@ -92098,6 +93245,12 @@ def runtime_context_material_link_routes() -> list[dict[str, Any]]:
         {
             "when": "the archive needs a complete census of current Notion omission markers, recorded counts, and source-page join-key presence",
             "command": "archive notion-import-locator-loss-audit <archive-root> --dry-run --format json",
+            "writes": False,
+            "provider_api_called": False,
+        },
+        {
+            "when": "reviewed private source occurrences must be aligned to exact current omission markers before any restoration writer is designed",
+            "command": "archive notion-import-locator-evidence-plan <archive-root> --evidence .wom-scratch/notion-locator-evidence/<private>.jsonl --dry-run --format json",
             "writes": False,
             "provider_api_called": False,
         },

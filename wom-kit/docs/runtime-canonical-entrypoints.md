@@ -1,6 +1,6 @@
 # Runtime Canonical Entry Points
 
-Status: v0.3.286 installed-wheel resource, manual format-variant routing, quick start, session handoff, local backup evidence, and philosophy implementation traceability checkpoint
+Status: v0.3.287 installed-wheel resource, read-only Notion locator evidence routing, quick start, session handoff, local backup evidence, and philosophy implementation traceability checkpoint
 
 When an AI runtime enters a WOM archive, it needs a small, explicit "start
 here" map. The archive may contain zets, source bindings, provider metadata,
@@ -83,6 +83,8 @@ anything:
 9. For Notion material links, choose the route from that guide:
    `notion-import-locator-loss-audit` to census omission markers, recorded
    counts, and source-page join-key presence,
+   `notion-import-locator-evidence-plan` to validate a human-reviewed private
+   occurrence mapping against exact current canonical bytes,
    `notion-objet-import-clue-audit` to check omitted-locator material clues,
    `notion-objet-source-map-link-plan` when source maps or ledgers can recover
    a candidate, or `notion-objet-link-index` / `notion-objet-link-plan` when
@@ -174,9 +176,10 @@ operational_context.session_start_injection
 ```
 
 The route list includes `notion-import-locator-loss-audit`,
-`notion-objet-import-clue-audit`, `notion-objet-source-map-link-plan`,
-`notion-objet-link-index`, and `notion-objet-link-plan`, with each route marked
-as read-only and provider-free.
+`notion-import-locator-evidence-plan`, `notion-objet-import-clue-audit`,
+`notion-objet-source-map-link-plan`, `notion-objet-link-index`, and
+`notion-objet-link-plan`, with each route marked as read-only and
+provider-free.
 
 ## Start Here
 
