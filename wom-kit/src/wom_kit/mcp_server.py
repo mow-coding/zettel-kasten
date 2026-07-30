@@ -2843,7 +2843,11 @@ class JsonRpcMcpServer:
                 try:
                     raw_line = raw_line.decode("utf-8", errors="strict")
                 except UnicodeDecodeError:
-                    self._write(stdout, error_response(None, JSONRPC_PARSE_ERROR))
+                    if not self._write(
+                        stdout,
+                        error_response(None, JSONRPC_PARSE_ERROR),
+                    ):
+                        return 0
                     continue
             line = raw_line.strip()
             if not line:

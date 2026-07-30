@@ -64,6 +64,8 @@ The complete implementation contract is recorded in
   invalid request, and invalid parameter sentinel regressions.
 - Updated version, public documentation, release notes, capability evidence,
   and deterministic packaged resources.
+- Rebased the candidate onto the exact merged v0.3.287 public source,
+  `e78282ea40b9efecde3d0c2c3046902a56f8f2aa`, before final publication work.
 
 ## Independent Review Findings And Corrections
 
@@ -107,6 +109,24 @@ before the candidate returned to the full test gate.
    the same exact `tool_execution_failed` envelope. Unexpected non-tool server
    method failures remain fixed JSON-RPC `Internal error`.
 
+A later independent final audit found two additional Medium issues. The
+candidate was held again and both became regressions:
+
+8. The invalid-UTF-8 path called `_write()` without checking its completion
+   signal. If stdout had already failed, the server could continue to a later
+   write tool without a response channel. This path now returns immediately
+   when the fixed parse-error response cannot be delivered. A regression sends
+   invalid UTF-8, forces stdout failure, then supplies a `create_draft_zettel`
+   request and proves the tool handler is never called.
+9. Public prose said no caller-controlled value crossed an error response,
+   which was broader than the JSON-RPC contract: a valid request id is
+   intentionally echoed at the top-level `id` for correlation. The privacy
+   promise now applies to error `message` and `data`; it explicitly preserves
+   the protocol-valid top-level id. A second independent pass found that the
+   short English WOM-kit README and Korean root README still used the older
+   broad wording. Both were corrected and added to the documentation
+   regression so every public summary now carries the same exception.
+
 ## Verification Status
 
 Completed local gates so far:
@@ -123,7 +143,7 @@ Completed local gates so far:
 - resource synchronization: 102 files for v0.3.288;
 - `py_compile`, staged/unstaged `git diff --check`: passed;
 - independent P1/P2 code and test review after all corrections: no remaining
-  finding;
+  finding at that review stage;
 - initial candidate commit:
   `7a99931e40cf94f070229384039e844eca5d5ed1`;
 - clean candidate wheel:
@@ -139,6 +159,30 @@ Completed local gates so far:
 This evidence update follows the initial product candidate commit. The
 supervisor must rerun the clean-wheel gate on the final evidence-bearing tree
 before treating it as the exact PR candidate.
+
+Final post-rebase and post-audit local gates:
+
+- first exact-v0.3.287-base full suite before findings 8-9: 1,776 tests
+  passed, 19 environment-dependent skips, 0 failures;
+- focused regressions for the stdout-stop and documented-id boundary:
+  4 tests passed;
+- complete MCP module after findings 8-9: 156 tests passed in 65.951 seconds;
+- documentation contract subset: 142 tests passed;
+- deterministic resource synchronization/check: 102 files;
+- release-readiness gate: all 4 checks passed;
+- final complete source suite: 1,777 tests passed, 19
+  environment-dependent skips, 0 failures in 855.231 seconds;
+- no orphan `python.exe` process remained after the final full suite;
+- final `git diff --check`: passed apart from expected Windows line-ending
+  notices.
+
+After the second independent documentation review, the complete documentation
+contract suite was rerun: 142 tests passed, 0 failures. The corrected English
+and Korean README assertions are part of that suite.
+
+The earlier `7a99931e` wheel remains only historical evidence and is not the
+release artifact because later commits changed the candidate. A new clean
+wheel must be built from the exact final merged commit.
 
 Remote PR, CI, merge, tag, GitHub Release, public artifact, and beta
 validation remain pending and are not claimed here.

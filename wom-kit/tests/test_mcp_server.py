@@ -1052,6 +1052,45 @@ class McpServerTests(unittest.TestCase):
         self.assertNotIn(b"SENTINEL_INVALID_UTF8", result.stdout)
         self.assertNotIn(b"UnicodeDecodeError", result.stdout)
 
+    def test_invalid_utf8_with_failed_stdout_stops_before_following_tool_request(
+        self,
+    ) -> None:
+        class WriteFailure:
+            def write(self, _value: str) -> int:
+                raise OSError("SENTINEL_INVALID_UTF8_WRITE_FAILURE")
+
+            def flush(self) -> None:
+                return None
+
+        server = mcp_server.JsonRpcMcpServer()
+        following_tool_request = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 921,
+                "method": "tools/call",
+                "params": {
+                    "name": "create_draft_zettel",
+                    "arguments": {
+                        "archive_root": "SENTINEL_UNREACHABLE_ARCHIVE",
+                        "title": "SENTINEL_UNREACHABLE_WRITE",
+                    },
+                },
+            },
+            separators=(",", ":"),
+        ).encode("utf-8")
+
+        with mock.patch.object(server, "handle_message") as handle_message:
+            returncode = server.serve(
+                [
+                    b"\xffSENTINEL_INVALID_UTF8\n",
+                    following_tool_request + b"\n",
+                ],
+                WriteFailure(),
+            )
+
+        self.assertEqual(returncode, 0)
+        handle_message.assert_not_called()
+
     def test_response_serialization_failure_is_fixed_internal_and_continues(self) -> None:
         server = mcp_server.JsonRpcMcpServer()
         stdin = io.StringIO(
