@@ -32,7 +32,10 @@ overview privacy contracts must not silently become body-search surfaces.
   source-map preservation, and cleanup-safety consumers have a different
   compatibility boundary.
 - Keep `zettel-objet-links.count` as the broader distinct-ID count across valid
-  frontmatter and body.
+  frontmatter and body. That separate command recursively token-scans valid
+  frontmatter, so an exact object-ID token inside nested metadata, URL text, or
+  path text can be a link-preview occurrence without becoming a structured tie
+  relationship.
 - Keep catalog `body_read: false`; body-only references do not affect
   `tie_summary.referenced_objets_count`.
 - Return zero ties and empty edges for redacted overview and catalog surfaces

@@ -49,7 +49,9 @@ Roadmap 요약: `v0.1.x`는 아이디어/프로토콜 언어 라인, `v0.2.x`는
 
 ## 빠른 시작
 
-정확한 릴리스 파일을 격리된 명령줄 도구로 설치합니다.
+아래 URL은 정확한 릴리스 파일 계약입니다. 일치하는 GitHub Release가 실제로
+존재하고 이 파일을 자산으로 나열한 뒤에만 설치하세요. 버전이 들어간 URL만으로
+파일이 실제 공개되었다는 증거가 되지는 않습니다.
 
 ```powershell
 uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.292/wom_kit-0.3.292-py3-none-any.whl"

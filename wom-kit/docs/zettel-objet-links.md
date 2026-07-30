@@ -92,8 +92,13 @@ The tie summary recognizes structured frontmatter sources and exact canonical
 edge target fields without reading the body; catalog output therefore keeps
 `body_read: false`. This link preview performs the broader read-only scan, so a
 body-only objet ID can increase its count without increasing the tie summary.
-Neither surface recursively treats arbitrary edge metadata, URLs, or paths as
-structured relationship targets.
+
+The link preview deliberately performs a broader recursive token scan across
+valid frontmatter plus body text. It can discover a canonical object-ID token
+inside arbitrary nested edge metadata, a URL string, or a path string. Such a
+discovery is a token occurrence for this link command; it does not make that
+location a structured relationship target and does not increase the tie
+summary.
 
 Overview and catalog also replace malformed object-shaped or non-string direct
 edge targets with the fixed `<redacted-reference>` placeholder. A target that

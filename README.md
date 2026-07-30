@@ -52,7 +52,9 @@ future-only boundaries.
 
 ## Quick Start
 
-Install the exact release wheel as an isolated command-line tool:
+The URL below is the exact release-artifact contract. Install it only after the
+matching GitHub Release exists and lists this wheel. The versioned URL alone is
+not proof that the asset is available.
 
 ```powershell
 uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.292/wom_kit-0.3.292-py3-none-any.whl"
