@@ -105,7 +105,10 @@ calls no provider or model. It writes no zet, facet, edge, receipt, index,
 diagnostic, or plan file.
 
 Provider-locator reconstruction and retroactive body writing remain
-unimplemented in v0.3.277.
+unimplemented. Since v0.3.287, the separate read-only
+[`notion-import-locator-evidence-plan`](notion-import-locator-evidence-plan.md)
+can validate an explicitly reviewed occurrence mapping against exact current
+canonical bytes; it still performs no restoration.
 
 ## Safe Follow-Up
 
@@ -117,5 +120,6 @@ unimplemented in v0.3.277.
 3. Keep count-mismatch zets out of any automatic proposal.
 4. For missing join keys, review provenance and existing derived-from evidence.
    Do not infer a page from similar titles, neighboring ids, or references.
-5. Add a separate read-only occurrence-alignment plan before designing any
-   approval-gated canonical write.
+5. Run the separate read-only
+   `notion-import-locator-evidence-plan` before designing any approval-gated
+   canonical write. Equal counts alone remain insufficient.

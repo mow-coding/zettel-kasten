@@ -12,7 +12,7 @@ REPO_ROOT = KIT_ROOT.parent
 CURRENT_VERSION = f"v{__version__}"
 CURRENT_RUNTIME_STATUS = (
     f"Status: {CURRENT_VERSION} installed-wheel resource, "
-    "manual format-variant routing, quick start, session handoff, "
+    "read-only Notion locator evidence routing, quick start, session handoff, "
     "local backup evidence, "
     "and philosophy implementation traceability checkpoint"
 )
@@ -8888,7 +8888,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(document="v03282-public-version-surface"):
                 self.assertIn("v0.3.282", text)
         self.assertIn(
-            "releases/download/v0.3.286/wom_kit-0.3.286-py3-none-any.whl",
+            "releases/download/v0.3.287/wom_kit-0.3.287-py3-none-any.whl",
             root_readme_text,
         )
 
@@ -9007,7 +9007,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         ):
             with self.subTest(document="v03283-current-install"):
                 self.assertIn(
-                    "releases/download/v0.3.286/wom_kit-0.3.286-py3-none-any.whl",
+                    "releases/download/v0.3.287/wom_kit-0.3.287-py3-none-any.whl",
                     text,
                 )
 
@@ -9285,7 +9285,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             matrix_text,
         )
 
-    def test_v03286_format_variant_manual_activation_is_current_and_synchronized(
+    def test_v03286_format_variant_manual_activation_remains_historical_source_documentation(
         self,
     ) -> None:
         release_path = KIT_ROOT / "docs" / "releases" / "v0.3.286.md"
@@ -9293,7 +9293,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         packaged_release_dir = (
             KIT_ROOT / "src" / "wom_kit" / "_resources" / "release-notes"
         )
-        packaged_release_path = packaged_release_dir / "v0.3.286.md"
+        historical_packaged_release_path = packaged_release_dir / "v0.3.286.md"
         decision_path = (
             KIT_ROOT
             / "docs"
@@ -9301,12 +9301,8 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         )
         connection_guide_path = KIT_ROOT / "docs" / "connection-edge-intelligence-plan.md"
         edge_guide_path = KIT_ROOT / "docs" / "zettel-edge-write.md"
-        resource_manifest_path = (
-            KIT_ROOT / "src" / "wom_kit" / "_resources" / "resource-manifest.json"
-        )
 
         release_text = release_path.read_text(encoding="utf-8")
-        packaged_release_text = packaged_release_path.read_text(encoding="utf-8")
         decision_text = decision_path.read_text(encoding="utf-8")
         connection_guide_text = connection_guide_path.read_text(encoding="utf-8")
         edge_guide_text = edge_guide_path.read_text(encoding="utf-8")
@@ -9340,46 +9336,16 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         root_package_init_text = (
             REPO_ROOT / "wom_kit" / "__init__.py"
         ).read_text(encoding="utf-8")
-        resource_manifest = json.loads(
-            resource_manifest_path.read_text(encoding="utf-8")
-        )
         release_flat = " ".join(release_text.split())
         decision_flat = " ".join(decision_text.split())
         connection_guide_flat = " ".join(connection_guide_text.split())
         edge_guide_flat = " ".join(edge_guide_text.split())
         matrix_flat = " ".join(matrix_text.split())
 
-        self.assertEqual(__version__, "0.3.286")
-        self.assertEqual(CURRENT_VERSION, "v0.3.286")
-        self.assertIn('version = "0.3.286"', pyproject_text)
-        self.assertIn('__version__ = "0.3.286"', package_init_text)
-        self.assertIn('__version__ = "0.3.286"', root_package_init_text)
-        self.assertEqual(packaged_release_text, release_text)
         self.assertTrue(historical_release_path.is_file())
-        self.assertEqual(
-            sorted(path.name for path in packaged_release_dir.glob("v*.md")),
-            ["v0.3.286.md"],
-        )
-        self.assertEqual(resource_manifest["version"], "0.3.286")
-        packaged_release_entries = [
-            item
-            for item in resource_manifest["files"]
-            if str(item.get("packaged") or "").startswith("release-notes/")
-        ]
-        self.assertEqual(
-            [
-                {
-                    "source": item["source"],
-                    "packaged": item["packaged"],
-                }
-                for item in packaged_release_entries
-            ],
-            [
-                {
-                    "source": "docs/releases/v0.3.286.md",
-                    "packaged": "release-notes/v0.3.286.md",
-                }
-            ],
+        self.assertFalse(
+            historical_packaged_release_path.exists(),
+            "Historical source release notes stay public, but only the current release note is packaged.",
         )
 
         for text in (
@@ -9446,19 +9412,6 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             matrix_text,
         )
 
-        current_wheel_url = (
-            "releases/download/v0.3.286/"
-            "wom_kit-0.3.286-py3-none-any.whl"
-        )
-        for text in (
-            root_readme_text,
-            root_readme_ko_text,
-            install_text,
-            install_ko_text,
-        ):
-            with self.subTest(document="v03286-current-install"):
-                self.assertIn(current_wheel_url, text)
-
         for text in (
             upgrade_text,
             upgrade_ko_text,
@@ -9467,7 +9420,195 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(document="v03286-version-surface"):
                 self.assertIn("v0.3.286", text)
                 self.assertIn("format_variant", text)
-        self.assertIn("v0.3.286 pre-release", versioning_text)
+
+    def test_v03287_notion_locator_evidence_plan_is_current_and_synchronized(
+        self,
+    ) -> None:
+        release_path = KIT_ROOT / "docs" / "releases" / "v0.3.287.md"
+        historical_release_path = KIT_ROOT / "docs" / "releases" / "v0.3.286.md"
+        packaged_release_dir = (
+            KIT_ROOT / "src" / "wom_kit" / "_resources" / "release-notes"
+        )
+        packaged_release_path = packaged_release_dir / "v0.3.287.md"
+        decision_path = (
+            KIT_ROOT
+            / "docs"
+            / "archive-infra-decision-log-2026-07-30-v03287-notion-locator-evidence-plan.md"
+        )
+        guide_path = KIT_ROOT / "docs" / "notion-import-locator-evidence-plan.md"
+        loss_audit_path = KIT_ROOT / "docs" / "notion-import-locator-loss-audit.md"
+        source_schema_path = (
+            KIT_ROOT / "schemas" / "notion-locator-occurrence-evidence.schema.json"
+        )
+        packaged_schema_path = (
+            KIT_ROOT
+            / "src"
+            / "wom_kit"
+            / "_resources"
+            / "schemas"
+            / "notion-locator-occurrence-evidence.schema.json"
+        )
+        resource_manifest_path = (
+            KIT_ROOT / "src" / "wom_kit" / "_resources" / "resource-manifest.json"
+        )
+
+        release_text = release_path.read_text(encoding="utf-8")
+        packaged_release_text = packaged_release_path.read_text(encoding="utf-8")
+        decision_text = decision_path.read_text(encoding="utf-8")
+        guide_text = guide_path.read_text(encoding="utf-8")
+        loss_audit_text = loss_audit_path.read_text(encoding="utf-8")
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        source_schema_text = source_schema_path.read_text(encoding="utf-8")
+        packaged_schema_text = packaged_schema_path.read_text(encoding="utf-8")
+        root_readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        root_readme_ko_text = (REPO_ROOT / "README.ko.md").read_text(
+            encoding="utf-8"
+        )
+        install_text = (
+            KIT_ROOT / "docs" / "python-tool-install.md"
+        ).read_text(encoding="utf-8")
+        install_ko_text = (
+            KIT_ROOT / "docs" / "python-tool-install.ko.md"
+        ).read_text(encoding="utf-8")
+        upgrade_text = (REPO_ROOT / "UPGRADE.md").read_text(encoding="utf-8")
+        upgrade_ko_text = (REPO_ROOT / "UPGRADE.ko.md").read_text(
+            encoding="utf-8"
+        )
+        changelog_text = (REPO_ROOT / "CHANGELOG.md").read_text(
+            encoding="utf-8"
+        )
+        versioning_text = (REPO_ROOT / "VERSIONING.md").read_text(
+            encoding="utf-8"
+        )
+        pyproject_text = (KIT_ROOT / "pyproject.toml").read_text(
+            encoding="utf-8"
+        )
+        package_init_text = (
+            KIT_ROOT / "src" / "wom_kit" / "__init__.py"
+        ).read_text(encoding="utf-8")
+        root_package_init_text = (
+            REPO_ROOT / "wom_kit" / "__init__.py"
+        ).read_text(encoding="utf-8")
+        resource_manifest = json.loads(
+            resource_manifest_path.read_text(encoding="utf-8")
+        )
+        guide_flat = " ".join(guide_text.split())
+
+        self.assertEqual(__version__, "0.3.287")
+        self.assertEqual(CURRENT_VERSION, "v0.3.287")
+        self.assertIn('version = "0.3.287"', pyproject_text)
+        self.assertIn('__version__ = "0.3.287"', package_init_text)
+        self.assertIn('__version__ = "0.3.287"', root_package_init_text)
+        self.assertTrue(historical_release_path.is_file())
+        self.assertEqual(packaged_release_text, release_text)
+        self.assertEqual(packaged_schema_text, source_schema_text)
+        self.assertEqual(
+            sorted(path.name for path in packaged_release_dir.glob("v*.md")),
+            ["v0.3.287.md"],
+        )
+        self.assertEqual(resource_manifest["version"], "0.3.287")
+
+        packaged_release_entries = [
+            item
+            for item in resource_manifest["files"]
+            if str(item.get("packaged") or "").startswith("release-notes/")
+        ]
+        self.assertEqual(
+            [
+                {
+                    "source": item["source"],
+                    "packaged": item["packaged"],
+                }
+                for item in packaged_release_entries
+            ],
+            [
+                {
+                    "source": "docs/releases/v0.3.287.md",
+                    "packaged": "release-notes/v0.3.287.md",
+                }
+            ],
+        )
+        schema_entries = [
+            item
+            for item in resource_manifest["files"]
+            if item.get("source")
+            == "schemas/notion-locator-occurrence-evidence.schema.json"
+        ]
+        self.assertEqual(len(schema_entries), 1)
+        self.assertEqual(
+            schema_entries[0]["packaged"],
+            "schemas/notion-locator-occurrence-evidence.schema.json",
+        )
+
+        for text in (release_text, decision_text, guide_text, matrix_text):
+            with self.subTest(document="v03287-locator-evidence-contract"):
+                self.assertIn("v0.3.287", text)
+                self.assertIn("notion-import-locator-evidence-plan", text)
+                self.assertIn("source_page_id", text)
+                self.assertIn("read-only", text.lower())
+
+        for phrase in (
+            "The only join authority",
+            "Equal counts alone",
+            "coverage_complete",
+            "It does not mean the uncovered locators are permanently lost",
+            "There is intentionally no restoration writer",
+            "There is no MCP tool",
+        ):
+            with self.subTest(guide_phrase=phrase):
+                self.assertIn(phrase, guide_flat)
+
+        for phrase in (
+            "exact nested frontmatter key",
+            "source-occurrence-to-marker-ordinal mapping",
+            "no source page id",
+            "No canonical restoration",
+            "77 occurrence-coordinate variants",
+        ):
+            with self.subTest(decision_phrase=phrase):
+                self.assertIn(phrase, decision_text)
+
+        for phrase in (
+            "Counts Are Not Enough",
+            "The only join authority is `facets.source_page_id`",
+            "Content-Free Result",
+            "raw `recordMap`",
+            "beta archive write",
+        ):
+            with self.subTest(release_phrase=phrase):
+                self.assertIn(phrase, release_text)
+
+        self.assertIn(
+            "| Notion import locator occurrence evidence plan | `read-only preview` |",
+            " ".join(matrix_text.split()),
+        )
+        self.assertIn(
+            "[`notion-import-locator-evidence-plan`](notion-import-locator-evidence-plan.md)",
+            loss_audit_text,
+        )
+
+        current_wheel_url = (
+            "releases/download/v0.3.287/"
+            "wom_kit-0.3.287-py3-none-any.whl"
+        )
+        for text in (
+            root_readme_text,
+            root_readme_ko_text,
+            install_text,
+            install_ko_text,
+        ):
+            with self.subTest(document="v03287-current-install"):
+                self.assertIn(current_wheel_url, text)
+
+        for text in (
+            upgrade_text,
+            upgrade_ko_text,
+            changelog_text,
+        ):
+            with self.subTest(document="v03287-version-surface"):
+                self.assertIn("v0.3.287", text)
+                self.assertIn("notion-import-locator-evidence-plan", text)
+        self.assertIn("v0.3.287 pre-release", versioning_text)
 
 
 if __name__ == "__main__":

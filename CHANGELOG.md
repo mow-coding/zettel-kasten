@@ -6,6 +6,34 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.287 - 2026-07-30
+
+- Added CLI-only, read-only
+  `archive notion-import-locator-evidence-plan` for validating a
+  human-reviewed private locator-occurrence evidence JSONL file against exact
+  current canonical Notion-import zet bytes.
+- Made exact nested `facets.source_page_id` the only join authority. Dashed
+  and compact UUID forms can match, while arbitrary identifiers remain
+  case-sensitive. Titles, filenames, `index`, external ids, other page
+  references, URLs, and body text are never fallback joins.
+- Required one unique current canonical match by expected file SHA-256,
+  agreement among body marker, import-time omission, and evidence occurrence
+  counts, and complete unique `1..N` source and marker ordinal sets.
+- Added the public
+  `notion-locator-occurrence-evidence/v0.1` row schema while keeping the
+  evidence file private under
+  `.wom-scratch/notion-locator-evidence/`.
+- Added bounded file, line, row, canonical-file, and total-byte limits plus
+  traversal, drive, UNC, symlink, junction, reparse, invalid UTF-8/JSON,
+  duplicate-key, unsupported-field, and excessive-nesting rejection.
+- Kept result rows content-free: no source page id or fingerprint, locator or
+  fingerprint, zet id, filename, path, title, body, context, token, account
+  id, or secret value. Aggregate alignment and coverage remain complete even
+  when returned item summaries are capped.
+- Added no canonical restoration writer, receipt, provider/API/model/network
+  call, MCP tool, raw `recordMap`/`pages.index.jsonl`/`properties['비고']`
+  adapter, occurrence-coordinate migration, inference, or beta archive write.
+
 ## v0.3.286 - 2026-07-30
 
 - Activated the WOM-local base link type `format_variant`

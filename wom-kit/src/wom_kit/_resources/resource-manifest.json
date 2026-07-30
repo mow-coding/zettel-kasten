@@ -1,8 +1,8 @@
 {
   "schema": "wom-kit/package-resource-manifest/v0.1",
-  "version": "0.3.286",
+  "version": "0.3.287",
   "source_of_truth": "wom-kit source resource directories",
-  "file_count": 101,
+  "file_count": 102,
   "files": [
     {
       "source": "schemas/activity-group-membership-receipt.schema.json",
@@ -111,6 +111,12 @@
       "packaged": "schemas/mint-retired-draft-receipt.schema.json",
       "bytes": 1786,
       "sha256": "6794dd32406fe2d91cf0b3647e8e7e7e3792d70361239e24c1364c31c4747f20"
+    },
+    {
+      "source": "schemas/notion-locator-occurrence-evidence.schema.json",
+      "packaged": "schemas/notion-locator-occurrence-evidence.schema.json",
+      "bytes": 1626,
+      "sha256": "6e8c561d02c4741cf8628ab8690b7d53c84ef914ca6653e178f49dd000a8bcb5"
     },
     {
       "source": "schemas/object-manifest-entry.schema.json",
@@ -605,10 +611,10 @@
       "sha256": "d619dc26af3216498c8392dfe838b0fe752d4bad9da998a58ca682d668fc510c"
     },
     {
-      "source": "docs/releases/v0.3.286.md",
-      "packaged": "release-notes/v0.3.286.md",
-      "bytes": 7781,
-      "sha256": "19139cb1045a2aa36953b60fc78aee18a844687e2f0cc5fc1394a400b1ea6c71"
+      "source": "docs/releases/v0.3.287.md",
+      "packaged": "release-notes/v0.3.287.md",
+      "bytes": 3866,
+      "sha256": "c48e09407285f7b0f0d40b4394535e798e36cbb2cb90497410669fb67f4f6b85"
     }
   ]
 }

@@ -5560,12 +5560,22 @@ class ArchiveCliTests(unittest.TestCase):
                 ],
             )
             material_commands = [route["command"] for route in entrypoints["material_link_routes"]]
-            self.assertTrue(
-                any(
-                    "notion-import-locator-loss-audit" in command
-                    for command in material_commands
-                )
+            locator_loss_route_index = next(
+                index
+                for index, command in enumerate(material_commands)
+                if "notion-import-locator-loss-audit" in command
             )
+            evidence_route = entrypoints["material_link_routes"][
+                locator_loss_route_index + 1
+            ]
+            self.assertEqual(
+                evidence_route["command"],
+                "archive notion-import-locator-evidence-plan <archive-root> "
+                "--evidence .wom-scratch/notion-locator-evidence/"
+                "<private>.jsonl --dry-run --format json",
+            )
+            self.assertFalse(evidence_route["writes"])
+            self.assertFalse(evidence_route["provider_api_called"])
             self.assertTrue(any("notion-objet-import-clue-audit" in command for command in material_commands))
             self.assertTrue(any("notion-objet-source-map-link-plan" in command for command in material_commands))
             self.assertTrue(any("notion-objet-link-index" in command for command in material_commands))
@@ -14469,11 +14479,19 @@ state:
             self.assertTrue(any("--topic git_infra_terms" in route["command"] for route in result["safe_routing"]))
             self.assertTrue(any("derive-text-coverage" in route["command"] for route in result["safe_routing"]))
             self.assertTrue(any("notion-objet-source-map-link-plan" in route["command"] for route in result["safe_routing"]))
-            self.assertTrue(
-                any(
-                    "notion-import-locator-loss-audit" in route["command"]
-                    for route in result["safe_routing"]
-                )
+            locator_loss_route_index = next(
+                index
+                for index, route in enumerate(result["safe_routing"])
+                if "notion-import-locator-loss-audit" in route["command"]
+            )
+            evidence_route = result["safe_routing"][
+                locator_loss_route_index + 1
+            ]
+            self.assertEqual(
+                evidence_route["command"],
+                "archive notion-import-locator-evidence-plan <archive-root> "
+                "--evidence .wom-scratch/notion-locator-evidence/"
+                "<private>.jsonl --dry-run --format json",
             )
             self.assertTrue(any("notion-objet-import-clue-audit" in route["command"] for route in result["safe_routing"]))
             self.assertTrue(any("notion-objet-link-index" in route["command"] for route in result["safe_routing"]))
@@ -22857,6 +22875,2636 @@ state:
             )
             self.assertEqual(no_dry_code, 1, no_dry_output)
             self.assertIn("requires --dry-run", no_dry_output)
+
+    def write_notion_locator_evidence_canonical(
+        self,
+        archive_root: Path,
+        *,
+        zettel_id: str,
+        source_page_id: Any,
+        declared_count: Any,
+        body_marker_count: int,
+        filename: str | None = None,
+        bom: bool = False,
+        title: str | None = None,
+        extra_frontmatter: dict[str, Any] | None = None,
+    ) -> tuple[Path, str]:
+        """Write one private Notion-import canonical and return its exact byte hash."""
+
+        facets: dict[str, Any] = {
+            "source_system": "notion_db3",
+            "source_page_id": source_page_id,
+        }
+        if declared_count is not None:
+            facets["source_locator_omitted_count"] = declared_count
+        frontmatter: dict[str, Any] = {
+            "id": zettel_id,
+            "title": title or f"PRIVATE TITLE {zettel_id}",
+            "created_at": "2026-07-30T01:02:03+09:00",
+            "updated_at": "2026-07-30T01:02:03+09:00",
+            "archive_id": archive_services.read_archive_id(archive_root),
+            "status": "canonical",
+            "kind": "record_note",
+            "facets": facets,
+            "assets": [],
+            "edges": [],
+            "provenance": {
+                "created_by": "ai_runtime:test",
+                "created_in": archive_services.read_archive_id(archive_root),
+                "source": "notion_db3",
+                "creation_mode": "imported",
+                "derived_from": [],
+            },
+            "visibility": {
+                "scope": "private",
+                "allowed_archives": [],
+                "source_visibility": "private",
+            },
+        }
+        if extra_frontmatter:
+            frontmatter.update(copy.deepcopy(extra_frontmatter))
+        body_lines = [f"PRIVATE BODY {zettel_id} MUST NOT ECHO"]
+        for ordinal in range(1, body_marker_count + 1):
+            body_lines.extend(
+                [
+                    archive_services.NOTION_IMPORT_LOCATOR_OMISSION_MARKER,
+                    f"PRIVATE MARKER CONTEXT {zettel_id} {ordinal} MUST NOT ECHO",
+                ]
+            )
+        text = (
+            "---\n"
+            + archive_cli.dump_yaml(frontmatter)
+            + "---\n\n"
+            + "\n".join(body_lines)
+            + "\n"
+        )
+        raw = text.encode("utf-8")
+        if bom:
+            raw = b"\xef\xbb\xbf" + raw
+        path = archive_root / "zettels" / (filename or f"{zettel_id}.md")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(raw)
+        return path, "sha256:" + hashlib.sha256(raw).hexdigest()
+
+    def notion_locator_evidence_row(
+        self,
+        *,
+        source_page_id: str,
+        expected_canonical_sha256: str,
+        occurrences: list[dict[str, Any]],
+        source_snapshot_sha256: str | None = None,
+        **overrides: Any,
+    ) -> dict[str, Any]:
+        row: dict[str, Any] = {
+            "schema": "wom-kit/notion-locator-occurrence-evidence/v0.1",
+            "source_page_id": source_page_id,
+            "basis": "reviewed_local_mirror",
+            "source_snapshot_sha256": source_snapshot_sha256
+            or "sha256:" + hashlib.sha256(
+                ("PRIVATE SOURCE SNAPSHOT " + source_page_id).encode("utf-8")
+            ).hexdigest(),
+            "expected_canonical_sha256": expected_canonical_sha256,
+            "occurrences": occurrences,
+        }
+        row.update(overrides)
+        return row
+
+    def write_notion_locator_evidence_jsonl(
+        self,
+        archive_root: Path,
+        rows: list[Any],
+        *,
+        name: str = "reviewed.jsonl",
+        bom: bool = False,
+    ) -> str:
+        relative = f".wom-scratch/notion-locator-evidence/{name}"
+        path = archive_root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        text = "".join(
+            json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n"
+            for row in rows
+        )
+        raw = text.encode("utf-8")
+        if bom:
+            raw = b"\xef\xbb\xbf" + raw
+        path.write_bytes(raw)
+        return relative
+
+    def run_notion_locator_evidence_plan(
+        self,
+        archive_root: Path,
+        evidence_relative: str,
+        *,
+        max_items: int | None = None,
+        output_format: str = "json",
+    ) -> tuple[int, str]:
+        args = [
+            "notion-import-locator-evidence-plan",
+            str(archive_root),
+            "--evidence",
+            evidence_relative,
+            "--dry-run",
+            "--format",
+            output_format,
+        ]
+        if max_items is not None:
+            args.extend(["--max-items", str(max_items)])
+        return self.run_cli(args)
+
+    def archive_byte_snapshot(self, archive_root: Path) -> dict[str, str]:
+        return {
+            path.relative_to(archive_root).as_posix(): hashlib.sha256(
+                path.read_bytes()
+            ).hexdigest()
+            for path in sorted(
+                item
+                for item in archive_root.rglob("*")
+                if item.is_file() and not item.is_symlink()
+            )
+        }
+
+    def assert_notion_locator_evidence_item_shape(
+        self, item: dict[str, Any]
+    ) -> None:
+        self.assertEqual(
+            set(item),
+            {
+                "row_number",
+                "status",
+                "source_occurrence_count",
+                "body_marker_count",
+                "frontmatter_omitted_count",
+                "expected_canonical_sha256_matches",
+                "blocker_codes",
+                "warning_codes",
+            },
+        )
+
+    def assert_notion_locator_evidence_private_output(
+        self, output: str, forbidden: list[str]
+    ) -> None:
+        for value in forbidden:
+            with self.subTest(private_canary=value):
+                self.assertNotIn(value, output)
+        self.assertNotIn("permanently lost", output.lower())
+
+    def notion_locator_evidence_blocker_codes(
+        self, result: dict[str, Any]
+    ) -> set[str]:
+        codes = {
+            str(code) for code in result.get("blocker_codes", []) if code
+        }
+        for item in result.get("items", []):
+            if isinstance(item, dict):
+                codes.update(
+                    str(code) for code in item.get("blocker_codes", []) if code
+                )
+        return codes
+
+    def test_notion_locator_occurrence_evidence_schema_is_strict_and_packaged_identically(
+        self,
+    ) -> None:
+        source_path = (
+            KIT_ROOT
+            / "schemas"
+            / "notion-locator-occurrence-evidence.schema.json"
+        )
+        packaged_path = (
+            SRC_ROOT
+            / "wom_kit"
+            / "_resources"
+            / "schemas"
+            / "notion-locator-occurrence-evidence.schema.json"
+        )
+        source_bytes = source_path.read_bytes()
+        self.assertEqual(packaged_path.read_bytes(), source_bytes)
+        schema = json.loads(source_bytes.decode("utf-8"))
+        self.assertFalse(schema["additionalProperties"])
+        self.assertEqual(
+            set(schema["required"]),
+            {
+                "schema",
+                "source_page_id",
+                "basis",
+                "source_snapshot_sha256",
+                "expected_canonical_sha256",
+                "occurrences",
+            },
+        )
+        self.assertEqual(set(schema["properties"]), set(schema["required"]))
+        self.assertEqual(
+            schema["properties"]["schema"]["const"],
+            "wom-kit/notion-locator-occurrence-evidence/v0.1",
+        )
+        self.assertEqual(
+            schema["properties"]["basis"]["const"],
+            "reviewed_local_mirror",
+        )
+        occurrence = schema["properties"]["occurrences"]["items"]
+        self.assertFalse(occurrence["additionalProperties"])
+        self.assertEqual(
+            set(occurrence["required"]),
+            {
+                "source_occurrence_ordinal",
+                "marker_ordinal",
+                "locator",
+            },
+        )
+        self.assertEqual(
+            set(occurrence["properties"]),
+            set(occurrence["required"]),
+        )
+        locator_schema = occurrence["properties"]["locator"]
+        self.assertEqual(
+            locator_schema["maxLength"],
+            archive_services.NOTION_LOCATOR_EVIDENCE_MAX_LOCATOR_CHARS,
+        )
+        locator_pattern = re.compile(locator_schema["pattern"])
+        self.assertIsNotNone(
+            locator_pattern.match("https://private.example/lowercase")
+        )
+        self.assertIsNotNone(
+            locator_pattern.match("HTTPS://Private.Example/UPPERCASE")
+        )
+        self.assertIsNone(
+            locator_pattern.match("ftp://private.example/not-http")
+        )
+
+    def test_notion_import_locator_evidence_plan_aligns_exact_and_multi_occurrences_privately(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            private_page_one = "a0b1c2d3-e4f5-4678-9abc-def012345678"
+            private_page_many = "PRIVATE-CASE-SENSITIVE-PAGE-MANY"
+            private_page_unaffected = (
+                "PRIVATE-UNAFFECTED-PAGE-WITHOUT-COUNT"
+            )
+            private_url_one = (
+                "https://private.example/locator/ONE-SECRET-MUST-NOT-ECHO"
+            )
+            private_url_repeated = (
+                "https://private.example/locator/REPEATED-SECRET-MUST-NOT-ECHO"
+            )
+            _path_one, canonical_sha_one = (
+                self.write_notion_locator_evidence_canonical(
+                    archive_root,
+                    zettel_id="zet_notion_locator_evidence_one",
+                    source_page_id=private_page_one,
+                    declared_count=1,
+                    body_marker_count=1,
+                )
+            )
+            _path_many, canonical_sha_many = (
+                self.write_notion_locator_evidence_canonical(
+                    archive_root,
+                    zettel_id="zet_notion_locator_evidence_many",
+                    source_page_id=private_page_many,
+                    declared_count=3,
+                    body_marker_count=3,
+                )
+            )
+            self.write_notion_locator_evidence_canonical(
+                archive_root,
+                zettel_id="zet_notion_locator_evidence_unaffected",
+                source_page_id=private_page_unaffected,
+                declared_count=None,
+                body_marker_count=0,
+            )
+            rows = [
+                self.notion_locator_evidence_row(
+                    # Compact input must join the dashed canonical UUID.
+                    source_page_id=private_page_one.replace("-", ""),
+                    expected_canonical_sha256=canonical_sha_one,
+                    occurrences=[
+                        {
+                            "source_occurrence_ordinal": 1,
+                            "marker_ordinal": 1,
+                            "locator": private_url_one,
+                        }
+                    ],
+                ),
+                self.notion_locator_evidence_row(
+                    source_page_id=private_page_many,
+                    expected_canonical_sha256=canonical_sha_many,
+                    occurrences=[
+                        {
+                            "source_occurrence_ordinal": 1,
+                            "marker_ordinal": 2,
+                            "locator": private_url_repeated,
+                        },
+                        {
+                            "source_occurrence_ordinal": 2,
+                            "marker_ordinal": 1,
+                            "locator": private_url_repeated,
+                        },
+                        {
+                            "source_occurrence_ordinal": 3,
+                            "marker_ordinal": 3,
+                            "locator": "http://private.example/locator/THIRD-SECRET",
+                        },
+                    ],
+                ),
+            ]
+            evidence_relative = self.write_notion_locator_evidence_jsonl(
+                archive_root, rows
+            )
+            evidence_path = archive_root / evidence_relative
+            evidence_sha = "sha256:" + hashlib.sha256(
+                evidence_path.read_bytes()
+            ).hexdigest()
+            before = self.archive_byte_snapshot(archive_root)
+
+            code, output = self.run_notion_locator_evidence_plan(
+                archive_root, evidence_relative
+            )
+            result = json.loads(output)
+
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(
+                result["lifecycle_action"],
+                "notion_import_locator_evidence_plan",
+            )
+            self.assertEqual(result["evidence_file_sha256"], evidence_sha)
+            self.assertRegex(result["plan_digest"], r"^sha256:[0-9a-f]{64}$")
+            self.assertNotIn("archive_id", result)
+            self.assertEqual(result["evidence_row_count"], 2)
+            self.assertEqual(result["aligned_count"], 2)
+            self.assertEqual(result["blocked_count"], 0)
+            self.assertEqual(result["returned_item_count"], 2)
+            self.assertEqual(result["truncated_item_count"], 0)
+            self.assertEqual(result["affected_canonical_count"], 2)
+            self.assertEqual(result["covered_affected_count"], 2)
+            self.assertEqual(result["uncovered_affected_count"], 0)
+            self.assertTrue(result["coverage_complete"])
+            self.assertEqual(result["would_change"], [])
+            self.assertEqual(len(result["items"]), 2)
+            for item in result["items"]:
+                self.assert_notion_locator_evidence_item_shape(item)
+                self.assertEqual(item["status"], "aligned_for_human_review")
+                self.assertEqual(item["blocker_codes"], [])
+                self.assertTrue(item["expected_canonical_sha256_matches"])
+            self.assertEqual(
+                [item["source_occurrence_count"] for item in result["items"]],
+                [1, 3],
+            )
+            self.assertEqual(
+                [item["body_marker_count"] for item in result["items"]],
+                [1, 3],
+            )
+            self.assertEqual(
+                [item["frontmatter_omitted_count"] for item in result["items"]],
+                [1, 3],
+            )
+            self.assertFalse(result["capabilities"]["canonical_writer_available"])
+            self.assertFalse(result["capabilities"]["receipt_writer_available"])
+            self.assertFalse(result["capabilities"]["provider_api_called"])
+            self.assertFalse(
+                result["capabilities"]["raw_record_map_parser_available"]
+            )
+            self.assertFalse(
+                result["capabilities"]["pages_index_jsonl_parser_available"]
+            )
+            self.assertFalse(
+                result["capabilities"]["coordinate_77_variants_handled"]
+            )
+            self.assert_notion_locator_evidence_private_output(
+                output,
+                [
+                    private_page_one,
+                    private_page_one.replace("-", ""),
+                    private_page_many,
+                    private_page_unaffected,
+                    private_url_one,
+                    private_url_repeated,
+                    "THIRD-SECRET",
+                    "PRIVATE TITLE",
+                    "PRIVATE BODY",
+                    "PRIVATE MARKER CONTEXT",
+                    "archive:personal:fake-life",
+                    str(archive_root),
+                    "reviewed.jsonl",
+                    canonical_sha_one,
+                    canonical_sha_many,
+                    rows[0]["source_snapshot_sha256"],
+                    rows[1]["source_snapshot_sha256"],
+                ],
+            )
+            self.assertEqual(self.archive_byte_snapshot(archive_root), before)
+
+            repeat_code, repeat_output = self.run_notion_locator_evidence_plan(
+                archive_root, evidence_relative
+            )
+            repeat = json.loads(repeat_output)
+            self.assertEqual(repeat_code, 0, repeat_output)
+            self.assertEqual(repeat["plan_digest"], result["plan_digest"])
+            self.assertEqual(
+                repeat["evidence_file_sha256"], result["evidence_file_sha256"]
+            )
+
+    def test_notion_import_locator_evidence_plan_uses_exact_join_authority_and_sha_for_fanout(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            fanout_page = "PRIVATE-FANOUT-PAGE-MUST-NOT-ECHO"
+            _first_path, first_sha = self.write_notion_locator_evidence_canonical(
+                archive_root,
+                zettel_id="zet_notion_fanout_first",
+                source_page_id=fanout_page,
+                declared_count=1,
+                body_marker_count=1,
+            )
+            _selected_path, selected_sha = (
+                self.write_notion_locator_evidence_canonical(
+                    archive_root,
+                    zettel_id="zet_notion_fanout_selected",
+                    source_page_id=fanout_page,
+                    declared_count=1,
+                    body_marker_count=1,
+                )
+            )
+            ambiguous_page = "PRIVATE-SAME-HASH-AMBIGUITY-MUST-NOT-ECHO"
+            ambiguous_path, ambiguous_sha = (
+                self.write_notion_locator_evidence_canonical(
+                    archive_root,
+                    zettel_id="zet_notion_same_hash_duplicate",
+                    source_page_id=ambiguous_page,
+                    declared_count=1,
+                    body_marker_count=1,
+                )
+            )
+            (archive_root / "zettels" / "second-private-file-name.md").write_bytes(
+                ambiguous_path.read_bytes()
+            )
+            drift_page = "PRIVATE-CANONICAL-DRIFT-MUST-NOT-ECHO"
+            self.write_notion_locator_evidence_canonical(
+                archive_root,
+                zettel_id="zet_notion_canonical_drift",
+                source_page_id=drift_page,
+                declared_count=1,
+                body_marker_count=1,
+            )
+            rows = [
+                self.notion_locator_evidence_row(
+                    source_page_id=fanout_page,
+                    expected_canonical_sha256=selected_sha,
+                    occurrences=[
+                        {
+                            "source_occurrence_ordinal": 1,
+                            "marker_ordinal": 1,
+                            "locator": "https://private.example/FANOUT-LOCATOR",
+                        }
+                    ],
+                ),
+                self.notion_locator_evidence_row(
+                    source_page_id=ambiguous_page,
+                    expected_canonical_sha256=ambiguous_sha,
+                    occurrences=[
+                        {
+                            "source_occurrence_ordinal": 1,
+                            "marker_ordinal": 1,
+                            "locator": "https://private.example/AMBIGUOUS-LOCATOR",
+                        }
+                    ],
+                ),
+                self.notion_locator_evidence_row(
+                    source_page_id=drift_page,
+                    expected_canonical_sha256=first_sha,
+                    occurrences=[
+                        {
+                            "source_occurrence_ordinal": 1,
+                            "marker_ordinal": 1,
+                            "locator": "https://private.example/DRIFT-LOCATOR",
+                        }
+                    ],
+                ),
+            ]
+            evidence_relative = self.write_notion_locator_evidence_jsonl(
+                archive_root, rows, name="fanout.jsonl"
+            )
+
+            code, output = self.run_notion_locator_evidence_plan(
+                archive_root, evidence_relative
+            )
+            result = json.loads(output)
+
+            self.assertEqual(code, 1, output)
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["evidence_row_count"], 3)
+            self.assertEqual(result["aligned_count"], 1)
+            self.assertEqual(result["blocked_count"], 2)
+            by_row = {item["row_number"]: item for item in result["items"]}
+            self.assertEqual(by_row[1]["status"], "aligned_for_human_review")
+            self.assertTrue(by_row[1]["expected_canonical_sha256_matches"])
+            self.assertEqual(by_row[1]["blocker_codes"], [])
+            self.assertEqual(by_row[2]["status"], "blocked")
+            self.assertIn(
+                "canonical_sha256_ambiguous", by_row[2]["blocker_codes"]
+            )
+            self.assertEqual(
+                by_row[2]["expected_canonical_sha256_matches"], 2
+            )
+            self.assertEqual(by_row[3]["status"], "blocked")
+            self.assertIn(
+                "canonical_sha256_no_match", by_row[3]["blocker_codes"]
+            )
+            self.assertFalse(by_row[3]["expected_canonical_sha256_matches"])
+            self.assert_notion_locator_evidence_private_output(
+                output,
+                [
+                    fanout_page,
+                    ambiguous_page,
+                    drift_page,
+                    "FANOUT-LOCATOR",
+                    "AMBIGUOUS-LOCATOR",
+                    "DRIFT-LOCATOR",
+                    "second-private-file-name.md",
+                    selected_sha,
+                    ambiguous_sha,
+                    first_sha,
+                    str(archive_root),
+                ],
+            )
+
+    def test_notion_import_locator_evidence_plan_never_falls_back_to_public_or_provider_fields(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            fallback_canary = "PRIVATE-FALLBACK-ONLY-PAGE-MUST-NOT-ECHO"
+            real_join_value = "PRIVATE-REAL-JOIN-VALUE-MUST-NOT-ECHO"
+            _path, canonical_sha = self.write_notion_locator_evidence_canonical(
+                archive_root,
+                zettel_id=f"zet_notion_{fallback_canary}",
+                filename=f"{fallback_canary}.md",
+                source_page_id=real_join_value,
+                declared_count=1,
+                body_marker_count=1,
+                title=fallback_canary,
+                extra_frontmatter={
+                    "index": fallback_canary,
+                    "external_id": fallback_canary,
+                    "source_page_id": fallback_canary,
+                    "external_import": {
+                        "source_system": "notion",
+                        "external_id": fallback_canary,
+                    },
+                },
+            )
+            conflicting_page = "PRIVATE-CONFLICT-A-MUST-NOT-ECHO"
+            self.write_notion_locator_evidence_canonical(
+                archive_root,
+                zettel_id="zet_notion_conflicting_join_values",
+                source_page_id=[
+                    conflicting_page,
+                    "PRIVATE-CONFLICT-B-MUST-NOT-ECHO",
+                ],
+                declared_count=1,
+                body_marker_count=1,
+            )
+            rows = [
+                self.notion_locator_evidence_row(
+                    source_page_id=fallback_canary,
+                    expected_canonical_sha256=canonical_sha,
+                    occurrences=[
+                        {
+                            "source_occurrence_ordinal": 1,
+                            "marker_ordinal": 1,
+                            "locator": "https://private.example/FALLBACK-MUST-NOT-JOIN",
+                        }
+                    ],
+                ),
+                self.notion_locator_evidence_row(
+                    source_page_id=conflicting_page,
+                    expected_canonical_sha256="sha256:" + _FAKE_SHA_A,
+                    occurrences=[
+                        {
+                            "source_occurrence_ordinal": 1,
+                            "marker_ordinal": 1,
+                            "locator": "https://private.example/CONFLICT-MUST-BLOCK",
+                        }
+                    ],
+                ),
+                self.notion_locator_evidence_row(
+                    source_page_id="PRIVATE-MISSING-PAGE-MUST-NOT-ECHO",
+                    expected_canonical_sha256="sha256:" + _FAKE_SHA_B,
+                    occurrences=[
+                        {
+                            "source_occurrence_ordinal": 1,
+                            "marker_ordinal": 1,
+                            "locator": "https://private.example/MISSING-MUST-BLOCK",
+                        }
+                    ],
+                ),
+            ]
+            evidence_relative = self.write_notion_locator_evidence_jsonl(
+                archive_root, rows, name="join-authority.jsonl"
+            )
+
+            code, output = self.run_notion_locator_evidence_plan(
+                archive_root, evidence_relative
+            )
+            result = json.loads(output)
+
+            self.assertEqual(code, 1, output)
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["aligned_count"], 0)
+            self.assertEqual(result["blocked_count"], 3)
+            by_row = {item["row_number"]: item for item in result["items"]}
+            self.assertEqual(
+                [by_row[index]["status"] for index in (1, 2, 3)],
+                ["blocked", "blocked", "blocked"],
+            )
+            self.assertIn(
+                "source_page_join_not_found", by_row[1]["blocker_codes"]
+            )
+            self.assertIn(
+                "source_page_join_conflicting", by_row[2]["blocker_codes"]
+            )
+            self.assertIn(
+                "source_page_join_not_found", by_row[3]["blocker_codes"]
+            )
+            self.assert_notion_locator_evidence_private_output(
+                output,
+                [
+                    fallback_canary,
+                    real_join_value,
+                    conflicting_page,
+                    "PRIVATE-CONFLICT-B",
+                    "PRIVATE-MISSING-PAGE",
+                    "FALLBACK-MUST-NOT-JOIN",
+                    "CONFLICT-MUST-BLOCK",
+                    "MISSING-MUST-BLOCK",
+                    str(archive_root),
+                ],
+            )
+
+    def test_notion_import_locator_evidence_plan_normalizes_only_uuid_page_ids(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            dashed_uuid = "ABCDEF12-3456-4789-ABCD-EF1234567890"
+            compact_uuid = dashed_uuid.replace("-", "").lower()
+            arbitrary_exact = "Private-Arbitrary-ID-Case-Sensitive"
+            arbitrary_other = "Private-Other-ID-Case-Sensitive"
+            _uuid_path, uuid_sha = self.write_notion_locator_evidence_canonical(
+                archive_root,
+                zettel_id="zet_notion_uuid_page",
+                source_page_id=dashed_uuid,
+                declared_count=1,
+                body_marker_count=1,
+            )
+            _arbitrary_path, arbitrary_sha = (
+                self.write_notion_locator_evidence_canonical(
+                    archive_root,
+                    zettel_id="zet_notion_arbitrary_page",
+                    source_page_id=arbitrary_exact,
+                    declared_count=1,
+                    body_marker_count=1,
+                )
+            )
+            self.write_notion_locator_evidence_canonical(
+                archive_root,
+                zettel_id="zet_notion_other_case_page",
+                source_page_id=arbitrary_other,
+                declared_count=1,
+                body_marker_count=1,
+            )
+            rows = [
+                self.notion_locator_evidence_row(
+                    source_page_id=compact_uuid,
+                    expected_canonical_sha256=uuid_sha,
+                    occurrences=[
+                        {
+                            "source_occurrence_ordinal": 1,
+                            "marker_ordinal": 1,
+                            "locator": "https://private.example/UUID",
+                        }
+                    ],
+                ),
+                self.notion_locator_evidence_row(
+                    source_page_id=arbitrary_exact,
+                    expected_canonical_sha256=arbitrary_sha,
+                    occurrences=[
+                        {
+                            "source_occurrence_ordinal": 1,
+                            "marker_ordinal": 1,
+                            "locator": "https://private.example/EXACT-CASE",
+                        }
+                    ],
+                ),
+                self.notion_locator_evidence_row(
+                    source_page_id=arbitrary_other.lower(),
+                    expected_canonical_sha256="sha256:" + _FAKE_SHA_A,
+                    occurrences=[
+                        {
+                            "source_occurrence_ordinal": 1,
+                            "marker_ordinal": 1,
+                            "locator": "https://private.example/WRONG-CASE",
+                        }
+                    ],
+                ),
+            ]
+            evidence_relative = self.write_notion_locator_evidence_jsonl(
+                archive_root, rows, name="normalization.jsonl"
+            )
+
+            code, output = self.run_notion_locator_evidence_plan(
+                archive_root, evidence_relative
+            )
+            result = json.loads(output)
+
+            self.assertEqual(code, 1, output)
+            by_row = {item["row_number"]: item for item in result["items"]}
+            self.assertEqual(
+                [by_row[index]["status"] for index in (1, 2)],
+                ["aligned_for_human_review", "aligned_for_human_review"],
+            )
+            self.assertEqual(by_row[3]["status"], "blocked")
+            self.assertIn(
+                "source_page_join_not_found", by_row[3]["blocker_codes"]
+            )
+            self.assert_notion_locator_evidence_private_output(
+                output,
+                [
+                    dashed_uuid,
+                    compact_uuid,
+                    arbitrary_exact,
+                    arbitrary_other,
+                    "UUID",
+                    "EXACT-CASE",
+                    "WRONG-CASE",
+                ],
+            )
+
+    def test_notion_import_locator_evidence_plan_rejects_untrusted_canonical_identity_schema_and_counts(
+        self,
+    ) -> None:
+        huge_count = "9" * 5000
+        scenarios = [
+            {
+                "name": "foreign_archive",
+                "zettel_id": "zet_notion_foreign_archive_identity",
+                "declared_count": 1,
+                "extra_frontmatter": {
+                    "archive_id": "archive:personal:foreign-private"
+                },
+                "expected_blocker": "canonical_archive_identity_mismatch",
+                "private_canary": "archive:personal:foreign-private",
+            },
+            {
+                "name": "invalid_zettel_id",
+                "zettel_id": "PRIVATE_INVALID_CANONICAL_ID",
+                "declared_count": 1,
+                "extra_frontmatter": None,
+                "expected_blocker": "canonical_frontmatter_identity_invalid",
+                "private_canary": "PRIVATE_INVALID_CANONICAL_ID",
+            },
+            {
+                "name": "invalid_schema",
+                "zettel_id": "zet_notion_invalid_canonical_schema",
+                "declared_count": 1,
+                "extra_frontmatter": {
+                    "visibility": "PRIVATE INVALID VISIBILITY SHAPE"
+                },
+                "expected_blocker": "canonical_frontmatter_schema_invalid",
+                "private_canary": "PRIVATE INVALID VISIBILITY SHAPE",
+            },
+            {
+                "name": "unbounded_omitted_count",
+                "zettel_id": "zet_notion_unbounded_omitted_count",
+                "declared_count": huge_count,
+                "extra_frontmatter": None,
+                "expected_blocker": (
+                    "canonical_frontmatter_omitted_count_invalid"
+                ),
+                "private_canary": huge_count,
+            },
+            {
+                "name": "boolean_omitted_count",
+                "zettel_id": "zet_notion_boolean_omitted_count",
+                "declared_count": True,
+                "extra_frontmatter": None,
+                "expected_blocker": (
+                    "canonical_frontmatter_omitted_count_invalid"
+                ),
+                "private_canary": "zet_notion_boolean_omitted_count",
+            },
+        ]
+        for scenario in scenarios:
+            with self.subTest(scenario=scenario["name"]):
+                with tempfile.TemporaryDirectory() as tmp:
+                    archive_root = self.copy_fake_archive(
+                        Path(tmp) / "archive"
+                    )
+                    page_id = (
+                        "PRIVATE-CANONICAL-TRUST-PAGE-"
+                        + str(scenario["name"])
+                    )
+                    locator = (
+                        "https://private.example/CANONICAL-TRUST-"
+                        + str(scenario["name"])
+                    )
+                    canonical_path, canonical_sha = (
+                        self.write_notion_locator_evidence_canonical(
+                            archive_root,
+                            zettel_id=str(scenario["zettel_id"]),
+                            source_page_id=page_id,
+                            declared_count=scenario["declared_count"],
+                            body_marker_count=1,
+                            extra_frontmatter=scenario[
+                                "extra_frontmatter"
+                            ],
+                        )
+                    )
+                    row = self.notion_locator_evidence_row(
+                        source_page_id=page_id,
+                        expected_canonical_sha256=canonical_sha,
+                        occurrences=[
+                            {
+                                "source_occurrence_ordinal": 1,
+                                "marker_ordinal": 1,
+                                "locator": locator,
+                            }
+                        ],
+                    )
+                    evidence_relative = (
+                        self.write_notion_locator_evidence_jsonl(
+                            archive_root,
+                            [row],
+                            name=f"{scenario['name']}.jsonl",
+                        )
+                    )
+                    before = self.archive_byte_snapshot(archive_root)
+
+                    code, output = self.run_notion_locator_evidence_plan(
+                        archive_root,
+                        evidence_relative,
+                    )
+                    result = json.loads(output)
+
+                    self.assertEqual(code, 1, output)
+                    self.assertIn(
+                        scenario["expected_blocker"],
+                        result["blocker_codes"],
+                    )
+                    self.assertIn(
+                        "canonical_scan_incomplete",
+                        result["blocker_codes"],
+                    )
+                    self.assertEqual(result["aligned_count"], 0)
+                    self.assertEqual(result["blocked_count"], 1)
+                    self.assertEqual(
+                        self.archive_byte_snapshot(archive_root),
+                        before,
+                    )
+                    self.assert_notion_locator_evidence_private_output(
+                        output,
+                        [
+                            page_id,
+                            locator,
+                            canonical_sha,
+                            str(scenario["private_canary"]),
+                            canonical_path.name,
+                            str(canonical_path),
+                            str(archive_root),
+                        ],
+                    )
+                    self.assertNotIn("Traceback", output)
+
+    def test_notion_import_locator_evidence_plan_requires_complete_bijective_ordinals(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            cases: list[tuple[str, list[dict[str, Any]], str]] = [
+                (
+                    "duplicate_source",
+                    [
+                        {
+                            "source_occurrence_ordinal": 1,
+                            "marker_ordinal": 1,
+                            "locator": "https://private.example/duplicate-source-a",
+                        },
+                        {
+                            "source_occurrence_ordinal": 1,
+                            "marker_ordinal": 2,
+                            "locator": "https://private.example/duplicate-source-b",
+                        },
+                    ],
+                    "source_occurrence_ordinals_not_exact_range",
+                ),
+                (
+                    "duplicate_marker",
+                    [
+                        {
+                            "source_occurrence_ordinal": 1,
+                            "marker_ordinal": 1,
+                            "locator": "https://private.example/duplicate-marker-a",
+                        },
+                        {
+                            "source_occurrence_ordinal": 2,
+                            "marker_ordinal": 1,
+                            "locator": "https://private.example/duplicate-marker-b",
+                        },
+                    ],
+                    "marker_ordinals_not_exact_range",
+                ),
+                (
+                    "source_out_of_range",
+                    [
+                        {
+                            "source_occurrence_ordinal": 1,
+                            "marker_ordinal": 1,
+                            "locator": "https://private.example/source-range-a",
+                        },
+                        {
+                            "source_occurrence_ordinal": 3,
+                            "marker_ordinal": 2,
+                            "locator": "https://private.example/source-range-b",
+                        },
+                    ],
+                    "source_occurrence_ordinals_not_exact_range",
+                ),
+                (
+                    "marker_out_of_range",
+                    [
+                        {
+                            "source_occurrence_ordinal": 1,
+                            "marker_ordinal": 1,
+                            "locator": "https://private.example/marker-range-a",
+                        },
+                        {
+                            "source_occurrence_ordinal": 2,
+                            "marker_ordinal": 3,
+                            "locator": "https://private.example/marker-range-b",
+                        },
+                    ],
+                    "marker_ordinals_not_exact_range",
+                ),
+                (
+                    "source_zero",
+                    [
+                        {
+                            "source_occurrence_ordinal": 0,
+                            "marker_ordinal": 1,
+                            "locator": "https://private.example/source-zero-a",
+                        },
+                        {
+                            "source_occurrence_ordinal": 2,
+                            "marker_ordinal": 2,
+                            "locator": "https://private.example/source-zero-b",
+                        },
+                    ],
+                    "source_occurrence_ordinal_not_positive",
+                ),
+                (
+                    "marker_negative",
+                    [
+                        {
+                            "source_occurrence_ordinal": 1,
+                            "marker_ordinal": -1,
+                            "locator": "https://private.example/marker-negative-a",
+                        },
+                        {
+                            "source_occurrence_ordinal": 2,
+                            "marker_ordinal": 2,
+                            "locator": "https://private.example/marker-negative-b",
+                        },
+                    ],
+                    "marker_ordinal_not_positive",
+                ),
+                (
+                    "source_noninteger",
+                    [
+                        {
+                            "source_occurrence_ordinal": "1",
+                            "marker_ordinal": 1,
+                            "locator": "https://private.example/source-string-a",
+                        },
+                        {
+                            "source_occurrence_ordinal": 2,
+                            "marker_ordinal": 2,
+                            "locator": "https://private.example/source-string-b",
+                        },
+                    ],
+                    "source_occurrence_ordinal_invalid",
+                ),
+                (
+                    "marker_boolean",
+                    [
+                        {
+                            "source_occurrence_ordinal": 1,
+                            "marker_ordinal": True,
+                            "locator": "https://private.example/marker-bool-a",
+                        },
+                        {
+                            "source_occurrence_ordinal": 2,
+                            "marker_ordinal": 2,
+                            "locator": "https://private.example/marker-bool-b",
+                        },
+                    ],
+                    "marker_ordinal_invalid",
+                ),
+                (
+                    "missing_source",
+                    [
+                        {
+                            "marker_ordinal": 1,
+                            "locator": "https://private.example/missing-source-a",
+                        },
+                        {
+                            "source_occurrence_ordinal": 2,
+                            "marker_ordinal": 2,
+                            "locator": "https://private.example/missing-source-b",
+                        },
+                    ],
+                    "source_occurrence_ordinal_invalid",
+                ),
+                (
+                    "missing_marker",
+                    [
+                        {
+                            "source_occurrence_ordinal": 1,
+                            "locator": "https://private.example/missing-marker-a",
+                        },
+                        {
+                            "source_occurrence_ordinal": 2,
+                            "marker_ordinal": 2,
+                            "locator": "https://private.example/missing-marker-b",
+                        },
+                    ],
+                    "marker_ordinal_invalid",
+                ),
+            ]
+            rows = []
+            page_canaries = []
+            locator_canaries = []
+            expected_codes: dict[int, str] = {}
+            for row_number, (name, occurrences, expected_code) in enumerate(
+                cases, start=1
+            ):
+                page_id = f"PRIVATE-ORDINAL-{name}-MUST-NOT-ECHO"
+                _path, canonical_sha = (
+                    self.write_notion_locator_evidence_canonical(
+                        archive_root,
+                        zettel_id=f"zet_notion_ordinal_{name}",
+                        source_page_id=page_id,
+                        declared_count=2,
+                        body_marker_count=2,
+                    )
+                )
+                rows.append(
+                    self.notion_locator_evidence_row(
+                        source_page_id=page_id,
+                        expected_canonical_sha256=canonical_sha,
+                        occurrences=occurrences,
+                    )
+                )
+                page_canaries.append(page_id)
+                locator_canaries.extend(
+                    str(item.get("locator"))
+                    for item in occurrences
+                    if item.get("locator")
+                )
+                expected_codes[row_number] = expected_code
+            evidence_relative = self.write_notion_locator_evidence_jsonl(
+                archive_root, rows, name="ordinal-errors.jsonl"
+            )
+
+            code, output = self.run_notion_locator_evidence_plan(
+                archive_root, evidence_relative
+            )
+            result = json.loads(output)
+
+            self.assertEqual(code, 1, output)
+            self.assertEqual(result["evidence_row_count"], len(cases))
+            self.assertEqual(result["aligned_count"], 0)
+            self.assertEqual(result["blocked_count"], len(cases))
+            by_row = {item["row_number"]: item for item in result["items"]}
+            self.assertEqual(set(by_row), set(expected_codes))
+            for row_number, expected_code in expected_codes.items():
+                with self.subTest(row_number=row_number, expected_code=expected_code):
+                    item = by_row[row_number]
+                    self.assert_notion_locator_evidence_item_shape(item)
+                    self.assertEqual(item["status"], "blocked")
+                    self.assertIn(expected_code, item["blocker_codes"])
+            self.assert_notion_locator_evidence_private_output(
+                output, page_canaries + locator_canaries
+            )
+
+    def test_notion_import_locator_evidence_plan_blocks_marker_frontmatter_and_evidence_count_mismatch(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            cases = [
+                (
+                    "zero_body",
+                    1,
+                    0,
+                    1,
+                    "body_marker_count_not_positive",
+                ),
+                (
+                    "zero_frontmatter",
+                    0,
+                    1,
+                    1,
+                    "frontmatter_omitted_count_not_positive",
+                ),
+                (
+                    "body_frontmatter",
+                    1,
+                    2,
+                    2,
+                    "body_frontmatter_count_mismatch",
+                ),
+                (
+                    "body_evidence",
+                    2,
+                    2,
+                    1,
+                    "body_evidence_count_mismatch",
+                ),
+            ]
+            rows = []
+            expected_codes: dict[int, str] = {}
+            canaries: list[str] = []
+            for row_number, (
+                name,
+                declared_count,
+                body_marker_count,
+                evidence_count,
+                expected_code,
+            ) in enumerate(cases, start=1):
+                page_id = f"PRIVATE-COUNT-{name}-MUST-NOT-ECHO"
+                _path, canonical_sha = (
+                    self.write_notion_locator_evidence_canonical(
+                        archive_root,
+                        zettel_id=f"zet_notion_count_{name}",
+                        source_page_id=page_id,
+                        declared_count=declared_count,
+                        body_marker_count=body_marker_count,
+                    )
+                )
+                occurrences = [
+                    {
+                        "source_occurrence_ordinal": ordinal,
+                        "marker_ordinal": ordinal,
+                        "locator": f"https://private.example/{name}/{ordinal}",
+                    }
+                    for ordinal in range(1, evidence_count + 1)
+                ]
+                rows.append(
+                    self.notion_locator_evidence_row(
+                        source_page_id=page_id,
+                        expected_canonical_sha256=canonical_sha,
+                        occurrences=occurrences,
+                    )
+                )
+                expected_codes[row_number] = expected_code
+                canaries.extend(
+                    [page_id]
+                    + [str(item["locator"]) for item in occurrences]
+                )
+            evidence_relative = self.write_notion_locator_evidence_jsonl(
+                archive_root, rows, name="count-mismatches.jsonl"
+            )
+
+            code, output = self.run_notion_locator_evidence_plan(
+                archive_root, evidence_relative
+            )
+            result = json.loads(output)
+
+            self.assertEqual(code, 1, output)
+            self.assertEqual(result["aligned_count"], 0)
+            self.assertEqual(result["blocked_count"], len(cases))
+            by_row = {item["row_number"]: item for item in result["items"]}
+            for row_number, expected_code in expected_codes.items():
+                with self.subTest(row_number=row_number):
+                    self.assertEqual(by_row[row_number]["status"], "blocked")
+                    self.assertIn(
+                        expected_code, by_row[row_number]["blocker_codes"]
+                    )
+            self.assert_notion_locator_evidence_private_output(output, canaries)
+
+    def test_notion_import_locator_evidence_plan_hardens_evidence_path_boundary(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            wrong_suffix = (
+                archive_root
+                / ".wom-scratch"
+                / "notion-locator-evidence"
+                / "PRIVATE-WRONG-SUFFIX.txt"
+            )
+            wrong_suffix.parent.mkdir(parents=True, exist_ok=True)
+            wrong_suffix.write_text("{}\n", encoding="utf-8")
+            outside_private_root = (
+                archive_root
+                / ".wom-scratch"
+                / "PRIVATE-OTHER-DIRECTORY"
+                / "reviewed.jsonl"
+            )
+            outside_private_root.parent.mkdir(parents=True, exist_ok=True)
+            outside_private_root.write_text("{}\n", encoding="utf-8")
+            not_regular = (
+                archive_root
+                / ".wom-scratch"
+                / "notion-locator-evidence"
+                / "PRIVATE-DIRECTORY.jsonl"
+            )
+            not_regular.mkdir(parents=True)
+
+            cases = [
+                (
+                    "../PRIVATE-TRAVERSAL.jsonl",
+                    "evidence_path_not_archive_relative",
+                    "PRIVATE-TRAVERSAL",
+                ),
+                (
+                    r"C:\PRIVATE-DRIVE.jsonl",
+                    "evidence_path_not_archive_relative",
+                    "PRIVATE-DRIVE",
+                ),
+                (
+                    r"\\PRIVATE-SERVER\share\evidence.jsonl",
+                    "evidence_path_not_archive_relative",
+                    "PRIVATE-SERVER",
+                ),
+                (
+                    r"C:PRIVATE-DRIVE-RELATIVE.jsonl",
+                    "evidence_path_not_archive_relative",
+                    "PRIVATE-DRIVE-RELATIVE",
+                ),
+                (
+                    str(wrong_suffix.relative_to(archive_root).as_posix()),
+                    "evidence_path_wrong_suffix",
+                    "PRIVATE-WRONG-SUFFIX",
+                ),
+                (
+                    str(outside_private_root.relative_to(archive_root).as_posix()),
+                    "evidence_path_outside_private_scratch",
+                    "PRIVATE-OTHER-DIRECTORY",
+                ),
+                (
+                    ".wom-scratch/notion-locator-evidence/PRIVATE-MISSING.jsonl",
+                    "evidence_file_missing_or_not_regular",
+                    "PRIVATE-MISSING",
+                ),
+                (
+                    str(not_regular.relative_to(archive_root).as_posix()),
+                    "evidence_file_missing_or_not_regular",
+                    "PRIVATE-DIRECTORY",
+                ),
+                (
+                    str(wrong_suffix.resolve()),
+                    "evidence_path_not_archive_relative",
+                    "PRIVATE-WRONG-SUFFIX",
+                ),
+            ]
+            before = self.archive_byte_snapshot(archive_root)
+            for evidence_value, expected_code, private_canary in cases:
+                with self.subTest(
+                    evidence_value=evidence_value, expected_code=expected_code
+                ):
+                    code, output = self.run_notion_locator_evidence_plan(
+                        archive_root, evidence_value
+                    )
+                    self.assertEqual(code, 1, output)
+                    result = json.loads(output)
+                    self.assertFalse(result["ok"])
+                    self.assertIn(expected_code, result["blocker_codes"])
+                    self.assertEqual(result["would_change"], [])
+                    self.assertNotIn(private_canary, output)
+                    self.assertNotIn(str(archive_root), output)
+                    self.assertNotIn("Traceback", output)
+            self.assertEqual(self.archive_byte_snapshot(archive_root), before)
+
+    def test_notion_import_locator_evidence_plan_rejects_symlink_or_reparse_path_component(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            temp_root = Path(tmp)
+            archive_root = self.copy_fake_archive(temp_root / "archive")
+            outside = temp_root / "PRIVATE-REPARSE-TARGET"
+            outside.mkdir()
+            (outside / "PRIVATE-REPARSE-FILE.jsonl").write_text(
+                "{}\n", encoding="utf-8"
+            )
+            scratch = archive_root / ".wom-scratch"
+            scratch.mkdir(exist_ok=True)
+            linked_root = scratch / "notion-locator-evidence"
+            if os.name == "nt":
+                completed = subprocess.run(
+                    [
+                        "cmd",
+                        "/c",
+                        "mklink",
+                        "/J",
+                        str(linked_root),
+                        str(outside),
+                    ],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                if completed.returncode != 0:
+                    self.skipTest(
+                        "Windows junction creation is unavailable in this environment"
+                    )
+            else:
+                try:
+                    linked_root.symlink_to(outside, target_is_directory=True)
+                except OSError:
+                    self.skipTest("directory symlink creation is unavailable")
+            try:
+                code, output = self.run_notion_locator_evidence_plan(
+                    archive_root,
+                    ".wom-scratch/notion-locator-evidence/PRIVATE-REPARSE-FILE.jsonl",
+                )
+                self.assertEqual(code, 1, output)
+                result = json.loads(output)
+                self.assertFalse(result["ok"])
+                self.assertIn(
+                    "evidence_path_contains_symlink_or_reparse",
+                    result["blocker_codes"],
+                )
+                self.assertNotIn("PRIVATE-REPARSE", output)
+                self.assertNotIn(str(outside), output)
+                self.assertNotIn("Traceback", output)
+                self.assertEqual(result["would_change"], [])
+            finally:
+                if os.name == "nt":
+                    linked_root.rmdir()
+                else:
+                    linked_root.unlink()
+
+    def test_notion_import_locator_evidence_plan_bounds_file_line_and_row_resources(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            evidence_root = (
+                archive_root / ".wom-scratch" / "notion-locator-evidence"
+            )
+            evidence_root.mkdir(parents=True, exist_ok=True)
+
+            oversized = evidence_root / "PRIVATE-OVERSIZED.jsonl"
+            with oversized.open("wb") as handle:
+                handle.truncate(64 * 1024 * 1024 + 1)
+            code, output = self.run_notion_locator_evidence_plan(
+                archive_root,
+                oversized.relative_to(archive_root).as_posix(),
+            )
+            self.assertEqual(code, 1, output)
+            result = json.loads(output)
+            self.assertIn(
+                "evidence_file_exceeds_64_mib", result["blocker_codes"]
+            )
+            self.assertNotIn("PRIVATE-OVERSIZED", output)
+            self.assertNotIn("Traceback", output)
+
+            overlong = evidence_root / "PRIVATE-OVERLONG-LINE.jsonl"
+            overlong.write_bytes(b"{" + b"x" * (1024 * 1024) + b"}\n")
+            code, output = self.run_notion_locator_evidence_plan(
+                archive_root,
+                overlong.relative_to(archive_root).as_posix(),
+            )
+            self.assertEqual(code, 1, output)
+            result = json.loads(output)
+            self.assertEqual(result["evidence_row_count"], 1)
+            self.assertIn(
+                "evidence_line_exceeds_1_mib",
+                result["items"][0]["blocker_codes"],
+            )
+            self.assertNotIn("PRIVATE-OVERLONG-LINE", output)
+
+            too_many = evidence_root / "PRIVATE-TOO-MANY-ROWS.jsonl"
+            too_many.write_text("{}\n" * 5001, encoding="utf-8")
+            zero_code, zero_output = self.run_notion_locator_evidence_plan(
+                archive_root,
+                too_many.relative_to(archive_root).as_posix(),
+                max_items=0,
+            )
+            code, output = self.run_notion_locator_evidence_plan(
+                archive_root,
+                too_many.relative_to(archive_root).as_posix(),
+                max_items=1,
+            )
+            zero_result = json.loads(zero_output)
+            self.assertEqual(zero_code, 1, zero_output)
+            self.assertEqual(code, 1, output)
+            result = json.loads(output)
+            self.assertIn(
+                "evidence_row_limit_exceeded", result["blocker_codes"]
+            )
+            self.assertEqual(result["evidence_row_count"], 5001)
+            self.assertEqual(zero_result["evidence_row_count"], 5001)
+            self.assertEqual(
+                zero_result["blocker_code_counts"],
+                result["blocker_code_counts"],
+            )
+            self.assertEqual(
+                result["blocker_code_counts"]["evidence_row_limit_exceeded"],
+                5001,
+            )
+            for aggregate_key in (
+                "affected_canonical_count",
+                "covered_affected_count",
+                "uncovered_affected_count",
+                "coverage_complete",
+                "evidence_row_count",
+                "aligned_count",
+                "blocked_count",
+            ):
+                with self.subTest(aggregate_key=aggregate_key):
+                    self.assertEqual(
+                        zero_result[aggregate_key],
+                        result[aggregate_key],
+                    )
+            self.assertEqual(zero_result["returned_item_count"], 0)
+            self.assertEqual(result["returned_item_count"], 1)
+            self.assertNotIn("PRIVATE-TOO-MANY-ROWS", output)
+            self.assertNotIn("PRIVATE-TOO-MANY-ROWS", zero_output)
+            self.assertNotIn("Traceback", zero_output + output)
+
+    def test_notion_import_locator_evidence_plan_contains_json_and_row_failures_without_echo(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            evidence_root = (
+                archive_root / ".wom-scratch" / "notion-locator-evidence"
+            )
+            evidence_root.mkdir(parents=True, exist_ok=True)
+            valid_sha = "sha256:" + _FAKE_SHA_A
+            base_row = self.notion_locator_evidence_row(
+                source_page_id="PRIVATE-STRUCTURE-PAGE-MUST-NOT-ECHO",
+                expected_canonical_sha256=valid_sha,
+                occurrences=[
+                    {
+                        "source_occurrence_ordinal": 1,
+                        "marker_ordinal": 1,
+                        "locator": "https://private.example/STRUCTURE-LOCATOR",
+                    }
+                ],
+            )
+            duplicate_row_key = (
+                '{"schema":"wom-kit/notion-locator-occurrence-evidence/v0.1",'
+                '"schema":"PRIVATE-DUPLICATE-SCHEMA-MUST-NOT-ECHO"}\n'
+            ).encode("utf-8")
+            duplicate_occurrence_key = (
+                "{"
+                '"schema":"wom-kit/notion-locator-occurrence-evidence/v0.1",'
+                '"source_page_id":"PRIVATE-DUPLICATE-OCCURRENCE-PAGE",'
+                '"basis":"reviewed_local_mirror",'
+                f'"source_snapshot_sha256":"{valid_sha}",'
+                f'"expected_canonical_sha256":"{valid_sha}",'
+                '"occurrences":[{'
+                '"source_occurrence_ordinal":1,'
+                '"source_occurrence_ordinal":2,'
+                '"marker_ordinal":1,'
+                '"locator":"https://private.example/DUPLICATE-OCCURRENCE"'
+                "}]}\n"
+            ).encode("utf-8")
+            row_with_extra = dict(base_row)
+            row_with_extra["PRIVATE_EXTRA_KEY_MUST_NOT_ECHO"] = "PRIVATE EXTRA VALUE"
+            occurrence_with_extra = copy.deepcopy(base_row)
+            occurrence_with_extra["occurrences"][0][
+                "PRIVATE_OCCURRENCE_EXTRA_MUST_NOT_ECHO"
+            ] = "PRIVATE EXTRA VALUE"
+            deeply_nested = (
+                '{"PRIVATE-DEEP-MUST-NOT-ECHO":'
+                + "[" * 1200
+                + "0"
+                + "]" * 1200
+                + "}\n"
+            ).encode("utf-8")
+            cases: list[tuple[str, bytes, str, str]] = [
+                (
+                    "invalid-utf8",
+                    b'{"PRIVATE-INVALID-UTF8":"\xff"}\n',
+                    "row_not_valid_utf8",
+                    "PRIVATE-INVALID-UTF8",
+                ),
+                (
+                    "invalid-json",
+                    b'{"PRIVATE-INVALID-JSON-MUST-NOT-ECHO":\n',
+                    "row_json_invalid",
+                    "PRIVATE-INVALID-JSON",
+                ),
+                (
+                    "duplicate-row-key",
+                    duplicate_row_key,
+                    "row_json_duplicate_key",
+                    "PRIVATE-DUPLICATE-SCHEMA",
+                ),
+                (
+                    "duplicate-occurrence-key",
+                    duplicate_occurrence_key,
+                    "row_json_duplicate_key",
+                    "PRIVATE-DUPLICATE-OCCURRENCE",
+                ),
+                (
+                    "row-not-object",
+                    b'["PRIVATE-ROW-NOT-OBJECT-MUST-NOT-ECHO"]\n',
+                    "row_not_object",
+                    "PRIVATE-ROW-NOT-OBJECT",
+                ),
+                (
+                    "row-extra",
+                    (
+                        json.dumps(
+                            row_with_extra, ensure_ascii=False, separators=(",", ":")
+                        )
+                        + "\n"
+                    ).encode("utf-8"),
+                    "row_unsupported_fields",
+                    "PRIVATE_EXTRA_KEY",
+                ),
+                (
+                    "occurrence-extra",
+                    (
+                        json.dumps(
+                            occurrence_with_extra,
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        )
+                        + "\n"
+                    ).encode("utf-8"),
+                    "occurrence_unsupported_fields",
+                    "PRIVATE_OCCURRENCE_EXTRA",
+                ),
+                (
+                    "deep-json",
+                    deeply_nested,
+                    "row_json_depth_or_node_limit_exceeded",
+                    "PRIVATE-DEEP",
+                ),
+            ]
+            for name, raw, expected_code, private_canary in cases:
+                with self.subTest(name=name, expected_code=expected_code):
+                    path = evidence_root / f"PRIVATE-{name}.jsonl"
+                    path.write_bytes(raw)
+                    code, output = self.run_notion_locator_evidence_plan(
+                        archive_root, path.relative_to(archive_root).as_posix()
+                    )
+                    self.assertEqual(code, 1, output)
+                    result = json.loads(output)
+                    self.assertFalse(result["ok"])
+                    self.assertIn(
+                        expected_code,
+                        self.notion_locator_evidence_blocker_codes(result),
+                    )
+                    self.assertEqual(result["would_change"], [])
+                    self.assertNotIn(private_canary, output)
+                    self.assertNotIn(path.name, output)
+                    self.assertNotIn(str(archive_root), output)
+                    self.assertNotIn("Traceback", output)
+
+    def test_notion_import_locator_evidence_plan_validates_exact_row_schema_and_scalars(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            valid_row = self.notion_locator_evidence_row(
+                source_page_id="PRIVATE-ROW-VALIDATION-PAGE-MUST-NOT-ECHO",
+                expected_canonical_sha256="sha256:" + _FAKE_SHA_A,
+                occurrences=[
+                    {
+                        "source_occurrence_ordinal": 1,
+                        "marker_ordinal": 1,
+                        "locator": "https://private.example/ROW-VALIDATION",
+                    }
+                ],
+            )
+            cases: list[tuple[str, dict[str, Any], str]] = []
+            wrong_schema = copy.deepcopy(valid_row)
+            wrong_schema["schema"] = "PRIVATE-WRONG-SCHEMA-MUST-NOT-ECHO"
+            cases.append(("schema", wrong_schema, "schema_invalid"))
+            wrong_basis = copy.deepcopy(valid_row)
+            wrong_basis["basis"] = "PRIVATE-WRONG-BASIS-MUST-NOT-ECHO"
+            cases.append(("basis", wrong_basis, "basis_invalid"))
+            bad_source_hash = copy.deepcopy(valid_row)
+            bad_source_hash["source_snapshot_sha256"] = "sha256:" + "A" * 64
+            cases.append(
+                ("source-hash", bad_source_hash, "source_snapshot_sha256_invalid")
+            )
+            bad_canonical_hash = copy.deepcopy(valid_row)
+            bad_canonical_hash["expected_canonical_sha256"] = _FAKE_SHA_B
+            cases.append(
+                (
+                    "canonical-hash",
+                    bad_canonical_hash,
+                    "expected_canonical_sha256_invalid",
+                )
+            )
+            for name, invalid_id in (
+                ("empty-page", ""),
+                ("trimmed-page", " PRIVATE-UNTRIMMED-PAGE "),
+                ("control-page", "PRIVATE-CONTROL-\u0001-PAGE"),
+                ("oversized-page", "P" * 10000),
+                ("integer-page", 123456789),
+            ):
+                row = copy.deepcopy(valid_row)
+                row["source_page_id"] = invalid_id
+                cases.append((name, row, "source_page_id_invalid"))
+            occurrences_not_list = copy.deepcopy(valid_row)
+            occurrences_not_list["occurrences"] = {
+                "PRIVATE": "NOT-A-LIST-MUST-NOT-ECHO"
+            }
+            cases.append(
+                ("occurrences-not-list", occurrences_not_list, "occurrences_invalid")
+            )
+            occurrences_empty = copy.deepcopy(valid_row)
+            occurrences_empty["occurrences"] = []
+            cases.append(
+                ("occurrences-empty", occurrences_empty, "occurrences_invalid")
+            )
+            occurrence_not_object = copy.deepcopy(valid_row)
+            occurrence_not_object["occurrences"] = [
+                "PRIVATE-NOT-AN-OCCURRENCE-OBJECT-MUST-NOT-ECHO"
+            ]
+            cases.append(
+                (
+                    "occurrence-not-object",
+                    occurrence_not_object,
+                    "occurrence_not_object",
+                )
+            )
+
+            evidence_relative = self.write_notion_locator_evidence_jsonl(
+                archive_root,
+                [row for _name, row, _expected_code in cases],
+                name="row-validation.jsonl",
+            )
+            code, output = self.run_notion_locator_evidence_plan(
+                archive_root, evidence_relative
+            )
+            result = json.loads(output)
+
+            self.assertEqual(code, 1, output)
+            self.assertEqual(result["evidence_row_count"], len(cases))
+            self.assertEqual(result["aligned_count"], 0)
+            self.assertEqual(result["blocked_count"], len(cases))
+            by_row = {item["row_number"]: item for item in result["items"]}
+            for row_number, (name, _row, expected_code) in enumerate(
+                cases, start=1
+            ):
+                with self.subTest(name=name, expected_code=expected_code):
+                    self.assertEqual(by_row[row_number]["status"], "blocked")
+                    self.assertIn(
+                        expected_code, by_row[row_number]["blocker_codes"]
+                    )
+            self.assert_notion_locator_evidence_private_output(
+                output,
+                [
+                    "PRIVATE-ROW-VALIDATION-PAGE",
+                    "PRIVATE-WRONG-SCHEMA",
+                    "PRIVATE-WRONG-BASIS",
+                    "PRIVATE-UNTRIMMED-PAGE",
+                    "PRIVATE-CONTROL",
+                    "PRIVATE-NOT-AN-OCCURRENCE",
+                    "NOT-A-LIST",
+                    "ROW-VALIDATION",
+                ],
+            )
+
+    def test_notion_import_locator_evidence_plan_preserves_valid_locator_bytes_only_in_private_plan(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            page_id = "PRIVATE-LOCATOR-BYTES-PAGE-MUST-NOT-ECHO"
+            _path, canonical_sha = self.write_notion_locator_evidence_canonical(
+                archive_root,
+                zettel_id="zet_notion_locator_bytes",
+                source_page_id=page_id,
+                declared_count=1,
+                body_marker_count=1,
+            )
+            first_locator = (
+                "HTTPS://Private.Example:443/a%2Fb?q=Case%20Sensitive#Fragment"
+            )
+            second_locator = (
+                "HTTPS://Private.Example:443/a%2Fb?q=case%20Sensitive#Fragment"
+            )
+            row = self.notion_locator_evidence_row(
+                source_page_id=page_id,
+                expected_canonical_sha256=canonical_sha,
+                occurrences=[
+                    {
+                        "source_occurrence_ordinal": 1,
+                        "marker_ordinal": 1,
+                        "locator": first_locator,
+                    }
+                ],
+            )
+            evidence_relative = self.write_notion_locator_evidence_jsonl(
+                archive_root, [row], name="locator-bytes.jsonl"
+            )
+            first_code, first_output = self.run_notion_locator_evidence_plan(
+                archive_root, evidence_relative
+            )
+            first_result = json.loads(first_output)
+            self.assertEqual(first_code, 0, first_output)
+            self.assertEqual(
+                first_result["items"][0]["status"],
+                "aligned_for_human_review",
+            )
+            self.assertNotIn(first_locator, first_output)
+
+            row["occurrences"][0]["locator"] = second_locator
+            self.write_notion_locator_evidence_jsonl(
+                archive_root, [row], name="locator-bytes.jsonl"
+            )
+            second_code, second_output = self.run_notion_locator_evidence_plan(
+                archive_root, evidence_relative
+            )
+            second_result = json.loads(second_output)
+            self.assertEqual(second_code, 0, second_output)
+            self.assertEqual(
+                second_result["items"][0]["status"],
+                "aligned_for_human_review",
+            )
+            self.assertNotEqual(
+                first_result["evidence_file_sha256"],
+                second_result["evidence_file_sha256"],
+            )
+            self.assertNotEqual(
+                first_result["plan_digest"], second_result["plan_digest"]
+            )
+            self.assertNotIn(second_locator, second_output)
+            self.assert_notion_locator_evidence_private_output(
+                first_output + second_output,
+                [page_id, first_locator, second_locator, canonical_sha],
+            )
+
+    def test_notion_import_locator_evidence_plan_rejects_unsafe_locators(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            unsafe_locators = [
+                "https://"
+                + "PRIVATE-USER:PRIVATE-PASSWORD"
+                + "@example.test/path",
+                "https://example.test/PRIVATE-CONTROL-\u0001-PATH",
+                "/PRIVATE-RELATIVE-LOCATOR",
+                "ftp://example.test/PRIVATE-FTP-LOCATOR",
+                "https:///PRIVATE-MISSING-HOST",
+                "https://%",
+                "https://%ZZ",
+                "https://example.test/%ZZ",
+                "https://example.test/" + "PRIVATE-OVERSIZED-LOCATOR-" * 1000,
+            ]
+            rows = []
+            page_canaries = []
+            for index, locator in enumerate(unsafe_locators, start=1):
+                page_id = f"PRIVATE-UNSAFE-LOCATOR-PAGE-{index}-MUST-NOT-ECHO"
+                _path, canonical_sha = (
+                    self.write_notion_locator_evidence_canonical(
+                        archive_root,
+                        zettel_id=f"zet_notion_unsafe_locator_{index}",
+                        source_page_id=page_id,
+                        declared_count=1,
+                        body_marker_count=1,
+                    )
+                )
+                rows.append(
+                    self.notion_locator_evidence_row(
+                        source_page_id=page_id,
+                        expected_canonical_sha256=canonical_sha,
+                        occurrences=[
+                            {
+                                "source_occurrence_ordinal": 1,
+                                "marker_ordinal": 1,
+                                "locator": locator,
+                            }
+                        ],
+                    )
+                )
+                page_canaries.append(page_id)
+            evidence_relative = self.write_notion_locator_evidence_jsonl(
+                archive_root, rows, name="unsafe-locators.jsonl"
+            )
+
+            code, output = self.run_notion_locator_evidence_plan(
+                archive_root, evidence_relative
+            )
+            result = json.loads(output)
+
+            self.assertEqual(code, 1, output)
+            self.assertEqual(result["aligned_count"], 0)
+            self.assertEqual(result["blocked_count"], len(unsafe_locators))
+            for item in result["items"]:
+                self.assertEqual(item["status"], "blocked")
+                self.assertIn("locator_invalid", item["blocker_codes"])
+            self.assert_notion_locator_evidence_private_output(
+                output,
+                page_canaries
+                + [
+                    "PRIVATE-USER",
+                    "PRIVATE-PASSWORD",
+                    "PRIVATE-CONTROL",
+                    "PRIVATE-RELATIVE",
+                    "PRIVATE-FTP",
+                    "PRIVATE-MISSING-HOST",
+                    "https://%",
+                    "https://%ZZ",
+                    "https://example.test/%ZZ",
+                    "PRIVATE-OVERSIZED-LOCATOR",
+                ],
+            )
+
+    def test_notion_import_locator_evidence_plan_contains_evidence_snapshot_io_and_drift(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            page_id = "PRIVATE-EVIDENCE-SNAPSHOT-PAGE-MUST-NOT-ECHO"
+            locator = "https://private.example/EVIDENCE-SNAPSHOT-LOCATOR"
+            row = self.notion_locator_evidence_row(
+                source_page_id=page_id,
+                expected_canonical_sha256="sha256:" + _FAKE_SHA_A,
+                occurrences=[
+                    {
+                        "source_occurrence_ordinal": 1,
+                        "marker_ordinal": 1,
+                        "locator": locator,
+                    }
+                ],
+            )
+            evidence_relative = self.write_notion_locator_evidence_jsonl(
+                archive_root,
+                [row],
+                name="snapshot-guard.jsonl",
+            )
+            evidence_path = archive_root / evidence_relative
+            before = self.archive_byte_snapshot(archive_root)
+            original_open = Path.open
+            evidence_path_key = os.path.normcase(
+                os.path.abspath(os.fspath(evidence_path.resolve()))
+            )
+
+            def unreadable_open(
+                path_self: Path, *args: Any, **kwargs: Any
+            ) -> Any:
+                if (
+                    os.path.normcase(
+                        os.path.abspath(os.fspath(path_self))
+                    )
+                    == evidence_path_key
+                    and args
+                    and args[0] == "rb"
+                ):
+                    raise PermissionError("PRIVATE PERMISSION DETAIL")
+                return original_open(path_self, *args, **kwargs)
+
+            with patch.object(Path, "open", new=unreadable_open):
+                unreadable_code, unreadable_output = (
+                    self.run_notion_locator_evidence_plan(
+                        archive_root,
+                        evidence_relative,
+                    )
+                )
+            unreadable = json.loads(unreadable_output)
+            self.assertEqual(unreadable_code, 1, unreadable_output)
+            self.assertIn(
+                "evidence_file_unreadable",
+                unreadable["blocker_codes"],
+            )
+            self.assertIsNone(unreadable["evidence_file_sha256"])
+            self.assertEqual(unreadable["evidence_row_count"], 0)
+
+            swapped_path = Path(tmp) / "PRIVATE-EVIDENCE-HANDLE-SWAP.jsonl"
+            swapped_path.write_bytes(evidence_path.read_bytes())
+
+            def swapped_open(
+                path_self: Path, *args: Any, **kwargs: Any
+            ) -> Any:
+                if (
+                    os.path.normcase(
+                        os.path.abspath(os.fspath(path_self))
+                    )
+                    == evidence_path_key
+                    and args
+                    and args[0] == "rb"
+                ):
+                    return original_open(swapped_path, *args, **kwargs)
+                return original_open(path_self, *args, **kwargs)
+
+            with patch.object(Path, "open", new=swapped_open):
+                swapped_code, swapped_output = (
+                    self.run_notion_locator_evidence_plan(
+                        archive_root,
+                        evidence_relative,
+                    )
+                )
+            swapped = json.loads(swapped_output)
+            self.assertEqual(swapped_code, 1, swapped_output)
+            self.assertIn(
+                "evidence_file_changed_during_read",
+                swapped["blocker_codes"],
+            )
+            self.assertIsNone(swapped["evidence_file_sha256"])
+            self.assertEqual(swapped["evidence_row_count"], 0)
+
+            original_lstat = os.lstat
+            target_stat_calls = 0
+            original_snapshot_reader = (
+                archive_services._read_notion_locator_evidence_snapshot
+            )
+
+            class ChangedStat:
+                def __init__(self, current: os.stat_result) -> None:
+                    self._current = current
+                    self.st_size = current.st_size
+                    self.st_mtime_ns = current.st_mtime_ns + 1
+                    self.st_ctime_ns = current.st_ctime_ns
+                    self.st_ino = current.st_ino
+
+                def __getattr__(self, name: str) -> Any:
+                    return getattr(self._current, name)
+
+            def changed_lstat(
+                raw_path: Any, *args: Any, **kwargs: Any
+            ) -> Any:
+                nonlocal target_stat_calls
+                current = original_lstat(raw_path, *args, **kwargs)
+                if (
+                    os.path.normcase(
+                        os.path.abspath(os.fspath(raw_path))
+                    )
+                    == evidence_path_key
+                ):
+                    target_stat_calls += 1
+                    if target_stat_calls >= 2:
+                        return ChangedStat(current)
+                return current
+
+            def drifting_snapshot_reader(
+                path: Path, blocker_codes: list[str]
+            ) -> bytes | None:
+                with patch("os.lstat", new=changed_lstat):
+                    return original_snapshot_reader(path, blocker_codes)
+
+            with patch(
+                "wom_kit.archive_services."
+                "_read_notion_locator_evidence_snapshot",
+                side_effect=drifting_snapshot_reader,
+            ):
+                changed_code, changed_output = (
+                    self.run_notion_locator_evidence_plan(
+                        archive_root,
+                        evidence_relative,
+                    )
+                )
+            changed = json.loads(changed_output)
+            self.assertEqual(changed_code, 1, changed_output)
+            self.assertIn(
+                "evidence_file_changed_during_read",
+                changed["blocker_codes"],
+            )
+            self.assertIsNone(changed["evidence_file_sha256"])
+            self.assertGreaterEqual(target_stat_calls, 2)
+
+            with patch(
+                "wom_kit.archive_services."
+                "notion_import_locator_evidence_plan",
+                side_effect=ValueError(
+                    "PRIVATE UNEXPECTED EVIDENCE ERROR MUST NOT ECHO"
+                ),
+            ):
+                unexpected_code, unexpected_output = (
+                    self.run_notion_locator_evidence_plan(
+                        archive_root,
+                        evidence_relative,
+                    )
+                )
+            self.assertEqual(unexpected_code, 1, unexpected_output)
+            self.assertIn(
+                "notion-import-locator-evidence-plan failed safely",
+                unexpected_output,
+            )
+            self.assertEqual(self.archive_byte_snapshot(archive_root), before)
+            self.assert_notion_locator_evidence_private_output(
+                unreadable_output
+                + swapped_output
+                + changed_output
+                + unexpected_output,
+                [
+                    page_id,
+                    locator,
+                    "PRIVATE PERMISSION DETAIL",
+                    "PRIVATE UNEXPECTED EVIDENCE ERROR MUST NOT ECHO",
+                    swapped_path.name,
+                    str(swapped_path),
+                    evidence_path.name,
+                    str(evidence_path),
+                ],
+            )
+            self.assertNotIn(
+                "Traceback",
+                unreadable_output
+                + swapped_output
+                + changed_output
+                + unexpected_output,
+            )
+
+    def test_notion_import_locator_evidence_plan_contains_canonical_snapshot_io_and_drift(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            page_id = "PRIVATE-CANONICAL-SNAPSHOT-PAGE-MUST-NOT-ECHO"
+            locator = "https://private.example/CANONICAL-SNAPSHOT-LOCATOR"
+            canonical_path, canonical_sha = (
+                self.write_notion_locator_evidence_canonical(
+                    archive_root,
+                    zettel_id="zet_notion_canonical_snapshot_guard",
+                    source_page_id=page_id,
+                    declared_count=1,
+                    body_marker_count=1,
+                )
+            )
+            row = self.notion_locator_evidence_row(
+                source_page_id=page_id,
+                expected_canonical_sha256=canonical_sha,
+                occurrences=[
+                    {
+                        "source_occurrence_ordinal": 1,
+                        "marker_ordinal": 1,
+                        "locator": locator,
+                    }
+                ],
+            )
+            evidence_relative = self.write_notion_locator_evidence_jsonl(
+                archive_root,
+                [row],
+                name="canonical-snapshot-guard.jsonl",
+            )
+            before = self.archive_byte_snapshot(archive_root)
+            original_open = Path.open
+            canonical_path_key = os.path.normcase(
+                os.path.abspath(os.fspath(canonical_path.resolve()))
+            )
+
+            def unreadable_open(
+                path_self: Path, *args: Any, **kwargs: Any
+            ) -> Any:
+                if (
+                    os.path.normcase(
+                        os.path.abspath(os.fspath(path_self))
+                    )
+                    == canonical_path_key
+                    and args
+                    and args[0] == "rb"
+                ):
+                    raise PermissionError("PRIVATE CANONICAL PERMISSION DETAIL")
+                return original_open(path_self, *args, **kwargs)
+
+            with patch.object(Path, "open", new=unreadable_open):
+                unreadable_code, unreadable_output = (
+                    self.run_notion_locator_evidence_plan(
+                        archive_root,
+                        evidence_relative,
+                    )
+                )
+            unreadable = json.loads(unreadable_output)
+            self.assertEqual(unreadable_code, 1, unreadable_output)
+            self.assertIn(
+                "canonical_file_unreadable",
+                unreadable["blocker_codes"],
+            )
+            self.assertIn(
+                "canonical_scan_incomplete",
+                unreadable["blocker_codes"],
+            )
+
+            swapped_path = Path(tmp) / "PRIVATE-CANONICAL-HANDLE-SWAP.md"
+            swapped_path.write_bytes(canonical_path.read_bytes())
+
+            def swapped_open(
+                path_self: Path, *args: Any, **kwargs: Any
+            ) -> Any:
+                if (
+                    os.path.normcase(
+                        os.path.abspath(os.fspath(path_self))
+                    )
+                    == canonical_path_key
+                    and args
+                    and args[0] == "rb"
+                ):
+                    return original_open(swapped_path, *args, **kwargs)
+                return original_open(path_self, *args, **kwargs)
+
+            with patch.object(Path, "open", new=swapped_open):
+                swapped_code, swapped_output = (
+                    self.run_notion_locator_evidence_plan(
+                        archive_root,
+                        evidence_relative,
+                    )
+                )
+            swapped = json.loads(swapped_output)
+            self.assertEqual(swapped_code, 1, swapped_output)
+            self.assertIn(
+                "canonical_file_changed_during_read",
+                swapped["blocker_codes"],
+            )
+            self.assertIn(
+                "canonical_scan_incomplete",
+                swapped["blocker_codes"],
+            )
+
+            original_lstat = os.lstat
+            target_stat_calls = 0
+            original_snapshot_reader = (
+                archive_services._read_notion_locator_canonical_snapshot
+            )
+
+            class ChangedStat:
+                def __init__(self, current: os.stat_result) -> None:
+                    self._current = current
+                    self.st_size = current.st_size
+                    self.st_mtime_ns = current.st_mtime_ns + 1
+                    self.st_ctime_ns = current.st_ctime_ns
+                    self.st_ino = current.st_ino
+
+                def __getattr__(self, name: str) -> Any:
+                    return getattr(self._current, name)
+
+            def changed_lstat(
+                raw_path: Any, *args: Any, **kwargs: Any
+            ) -> Any:
+                nonlocal target_stat_calls
+                current = original_lstat(raw_path, *args, **kwargs)
+                if (
+                    os.path.normcase(
+                        os.path.abspath(os.fspath(raw_path))
+                    )
+                    == canonical_path_key
+                ):
+                    target_stat_calls += 1
+                    if target_stat_calls >= 2:
+                        return ChangedStat(current)
+                return current
+
+            def drifting_snapshot_reader(
+                root: Path,
+                path: Path,
+                *,
+                expected_archive_id: str | None = None,
+            ) -> tuple[bytes | None, str | None]:
+                if (
+                    os.path.normcase(
+                        os.path.abspath(os.fspath(path))
+                    )
+                    != canonical_path_key
+                ):
+                    return original_snapshot_reader(
+                        root,
+                        path,
+                        expected_archive_id=expected_archive_id,
+                    )
+                with patch("os.lstat", new=changed_lstat):
+                    return original_snapshot_reader(
+                        root,
+                        path,
+                        expected_archive_id=expected_archive_id,
+                    )
+
+            with patch(
+                "wom_kit.archive_services."
+                "_read_notion_locator_canonical_snapshot",
+                side_effect=drifting_snapshot_reader,
+            ):
+                changed_code, changed_output = (
+                    self.run_notion_locator_evidence_plan(
+                        archive_root,
+                        evidence_relative,
+                    )
+                )
+            changed = json.loads(changed_output)
+            self.assertEqual(changed_code, 1, changed_output)
+            self.assertIn(
+                "canonical_file_changed_during_read",
+                changed["blocker_codes"],
+            )
+            self.assertIn(
+                "canonical_scan_incomplete",
+                changed["blocker_codes"],
+            )
+            self.assertGreaterEqual(target_stat_calls, 2)
+            self.assertEqual(self.archive_byte_snapshot(archive_root), before)
+            self.assert_notion_locator_evidence_private_output(
+                unreadable_output + swapped_output + changed_output,
+                [
+                    page_id,
+                    locator,
+                    canonical_sha,
+                    "PRIVATE CANONICAL PERMISSION DETAIL",
+                    swapped_path.name,
+                    str(swapped_path),
+                    canonical_path.name,
+                    str(canonical_path),
+                ],
+            )
+            self.assertNotIn(
+                "Traceback",
+                unreadable_output + swapped_output + changed_output,
+            )
+
+    def test_notion_import_locator_evidence_plan_bounds_canonical_file_and_total_matched_bytes(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            page_id = "PRIVATE-OVERSIZED-CANONICAL-PAGE-MUST-NOT-ECHO"
+            locator = "https://private.example/OVERSIZED-CANONICAL-LOCATOR"
+            canonical_path, _initial_sha = (
+                self.write_notion_locator_evidence_canonical(
+                    archive_root,
+                    zettel_id="zet_notion_oversized_canonical",
+                    source_page_id=page_id,
+                    declared_count=1,
+                    body_marker_count=1,
+                )
+            )
+            raw = canonical_path.read_bytes()
+            raw += b"x" * (
+                archive_services.NOTION_LOCATOR_EVIDENCE_MAX_CANONICAL_FILE_BYTES
+                - len(raw)
+                + 1
+            )
+            canonical_path.write_bytes(raw)
+            canonical_sha = "sha256:" + hashlib.sha256(raw).hexdigest()
+            row = self.notion_locator_evidence_row(
+                source_page_id=page_id,
+                expected_canonical_sha256=canonical_sha,
+                occurrences=[
+                    {
+                        "source_occurrence_ordinal": 1,
+                        "marker_ordinal": 1,
+                        "locator": locator,
+                    }
+                ],
+            )
+            evidence_relative = self.write_notion_locator_evidence_jsonl(
+                archive_root,
+                [row],
+                name="oversized-canonical.jsonl",
+            )
+            before = self.archive_byte_snapshot(archive_root)
+
+            code, output = self.run_notion_locator_evidence_plan(
+                archive_root,
+                evidence_relative,
+            )
+            result = json.loads(output)
+
+            self.assertEqual(code, 1, output)
+            self.assertIn(
+                "canonical_file_exceeds_16_mib",
+                result["blocker_codes"],
+            )
+            self.assertIn(
+                "canonical_scan_incomplete",
+                result["blocker_codes"],
+            )
+            self.assertEqual(self.archive_byte_snapshot(archive_root), before)
+            self.assert_notion_locator_evidence_private_output(
+                output,
+                [
+                    page_id,
+                    locator,
+                    canonical_sha,
+                    canonical_path.name,
+                    str(canonical_path),
+                ],
+            )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            rows: list[dict[str, Any]] = []
+            canaries: list[str] = []
+            canonical_bytes = 0
+            for index in range(1, 3):
+                page_id = (
+                    f"PRIVATE-TOTAL-MATCHED-PAGE-{index}-MUST-NOT-ECHO"
+                )
+                locator = (
+                    f"https://private.example/TOTAL-MATCHED-LOCATOR-{index}"
+                )
+                canonical_path, canonical_sha = (
+                    self.write_notion_locator_evidence_canonical(
+                        archive_root,
+                        zettel_id=f"zet_notion_total_matched_{index}",
+                        source_page_id=page_id,
+                        declared_count=1,
+                        body_marker_count=1,
+                    )
+                )
+                canonical_bytes += len(canonical_path.read_bytes())
+                rows.append(
+                    self.notion_locator_evidence_row(
+                        source_page_id=page_id,
+                        expected_canonical_sha256=canonical_sha,
+                        occurrences=[
+                            {
+                                "source_occurrence_ordinal": 1,
+                                "marker_ordinal": 1,
+                                "locator": locator,
+                            }
+                        ],
+                    )
+                )
+                canaries.extend([page_id, locator, canonical_sha])
+            evidence_relative = self.write_notion_locator_evidence_jsonl(
+                archive_root,
+                rows,
+                name="total-matched-limit.jsonl",
+            )
+            before = self.archive_byte_snapshot(archive_root)
+
+            with patch(
+                "wom_kit.archive_services."
+                "NOTION_LOCATOR_EVIDENCE_MAX_MATCHED_CANONICAL_BYTES",
+                canonical_bytes - 1,
+            ):
+                code, output = self.run_notion_locator_evidence_plan(
+                    archive_root,
+                    evidence_relative,
+                )
+            result = json.loads(output)
+
+            self.assertEqual(code, 1, output)
+            self.assertIn(
+                "canonical_matched_bytes_exceeds_256_mib",
+                result["blocker_codes"],
+            )
+            self.assertIn(
+                "canonical_scan_incomplete",
+                result["blocker_codes"],
+            )
+            self.assertEqual(result["affected_canonical_count"], 2)
+            self.assertEqual(result["covered_affected_count"], 2)
+            self.assertFalse(result["coverage_complete"])
+            self.assertEqual(result["aligned_count"], 0)
+            self.assertEqual(result["blocked_count"], 2)
+            self.assertEqual(self.archive_byte_snapshot(archive_root), before)
+            self.assert_notion_locator_evidence_private_output(
+                output,
+                canaries + [str(archive_root), evidence_relative],
+            )
+
+    def test_notion_import_locator_evidence_plan_keeps_coverage_aggregates_when_items_are_truncated(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            rows: list[dict[str, Any]] = []
+            page_canaries: list[str] = []
+            locator_canaries: list[str] = []
+            canonical_hashes: list[str] = []
+            for index in range(1, 5):
+                page_id = (
+                    f"PRIVATE-COVERAGE-PAGE-{index}-MUST-NOT-ECHO"
+                )
+                locator = (
+                    f"https://private.example/COVERAGE-LOCATOR-{index}"
+                )
+                declared_count = 2 if index == 3 else 1
+                _path, canonical_sha = (
+                    self.write_notion_locator_evidence_canonical(
+                        archive_root,
+                        zettel_id=f"zet_notion_coverage_{index}",
+                        source_page_id=page_id,
+                        declared_count=declared_count,
+                        body_marker_count=1,
+                    )
+                )
+                rows.append(
+                    self.notion_locator_evidence_row(
+                        source_page_id=page_id,
+                        expected_canonical_sha256=canonical_sha,
+                        occurrences=[
+                            {
+                                "source_occurrence_ordinal": 1,
+                                "marker_ordinal": 1,
+                                "locator": locator,
+                            }
+                        ],
+                    )
+                )
+                page_canaries.append(page_id)
+                locator_canaries.append(locator)
+                canonical_hashes.append(canonical_sha)
+
+            evidence_relative = self.write_notion_locator_evidence_jsonl(
+                archive_root,
+                rows[:3],
+                name="partial-coverage.jsonl",
+            )
+            code, output = self.run_notion_locator_evidence_plan(
+                archive_root,
+                evidence_relative,
+                max_items=2,
+            )
+            result = json.loads(output)
+
+            self.assertEqual(code, 1, output)
+            self.assertEqual(result["affected_canonical_count"], 4)
+            self.assertEqual(result["covered_affected_count"], 3)
+            self.assertEqual(result["uncovered_affected_count"], 1)
+            self.assertFalse(result["coverage_complete"])
+            self.assertEqual(result["evidence_row_count"], 3)
+            self.assertEqual(result["aligned_count"], 2)
+            self.assertEqual(result["blocked_count"], 1)
+            self.assertEqual(result["returned_item_count"], 2)
+            self.assertEqual(result["truncated_item_count"], 1)
+            self.assertEqual(len(result["items"]), 2)
+
+            self.write_notion_locator_evidence_jsonl(
+                archive_root,
+                rows,
+                name="partial-coverage.jsonl",
+            )
+            complete_code, complete_output = (
+                self.run_notion_locator_evidence_plan(
+                    archive_root,
+                    evidence_relative,
+                    max_items=2,
+                )
+            )
+            complete = json.loads(complete_output)
+
+            self.assertEqual(complete_code, 1, complete_output)
+            self.assertEqual(complete["affected_canonical_count"], 4)
+            self.assertEqual(complete["covered_affected_count"], 4)
+            self.assertEqual(complete["uncovered_affected_count"], 0)
+            self.assertTrue(complete["coverage_complete"])
+            self.assertEqual(complete["evidence_row_count"], 4)
+            self.assertEqual(complete["aligned_count"], 3)
+            self.assertEqual(complete["blocked_count"], 1)
+            self.assertEqual(complete["returned_item_count"], 2)
+            self.assertEqual(complete["truncated_item_count"], 2)
+            self.assertEqual(len(complete["items"]), 2)
+            self.assert_notion_locator_evidence_private_output(
+                output + complete_output,
+                page_canaries + locator_canaries + canonical_hashes,
+            )
+
+    def test_notion_import_locator_evidence_plan_reads_bom_canonical_from_one_byte_snapshot(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            page_id = "PRIVATE-BOM-SNAPSHOT-PAGE-MUST-NOT-ECHO"
+            locator = "https://private.example/BOM-SNAPSHOT-LOCATOR"
+            canonical_path, canonical_sha = (
+                self.write_notion_locator_evidence_canonical(
+                    archive_root,
+                    zettel_id="zet_notion_bom_snapshot",
+                    source_page_id=page_id,
+                    declared_count=1,
+                    body_marker_count=1,
+                    bom=True,
+                )
+            )
+            self.assertTrue(canonical_path.read_bytes().startswith(b"\xef\xbb\xbf"))
+            row = self.notion_locator_evidence_row(
+                source_page_id=page_id,
+                expected_canonical_sha256=canonical_sha,
+                occurrences=[
+                    {
+                        "source_occurrence_ordinal": 1,
+                        "marker_ordinal": 1,
+                        "locator": locator,
+                    }
+                ],
+            )
+            evidence_relative = self.write_notion_locator_evidence_jsonl(
+                archive_root,
+                [row],
+                name="bom-canonical.jsonl",
+            )
+            before = self.archive_byte_snapshot(archive_root)
+            snapshot_reader = (
+                archive_services._read_notion_locator_canonical_snapshot
+            )
+
+            with patch(
+                "wom_kit.archive_services."
+                "_read_notion_locator_canonical_snapshot",
+                wraps=snapshot_reader,
+            ) as snapshot_mock:
+                code, output = self.run_notion_locator_evidence_plan(
+                    archive_root,
+                    evidence_relative,
+                )
+            result = json.loads(output)
+
+            self.assertEqual(code, 0, output)
+            self.assertEqual(
+                result["items"][0]["status"],
+                "aligned_for_human_review",
+            )
+            targeted_reads = [
+                call
+                for call in snapshot_mock.call_args_list
+                if len(call.args) >= 2
+                and Path(call.args[1]).resolve() == canonical_path.resolve()
+            ]
+            self.assertEqual(len(targeted_reads), 1, snapshot_mock.call_args_list)
+            self.assertEqual(self.archive_byte_snapshot(archive_root), before)
+            self.assert_notion_locator_evidence_private_output(
+                output,
+                [page_id, locator, canonical_sha, str(canonical_path)],
+            )
+
+    def test_notion_import_locator_evidence_plan_text_mode_stays_private_read_only_and_dry_run_only(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            page_id = "PRIVATE-TEXT-MODE-PAGE-MUST-NOT-ECHO"
+            locator = "https://private.example/TEXT-MODE-LOCATOR"
+            _path, canonical_sha = (
+                self.write_notion_locator_evidence_canonical(
+                    archive_root,
+                    zettel_id="zet_notion_text_mode",
+                    source_page_id=page_id,
+                    declared_count=1,
+                    body_marker_count=1,
+                )
+            )
+            row = self.notion_locator_evidence_row(
+                source_page_id=page_id,
+                expected_canonical_sha256=canonical_sha,
+                occurrences=[
+                    {
+                        "source_occurrence_ordinal": 1,
+                        "marker_ordinal": 1,
+                        "locator": locator,
+                    }
+                ],
+            )
+            evidence_relative = self.write_notion_locator_evidence_jsonl(
+                archive_root,
+                [row],
+                name="text-mode.jsonl",
+            )
+            before = self.archive_byte_snapshot(archive_root)
+
+            with patch(
+                "wom_kit.archive_services.notion_api_get_json",
+                side_effect=AssertionError(
+                    "provider API must not be called by the local plan"
+                ),
+            ):
+                code, output = self.run_notion_locator_evidence_plan(
+                    archive_root,
+                    evidence_relative,
+                    output_format="text",
+                )
+
+            self.assertEqual(code, 0, output)
+            self.assertNotIn("Traceback", output)
+            self.assertEqual(self.archive_byte_snapshot(archive_root), before)
+            self.assert_notion_locator_evidence_private_output(
+                output,
+                [
+                    page_id,
+                    locator,
+                    canonical_sha,
+                    row["source_snapshot_sha256"],
+                    evidence_relative,
+                    str(archive_root),
+                ],
+            )
+
+            no_dry_code, no_dry_output = self.run_cli(
+                [
+                    "notion-import-locator-evidence-plan",
+                    str(archive_root),
+                    "--evidence",
+                    evidence_relative,
+                ]
+            )
+            self.assertEqual(no_dry_code, 1, no_dry_output)
+            self.assertIn("requires --dry-run", no_dry_output)
+            self.assertEqual(self.archive_byte_snapshot(archive_root), before)
+            self.assert_notion_locator_evidence_private_output(
+                no_dry_output,
+                [page_id, locator, canonical_sha, str(archive_root)],
+            )
 
     def test_notion_objet_link_rewrite_plan_validates_selected_candidate_without_writes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

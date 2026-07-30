@@ -2,6 +2,54 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.3.287 읽기 전용 Notion locator 증거 계획
+
+v0.3.287은 v0.3.277 locator 손실 조사 다음의 읽기 전용 단계입니다.
+URL을 복원하지 않고, 사람이 검토한 비공개 occurrence 대응표를 현재
+canonical Notion 이관 zet의 정확한 바이트와 대조합니다.
+
+증거 파일은 보관소의 다음 비공개 scratch 경계 아래에만 두세요.
+
+```text
+.wom-scratch/notion-locator-evidence/<private>.jsonl
+```
+
+그다음 다음 명령을 실행합니다.
+
+```powershell
+archive notion-import-locator-evidence-plan <archive-root> `
+  --evidence ".wom-scratch/notion-locator-evidence/<private>.jsonl" `
+  --dry-run `
+  --format json
+```
+
+다음 항목을 검토하세요.
+
+- `aligned_count`
+- `blocked_count`
+- `coverage_complete`
+- `uncovered_affected_count`
+- 각 안전한 행의 `blocker_codes`
+- `evidence_file_sha256`
+- `plan_digest`
+
+명령은 `facets.source_page_id`만 연결 근거로 사용하고, 각 행을 사람이
+검토한 `expected_canonical_sha256`에 결속합니다. 제목, 파일명, `index`,
+외부 ID, URL, 본문을 대체 연결 근거로 사용하지 않습니다. 본문 marker 수,
+frontmatter 누락 수, 증거 occurrence 수, 두 ordinal 집합이 모두 일치해야
+합니다.
+
+출력은 비공개 source page ID, locator, locator fingerprint, zet ID, 파일명,
+경로, 제목, 본문, 주변 문맥을 반환하지 않습니다. `coverage_complete`가
+거짓이라는 것은 이번 증거 묶음이 전체를 덮지 않았다는 뜻일 뿐, 덮이지 않은
+locator가 영구 소실됐다는 뜻이 아닙니다.
+
+이번 릴리스에는 쓰기나 이관 명령이 없습니다. 차단된 행을 통과시키려고
+canonical zet을 직접 편집하지 마세요. 자세한 계약은
+[`wom-kit/docs/notion-import-locator-evidence-plan.md`](wom-kit/docs/notion-import-locator-evidence-plan.md)와
+[`wom-kit/docs/releases/v0.3.287.md`](wom-kit/docs/releases/v0.3.287.md)를
+참고하세요.
+
 ## v0.3.286 사람 검토 전용 `format_variant` edge
 
 v0.3.286은 한 가지 좁은 경우를 위한 base link type을 추가합니다. 사람이 두

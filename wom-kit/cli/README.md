@@ -10,6 +10,15 @@ v0.3.0 opens the first narrow receiver-side write boundary: an approval-gated sh
 
 v0.3.1 adds a read-only shared update route preview. It points to an existing candidate route surface and writes nothing. See `wom-kit/docs/shared-update-route-preview.md`.
 
+v0.3.287 adds CLI-only, read-only
+`notion-import-locator-evidence-plan`. It checks a private, human-reviewed
+source-occurrence-to-marker mapping against exact current canonical
+Notion-import zet bytes, using only `facets.source_page_id` as join authority.
+It returns content-free row states and complete coverage aggregates, and adds
+no locator restoration, receipt, provider call, raw export adapter,
+beta-archive write, or MCP tool. See
+`wom-kit/docs/notion-import-locator-evidence-plan.md`.
+
 v0.3.286 activates the WOM-local base edge type `format_variant` for one
 human-reviewed alternate rendition of the same intellectual content. The
 source is only the chosen review anchor, not a claim that it is older,

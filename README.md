@@ -34,10 +34,10 @@ not re-grow baseline ladders or tag lists here.
 Current public baseline:
 
 ```text
-v0.3.286 pre-release
+v0.3.287 pre-release
 ```
 
-Previous public baseline: v0.3.285 pre-release.
+Previous public baseline: v0.3.286 pre-release.
 
 Full release history: see [CHANGELOG.md](CHANGELOG.md) and [wom-kit/docs/releases/](wom-kit/docs/releases/).
 
@@ -55,7 +55,7 @@ future-only boundaries.
 Install the exact release wheel as an isolated command-line tool:
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.286/wom_kit-0.3.286-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.287/wom_kit-0.3.287-py3-none-any.whl"
 archive --version
 ```
 
@@ -190,7 +190,7 @@ Notion:
 - local nested-tree recovery tooling that builds nested tree fixture previews from reviewed block mirror metadata, merges sanitized ancestor result nodes with immediate after-merge replanning, verifies client nested-tree issues from sanitized local fixture bundles, and packages the minimal sanitized fixture request contract for client follow-up,
 - documented Notion page snapshot and `store-ref` boundaries for page/block JSON exports,
 - one-zettel plus archive-wide Notion provider locator to manifested objet link planning and reviewed rewrite planning without echoing provider URLs or creating provider URLs,
-- import material-clue auditing plus scaled source-map/ledger based Notion material-link planning for imported zets whose body locators were already omitted, and the CLI-only read-only `notion-import-locator-loss-audit` census that compares current omission markers with import-time counts and verifies private `source_page_id` join-key presence without echoing values or reading source mirrors,
+- import material-clue auditing plus scaled source-map/ledger based Notion material-link planning for imported zets whose body locators were already omitted, the CLI-only read-only `notion-import-locator-loss-audit` census that compares current omission markers with import-time counts and verifies private `source_page_id` join-key presence without echoing values or reading source mirrors, and the v0.3.287 CLI-only read-only `notion-import-locator-evidence-plan` that validates a human-reviewed private source-occurrence-to-marker mapping against exact current canonical bytes while returning no page id, locator, fingerprint, zet identity, path, title, body, or context and performing no restoration,
 - approval-gated Notion objet manifest locator fingerprint labels so reviewed manifests can match later locator plans without storing raw provider locator text, and approval-gated Notion locator conversion to reviewed `embed` edges without rewriting zettel body text,
 
 Zettel edge writes:
@@ -374,6 +374,7 @@ For the full design philosophy, including the human data primitive model, AX rat
 - [Notion Objet Link Index](wom-kit/docs/notion-objet-link-index.md)
 - [Notion Objet Import Clue Audit](wom-kit/docs/notion-objet-import-clue-audit.md)
 - [Notion Import Locator-Loss Audit](wom-kit/docs/notion-import-locator-loss-audit.md)
+- [Notion Import Locator Evidence Plan](wom-kit/docs/notion-import-locator-evidence-plan.md)
 - [Notion Objet Source Map Link Plan](wom-kit/docs/notion-objet-source-map-link-plan.md)
 - [Notion Objet Link Rewrite Plan](wom-kit/docs/notion-objet-link-rewrite-plan.md)
 - [Notion Objet Link Convert](wom-kit/docs/notion-objet-link-convert.md)
@@ -500,7 +501,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
-v0.3.286 (current checkpoint)
+v0.3.287 (current checkpoint)
 ```
 
 Public releases from `v0.2.5` onward are tagged as compatibility checkpoints.

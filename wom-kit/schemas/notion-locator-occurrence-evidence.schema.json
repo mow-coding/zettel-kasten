@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wom.local/schemas/notion-locator-occurrence-evidence.schema.json",
+  "title": "WOM reviewed Notion locator occurrence evidence row",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "source_page_id",
+    "basis",
+    "source_snapshot_sha256",
+    "expected_canonical_sha256",
+    "occurrences"
+  ],
+  "properties": {
+    "schema": {
+      "const": "wom-kit/notion-locator-occurrence-evidence/v0.1"
+    },
+    "source_page_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "basis": {
+      "const": "reviewed_local_mirror"
+    },
+    "source_snapshot_sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "expected_canonical_sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "occurrences": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 10000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "source_occurrence_ordinal",
+          "marker_ordinal",
+          "locator"
+        ],
+        "properties": {
+          "source_occurrence_ordinal": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "marker_ordinal": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "locator": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8192,
+            "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://"
+          }
+        }
+      }
+    }
+  }
+}

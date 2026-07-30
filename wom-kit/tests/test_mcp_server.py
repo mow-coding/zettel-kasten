@@ -685,6 +685,7 @@ class McpServerTests(unittest.TestCase):
             self.assertIn("notion_objet_source_map_link_plan", tool_names)
             self.assertIn("notion_objet_import_clue_audit", tool_names)
             self.assertIn("notion_objet_link_rewrite_plan", tool_names)
+            self.assertNotIn("notion_import_locator_evidence_plan", tool_names)
             self.assertIn("view_recommendation_plan", tool_names)
             self.assertIn("project_intake_plan", tool_names)
             self.assertIn("project_intake_unpack_queue", tool_names)
