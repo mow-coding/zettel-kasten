@@ -24,6 +24,54 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.287 Read-Only Notion Locator Evidence Plan
+
+v0.3.287 adds the next read-only step after the v0.3.277 locator-loss census.
+It does not restore any URL. It validates a private, human-reviewed occurrence
+mapping against the exact current bytes of canonical Notion-import zets.
+
+Create the evidence file only under the archive's private scratch boundary:
+
+```text
+.wom-scratch/notion-locator-evidence/<private>.jsonl
+```
+
+Then run:
+
+```powershell
+archive notion-import-locator-evidence-plan <archive-root> `
+  --evidence ".wom-scratch/notion-locator-evidence/<private>.jsonl" `
+  --dry-run `
+  --format json
+```
+
+Review these fields:
+
+- `aligned_count`
+- `blocked_count`
+- `coverage_complete`
+- `uncovered_affected_count`
+- each safe row's `blocker_codes`
+- `evidence_file_sha256`
+- `plan_digest`
+
+The command joins only through `facets.source_page_id` and binds each row to
+the reviewed `expected_canonical_sha256`. It does not use a title, filename,
+`index`, external id, URL, or body text as a fallback. Marker count,
+frontmatter omitted count, evidence occurrence count, and both complete
+ordinal sets must agree.
+
+The output never returns the private source page id, locator, locator
+fingerprint, zet id, filename, path, title, body, or context. A false
+`coverage_complete` value means the supplied batch is incomplete; it is not a
+claim that an uncovered locator is permanently lost.
+
+There is no write or migration command in this release. Do not edit canonical
+zets by hand to make a blocked row pass. See
+[`wom-kit/docs/notion-import-locator-evidence-plan.md`](wom-kit/docs/notion-import-locator-evidence-plan.md)
+and
+[`wom-kit/docs/releases/v0.3.287.md`](wom-kit/docs/releases/v0.3.287.md).
+
 ## v0.3.286 Manual-Only `format_variant` Edges
 
 v0.3.286 adds one base link type for a narrow case: a human has reviewed two

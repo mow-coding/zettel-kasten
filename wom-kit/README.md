@@ -10,22 +10,21 @@ It is not a website, SaaS app, dashboard, or visual note-taking product. The int
 
 ## Install The Command-Line Tool
 
-v0.3.286 provides a self-contained wheel on the exact GitHub release:
+v0.3.287 provides a self-contained wheel on the exact GitHub release:
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.286/wom_kit-0.3.286-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.287/wom_kit-0.3.287-py3-none-any.whl"
 archive --version
 ```
 
-v0.3.286 activates the WOM-local `format_variant` base edge for one
-human-reviewed alternate rendition of the same intellectual content. It
-reuses the existing `zettel-edge`, `revert-edge`, `related-zets`, and
-`base-link-types` paths. The source is only a chosen review anchor, not a
-claim of older, original, or canonical status; the release adds no inference,
-automatic reciprocal edge, corpus migration, provider read, beta-archive
-write, or MCP writer. `zettel-edge-batch` always returns this type for manual
-single-edge review and cannot auto-write it. See
-[`docs/releases/v0.3.286.md`](docs/releases/v0.3.286.md).
+v0.3.287 adds the CLI-only, read-only
+`notion-import-locator-evidence-plan`. It validates a human-reviewed private
+source-occurrence-to-marker mapping against exact current canonical bytes,
+using only `facets.source_page_id` as join authority. It returns no page id,
+locator, fingerprint, zet identity, filename, path, title, body, or context,
+and adds no restoration writer, receipt, provider call, raw Notion-export
+adapter, beta-archive write, or MCP tool. See
+[`docs/releases/v0.3.287.md`](docs/releases/v0.3.287.md).
 
 Use a dedicated virtual environment when installing with plain `pip`. WOM-kit
 is not published to PyPI yet, so `pip install wom-kit` is not an official

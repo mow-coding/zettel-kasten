@@ -529,6 +529,7 @@ This guide rephrases existing model documents for AI-human conversation:
 - [Zettel Edge Batch](zettel-edge-batch.md)
 - [Notion Objet Import Clue Audit](notion-objet-import-clue-audit.md)
 - [Notion Import Locator-Loss Audit](notion-import-locator-loss-audit.md)
+- [Notion Import Locator Evidence Plan](notion-import-locator-evidence-plan.md)
 - [Notion Objet Source Map Link Plan](notion-objet-source-map-link-plan.md)
 - [Notion Nested Tree Plan](notion-nested-tree-plan.md)
 - [Notion Ancestor Crawl Plan](notion-ancestor-crawl-plan.md)

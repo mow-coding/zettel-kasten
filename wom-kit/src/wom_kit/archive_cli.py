@@ -11544,6 +11544,88 @@ def command_notion_import_locator_loss_audit(args: argparse.Namespace) -> int:
     return 0 if result.get("ok", True) else 1
 
 
+def command_notion_import_locator_evidence_plan(
+    args: argparse.Namespace,
+) -> int:
+    if not args.dry_run:
+        print(
+            "notion-import-locator-evidence-plan is read-only and "
+            "requires --dry-run.",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        result = archive_services.notion_import_locator_evidence_plan(
+            Path(args.archive_root),
+            evidence_path=args.evidence,
+            dry_run=True,
+            max_items=args.max_items,
+        )
+    except Exception:
+        # Final privacy boundary: an unexpected service failure must never
+        # stringify a private path, source id, locator, or parser value.
+        print(
+            "notion-import-locator-evidence-plan failed safely.",
+            file=sys.stderr,
+        )
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        print("Notion import locator evidence plan:")
+        print(f"- state: {result.get('state') or 'blocked'}")
+        print(
+            f"- affected canonical: "
+            f"{result.get('affected_canonical_count', 0)}"
+        )
+        print(
+            f"- covered/uncovered affected: "
+            f"{result.get('covered_affected_count', 0)}/"
+            f"{result.get('uncovered_affected_count', 0)}"
+        )
+        print(
+            f"- coverage complete: "
+            f"{bool(result.get('coverage_complete'))}"
+        )
+        print(
+            f"- evidence rows aligned/blocked: "
+            f"{result.get('evidence_row_count', 0)} "
+            f"{result.get('aligned_count', 0)}/"
+            f"{result.get('blocked_count', 0)}"
+        )
+        print(
+            f"- returned/truncated items: "
+            f"{result.get('returned_item_count', 0)}/"
+            f"{result.get('truncated_item_count', 0)}"
+        )
+        for item in result.get("items", []):
+            if not isinstance(item, dict):
+                continue
+            print(
+                f"* row {item.get('row_number')}: "
+                f"{item.get('status')}; "
+                f"source/body/frontmatter="
+                f"{item.get('source_occurrence_count')}/"
+                f"{item.get('body_marker_count')}/"
+                f"{item.get('frontmatter_omitted_count')}; "
+                f"sha matches="
+                f"{item.get('expected_canonical_sha256_matches')}; "
+                f"blockers={','.join(item.get('blocker_codes') or []) or '-'}; "
+                f"warnings={','.join(item.get('warning_codes') or []) or '-'}"
+            )
+        if result.get("blocker_codes"):
+            print("Blocker codes:")
+            for blocker_code in result["blocker_codes"]:
+                print(f"- {blocker_code}")
+        if result.get("warning_codes"):
+            print("Warning codes:")
+            for warning_code in result["warning_codes"]:
+                print(f"- {warning_code}")
+        print("Writes: none")
+    return 0 if result.get("ok", False) else 1
+
+
 def command_notion_objet_link_rewrite_plan(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print("notion-objet-link-rewrite-plan is read-only and requires --dry-run.", file=sys.stderr)
@@ -23139,6 +23221,49 @@ def build_parser() -> argparse.ArgumentParser:
     )
     notion_import_locator_loss_audit.set_defaults(
         func=command_notion_import_locator_loss_audit
+    )
+
+    notion_import_locator_evidence_plan = subcommands.add_parser(
+        "notion-import-locator-evidence-plan",
+        help=(
+            "Validate reviewed private Notion locator occurrences against "
+            "current canonical omission markers without writing."
+        ),
+    )
+    notion_import_locator_evidence_plan.add_argument(
+        "archive_root",
+        help="Archive root to inspect.",
+    )
+    notion_import_locator_evidence_plan.add_argument(
+        "--evidence",
+        required=True,
+        help=(
+            "Archive-relative private JSONL under "
+            ".wom-scratch/notion-locator-evidence/."
+        ),
+    )
+    notion_import_locator_evidence_plan.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Required. Validate one byte snapshot and write nothing.",
+    )
+    notion_import_locator_evidence_plan.add_argument(
+        "--max-items",
+        type=int,
+        default=200,
+        help=(
+            "Maximum content-free row summaries to return; all rows are "
+            "still validated and counted."
+        ),
+    )
+    notion_import_locator_evidence_plan.add_argument(
+        "--format",
+        choices=["text", "json"],
+        default="text",
+        help="Output format.",
+    )
+    notion_import_locator_evidence_plan.set_defaults(
+        func=command_notion_import_locator_evidence_plan
     )
 
     notion_objet_link_rewrite_plan = subcommands.add_parser(
