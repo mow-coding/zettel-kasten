@@ -93707,6 +93707,7 @@ class WomKitProjectUpdateDirectoryGuard:
     def __init__(self, project_root: Path) -> None:
         self.project_root = project_root
         self._handles: dict[str, int] = {}
+        self._identities: dict[str, tuple[int, int]] = {}
         self._kernel32: Any = None
         self._info_type: Any = None
         if os.name == "nt":
@@ -93758,12 +93759,142 @@ class WomKitProjectUpdateDirectoryGuard:
         return os.path.normcase(os.path.abspath(str(path)))
 
     def is_held(self, path: Path) -> bool:
-        return self._key(path) in self._handles
+        return self._validate_held(path)
+
+    def _close_handle(self, handle: int) -> None:
+        if os.name == "nt":
+            self._kernel32.CloseHandle(handle)
+        else:
+            os.close(handle)
+
+    def _drop(self, key: str) -> None:
+        handle = self._handles.pop(key, None)
+        self._identities.pop(key, None)
+        if handle is None:
+            return
+        try:
+            self._close_handle(handle)
+        except OSError:
+            pass
+
+    def _windows_handle_information(
+        self,
+        handle: int,
+    ) -> tuple[int, tuple[int, int]] | None:
+        info = self._info_type()
+        if not self._kernel32.GetFileInformationByHandle(
+            handle,
+            ctypes.byref(info),
+        ):
+            return None
+        file_index = (info.file_index_high << 32) | info.file_index_low
+        return (
+            int(info.attributes),
+            (int(info.volume_serial), int(file_index)),
+        )
+
+    def _open_windows_directory(
+        self,
+        path: Path,
+    ) -> tuple[int, tuple[int, int]] | None:
+        handle = self._kernel32.CreateFileW(
+            str(path),
+            0x0001 | 0x0080,  # FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES
+            0x00000001 | 0x00000002,  # share read/write, never delete
+            None,
+            3,  # OPEN_EXISTING
+            0x02000000 | 0x00200000,  # BACKUP_SEMANTICS | OPEN_REPARSE_POINT
+            None,
+        )
+        invalid_handle = ctypes.c_void_p(-1).value
+        handle_value = (
+            handle
+            if isinstance(handle, int)
+            else getattr(handle, "value", None)
+        )
+        if handle_value in {None, invalid_handle}:
+            return None
+        opened = self._windows_handle_information(int(handle_value))
+        if opened is None:
+            self._kernel32.CloseHandle(handle)
+            return None
+        attributes, identity = opened
+        if (
+            attributes & 0x00000400  # FILE_ATTRIBUTE_REPARSE_POINT
+            or not attributes & 0x00000010  # FILE_ATTRIBUTE_DIRECTORY
+        ):
+            self._kernel32.CloseHandle(handle)
+            return None
+        return int(handle_value), identity
+
+    def _validate_held(self, path: Path) -> bool:
+        key = self._key(path)
+        handle = self._handles.get(key)
+        identity = self._identities.get(key)
+        if handle is None or identity is None:
+            self._drop(key)
+            return False
+        if (
+            wom_kit_real_path_kind(self.project_root, path) != "directory"
+            or not wom_kit_path_components_are_real(
+                self.project_root,
+                path,
+            )
+        ):
+            self._drop(key)
+            return False
+        try:
+            path_stat = os.lstat(path)
+        except OSError:
+            self._drop(key)
+            return False
+        if os.name != "nt":
+            try:
+                opened = os.fstat(handle)
+            except OSError:
+                self._drop(key)
+                return False
+            current_identity = (int(opened.st_dev), int(opened.st_ino))
+            path_identity = (int(path_stat.st_dev), int(path_stat.st_ino))
+            if (
+                not stat.S_ISDIR(opened.st_mode)
+                or not stat.S_ISDIR(path_stat.st_mode)
+                or current_identity != identity
+                or path_identity != identity
+            ):
+                self._drop(key)
+                return False
+            return True
+
+        held_information = self._windows_handle_information(handle)
+        verification = self._open_windows_directory(path)
+        if held_information is None or verification is None:
+            if verification is not None:
+                self._close_handle(verification[0])
+            self._drop(key)
+            return False
+        held_attributes, held_identity = held_information
+        verification_handle, verification_identity = verification
+        self._close_handle(verification_handle)
+        if (
+            held_attributes & 0x00000400
+            or not held_attributes & 0x00000010
+            or held_identity != identity
+            or verification_identity != identity
+            or (
+                path_stat.st_ino
+                and identity[1]
+                and int(path_stat.st_ino) != identity[1]
+            )
+        ):
+            self._drop(key)
+            return False
+        return True
 
     def hold(self, path: Path) -> bool:
         key = self._key(path)
         if key in self._handles:
-            return True
+            return self._validate_held(path)
         if (
             wom_kit_real_path_kind(self.project_root, path) != "directory"
             or not wom_kit_path_components_are_real(
@@ -93804,79 +93935,50 @@ class WomKitProjectUpdateDirectoryGuard:
                 os.close(descriptor)
                 return False
             self._handles[key] = descriptor
+            self._identities[key] = (
+                int(opened.st_dev),
+                int(opened.st_ino),
+            )
             return True
 
-        from ctypes import wintypes
-
-        handle = self._kernel32.CreateFileW(
-            str(path),
-            0x0080,  # FILE_READ_ATTRIBUTES
-            0x00000001 | 0x00000002,  # share read/write, never delete
-            None,
-            3,  # OPEN_EXISTING
-            0x02000000 | 0x00200000,  # BACKUP_SEMANTICS | OPEN_REPARSE_POINT
-            None,
-        )
-        invalid_handle = ctypes.c_void_p(-1).value
-        handle_value = (
-            handle
-            if isinstance(handle, int)
-            else getattr(handle, "value", None)
-        )
-        if handle_value in {None, invalid_handle}:
+        opened_directory = self._open_windows_directory(path)
+        if opened_directory is None:
             return False
-        info = self._info_type()
-        if not self._kernel32.GetFileInformationByHandle(
-            handle,
-            ctypes.byref(info),
-        ):
-            self._kernel32.CloseHandle(handle)
-            return False
-        file_index = (info.file_index_high << 32) | info.file_index_low
+        handle_value, identity = opened_directory
         try:
             after = os.lstat(path)
         except OSError:
-            self._kernel32.CloseHandle(handle)
+            self._close_handle(handle_value)
             return False
         if (
-            info.attributes & 0x00000400  # FILE_ATTRIBUTE_REPARSE_POINT
-            or not info.attributes & 0x00000010  # FILE_ATTRIBUTE_DIRECTORY
-            or (
+            (
                 before.st_ino
-                and file_index
-                and before.st_ino != file_index
+                and identity[1]
+                and int(before.st_ino) != identity[1]
             )
             or (
                 after.st_ino
-                and file_index
-                and after.st_ino != file_index
+                and identity[1]
+                and int(after.st_ino) != identity[1]
             )
-            or before.st_ino != after.st_ino
+            or (
+                before.st_ino
+                and after.st_ino
+                and before.st_ino != after.st_ino
+            )
         ):
-            self._kernel32.CloseHandle(handle)
+            self._close_handle(handle_value)
             return False
         self._handles[key] = int(handle_value)
+        self._identities[key] = identity
         return True
 
     def release(self, path: Path) -> None:
-        handle = self._handles.pop(self._key(path), None)
-        if handle is None:
-            return
-        if os.name == "nt":
-            self._kernel32.CloseHandle(handle)
-        else:
-            os.close(handle)
+        self._drop(self._key(path))
 
     def close(self) -> None:
         for key in list(self._handles):
-            handle = self._handles.pop(key)
-            try:
-                if os.name == "nt":
-                    self._kernel32.CloseHandle(handle)
-                else:
-                    os.close(handle)
-            except OSError:
-                pass
+            self._drop(key)
 
     def hold_existing_tree(self, root: Path) -> bool:
         if not self.hold(root):
@@ -94767,6 +94869,34 @@ def wom_kit_project_update_symbolic_head_state(
     return "branch", branch_name
 
 
+def wom_kit_project_update_unlink_tracked_file(
+    mirror_path: Path,
+    path: Path,
+    *,
+    directory_guard: WomKitProjectUpdateDirectoryGuard | None,
+) -> bool:
+    if (
+        not is_path_within_root(path, mirror_path)
+        or (
+            directory_guard is not None
+            and not directory_guard.is_held(path.parent)
+        )
+        or not wom_kit_existing_path_components_are_real(mirror_path, path)
+    ):
+        return False
+    try:
+        path_stat = os.lstat(path)
+    except OSError:
+        return False
+    if not stat.S_ISREG(path_stat.st_mode):
+        return False
+    try:
+        path.unlink()
+    except OSError:
+        return False
+    return True
+
+
 def wom_kit_project_update_materialize_commit(
     mirror_path: Path,
     target_commit: str,
@@ -94823,6 +94953,14 @@ def wom_kit_project_update_materialize_commit(
 
     if dry_run:
         return True
+    if (
+        os.name == "nt"
+        and (
+            directory_guard is None
+            or not directory_guard.is_held(mirror_path)
+        )
+    ):
+        return False
 
     removed_paths = sorted(
         current_paths - target_paths,
@@ -94832,7 +94970,12 @@ def wom_kit_project_update_materialize_commit(
     try:
         for relative_path in removed_paths:
             path = mirror_path.joinpath(*PurePosixPath(relative_path).parts)
-            path.unlink()
+            if not wom_kit_project_update_unlink_tracked_file(
+                mirror_path,
+                path,
+                directory_guard=directory_guard,
+            ):
+                return False
         removed_parents = sorted(
             {
                 parent
@@ -94850,11 +94993,36 @@ def wom_kit_project_update_materialize_commit(
         )
         for directory in removed_parents:
             if directory_guard is not None:
+                if (
+                    not directory_guard.is_held(directory)
+                    or not directory_guard.is_held(directory.parent)
+                ):
+                    return False
                 directory_guard.release(directory)
             try:
                 directory.rmdir()
             except OSError:
-                pass
+                if (
+                    wom_kit_real_path_kind(mirror_path, directory)
+                    != "directory"
+                    or not wom_kit_path_components_are_real(
+                        mirror_path,
+                        directory,
+                    )
+                ):
+                    return False
+                try:
+                    with os.scandir(directory) as scanner:
+                        directory_nonempty = next(scanner, None) is not None
+                except OSError:
+                    return False
+                if (
+                    directory_guard is not None
+                    and not directory_guard.hold(directory)
+                ):
+                    return False
+                if not directory_nonempty:
+                    return False
         target_directories = sorted(
             {
                 parent
@@ -95588,6 +95756,10 @@ def wom_kit_project_update_git_snapshot(
         mirror_path,
         ["ls-files", "-v", "-z"],
     )
+    eol_ok, eol_value = wom_kit_project_update_git(
+        mirror_path,
+        ["ls-files", "--eol", "-z"],
+    )
     untracked_ok, untracked_value = wom_kit_project_update_git(
         mirror_path,
         ["ls-files", "--others", "--exclude-standard", "-z"],
@@ -95612,13 +95784,36 @@ def wom_kit_project_update_git_snapshot(
         or not tree_ok
         or not index_ok
         or not flags_ok
+        or not eol_ok
         or not untracked_ok
     ):
         return None
+
+    def nul_records(value: str) -> list[str] | None:
+        if value == "":
+            return []
+        if not value.endswith("\0"):
+            return None
+        records = value[:-1].split("\0")
+        if any(record == "" for record in records):
+            return None
+        return records
+
+    tree_records = nul_records(tree_value)
+    index_records = nul_records(index_value)
+    flag_records = nul_records(flags_value)
+    eol_records = nul_records(eol_value)
+    untracked_records = nul_records(untracked_value)
+    if (
+        tree_records is None
+        or index_records is None
+        or flag_records is None
+        or eol_records is None
+        or untracked_records is None
+    ):
+        return None
     tree_entries: dict[str, tuple[str, str]] = {}
-    for record in tree_value.split("\0"):
-        if not record:
-            continue
+    for record in tree_records:
         try:
             metadata, relative_path = record.split("\t", 1)
             mode, object_type, object_id = metadata.split(" ", 2)
@@ -95640,9 +95835,7 @@ def wom_kit_project_update_git_snapshot(
         return None
 
     index_entries: dict[str, tuple[str, str]] = {}
-    for record in index_value.split("\0"):
-        if not record:
-            continue
+    for record in index_records:
         try:
             metadata, relative_path = record.split("\t", 1)
             mode, object_id, stage = metadata.split(" ", 2)
@@ -95658,9 +95851,7 @@ def wom_kit_project_update_git_snapshot(
         index_entries[relative_path] = (mode, object_id.lower())
 
     flag_entries: dict[str, str] = {}
-    for record in flags_value.split("\0"):
-        if not record:
-            continue
+    for record in flag_records:
         if len(record) < 3 or record[1] != " ":
             return None
         relative_path = record[2:]
@@ -95671,6 +95862,32 @@ def wom_kit_project_update_git_snapshot(
         set(flag_entries) == set(tree_entries)
         and all(value == "H" for value in flag_entries.values())
     )
+    eol_entries: dict[str, tuple[str, str, str]] = {}
+    for record in eol_records:
+        try:
+            metadata, relative_path = record.split("\t", 1)
+        except ValueError:
+            return None
+        matched_eol = re.fullmatch(
+            r"i/(\S+)[ ]+w/(\S+)[ ]+attr/([\x20-\x7e]*)",
+            metadata,
+        )
+        if (
+            matched_eol is None
+            or matched_eol.group(1)
+            not in {"-text", "none", "lf", "crlf", "mixed"}
+            or matched_eol.group(2)
+            not in {"-text", "none", "lf", "crlf", "mixed"}
+            or relative_path in eol_entries
+        ):
+            return None
+        eol_entries[relative_path] = (
+            matched_eol.group(1),
+            matched_eol.group(2),
+            matched_eol.group(3).strip(),
+        )
+    if set(eol_entries) != set(tree_entries):
+        return None
     index_matches_head = index_entries == tree_entries
 
     worktree_hasher = hashlib.sha256()
@@ -95717,41 +95934,17 @@ def wom_kit_project_update_git_snapshot(
 
         if not matches_object(raw_bytes):
             normalized_line_endings = raw_bytes.replace(b"\r\n", b"\n")
-            text_suffix = PurePosixPath(relative_path).suffix.casefold()
-            text_name = PurePosixPath(relative_path).name.casefold()
+            index_eol, worktree_eol, eol_attributes = eol_entries[
+                relative_path
+            ]
             safe_text_eol_candidate = bool(
                 local_autocrlf_true
+                and index_eol == "lf"
+                and worktree_eol == "crlf"
+                and eol_attributes != "-text"
                 and normalized_line_endings != raw_bytes
                 and b"\r" not in normalized_line_endings
                 and b"\0" not in raw_bytes
-                and (
-                    text_suffix
-                    in {
-                        ".cfg",
-                        ".css",
-                        ".csv",
-                        ".html",
-                        ".ini",
-                        ".js",
-                        ".json",
-                        ".md",
-                        ".py",
-                        ".rst",
-                        ".toml",
-                        ".ts",
-                        ".txt",
-                        ".xml",
-                        ".yaml",
-                        ".yml",
-                    }
-                    or text_name
-                    in {
-                        ".gitattributes",
-                        ".gitignore",
-                        "license",
-                        "readme",
-                    }
-                )
             )
             try:
                 raw_bytes.decode("utf-8-sig")
@@ -95780,11 +95973,7 @@ def wom_kit_project_update_git_snapshot(
         worktree_hasher.update(len(raw_bytes).to_bytes(8, "big"))
         worktree_hasher.update(hashlib.sha256(raw_bytes).digest())
 
-    untracked_paths = sorted(
-        record
-        for record in untracked_value.split("\0")
-        if record
-    )
+    untracked_paths = sorted(untracked_records)
     return {
         "head": head.lower(),
         "branch": branch if symbolic_head_state == "branch" else None,
@@ -95794,6 +95983,9 @@ def wom_kit_project_update_git_snapshot(
         "index_matches_head": index_matches_head,
         "flags_sha256": hashlib.sha256(
             flags_value.encode("utf-8")
+        ).hexdigest(),
+        "eol_sha256": hashlib.sha256(
+            eol_value.encode("utf-8")
         ).hexdigest(),
         "flags_safe": flags_safe,
         "raw_bytes_match_head": raw_bytes_match_head,

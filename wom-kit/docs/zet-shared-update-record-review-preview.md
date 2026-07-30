@@ -18,7 +18,7 @@ Can this local shared update review record be inspected safely, without treating
 ## CLI
 
 ```powershell
-python wom-kit\cli\archive.py shared-update-record-review <archive-root> --record <archive-relative-json> --dry-run --format json
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli shared-update-record-review <archive-root> --record <archive-relative-json> --dry-run --format json
 ```
 
 The `--record` path must be archive-relative and contained under the archive root. Absolute paths, URL-like paths, traversal, UNC paths, and NUL bytes are rejected.

@@ -23,7 +23,7 @@ surface and writes nothing.
 ## CLI
 
 ```powershell
-python wom-kit\cli\archive.py shared-update-route-preview <archive-root> --record <archive-relative-json> --dry-run --format json
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli shared-update-route-preview <archive-root> --record <archive-relative-json> --dry-run --format json
 ```
 
 The `--record` path must be archive-relative and contained under the archive

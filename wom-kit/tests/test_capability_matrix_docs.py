@@ -4614,7 +4614,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         for phrase in (
             "Status: v0.3.19 read-only source planning baseline",
             "imap_mailbox",
-            "archive.py imap-mailbox-plan",
+            "wom_kit.archive_cli imap-mailbox-plan",
             "imap_mailbox_plan",
             "gmail",
             "naver",
@@ -4636,7 +4636,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                 self.assertIn(phrase, imap_text)
         for phrase in (
             "imap_mailbox",
-            "archive.py imap-mailbox-plan",
+            "wom_kit.archive_cli imap-mailbox-plan",
             "does not connect, login, read headers, read bodies",
             "imap_mailbox_plan",
         ):
@@ -5744,7 +5744,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
         for phrase in (
             "Status: v0.3.20 read-only credential reference baseline",
-            "archive.py credential-ref-plan",
+            "wom_kit.archive_cli credential-ref-plan",
             "credential_ref_plan",
             "env:NAME",
             "keyring:name",
@@ -10053,6 +10053,9 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         runtime_entrypoints_text = runtime_entrypoints_path.read_text(
             encoding="utf-8"
         )
+        wrapper_text = (KIT_ROOT / "cli" / "archive.py").read_text(
+            encoding="utf-8"
+        )
         matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
         changelog_text = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
         upgrade_text = (REPO_ROOT / "UPGRADE.md").read_text(encoding="utf-8")
@@ -10146,15 +10149,65 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(release_phrase=phrase):
                 self.assertIn(phrase, release_flat)
 
+        self.assertIn("python -m wom_kit.archive_cli ai-start-here", startup_text)
         self.assertIn(
+            "python -m wom_kit.archive_cli ai-start-here",
+            operator_contract_text,
+        )
+        self.assertNotIn(
             "python wom-kit/cli/archive.py ai-start-here",
             startup_text,
+        )
+        self.assertNotIn(
+            "python wom-kit/cli/archive.py ai-start-here",
+            operator_contract_text,
         )
         self.assertNotIn("python wom-kit/archive.py", startup_text)
         self.assertIn(
             "project-version-update <project-or-archive-root> --target vX.Y.Z",
             startup_text,
         )
+        self.assertIn(
+            "PYTHONPATH=src python -m wom_kit.archive_cli doctor",
+            root_readme_text,
+        )
+        self.assertIn(
+            "PYTHONPATH=src python -m wom_kit.archive_cli doctor",
+            root_readme_ko_text,
+        )
+        self.assertNotIn(
+            "python cli/archive.py doctor examples/fake-life-archive --strict",
+            root_readme_text,
+        )
+        self.assertNotIn(
+            "python cli/archive.py doctor examples/fake-life-archive --strict",
+            root_readme_ko_text,
+        )
+        self.assertIn("python -m wom_kit.archive_cli doctor", cli_readme_text)
+        self.assertNotIn("python wom-kit\\cli\\archive.py", cli_readme_text)
+        refusal_codes = (
+            "WOM_BRIDGE_PRELOADED_MODULE",
+            "WOM_BRIDGE_SOURCE_TREE_UNSAFE",
+            "WOM_BRIDGE_PROJECT_PATH_ON_SYS_PATH",
+            "WOM_BRIDGE_IMPORT_FAILED",
+            "WOM_BRIDGE_IMPORT_SOURCE_MISMATCH",
+            "WOM_BRIDGE_ENTRYPOINT_INVALID",
+        )
+        for refusal_code in refusal_codes:
+            with self.subTest(refusal_code=refusal_code):
+                self.assertIn(refusal_code, version_guide_text)
+                self.assertIn(refusal_code, wrapper_text)
+        recovery_doc_url = (
+            "https://github.com/mow-coding/zettel-kasten/blob/main/"
+            "wom-kit/docs/version-truth-source.md#wom-bridge-refusal-codes"
+        )
+        recovery_pointer = f"WOM_BRIDGE_RECOVERY_DOC={recovery_doc_url}"
+        self.assertIn("WOM_BRIDGE_RECOVERY_DOC=", wrapper_text)
+        self.assertIn(recovery_doc_url, wrapper_text)
+        self.assertIn(recovery_pointer, version_guide_text)
+        self.assertIn(recovery_pointer, release_text)
+        self.assertIn(recovery_pointer, changelog_text)
+        self.assertIn("## Audit Correction — 2026-07-31", decision_text)
         self.assertIn("project_scoped_bridge_available", operator_contract_text)
         self.assertIn(
             "runtime_alignment.integrity.verified: true",
@@ -10181,6 +10234,58 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         ):
             with self.subTest(document="v03291-current-install"):
                 self.assertIn(current_wheel_url, text)
+
+    def test_active_source_docs_use_module_launcher_not_direct_wrapper(self) -> None:
+        active_paths = (
+            KIT_ROOT / "README.md",
+            KIT_ROOT / "docs" / "new-user-flow.md",
+            KIT_ROOT / "docs" / "phase-2-quickstart.md",
+            KIT_ROOT / "docs" / "real-pilot-preflight.md",
+            KIT_ROOT / "docs" / "source-maps.md",
+            KIT_ROOT / "docs" / "imap-mailbox-source.md",
+            KIT_ROOT / "docs" / "derived-text.md",
+            KIT_ROOT / "docs" / "artifact-hygiene.md",
+            KIT_ROOT / "docs" / "credential-access-approval-plan.md",
+            KIT_ROOT / "docs" / "credential-store-contract.md",
+            KIT_ROOT / "docs" / "notion-objet-link-index.md",
+            KIT_ROOT / "docs" / "notion-objet-link-plan.md",
+            KIT_ROOT / "docs" / "security-hardening.md",
+            KIT_ROOT / "docs" / "zet-shared-update-record-baseline.md",
+            KIT_ROOT / "docs" / "zettel-objet-links.md",
+            KIT_ROOT / "docs" / "connection-edge-intelligence-plan.md",
+            KIT_ROOT / "docs" / "credential-access-broker-plan.md",
+            KIT_ROOT / "docs" / "credential-ref-inventory-and-onboarding.md",
+            KIT_ROOT / "docs" / "credential-store-recommendations.md",
+            KIT_ROOT / "docs" / "human-artifact-store-contract.md",
+            KIT_ROOT / "docs" / "index-health.md",
+            KIT_ROOT / "docs" / "notion-objet-link-convert.md",
+            KIT_ROOT / "docs" / "notion-objet-link-rewrite-plan.md",
+            KIT_ROOT / "docs" / "view-health.md",
+            KIT_ROOT / "docs" / "view-recommendation-plan.md",
+            KIT_ROOT / "docs" / "zet-shared-update-record-review-index.md",
+            KIT_ROOT / "docs" / "zet-shared-update-record-review-preview.md",
+            KIT_ROOT / "docs" / "zet-transport-threat-model.md",
+            KIT_ROOT / "docs" / "concepts" / "wom-safe-html-profile.md",
+            KIT_ROOT / "docs" / "concepts" / "wom-safe-html-profile.ko.md",
+            KIT_ROOT / "docs" / "shared-update-route-preview.md",
+            KIT_ROOT / "docs" / "shared-update-route-preview.ko.md",
+            KIT_ROOT / "docs" / "shared-update-route-preview-example.md",
+            KIT_ROOT / "docs" / "shared-update-route-preview-example.ko.md",
+        )
+        forbidden_launchers = (
+            "python wom-kit\\cli\\archive.py",
+            "python wom-kit/cli/archive.py",
+            "python cli\\archive.py",
+            "python cli/archive.py",
+        )
+
+        self.assertEqual(len(active_paths), 34)
+        for path in active_paths:
+            text = path.read_text(encoding="utf-8")
+            with self.subTest(path=path.relative_to(REPO_ROOT).as_posix()):
+                self.assertIn("python -m wom_kit.archive_cli", text)
+                for launcher in forbidden_launchers:
+                    self.assertNotIn(launcher, text)
 
 
 if __name__ == "__main__":

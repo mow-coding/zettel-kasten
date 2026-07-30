@@ -25,7 +25,7 @@ archive zettel-objet-links <archive-root> --path inbox/example.md --dry-run
 ```
 
 ```powershell
-python wom-kit\cli\archive.py zettel-objet-links <archive-root> `
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli zettel-objet-links <archive-root> `
   --path inbox/example.md `
   --dry-run
 ```
@@ -33,7 +33,7 @@ python wom-kit\cli\archive.py zettel-objet-links <archive-root> `
 or:
 
 ```powershell
-python wom-kit\cli\archive.py zettel-objet-links <archive-root> `
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli zettel-objet-links <archive-root> `
   --zettel-id zet_20260614_example `
   --dry-run `
   --format json

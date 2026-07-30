@@ -62,6 +62,25 @@ the project tree. The bridge runs the project source once. It does not replace
 pip/uv/pipx/editable ownership, restart a process, or install the runtime Agent
 Skill.
 
+For ordinary work in an active source checkout, do not invoke
+`wom-kit/cli/archive.py` directly. From inside `wom-kit/`, use:
+
+```powershell
+$env:PYTHONPATH = "src"
+python -m wom_kit.archive_cli <command> ...
+```
+
+or in a POSIX shell:
+
+```bash
+PYTHONPATH=src python -m wom_kit.archive_cli <command> ...
+```
+
+The direct wrapper is reserved for the exact verified `bridge_argv` or a
+pristine-checkout recovery attempt. Its six stable external refusal codes and
+fixed `WOM_BRIDGE_RECOVERY_DOC` pointer are documented in
+[`wom-kit/docs/version-truth-source.md`](wom-kit/docs/version-truth-source.md#wom-bridge-refusal-codes).
+
 Existing Windows source mirrors need one additional transition safeguard.
 When an older checkout used `core.autocrlf=true`, an unchanged `.py` file can
 remain in CRLF form even after the new repository attributes require LF.
@@ -4742,11 +4761,11 @@ What changed:
 
 No private archive migration is required.
 
-Current commands should use the new paths:
+Current source-development commands use the import package. Since v0.3.291,
+the direct wrapper is reserved for a verified bridge or pristine recovery:
 
 ```bash
-python wom-kit/cli/archive.py doctor wom-kit/examples/fake-life-archive --strict
-python -m wom_kit.archive_cli doctor wom-kit/examples/fake-life-archive --strict
+PYTHONPATH=wom-kit/src python -m wom_kit.archive_cli doctor wom-kit/examples/fake-life-archive --strict
 ```
 
 ## From `v0.2.17` To `v0.2.18`

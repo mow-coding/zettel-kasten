@@ -16,6 +16,13 @@ network call. The bridge runs that source once; it does not replace the global
 Python tool, guess installer provenance, or install the runtime Agent Skill.
 See `wom-kit/docs/releases/v0.3.291.md`.
 
+The direct `wom-kit/cli/archive.py` wrapper is a verified-bridge and pristine
+recovery entrypoint, not the routine launcher for an active development tree.
+Source development uses `PYTHONPATH` plus `python -m wom_kit.archive_cli`;
+installed environments use the `archive` or `wom` console script. The six
+stable external wrapper refusal codes and fixed content-free recovery pointer
+are documented in `wom-kit/docs/version-truth-source.md`.
+
 v0.3.0 opens the first narrow receiver-side write boundary: an approval-gated shared update attestation/review record and receipt. See `wom-kit/docs/shared-update-attestation-review-write.md`.
 
 v0.3.1 adds a read-only shared update route preview. It points to an existing candidate route surface and writes nothing. See `wom-kit/docs/shared-update-route-preview.md`.
@@ -287,16 +294,18 @@ python -m pip install PyYAML
 Windows PowerShell from the repository root:
 
 ```powershell
-python wom-kit\cli\archive.py doctor wom-kit\examples\fake-life-archive
+$env:PYTHONPATH = "wom-kit\src"
+python -m wom_kit.archive_cli doctor wom-kit\examples\fake-life-archive
 ```
 
 macOS/Linux shell from the repository root:
 
 ```bash
-python wom-kit/cli/archive.py doctor wom-kit/examples/fake-life-archive
+PYTHONPATH=wom-kit/src python -m wom_kit.archive_cli doctor wom-kit/examples/fake-life-archive
 ```
 
-From inside `wom-kit/`, you can also use the package module without installing by temporarily setting `PYTHONPATH`.
+From inside `wom-kit/`, use the same package module with the shorter source
+path.
 
 Windows PowerShell:
 
@@ -311,16 +320,19 @@ macOS/Linux shell:
 PYTHONPATH=src python -m wom_kit.archive_cli doctor examples/fake-life-archive
 ```
 
+The remaining PowerShell examples assume the repository root and the
+`PYTHONPATH=wom-kit\src` setup from the first Windows block.
+
 Strict mode treats warnings as failure:
 
 ```powershell
-python wom-kit\cli\archive.py doctor wom-kit\examples\fake-life-archive --strict
+python -m wom_kit.archive_cli doctor wom-kit\examples\fake-life-archive --strict
 ```
 
 JSON output:
 
 ```powershell
-python wom-kit\cli\archive.py doctor wom-kit\examples\fake-life-archive --json
+python -m wom_kit.archive_cli doctor wom-kit\examples\fake-life-archive --json
 ```
 
 `doctor --json` returns stable structured diagnostics. Paths inside diagnostics are archive-relative `/` paths where possible.
@@ -328,7 +340,7 @@ python wom-kit\cli\archive.py doctor wom-kit\examples\fake-life-archive --json
 Initialize a new archive:
 
 ```powershell
-python wom-kit\cli\archive.py init .\tmp-my-archive `
+python -m wom_kit.archive_cli init .\tmp-my-archive `
   --type personal `
   --archive-id archive:personal:me `
   --principal-id person:me `
@@ -341,19 +353,19 @@ The target path must be absent or empty.
 List all zettels:
 
 ```powershell
-python wom-kit\cli\archive.py list-zettels wom-kit\examples\fake-life-archive --status all
+python -m wom_kit.archive_cli list-zettels wom-kit\examples\fake-life-archive --status all
 ```
 
 Read a zettel:
 
 ```powershell
-python wom-kit\cli\archive.py read-zettel wom-kit\examples\fake-life-archive --zettel-id zet_20240504_fake_lunch_thought
+python -m wom_kit.archive_cli read-zettel wom-kit\examples\fake-life-archive --zettel-id zet_20240504_fake_lunch_thought
 ```
 
 Create an inbox draft:
 
 ```powershell
-python wom-kit\cli\archive.py create-draft .\tmp-my-archive `
+python -m wom_kit.archive_cli create-draft .\tmp-my-archive `
   --title "Draft title" `
   --body "Draft body"
 ```
@@ -361,7 +373,7 @@ python wom-kit\cli\archive.py create-draft .\tmp-my-archive `
 Compose a draft preview from a prompt-boundary report:
 
 ```powershell
-python wom-kit\cli\archive.py create-draft .\tmp-my-archive `
+python -m wom_kit.archive_cli create-draft .\tmp-my-archive `
   --title "Draft title" `
   --body "Draft body" `
   --dry-run `
@@ -374,7 +386,7 @@ The report path is not stored in draft frontmatter. `low` risk is not proof of s
 Preview minting without writing canonical memory:
 
 ```powershell
-python wom-kit\cli\archive.py mint-zet wom-kit\examples\fake-life-archive `
+python -m wom_kit.archive_cli mint-zet wom-kit\examples\fake-life-archive `
   --path inbox\zet_20260519_draft_ai_lunch_note.md `
   --dry-run
 ```
@@ -408,7 +420,7 @@ warnings
 Dry-run writes nothing. Real minting is available only through the CLI and requires both an approval flag and a reviewer id:
 
 ```powershell
-python wom-kit\cli\archive.py mint-zet .\tmp-my-archive `
+python -m wom_kit.archive_cli mint-zet .\tmp-my-archive `
   --path inbox\PUT-THE-DRAFT-FILENAME-HERE.md `
   --approve `
   --reviewed-by person:me
@@ -427,13 +439,13 @@ It keeps the original inbox draft. Blockers always stop the command. If warnings
 Build the generated search index:
 
 ```powershell
-python wom-kit\cli\archive.py index wom-kit\examples\fake-life-archive
+python -m wom_kit.archive_cli index wom-kit\examples\fake-life-archive
 ```
 
 Search the generated index:
 
 ```powershell
-python wom-kit\cli\archive.py search wom-kit\examples\fake-life-archive "lunch"
+python -m wom_kit.archive_cli search wom-kit\examples\fake-life-archive "lunch"
 ```
 
 The index file lives at:
@@ -447,7 +459,7 @@ It is a rebuildable search map. It is not the source of truth for archive memory
 Create a parcel from a saved view:
 
 ```powershell
-python wom-kit\cli\archive.py parcel wom-kit\examples\fake-life-archive `
+python -m wom_kit.archive_cli parcel wom-kit\examples\fake-life-archive `
   --view view.fake.education.gilwon `
   --purpose "Portable education context." `
   --mode reference
@@ -464,7 +476,7 @@ The first implementation includes selected zettel files, a view snapshot, and ob
 Preview admitting a parcel/workpack:
 
 ```powershell
-python wom-kit\cli\archive.py admit .\tmp-my-archive `
+python -m wom_kit.archive_cli admit .\tmp-my-archive `
   .\some-workpack `
   --dry-run
 ```
@@ -474,7 +486,7 @@ Admit/import dry-run reports proposed inbox writes, object manifest merges, dupl
 Preview legacy sharing of a saved view with another archive:
 
 ```powershell
-python wom-kit\cli\archive.py share wom-kit\examples\fake-life-archive `
+python -m wom_kit.archive_cli share wom-kit\examples\fake-life-archive `
   --view view.fake.company.derived `
   --target-archive archive:company:fake-blue `
   --counterparty-id archive:company:fake-blue `
@@ -495,7 +507,7 @@ where the future share receipt would live
 Preview counterparty-bound zet delegation:
 
 ```powershell
-python wom-kit\cli\archive.py delegate-zet wom-kit\examples\fake-life-archive `
+python -m wom_kit.archive_cli delegate-zet wom-kit\examples\fake-life-archive `
   --view view.fake.company.derived `
   --target-policy counterparty_bound `
   --target-archive archive:company:fake-blue `
@@ -507,7 +519,7 @@ python wom-kit\cli\archive.py delegate-zet wom-kit\examples\fake-life-archive `
 Preview one-time claimable delegation without choosing the recipient yet:
 
 ```powershell
-python wom-kit\cli\archive.py delegate-zet wom-kit\examples\fake-life-archive `
+python -m wom_kit.archive_cli delegate-zet wom-kit\examples\fake-life-archive `
   --view view.fake.company.derived `
   --target-policy claimable_once `
   --dry-run
@@ -518,7 +530,7 @@ python wom-kit\cli\archive.py delegate-zet wom-kit\examples\fake-life-archive `
 Write a real delegate receipt after review:
 
 ```powershell
-python wom-kit\cli\archive.py delegate-zet wom-kit\examples\fake-life-archive `
+python -m wom_kit.archive_cli delegate-zet wom-kit\examples\fake-life-archive `
   --view view.fake.company.derived `
   --target-policy counterparty_bound `
   --target-archive archive:company:fake-blue `
@@ -533,7 +545,7 @@ Real delegate writes create `receipts/delegate/*.delegate.json` with `dry_run: f
 Preview ownership transfer without changing the archive:
 
 ```powershell
-python wom-kit\cli\archive.py transfer-ownership .\some-archive `
+python -m wom_kit.archive_cli transfer-ownership .\some-archive `
   --new-owner person:child `
   --operator-after person:child `
   --approved-by person:parent-a `
@@ -545,7 +557,7 @@ python wom-kit\cli\archive.py transfer-ownership .\some-archive `
 Apply an archive-internal ownership transfer after the same gates pass:
 
 ```powershell
-python wom-kit\cli\archive.py transfer-ownership .\some-archive `
+python -m wom_kit.archive_cli transfer-ownership .\some-archive `
   --new-owner person:child `
   --operator-after person:child `
   --approved-by person:parent-a `
@@ -560,7 +572,7 @@ python wom-kit\cli\archive.py transfer-ownership .\some-archive `
 Inspect external provider bindings:
 
 ```powershell
-python wom-kit\cli\archive.py providers .\some-archive --format json
+python -m wom_kit.archive_cli providers .\some-archive --format json
 ```
 
 `provider-bindings.yml` describes GitHub, R2/B2, Neon, local backup, sync, backup, and keyring references without storing actual secrets. External permission changes remain manual and are listed in `provider_change_plan`. Real share, merge, fork, and external provider mutation are intentionally unavailable.
@@ -568,7 +580,7 @@ python wom-kit\cli\archive.py providers .\some-archive --format json
 Plan objet storage metadata without touching any provider:
 
 ```powershell
-python wom-kit\cli\archive.py object-storage .\tmp-my-archive `
+python -m wom_kit.archive_cli object-storage .\tmp-my-archive `
   --dry-run `
   --provider cloudflare-r2 `
   --profile-id profile:personal:username `
@@ -582,7 +594,7 @@ The default bucket/container proposal is `zettel-kasten-<normalized-profile-slug
 Plan a source/objet reference before drafting:
 
 ```powershell
-python wom-kit\cli\archive.py source-intake .\tmp-my-archive `
+python -m wom_kit.archive_cli source-intake .\tmp-my-archive `
   --dry-run `
   --object-id sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa `
   --format json
@@ -593,7 +605,7 @@ python wom-kit\cli\archive.py source-intake .\tmp-my-archive `
 Register already extracted text for a manifested source object:
 
 ```powershell
-python wom-kit\cli\archive.py derive-text capture .\tmp-my-archive `
+python -m wom_kit.archive_cli derive-text capture .\tmp-my-archive `
   --text-file .\workbench\example-extracted.txt `
   --source-object-id sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa `
   --derivation-kind parser `
@@ -607,7 +619,7 @@ python wom-kit\cli\archive.py derive-text capture .\tmp-my-archive `
 Approved mode writes only the derived text body, `objects/manifests/derived-text.jsonl`, and a receipt:
 
 ```powershell
-python wom-kit\cli\archive.py derive-text capture .\tmp-my-archive `
+python -m wom_kit.archive_cli derive-text capture .\tmp-my-archive `
   --text-file .\workbench\example-extracted.txt `
   --source-object-id sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa `
   --derivation-kind parser `
@@ -624,12 +636,12 @@ python wom-kit\cli\archive.py derive-text capture .\tmp-my-archive `
 Compose a draft from the source intake plan without manually copying refs:
 
 ```powershell
-python wom-kit\cli\archive.py source-intake .\tmp-my-archive `
+python -m wom_kit.archive_cli source-intake .\tmp-my-archive `
   --dry-run `
   --object-id sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa `
   --format json > source-intake-plan.json
 
-python wom-kit\cli\archive.py create-draft .\tmp-my-archive `
+python -m wom_kit.archive_cli create-draft .\tmp-my-archive `
   --title "Draft title" `
   --body "Draft body" `
   --dry-run `
@@ -642,7 +654,7 @@ python wom-kit\cli\archive.py create-draft .\tmp-my-archive `
 Preview a block header from an existing zet:
 
 ```powershell
-python wom-kit\cli\archive.py block-header wom-kit\examples\fake-life-archive `
+python -m wom_kit.archive_cli block-header wom-kit\examples\fake-life-archive `
   --path inbox\zet_20260519_draft_ai_lunch_note.md `
   --dry-run `
   --format json
@@ -651,7 +663,7 @@ python wom-kit\cli\archive.py block-header wom-kit\examples\fake-life-archive `
 Preview a foreign/shared block before any trust action:
 
 ```powershell
-python wom-kit\cli\archive.py foreign-block wom-kit\examples\fake-life-archive `
+python -m wom_kit.archive_cli foreign-block wom-kit\examples\fake-life-archive `
   --path workbench\foreign-block-preview.json `
   --dry-run `
   --format json
@@ -662,7 +674,7 @@ The result uses `trust_state: untrusted_foreign`, keeps `would_change: []`, and 
 Preview future trust/attestation eligibility from a foreign-block intake report:
 
 ```powershell
-python wom-kit\cli\archive.py foreign-block-trust wom-kit\examples\fake-life-archive `
+python -m wom_kit.archive_cli foreign-block-trust wom-kit\examples\fake-life-archive `
   --intake-report workbench\foreign-block-intake-report.json `
   --dry-run `
   --format json
@@ -673,7 +685,7 @@ The result still uses `trust_state: untrusted_foreign`, keeps `would_change: []`
 Preview a future human-review attestation packet from a foreign-block trust report:
 
 ```powershell
-python wom-kit\cli\archive.py foreign-block-attestation wom-kit\examples\fake-life-archive `
+python -m wom_kit.archive_cli foreign-block-attestation wom-kit\examples\fake-life-archive `
   --trust-report workbench\foreign-block-trust-report.json `
   --dry-run `
   --format json
@@ -684,7 +696,7 @@ The result still uses `trust_state: untrusted_foreign`, keeps `would_change: []`
 Preview a future quarantine placement plan from a foreign-block attestation packet:
 
 ```powershell
-python wom-kit\cli\archive.py foreign-block-quarantine wom-kit\examples\fake-life-archive `
+python -m wom_kit.archive_cli foreign-block-quarantine wom-kit\examples\fake-life-archive `
   --attestation-packet workbench\foreign-block-attestation-packet.json `
   --dry-run `
   --format json
@@ -695,7 +707,7 @@ The result still uses `trust_state: untrusted_foreign`, keeps `would_change: []`
 Preview an approved local quarantine case write from a quarantine plan:
 
 ```powershell
-python wom-kit\cli\archive.py quarantine-foreign-block wom-kit\examples\fake-life-archive `
+python -m wom_kit.archive_cli quarantine-foreign-block wom-kit\examples\fake-life-archive `
   --plan workbench\foreign-block-quarantine-plan.json `
   --dry-run `
   --format json
@@ -704,7 +716,7 @@ python wom-kit\cli\archive.py quarantine-foreign-block wom-kit\examples\fake-lif
 Approve the isolated quarantine write after human/operator review:
 
 ```powershell
-python wom-kit\cli\archive.py quarantine-foreign-block wom-kit\examples\fake-life-archive `
+python -m wom_kit.archive_cli quarantine-foreign-block wom-kit\examples\fake-life-archive `
   --plan workbench\foreign-block-quarantine-plan.json `
   --approve `
   --reviewed-by person:me `
@@ -716,7 +728,7 @@ Approved mode writes only `quarantine/foreign-blocks/<case-id>/quarantine-case.j
 Review existing untrusted quarantine cases:
 
 ```powershell
-python wom-kit\cli\archive.py quarantine-review wom-kit\examples\fake-life-archive `
+python -m wom_kit.archive_cli quarantine-review wom-kit\examples\fake-life-archive `
   --format json
 ```
 
@@ -725,7 +737,7 @@ Use `--case-id <safe-id>` for one case and `--include-receipts` when the reviewe
 Preview a future decision path for one quarantined foreign block case:
 
 ```powershell
-python wom-kit\cli\archive.py quarantine-decision wom-kit\examples\fake-life-archive `
+python -m wom_kit.archive_cli quarantine-decision wom-kit\examples\fake-life-archive `
   --case-id case-review-001 `
   --dry-run `
   --format json
@@ -736,14 +748,14 @@ python wom-kit\cli\archive.py quarantine-decision wom-kit\examples\fake-life-arc
 Preview or record an approved local quarantine decision:
 
 ```powershell
-python wom-kit\cli\archive.py record-quarantine-decision wom-kit\examples\fake-life-archive `
+python -m wom_kit.archive_cli record-quarantine-decision wom-kit\examples\fake-life-archive `
   --decision-preview workbench\foreign-block-quarantine-decision.json `
   --dry-run `
   --format json
 ```
 
 ```powershell
-python wom-kit\cli\archive.py record-quarantine-decision wom-kit\examples\fake-life-archive `
+python -m wom_kit.archive_cli record-quarantine-decision wom-kit\examples\fake-life-archive `
   --decision-preview workbench\foreign-block-quarantine-decision.json `
   --approve `
   --reviewed-by person:me `
@@ -755,7 +767,7 @@ Approved mode writes only `quarantine/foreign-blocks/<case-id>/quarantine-decisi
 Review recorded quarantine decisions:
 
 ```powershell
-python wom-kit\cli\archive.py quarantine-decision-review wom-kit\examples\fake-life-archive `
+python -m wom_kit.archive_cli quarantine-decision-review wom-kit\examples\fake-life-archive `
   --format json
 ```
 
@@ -768,7 +780,7 @@ When receipt summaries are included, boolean fields use direct meanings. `trust_
 Plan the next safe path from a recorded decision:
 
 ```powershell
-python wom-kit\cli\archive.py quarantine-decision-outcome wom-kit\examples\fake-life-archive `
+python -m wom_kit.archive_cli quarantine-decision-outcome wom-kit\examples\fake-life-archive `
   --case-id case-review-001 `
   --dry-run `
   --format json
@@ -779,7 +791,7 @@ Use `--expected-decision` for replay safety and `--reviewer` / `--review-note` o
 Plan a human attestation review candidate from an eligible decision:
 
 ```powershell
-python wom-kit\cli\archive.py attestation-review-candidate wom-kit\examples\fake-life-archive `
+python -m wom_kit.archive_cli attestation-review-candidate wom-kit\examples\fake-life-archive `
   --case-id case-review-001 `
   --expected-decision eligible_for_attestation_review `
   --expected-outcome prepare_attestation_review_candidate `
@@ -795,7 +807,7 @@ The block-header preview reads only the target zet file. It derives header metad
 Review recorded attestation review candidates:
 
 ```powershell
-python wom-kit\cli\archive.py attestation-candidate-review wom-kit\examples\fake-life-archive `
+python -m wom_kit.archive_cli attestation-candidate-review wom-kit\examples\fake-life-archive `
   --format json
 ```
 
@@ -804,7 +816,7 @@ Use `--case-id <safe-id>` to display one case, `--review-scope identity|source_r
 Preview a non-binding statement draft for one recorded candidate:
 
 ```powershell
-python wom-kit\cli\archive.py attestation-statement-draft wom-kit\examples\fake-life-archive `
+python -m wom_kit.archive_cli attestation-statement-draft wom-kit\examples\fake-life-archive `
   --case-id case-review-001 `
   --dry-run `
   --statement-style human_readable `
@@ -816,7 +828,7 @@ The preview re-reads current candidate, candidate receipt, quarantine case/recei
 Review recorded untrusted statement drafts and matching receipts:
 
 ```powershell
-python wom-kit\cli\archive.py attestation-statement-draft-review wom-kit\examples\fake-life-archive `
+python -m wom_kit.archive_cli attestation-statement-draft-review wom-kit\examples\fake-life-archive `
   --statement-style all `
   --review-scope all `
   --include-receipts `
@@ -832,7 +844,7 @@ The index writes nothing, returns `dry_run: true`, `index_status: indexed_not_mo
 Preview a non-binding decision route for one recorded statement draft:
 
 ```powershell
-python wom-kit\cli\archive.py attestation-statement-draft-decision wom-kit\examples\fake-life-archive `
+python -m wom_kit.archive_cli attestation-statement-draft-decision wom-kit\examples\fake-life-archive `
   --case-id case-review-001 `
   --dry-run `
   --decision-intent needs_more_review `
@@ -916,7 +928,7 @@ keyrings/*.local.yml
 v0.2.46 adds a dry-run `projection-plan` preview for one local zet and one operator-declared surface kind:
 
 ```powershell
-python wom-kit\cli\archive.py projection-plan .\some-archive `
+python -m wom_kit.archive_cli projection-plan .\some-archive `
   --zet zet_20240504_example `
   --surface static_site `
   --dry-run `

@@ -190,6 +190,65 @@ Preview a verified `project-version-update` first and, when a write is needed,
 pause editors, sync/backup clients, and other Git writers for the complete
 transaction before completing its affirmed approval from Windows.
 
+## Source Development Launcher
+
+The direct `wom-kit/cli/archive.py` wrapper is not the normal launcher for an
+active development checkout. Its closed-tree checks intentionally reject
+ordinary development state such as bytecode caches, extra Python sources, or
+modified tracked runtime bytes. Use the package module instead.
+
+From inside `wom-kit/` in PowerShell:
+
+```powershell
+$env:PYTHONPATH = "src"
+python -m wom_kit.archive_cli <command> ...
+```
+
+From inside `wom-kit/` in a POSIX shell:
+
+```bash
+PYTHONPATH=src python -m wom_kit.archive_cli <command> ...
+```
+
+The direct wrapper has two narrow supported roles:
+
+1. the exact isolated invocation returned in a verified `bridge_argv`; and
+2. an explicit recovery attempt from a pristine, exact tagged checkout.
+
+Do not make a development tree look pristine by deleting or reverting unknown
+work. Preserve the work, use the module launcher for development, and use a
+separate pristine checkout when recovery evidence is required.
+
+## WOM Bridge Refusal Codes
+
+The direct wrapper exposes exactly these six stable external refusal codes:
+
+- `WOM_BRIDGE_PRELOADED_MODULE`: `wom_kit` was already loaded before the
+  verified bridge import boundary;
+- `WOM_BRIDGE_SOURCE_TREE_UNSAFE`: the Git, source-byte, index, closed-tree, or
+  synchronized-resource gate did not verify;
+- `WOM_BRIDGE_PROJECT_PATH_ON_SYS_PATH`: a project-path alias remained on
+  `sys.path` after the required purge;
+- `WOM_BRIDGE_IMPORT_FAILED`: the exact verified package or CLI module could
+  not be imported;
+- `WOM_BRIDGE_IMPORT_SOURCE_MISMATCH`: an imported module did not come from
+  the exact verified project source path; and
+- `WOM_BRIDGE_ENTRYPOINT_INVALID`: the verified CLI module did not expose a
+  callable `main` entrypoint.
+
+Every such refusal writes the code followed by this fixed, content-free line:
+
+```text
+WOM_BRIDGE_RECOVERY_DOC=https://github.com/mow-coding/zettel-kasten/blob/main/wom-kit/docs/version-truth-source.md#wom-bridge-refusal-codes
+```
+
+The line contains no inspected path, module name, repository payload, or
+exception text. For an ordinary development checkout, switch to the module
+launcher above. For a generated bridge, do not bypass the gate: start a new
+process, rerun `archive version <root> --format json`, and follow its
+`next_safe_actions`. For pristine recovery, use a separate exact tagged
+checkout and keep the original checkout unchanged for diagnosis.
+
 ## Approval-Gated Project Update
 
 Starting in v0.3.215, a separate command can perform that bounded update after

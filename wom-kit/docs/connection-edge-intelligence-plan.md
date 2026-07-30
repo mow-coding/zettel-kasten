@@ -14,7 +14,7 @@ ambiguous, and which ones may need a richer relationship meaning later.
 ## Command
 
 ```powershell
-python wom-kit\cli\archive.py connection-edge-intelligence-plan `
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli connection-edge-intelligence-plan `
   wom-kit\examples\fake-life-archive `
   --evidence workbench/connection-evidence.sample.json `
   --source notion `

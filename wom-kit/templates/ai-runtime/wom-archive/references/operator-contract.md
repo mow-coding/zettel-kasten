@@ -73,11 +73,24 @@ output. A long mint-receipt heartbeat may also include a fixed safe phase such
 as `file_hash` or `edge_receipt_index`. Treat the phase only as local liveness;
 it contains no receipt/path/content identity and does not prove completion.
 
-If `archive` is not installed on PATH, run the repository entrypoint instead:
+If `archive` is not installed on `PATH`, run the package module from an active
+source checkout. In PowerShell from inside `wom-kit/`:
+
+```powershell
+$env:PYTHONPATH = "src"
+python -m wom_kit.archive_cli ai-start-here <archive-root> --dry-run --progress --format json
+```
+
+In a POSIX shell from inside `wom-kit/`:
 
 ```bash
-python wom-kit/cli/archive.py ai-start-here <archive-root> --dry-run --progress --format json
+PYTHONPATH=src python -m wom_kit.archive_cli ai-start-here <archive-root> --dry-run --progress --format json
 ```
+
+Do not use the direct `wom-kit/cli/archive.py` wrapper as the ordinary
+development fallback. It is reserved for an exact verified `bridge_argv` or a
+pristine-checkout recovery attempt and intentionally refuses source-tree
+drift, bytecode caches, or extra importable code.
 
 If the expected archive is known, include:
 

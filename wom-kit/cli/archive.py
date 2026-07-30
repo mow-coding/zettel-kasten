@@ -37,6 +37,7 @@ MAX_PYTHON_SOURCE_BYTES = 32 * 1024 * 1024
 MAX_TOTAL_PYTHON_SOURCE_BYTES = 128 * 1024 * 1024
 MAX_GIT_OUTPUT_BYTES = 4 * 1024 * 1024
 MAX_GIT_STDIN_BYTES = 2 * 1024 * 1024
+BRIDGE_RECOVERY_DOC_URL = "https://github.com/mow-coding/zettel-kasten/blob/main/wom-kit/docs/version-truth-source.md#wom-bridge-refusal-codes"
 RESOURCE_MANIFEST_GIT_PATH = (
     "wom-kit/src/wom_kit/_resources/resource-manifest.json"
 )
@@ -65,6 +66,10 @@ sys.dont_write_bytecode = True
 
 def _refuse(error_code: str) -> None:
     print(error_code, file=sys.stderr)
+    print(
+        f"WOM_BRIDGE_RECOVERY_DOC={BRIDGE_RECOVERY_DOC_URL}",
+        file=sys.stderr,
+    )
     raise SystemExit(1)
 
 
@@ -1497,4 +1502,3 @@ if not callable(getattr(selected_archive_cli, "main", None)):
 
 if __name__ == "__main__":
     raise SystemExit(selected_archive_cli.main())
-

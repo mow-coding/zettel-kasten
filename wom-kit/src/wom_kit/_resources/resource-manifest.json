@@ -343,8 +343,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/references/operator-contract.md",
       "packaged": "templates/ai-runtime/wom-archive/references/operator-contract.md",
-      "bytes": 55208,
-      "sha256": "33a5f9dcb468212d24df2f0a501f7048636162e2ae380df036ce70be3b2ebc54"
+      "bytes": 55731,
+      "sha256": "9ea4180b7804041db1924cf32240e0770cc3bb5930b6fec75e8c6dda7d80e5d6"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/reading-memory-and-revision.md",
@@ -361,8 +361,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/references/startup-and-update.md",
       "packaged": "templates/ai-runtime/wom-archive/references/startup-and-update.md",
-      "bytes": 4974,
-      "sha256": "fcd385e894d3fd34447693889ac697a80a6db20d85fe526f22ce3b9c133edaed"
+      "bytes": 5459,
+      "sha256": "c4ce0354a42ee108c2aea37e6250fbe50e57fc85b6d51daddb17ab933d45033e"
     },
     {
       "source": "templates/company/AGENTS.md",
@@ -619,8 +619,8 @@
     {
       "source": "docs/releases/v0.3.291.md",
       "packaged": "release-notes/v0.3.291.md",
-      "bytes": 15436,
-      "sha256": "7a0f4c06065a9cc8ef0c302b057dea191c01541065427d2f7339142124e13e34"
+      "bytes": 16905,
+      "sha256": "80f9e5e144d8afcc78764239e031e6649c4201d15fa07fe597f54bdaa6d11e1b"
     }
   ]
 }

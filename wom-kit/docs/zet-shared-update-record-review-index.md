@@ -20,7 +20,7 @@ v0.2.59 adds [ZET Transport Threat Model](zet-transport-threat-model.md) plannin
 ## CLI
 
 ```powershell
-python wom-kit\cli\archive.py shared-update-record-review-index <archive-root> --records-dir <archive-relative-dir> --dry-run --format json
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli shared-update-record-review-index <archive-root> --records-dir <archive-relative-dir> --dry-run --format json
 ```
 
 The `--records-dir` path must be archive-relative and contained under the archive root. Absolute paths, URL-like paths, traversal, UNC paths, and NUL bytes are rejected.

@@ -28,7 +28,7 @@ shared-updates/incoming/example-update.json
 ## 2. dry-run 미리보기 실행
 
 ```powershell
-python wom-kit\cli\archive.py shared-update-route-preview <archive-root> --record shared-updates/incoming/example-update.json --dry-run --format json
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli shared-update-route-preview <archive-root> --record shared-updates/incoming/example-update.json --dry-run --format json
 ```
 
 ## 3. 대표 출력 예시

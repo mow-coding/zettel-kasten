@@ -151,3 +151,51 @@ updates, or Skill lifecycle writes from the version inspection.
 
 Implementation detail and verification evidence are recorded in
 `meeting-minutes/2026-07-30-v03291-runtime-version-alignment-implementation.md`.
+
+## Audit Correction — 2026-07-31
+
+An independent follow-up audit showed that the earlier public-guidance bullet
+above was too broad. `wom-kit/cli/archive.py` is no longer an ordinary
+source-development fallback after the v0.3.291 closed-tree bridge gate. A
+normal test or editor import can create `__pycache__`, and ordinary source
+changes are also expected during development; both correctly make the direct
+wrapper refuse.
+
+The corrected decision is append-only:
+
+- active source development uses `PYTHONPATH=src` plus
+  `python -m wom_kit.archive_cli`;
+- the direct wrapper is reserved for the exact verified `bridge_argv` or an
+  explicit pristine-checkout recovery attempt;
+- packaged runtime guidance, English/Korean quick verification, and current
+  CLI guidance must preserve that distinction; and
+- direct-wrapper refusals expose one of six documented stable
+  `WOM_BRIDGE_*` codes followed by the fixed content-free
+  `WOM_BRIDGE_RECOVERY_DOC` pointer.
+
+This correction does not weaken the bridge integrity gate or rewrite the
+original decision record. It narrows the supported launcher contract so the
+code, tests, source documentation, and installed package resources agree.
+
+### Defensive enforcement correction
+
+The same follow-up audit showed that the Windows directory-hold
+implementation did not yet enforce the intended pathname-stability claim.
+The corrected implementation:
+
+- opens directories with list-directory plus attribute access while still
+  omitting delete sharing;
+- binds each held handle to its volume/file identity and revalidates the
+  current pathname before use;
+- rechecks containment, real path components, held parent identity, and
+  regular-file type immediately before every tracked unlink;
+- purges incomplete handle/identity cache state and closes any surviving
+  handle fail-closed; and
+- parses all five NUL-delimited Git inventories with strict framing, while
+  deriving CRLF eligibility from the exact `ls-files --eol` tracked set rather
+  than a filename allowlist.
+
+The preserved local concurrency regression changed from outside-tree deletion
+to blocked directory replacement with the outside file unchanged. This is an
+enforcement correction to the original Windows-only decision, not an expansion
+of the approved write boundary or a claim of atomic file compare-and-swap.

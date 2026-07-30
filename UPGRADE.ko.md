@@ -38,6 +38,27 @@ exact-object-ID finder가 `wom_kit`만 불러오므로, 관문 뒤 생긴 최상
 업데이트, pip/uv/pipx/editable 소유권 추측, 프로세스 재시작, runtime Agent
 Skill 설치를 하지 않습니다.
 
+일반적인 active source checkout 작업에서는
+`wom-kit/cli/archive.py`를 직접 실행하지 마세요. `wom-kit/` 안에서 다음
+module 형식을 사용합니다.
+
+```powershell
+$env:PYTHONPATH = "src"
+python -m wom_kit.archive_cli <command> ...
+```
+
+POSIX shell에서는 다음과 같습니다.
+
+```bash
+PYTHONPATH=src python -m wom_kit.archive_cli <command> ...
+```
+
+직접 wrapper는 정확히 검증된 `bridge_argv` 또는 pristine-checkout 복구
+시도에만 사용합니다. 외부에 공개되는 안정적인 거부 코드 6개와 고정
+`WOM_BRIDGE_RECOVERY_DOC` pointer는
+[`wom-kit/docs/version-truth-source.md`](wom-kit/docs/version-truth-source.md#wom-bridge-refusal-codes)에
+정리되어 있습니다.
+
 기존 Windows 소스 미러에는 전환 안전장치가 하나 더 필요합니다.
 예전 checkout이 `core.autocrlf=true`를 사용했다면 새 저장소 속성이 LF를
 요구한 뒤에도 변경되지 않은 `.py` 파일이 CRLF로 남을 수 있습니다. 승인된
@@ -4536,11 +4557,11 @@ archive github-repo <archive-root> --dry-run \
 
 private archive migration은 필요 없습니다.
 
-현재 명령 예시는 새 path/package를 사용합니다:
+현재 source-development 명령은 import package를 사용합니다. v0.3.291부터
+직접 wrapper는 검증된 bridge 또는 pristine 복구용입니다.
 
 ```bash
-python wom-kit/cli/archive.py doctor wom-kit/examples/fake-life-archive --strict
-python -m wom_kit.archive_cli doctor wom-kit/examples/fake-life-archive --strict
+PYTHONPATH=wom-kit/src python -m wom_kit.archive_cli doctor wom-kit/examples/fake-life-archive --strict
 ```
 
 ## `v0.2.17`에서 `v0.2.18`로

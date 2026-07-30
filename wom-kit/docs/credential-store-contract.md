@@ -35,7 +35,7 @@ This is the difference between a label on a key hook and the key itself.
 v0.3.20 adds:
 
 ```powershell
-python cli\archive.py credential-ref-plan .\my-archive `
+$env:PYTHONPATH='src'; python -m wom_kit.archive_cli credential-ref-plan .\my-archive `
   --credential-id cred:openai-api `
   --credential-kind openai_api_key `
   --provider openai `
@@ -104,7 +104,7 @@ or provider credentials.
 v0.3.21 adds a read-only inventory companion:
 
 ```powershell
-python cli\archive.py credential-ref-inventory .\my-archive `
+$env:PYTHONPATH='src'; python -m wom_kit.archive_cli credential-ref-inventory .\my-archive `
   --dry-run `
   --format json
 ```

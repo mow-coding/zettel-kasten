@@ -28,7 +28,7 @@ archive notion-objet-link-index <archive-root> --dry-run
 ```
 
 ```powershell
-python wom-kit\cli\archive.py notion-objet-link-index <archive-root> `
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli notion-objet-link-index <archive-root> `
   --dry-run `
   --format json
 ```
@@ -36,7 +36,7 @@ python wom-kit\cli\archive.py notion-objet-link-index <archive-root> `
 Optional limits:
 
 ```powershell
-python wom-kit\cli\archive.py notion-objet-link-index <archive-root> `
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli notion-objet-link-index <archive-root> `
   --dry-run `
   --max-zettels 100 `
   --max-locators-per-zettel 20 `
