@@ -28,6 +28,9 @@ This project uses semantic versioning for public compatibility checkpoints.
   installed resource.
 - Added focused adversarial fixtures for archive, path, manifest, set,
   byte-count, digest, and mirror mismatches.
+- Kept the Linux CI budget at 45 minutes and raised only the full Windows
+  suite to 75 minutes after an exact-source tag run exhausted the old
+  45-minute budget without a test assertion failure.
 - Changed no archive format, runtime command behavior, MCP wire contract,
   provider integration, archive content, or beta archive.
 
