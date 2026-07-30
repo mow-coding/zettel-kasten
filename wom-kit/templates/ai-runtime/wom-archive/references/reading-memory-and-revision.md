@@ -1,7 +1,6 @@
 # Reading Memory And Revision
 
-Use this reference when the human asks what the archive knows, whether a zet is
-fresh, what changed, or whether earlier canonical bytes can be recovered.
+Use this reference when the human asks what the archive knows, whether a zet is fresh, what changed, or whether earlier canonical bytes can be recovered.
 
 ## Search Through WOM
 
@@ -14,6 +13,12 @@ archive search <archive-root> <query> --count-total --format json
 Inspect the complete-or-truncated metadata before claiming zero results or
 complete coverage. Raw filesystem grep and raw SQLite queries are diagnostic
 tools, not authoritative WOM search results.
+
+Before claiming that an objet, source file, or preserved original does not
+exist, run `archive objet-rediscovery-plan <archive-root> <query> --dry-run
+--count-total --format json`. `archive search.complete` covers only index
+truncation, not source freshness, private names, objet edges, external stores,
+remote availability, or unrecovered refs; `search_incomplete` forbids global absence.
 
 To inspect whether historical AI-declared inbox drafts contradict the current
 official draft shape, use:
@@ -42,15 +47,13 @@ containment.
 To add the reviewed memberships, pass the exact request and review-plan hashes
 to `activity-group-membership-write --dry-run`, then use its explicit
 `--approve --reviewed-by ... --affirm-memberships-reviewed` path only after
-human review. Never hand-edit canonical zets. If a hard interruption retains
-its journal and lock, first confirm the old writer is no longer running, then
-use `activity-group-membership-recovery-plan --dry-run` and the exact
-digest-bound `activity-group-membership-recover` approval. Never infer
-membership and never execute a `manual_forensic_hold`. A retained add or
-removal journal in either private request root blocks both operation writers
-before and under the shared lock. Do not read, rename, or delete that private
-evidence merely to make a writer proceed. Completed cleanup requires the
-operation-specific receipt's raw hash and exact ordered journal/lock binding to remain the same as the reviewed recovery plan.
+human review. Never hand-edit canonical zets. After a hard interruption,
+confirm the old writer stopped, then use the recovery plan and its exact
+digest-bound approval. Never infer membership or execute
+`manual_forensic_hold`. A retained add/removal journal in either private root
+blocks both writers before and under the shared lock; do not read, rename, or
+delete it to proceed. Cleanup requires the operation-specific receipt hash and
+ordered journal/lock binding to match the reviewed recovery plan.
 
 To review explicitly selected removals, start read-only:
 
@@ -61,14 +64,12 @@ archive activity-group-membership-removal-plan <archive-root> --request .wom-scr
 Preserve the exact private request and review digest. Preview the separate
 `activity-group-membership-removal-write` with both expected digests; approve
 only with an attributed human reviewer and `--affirm-removals-reviewed`.
-`already_absent` rows are reviewed no-ops and
-must not appear as mutation evidence. If the removal writer is interrupted,
-first confirm it has stopped, then use
+`already_absent` rows are reviewed no-ops, not mutation evidence. After an
+interruption, confirm the removal writer stopped, then use
 `activity-group-membership-removal-recovery-plan --dry-run` and only the exact
-digest-bound `activity-group-membership-removal-recover` approval. Never use
-the add recovery command for removal evidence, remove a membership by editing
-a canonical zet directly, infer candidates, expose an MCP writer, or treat
-recovery as a deliberate revert.
+digest-bound approval. Never use add recovery for removal evidence, edit a
+canonical zet directly, infer candidates, expose an MCP writer, or treat
+recovery as deliberate revert.
 
 ## Read Abstracts Before Full Bodies
 
@@ -176,5 +177,4 @@ workflows before using them:
 - `zet-revision-restore-write`
 - `session-handoff-checkpoint`
 
-The complete operator contract contains the required hashes, event timestamps,
-human affirmations, and rollback boundaries.
+The complete operator contract contains required hashes, event timestamps, human affirmations, and rollback boundaries.

@@ -5,7 +5,8 @@ safe full-Doctor receipt phase and callback coalescing added in v0.3.223;
 no-repeat runtime-context handoff added in v0.3.224; identity consistency and
 review routing added in v0.3.226; aggregate edge-receipt progress added in
 v0.3.227; official AI command-path routing added in v0.3.278; explicit
-runtime-guidance readiness and feedback routing added in v0.3.293
+runtime-guidance readiness and feedback routing added in v0.3.293;
+checked-layer objet rediscovery routing added in v0.3.294
 
 ## Purpose
 
@@ -58,12 +59,17 @@ cannot prove the host actually consumed them, so
 
 ## Official Read And Write Paths
 
-Introduced in v0.3.278 and extended through v0.3.293, JSON output includes
-`wom-kit/ai-command-path-routing/v0.7`, and Markdown output renders
+Introduced in v0.3.278 and extended through v0.3.294, JSON output includes
+`wom-kit/ai-command-path-routing/v0.8`, and Markdown output renders
 `Official Read Command Paths` and `Official Write Command Paths`.
 
 The routes require `archive search --count-total --format json` for
-authoritative WOM search and `archive create-draft` preview plus reviewed
+authoritative WOM index search and then
+`archive objet-rediscovery-plan --dry-run --count-total --format json` before
+any global claim that an objet or source does not exist. The plan reports ten
+fixed evidence layers without echoing the private query or rows; index
+`complete` alone is not global absence. Routes also require
+`archive create-draft` preview plus reviewed
 replay for AI-assisted inbox drafts. Raw grep/SQL do not prove a WOM search
 result, and direct Markdown writes to `inbox/` are forbidden. The same object
 states that local version inspection does not check remote release freshness

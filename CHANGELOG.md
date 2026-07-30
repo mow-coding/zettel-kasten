@@ -6,6 +6,32 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.294 - 2026-07-31
+
+- Added read-only `archive objet-rediscovery-plan <archive-root> <query>
+  --dry-run` and the matching `objet_rediscovery_plan` MCP tool.
+- Preserved ordinary `archive search.complete` as generated-index
+  non-truncation only; even an exact index total never proves every
+  rediscovery layer or a global absence claim.
+- Added ten fixed, ordered checked-layer records. Existing zettel, object,
+  derived-text, view, and source-map channels are each probed independently
+  and report only current SQLite snapshot evidence; zettel-to-objet edges
+  remain unchecked and four future private/external/reference contracts
+  remain explicitly not implemented.
+- Added content-free blocked results for invalid archives, unavailable or
+  malformed SQLite, permission/decoder errors, pending WAL or rollback-journal
+  content, unsafe local reparse boundaries, and an index snapshot that changes
+  during inspection.
+- Kept the private query, search rows, titles, filenames, ids, snippets,
+  local paths, provider locators, secrets, and exception text out of JSON,
+  text, and MCP summaries.
+- Advanced AI command-path routing to v0.8 with the explicit
+  `plan_objet_rediscovery_before_negative_claim` route while preserving the
+  v0.3.293 runtime-guidance and operator-feedback contracts.
+- Added no writer, index rebuild, archive migration, provider/network/
+  credential call, external-directory scan, Runtime Skill installation, or
+  existing `AGENTS.md` rewrite.
+
 ## v0.3.293 - 2026-07-31
 
 - Added explicit read-only `runtime-guidance-readiness` for the Codex

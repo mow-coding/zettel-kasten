@@ -40,10 +40,12 @@ To inspect only this layer, run:
 archive operational-context <archive-root> --dry-run --format json
 ```
 
-Introduced in v0.3.278 and extended through v0.3.293, this read-only output also
+Introduced in v0.3.278 and extended through v0.3.294, this read-only output also
 returns the same official
-`wom-kit/ai-command-path-routing/v0.7` object as runtime-context and
-ai-start-here. It routes search through `archive search`, conservative inbox
+`wom-kit/ai-command-path-routing/v0.8` object as runtime-context and
+ai-start-here. It routes index search through `archive search` and global
+negative-claim planning through `archive objet-rediscovery-plan --dry-run`,
+conservative inbox
 shape review through `archive inbox-pipeline-audit`, AI draft creation through
 `archive create-draft`, and other writes through their dedicated
 preview/approval commands. Explicit event membership review routes through the
