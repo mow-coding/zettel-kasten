@@ -22,8 +22,8 @@ branch-protection migration.
 - Slow Windows runners have meaningful headroom without reducing coverage.
 - Linux failure budgets do not expand.
 - Existing check names and commands remain stable.
-- v0.3.288 keeps its immutable tag and needs a documented exact-SHA timeout
-  exception; the new budget starts with v0.3.289.
+- v0.3.288 kept its immutable tag and passed a clean tag-workflow retry, so no
+  timeout exception was used; the new budget starts with v0.3.289.
 
 Detailed evidence is recorded in
 `meeting-minutes/2026-07-30-v03289-windows-ci-time-budget.md`.

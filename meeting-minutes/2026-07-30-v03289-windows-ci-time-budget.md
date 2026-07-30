@@ -43,8 +43,9 @@ the smallest standard correction.
 ## Release Consequence
 
 The change cannot retroactively alter the workflow embedded in the v0.3.288
-tag. The v0.3.288 release decision must therefore cite exact-SHA main CI,
-local full-suite evidence, and the tag-timeout exception without moving the
-tag. v0.3.289 and later tags receive the corrected budget.
+tag. A clean rerun of that tag workflow subsequently passed the complete
+Windows job in 41 minutes 44 seconds, so v0.3.288 was released through the
+normal green tag gate without moving the tag or using a timeout exception.
+v0.3.289 and later tags receive the corrected budget and additional headroom.
 
 No beta archive was read or written for this correction.
