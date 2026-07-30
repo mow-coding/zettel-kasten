@@ -159,6 +159,15 @@ Beta semantic confirmation remains a later human real-use validation step.
     tests passed in 10.295 seconds with `PYTHONUTF8=1`, with no reader-thread
     decode traceback. A fresh complete suite on the resulting exact commit
     remains required.
+16. The corrected exact commit `6127a919` then completed the full Windows
+    source suite: 1,874 tests in 3,955.531 seconds, 22 expected environment
+    skips, and `OK`. The preserved verbose log contains zero
+    `UnicodeDecodeError`, `FAIL`, or `ERROR` markers. HEAD and tracked
+    worktree state were exact and clean before and after the run, and the
+    merge-base remained the exact public v0.3.291 merge commit `9b9a49f7`.
+    This local result authorizes PR creation, not a tag or public-release
+    claim; exact PR-head CI, merge-commit CI, clean wheel, tag CI, release,
+    and anonymous asset verification remain required.
 
 ## Later release-train boundary
 
@@ -249,3 +258,10 @@ return-code-only Windows `mklink` output away from text decoders, the exact
 nine affected tests passed in 10.295 seconds under the same UTF-8 environment.
 This focused result closes the reproduced decoder failure, but it does not
 replace the required fresh complete-suite result on the corrected commit.
+
+That required replacement suite subsequently passed at exact commit
+`6127a919`: 1,874 tests in 3,955.531 seconds with 22 skips and no failures or
+errors. The external stderr log contains the exact final `OK (skipped=22)`
+summary and zero `UnicodeDecodeError`, `FAIL`, or `ERROR` markers. The tracked
+worktree remained clean. The minutes-only evidence commit that records this
+result still requires exact-head remote PR CI before merge.
