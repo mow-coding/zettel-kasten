@@ -10,21 +10,22 @@ It is not a website, SaaS app, dashboard, or visual note-taking product. The int
 
 ## Install The Command-Line Tool
 
-v0.3.287 provides a self-contained wheel on the exact GitHub release:
+v0.3.288 provides a self-contained wheel on the exact GitHub release:
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.287/wom_kit-0.3.287-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.288/wom_kit-0.3.288-py3-none-any.whl"
 archive --version
 ```
 
-v0.3.287 adds the CLI-only, read-only
-`notion-import-locator-evidence-plan`. It validates a human-reviewed private
-source-occurrence-to-marker mapping against exact current canonical bytes,
-using only `facets.source_page_id` as join authority. It returns no page id,
-locator, fingerprint, zet identity, filename, path, title, body, or context,
-and adds no restoration writer, receipt, provider call, raw Notion-export
-adapter, beta-archive write, or MCP tool. See
-[`docs/releases/v0.3.287.md`](docs/releases/v0.3.287.md).
+v0.3.288 gives every failed MCP tool one exact content-free
+`tool_execution_failed` envelope and gives JSON-RPC failures fixed category
+messages. Raw exception text, paths, identifiers, validation details, unknown
+method/tool names, and caller values do not cross the stdio wire boundary.
+Only `null` and objects are accepted for request parameters and tool
+arguments; falsey non-object values are rejected. Successful tool results,
+archive-service behavior, and existing dry-run, approval, allowed-root, and
+redaction checks are unchanged. See
+[`docs/releases/v0.3.288.md`](docs/releases/v0.3.288.md).
 
 Use a dedicated virtual environment when installing with plain `pip`. WOM-kit
 is not published to PyPI yet, so `pip install wom-kit` is not an official
@@ -1580,6 +1581,12 @@ After editable install:
 ```powershell
 archive-mcp
 ```
+
+Since v0.3.288, every failed tool returns the exact content-free
+`tool_execution_failed` envelope documented in the current release note.
+JSON-RPC failures use fixed category messages, and only `null` or an object is
+accepted for request `params` and tool `arguments`. Raw exception text remains
+inside the local process and is not part of the MCP wire contract.
 
 Initial tools:
 

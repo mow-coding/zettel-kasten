@@ -24,6 +24,36 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.288 Content-Free MCP Error Boundary
+
+v0.3.288 is a privacy-hardening release for clients that use `archive-mcp` or
+`wom-mcp`.
+
+No archive migration is required. Upgrade the client/server wheel together,
+then restart the MCP host process so it loads the new server.
+
+Failed tools now return one fixed envelope:
+
+```json
+{
+  "content": [{"type": "text", "text": "Tool execution failed."}],
+  "structuredContent": {"error": "tool_execution_failed"},
+  "isError": true
+}
+```
+
+If a client previously displayed or parsed human exception messages from
+`structuredContent.error`, update it to recognize
+`tool_execution_failed`. Diagnose the underlying reason locally; the server
+no longer sends raw internal details to the MCP client.
+
+Protocol errors also use fixed category messages. Values such as `false`, `0`,
+`""`, and `[]` are invalid for request `params` or tool `arguments`; use
+`null` or `{}` when no values are needed.
+
+Successful tool results and archive safety rules are unchanged. See
+[`wom-kit/docs/releases/v0.3.288.md`](wom-kit/docs/releases/v0.3.288.md).
+
 ## v0.3.287 Read-Only Notion Locator Evidence Plan
 
 v0.3.287 adds the next read-only step after the v0.3.277 locator-loss census.
