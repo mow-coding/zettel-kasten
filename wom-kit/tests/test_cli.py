@@ -8129,8 +8129,33 @@ state:
             )
             self.assertEqual(result["review_summary"]["durable_write_human_approval_required_count"], 11)
             self.assertEqual(result["review_summary"]["auto_writable_count"], 0)
-            self.assertIn("format_variant", result["classification_summary"]["provisional_meaning_candidate_ids"])
+            self.assertNotIn("format_variant", result["classification_summary"]["provisional_meaning_candidate_ids"])
             self.assertIn("responds_to", result["classification_summary"]["provisional_meaning_candidate_ids"])
+            format_variant_vocabulary = next(
+                item
+                for item in result["relationship_meaning_vocabulary"]
+                if item["meaning_id"] == "format_variant"
+            )
+            self.assertEqual(format_variant_vocabulary["status"], "active_mapping")
+            self.assertEqual(format_variant_vocabulary["active_edge_type"], "format_variant")
+            self.assertEqual(format_variant_vocabulary["write_policy"], "manual_human_review_only")
+            self.assertIn(
+                "format_variant",
+                result["archive_edge_type_status"]["active_edge_types_from_current_archive_model"],
+            )
+            self.assertNotIn(
+                "format_variant",
+                result["archive_edge_type_status"]["provisional_meanings_not_active_edge_types"],
+            )
+            self.assertTrue(
+                all(
+                    suggestion["recommended_edge_type"] != "format_variant"
+                    and suggestion["relationship_meaning"]["suggested_id"] != "format_variant"
+                    and "format_variant"
+                    not in suggestion["relationship_meaning"]["provisional_candidate_ids"]
+                    for suggestion in result["classification_suggestions"]
+                )
+            )
             containment_suggestions = [item for item in result["classification_suggestions"] if item["current_edge_type"] == "contains"]
             self.assertEqual(len(containment_suggestions), 2)
             self.assertTrue(all(item["relationship_meaning"]["suggested_id"] == "structural_containment" for item in containment_suggestions))
@@ -8263,6 +8288,70 @@ state:
             )
             self.assertEqual(no_dry_run_code, 1)
             self.assertIn("requires --dry-run", no_dry_run_output)
+
+    def test_format_variant_active_vocabulary_does_not_reclassify_existing_suggestions(self) -> None:
+        vocabulary = {
+            item["meaning_id"]: item
+            for item in archive_services.CONNECTION_EDGE_RELATIONSHIP_VOCABULARY
+        }
+        self.assertEqual(vocabulary["format_variant"]["status"], "active_mapping")
+        self.assertEqual(vocabulary["format_variant"]["active_edge_type"], "format_variant")
+        self.assertEqual(
+            archive_services.CONNECTION_EDGE_ACTIVE_MEANING_BY_EDGE_TYPE["format_variant"],
+            "format_variant",
+        )
+        self.assertNotIn(
+            "format_variant",
+            archive_services.CONNECTION_IMPORT_RECOMMENDED_EDGE_TYPES,
+        )
+
+        existing_cases = [
+            (
+                {
+                    "candidate_id": "candidate:existing-derived",
+                    "connection_kind": "relation_property",
+                    "edge_type": "derived",
+                    "confidence": "high",
+                    "review_status": "fixture_reviewed",
+                },
+                "derived",
+                "derived_output",
+                ["fulfills"],
+            ),
+            (
+                {
+                    "candidate_id": "candidate:existing-embed",
+                    "connection_kind": "objet_embed",
+                    "edge_type": "embed",
+                    "confidence": "high",
+                    "review_status": "fixture_reviewed",
+                },
+                "embed",
+                "embedded_objet",
+                [],
+            ),
+        ]
+        for candidate, expected_edge_type, expected_meaning, expected_provisional in existing_cases:
+            with self.subTest(candidate_id=candidate["candidate_id"]):
+                suggestion = archive_services.connection_edge_intelligence_suggestion(candidate)
+                self.assertEqual(suggestion["current_edge_type"], expected_edge_type)
+                self.assertEqual(suggestion["recommended_edge_type"], expected_edge_type)
+                self.assertEqual(
+                    suggestion["relationship_meaning"]["suggested_id"],
+                    expected_meaning,
+                )
+                self.assertEqual(
+                    suggestion["relationship_meaning"]["active_edge_type"],
+                    expected_edge_type,
+                )
+                self.assertEqual(
+                    suggestion["relationship_meaning"]["provisional_candidate_ids"],
+                    expected_provisional,
+                )
+                self.assertNotIn(
+                    "format_variant",
+                    suggestion["relationship_meaning"]["provisional_candidate_ids"],
+                )
 
     def test_notion_nested_tree_plan_assigns_generation_and_reports_untraceable_without_writes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -10274,6 +10363,319 @@ state:
             self.assertEqual(object_result["target"]["ref"], object_id)
             self.assertTrue(object_result["target"]["verified"])
             self.assertEqual(object_result["target"]["manifest_path"], "objects/manifests/files.jsonl")
+
+    def test_format_variant_manual_zettel_edge_accepts_zettel_and_manifested_objet_targets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            source_id = "zet_20240504_fake_lunch_thought"
+            source_path = archive_root / "zettels" / f"{source_id}.md"
+            zettel_target = "zet_20240505_fake_company_onboarding_insight"
+            zettel_target_path = archive_root / "zettels" / f"{zettel_target}.md"
+            object_target = f"sha256:{_FAKE_SHA_A}"
+            reviewer = "person:format-variant-reviewer"
+
+            source_frontmatter, source_body = archive_services.split_zettel_text(
+                source_path.read_text(encoding="utf-8")
+            )
+            existing_reference = {
+                "type": "references",
+                "target": "zet_20110228_fake_school_record",
+                "visibility": "private",
+            }
+            source_frontmatter["edges"] = [copy.deepcopy(existing_reference)]
+            source_path.write_text(
+                "---\n" + archive_cli.dump_yaml(source_frontmatter) + "---\n" + source_body,
+                encoding="utf-8",
+            )
+            reciprocal_target_before = zettel_target_path.read_text(encoding="utf-8")
+            manifest_path = archive_root / "objects" / "manifests" / "files.jsonl"
+            manifest_before = manifest_path.read_text(encoding="utf-8")
+            approved_results: list[dict[str, Any]] = []
+
+            for target_ref, expected_kind in (
+                (zettel_target, "zettel"),
+                (object_target, "objet"),
+            ):
+                with self.subTest(target_kind=expected_kind):
+                    before_dry_run = self.snapshot_archive_files(archive_root)
+                    dry_code, dry_output = self.run_cli(
+                        [
+                            "zettel-edge",
+                            str(archive_root),
+                            "--from-zettel",
+                            source_id,
+                            "--target",
+                            target_ref,
+                            "--edge-type",
+                            "format_variant",
+                            "--visibility",
+                            "private",
+                            "--dry-run",
+                            "--format",
+                            "json",
+                        ]
+                    )
+                    dry_result = json.loads(dry_output)
+                    self.assertEqual(dry_code, 0, dry_output)
+                    self.assertTrue(dry_result["ok"])
+                    self.assertEqual(dry_result["write_status"], "would_write")
+                    self.assertEqual(dry_result["edge_type"], "format_variant")
+                    self.assertEqual(dry_result["target"]["kind"], expected_kind)
+                    self.assertTrue(dry_result["target"]["verified"])
+                    self.assertEqual(dry_result["proposed_edge"]["type"], "format_variant")
+                    self.assertEqual(dry_result["proposed_edge"]["target"], target_ref)
+                    self.assertEqual(dry_result["files_written"], [])
+                    self.assertEqual(self.snapshot_archive_files(archive_root), before_dry_run)
+
+                    approve_code, approve_output = self.run_cli(
+                        [
+                            "zettel-edge",
+                            str(archive_root),
+                            "--from-zettel",
+                            source_id,
+                            "--target",
+                            target_ref,
+                            "--edge-type",
+                            "format_variant",
+                            "--visibility",
+                            "private",
+                            "--approve",
+                            "--reviewed-by",
+                            reviewer,
+                            "--format",
+                            "json",
+                        ]
+                    )
+                    approve_result = json.loads(approve_output)
+                    self.assertEqual(approve_code, 0, approve_output)
+                    self.assertTrue(approve_result["ok"])
+                    self.assertEqual(approve_result["write_status"], "written")
+                    self.assertEqual(approve_result["target"]["kind"], expected_kind)
+                    self.assertEqual(approve_result["reviewed_by"], reviewer)
+                    self.assertEqual(approve_result["receipt_path"], dry_result["receipt_path"])
+                    self.assertIn(
+                        f"zettels/{source_id}.md",
+                        approve_result["files_written"],
+                    )
+                    self.assertIn(
+                        approve_result["receipt_path"],
+                        approve_result["files_written"],
+                    )
+
+                    receipt = json.loads(
+                        (archive_root / approve_result["receipt_path"]).read_text(encoding="utf-8")
+                    )
+                    self.assertEqual(receipt["edge_type"], "format_variant")
+                    self.assertEqual(receipt["target_ref"], target_ref)
+                    self.assertEqual(receipt["target_kind"], expected_kind)
+                    self.assertEqual(receipt["reviewed_by"], reviewer)
+                    approved_results.append(approve_result)
+
+            final_frontmatter, _final_body = archive_services.split_zettel_text(
+                source_path.read_text(encoding="utf-8")
+            )
+            self.assertEqual(final_frontmatter["edges"][0], existing_reference)
+            format_variant_edges = [
+                item
+                for item in final_frontmatter["edges"]
+                if isinstance(item, dict) and item.get("type") == "format_variant"
+            ]
+            self.assertEqual(len(format_variant_edges), 2)
+            self.assertEqual(
+                {item["target"] for item in format_variant_edges},
+                {zettel_target, object_target},
+            )
+            self.assertTrue(
+                all(
+                    item["provenance"]["source"] == "manual_cli_review"
+                    and item["provenance"]["reviewed_by"] == reviewer
+                    for item in format_variant_edges
+                )
+            )
+            self.assertEqual(zettel_target_path.read_text(encoding="utf-8"), reciprocal_target_before)
+            self.assertEqual(manifest_path.read_text(encoding="utf-8"), manifest_before)
+            self.assertEqual(len(approved_results), 2)
+
+    def test_format_variant_batch_policy_state_always_requires_manual_single_edge_review(self) -> None:
+        policy = {
+            "auto_write_edge_types": ["format_variant"],
+            "minimum_confidence_rank": archive_services.zettel_edge_batch_confidence_rank("high"),
+        }
+        for candidate in (
+            {
+                "edge_type": "format_variant",
+                "confidence": "high",
+                "confidence_rank": archive_services.zettel_edge_batch_confidence_rank("high"),
+                "review_status": "policy_candidate",
+            },
+            {
+                "edge_type": "format_variant",
+                "confidence": "0.99",
+                "confidence_rank": archive_services.zettel_edge_batch_confidence_rank("0.99"),
+                "review_status": "policy_candidate",
+                "requires_human_review": False,
+            },
+        ):
+            with self.subTest(requires_human_review=candidate.get("requires_human_review", "omitted")):
+                self.assertEqual(
+                    archive_services.zettel_edge_batch_item_policy_state(candidate, policy),
+                    ("review_queue", "manual_single_edge_review_required"),
+                )
+
+    def test_format_variant_batch_dry_run_and_approve_never_write_even_when_policy_allows_it(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            source_id = "zet_20240504_fake_lunch_thought"
+            source_path = archive_root / "zettels" / f"{source_id}.md"
+            source_frontmatter, source_body = archive_services.split_zettel_text(
+                source_path.read_text(encoding="utf-8")
+            )
+            existing_reference = {
+                "type": "references",
+                "target": "zet_20110228_fake_school_record",
+                "visibility": "private",
+            }
+            source_frontmatter["edges"] = [copy.deepcopy(existing_reference)]
+            source_path.write_text(
+                "---\n" + archive_cli.dump_yaml(source_frontmatter) + "---\n" + source_body,
+                encoding="utf-8",
+            )
+
+            plan_path = Path(tmp) / "format-variant-batch.plan.json"
+            plan_path.write_text(
+                json.dumps(
+                    {
+                        "schema": "wom-kit/zettel-edge-batch/v0.1",
+                        "policy": {
+                            "policy_id": "policy:format-variant-must-stay-manual",
+                            "policy_label": "Attempted format variant auto write",
+                            "auto_write_edge_types": ["format_variant"],
+                            "minimum_confidence": "high",
+                            "ambiguous_edges_to_review_queue": True,
+                        },
+                        "edges": [
+                            {
+                                "candidate_id": "candidate:format-variant-review-omitted",
+                                "from_zettel": source_id,
+                                "target": "zet_20240505_fake_company_onboarding_insight",
+                                "edge_type": "format_variant",
+                                "visibility": "private",
+                                "confidence": "high",
+                                "review_status": "policy_candidate",
+                                "evidence_ref": "fixture:format-variant-omitted",
+                            },
+                            {
+                                "candidate_id": "candidate:format-variant-review-false",
+                                "from_zettel": source_id,
+                                "target": f"sha256:{_FAKE_SHA_A}",
+                                "edge_type": "format_variant",
+                                "visibility": "private",
+                                "confidence": "0.99",
+                                "review_status": "policy_candidate",
+                                "requires_human_review": False,
+                                "evidence_ref": "fixture:format-variant-false",
+                            },
+                        ],
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            before = self.snapshot_archive_files(archive_root)
+
+            dry_code, dry_output = self.run_cli(
+                [
+                    "zettel-edge-batch",
+                    str(archive_root),
+                    "--plan",
+                    str(plan_path),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            dry_result = json.loads(dry_output)
+            self.assertEqual(dry_code, 0, dry_output)
+            self.assertTrue(dry_result["ok"])
+            self.assertEqual(dry_result["summary"]["policy_writable_edge_count"], 0)
+            self.assertEqual(dry_result["summary"]["policy_matched_edge_count"], 0)
+            self.assertEqual(dry_result["summary"]["review_queue_count"], 2)
+            self.assertEqual(dry_result["summary"]["written_edge_count"], 0)
+            self.assertFalse(dry_result["summary"]["batch_receipt_written"])
+            self.assertEqual(dry_result["policy_writable_edges"], [])
+            self.assertEqual(
+                {
+                    item["candidate_id"]: item["policy_reason"]
+                    for item in dry_result["human_review_queue"]
+                },
+                {
+                    "candidate:format-variant-review-omitted": "manual_single_edge_review_required",
+                    "candidate:format-variant-review-false": "manual_single_edge_review_required",
+                },
+            )
+            self.assertTrue(
+                all(
+                    item["policy_state"] == "review_queue"
+                    for item in dry_result["human_review_queue"]
+                )
+            )
+            self.assertIsNone(dry_result["batch_id"])
+            self.assertIsNone(dry_result["receipt_path"])
+            self.assertEqual(dry_result["would_change"], [])
+            self.assertEqual(dry_result["files_written"], [])
+            self.assertFalse(dry_result["closed_actions"]["zettel_frontmatter_written"])
+            self.assertEqual(dry_result["closed_actions"]["individual_edge_receipts_written"], 0)
+            self.assertFalse(dry_result["closed_actions"]["batch_receipt_written"])
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+
+            approve_code, approve_output = self.run_cli(
+                [
+                    "zettel-edge-batch",
+                    str(archive_root),
+                    "--plan",
+                    str(plan_path),
+                    "--approve",
+                    "--reviewed-by",
+                    "person:format-variant-reviewer",
+                    "--format",
+                    "json",
+                ]
+            )
+            approve_result = json.loads(approve_output)
+            self.assertEqual(approve_code, 1, approve_output)
+            self.assertFalse(approve_result["ok"])
+            self.assertEqual(approve_result["write_status"], "blocked")
+            self.assertEqual(
+                approve_result["blockers"],
+                ["No policy-writable edges are available to approve."],
+            )
+            self.assertEqual(approve_result["summary"]["policy_writable_edge_count"], 0)
+            self.assertEqual(approve_result["summary"]["review_queue_count"], 2)
+            self.assertEqual(approve_result["summary"]["written_edge_count"], 0)
+            self.assertFalse(approve_result["summary"]["batch_receipt_written"])
+            self.assertEqual(
+                {
+                    item["candidate_id"]: item["policy_reason"]
+                    for item in approve_result["human_review_queue"]
+                },
+                {
+                    "candidate:format-variant-review-omitted": "manual_single_edge_review_required",
+                    "candidate:format-variant-review-false": "manual_single_edge_review_required",
+                },
+            )
+            self.assertIsNone(approve_result["batch_id"])
+            self.assertIsNone(approve_result["receipt_path"])
+            self.assertEqual(approve_result["would_change"], [])
+            self.assertEqual(approve_result["files_written"], [])
+            self.assertFalse(approve_result["closed_actions"]["zettel_frontmatter_written"])
+            self.assertEqual(approve_result["closed_actions"]["individual_edge_receipts_written"], 0)
+            self.assertFalse(approve_result["closed_actions"]["batch_receipt_written"])
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+
+            final_frontmatter, _final_body = archive_services.split_zettel_text(
+                source_path.read_text(encoding="utf-8")
+            )
+            self.assertEqual(final_frontmatter["edges"], [existing_reference])
 
     def test_zettel_edge_batch_policy_dry_run_and_approval_write_receipts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -63667,6 +64069,55 @@ archive_services.zet_abstract_backfill_recover(
             self.assertNotIn(secret, output)
             self.assertEqual(types_path.read_text(encoding="utf-8"), migrated_text)
 
+    def test_format_variant_base_type_is_exact_across_source_example_and_package(self) -> None:
+        type_paths = {
+            "source": KIT_ROOT / "zettel-kasten" / "types.yml",
+            "example": KIT_ROOT / "examples" / "fake-life-archive" / "zettel-kasten" / "types.yml",
+            "packaged": SRC_ROOT / "wom_kit" / "_resources" / "zettel-kasten" / "types.yml",
+        }
+        records_by_surface: dict[str, dict[str, dict[str, Any]]] = {}
+        for surface, path in type_paths.items():
+            data = archive_cli.load_yaml(path.read_text(encoding="utf-8"))
+            self.assertIsInstance(data, dict, surface)
+            link_types = data.get("link_types")
+            self.assertIsInstance(link_types, list, surface)
+            records: dict[str, dict[str, Any]] = {}
+            for item in link_types:
+                if not isinstance(item, dict) or not isinstance(item.get("id"), str):
+                    continue
+                self.assertNotIn(item["id"], records, f"{surface}: duplicate link type {item['id']}")
+                records[item["id"]] = item
+            records_by_surface[surface] = records
+
+        source_format_variant = records_by_surface["source"]["format_variant"]
+        self.assertEqual(source_format_variant["from"], ["Zettel"])
+        self.assertEqual(source_format_variant["to"], ["Zettel", "OriginalObject"])
+        self.assertTrue(
+            any(
+                "human review" in str(note).lower() and "do not infer" in str(note).lower()
+                for note in source_format_variant.get("policy_notes", [])
+            )
+        )
+        self.assertEqual(records_by_surface["example"]["format_variant"], source_format_variant)
+        self.assertEqual(records_by_surface["packaged"]["format_variant"], source_format_variant)
+
+        expected_references = {
+            "id": "references",
+            "description": "One record cites or points to another record or object.",
+            "from": ["Zettel", "View", "Workpack"],
+            "to": ["Zettel", "OriginalObject", "View", "Workpack"],
+            "storage": {
+                "frontmatter": "edges",
+                "sqlite_table": "edges",
+            },
+        }
+        for surface, records in records_by_surface.items():
+            self.assertEqual(
+                records["references"],
+                expected_references,
+                f"{surface}: activating format_variant must not redefine references",
+            )
+
     def _strip_link_type(self, types_path: Path, edge_id: str) -> None:
         types_data = archive_cli.load_yaml(types_path.read_text(encoding="utf-8"))
         types_data["link_types"] = [
@@ -63675,6 +64126,211 @@ archive_services.zet_abstract_backfill_recover(
             if not (isinstance(item, dict) and item.get("id") == edge_id)
         ]
         types_path.write_text(archive_cli.dump_yaml(types_data), encoding="utf-8")
+
+    def test_legacy_link_types_migration_does_not_add_or_reclassify_format_variant(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            types_path = archive_root / "zettel-kasten" / "types.yml"
+            self._strip_link_type(types_path, "format_variant")
+            original_types = types_path.read_text(encoding="utf-8")
+
+            source_path = archive_root / "zettels" / "zet_20240504_fake_lunch_thought.md"
+            source_frontmatter, source_body = archive_services.split_zettel_text(
+                source_path.read_text(encoding="utf-8")
+            )
+            existing_reference = {
+                "type": "references",
+                "target": "zet_20240505_fake_company_onboarding_insight",
+                "visibility": "private",
+            }
+            source_frontmatter["edges"] = [existing_reference]
+            source_path.write_text(
+                "---\n" + archive_cli.dump_yaml(source_frontmatter) + "---\n" + source_body,
+                encoding="utf-8",
+            )
+            source_before = source_path.read_text(encoding="utf-8")
+
+            dry_code, dry_output = self.run_cli(
+                [
+                    "migrate",
+                    str(archive_root),
+                    "--target",
+                    "link-types-v0.3",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            dry_result = json.loads(dry_output)
+            self.assertEqual(dry_code, 0, dry_output)
+            self.assertNotIn(
+                "format_variant",
+                dry_result["archive_link_type_status"]["missing_recommended_edge_types"],
+            )
+            self.assertEqual(dry_result["files_written"], [])
+            self.assertEqual(types_path.read_text(encoding="utf-8"), original_types)
+            self.assertEqual(source_path.read_text(encoding="utf-8"), source_before)
+
+            approve_code, approve_output = self.run_cli(
+                [
+                    "migrate",
+                    str(archive_root),
+                    "--target",
+                    "link-types-v0.3",
+                    "--approve",
+                    "--format",
+                    "json",
+                ]
+            )
+            approve_result = json.loads(approve_output)
+            self.assertEqual(approve_code, 0, approve_output)
+            self.assertEqual(approve_result["files_written"], [])
+            self.assertEqual(types_path.read_text(encoding="utf-8"), original_types)
+            self.assertEqual(source_path.read_text(encoding="utf-8"), source_before)
+
+    def test_sync_base_link_types_format_variant_dry_run_and_approve_are_append_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            types_path = archive_root / "zettel-kasten" / "types.yml"
+            self._strip_link_type(types_path, "format_variant")
+            original_text = types_path.read_text(encoding="utf-8")
+            original_zettels = {
+                path.relative_to(archive_root).as_posix(): path.read_text(encoding="utf-8")
+                for directory in ("inbox", "zettels")
+                for path in sorted((archive_root / directory).glob("*.md"))
+            }
+
+            base_types = archive_cli.load_yaml(
+                (KIT_ROOT / "zettel-kasten" / "types.yml").read_text(encoding="utf-8")
+            )
+            expected_format_variant = next(
+                item
+                for item in base_types["link_types"]
+                if isinstance(item, dict) and item.get("id") == "format_variant"
+            )
+
+            dry_code, dry_output = self.run_cli(
+                [
+                    "migrate",
+                    str(archive_root),
+                    "--target",
+                    "base-link-types",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            dry_result = json.loads(dry_output)
+            self.assertEqual(dry_code, 0, dry_output)
+            self.assertEqual(dry_result["appended_link_type_ids"], ["format_variant"])
+            self.assertEqual(dry_result["files_written"], [])
+            self.assertTrue(dry_result["receipt_path"].startswith("receipts/migrations/base-link-types."))
+            self.assertFalse((archive_root / dry_result["receipt_path"]).exists())
+            self.assertEqual(types_path.read_text(encoding="utf-8"), original_text)
+            preview_types = archive_cli.load_yaml(dry_result["new_text"])
+            preview_format_variant = next(
+                item
+                for item in preview_types["link_types"]
+                if isinstance(item, dict) and item.get("id") == "format_variant"
+            )
+            self.assertEqual(preview_format_variant, expected_format_variant)
+
+            approve_code, approve_output = self.run_cli(
+                [
+                    "migrate",
+                    str(archive_root),
+                    "--target",
+                    "base-link-types",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:format-variant-reviewer",
+                    "--format",
+                    "json",
+                ]
+            )
+            approve_result = json.loads(approve_output)
+            self.assertEqual(approve_code, 0, approve_output)
+            self.assertEqual(approve_result["appended_link_type_ids"], ["format_variant"])
+            self.assertEqual(approve_result["files_written"][0], "zettel-kasten/types.yml")
+            self.assertIn(approve_result["receipt_path"], approve_result["files_written"])
+
+            migrated_types = archive_cli.load_yaml(types_path.read_text(encoding="utf-8"))
+            migrated_format_variants = [
+                item
+                for item in migrated_types["link_types"]
+                if isinstance(item, dict) and item.get("id") == "format_variant"
+            ]
+            self.assertEqual(migrated_format_variants, [expected_format_variant])
+
+            receipt_path = archive_root / approve_result["receipt_path"]
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            self.assertEqual(receipt["receipt_kind"], "base_link_types_sync")
+            self.assertEqual(receipt["reviewed_by"], "person:format-variant-reviewer")
+            self.assertEqual(receipt["appended_link_type_ids"], ["format_variant"])
+            self.assertFalse(receipt["closed_actions"]["zettel_files_written"])
+            self.assertEqual(
+                {
+                    path.relative_to(archive_root).as_posix(): path.read_text(encoding="utf-8")
+                    for directory in ("inbox", "zettels")
+                    for path in sorted((archive_root / directory).glob("*.md"))
+                },
+                original_zettels,
+            )
+
+    def test_sync_base_link_types_does_not_overwrite_custom_format_variant(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            types_path = archive_root / "zettel-kasten" / "types.yml"
+            types_data = archive_cli.load_yaml(types_path.read_text(encoding="utf-8"))
+            custom_format_variant = next(
+                item
+                for item in types_data["link_types"]
+                if isinstance(item, dict) and item.get("id") == "format_variant"
+            )
+            custom_format_variant["description"] = "OWNER custom same-id meaning; do not clobber."
+            custom_format_variant["owner_policy"] = "manual_private_review"
+            types_path.write_text(archive_cli.dump_yaml(types_data), encoding="utf-8")
+            original_text = types_path.read_text(encoding="utf-8")
+
+            for mode_args in (
+                ["--dry-run"],
+                ["--approve", "--reviewed-by", "person:format-variant-reviewer"],
+            ):
+                with self.subTest(mode=mode_args[0]):
+                    code, output = self.run_cli(
+                        [
+                            "migrate",
+                            str(archive_root),
+                            "--target",
+                            "base-link-types",
+                            *mode_args,
+                            "--format",
+                            "json",
+                        ]
+                    )
+                    result = json.loads(output)
+                    self.assertEqual(code, 0, output)
+                    self.assertIn("format_variant", result["present_not_overwritten"])
+                    self.assertNotIn("format_variant", result["appended_link_type_ids"])
+                    self.assertEqual(result["files_written"], [])
+                    self.assertIsNone(result["receipt_path"])
+                    self.assertEqual(types_path.read_text(encoding="utf-8"), original_text)
+
+            final_types = archive_cli.load_yaml(types_path.read_text(encoding="utf-8"))
+            final_format_variants = [
+                item
+                for item in final_types["link_types"]
+                if isinstance(item, dict) and item.get("id") == "format_variant"
+            ]
+            self.assertEqual(len(final_format_variants), 1)
+            self.assertEqual(
+                final_format_variants[0]["description"],
+                "OWNER custom same-id meaning; do not clobber.",
+            )
+            self.assertEqual(
+                final_format_variants[0]["owner_policy"],
+                "manual_private_review",
+            )
 
     def test_sync_base_link_types_dry_run_reports_continues_writes_nothing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

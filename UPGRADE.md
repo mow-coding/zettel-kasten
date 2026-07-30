@@ -24,6 +24,93 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.286 Manual-Only `format_variant` Edges
+
+v0.3.286 adds one base link type for a narrow case: a human has reviewed two
+records and decided that one is another format or rendition of the same
+intellectual content. Examples can include a zet and a manifested original
+object, or two zets that preserve the same work in different formats.
+
+The stored source is only the human-selected review anchor. It does **not**
+claim that the source is older, original, or canonical. WOM's local
+`format_variant` is conceptually close to DCMI `hasFormat` / `isFormatOf`, but
+it is not an exact mapping to either directional property because this
+release does not establish which resource pre-existed.
+
+If the archive has no local `zettel-kasten/types.yml`, no adoption command is
+needed: it inherits the new base type from the installed kit.
+
+If the archive vendors its own `zettel-kasten/types.yml`, preview the existing
+base-type sync:
+
+```powershell
+archive migrate <archive-root> `
+  --target base-link-types `
+  --dry-run --format json
+```
+
+Review `appended_link_type_ids` and `present_not_overwritten`, then approve
+only if the result is correct:
+
+```powershell
+archive migrate <archive-root> `
+  --target base-link-types `
+  --approve --reviewed-by <safe-reviewer-id> --format json
+```
+
+This sync is append-only and no-clobber. It appends missing base records but
+never overwrites a local record with the same id. It intentionally has no
+revert. Like the existing migration contract, approval can normalize the
+whole YAML file's comments, anchors, flow style, and key ordering, so review
+the dry-run and commit the archive only after inspecting the result.
+
+For one human-reviewed pair, preview the existing single-edge writer:
+
+```powershell
+archive zettel-edge <archive-root> `
+  --from-zettel <review-anchor-zet> `
+  --target <alternate-zet-or-objet> `
+  --edge-type format_variant `
+  --dry-run --format json
+```
+
+After verifying both records and the exact direction, repeat with
+`--approve --reviewed-by <safe-reviewer-id>`. Store one assertion only; WOM
+does not create the reciprocal edge automatically.
+
+The existing edge receipt remains the compensation authority:
+
+```powershell
+archive revert-edge <archive-root> `
+  --receipt receipts/edges/<edge>.zettel-edge.json `
+  --dry-run --format json
+```
+
+After the generated index is current, the existing reader can find a
+`Zettel -> Zettel` relation from either zettel endpoint:
+
+```powershell
+archive related-zets <archive-root> `
+  --zettel-id <zet-id> `
+  --edge-type format_variant
+```
+
+`zettel-edge-batch` cannot auto-write this type. Even if a reviewed policy
+lists `format_variant` under `auto_write_edge_types`, the row is returned in
+`human_review_queue` with `manual_single_edge_review_required`. Use the
+single-edge preview and approval above for each reviewed pair.
+
+This release does not infer `format_variant` from titles, filenames, node
+categories, providers, existing `references` edges, or a model. It does not
+reclassify or migrate existing edges, write a reciprocal assertion, read a
+provider, modify a beta archive, or add an MCP writer. See
+[`wom-kit/docs/zettel-edge-write.md`](wom-kit/docs/zettel-edge-write.md) and
+[`wom-kit/docs/releases/v0.3.286.md`](wom-kit/docs/releases/v0.3.286.md).
+
+`related-zets` takes a zettel id. A `format_variant` edge may target an
+`OriginalObject`, but this release does not add object-id subjects to that
+reader.
+
 ## v0.3.285 Notion Manifest Index-Title Fallback
 
 No archive migration is required. v0.3.285 changes only title selection for a

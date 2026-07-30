@@ -1,6 +1,7 @@
 # Zettel Edge Write
 
-Status: v0.3.108 approval-gated zettel edge write and revert checkpoint
+Status: v0.3.286 manual-only `format_variant` write contract
+Previous checkpoint: Status: v0.3.108 approval-gated zettel edge write and revert checkpoint
 Rollback checkpoint: Status: v0.3.108 receipt-based edge revert checkpoint
 Batch checkpoint: Status: v0.3.102 approval-gated policy batch zettel edge write ergonomics checkpoint
 Original checkpoint: Status: v0.3.82 approval-gated zettel edge write checkpoint
@@ -106,6 +107,44 @@ open Notion or read an export. Object targets are resolved against
 `objects/manifests/files.jsonl`.
 
 `--edge-type` must already be defined in `zettel-kasten/types.yml`.
+
+## `format_variant` Manual-Only Contract
+
+Since v0.3.286 the base type vocabulary includes `format_variant` from
+`Zettel` to `Zettel | OriginalObject`.
+
+Use it only when a human has reviewed the two records and decided that the
+target is an alternate rendition of the same intellectual content as the
+source anchor. The stored source is simply the review anchor. It does not mean
+that the source is older, original, or canonical.
+
+```powershell
+archive zettel-edge <archive-root> `
+  --from-zettel <review-anchor-zet> `
+  --target <alternate-zet-or-objet> `
+  --edge-type format_variant `
+  --dry-run `
+  --format json
+```
+
+After checking the preview, repeat with `--approve --reviewed-by <actor>`.
+Store one reviewed assertion per pair. Do not write a second reciprocal edge
+automatically. WOM does not infer this relation from titles, filenames, node
+categories, or existing `references` edges, and v0.3.286 performs no corpus
+migration.
+
+The policy batch writer is not an alternate approval path for this type.
+`zettel-edge-batch` always places a `format_variant` row in
+`human_review_queue` with `manual_single_edge_review_required`, even when the
+plan lists it under `policy.auto_write_edge_types`, gives it high confidence,
+and omits a human-review flag. Dry-run and approve both leave that row
+unwritten. Use the single-edge command above for the reviewed pair.
+
+If a stale archive has its own local `zettel-kasten/types.yml`, first preview
+and approve `archive migrate <archive-root> --target base-link-types`.
+That sync appends missing base types but never overwrites a custom same-id
+record. It has no automatic revert, so review `present_not_overwritten` before
+using the local definition.
 
 ## Writes
 

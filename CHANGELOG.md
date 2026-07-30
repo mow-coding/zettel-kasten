@@ -6,6 +6,41 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.286 - 2026-07-30
+
+- Activated the WOM-local base link type `format_variant`
+  (`Zettel -> Zettel | OriginalObject`) for one human-reviewed alternate
+  rendition of the same intellectual content.
+- Defined the source as a human-selected review anchor only. The stored
+  direction does not claim that the source is older, original, or canonical.
+  The concept is close to DCMI `hasFormat` / `isFormatOf`, but is not an exact
+  directional mapping because the current evidence does not establish
+  DCMI's pre-existing-resource direction.
+- Changed connection edge intelligence vocabulary from a provisional
+  `format_variant` label to an active mapping while deliberately adding no
+  recommendation or inference rule.
+- Reused the existing approval-gated `archive zettel-edge` writer for one
+  explicit assertion, the existing receipt-backed `archive revert-edge` for
+  compensation, and generated-index-backed `archive related-zets` for
+  bidirectional reading of `Zettel -> Zettel` edges. No new writer or
+  reciprocal edge behavior was added, and object targets do not become
+  `related-zets` query subjects.
+- Closed the generic policy-batch bypass: `zettel-edge-batch` always routes a
+  `format_variant` row to `human_review_queue` with
+  `manual_single_edge_review_required`, even when a plan lists the type as
+  auto-writable and gives it high confidence. It cannot write this type.
+- Kept archive adoption explicit. Archives with no local
+  `zettel-kasten/types.yml` inherit the new base type; archives that vendor
+  that file can use the existing approval-gated
+  `archive migrate --target base-link-types` sync. The sync appends missing
+  base records, does not overwrite a custom same-id record, and has no revert.
+- Updated the base and fake-archive type resources and packaged runtime
+  resource mirror for the new vocabulary.
+- Added no title, filename, node-category, existing-`references`, provider, or
+  model inference; no existing-edge reclassification or corpus migration; no
+  automatic reciprocal assertion; no provider/API/network read; no beta
+  archive write; and no MCP writer.
+
 ## v0.3.285 - 2026-07-30
 
 - Added a narrow Notion manifest-import title fallback for new items whose
