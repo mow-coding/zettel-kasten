@@ -5,7 +5,7 @@ Batch: v0.3.172 (implements the LOCKED spec "Two verification-honesty fixes:
 live-multipart part-size override + strip-bom dry-run parity").
 Anchor tree at spec authoring: HEAD `c764fc93` (v0.3.171), tree clean.
 Release action: working tree only — no git commit/tag/push. Never touches a real
-archive or `C:\Users\mylifeisbusy\zettel-kasten-basoon`; all archive fixtures live
+archive or `<private-beta-archive-root>`; all archive fixtures live
 in temp dirs, and no test opens a real socket (the injected
 `_FakeObjectStorageTransport` proves the multipart envelope).
 

@@ -11,11 +11,12 @@ Run it from the repository root:
 python wom-kit\tools\check_release_readiness.py
 ```
 
-The gate runs the three current public-release hygiene checkers:
+The gate runs the four current public-release readiness checkers:
 
 - `wom-kit/tools/check_public_links.py`
 - `wom-kit/tools/check_korean_product_language.py`
 - `wom-kit/tools/check_public_privacy.py`
+- `wom-kit/tools/check_runtime_skill.py`
 
 It prints a compact pass/fail summary and exits with `0` only when every child checker passes.
 

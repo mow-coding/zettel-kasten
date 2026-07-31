@@ -6,7 +6,7 @@ read-only `operator-feedback-ledger` + approval-gated
 `operator-feedback-mark-delivered`).
 Anchor tree at spec authoring: HEAD `b5e6a258` (v0.3.168), tree clean.
 Release action: working tree only — no git commit/tag/push. Never touches a real
-archive or `C:\Users\mylifeisbusy\zettel-kasten-basoon`; all archive fixtures live
+archive or `<private-beta-archive-root>`; all archive fixtures live
 in temp dirs.
 
 This log records the design decisions and, per the AGENTS.md decision-log mandate,

@@ -15,7 +15,7 @@ It is a lightweight project guardrail. It is not a general-purpose secret scanne
 
 ## What It Checks
 
-The checker reads Git-known public text files and flags obvious accidental leaks such as:
+The checker reads Git-known text files and flags obvious accidental leaks such as:
 
 - local user-home paths with non-placeholder user segments,
 - token-like strings for common provider and API key shapes,
@@ -33,6 +33,18 @@ C:\Users\example\dev\zettel-kasten
 https://example.invalid/provider
 http://localhost:<port>/api
 ```
+
+The file set comes from:
+
+```text
+git ls-files --cached --others --exclude-standard
+```
+
+That means tracked text records are checked even if a later `.gitignore` rule
+matches their path. Eligible untracked text files are also checked, while
+ignored untracked local records remain outside the scan. The checker does not
+silently exempt tracked meeting minutes or decision logs based on their folder
+or filename.
 
 ## What It Does Not Do
 

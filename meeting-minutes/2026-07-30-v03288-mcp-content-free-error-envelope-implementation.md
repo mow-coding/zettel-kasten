@@ -172,7 +172,7 @@ Completed local gates so far:
   files, all four entrypoints, runtime Agent Skill lifecycle, onboarding
   preview/write, and strict Doctor passed;
 - preserved local candidate artifact:
-  `C:\Users\mylifeisbusy\Documents\dev\zettel-kasten-release-artifacts\v0.3.288-candidate-7a99931e`.
+  `<local-release-candidate-dir>`.
 
 This evidence update follows the initial product candidate commit. The
 supervisor must rerun the clean-wheel gate on the final evidence-bearing tree
