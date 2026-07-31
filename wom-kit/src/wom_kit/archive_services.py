@@ -108378,14 +108378,15 @@ def objet_rediscovery_plan(
             objet_rediscovery_layer(
                 "external_store_evidence",
                 applicability="unknown",
-                check_state="not_implemented",
+                check_state="unchecked",
                 match_state="unknown",
                 evidence_scope=(
-                    "No approved external-store evidence inspection contract exists."
+                    "The existing local backup-evidence status was not inspected "
+                    "because it does not consume the submitted private query."
                 ),
                 freshness_proven=False,
                 negative_claim_contribution=False,
-                reason_codes=["external_store_evidence_contract_not_implemented"],
+                reason_codes=["backup_evidence_status_not_checked"],
             ),
             objet_rediscovery_layer(
                 "unrecovered_source_references",
@@ -108444,6 +108445,7 @@ def objet_rediscovery_plan(
                 "archive resolve-objet-ref <archive-root> "
                 "--object-id sha256:<hex> --dry-run --format json"
             ),
+            "archive backup-evidence <archive-root> --dry-run",
         ]
     )
 
