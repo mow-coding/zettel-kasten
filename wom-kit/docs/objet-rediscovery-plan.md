@@ -117,13 +117,17 @@ The static next-command list routes external evidence review to
 `archive backup-evidence <archive-root> --dry-run`; naming that existing
 read-only command does not mean this plan executed it.
 
-The plan uses a dedicated immutable read of the last complete SQLite main-file
-snapshot so it cannot create `-wal` or `-shm` sidecars. Because immutable reads
-would ignore pending WAL contents and hot rollback recovery, a non-empty WAL
-or rollback journal fails closed. The local zettel scan uses a no-reparse
-walker and blocks symlink, junction, or reparse directories before descent; it
-does not turn a linked external directory into an archive source. A main index
-that changes across health, search, and per-channel inspection also fails closed.
+The plan pins one dedicated immutable read transaction for the last complete
+SQLite main-file snapshot and shares that connection across health, global
+search, and all five channel probes, so it cannot mix multiple database
+snapshots or create `-wal` or `-shm` sidecars. Because immutable reads would
+ignore pending WAL contents and hot rollback recovery, a non-empty WAL or
+rollback journal fails closed. The local zettel scan rejects changed or
+reparse directory identities and missing, zero, or changed regular-file
+identities on Windows, and blocks symlink, junction, or reparse directories
+before descent; it does not reopen a checked path or turn a linked external
+directory into an archive source. A main index that changes across the
+complete inspection also fails closed.
 
 Ordinary `archive search` is unchanged and keeps its existing transaction and
 `complete == not truncated` contract.

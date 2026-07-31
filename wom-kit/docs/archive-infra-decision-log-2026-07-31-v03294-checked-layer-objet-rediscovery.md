@@ -43,9 +43,11 @@ privacy and approval decisions.
 - Normalize invalid archives, unavailable/malformed index data, expected read
   errors, pending WAL or rollback-journal data, unsafe local scan boundaries,
   and mid-read snapshot changes into content-free blocked results.
-- Use a plan-private immutable SQLite read, fail closed on a non-empty WAL or
-  rollback journal, reject symlink/junction/reparse directory descent, and
-  verify the main index snapshot does not change across inspection.
+- Pin one plan-private immutable SQLite read transaction and share its
+  connection across health, global search, and all channel probes; fail closed
+  on a non-empty WAL or rollback journal; reject changed or reparse directory
+  identities and missing, zero, or changed regular-file identities on Windows;
+  and verify the main index snapshot does not change across inspection.
 - Never echo query/search/private identifiers or exception details and perform
   no writes, rebuild, provider/network/credential call, external-directory
   scan, Runtime Skill installation, or `AGENTS.md` rewrite.
@@ -67,8 +69,9 @@ approved tool must still select exact follow-up evidence. v0.3.295-v0.3.299
 remain separate release batches.
 
 No public release is authorized by this source decision. The implementation
-must be rebased onto the exact public v0.3.293 merge commit and pass the full
-suite, clean-wheel checks, and public-artifact verification before release.
+is now based on the exact public v0.3.293 merge commit, but it must still pass
+the final full suite, clean-wheel checks, PR/main/tag CI, and public-artifact
+verification before release.
 
 Implementation record:
 `meeting-minutes/2026-07-31-v03294-checked-layer-objet-rediscovery-implementation.md`.
