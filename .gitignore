@@ -23,6 +23,7 @@ real-archive/
 real-archives/
 .local-archive/
 .archive-local/
+.wom-scratch/
 source-dumps/
 provider-exports/
 raw-data/

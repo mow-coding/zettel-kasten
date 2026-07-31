@@ -10,12 +10,12 @@ It is not a website, SaaS app, dashboard, or visual note-taking product. The int
 
 ## Install The Command-Line Tool
 
-The exact v0.3.292 GitHub Release, when present, uses the self-contained wheel
+The exact v0.3.293 GitHub Release, when present, uses the self-contained wheel
 below. Confirm that the release exists and lists the wheel before installing
 it. The versioned URL alone is not proof that the asset is available.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.292/wom_kit-0.3.292-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.293/wom_kit-0.3.293-py3-none-any.whl"
 archive --version
 ```
 
@@ -46,6 +46,11 @@ remains: caller values do not enter error `message` or `data`.
 A valid JSON-RPC request id still crosses the stdio boundary unchanged in the
 top-level `id` field. See
 [`docs/releases/v0.3.291.md`](docs/releases/v0.3.291.md).
+
+v0.3.293 adds an explicit read-only Codex/repository runtime-guidance
+readiness check and a complete operator-feedback route without claiming host
+consumption, rewriting `AGENTS.md`, or installing a Skill automatically. See
+[`docs/releases/v0.3.293.md`](docs/releases/v0.3.293.md).
 
 v0.3.292 keeps those runtime safeguards and makes objet relationship counts
 honest across overview and catalog surfaces. See

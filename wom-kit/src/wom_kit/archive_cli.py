@@ -6,6 +6,8 @@ Commands:
           Print the running WOM-kit version and optional project pin status.
   runtime-skill-status
           Inspect the packaged WOM archive Agent Skill installation without writes.
+  runtime-guidance-readiness
+          Inspect explicit host Skill and repository guidance readiness without writes.
   runtime-skill-install
           Preview or approve a manifest-bound Codex/custom Agent Skill install or update.
   runtime-skill-uninstall
@@ -341,7 +343,7 @@ from datetime import date, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterable
 
-from . import __version__, archive_services, runtime_skill_install
+from . import __version__, archive_services, runtime_guidance, runtime_skill_install
 from .paths import (
     ArchivePathError,
     archive_relative_path,
@@ -4167,6 +4169,29 @@ def command_runtime_skill_status(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 1
 
 
+def command_runtime_guidance_readiness(args: argparse.Namespace) -> int:
+    try:
+        result = runtime_guidance.runtime_guidance_readiness(
+            Path(args.archive_root),
+            host=args.host,
+            scope=args.scope,
+            repo_root=Path(args.repo_root) if args.repo_root else None,
+        )
+    except runtime_guidance.EXPECTED_LOCAL_INSPECTION_ERRORS:
+        result = runtime_guidance.blocked_runtime_guidance_result(
+            host=args.host,
+            scope=args.scope,
+            diagnostic_code="runtime_guidance_inspection_failed",
+            blocker=(
+                "Runtime guidance readiness could not complete a safe local "
+                "inspection."
+            ),
+            observation_status="conservative_after_failure",
+        )
+    print_json(result)
+    return 0 if result.get("ok") else 1
+
+
 def command_runtime_skill_install(args: argparse.Namespace) -> int:
     result = runtime_skill_install.runtime_skill_install(
         dry_run=bool(args.dry_run),
@@ -5117,6 +5142,21 @@ def render_ai_start_here_markdown(result: dict[str, Any]) -> str:
         if isinstance(action_routing.get("write_action_routes"), list)
         else []
     )
+    feedback_routing = (
+        action_routing.get("operator_feedback_routing")
+        if isinstance(action_routing.get("operator_feedback_routing"), dict)
+        else {}
+    )
+    feedback_steps = (
+        feedback_routing.get("sequence")
+        if isinstance(feedback_routing.get("sequence"), list)
+        else []
+    )
+    guidance_readiness = (
+        result.get("runtime_guidance_readiness")
+        if isinstance(result.get("runtime_guidance_readiness"), dict)
+        else {}
+    )
     identity_consistency = (
         result.get("identity_consistency")
         if isinstance(result.get("identity_consistency"), dict)
@@ -5143,6 +5183,7 @@ def render_ai_start_here_markdown(result: dict[str, Any]) -> str:
         f"- Inspection mode: `{inspection.get('mode') or summary.get('inspection_mode') or 'quick'}`",
         f"- Full Doctor run: {'yes' if inspection.get('full_doctor_run') else 'no'}",
         f"- Identity consistency: `{identity_consistency.get('status') or 'unknown'}`",
+        f"- Runtime guidance readiness: `{guidance_readiness.get('status') or 'not_checked'}`",
         "",
         "## Read First",
         "",
@@ -5195,6 +5236,33 @@ def render_ai_start_here_markdown(result: dict[str, Any]) -> str:
                 lines.append("  Persistent write command: not implemented; do not edit the target file directly as an AI.")
     if not write_routes:
         lines.append("- No official write command paths were reported.")
+    lines.extend(["", "## Runtime Guidance Readiness", ""])
+    lines.append(
+        f"- Status: `{guidance_readiness.get('status') or 'not_checked'}`"
+    )
+    check_command = guidance_readiness.get("check_command")
+    if isinstance(check_command, str):
+        lines.append(f"- Explicit check: `{check_command}`")
+    lines.append(
+        "- Host guidance consumption: "
+        f"`{guidance_readiness.get('host_guidance_consumption') or 'not_proven'}`"
+    )
+    lines.extend(["", "## Operator Feedback Workflow", ""])
+    for item in feedback_steps:
+        if not isinstance(item, dict):
+            continue
+        step = item.get("step") or "-"
+        action = item.get("action") or "-"
+        command = item.get("command")
+        if isinstance(command, str):
+            lines.append(f"{step}. `{action}`: `{command}`")
+        else:
+            lines.append(f"{step}. `{action}`")
+    if not feedback_steps:
+        lines.append("- Use the official plan, ledger, human-review, preview, and approval sequence.")
+    lines.append(
+        "- Human review is a real gate; a dry-run never proves review or approval."
+    )
     lines.extend(["", "## Storage Authority", ""])
     lines.append(f"- Local: `{authority_summary.get('local') or 'canonical_working_and_recovery_state'}`")
     lines.append(f"- GitHub: `{authority_summary.get('github') or 'metadata_and_version_history_backup'}`")
@@ -19376,6 +19444,44 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_runtime_skill_target_arguments(runtime_skill_status_parser)
     runtime_skill_status_parser.set_defaults(func=command_runtime_skill_status)
+
+    runtime_guidance_readiness_parser = subcommands.add_parser(
+        "runtime-guidance-readiness",
+        aliases=["guidance-readiness", "agent-guidance-readiness"],
+        help=(
+            "Inspect one explicit AI host repository for current WOM Skill and "
+            "AGENTS.md routing without writing files."
+        ),
+    )
+    runtime_guidance_readiness_parser.add_argument(
+        "archive_root",
+        help="Archive root whose runtime guidance readiness is being checked.",
+    )
+    runtime_guidance_readiness_parser.add_argument(
+        "--host",
+        choices=["codex", "custom"],
+        required=True,
+        help="Explicit AI host contract; v0.1 inspection supports codex.",
+    )
+    runtime_guidance_readiness_parser.add_argument(
+        "--scope",
+        choices=["user", "repo", "custom"],
+        required=True,
+        help="Explicit host scope; v0.1 inspection supports repo.",
+    )
+    runtime_guidance_readiness_parser.add_argument(
+        "--repo-root",
+        help="Explicit existing repository root required for codex repo inspection.",
+    )
+    runtime_guidance_readiness_parser.add_argument(
+        "--format",
+        choices=["json"],
+        default="json",
+        help="Output format.",
+    )
+    runtime_guidance_readiness_parser.set_defaults(
+        func=command_runtime_guidance_readiness
+    )
 
     runtime_skill_install_parser = subcommands.add_parser(
         "runtime-skill-install",

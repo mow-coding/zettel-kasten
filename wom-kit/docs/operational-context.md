@@ -40,9 +40,9 @@ To inspect only this layer, run:
 archive operational-context <archive-root> --dry-run --format json
 ```
 
-Introduced in v0.3.278 and extended through v0.3.284, this read-only output also
+Introduced in v0.3.278 and extended through v0.3.293, this read-only output also
 returns the same official
-`wom-kit/ai-command-path-routing/v0.6` object as runtime-context and
+`wom-kit/ai-command-path-routing/v0.7` object as runtime-context and
 ai-start-here. It routes search through `archive search`, conservative inbox
 shape review through `archive inbox-pipeline-audit`, AI draft creation through
 `archive create-draft`, and other writes through their dedicated
@@ -52,11 +52,13 @@ digest-bound `activity-group-membership-write`, and interrupted writes through
 the separate recovery plan/approval commands. Explicit removals have a
 read-only removal plan, a distinct digest-bound removal writer, and their own
 recovery plan/approval commands. None infers membership. A destination folder
-alone is never write authorization. v0.3.284 advances routing to v0.6 while
+alone is never write authorization. v0.3.284 advanced routing to v0.6 while
 addition and removal share one global lock and a two-root retained-evidence
 scan but keep operation-specific request, journal, receipt, and recovery
-contracts. Unknown completion evidence stays in forensic hold. The inbox
-audit proves no writer identity and performs no automatic repair. See
+contracts. v0.3.293 advances routing to v0.7 with the exact
+operator-feedback plan, ledger, human-review, preview, and reviewed-approval
+sequence. Unknown completion evidence stays in forensic hold. The inbox audit
+proves no writer identity and performs no automatic repair. See
 [AI Command-Path Routing](ai-command-path-routing.md).
 
 ## Update It

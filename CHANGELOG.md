@@ -6,6 +6,31 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.293 - 2026-07-31
+
+- Added explicit read-only `runtime-guidance-readiness` for the Codex
+  repository scope with required host, scope, and repository-root selectors.
+- Distinguished missing runtime Skill material from an absent or non-current
+  exact `AGENTS.md` routing contract; unreadable, unsafe, and unsupported
+  evidence fails closed.
+- Kept ordinary runtime entry host-neutral with `not_checked`, an exact opt-in
+  command, and host consumption permanently `not_proven`.
+- Added the exact operator-feedback plan, ledger, human-review, preview, and
+  approval sequence to action routing v0.7.
+- Added no automatic Skill install, `AGENTS.md` rewrite, external feedback
+  submission, archive migration, provider call, or beta archive mutation.
+- Hardened the readiness/status projection so an ownership manifest's
+  `package_version` must pass the shared exact stable-version policy before it
+  can be returned. Invalid values become `null`, the target is
+  `managed_invalid`, and JSON/text never echo the untrusted value.
+- Made an existing directory without a readable WOM `archive.yml` return a
+  content-free `invalid_archive` blocked result and exit 1 instead of allowing
+  an exception or absolute path to cross the CLI boundary.
+- Extended that archive-identity boundary to malformed YAML, invalid UTF-8,
+  expected local read failures, non-string values, and empty or
+  whitespace-only `archive_id` values. These cases stop before any host
+  inspection and return valid structured JSON with no stderr traceback.
+
 ## v0.3.292 - 2026-07-31
 
 - Made overview and catalog `tie_summary.referenced_objets_count` include

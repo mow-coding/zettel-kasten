@@ -11,13 +11,8 @@ KIT_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = KIT_ROOT.parent
 CURRENT_VERSION = f"v{__version__}"
 CURRENT_RUNTIME_STATUS = (
-    f"Status: {CURRENT_VERSION} objet tie-count consistency, "
-    "runtime version alignment, "
-    "edge-writer entity-type enforcement, "
-    "exact installed-wheel resource integrity, "
-    "read-only Notion locator evidence routing, content-free MCP error boundary, "
-    "quick start, session handoff, local backup evidence, "
-    "and philosophy implementation traceability checkpoint"
+    f"Status: {CURRENT_VERSION} explicit runtime-guidance readiness, "
+    "operator-feedback routing, and prior runtime safeguards checkpoint"
 )
 MATRIX_PATH = KIT_ROOT / "docs" / "capability-matrix.md"
 PRODUCT_ROADMAP_PATH = KIT_ROOT / "docs" / "product-roadmap.md"
@@ -8891,7 +8886,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(document="v03282-public-version-surface"):
                 self.assertIn("v0.3.282", text)
         self.assertIn(
-            "releases/download/v0.3.292/wom_kit-0.3.292-py3-none-any.whl",
+            "releases/download/v0.3.293/wom_kit-0.3.293-py3-none-any.whl",
             root_readme_text,
         )
 
@@ -9010,7 +9005,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         ):
             with self.subTest(document="v03283-current-install"):
                 self.assertIn(
-                    "releases/download/v0.3.292/wom_kit-0.3.292-py3-none-any.whl",
+                    "releases/download/v0.3.293/wom_kit-0.3.293-py3-none-any.whl",
                     text,
                 )
 
@@ -9432,8 +9427,8 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         packaged_release_dir = (
             KIT_ROOT / "src" / "wom_kit" / "_resources" / "release-notes"
         )
-        current_release_path = KIT_ROOT / "docs" / "releases" / "v0.3.292.md"
-        packaged_release_path = packaged_release_dir / "v0.3.292.md"
+        current_release_path = KIT_ROOT / "docs" / "releases" / "v0.3.293.md"
+        packaged_release_path = packaged_release_dir / "v0.3.293.md"
         decision_path = (
             KIT_ROOT
             / "docs"
@@ -9499,19 +9494,19 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         )
         guide_flat = " ".join(guide_text.split())
 
-        self.assertEqual(__version__, "0.3.292")
-        self.assertEqual(CURRENT_VERSION, "v0.3.292")
-        self.assertIn('version = "0.3.292"', pyproject_text)
-        self.assertIn('__version__ = "0.3.292"', package_init_text)
-        self.assertIn('__version__ = "0.3.292"', root_package_init_text)
+        self.assertEqual(__version__, "0.3.293")
+        self.assertEqual(CURRENT_VERSION, "v0.3.293")
+        self.assertIn('version = "0.3.293"', pyproject_text)
+        self.assertIn('__version__ = "0.3.293"', package_init_text)
+        self.assertIn('__version__ = "0.3.293"', root_package_init_text)
         self.assertTrue(historical_release_path.is_file())
         self.assertEqual(packaged_release_text, current_release_text)
         self.assertEqual(packaged_schema_text, source_schema_text)
         self.assertEqual(
             sorted(path.name for path in packaged_release_dir.glob("v*.md")),
-            ["v0.3.292.md"],
+            ["v0.3.293.md"],
         )
-        self.assertEqual(resource_manifest["version"], "0.3.292")
+        self.assertEqual(resource_manifest["version"], "0.3.293")
 
         packaged_release_entries = [
             item
@@ -9528,8 +9523,8 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             ],
             [
                 {
-                    "source": "docs/releases/v0.3.292.md",
-                    "packaged": "release-notes/v0.3.292.md",
+                    "source": "docs/releases/v0.3.293.md",
+                    "packaged": "release-notes/v0.3.293.md",
                 }
             ],
         )
@@ -9593,8 +9588,8 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         )
 
         current_wheel_url = (
-            "releases/download/v0.3.292/"
-            "wom_kit-0.3.292-py3-none-any.whl"
+            "releases/download/v0.3.293/"
+            "wom_kit-0.3.293-py3-none-any.whl"
         )
         for text in (
             root_readme_text,
@@ -9613,20 +9608,20 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(document="v03287-version-surface"):
                 self.assertIn("v0.3.287", text)
                 self.assertIn("notion-import-locator-evidence-plan", text)
-        self.assertIn("v0.3.292 pre-release", versioning_text)
+        self.assertIn("v0.3.293 pre-release", versioning_text)
 
     def test_v03288_mcp_content_free_error_boundary_is_current_and_synchronized(
         self,
     ) -> None:
         release_path = KIT_ROOT / "docs" / "releases" / "v0.3.288.md"
-        current_release_path = KIT_ROOT / "docs" / "releases" / "v0.3.292.md"
+        current_release_path = KIT_ROOT / "docs" / "releases" / "v0.3.293.md"
         packaged_release_path = (
             KIT_ROOT
             / "src"
             / "wom_kit"
             / "_resources"
             / "release-notes"
-            / "v0.3.292.md"
+            / "v0.3.293.md"
         )
         decision_path = (
             KIT_ROOT
@@ -9658,10 +9653,10 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             resource_manifest_path.read_text(encoding="utf-8")
         )
 
-        self.assertEqual(__version__, "0.3.292")
-        self.assertEqual(CURRENT_VERSION, "v0.3.292")
+        self.assertEqual(__version__, "0.3.293")
+        self.assertEqual(CURRENT_VERSION, "v0.3.293")
         self.assertEqual(packaged_release_text, current_release_text)
-        self.assertEqual(resource_manifest["version"], "0.3.292")
+        self.assertEqual(resource_manifest["version"], "0.3.293")
         self.assertEqual(
             [
                 (row["source"], row["packaged"])
@@ -9670,8 +9665,8 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             ],
             [
                 (
-                    "docs/releases/v0.3.292.md",
-                    "release-notes/v0.3.292.md",
+                    "docs/releases/v0.3.293.md",
+                    "release-notes/v0.3.293.md",
                 )
             ],
         )
@@ -9737,8 +9732,8 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         )
 
         current_wheel_url = (
-            "releases/download/v0.3.292/"
-            "wom_kit-0.3.292-py3-none-any.whl"
+            "releases/download/v0.3.293/"
+            "wom_kit-0.3.293-py3-none-any.whl"
         )
         for text in (
             root_readme_text,
@@ -9757,11 +9752,11 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         self,
     ) -> None:
         release_path = KIT_ROOT / "docs" / "releases" / "v0.3.289.md"
-        current_release_path = KIT_ROOT / "docs" / "releases" / "v0.3.292.md"
+        current_release_path = KIT_ROOT / "docs" / "releases" / "v0.3.293.md"
         packaged_release_dir = (
             KIT_ROOT / "src" / "wom_kit" / "_resources" / "release-notes"
         )
-        packaged_release_path = packaged_release_dir / "v0.3.292.md"
+        packaged_release_path = packaged_release_dir / "v0.3.293.md"
         decision_path = (
             KIT_ROOT
             / "docs"
@@ -9805,17 +9800,17 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         )
         release_flat = " ".join(release_text.split())
 
-        self.assertEqual(__version__, "0.3.292")
-        self.assertEqual(CURRENT_VERSION, "v0.3.292")
-        self.assertIn('version = "0.3.292"', pyproject_text)
-        self.assertIn('__version__ = "0.3.292"', package_init_text)
-        self.assertIn('__version__ = "0.3.292"', root_package_init_text)
+        self.assertEqual(__version__, "0.3.293")
+        self.assertEqual(CURRENT_VERSION, "v0.3.293")
+        self.assertIn('version = "0.3.293"', pyproject_text)
+        self.assertIn('__version__ = "0.3.293"', package_init_text)
+        self.assertIn('__version__ = "0.3.293"', root_package_init_text)
         self.assertEqual(packaged_release_text, current_release_text)
         self.assertEqual(
             sorted(path.name for path in packaged_release_dir.glob("v*.md")),
-            ["v0.3.292.md"],
+            ["v0.3.293.md"],
         )
-        self.assertEqual(resource_manifest["version"], "0.3.292")
+        self.assertEqual(resource_manifest["version"], "0.3.293")
         self.assertEqual(
             [
                 (row["source"], row["packaged"])
@@ -9824,8 +9819,8 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             ],
             [
                 (
-                    "docs/releases/v0.3.292.md",
-                    "release-notes/v0.3.292.md",
+                    "docs/releases/v0.3.293.md",
+                    "release-notes/v0.3.293.md",
                 )
             ],
         )
@@ -9859,8 +9854,8 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         self.assertIn("exact resource-set equality", decision_text)
 
         current_wheel_url = (
-            "releases/download/v0.3.292/"
-            "wom_kit-0.3.292-py3-none-any.whl"
+            "releases/download/v0.3.293/"
+            "wom_kit-0.3.293-py3-none-any.whl"
         )
         for text in (
             root_readme_text,
@@ -9875,11 +9870,11 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         self,
     ) -> None:
         release_path = KIT_ROOT / "docs" / "releases" / "v0.3.290.md"
-        current_release_path = KIT_ROOT / "docs" / "releases" / "v0.3.292.md"
+        current_release_path = KIT_ROOT / "docs" / "releases" / "v0.3.293.md"
         packaged_release_dir = (
             KIT_ROOT / "src" / "wom_kit" / "_resources" / "release-notes"
         )
-        packaged_release_path = packaged_release_dir / "v0.3.292.md"
+        packaged_release_path = packaged_release_dir / "v0.3.293.md"
         decision_path = (
             KIT_ROOT
             / "docs"
@@ -9929,18 +9924,18 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         )
         release_flat = " ".join(release_text.split())
 
-        self.assertEqual(__version__, "0.3.292")
-        self.assertEqual(CURRENT_VERSION, "v0.3.292")
-        self.assertIn('version = "0.3.292"', pyproject_text)
-        self.assertIn('__version__ = "0.3.292"', package_init_text)
-        self.assertIn('__version__ = "0.3.292"', root_package_init_text)
+        self.assertEqual(__version__, "0.3.293")
+        self.assertEqual(CURRENT_VERSION, "v0.3.293")
+        self.assertIn('version = "0.3.293"', pyproject_text)
+        self.assertIn('__version__ = "0.3.293"', package_init_text)
+        self.assertIn('__version__ = "0.3.293"', root_package_init_text)
         self.assertTrue(release_path.is_file())
         self.assertEqual(packaged_release_text, current_release_text)
         self.assertEqual(
             sorted(path.name for path in packaged_release_dir.glob("v*.md")),
-            ["v0.3.292.md"],
+            ["v0.3.293.md"],
         )
-        self.assertEqual(resource_manifest["version"], "0.3.292")
+        self.assertEqual(resource_manifest["version"], "0.3.293")
         self.assertEqual(
             [
                 (row["source"], row["packaged"])
@@ -9949,8 +9944,8 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             ],
             [
                 (
-                    "docs/releases/v0.3.292.md",
-                    "release-notes/v0.3.292.md",
+                    "docs/releases/v0.3.293.md",
+                    "release-notes/v0.3.293.md",
                 )
             ],
         )
@@ -9991,8 +9986,8 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         )
 
         current_wheel_url = (
-            "releases/download/v0.3.292/"
-            "wom_kit-0.3.292-py3-none-any.whl"
+            "releases/download/v0.3.293/"
+            "wom_kit-0.3.293-py3-none-any.whl"
         )
         for text in (
             root_readme_text,
@@ -10007,14 +10002,14 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         self,
     ) -> None:
         release_path = KIT_ROOT / "docs" / "releases" / "v0.3.291.md"
-        current_release_path = KIT_ROOT / "docs" / "releases" / "v0.3.292.md"
+        current_release_path = KIT_ROOT / "docs" / "releases" / "v0.3.293.md"
         historical_release_path = (
             KIT_ROOT / "docs" / "releases" / "v0.3.290.md"
         )
         packaged_release_dir = (
             KIT_ROOT / "src" / "wom_kit" / "_resources" / "release-notes"
         )
-        packaged_release_path = packaged_release_dir / "v0.3.292.md"
+        packaged_release_path = packaged_release_dir / "v0.3.293.md"
         decision_path = (
             KIT_ROOT
             / "docs"
@@ -10091,18 +10086,18 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         )
         release_flat = " ".join(release_text.split())
 
-        self.assertEqual(__version__, "0.3.292")
-        self.assertEqual(CURRENT_VERSION, "v0.3.292")
-        self.assertIn('version = "0.3.292"', pyproject_text)
-        self.assertIn('__version__ = "0.3.292"', package_init_text)
-        self.assertIn('__version__ = "0.3.292"', root_package_init_text)
+        self.assertEqual(__version__, "0.3.293")
+        self.assertEqual(CURRENT_VERSION, "v0.3.293")
+        self.assertIn('version = "0.3.293"', pyproject_text)
+        self.assertIn('__version__ = "0.3.293"', package_init_text)
+        self.assertIn('__version__ = "0.3.293"', root_package_init_text)
         self.assertTrue(historical_release_path.is_file())
         self.assertEqual(packaged_release_text, current_release_text)
         self.assertEqual(
             sorted(path.name for path in packaged_release_dir.glob("v*.md")),
-            ["v0.3.292.md"],
+            ["v0.3.293.md"],
         )
-        self.assertEqual(resource_manifest["version"], "0.3.292")
+        self.assertEqual(resource_manifest["version"], "0.3.293")
         self.assertEqual(
             [
                 (row["source"], row["packaged"])
@@ -10111,8 +10106,8 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             ],
             [
                 (
-                    "docs/releases/v0.3.292.md",
-                    "release-notes/v0.3.292.md",
+                    "docs/releases/v0.3.293.md",
+                    "release-notes/v0.3.293.md",
                 )
             ],
         )
@@ -10225,8 +10220,8 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         self.assertIn("Since v0.3.291", matrix_text)
 
         current_wheel_url = (
-            "releases/download/v0.3.292/"
-            "wom_kit-0.3.292-py3-none-any.whl"
+            "releases/download/v0.3.293/"
+            "wom_kit-0.3.293-py3-none-any.whl"
         )
         for text in (
             root_readme_text,
@@ -10238,17 +10233,18 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(document="v03291-historical-current-install"):
                 self.assertIn(current_wheel_url, text)
 
-    def test_v03292_objet_tie_count_contract_is_current_and_synchronized(
+    def test_v03292_objet_tie_count_contract_remains_historical_and_documented(
         self,
     ) -> None:
         release_path = KIT_ROOT / "docs" / "releases" / "v0.3.292.md"
+        current_release_path = KIT_ROOT / "docs" / "releases" / "v0.3.293.md"
         historical_release_path = (
             KIT_ROOT / "docs" / "releases" / "v0.3.291.md"
         )
         packaged_release_dir = (
             KIT_ROOT / "src" / "wom_kit" / "_resources" / "release-notes"
         )
-        packaged_release_path = packaged_release_dir / "v0.3.292.md"
+        packaged_release_path = packaged_release_dir / "v0.3.293.md"
         decision_path = (
             KIT_ROOT
             / "docs"
@@ -10266,6 +10262,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         )
 
         release_text = release_path.read_text(encoding="utf-8")
+        current_release_text = current_release_path.read_text(encoding="utf-8")
         packaged_release_text = packaged_release_path.read_text(encoding="utf-8")
         decision_text = decision_path.read_text(encoding="utf-8")
         catalog_text = catalog_path.read_text(encoding="utf-8")
@@ -10307,18 +10304,18 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         release_flat = " ".join(release_text.split())
         links_flat = " ".join(links_text.split())
 
-        self.assertEqual(__version__, "0.3.292")
-        self.assertEqual(CURRENT_VERSION, "v0.3.292")
-        self.assertIn('version = "0.3.292"', pyproject_text)
-        self.assertIn('__version__ = "0.3.292"', package_init_text)
-        self.assertIn('__version__ = "0.3.292"', root_package_init_text)
+        self.assertEqual(__version__, "0.3.293")
+        self.assertEqual(CURRENT_VERSION, "v0.3.293")
+        self.assertIn('version = "0.3.293"', pyproject_text)
+        self.assertIn('__version__ = "0.3.293"', package_init_text)
+        self.assertIn('__version__ = "0.3.293"', root_package_init_text)
         self.assertTrue(historical_release_path.is_file())
-        self.assertEqual(packaged_release_text, release_text)
+        self.assertEqual(packaged_release_text, current_release_text)
         self.assertEqual(
             sorted(path.name for path in packaged_release_dir.glob("v*.md")),
-            ["v0.3.292.md"],
+            ["v0.3.293.md"],
         )
-        self.assertEqual(resource_manifest["version"], "0.3.292")
+        self.assertEqual(resource_manifest["version"], "0.3.293")
         self.assertEqual(
             [
                 (row["source"], row["packaged"])
@@ -10327,8 +10324,8 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             ],
             [
                 (
-                    "docs/releases/v0.3.292.md",
-                    "release-notes/v0.3.292.md",
+                    "docs/releases/v0.3.293.md",
+                    "release-notes/v0.3.293.md",
                 )
             ],
         )
@@ -10385,11 +10382,11 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             matrix_text,
         )
         self.assertIn(CURRENT_RUNTIME_STATUS, runtime_entrypoints_text)
-        self.assertIn("v0.3.292 pre-release", versioning_text)
+        self.assertIn("v0.3.293 pre-release", versioning_text)
 
         current_wheel_url = (
-            "releases/download/v0.3.292/"
-            "wom_kit-0.3.292-py3-none-any.whl"
+            "releases/download/v0.3.293/"
+            "wom_kit-0.3.293-py3-none-any.whl"
         )
         for text in (
             root_readme_text,
@@ -10424,6 +10421,124 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         ):
             with self.subTest(future_boundary=phrase):
                 self.assertIn(phrase, implementation_text)
+
+    def test_v03293_runtime_guidance_contract_is_current_and_synchronized(
+        self,
+    ) -> None:
+        release_path = KIT_ROOT / "docs" / "releases" / "v0.3.293.md"
+        packaged_release_dir = (
+            KIT_ROOT / "src" / "wom_kit" / "_resources" / "release-notes"
+        )
+        packaged_release_path = packaged_release_dir / "v0.3.293.md"
+        decision_path = (
+            KIT_ROOT
+            / "docs"
+            / "archive-infra-decision-log-2026-07-31-v03293-runtime-guidance-readiness.md"
+        )
+        implementation_path = (
+            REPO_ROOT
+            / "meeting-minutes"
+            / "2026-07-31-v03293-runtime-guidance-readiness-implementation.md"
+        )
+        resource_manifest = json.loads(
+            (
+                KIT_ROOT
+                / "src"
+                / "wom_kit"
+                / "_resources"
+                / "resource-manifest.json"
+            ).read_text(encoding="utf-8")
+        )
+        release_text = release_path.read_text(encoding="utf-8")
+        decision_text = decision_path.read_text(encoding="utf-8")
+        implementation_text = implementation_path.read_text(encoding="utf-8")
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        docs_text = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in (
+                KIT_ROOT / "docs" / "runtime-canonical-entrypoints.md",
+                KIT_ROOT / "docs" / "ai-start-here.md",
+                KIT_ROOT / "docs" / "ai-command-path-routing.md",
+                KIT_ROOT / "docs" / "operator-feedback-lifecycle.md",
+                REPO_ROOT / "CHANGELOG.md",
+                REPO_ROOT / "UPGRADE.md",
+                REPO_ROOT / "UPGRADE.ko.md",
+            )
+        )
+
+        self.assertEqual(__version__, "0.3.293")
+        self.assertEqual(CURRENT_VERSION, "v0.3.293")
+        self.assertEqual(
+            packaged_release_path.read_text(encoding="utf-8"),
+            release_text,
+        )
+        self.assertEqual(
+            sorted(path.name for path in packaged_release_dir.glob("v*.md")),
+            ["v0.3.293.md"],
+        )
+        self.assertEqual(resource_manifest["version"], "0.3.293")
+        self.assertEqual(
+            [
+                (row["source"], row["packaged"])
+                for row in resource_manifest["files"]
+                if str(row.get("packaged") or "").startswith("release-notes/")
+            ],
+            [
+                (
+                    "docs/releases/v0.3.293.md",
+                    "release-notes/v0.3.293.md",
+                )
+            ],
+        )
+
+        exact_command = (
+            "archive runtime-guidance-readiness <archive-root> "
+            "--host codex --scope repo --repo-root <repo-root> --format json"
+        )
+        for text in (
+            release_text,
+            decision_text,
+            implementation_text,
+            matrix_text,
+            docs_text,
+        ):
+            with self.subTest(document="v03293-runtime-guidance"):
+                self.assertIn(exact_command, " ".join(text.split()))
+                self.assertIn("not_checked", text)
+                self.assertIn("not_proven", text)
+                self.assertIn("runtime-skill-install --dry-run", text)
+                self.assertIn("AGENTS.md", text)
+                self.assertIn("human review", text.lower())
+                self.assertIn("operator-feedback-ledger", text)
+                self.assertIn("operator-feedback-record", text)
+
+        self.assertIn("runtime_skill_absent", decision_text)
+        self.assertIn(
+            "agents_routing_contract_not_current",
+            decision_text,
+        )
+        self.assertIn("exact public v0.3.292 predecessor", release_text)
+        self.assertIn("exact public v0.3.292", implementation_text)
+
+        current_wheel_url = (
+            "releases/download/v0.3.293/"
+            "wom_kit-0.3.293-py3-none-any.whl"
+        )
+        for path in (
+            REPO_ROOT / "README.md",
+            REPO_ROOT / "README.ko.md",
+            KIT_ROOT / "README.md",
+            KIT_ROOT / "docs" / "python-tool-install.md",
+            KIT_ROOT / "docs" / "python-tool-install.ko.md",
+        ):
+            with self.subTest(document=str(path)):
+                text = path.read_text(encoding="utf-8")
+                self.assertIn(current_wheel_url, text)
+                normalized = " ".join(text.lower().split())
+                self.assertTrue(
+                    "not proof" in normalized or "증거" in normalized,
+                    path,
+                )
 
     def test_active_source_docs_use_module_launcher_not_direct_wrapper(self) -> None:
         active_paths = (

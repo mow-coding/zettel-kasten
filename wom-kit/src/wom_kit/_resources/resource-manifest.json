@@ -1,6 +1,6 @@
 {
   "schema": "wom-kit/package-resource-manifest/v0.1",
-  "version": "0.3.292",
+  "version": "0.3.293",
   "source_of_truth": "wom-kit source resource directories",
   "file_count": 103,
   "files": [
@@ -367,8 +367,8 @@
     {
       "source": "templates/company/AGENTS.md",
       "packaged": "templates/company/AGENTS.md",
-      "bytes": 8212,
-      "sha256": "0aef0f9451893b355f5d8cf5934adb7e1d091c423099c92089b9d81d80303ba1"
+      "bytes": 9091,
+      "sha256": "a8aa032493a1b6466ad02e4654c60de8a41c4d5b1cbf1d00fc99ebf89b7125d9"
     },
     {
       "source": "templates/company/archive-identity.yml",
@@ -439,8 +439,8 @@
     {
       "source": "templates/family/AGENTS.md",
       "packaged": "templates/family/AGENTS.md",
-      "bytes": 8352,
-      "sha256": "8b03253248743579dba7af153ea5c4543bf235b5b68f5dedb128c975c5e7241c"
+      "bytes": 9231,
+      "sha256": "856630fce582a1787347bd88d7b965af400c375ace07ac185553964c48397a3a"
     },
     {
       "source": "templates/family/archive-identity.yml",
@@ -511,8 +511,8 @@
     {
       "source": "templates/personal/AGENTS.md",
       "packaged": "templates/personal/AGENTS.md",
-      "bytes": 8321,
-      "sha256": "5af32b48950141a9dd15a444610ae1cc388d65f569e1e2903e24ecce6fe8400a"
+      "bytes": 9200,
+      "sha256": "e4c0241c048008bda6952362abb52ef80cde2713aaf7acd5df00b37724b0e05c"
     },
     {
       "source": "templates/personal/archive-identity.yml",
@@ -617,10 +617,10 @@
       "sha256": "d619dc26af3216498c8392dfe838b0fe752d4bad9da998a58ca682d668fc510c"
     },
     {
-      "source": "docs/releases/v0.3.292.md",
-      "packaged": "release-notes/v0.3.292.md",
-      "bytes": 4438,
-      "sha256": "2dc4b33af2109c7a67fd0c081e1f3854bde25901e1d5582a86783d5c855fc121"
+      "source": "docs/releases/v0.3.293.md",
+      "packaged": "release-notes/v0.3.293.md",
+      "bytes": 5013,
+      "sha256": "34960a8fb0145fa522fecf1b9422ecf59ff151a38f4f0b638388d8ac4ac143a8"
     }
   ]
 }

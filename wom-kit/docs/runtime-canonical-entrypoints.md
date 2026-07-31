@@ -1,6 +1,6 @@
 # Runtime Canonical Entry Points
 
-Status: v0.3.292 objet tie-count consistency, runtime version alignment, edge-writer entity-type enforcement, exact installed-wheel resource integrity, read-only Notion locator evidence routing, content-free MCP error boundary, quick start, session handoff, local backup evidence, and philosophy implementation traceability checkpoint
+Status: v0.3.293 explicit runtime-guidance readiness, operator-feedback routing, and prior runtime safeguards checkpoint
 
 When an AI runtime enters a WOM archive, it needs a small, explicit "start
 here" map. The archive may contain zets, source bindings, provider metadata,
@@ -31,10 +31,30 @@ a terminal-capable AI can discover both the operational handoff and the
 official read/write command paths without waiting for the human to mention
 them.
 
+## Explicit Host Guidance Readiness
+
+Ordinary `runtime-context` and `ai-start-here` do not inspect a host
+installation or a repository's `AGENTS.md`. They return
+`runtime_guidance_readiness.status: not_checked` and the exact opt-in command:
+
+```powershell
+archive runtime-guidance-readiness <archive-root> --host codex --scope repo --repo-root <repo-root> --format json
+```
+
+The explicit command checks the current Codex runtime Skill state and the
+repository-level exact routing contract without writing either location.
+Missing Skill installation, an absent exact `AGENTS.md` contract, and a
+present but non-current contract are separate diagnostics. Legacy phrase
+anchors are human migration hints only. Unreadable or unsupported inputs fail
+closed. If installation is needed, the result offers only the exact
+`runtime-skill-install --dry-run` command; it never installs automatically and
+never rewrites `AGENTS.md`. Successful inspection still reports host guidance
+consumption as `not_proven`.
+
 ## Official Action Routing
 
-Introduced in v0.3.278 and extended through v0.3.284, `action_routing` uses
-`wom-kit/ai-command-path-routing/v0.6`. It tells an AI which official command
+Introduced in v0.3.278 and extended in v0.3.293, `action_routing` uses
+`wom-kit/ai-command-path-routing/v0.7`. It tells an AI which official command
 handles session entry, search, local version truth, saved-view inspection,
 inbox pipeline-shape review, explicit event-membership add/removal planning, command
 discovery, draft creation, minting, typed edges, source capture, and
@@ -228,6 +248,33 @@ Use `runtime-context --no-redact-local-paths` only for trusted local debugging.
 Use `runtime-context --full-doctor --progress` only when complete validation is
 needed. Quick mode reports `doctor_summary.checked: false` and is not an archive
 health claim.
+
+## Exact New-Archive AGENTS Routing Contract
+
+New archive templates include exactly one versioned positive routing block:
+
+```markdown
+<!-- WOM-RUNTIME-GUIDANCE-ROUTING v0.3.293 BEGIN -->
+This is the current authoritative WOM runtime guidance routing contract. Follow every directive in this block.
+Run `archive ai-start-here <archive-root> --dry-run --progress --format json` before choosing an archive action.
+Read and follow the returned `action_routing`.
+Use `archive search <archive-root> <query> --count-total --format json` for official WOM search.
+Raw grep and raw SQL are not authoritative WOM search results.
+For operator feedback, run `archive operator-feedback-plan <archive-root> --dry-run --format json`, inspect `archive operator-feedback-ledger <archive-root> --dry-run --format json`, require human review, preview `archive operator-feedback-record <archive-root> ... --dry-run --format json`, and only then use the reviewed `--approve` replay.
+<!-- WOM-RUNTIME-GUIDANCE-ROUTING v0.3.293 END -->
+```
+
+`runtime-guidance-readiness` accepts the block only when both sentinels occur
+once, in order, and the inclusive block matches these bytes after CRLF-to-LF
+normalization only. The fixed authority sentence is part of that canonical
+machine-readable unit; deleting it or changing it into a negation or historical
+label makes the unit non-current. A quoted, fenced, duplicated, truncated,
+reordered, or otherwise edited copy is also non-current. Arbitrary prose
+outside the sentinels is not natural-language parsed as an override of an
+otherwise exact active unit; an example or historical copy must therefore be
+quoted, fenced, or byte-distinct. Legacy phrases elsewhere are migration hints
+only and never support `ready: true`. Existing `AGENTS.md` files are never
+rewritten automatically.
 
 ## Not Implemented
 
