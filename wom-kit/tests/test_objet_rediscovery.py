@@ -696,6 +696,27 @@ class ObjetRediscoveryPlanTests(unittest.TestCase):
                     "2",
                 ]
             )
+            exact_text_code, exact_text_stdout, exact_text_stderr = self.run_cli(
+                [
+                    "objet-rediscovery-plan",
+                    str(archive_root),
+                    PRIVATE_QUERY,
+                    "--dry-run",
+                    "--limit",
+                    "2",
+                    "--count-total",
+                ]
+            )
+            bounded_text_code, bounded_text_stdout, bounded_text_stderr = self.run_cli(
+                [
+                    "objet-rediscovery-plan",
+                    str(archive_root),
+                    "fake",
+                    "--dry-run",
+                    "--limit",
+                    "1",
+                ]
+            )
 
             blocked_service = archive_services.objet_rediscovery_plan(
                 archive_root,
@@ -755,7 +776,30 @@ class ObjetRediscoveryPlanTests(unittest.TestCase):
         self.assertEqual(text_code, 0)
         self.assertEqual(text_stderr, "")
         self.assertTrue(text_stdout.startswith("SEARCH INCOMPLETE."))
+        self.assertIn(
+            "Checked generated-index matches (exact): 0",
+            text_stdout,
+        )
+        self.assertNotIn("Checked matches:", text_stdout)
         self.assertNotIn(PRIVATE_QUERY, text_stdout)
+        self.assertEqual(exact_text_code, 0)
+        self.assertEqual(exact_text_stderr, "")
+        self.assertIn(
+            "Checked generated-index matches (exact): ",
+            exact_text_stdout,
+        )
+        self.assertNotIn("bounded lower bound", exact_text_stdout)
+        self.assertNotIn(PRIVATE_QUERY, exact_text_stdout)
+        self.assertEqual(bounded_text_code, 0)
+        self.assertEqual(bounded_text_stderr, "")
+        self.assertIn(
+            "Checked generated-index matches (bounded lower bound): at least ",
+            bounded_text_stdout,
+        )
+        self.assertNotIn(
+            "Checked generated-index matches (exact):",
+            bounded_text_stdout,
+        )
 
         self.assertEqual(blocked_code, 1)
         self.assertEqual(blocked_stderr, "")
