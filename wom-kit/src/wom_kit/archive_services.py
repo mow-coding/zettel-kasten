@@ -29194,51 +29194,34 @@ def notion_source_map_zettel_ref_from_record(root: Path, record: dict[str, Any])
     return zettel_id, zettel_path
 
 
-def inspect_zettel_frontmatter_boundary(path: Path) -> dict[str, Any]:
-    """Inspect only a zettel's frontmatter prefix with indexer-equivalent grammar."""
+def _inspect_zettel_frontmatter_stream(handle: Any) -> dict[str, Any]:
+    """Inspect one already-open text stream through its frontmatter boundary."""
 
     def delimiter_line(value: str) -> bool:
         # Text mode normalizes CRLF to LF.  Requiring the newline keeps an EOF
         # delimiter from being accepted when FRONTMATTER_RE would reject it.
         return re.fullmatch(r"---[ \t]*\n", value) is not None
 
-    body_text_read = False
-    try:
-        with path.open("r", encoding="utf-8-sig") as handle:
-            first = handle.readline()
-            if not delimiter_line(first):
-                return {
-                    "frontmatter": {},
-                    "metadata_readable": False,
-                    "issue_code": "frontmatter_boundary_invalid",
-                    "body_text_read": bool(first),
-                }
-            lines: list[str] = []
-            terminated = False
-            for line in handle:
-                if delimiter_line(line):
-                    terminated = True
-                    break
-                lines.append(line)
-            if not terminated:
-                return {
-                    "frontmatter": {},
-                    "metadata_readable": False,
-                    "issue_code": "frontmatter_boundary_invalid",
-                    "body_text_read": True,
-                }
-    except UnicodeError:
+    first = handle.readline()
+    if not delimiter_line(first):
         return {
             "frontmatter": {},
             "metadata_readable": False,
-            "issue_code": "frontmatter_unicode_error",
-            "body_text_read": True,
+            "issue_code": "frontmatter_boundary_invalid",
+            "body_text_read": bool(first),
         }
-    except OSError:
+    lines: list[str] = []
+    terminated = False
+    for line in handle:
+        if delimiter_line(line):
+            terminated = True
+            break
+        lines.append(line)
+    if not terminated:
         return {
             "frontmatter": {},
             "metadata_readable": False,
-            "issue_code": "frontmatter_io_error",
+            "issue_code": "frontmatter_boundary_invalid",
             "body_text_read": True,
         }
 
@@ -29273,6 +29256,28 @@ def inspect_zettel_frontmatter_boundary(path: Path) -> dict[str, Any]:
         "issue_code": None,
         "body_text_read": False,
     }
+
+
+def inspect_zettel_frontmatter_boundary(path: Path) -> dict[str, Any]:
+    """Inspect only a zettel's frontmatter prefix with indexer-equivalent grammar."""
+
+    try:
+        with path.open("r", encoding="utf-8-sig") as handle:
+            return _inspect_zettel_frontmatter_stream(handle)
+    except UnicodeError:
+        return {
+            "frontmatter": {},
+            "metadata_readable": False,
+            "issue_code": "frontmatter_unicode_error",
+            "body_text_read": True,
+        }
+    except OSError:
+        return {
+            "frontmatter": {},
+            "metadata_readable": False,
+            "issue_code": "frontmatter_io_error",
+            "body_text_read": True,
+        }
 
 
 def read_zettel_frontmatter_only_with_observation(
@@ -107224,29 +107229,45 @@ def live_zettel_index_entries(
     reject_reparse_directories: bool = False,
 ) -> list[dict[str, Any]]:
     entries: list[dict[str, Any]] = []
+    strict_snapshots = (
+        strict_local_zettel_snapshots(root)
+        if reject_reparse_directories
+        else []
+    )
     zettel_paths = (
-        strict_local_zettel_paths(root)
+        []
         if reject_reparse_directories
         else list(iter_zettel_paths(root))
     )
-    zettel_path_count = len(zettel_paths)
+    zettel_path_count = (
+        len(strict_snapshots)
+        if reject_reparse_directories
+        else len(zettel_paths)
+    )
     if progress_callback is not None:
         progress_callback("index-health-live-zettels", "start", 0, zettel_path_count)
-    for path_index, path in enumerate(zettel_paths, start=1):
-        relative = archive_relative_path(path, root)
-        inspection = inspect_zettel_frontmatter_boundary(path)
+    for path_index in range(1, zettel_path_count + 1):
+        if reject_reparse_directories:
+            snapshot = strict_snapshots[path_index - 1]
+            relative = snapshot.relative_path
+            inspection = snapshot.inspection
+            mtime = snapshot.mtime
+        else:
+            path = zettel_paths[path_index - 1]
+            relative = archive_relative_path(path, root)
+            inspection = inspect_zettel_frontmatter_boundary(path)
+            try:
+                mtime = path.stat().st_mtime
+            except OSError:
+                mtime = None
+                inspection = {
+                    "frontmatter": {},
+                    "metadata_readable": False,
+                    "issue_code": "frontmatter_io_error",
+                    "body_text_read": bool(inspection.get("body_text_read")),
+                }
         if inspection.get("body_text_read") and read_observations is not None:
             read_observations["zettel_body_text_read"] = True
-        try:
-            stat = path.stat()
-        except OSError:
-            stat = None
-            inspection = {
-                "frontmatter": {},
-                "metadata_readable": False,
-                "issue_code": "frontmatter_io_error",
-                "body_text_read": bool(inspection.get("body_text_read")),
-            }
         frontmatter = inspection.get("frontmatter") if isinstance(inspection.get("frontmatter"), dict) else {}
         issue_code = inspection.get("issue_code")
         if isinstance(issue_code, str) and inspection_issues is not None:
@@ -107259,7 +107280,7 @@ def live_zettel_index_entries(
                 "kind": str(frontmatter.get("kind") or "") if inspection.get("metadata_readable") else "",
                 "metadata_readable": bool(inspection.get("metadata_readable")),
                 "modified_after_index": bool(
-                    stat is not None and db_mtime is not None and stat.st_mtime > db_mtime
+                    mtime is not None and db_mtime is not None and mtime > db_mtime
                 ),
             }
         )
@@ -108671,81 +108692,473 @@ def _search_archive_impl(
     }
 
 
-def strict_local_zettel_paths(archive_root: Path) -> list[Path]:
-    """Enumerate local Markdown zettels without following symlinks or reparse points."""
+@dataclass(frozen=True)
+class _BoundDirectory:
+    path: Path
+    descriptor: int | None
+    windows_handles: tuple[Any, ...]
 
-    paths: list[Path] = []
+
+@dataclass(frozen=True)
+class _BoundRegularFile:
+    path: Path
+    descriptor: int
+    initial_stat: os.stat_result
+
+
+@dataclass(frozen=True)
+class _StrictLocalZettelSnapshot:
+    relative_path: str
+    path: Path
+    inspection: dict[str, Any]
+    mtime: float
+
+
+@contextmanager
+def _bound_directory_chain(
+    root: Path,
+    target: Path,
+) -> Iterable[_BoundDirectory]:
+    """Adapt the established held-directory contract without domain diagnostics."""
+
+    entered = False
+    try:
+        with activity_group_bound_directory_chain(root, target) as binding:
+            entered = True
+            descriptor = binding.get("descriptor")
+            handles = binding.get("windows_handles")
+            yield _BoundDirectory(
+                path=target,
+                descriptor=descriptor if isinstance(descriptor, int) else None,
+                windows_handles=tuple(handles or ()),
+            )
+    except FileNotFoundError as exc:
+        if entered:
+            raise OSError("bound_directory_chain_changed") from exc
+        raise
+
+
+@contextmanager
+def _bound_child_directory(
+    root: Path,
+    parent: _BoundDirectory,
+    child_path: Path,
+    enumerated_stat: os.stat_result,
+) -> Iterable[_BoundDirectory]:
+    """Open one enumerated child while its exact parent remains held."""
+
+    if child_path.parent != parent.path:
+        raise OSError("bound_child_parent_mismatch")
+    if parent.descriptor is None:
+        # On Windows the outer chain omits delete sharing, so reopening the
+        # child chain cannot cross a replaced parent.
+        with _bound_directory_chain(root, child_path) as child:
+            opened_stat = os.stat(child_path, follow_symlinks=False)
+            if (
+                not stat.S_ISDIR(opened_stat.st_mode)
+                or (
+                    int(opened_stat.st_dev),
+                    int(opened_stat.st_ino),
+                )
+                != (
+                    int(enumerated_stat.st_dev),
+                    int(enumerated_stat.st_ino),
+                )
+            ):
+                raise OSError("bound_child_directory_changed")
+            yield child
+        return
+
+    flags = os.O_RDONLY
+    flags |= getattr(os, "O_DIRECTORY", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(
+        child_path.name,
+        flags,
+        dir_fd=parent.descriptor,
+    )
+    try:
+        opened_stat = os.fstat(descriptor)
+        expected_identity = (
+            int(enumerated_stat.st_dev),
+            int(enumerated_stat.st_ino),
+        )
+        opened_identity = (
+            int(opened_stat.st_dev),
+            int(opened_stat.st_ino),
+        )
+        if (
+            not stat.S_ISDIR(opened_stat.st_mode)
+            or opened_identity != expected_identity
+        ):
+            raise OSError("bound_child_directory_changed")
+        yield _BoundDirectory(
+            path=child_path,
+            descriptor=descriptor,
+            windows_handles=(),
+        )
+        final_stat = os.fstat(descriptor)
+        current_stat = os.stat(
+            child_path.name,
+            dir_fd=parent.descriptor,
+            follow_symlinks=False,
+        )
+        if (
+            (int(final_stat.st_dev), int(final_stat.st_ino))
+            != expected_identity
+            or (int(current_stat.st_dev), int(current_stat.st_ino))
+            != expected_identity
+        ):
+            raise OSError("bound_child_directory_changed")
+    finally:
+        os.close(descriptor)
+
+
+@contextmanager
+def _scan_bound_directory(
+    binding: _BoundDirectory,
+) -> Iterable[os.ScandirIterator[str]]:
+    scan_target: int | Path = (
+        binding.descriptor
+        if binding.descriptor is not None
+        else binding.path
+    )
+    with os.scandir(scan_target) as scanner:
+        yield scanner
+
+
+def _bound_file_state(value: os.stat_result) -> tuple[int, int, int, int, int]:
+    return (
+        int(value.st_dev),
+        int(value.st_ino),
+        int(value.st_size),
+        int(value.st_mtime_ns),
+        int(value.st_ctime_ns),
+    )
+
+
+@contextmanager
+def _hold_bound_regular_file(
+    parent: _BoundDirectory,
+    path: Path,
+    enumerated_stat: os.stat_result,
+) -> Iterable[_BoundRegularFile]:
+    """Hold one exact regular file while a caller inspects its bounded prefix."""
+
+    if path.parent != parent.path:
+        raise OSError("bound_regular_file_parent_mismatch")
+    expected_identity = (
+        int(enumerated_stat.st_dev),
+        int(enumerated_stat.st_ino),
+    )
+    if parent.descriptor is not None:
+        flags = os.O_RDONLY
+        flags |= getattr(os, "O_BINARY", 0)
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(
+            path.name,
+            flags,
+            dir_fd=parent.descriptor,
+        )
+        try:
+            opened_stat = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(opened_stat.st_mode)
+                or (
+                    int(opened_stat.st_dev),
+                    int(opened_stat.st_ino),
+                )
+                != expected_identity
+            ):
+                raise OSError("bound_regular_file_changed")
+            yield _BoundRegularFile(
+                path=path,
+                descriptor=descriptor,
+                initial_stat=opened_stat,
+            )
+            final_stat = os.fstat(descriptor)
+            current_stat = os.stat(
+                path.name,
+                dir_fd=parent.descriptor,
+                follow_symlinks=False,
+            )
+            if (
+                _bound_file_state(final_stat)
+                != _bound_file_state(opened_stat)
+                or (
+                    int(current_stat.st_dev),
+                    int(current_stat.st_ino),
+                )
+                != expected_identity
+            ):
+                raise OSError("bound_regular_file_changed")
+        finally:
+            os.close(descriptor)
+        return
+
+    import msvcrt
+    from ctypes import wintypes
+
+    class ByHandleFileInformation(ctypes.Structure):
+        _fields_ = [
+            ("dwFileAttributes", wintypes.DWORD),
+            ("ftCreationTime", wintypes.FILETIME),
+            ("ftLastAccessTime", wintypes.FILETIME),
+            ("ftLastWriteTime", wintypes.FILETIME),
+            ("dwVolumeSerialNumber", wintypes.DWORD),
+            ("nFileSizeHigh", wintypes.DWORD),
+            ("nFileSizeLow", wintypes.DWORD),
+            ("nNumberOfLinks", wintypes.DWORD),
+            ("nFileIndexHigh", wintypes.DWORD),
+            ("nFileIndexLow", wintypes.DWORD),
+        ]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    create_file = kernel32.CreateFileW
+    create_file.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    ]
+    create_file.restype = wintypes.HANDLE
+    get_information = kernel32.GetFileInformationByHandle
+    get_information.argtypes = [
+        wintypes.HANDLE,
+        ctypes.POINTER(ByHandleFileInformation),
+    ]
+    get_information.restype = wintypes.BOOL
+    close_handle = kernel32.CloseHandle
+    close_handle.argtypes = [wintypes.HANDLE]
+    close_handle.restype = wintypes.BOOL
+
+    generic_read = 0x80000000
+    file_share_read = 0x00000001
+    open_existing = 3
+    file_flag_open_reparse_point = 0x00200000
+    file_attribute_directory = 0x00000010
+    file_attribute_reparse_point = 0x00000400
+    invalid_handle = wintypes.HANDLE(-1).value
+    handle = create_file(
+        str(path),
+        generic_read,
+        file_share_read,
+        None,
+        open_existing,
+        file_flag_open_reparse_point,
+        None,
+    )
+    if handle == invalid_handle:
+        raise ctypes.WinError(ctypes.get_last_error())
+    descriptor: int | None = None
+    handle_transferred = False
+    try:
+        information = ByHandleFileInformation()
+        if not get_information(handle, ctypes.byref(information)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        opened_identity = (
+            int(information.dwVolumeSerialNumber),
+            (
+                int(information.nFileIndexHigh) << 32
+            )
+            | int(information.nFileIndexLow),
+        )
+        current_stat = os.stat(path, follow_symlinks=False)
+        enumerated_identity = (
+            int(enumerated_stat.st_dev),
+            int(enumerated_stat.st_ino),
+        )
+        current_identity = (
+            int(current_stat.st_dev),
+            int(current_stat.st_ino),
+        )
+        if (
+            information.dwFileAttributes
+            & (file_attribute_directory | file_attribute_reparse_point)
+            or not enumerated_identity[1]
+            or not current_identity[1]
+            or not opened_identity[1]
+            or current_identity != enumerated_identity
+            or opened_identity[1] != enumerated_identity[1]
+        ):
+            raise OSError("bound_regular_file_changed")
+        descriptor = msvcrt.open_osfhandle(
+            int(handle),
+            os.O_RDONLY | getattr(os, "O_BINARY", 0),
+        )
+        handle_transferred = True
+        opened_stat = os.fstat(descriptor)
+        if (
+            not opened_stat.st_ino
+            or (
+                int(opened_stat.st_dev),
+                int(opened_stat.st_ino),
+            )
+            != enumerated_identity
+        ):
+            raise OSError("bound_regular_file_changed")
+        yield _BoundRegularFile(
+            path=path,
+            descriptor=descriptor,
+            initial_stat=opened_stat,
+        )
+        final_stat = os.fstat(descriptor)
+        current_stat = os.stat(path, follow_symlinks=False)
+        current_identity = (
+            int(current_stat.st_dev),
+            int(current_stat.st_ino),
+        )
+        if (
+            _bound_file_state(final_stat)
+            != _bound_file_state(opened_stat)
+            or not current_identity[1]
+            or current_identity != enumerated_identity
+            or opened_identity[1] != current_identity[1]
+        ):
+            raise OSError("bound_regular_file_changed")
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        elif not handle_transferred:
+            close_handle(handle)
+
+
+def _inspect_bound_zettel_file(
+    binding: _BoundRegularFile,
+) -> tuple[dict[str, Any], float]:
+    with os.fdopen(
+        os.dup(binding.descriptor),
+        "r",
+        encoding="utf-8-sig",
+        newline=None,
+    ) as handle:
+        inspection = _inspect_zettel_frontmatter_stream(handle)
+    return inspection, float(os.fstat(binding.descriptor).st_mtime)
+
+
+def strict_local_zettel_snapshots(
+    archive_root: Path,
+) -> list[_StrictLocalZettelSnapshot]:
+    """Inspect local Markdown zettels while their directories and files are bound."""
+
+    archive_root = archive_root.resolve(strict=True)
+    snapshots: list[_StrictLocalZettelSnapshot] = []
     reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
 
-    def require_real_directory(path: Path) -> None:
+    def visit(
+        binding: _BoundDirectory,
+        relative_parts: tuple[str, ...],
+    ) -> None:
         try:
-            path_stat = os.lstat(path)
+            with _scan_bound_directory(binding) as scanner:
+                entries = sorted(
+                    (
+                        (
+                            entry.name,
+                            (
+                                os.stat(
+                                    entry.path,
+                                    follow_symlinks=False,
+                                )
+                                if os.name == "nt"
+                                else entry.stat(
+                                    follow_symlinks=False,
+                                )
+                            ),
+                        )
+                        for entry in scanner
+                    ),
+                    key=lambda item: (
+                        item[0].casefold(),
+                        item[0],
+                    ),
+                )
+        except OSError as exc:
+            raise ObjetRediscoveryArchiveBoundaryError(
+                "local zettel directory entry is unreadable"
+            ) from exc
+        for entry_name, entry_stat in entries:
+            path = binding.path / entry_name
+            if (
+                stat.S_ISLNK(entry_stat.st_mode)
+                or (
+                    reparse_flag
+                    and getattr(entry_stat, "st_file_attributes", 0)
+                    & reparse_flag
+                )
+            ):
+                raise ObjetRediscoveryArchiveBoundaryError(
+                    "local zettel directory contains an unsafe entry"
+                )
+            if stat.S_ISDIR(entry_stat.st_mode):
+                try:
+                    with _bound_child_directory(
+                        archive_root,
+                        binding,
+                        path,
+                        entry_stat,
+                    ) as child:
+                        visit(child, (*relative_parts, entry_name))
+                except OSError as exc:
+                    raise ObjetRediscoveryArchiveBoundaryError(
+                        "local zettel directory boundary is unsafe"
+                    ) from exc
+                continue
+            if not entry_name.casefold().endswith(".md"):
+                continue
+            if not stat.S_ISREG(entry_stat.st_mode):
+                raise ObjetRediscoveryArchiveBoundaryError(
+                    "local zettel directory contains an unsupported entry"
+                )
+            try:
+                with _hold_bound_regular_file(
+                    binding,
+                    path,
+                    entry_stat,
+                ) as held:
+                    inspection, mtime = _inspect_bound_zettel_file(held)
+                snapshots.append(
+                    _StrictLocalZettelSnapshot(
+                        relative_path=PurePosixPath(
+                            *relative_parts,
+                            entry_name,
+                        ).as_posix(),
+                        path=path,
+                        inspection=inspection,
+                        mtime=mtime,
+                    )
+                )
+            except OSError as exc:
+                raise ObjetRediscoveryArchiveBoundaryError(
+                    "local zettel file boundary is unsafe"
+                ) from exc
+
+    for folder in ("zettels", "inbox"):
+        folder_root = archive_root / folder
+        try:
+            with _bound_directory_chain(archive_root, folder_root) as binding:
+                visit(binding, (folder,))
         except FileNotFoundError:
+            continue
+        except ObjetRediscoveryArchiveBoundaryError:
             raise
         except OSError as exc:
             raise ObjetRediscoveryArchiveBoundaryError(
                 "local zettel directory boundary is unreadable"
             ) from exc
-        if (
-            stat.S_ISLNK(path_stat.st_mode)
-            or not stat.S_ISDIR(path_stat.st_mode)
-            or (
-                reparse_flag
-                and getattr(path_stat, "st_file_attributes", 0) & reparse_flag
-            )
-        ):
-            raise ObjetRediscoveryArchiveBoundaryError(
-                "local zettel directory boundary is unsafe"
-            )
+    return sorted(snapshots, key=lambda snapshot: snapshot.relative_path)
 
-    for folder in ("zettels", "inbox"):
-        folder_root = archive_root / folder
-        try:
-            require_real_directory(folder_root)
-        except FileNotFoundError:
-            continue
 
-        pending = [folder_root]
-        while pending:
-            current = pending.pop()
-            require_real_directory(current)
-            try:
-                with os.scandir(current) as scanner:
-                    entries = list(scanner)
-            except OSError as exc:
-                raise ObjetRediscoveryArchiveBoundaryError(
-                    "local zettel directory boundary is unreadable"
-                ) from exc
-            for entry in entries:
-                path = Path(entry.path)
-                try:
-                    entry_stat = entry.stat(follow_symlinks=False)
-                except OSError as exc:
-                    raise ObjetRediscoveryArchiveBoundaryError(
-                        "local zettel directory entry is unreadable"
-                    ) from exc
-                if (
-                    stat.S_ISLNK(entry_stat.st_mode)
-                    or (
-                        reparse_flag
-                        and getattr(entry_stat, "st_file_attributes", 0)
-                        & reparse_flag
-                    )
-                ):
-                    raise ObjetRediscoveryArchiveBoundaryError(
-                        "local zettel directory contains an unsafe entry"
-                    )
-                if stat.S_ISDIR(entry_stat.st_mode):
-                    pending.append(path)
-                    continue
-                if not entry.name.casefold().endswith(".md"):
-                    continue
-                if not stat.S_ISREG(entry_stat.st_mode):
-                    raise ObjetRediscoveryArchiveBoundaryError(
-                        "local zettel directory contains an unsupported entry"
-                    )
-                paths.append(path)
-    return sorted(paths)
+def strict_local_zettel_paths(archive_root: Path) -> list[Path]:
+    """Compatibility view over strict snapshots; callers must not reopen them."""
+
+    return [
+        snapshot.path
+        for snapshot in strict_local_zettel_snapshots(archive_root)
+    ]
 
 
 def iter_zettel_paths(archive_root: Path) -> list[Path]:
