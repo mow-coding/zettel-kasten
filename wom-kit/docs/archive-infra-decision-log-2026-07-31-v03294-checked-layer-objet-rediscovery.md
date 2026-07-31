@@ -37,7 +37,9 @@ privacy and approval decisions.
 - Mark private-name, approved-local-store, and unrecovered-reference contracts
   as unknown and not implemented. Mark `external_store_evidence` unknown and
   unchecked, because the existing read-only `backup-evidence` command reports
-  storage evidence without consuming the submitted private query.
+  storage evidence without consuming the submitted private query; expose only
+  the static next command
+  `archive backup-evidence <archive-root> --dry-run`.
 - Keep successful plans at `status: search_incomplete`,
   `rediscovery_complete: false`, and `negative_claim_supported: false`.
 - Normalize invalid archives, unavailable/malformed index data, expected read
