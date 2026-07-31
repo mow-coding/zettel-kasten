@@ -99,6 +99,39 @@ sidecars, and an automatically removed temporary external-directory junction.
     discarded. Every accepted final regression sets `PYTHONPATH` to this
     worktree's `wom-kit/src` and first verifies version `0.3.294` plus the exact
     module path.
+16. The candidate was rebased onto the exact annotated-v0.3.293 target,
+    public merge commit `52e01286ee1aff93f245e12b0dc33999a2b312c7`.
+    All following evidence is from that exact-predecessor history, not the
+    earlier local base.
+17. Post-rebase review separated exact and bounded rediscovery counts.
+    `checked_match_count_exact` now makes the distinction machine-readable,
+    and neither count form upgrades incomplete evidence into a negative claim.
+18. Public privacy hygiene was widened to inspect Git-tracked meeting minutes
+    and decision logs even when a broad ignore rule also matches them. Four
+    historical real-home-path examples were replaced by explicit placeholders.
+19. The no-reparse zettel walk was strengthened into a held directory/file
+    snapshot. Strict rediscovery consumes the captured relative path,
+    frontmatter, and mtime without reopening a checked path; missing, zero, or
+    changed Windows file identities, decoder failure, file replacement,
+    directory replacement, and junction escape all fail closed.
+20. Health, global search, and five channel probes now share one immutable
+    SQLite connection and one explicitly pinned read transaction. Borrowed
+    helpers cannot reconnect, begin, roll back, or close; nested cleanup still
+    closes the connection if rollback itself fails.
+21. The external-evidence layer was corrected from `not_implemented` to
+    `unchecked`/`unknown`. WOM already has the query-independent read-only
+    `archive backup-evidence <archive-root> --dry-run` status, so the plan names
+    that static next command without pretending it was executed.
+22. Release wheel verification was upgraded from checking executable presence
+    to actually executing both CLI version probes and full
+    initialize/list/EOF handshakes for both MCP aliases. The checker requires
+    strict UTF-8, empty stderr, bounded output and runtime, complete
+    byte-identical MCP inventories, a sanitized Python environment, and
+    fail-closed descendant-process containment on Windows and POSIX.
+23. Independent review found and closed the wheel checker's final scheduling
+    race: output overflow is now recomputed after both reader joins. A
+    deterministic delayed-reader regression proves that a valid JSON prefix
+    plus excess bytes cannot pass only because the parent process exited first.
 
 ## Agent Provenance Boundary
 
@@ -123,40 +156,70 @@ are recorded; an unexposed backend identity is not guessed.
 - inference telemetry, service tier, or backend routing exposed:
   `not_exposed`;
 - model transition or fallback observed in this task: `not_observed`;
-- input commit: `f8e209f21179a769bde3abf0526473b2ea5d41fd`;
-- implementation output commit:
-  `c688f545feffe63182392f10727cd3ab6876c8e7`;
-- provenance/evidence follow-up commit: this record-only update follows the
-  implementation commit; its SHA is captured in the release-supervisor
-  handoff rather than self-referenced inside its own commit;
-- test reference: exact-worktree focused, ordinary-regression, non-CLI, CLI,
-  release-readiness, and clean-wheel evidence recorded in this file;
+- exact public predecessor:
+  `52e01286ee1aff93f245e12b0dc33999a2b312c7`;
+- initial post-rebase documentation/provenance commit:
+  `02a55180980f84186b73127147eacfe4e8cfe2cd`;
+- implementation commits through the final code correction:
+  `72af9e1e4076dda41295559f9eec665dbb7bde7b`,
+  `92a565bc8609f1194eebf825ca980bef0d883385`,
+  `d9d784ba0020a28f5b835cd1758b1e45270e608f`,
+  `9f68000ac5f0481441d65ea0ef6ca7ddeece1f54`,
+  `1c47f876c0a3d99b274ff416e39cc180c3f0ed1c`,
+  `301f5c33b014ef19d7baab40f9c6fa8e20ef2782`, and
+  `9ca42388347174dfa453045a9008a0ae8e8b73f8`;
+- provenance/evidence follow-up commit: the SHA of the commit containing this
+  final record is captured by Git and the release-supervisor handoff rather
+  than self-referenced inside its own body;
+- test reference: exact-worktree focused, ordinary-regression, documentation,
+  package-resource, and release-readiness evidence currently recorded in this
+  file; final full-suite and clean-wheel evidence remain explicitly pending;
 - human authority: the human project owner and release supervisor retain final
   scope, merge, release, and beta-validation authority. This AI role does not
   authorize a push, PR, tag, or release.
 
-### Independent Read-Only Audit Role
+### Collaborating Implementation And Review Role
 
 - observed product/app: separate Codex collaboration subtask inside the same
   desktop project context;
-- runtime self-report: Codex read-only design and implementation auditor task
-  `/root/v03293_299_backlog_map/v03294_design_audit`;
-- task role: independently inspect the directive, implementation diff,
-  privacy/fail-closed boundaries, SQLite behavior, tests, package resources,
-  and durable record without editing the worktree;
-- served-model UI label, telemetry, model ID, or platform attestation exposed
-  to the auditor: `not_exposed`;
-- model transition or fallback observed by the auditor: `not_observed`;
-- review input: input commit
-  `f8e209f21179a769bde3abf0526473b2ea5d41fd` plus the evolving uncommitted
-  v0.3.294 worktree diff on branch
+- runtime self-report: Codex implementation and follow-up review task
+  `/root/v03294_privacy_impl`;
+- task role: implement the public-privacy tracked-record changes, placeholder
+  corrections, tests, and related privacy/readiness documentation, then
+  independently review the root-authored installed-wheel checker,
+  descendant-containment, and bounded-reader behavior;
+- served-model UI label, telemetry, model ID, or platform attestation exposed:
+  `not_exposed`;
+- model transition or fallback observed: `not_observed`;
+- contribution integration: the direct implementation is included in commit
+  `d9d784ba0020a28f5b835cd1758b1e45270e608f`; read-only wheel-review findings
+  were reproduced and corrected by root in
+  `9ca42388347174dfa453045a9008a0ae8e8b73f8`;
+- review outcome: independently reproduced concrete descendant and
+  delayed-reader overflow gaps, then returned `CLEAR` after root's integrated
+  fixes;
+- human authority: the human project owner and release supervisor retain final
+  acceptance and public-release authority.
+
+### Independent Read-Only Audit Roles
+
+- observed product/app: separate Codex collaboration subtasks inside the same
+  desktop project context;
+- runtime self-report: Codex read-only design, snapshot/TOCTOU, and SQLite
+  lifecycle audit roles;
+- review references: the earlier `v03294_design_audit` plus current
+  `/root/v03294_snapshot_review` and `/root/v03294_sqlite_design` tasks;
+- task role: independently inspect privacy/fail-closed boundaries, held local
+  snapshots, one-transaction SQLite behavior, tests, package resources, and
+  durable records without changing the accepted implementation;
+- served-model UI labels, telemetry, model IDs, or platform attestations
+  exposed to these auditors: `not_exposed`;
+- model transitions or fallbacks observed by these auditors: `not_observed`;
+- review input: exact public predecessor plus the evolving v0.3.294 branch
   `codex/v0.3.294-checked-layer-rediscovery`;
-- review output commit: none; the audit role was read-only;
-- review reference: collaboration task `v03294_design_audit`, whose concrete
-  reproductions and corrections are listed in the implementation chronology;
-  its final clear covered 11 exact-source focused tests, custom sidecar
-  boundary probes, compilation, diff checks, and selected package/runtime
-  regressions;
+- review output commits: none; the listed audit roles were read-only;
+- concrete review outcome: snapshot/TOCTOU and one-transaction SQLite reviews
+  returned `CLEAR`;
 - human authority: findings are advisory evidence. The human project owner and
   release supervisor retain final acceptance and public-release authority.
 
@@ -166,44 +229,47 @@ Early exploratory test output is not release evidence because the editable
 import-path contamination was discovered afterward and those runs were
 discarded.
 
-Accepted exact-worktree verification:
+Accepted exact-worktree verification after the exact-v0.3.293 rebase:
 
 - import preflight: version `0.3.294` and
-  `zettel-kasten-v03294/wom-kit/src/wom_kit/archive_services.py`;
-- focused rediscovery regressions: 11 passed, including real Windows junction,
-  rollback-journal, later-channel-unavailable, BLOB, and CLI/MCP empty-query
-  cases;
-- capability/runtime/package documentation group: 170 passed;
-- ordinary search and MCP search targeted checks: 7 passed;
-- corrected ordinary index-health targeted checks: 5 passed;
-- exact-final-tree non-CLI suite: 548 tests passed, 14 skipped, 0 failed;
-- exact-final-tree CLI suite: 1,349 tests passed, 8 skipped, 0 failed;
+  repository-relative module `wom-kit/src/wom_kit/archive_services.py`;
+- focused rediscovery regressions: 21 passed with 10 subtests, including held Windows identity,
+  file/directory replacement, junction, strict decoder, one SQLite
+  transaction, rollback cleanup, sidecar, unavailable-channel, BLOB, and
+  CLI/MCP parity cases;
+- installed-wheel checker regressions: 33 passed with 80 subtests, including environment
+  isolation, bounded output, delayed-reader overflow, inherited-pipe timeout,
+  detached descendant, Windows Job Object, strict CLI/MCP parsing, and exact
+  resource-integrity cases;
+- public privacy hygiene regressions: 15 passed with 32 subtests, including Git-tracked ignored
+  records and non-placeholder Windows/POSIX home paths;
+- corrected ordinary index-health targeted checks: 4 passed;
+- capability/runtime/package documentation group: 149 passed;
 - release-readiness gate: 4/4 passed (public link hygiene, Korean product
   language, public privacy, and packaged Runtime Skill);
-- clean wheel-only installation:
-  `wom_kit-0.3.294-py3-none-any.whl`, 120 wheel files, all 103 manifested
-  resources verified (333,681 bytes), all four entry points exercised,
-  Runtime Skill lifecycle passed, onboarding preview/write passed, strict
-  Doctor passed, and SHA-256
-  `948b496f1400a896373d565a962c2ba65f84c54ab2209fd67b4a509f762e2c17`;
+- package-resource synchronization: 103/103 current;
+- complete Windows source suite: 1,929 tests run in 1,415.677 seconds;
+  1,907 passed, 22 skipped, and 0 failed;
+- clean wheel-only installation: pending the final full-suite result; its
+  filename, byte size, resource totals, entrypoint/MCP evidence, and SHA-256
+  are recorded before this candidate is pushed;
 - Python compilation and `git diff --check`: passed after the focused fixes;
-- independent audit disposition: clear after all seven concrete findings were
+- independent audit disposition: clear after all concrete findings were
   reproduced, corrected, and rechecked.
 
-One attempted wheel check was discarded because the source-test
-`PYTHONPATH` override was mistakenly left enabled, so the check correctly
-reported that its installed-version probe was not package-only. The accepted
-wheel result above was then produced without that override in the tool's
-isolated wheel-only environment.
+One earlier wheel attempt was discarded because the source-test `PYTHONPATH`
+override was mistakenly left enabled, so the check correctly reported that
+its installed-version probe was not package-only. No wheel result is currently
+accepted for this exact candidate. The final clean-wheel check remains pending
+and must run after removing that source override.
 
 ## Release Boundary
 
-The branch began from local commit
-`f8e209f21179a769bde3abf0526473b2ea5d41fd`. That commit is not asserted to be
-the exact public v0.3.293 merge predecessor. Before public release, the release
-supervisor must identify the exact merged public v0.3.293 commit, rebase this
-candidate onto it, resolve conflicts, and rerun the full suite and clean-wheel
-verification.
+The branch now descends directly from exact public v0.3.293 merge commit
+`52e01286ee1aff93f245e12b0dc33999a2b312c7`. That predecessor correction is
+complete.
 
-No push, PR, tag, GitHub Release, anonymous download, or beta validation is
-performed in this implementation batch.
+Source success is still not a public-release claim. Push, PR review, PR/main/tag
+CI, exact merge-commit wheel verification, annotated tag, non-draft GitHub
+Release, single asset, and anonymous digest-matching download remain mandatory.
+Beta validation remains external human/client evidence after publication.

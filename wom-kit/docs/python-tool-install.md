@@ -174,8 +174,11 @@ python wom-kit/tools/check_wheel_install.py --format json
 ```
 
 The second command builds a wheel from a clean source copy, inspects every
-manifested resource, installs it in a fresh virtual environment, checks all
-four entrypoints, previews/installs/verifies/uninstalls the Agent Skill in a
-disposable host directory, previews and creates a disposable archive, and runs
-strict Doctor. A release wheel may be preserved only after that entire check
-passes.
+manifested resource, and installs it in a fresh virtual environment. It
+executes both CLI version probes and performs initialize/list/EOF handshakes
+against both MCP aliases, requiring strict UTF-8, empty stderr, bounded
+output/runtime, descendant-process containment, and byte-identical complete
+tool inventories. It then previews/installs/verifies/uninstalls the Agent Skill
+in a disposable host directory, previews and creates a disposable archive, and
+runs strict Doctor. A release wheel may be preserved only after that entire
+check passes.
