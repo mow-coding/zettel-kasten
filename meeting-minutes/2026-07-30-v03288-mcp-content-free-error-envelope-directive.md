@@ -143,7 +143,7 @@ the MCP wire boundary.
 ## Hard Boundaries
 
 - Do not access or modify
-  `C:\Users\mylifeisbusy\zettel-kasten-basoon`.
+  `<private-beta-archive-root>`.
 - Do not add a new MCP tool, CLI command, provider call, network call, archive
   write, migration, or beta-validation command.
 - Do not change archive service semantics merely to make MCP tests pass.

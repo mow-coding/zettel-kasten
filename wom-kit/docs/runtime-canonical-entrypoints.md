@@ -1,6 +1,6 @@
 # Runtime Canonical Entry Points
 
-Status: v0.3.293 explicit runtime-guidance readiness, operator-feedback routing, and prior runtime safeguards checkpoint
+Status: v0.3.294 checked-layer objet rediscovery, explicit runtime-guidance readiness, operator-feedback routing, and prior runtime safeguards checkpoint
 
 When an AI runtime enters a WOM archive, it needs a small, explicit "start
 here" map. The archive may contain zets, source bindings, provider metadata,
@@ -53,15 +53,20 @@ consumption as `not_proven`.
 
 ## Official Action Routing
 
-Introduced in v0.3.278 and extended in v0.3.293, `action_routing` uses
-`wom-kit/ai-command-path-routing/v0.7`. It tells an AI which official command
+Introduced in v0.3.278 and extended in v0.3.294, `action_routing` uses
+`wom-kit/ai-command-path-routing/v0.8`. It tells an AI which official command
 handles session entry, search, local version truth, saved-view inspection,
 inbox pipeline-shape review, explicit event-membership add/removal planning, command
 discovery, draft creation, minting, typed edges, source capture, and
 operational-context updates.
 
 Search uses `archive search <archive-root> <query> --count-total --format
-json`; raw grep and raw SQL are not authoritative WOM search. AI drafts use
+json`; raw grep and raw SQL are not authoritative WOM search. Before a global
+claim that an objet or source does not exist, follow it with
+`archive objet-rediscovery-plan <archive-root> <query> --dry-run --count-total
+--format json`. That plan preserves index completeness separately and reports
+unchecked or unimplemented layers; an index-only zero is not global absence.
+AI drafts use
 `archive create-draft` preview and exact reviewed replay; a direct Markdown
 write into `inbox/` is forbidden. `archive version` does not verify remote
 release freshness. `archive inbox-pipeline-audit --dry-run` returns

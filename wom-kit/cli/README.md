@@ -23,6 +23,18 @@ installed environments use the `archive` or `wom` console script. The six
 stable external wrapper refusal codes and fixed content-free recovery pointer
 are documented in `wom-kit/docs/version-truth-source.md`.
 
+v0.3.294 adds read-only `objet-rediscovery-plan`. Run it after index search
+and before any global claim that an objet or source file does not exist:
+
+```text
+archive objet-rediscovery-plan <archive-root> <query> --dry-run --count-total --format json
+```
+
+It lists ten fixed checked/unchecked evidence layers, preserves
+`search.complete` as index-only non-truncation, and echoes no private query,
+result row, filename, title, id, path, or exception. See
+`wom-kit/docs/objet-rediscovery-plan.md`.
+
 v0.3.0 opens the first narrow receiver-side write boundary: an approval-gated shared update attestation/review record and receipt. See `wom-kit/docs/shared-update-attestation-review-write.md`.
 
 v0.3.1 adds a read-only shared update route preview. It points to an existing candidate route surface and writes nothing. See `wom-kit/docs/shared-update-route-preview.md`.
@@ -232,6 +244,9 @@ index
 
 search
   Search zettels, object manifest entries, derived text records, views, and source map entries through the generated index.
+
+objet-rediscovery-plan --dry-run
+  Summarize ten fixed rediscovery evidence layers before any global absence claim. This is privacy-safe, write-free, and remains search_incomplete while any applicable or unknown layer is incomplete.
 
 parcel
   Create a portable parcel from a saved view. The v0.2 compatibility path still writes under workpacks/.

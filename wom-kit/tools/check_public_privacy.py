@@ -22,8 +22,6 @@ PUBLIC_TEXT_SUFFIXES = {
     ".js",
     ".ts",
 }
-PRIVATE_PATH_PREFIXES = ("meeting-minutes/",)
-PRIVATE_FILE_PREFIXES = ("archive-infra-decision-log-",)
 PLACEHOLDER_MARKERS = (
     "example",
     "placeholder",
@@ -90,10 +88,6 @@ def run_git_ls_files(repo_root: Path) -> list[str]:
 
 
 def is_public_text_path(path: str) -> bool:
-    if path.startswith(PRIVATE_PATH_PREFIXES):
-        return False
-    if any(Path(path).name.startswith(prefix) for prefix in PRIVATE_FILE_PREFIXES):
-        return False
     return Path(path).suffix.lower() in PUBLIC_TEXT_SUFFIXES
 
 

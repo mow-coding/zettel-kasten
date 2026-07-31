@@ -2,6 +2,30 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.3.294 checked-layer objet 재발견
+
+v0.3.294는 아카이브 마이그레이션이 필요하지 않으며 zet, index,
+manifest, receipt, metadata, Runtime Skill 설치 상태, `AGENTS.md`를
+다시 쓰지 않습니다.
+
+보존된 원본이나 objet가 전역적으로 존재하지 않는다고 결론 내리기 전에
+다음을 실행합니다.
+
+```text
+archive objet-rediscovery-plan <archive-root> <query> --dry-run --count-total --format json
+```
+
+이 명령은 비공개 파일명 finder가 아니라 개인정보 안전한 증거
+계획입니다. query와 검색 행을 출력하지 않고 고정된 10개 재발견 계층을
+모두 표시합니다. 기존 index의 `complete`와 `truncated`는
+`index_search` 안에 그대로 보존됩니다. 앞선 채널이 전체 결과 제한을
+채워도 5개 index 채널은 각각 제한된 범위로 확인됩니다. v0.3.294에서는
+미구현 또는 미확인 계층이 남으므로 결과는 `search_incomplete`,
+`rediscovery_complete: false`, `negative_claim_supported: false`입니다.
+
+공개 릴리스 전에 정확한 공개 v0.3.293 merge commit 위로 rebase하고
+전체 테스트와 clean-wheel 검증을 다시 수행해야 합니다.
+
 ## v0.3.293 runtime guidance 준비 상태
 
 v0.3.293은 아카이브 마이그레이션이 필요하지 않으며 zet이나
