@@ -107293,6 +107293,20 @@ def live_zettel_index_entries(
     return entries
 
 
+def require_objet_rediscovery_borrowed_connection(
+    connection: sqlite3.Connection,
+) -> None:
+    """Require the shared, already-pinned Row connection used by the plan."""
+
+    if (
+        connection.row_factory is not sqlite3.Row
+        or not connection.in_transaction
+    ):
+        raise ArchiveServiceError(
+            "Borrowed rediscovery index connection is not a pinned Row snapshot."
+        )
+
+
 def index_health(
     archive_root: Path | str,
     *,
@@ -107307,6 +107321,7 @@ def index_health(
         progress_callback=progress_callback,
         immutable_index_read=False,
         reject_reparse_directories=False,
+        connection=None,
     )
 
 
@@ -107315,6 +107330,7 @@ def index_health_immutable_snapshot(
     *,
     dry_run: bool = True,
     max_items: int = 50,
+    connection: sqlite3.Connection | None = None,
 ) -> dict[str, Any]:
     """Plan-private health read that cannot create SQLite sidecar files."""
 
@@ -107325,6 +107341,7 @@ def index_health_immutable_snapshot(
         progress_callback=None,
         immutable_index_read=True,
         reject_reparse_directories=True,
+        connection=connection,
     )
 
 
@@ -107336,6 +107353,7 @@ def _index_health_impl(
     progress_callback: Callable[[str, str, int | None, int | None], None] | None,
     immutable_index_read: bool,
     reject_reparse_directories: bool,
+    connection: sqlite3.Connection | None,
 ) -> dict[str, Any]:
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
@@ -107365,11 +107383,20 @@ def _index_health_impl(
     index_schema_complete = False
 
     if db_path.is_file():
-        conn = connect_archive_index(
-            db_path,
-            row_factory=True,
-            immutable_read=immutable_index_read,
-        )
+        owns_connection = connection is None
+        if connection is not None:
+            if not immutable_index_read:
+                raise ArchiveServiceError(
+                    "Borrowed index connections are plan-private."
+                )
+            require_objet_rediscovery_borrowed_connection(connection)
+            conn = connection
+        else:
+            conn = connect_archive_index(
+                db_path,
+                row_factory=True,
+                immutable_read=immutable_index_read,
+            )
         try:
             zettels_table = conn.execute(
                 "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'zettels'"
@@ -107405,7 +107432,8 @@ def _index_health_impl(
                     "index-health-index-rows", "done", indexed_row_count, indexed_row_count
                 )
         finally:
-            conn.close()
+            if owns_connection:
+                conn.close()
     elif progress_callback is not None:
         progress_callback("index-health-index-rows", "start", 0, 0)
         progress_callback("index-health-index-rows", "done", 0, 0)
@@ -107907,6 +107935,7 @@ def objet_rediscovery_index_channel_evidence(
     query: str,
     *,
     limit: int,
+    connection: sqlite3.Connection | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Probe every indexed search channel without returning any matching row."""
 
@@ -107915,13 +107944,19 @@ def objet_rediscovery_index_channel_evidence(
     probe_limit = bounded_limit + 1
     like = f"%{query.lower()}%"
     evidence: dict[str, dict[str, Any]] = {}
-    conn = connect_archive_index(
-        db_path,
-        row_factory=False,
-        immutable_read=True,
-    )
+    owns_connection = connection is None
+    if connection is not None:
+        require_objet_rediscovery_borrowed_connection(connection)
+        conn = connection
+    else:
+        conn = connect_archive_index(
+            db_path,
+            row_factory=True,
+            immutable_read=True,
+        )
     try:
-        conn.execute("BEGIN")
+        if owns_connection:
+            conn.execute("BEGIN")
         for channel, table, where_clause in SEARCH_CHANNEL_TABLES:
             rows = conn.execute(
                 f"SELECT 1 FROM {table} WHERE {where_clause} LIMIT ?",  # noqa: S608 - fixed table/clause constants
@@ -107937,8 +107972,11 @@ def objet_rediscovery_index_channel_evidence(
                 "limit_applied": bounded_limit,
             }
     finally:
-        conn.rollback()
-        conn.close()
+        if owns_connection:
+            try:
+                conn.rollback()
+            finally:
+                conn.close()
     return evidence
 
 
@@ -107997,22 +108035,40 @@ def objet_rediscovery_plan(
                 ),
                 query_present=True,
             )
-        health = index_health_immutable_snapshot(
-            root,
-            dry_run=True,
-            max_items=1,
+        connection = connect_archive_index(
+            root / INDEX_RELATIVE_PATH,
+            row_factory=True,
+            immutable_read=True,
         )
-        search_result = search_archive_immutable_snapshot(
-            root,
-            query,
-            limit=limit,
-            count_total=count_total,
-        )
-        channel_evidence = objet_rediscovery_index_channel_evidence(
-            root,
-            query,
-            limit=limit,
-        )
+        try:
+            connection.execute("BEGIN")
+            connection.execute(
+                "SELECT 1 FROM sqlite_master LIMIT 1"
+            ).fetchone()
+            health = index_health_immutable_snapshot(
+                root,
+                dry_run=True,
+                max_items=1,
+                connection=connection,
+            )
+            search_result = search_archive_immutable_snapshot(
+                root,
+                query,
+                limit=limit,
+                count_total=count_total,
+                connection=connection,
+            )
+            channel_evidence = objet_rediscovery_index_channel_evidence(
+                root,
+                query,
+                limit=limit,
+                connection=connection,
+            )
+        finally:
+            try:
+                connection.rollback()
+            finally:
+                connection.close()
         snapshot_after, pending_sidecar_after = (
             objet_rediscovery_index_snapshot_state(root)
         )
@@ -108455,6 +108511,7 @@ def search_archive(
         limit=limit,
         count_total=count_total,
         immutable_index_read=False,
+        connection=None,
     )
 
 
@@ -108464,6 +108521,7 @@ def search_archive_immutable_snapshot(
     limit: int = 20,
     *,
     count_total: bool = False,
+    connection: sqlite3.Connection | None = None,
 ) -> dict[str, Any]:
     """Plan-private index search that cannot create SQLite sidecar files."""
 
@@ -108473,6 +108531,7 @@ def search_archive_immutable_snapshot(
         limit=limit,
         count_total=count_total,
         immutable_index_read=True,
+        connection=connection,
     )
 
 
@@ -108483,6 +108542,7 @@ def _search_archive_impl(
     *,
     count_total: bool,
     immutable_index_read: bool,
+    connection: sqlite3.Connection | None,
 ) -> dict[str, Any]:
     root = require_existing_archive_root(archive_root)
     if not query.strip():
@@ -108500,15 +108560,25 @@ def _search_archive_impl(
     probe_budget = limit + 1
     rows_seen = 0
     results: list[dict[str, Any]] = []
-    conn = connect_archive_index(
-        db_path,
-        row_factory=True,
-        immutable_read=immutable_index_read,
-    )
+    owns_connection = connection is None
+    if connection is not None:
+        if not immutable_index_read:
+            raise ArchiveServiceError(
+                "Borrowed index connections are plan-private."
+            )
+        require_objet_rediscovery_borrowed_connection(connection)
+        conn = connection
+    else:
+        conn = connect_archive_index(
+            db_path,
+            row_factory=True,
+            immutable_read=immutable_index_read,
+        )
     try:
         # One read transaction so the returned rows and any later count describe
         # the same database state even if a rebuild commits alongside.
-        conn.execute("BEGIN")
+        if owns_connection:
+            conn.execute("BEGIN")
         for row in conn.execute(
             f"""
             SELECT path, zettel_id, title, status, kind, body, frontmatter_json
@@ -108670,8 +108740,11 @@ def _search_archive_impl(
         else:
             total_matches = None
     finally:
-        conn.rollback()
-        conn.close()
+        if owns_connection:
+            try:
+                conn.rollback()
+            finally:
+                conn.close()
 
     return {
         "query": query,
