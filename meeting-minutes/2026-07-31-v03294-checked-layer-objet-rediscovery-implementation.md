@@ -172,8 +172,9 @@ are recorded; an unexposed backend identity is not guessed.
   final record is captured by Git and the release-supervisor handoff rather
   than self-referenced inside its own body;
 - test reference: exact-worktree focused, ordinary-regression, documentation,
-  package-resource, and release-readiness evidence currently recorded in this
-  file; final full-suite and clean-wheel evidence remain explicitly pending;
+  package-resource, release-readiness, complete source-suite, and pre-PR
+  clean-wheel evidence recorded in this file; exact-merge/public-artifact
+  evidence remains explicitly pending;
 - human authority: the human project owner and release supervisor retain final
   scope, merge, release, and beta-validation authority. This AI role does not
   authorize a push, PR, tag, or release.
@@ -250,18 +251,30 @@ Accepted exact-worktree verification after the exact-v0.3.293 rebase:
 - package-resource synchronization: 103/103 current;
 - complete Windows source suite: 1,929 tests run in 1,415.677 seconds;
   1,907 passed, 22 skipped, and 0 failed;
-- clean wheel-only installation: pending the final full-suite result; its
-  filename, byte size, resource totals, entrypoint/MCP evidence, and SHA-256
-  are recorded before this candidate is pushed;
+- clean pre-PR wheel-only installation from source commit `098f65bf`:
+  `wom_kit-0.3.294-py3-none-any.whl`, 1,258,146 bytes, SHA-256
+  `efab0dc2f5bebf7614a00c7b9e2499be3e74c1986934eb40db3b2a1b65c60bd5`,
+  120 wheel files, and 103/103 resources totaling 337,673 bytes;
+- installed entrypoint evidence: both CLI aliases reported v0.3.294 with empty
+  stderr; both MCP aliases completed initialize/initialized/tools-list/EOF,
+  exposed 121 tools, and produced the same 100,970-byte canonical inventory
+  SHA-256
+  `bbf0dae19380438ec6486d256647a9a2d50355c1d8ae85aea3145e9146f6d7bd`;
+- installed Runtime Skill lifecycle, onboarding preview/write, and strict
+  Doctor all passed; a second fresh virtual environment resolved
+  `PyYAML==6.0.3`, installed the preserved wheel, and returned
+  `No broken requirements found` from `pip check`;
+- this pre-PR wheel is candidate evidence only. The exact public merge commit
+  must produce a newly reviewed release wheel before tagging and publication;
 - Python compilation and `git diff --check`: passed after the focused fixes;
 - independent audit disposition: clear after all concrete findings were
   reproduced, corrected, and rechecked.
 
 One earlier wheel attempt was discarded because the source-test `PYTHONPATH`
 override was mistakenly left enabled, so the check correctly reported that
-its installed-version probe was not package-only. No wheel result is currently
-accepted for this exact candidate. The final clean-wheel check remains pending
-and must run after removing that source override.
+its installed-version probe was not package-only. The accepted pre-PR candidate
+result above was produced after removing that override. It does not replace the
+mandatory rebuild from the future exact public merge commit.
 
 ## Release Boundary
 
