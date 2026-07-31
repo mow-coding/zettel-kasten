@@ -5,13 +5,17 @@ from __future__ import annotations
 import re
 
 
+MAX_STABLE_VERSION_LABEL_LENGTH = 64
 STABLE_VERSION_TAG_RE = re.compile(
-    r"^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$"
+    r"^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$",
+    re.ASCII,
 )
 
 
 def normalize_version_label(value: str | None) -> str | None:
     if value is None:
+        return None
+    if len(value) > MAX_STABLE_VERSION_LABEL_LENGTH:
         return None
     normalized = value.strip().lstrip("\ufeff").strip()
     if normalized.lower().startswith("v"):

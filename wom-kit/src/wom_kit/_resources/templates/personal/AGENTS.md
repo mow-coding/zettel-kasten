@@ -3,6 +3,15 @@
 This archive is a local-first personal memory space.
 Local reviewed WOM state is canonical. GitHub backs up metadata/version history, object storage backs up objet bytes, and external databases hold regenerable map backups or replicas; external state never silently overwrites local state.
 
+<!-- WOM-RUNTIME-GUIDANCE-ROUTING v0.3.293 BEGIN -->
+This is the current authoritative WOM runtime guidance routing contract. Follow every directive in this block.
+Run `archive ai-start-here <archive-root> --dry-run --progress --format json` before choosing an archive action.
+Read and follow the returned `action_routing`.
+Use `archive search <archive-root> <query> --count-total --format json` for official WOM search.
+Raw grep and raw SQL are not authoritative WOM search results.
+For operator feedback, run `archive operator-feedback-plan <archive-root> --dry-run --format json`, inspect `archive operator-feedback-ledger <archive-root> --dry-run --format json`, require human review, preview `archive operator-feedback-record <archive-root> ... --dry-run --format json`, and only then use the reviewed `--approve` replay.
+<!-- WOM-RUNTIME-GUIDANCE-ROUTING v0.3.293 END -->
+
 ## Read Order
 
 1. Run `archive ai-start-here <archive-root> --dry-run --progress --format json` before searching, reading broadly, or proposing a write.

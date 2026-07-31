@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import re
 from typing import Any
 
 from . import __version__
@@ -20,6 +21,48 @@ READINESS_SCHEMA = "wom-kit/runtime-guidance-readiness/v0.1"
 MAX_AGENTS_BYTES = 512 * 1024
 SUPPORTED_HOST = "codex"
 SUPPORTED_SCOPE = "repo"
+AGENTS_ROUTING_BLOCK_BEGIN = (
+    "<!-- WOM-RUNTIME-GUIDANCE-ROUTING v0.3.293 BEGIN -->"
+)
+AGENTS_ROUTING_BLOCK_END = (
+    "<!-- WOM-RUNTIME-GUIDANCE-ROUTING v0.3.293 END -->"
+)
+AGENTS_ROUTING_AUTHORITY_LINE = (
+    "This is the current authoritative WOM runtime guidance routing contract. "
+    "Follow every directive in this block."
+)
+AGENTS_ROUTING_BLOCK = "\n".join(
+    (
+        AGENTS_ROUTING_BLOCK_BEGIN,
+        AGENTS_ROUTING_AUTHORITY_LINE,
+        (
+            "Run `archive ai-start-here <archive-root> --dry-run --progress "
+            "--format json` before choosing an archive action."
+        ),
+        "Read and follow the returned `action_routing`.",
+        (
+            "Use `archive search <archive-root> <query> --count-total "
+            "--format json` for official WOM search."
+        ),
+        "Raw grep and raw SQL are not authoritative WOM search results.",
+        (
+            "For operator feedback, run `archive operator-feedback-plan "
+            "<archive-root> --dry-run --format json`, inspect `archive "
+            "operator-feedback-ledger <archive-root> --dry-run --format json`, "
+            "require human review, preview `archive operator-feedback-record "
+            "<archive-root> ... --dry-run --format json`, and only then use "
+            "the reviewed `--approve` replay."
+        ),
+        AGENTS_ROUTING_BLOCK_END,
+    )
+)
+AGENTS_ROUTING_REQUIRED_ROUTES = (
+    "ai_start_here",
+    "action_routing",
+    "official_archive_search",
+    "raw_search_not_authoritative",
+    "operator_feedback_review_route",
+)
 AGENTS_ROUTING_MARKERS = (
     (
         "ai_start_here",
@@ -33,6 +76,10 @@ AGENTS_ROUTING_MARKERS = (
     (
         "raw_search_not_authoritative",
         "raw grep and raw sql are not authoritative",
+    ),
+    (
+        "operator_feedback_review_route",
+        "operator-feedback-plan",
     ),
 )
 SAFE_SKILL_STATES = {
@@ -79,19 +126,27 @@ def _read_valid_archive_id(root: Path) -> str:
 
 
 def _blocked_result(
-    archive_root: Path | str,
     *,
     host: str,
     scope: str,
     diagnostic_code: str,
     blocker: str,
+    archive_id: str | None = None,
+    inspection_reads: dict[str, bool] | None = None,
+    observation_status: str = "observed",
 ) -> dict[str, Any]:
-    archive_id: str | None = None
-    try:
-        root = archive_services.require_existing_archive_root(archive_root)
-        archive_id = _read_valid_archive_id(root)
-    except EXPECTED_ARCHIVE_IDENTITY_ERRORS:
-        pass
+    reads = {
+        "archive_configuration_read": False,
+        "agents_body_read": False,
+        "credential_or_secret_store_read": False,
+    }
+    if inspection_reads is not None:
+        reads.update(
+            {
+                key: bool(inspection_reads.get(key))
+                for key in reads
+            }
+        )
     return {
         "ok": False,
         "ready": False,
@@ -117,16 +172,18 @@ def _blocked_result(
         },
         "diagnostic_codes": [diagnostic_code],
         "next_safe_commands": [],
+        "inspection_reads": reads,
+        "observation_status": observation_status,
         "closed_actions": {
             "files_written": False,
             "agents_file_modified": False,
             "runtime_skill_installation_changed": False,
             "provider_api_called": False,
             "network_checked": False,
-            "secrets_read": False,
         },
         "privacy": {
             "local_paths_redacted": True,
+            "archive_identity_exposed": archive_id is not None,
             "agents_body_exposed": False,
             "secret_values_exposed": False,
         },
@@ -136,21 +193,31 @@ def _blocked_result(
 
 
 def blocked_runtime_guidance_result(
-    archive_root: Path | str,
     *,
     host: str,
     scope: str,
     diagnostic_code: str,
     blocker: str,
+    inspection_reads: dict[str, bool] | None = None,
+    observation_status: str = "conservative_after_failure",
 ) -> dict[str, Any]:
-    """Build one content-free CLI/service failure result."""
+    """Build one pure content-free CLI/service failure result without I/O."""
 
     return _blocked_result(
-        archive_root,
         host=host,
         scope=scope,
         diagnostic_code=diagnostic_code,
         blocker=blocker,
+        inspection_reads=(
+            inspection_reads
+            if inspection_reads is not None
+            else {
+                "archive_configuration_read": True,
+                "agents_body_read": True,
+                "credential_or_secret_store_read": False,
+            }
+        ),
+        observation_status=observation_status,
     )
 
 
@@ -238,29 +305,103 @@ def _safe_runtime_skill_projection(
     return state, target, installation, version_invalid
 
 
-def _inspect_agents_routing(repo_root: Path) -> dict[str, Any]:
+def _agents_routing_result(
+    status: str,
+    *,
+    checked: bool,
+    body_read: bool,
+    legacy_present: list[str] | None = None,
+) -> tuple[dict[str, Any], bool]:
+    current = status == "current"
+    legacy_routes = legacy_present or []
+    return (
+        {
+            "status": status,
+            "checked": checked,
+            "path_hint": "repo/AGENTS.md",
+            "contract_version": "v0.3.293",
+            "required_routes": list(AGENTS_ROUTING_REQUIRED_ROUTES),
+            "present_routes": (
+                list(AGENTS_ROUTING_REQUIRED_ROUTES) if current else []
+            ),
+            "missing_routes": (
+                [] if current else list(AGENTS_ROUTING_REQUIRED_ROUTES)
+            ),
+            "canonical_block_present": current,
+            "legacy_anchors_present_unverified": (
+                bool(legacy_routes) and not current
+            ),
+            "legacy_present_routes": (
+                [] if current else legacy_routes
+            ),
+            "body_echoed": False,
+        },
+        body_read,
+    )
+
+
+def _inside_markdown_fence(text: str, block_start: int) -> bool:
+    """Return whether an exact routing block starts inside a Markdown fence."""
+
+    opened: tuple[str, int] | None = None
+    for line in text[:block_start].splitlines():
+        match = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", line)
+        if match is None:
+            continue
+        marker = match.group(1)
+        trailing = match.group(2)
+        if opened is None:
+            opened = (marker[0], len(marker))
+            continue
+        if (
+            marker[0] == opened[0]
+            and len(marker) >= opened[1]
+            and not trailing.strip()
+        ):
+            opened = None
+    return opened is not None
+
+
+def _canonical_agents_routing_block_present(text: str) -> bool:
+    """Recognize exactly one positive, non-quoted canonical contract block."""
+
+    normalized = text.replace("\r\n", "\n")
+    if (
+        normalized.count(AGENTS_ROUTING_BLOCK_BEGIN) != 1
+        or normalized.count(AGENTS_ROUTING_BLOCK_END) != 1
+    ):
+        return False
+    start = normalized.find(AGENTS_ROUTING_BLOCK_BEGIN)
+    end_start = normalized.find(AGENTS_ROUTING_BLOCK_END)
+    if start < 0 or end_start < start:
+        return False
+    end = end_start + len(AGENTS_ROUTING_BLOCK_END)
+    if (start and normalized[start - 1] != "\n") or (
+        end < len(normalized) and normalized[end] != "\n"
+    ):
+        return False
+    if normalized[start:end] != AGENTS_ROUTING_BLOCK:
+        return False
+    return not _inside_markdown_fence(normalized, start)
+
+
+def _inspect_agents_routing(
+    repo_root: Path,
+) -> tuple[dict[str, Any], bool]:
     agents_path = repo_root / "AGENTS.md"
     kind = archive_services.wom_kit_real_path_kind(repo_root, agents_path)
     if kind == "missing":
-        return {
-            "status": "absent",
-            "checked": True,
-            "path_hint": "repo/AGENTS.md",
-            "required_routes": [name for name, _marker in AGENTS_ROUTING_MARKERS],
-            "present_routes": [],
-            "missing_routes": [name for name, _marker in AGENTS_ROUTING_MARKERS],
-            "body_echoed": False,
-        }
+        return _agents_routing_result(
+            "absent",
+            checked=True,
+            body_read=False,
+        )
     if kind != "file":
-        return {
-            "status": "unsafe",
-            "checked": True,
-            "path_hint": "repo/AGENTS.md",
-            "required_routes": [name for name, _marker in AGENTS_ROUTING_MARKERS],
-            "present_routes": [],
-            "missing_routes": [],
-            "body_echoed": False,
-        }
+        return _agents_routing_result(
+            "unsafe",
+            checked=True,
+            body_read=False,
+        )
 
     text = archive_services.wom_kit_read_bounded_real_text(
         repo_root,
@@ -268,36 +409,28 @@ def _inspect_agents_routing(repo_root: Path) -> dict[str, Any]:
         max_bytes=MAX_AGENTS_BYTES,
     )
     if text is None:
-        return {
-            "status": "unreadable",
-            "checked": True,
-            "path_hint": "repo/AGENTS.md",
-            "required_routes": [name for name, _marker in AGENTS_ROUTING_MARKERS],
-            "present_routes": [],
-            "missing_routes": [],
-            "body_echoed": False,
-        }
+        return _agents_routing_result(
+            "unreadable",
+            checked=True,
+            body_read=True,
+        )
 
     normalized = " ".join(text.casefold().split())
-    present = [
+    legacy_present = [
         name
         for name, marker in AGENTS_ROUTING_MARKERS
         if marker.casefold() in normalized
     ]
-    missing = [
-        name
-        for name, _marker in AGENTS_ROUTING_MARKERS
-        if name not in present
-    ]
-    return {
-        "status": "current" if not missing else "incomplete",
-        "checked": True,
-        "path_hint": "repo/AGENTS.md",
-        "required_routes": [name for name, _marker in AGENTS_ROUTING_MARKERS],
-        "present_routes": present,
-        "missing_routes": missing,
-        "body_echoed": False,
-    }
+    return _agents_routing_result(
+        (
+            "current"
+            if _canonical_agents_routing_block_present(text)
+            else "incomplete"
+        ),
+        checked=True,
+        body_read=True,
+        legacy_present=legacy_present,
+    )
 
 
 def runtime_guidance_readiness(
@@ -313,7 +446,6 @@ def runtime_guidance_readiness(
     normalized_scope = scope.strip().lower() if isinstance(scope, str) else ""
     if normalized_host != SUPPORTED_HOST or normalized_scope != SUPPORTED_SCOPE:
         return _blocked_result(
-            archive_root,
             host=host,
             scope=scope,
             diagnostic_code="unsupported_host_scope",
@@ -324,7 +456,6 @@ def runtime_guidance_readiness(
         )
     if repo_root is None:
         return _blocked_result(
-            archive_root,
             host=host,
             scope=scope,
             diagnostic_code="repo_root_required",
@@ -334,12 +465,15 @@ def runtime_guidance_readiness(
             ),
         )
 
+    inspection_reads = {
+        "archive_configuration_read": False,
+        "agents_body_read": False,
+        "credential_or_secret_store_read": False,
+    }
     try:
         root = archive_services.require_existing_archive_root(archive_root)
-        archive_id = _read_valid_archive_id(root)
     except EXPECTED_ARCHIVE_IDENTITY_ERRORS:
         return _blocked_result(
-            archive_root,
             host=host,
             scope=scope,
             diagnostic_code="invalid_archive",
@@ -347,6 +481,35 @@ def runtime_guidance_readiness(
                 "Runtime guidance readiness requires a readable WOM archive "
                 "with a valid archive identity."
             ),
+            inspection_reads=inspection_reads,
+        )
+
+    inspection_reads["archive_configuration_read"] = True
+    try:
+        archive_id = _read_valid_archive_id(root)
+    except EXPECTED_ARCHIVE_IDENTITY_ERRORS:
+        return _blocked_result(
+            host=host,
+            scope=scope,
+            diagnostic_code="invalid_archive",
+            blocker=(
+                "Runtime guidance readiness requires a readable WOM archive "
+                "with a valid archive identity."
+            ),
+            inspection_reads=inspection_reads,
+        )
+    projected_archive_id = archive_services.safe_projection_scalar(archive_id)
+    if projected_archive_id != archive_id:
+        return _blocked_result(
+            host=host,
+            scope=scope,
+            diagnostic_code="archive_identity_unshareable",
+            blocker=(
+                "Runtime guidance readiness requires an archive identity that "
+                "can be projected exactly without exposing private or unsafe "
+                "content."
+            ),
+            inspection_reads=inspection_reads,
         )
 
     try:
@@ -358,7 +521,6 @@ def runtime_guidance_readiness(
         )
     except (archive_services.ArchiveServiceError, OSError, ValueError):
         return _blocked_result(
-            archive_root,
             host=host,
             scope=scope,
             diagnostic_code="unsafe_or_unreadable_target",
@@ -366,6 +528,8 @@ def runtime_guidance_readiness(
                 "Runtime guidance readiness could not resolve a safe archive "
                 "and explicit host repository target."
             ),
+            archive_id=projected_archive_id,
+            inspection_reads=inspection_reads,
         )
 
     skill_result = runtime_skill_install.runtime_skill_status(
@@ -375,7 +539,8 @@ def runtime_guidance_readiness(
         redact_local_paths=True,
         package_version=__version__,
     )
-    agents_routing = _inspect_agents_routing(resolved_repo)
+    agents_routing, agents_body_read = _inspect_agents_routing(resolved_repo)
+    inspection_reads["agents_body_read"] = agents_body_read
     (
         skill_status,
         skill_target,
@@ -406,8 +571,10 @@ def runtime_guidance_readiness(
         blockers.append("Runtime Skill state is not safely managed by this WOM-kit contract.")
 
     agents_status = str(agents_routing.get("status") or "unreadable")
-    if agents_status in {"absent", "incomplete"}:
-        diagnostic_codes.append("legacy_agents_routing_absent")
+    if agents_status == "absent":
+        diagnostic_codes.append("agents_routing_contract_absent")
+    elif agents_status == "incomplete":
+        diagnostic_codes.append("agents_routing_contract_not_current")
     elif agents_status in {"unsafe", "unreadable"}:
         diagnostic_codes.append(f"agents_routing_{agents_status}")
         blockers.append("Repository AGENTS.md routing could not be inspected safely.")
@@ -437,7 +604,7 @@ def runtime_guidance_readiness(
         "schema": READINESS_SCHEMA,
         "lifecycle_action": "runtime_guidance_readiness",
         "status": status,
-        "archive_id": archive_id,
+        "archive_id": projected_archive_id,
         "target": {
             "host": normalized_host,
             "scope": normalized_scope,
@@ -455,16 +622,18 @@ def runtime_guidance_readiness(
         },
         "diagnostic_codes": diagnostic_codes,
         "next_safe_commands": next_safe_commands,
+        "inspection_reads": inspection_reads,
+        "observation_status": "observed",
         "closed_actions": {
             "files_written": False,
             "agents_file_modified": False,
             "runtime_skill_installation_changed": False,
             "provider_api_called": False,
             "network_checked": False,
-            "secrets_read": False,
         },
         "privacy": {
             "local_paths_redacted": True,
+            "archive_identity_exposed": True,
             "agents_body_exposed": False,
             "secret_values_exposed": False,
             "untrusted_manifest_values_exposed": False,

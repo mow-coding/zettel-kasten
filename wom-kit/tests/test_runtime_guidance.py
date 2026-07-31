@@ -10,7 +10,12 @@ import tempfile
 import unittest
 from unittest import mock
 
-from wom_kit import archive_cli, archive_services, runtime_guidance
+from wom_kit import (
+    archive_cli,
+    archive_services,
+    runtime_guidance,
+    version_policy,
+)
 from wom_kit import runtime_skill_install
 
 
@@ -37,24 +42,27 @@ class RuntimeGuidanceReadinessTests(unittest.TestCase):
         archive_root = repo / "archive"
         repo.mkdir()
         shutil.copytree(FAKE_ARCHIVE, archive_root)
-        agents_lines = [
-            "# Repository Guidance",
-            (
-                "Run `archive ai-start-here <archive-root> --dry-run "
-                "--progress --format json`."
-            ),
-            "Read the returned `action_routing`.",
-            (
-                "Use `archive search <archive-root> <query> --count-total "
-                "--format json`."
-            ),
-        ]
+        agents_lines = ["# Repository Guidance"]
         if complete_agents:
-            agents_lines.append(
-                "Raw grep and raw SQL are not authoritative WOM search results."
+            agents_lines.extend(
+                ["", runtime_guidance.AGENTS_ROUTING_BLOCK]
             )
         else:
-            agents_lines.append("PRIVATE_AGENTS_BODY_CANARY")
+            agents_lines.extend(
+                [
+                    (
+                        "Run `archive ai-start-here <archive-root> --dry-run "
+                        "--progress --format json`."
+                    ),
+                    "Read the returned `action_routing`.",
+                    (
+                        "Use `archive search <archive-root> <query> "
+                        "--count-total --format json`."
+                    ),
+                    "Raw grep and raw SQL are not authoritative WOM search results.",
+                    "PRIVATE_AGENTS_BODY_CANARY",
+                ]
+            )
         (repo / "AGENTS.md").write_text(
             "\n".join(agents_lines) + "\n",
             encoding="utf-8",
@@ -182,7 +190,18 @@ class RuntimeGuidanceReadinessTests(unittest.TestCase):
             result["closed_actions"]["runtime_skill_installation_changed"]
         )
         self.assertFalse(result["closed_actions"]["network_checked"])
+        self.assertNotIn("secrets_read", result["closed_actions"])
+        self.assertEqual(
+            result["inspection_reads"],
+            {
+                "archive_configuration_read": True,
+                "agents_body_read": True,
+                "credential_or_secret_store_read": False,
+            },
+        )
+        self.assertEqual(result["observation_status"], "observed")
         self.assertTrue(result["privacy"]["local_paths_redacted"])
+        self.assertTrue(result["privacy"]["archive_identity_exposed"])
         self.assertFalse(result["privacy"]["agents_body_exposed"])
         self.assertNotIn(str(repo), output)
         self.assertNotIn(str(archive_root), output)
@@ -196,6 +215,9 @@ class RuntimeGuidanceReadinessTests(unittest.TestCase):
             "0.3",
             "0.3.293-dev",
             "PRIVATE_VERSION_CANARY",
+            "0.3.29٣",
+            "０.３.２９３",
+            "0.3." + ("9" * 5000),
         )
         for unsafe_version in unsafe_versions:
             with self.subTest(unsafe_version=unsafe_version):
@@ -307,6 +329,12 @@ class RuntimeGuidanceReadinessTests(unittest.TestCase):
                     readiness_output + status_json_output,
                 )
                 self.assertNotIn(
+                    json.dumps(unsafe_version, ensure_ascii=False),
+                    readiness_output + status_json_output,
+                )
+                if unsafe_version not in "0.3.293":
+                    self.assertNotIn(unsafe_version, combined_output)
+                self.assertNotIn(
                     f"Installed version: {unsafe_version}",
                     status_text_output,
                 )
@@ -346,10 +374,47 @@ class RuntimeGuidanceReadinessTests(unittest.TestCase):
         self.assertIsNone(result["archive_id"])
         self.assertEqual(result["diagnostic_codes"], ["invalid_archive"])
         self.assertFalse(result["closed_actions"]["files_written"])
+        self.assertEqual(
+            result["inspection_reads"],
+            {
+                "archive_configuration_read": True,
+                "agents_body_read": False,
+                "credential_or_secret_store_read": False,
+            },
+        )
         self.assertTrue(result["privacy"]["local_paths_redacted"])
+        self.assertFalse(result["privacy"]["archive_identity_exposed"])
         self.assertNotIn(str(repo), output)
         self.assertNotIn(str(archive_root), output)
         self.assertNotIn("Traceback", output)
+
+    def test_nonexistent_root_reports_no_archive_configuration_read(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "repo"
+            repo.mkdir()
+            missing_archive = repo / "missing-archive"
+
+            result = runtime_guidance.runtime_guidance_readiness(
+                missing_archive,
+                host="codex",
+                scope="repo",
+                repo_root=repo,
+            )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["diagnostic_codes"], ["invalid_archive"])
+        self.assertEqual(result["observation_status"], "observed")
+        self.assertEqual(
+            result["inspection_reads"],
+            {
+                "archive_configuration_read": False,
+                "agents_body_read": False,
+                "credential_or_secret_store_read": False,
+            },
+        )
+        self.assertFalse(result["privacy"]["archive_identity_exposed"])
 
     def test_invalid_archive_identity_variants_stop_before_host_inspection_without_writes(
         self,
@@ -439,7 +504,18 @@ class RuntimeGuidanceReadinessTests(unittest.TestCase):
                     ["invalid_archive"],
                 )
                 self.assertFalse(result["closed_actions"]["files_written"])
+                self.assertEqual(
+                    result["inspection_reads"],
+                    {
+                        "archive_configuration_read": True,
+                        "agents_body_read": False,
+                        "credential_or_secret_store_read": False,
+                    },
+                )
                 self.assertTrue(result["privacy"]["local_paths_redacted"])
+                self.assertFalse(
+                    result["privacy"]["archive_identity_exposed"]
+                )
                 self.assertNotIn(private_canary, stdout)
                 self.assertNotIn(str(repo), stdout)
                 self.assertNotIn(str(archive_root), stdout)
@@ -510,10 +586,113 @@ class RuntimeGuidanceReadinessTests(unittest.TestCase):
         result = json.loads(stdout)
         self.assertEqual(result["diagnostic_codes"], ["invalid_archive"])
         self.assertIsNone(result["archive_id"])
+        self.assertTrue(
+            result["inspection_reads"]["archive_configuration_read"]
+        )
+        self.assertFalse(result["inspection_reads"]["agents_body_read"])
+        self.assertFalse(result["privacy"]["archive_identity_exposed"])
         self.assertNotIn(str(private_error), stdout)
         self.assertNotIn(str(repo), stdout)
         self.assertNotIn(str(archive_root), stdout)
         self.assertNotIn("Traceback", stdout)
+
+    def test_unshareable_archive_identity_stops_after_one_configuration_read(
+        self,
+    ) -> None:
+        cases = {
+            "path_like": r"X:\synthetic-private\archive-root",
+            "secret_like": (
+                "token: abcdefghijklmnopqrstuvwxyz123456"
+            ),
+            "overlong": "archive:" + ("private-tail-" * 30),
+            "normalization_drift": " archive:personal:fake-life ",
+        }
+        for label, unsafe_archive_id in cases.items():
+            with self.subTest(label=label):
+                with tempfile.TemporaryDirectory() as tmp:
+                    repo, archive_root = self.make_repo(Path(tmp))
+                    (archive_root / "archive.yml").write_text(
+                        "archive_id: "
+                        + json.dumps(unsafe_archive_id, ensure_ascii=True)
+                        + "\n",
+                        encoding="utf-8",
+                        newline="\n",
+                    )
+                    before = self.tree_digest(repo)
+
+                    with (
+                        mock.patch.object(
+                            archive_services,
+                            "read_archive_id",
+                            wraps=archive_services.read_archive_id,
+                        ) as read_archive_id,
+                        mock.patch.object(
+                            runtime_skill_install,
+                            "resolve_target_location",
+                            side_effect=AssertionError(
+                                "unsafe identity entered host target resolution"
+                            ),
+                        ) as resolve_target,
+                        mock.patch.object(
+                            runtime_skill_install,
+                            "runtime_skill_status",
+                            side_effect=AssertionError(
+                                "unsafe identity entered Runtime Skill inspection"
+                            ),
+                        ) as inspect_skill,
+                        mock.patch.object(
+                            runtime_guidance,
+                            "_inspect_agents_routing",
+                            side_effect=AssertionError(
+                                "unsafe identity entered AGENTS.md inspection"
+                            ),
+                        ) as inspect_agents,
+                    ):
+                        code, stdout, stderr = self.run_cli_streams(
+                            [
+                                "runtime-guidance-readiness",
+                                str(archive_root),
+                                "--host",
+                                "codex",
+                                "--scope",
+                                "repo",
+                                "--repo-root",
+                                str(repo),
+                                "--format",
+                                "json",
+                            ]
+                        )
+                    after = self.tree_digest(repo)
+
+                self.assertEqual(code, 1, stdout + stderr)
+                self.assertEqual(stderr, "")
+                self.assertEqual(before, after)
+                read_archive_id.assert_called_once()
+                resolve_target.assert_not_called()
+                inspect_skill.assert_not_called()
+                inspect_agents.assert_not_called()
+                result = json.loads(stdout)
+                self.assertEqual(
+                    result["diagnostic_codes"],
+                    ["archive_identity_unshareable"],
+                )
+                self.assertIsNone(result["archive_id"])
+                self.assertEqual(
+                    result["inspection_reads"],
+                    {
+                        "archive_configuration_read": True,
+                        "agents_body_read": False,
+                        "credential_or_secret_store_read": False,
+                    },
+                )
+                self.assertFalse(
+                    result["privacy"]["archive_identity_exposed"]
+                )
+                self.assertNotIn(unsafe_archive_id, stdout)
+                self.assertNotIn("private-tail", stdout)
+                self.assertNotIn(str(repo), stdout)
+                self.assertNotIn(str(archive_root), stdout)
+                self.assertNotIn("Traceback", stdout)
 
     def test_absent_skill_and_incomplete_agents_have_distinct_diagnostics(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -536,7 +715,7 @@ class RuntimeGuidanceReadinessTests(unittest.TestCase):
         self.assertEqual(result["agents_routing"]["status"], "incomplete")
         self.assertIn("runtime_skill_absent", result["diagnostic_codes"])
         self.assertIn(
-            "legacy_agents_routing_absent",
+            "agents_routing_contract_not_current",
             result["diagnostic_codes"],
         )
         self.assertEqual(
@@ -547,6 +726,197 @@ class RuntimeGuidanceReadinessTests(unittest.TestCase):
             ],
         )
         self.assertNotIn("PRIVATE_AGENTS_BODY_CANARY", serialized)
+
+    def test_agents_detector_requires_one_exact_positive_unquoted_block(
+        self,
+    ) -> None:
+        block = runtime_guidance.AGENTS_ROUTING_BLOCK
+        begin = runtime_guidance.AGENTS_ROUTING_BLOCK_BEGIN
+        end = runtime_guidance.AGENTS_ROUTING_BLOCK_END
+        lines = block.splitlines()
+        legacy_block_without_authority = "\n".join(
+            [lines[0], *lines[2:]]
+        )
+        cases = {
+            "exact": (block, True),
+            "crlf_only": (block.replace("\n", "\r\n"), True),
+            "external_negation_of_legacy_block": (
+                "Do NOT follow the block below.\n"
+                + legacy_block_without_authority,
+                False,
+            ),
+            "historical_legacy_block": (
+                "Historical only; this retired block is not current.\n"
+                + legacy_block_without_authority,
+                False,
+            ),
+            "internally_negated_authority": (
+                block.replace(
+                    runtime_guidance.AGENTS_ROUTING_AUTHORITY_LINE,
+                    "Do NOT follow the directives in this block.",
+                ),
+                False,
+            ),
+            "internally_historical_authority": (
+                block.replace(
+                    runtime_guidance.AGENTS_ROUTING_AUTHORITY_LINE,
+                    "This block is historical only and is not current.",
+                ),
+                False,
+            ),
+            "negated_legacy_phrases": (
+                "\n".join(
+                    [
+                        "Do NOT run `archive ai-start-here <archive-root> "
+                        "--dry-run --progress --format json`.",
+                        "Ignore action_routing.",
+                        "Do NOT use `archive search <archive-root> <query> "
+                        "--count-total --format json`.",
+                        (
+                            'The old sentence "raw grep and raw SQL are not '
+                            'authoritative WOM search results" is wrong.'
+                        ),
+                        "Do NOT run operator-feedback-plan.",
+                    ]
+                ),
+                False,
+            ),
+            "historical_quote": (
+                "A retired guide once contained:\n" + block.replace(
+                    "\n", "\n> "
+                ).join(("> ", "")),
+                False,
+            ),
+            "duplicate": (block + "\n" + block, False),
+            "reordered": (
+                "\n".join([lines[0], lines[2], lines[1], *lines[3:]]),
+                False,
+            ),
+            "truncated": ("\n".join(lines[:-2] + [end]), False),
+            "fenced": ("```markdown\n" + block + "\n```\n", False),
+            "blockquote": (
+                "\n".join("> " + line for line in lines),
+                False,
+            ),
+            "begin_only": (begin + "\n" + lines[1], False),
+            "end_before_begin": (end + "\n" + block, False),
+            "standalone_cr": (block.replace("\n", "\r"), False),
+        }
+        for label, (text, expected) in cases.items():
+            with self.subTest(label=label):
+                self.assertEqual(
+                    runtime_guidance._canonical_agents_routing_block_present(
+                        text
+                    ),
+                    expected,
+                )
+
+    def test_negated_legacy_agents_never_become_ready_or_get_rewritten(
+        self,
+    ) -> None:
+        negated = "\n".join(
+            [
+                "# Historical notes",
+                (
+                    "Do NOT run `archive ai-start-here <archive-root> "
+                    "--dry-run --progress --format json`."
+                ),
+                "Ignore action_routing.",
+                (
+                    "Do NOT use `archive search <archive-root> <query> "
+                    "--count-total --format json`."
+                ),
+                (
+                    'The old sentence "raw grep and raw SQL are not '
+                    'authoritative WOM search results" is wrong.'
+                ),
+                "Do NOT run operator-feedback-plan or operator-feedback-ledger.",
+                "",
+            ]
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, archive_root = self.make_repo(Path(tmp))
+            self.install_repo_skill(repo)
+            (repo / "AGENTS.md").write_text(
+                negated,
+                encoding="utf-8",
+                newline="\n",
+            )
+            before = self.tree_digest(repo)
+
+            result = runtime_guidance.runtime_guidance_readiness(
+                archive_root,
+                host="codex",
+                scope="repo",
+                repo_root=repo,
+            )
+            after = self.tree_digest(repo)
+
+        self.assertEqual(before, after)
+        self.assertTrue(result["ok"], result)
+        self.assertFalse(result["ready"])
+        self.assertEqual(result["status"], "attention_required")
+        self.assertEqual(result["agents_routing"]["status"], "incomplete")
+        self.assertFalse(
+            result["agents_routing"]["canonical_block_present"]
+        )
+        self.assertTrue(
+            result["agents_routing"][
+                "legacy_anchors_present_unverified"
+            ]
+        )
+        self.assertIn(
+            "agents_routing_contract_not_current",
+            result["diagnostic_codes"],
+        )
+
+    def test_agents_read_observations_distinguish_absent_and_canonical(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, archive_root = self.make_repo(Path(tmp))
+            self.install_repo_skill(repo)
+            agents_path = repo / "AGENTS.md"
+            agents_path.unlink()
+
+            absent = runtime_guidance.runtime_guidance_readiness(
+                archive_root,
+                host="codex",
+                scope="repo",
+                repo_root=repo,
+            )
+            agents_path.write_text(
+                runtime_guidance.AGENTS_ROUTING_BLOCK + "\n",
+                encoding="utf-8",
+                newline="\n",
+            )
+            canonical = runtime_guidance.runtime_guidance_readiness(
+                archive_root,
+                host="codex",
+                scope="repo",
+                repo_root=repo,
+            )
+
+        self.assertEqual(absent["agents_routing"]["status"], "absent")
+        self.assertEqual(
+            absent["inspection_reads"],
+            {
+                "archive_configuration_read": True,
+                "agents_body_read": False,
+                "credential_or_secret_store_read": False,
+            },
+        )
+        self.assertTrue(absent["privacy"]["archive_identity_exposed"])
+        self.assertTrue(canonical["ready"], canonical)
+        self.assertEqual(
+            canonical["inspection_reads"],
+            {
+                "archive_configuration_read": True,
+                "agents_body_read": True,
+                "credential_or_secret_store_read": False,
+            },
+        )
+        self.assertTrue(canonical["privacy"]["archive_identity_exposed"])
 
     def test_unreadable_agents_and_unsupported_scope_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -576,11 +946,31 @@ class RuntimeGuidanceReadinessTests(unittest.TestCase):
             "agents_routing_unreadable",
             unreadable["diagnostic_codes"],
         )
+        self.assertEqual(
+            unreadable["inspection_reads"],
+            {
+                "archive_configuration_read": True,
+                "agents_body_read": True,
+                "credential_or_secret_store_read": False,
+            },
+        )
+        self.assertTrue(unreadable["privacy"]["archive_identity_exposed"])
         self.assertFalse(unsupported["ok"])
         self.assertEqual(unsupported["status"], "blocked")
         self.assertEqual(
             unsupported["diagnostic_codes"],
             ["unsupported_host_scope"],
+        )
+        self.assertEqual(
+            unsupported["inspection_reads"],
+            {
+                "archive_configuration_read": False,
+                "agents_body_read": False,
+                "credential_or_secret_store_read": False,
+            },
+        )
+        self.assertFalse(
+            unsupported["privacy"]["archive_identity_exposed"]
         )
         self.assertNotIn("PRIVATE_PATH_CANARY", serialized)
         self.assertNotIn(str(repo), serialized)
@@ -617,6 +1007,141 @@ class RuntimeGuidanceReadinessTests(unittest.TestCase):
             missing_root["diagnostic_codes"],
             ["repo_root_required"],
         )
+
+    def test_stable_version_policy_is_ascii_and_raw_length_bounded(
+        self,
+    ) -> None:
+        self.assertEqual(version_policy.MAX_STABLE_VERSION_LABEL_LENGTH, 64)
+        for value in ("0.3.293", "v0.3.293", "12.34.56"):
+            with self.subTest(value=value):
+                self.assertEqual(
+                    version_policy.stable_version_value(value),
+                    value.removeprefix("v"),
+                )
+        for value in (
+            "0.3.29٣",
+            "０.３.２９３",
+            "v１.2.3",
+            "0.3." + ("9" * 61),
+            (" " * 65) + "0.3.293",
+        ):
+            with self.subTest(value=value[:80]):
+                self.assertIsNone(
+                    version_policy.stable_version_value(value)
+                )
+
+    def test_source_packaged_templates_and_docs_share_exact_routing_block(
+        self,
+    ) -> None:
+        for profile in ("personal", "family", "company"):
+            with self.subTest(profile=profile):
+                source = (
+                    KIT_ROOT / "templates" / profile / "AGENTS.md"
+                ).read_bytes()
+                packaged = (
+                    KIT_ROOT
+                    / "src"
+                    / "wom_kit"
+                    / "_resources"
+                    / "templates"
+                    / profile
+                    / "AGENTS.md"
+                ).read_bytes()
+                self.assertEqual(source, packaged)
+                text = source.decode("utf-8")
+                self.assertEqual(
+                    text.count(runtime_guidance.AGENTS_ROUTING_BLOCK_BEGIN),
+                    1,
+                )
+                self.assertEqual(
+                    text.count(runtime_guidance.AGENTS_ROUTING_BLOCK_END),
+                    1,
+                )
+                self.assertTrue(
+                    runtime_guidance._canonical_agents_routing_block_present(
+                        text
+                    )
+                )
+                self.assertIn(
+                    runtime_guidance.AGENTS_ROUTING_AUTHORITY_LINE,
+                    text,
+                )
+        documentation = (
+            KIT_ROOT / "docs" / "runtime-canonical-entrypoints.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn(runtime_guidance.AGENTS_ROUTING_BLOCK, documentation)
+
+    def test_cli_fallback_reports_conservative_read_observations_without_io(
+        self,
+    ) -> None:
+        private_canary = "PRIVATE_UNEXPECTED_FAILURE_CANARY"
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, archive_root = self.make_repo(Path(tmp))
+            before = self.tree_digest(repo)
+            with (
+                mock.patch.object(
+                    runtime_guidance,
+                    "runtime_guidance_readiness",
+                    side_effect=archive_services.ArchiveServiceError(
+                        private_canary
+                    ),
+                ),
+                mock.patch.object(
+                    archive_services,
+                    "read_archive_id",
+                    side_effect=AssertionError(
+                        "pure blocked constructor retried archive identity"
+                    ),
+                ) as read_archive_id,
+                mock.patch.object(
+                    runtime_guidance,
+                    "_inspect_agents_routing",
+                    side_effect=AssertionError(
+                        "pure blocked constructor inspected AGENTS"
+                    ),
+                ) as inspect_agents,
+            ):
+                code, stdout, stderr = self.run_cli_streams(
+                    [
+                        "runtime-guidance-readiness",
+                        str(archive_root),
+                        "--host",
+                        "codex",
+                        "--scope",
+                        "repo",
+                        "--repo-root",
+                        str(repo),
+                        "--format",
+                        "json",
+                    ]
+                )
+            after = self.tree_digest(repo)
+
+        self.assertEqual(code, 1, stdout + stderr)
+        self.assertEqual(stderr, "")
+        self.assertEqual(before, after)
+        read_archive_id.assert_not_called()
+        inspect_agents.assert_not_called()
+        result = json.loads(stdout)
+        self.assertEqual(
+            result["diagnostic_codes"],
+            ["runtime_guidance_inspection_failed"],
+        )
+        self.assertEqual(
+            result["observation_status"],
+            "conservative_after_failure",
+        )
+        self.assertEqual(
+            result["inspection_reads"],
+            {
+                "archive_configuration_read": True,
+                "agents_body_read": True,
+                "credential_or_secret_store_read": False,
+            },
+        )
+        self.assertIsNone(result["archive_id"])
+        self.assertFalse(result["privacy"]["archive_identity_exposed"])
+        self.assertNotIn(private_canary, stdout)
 
     def test_start_surfaces_do_not_run_host_inspection_and_return_not_checked(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
