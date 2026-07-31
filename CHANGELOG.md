@@ -16,8 +16,10 @@ This project uses semantic versioning for public compatibility checkpoints.
 - Added ten fixed, ordered checked-layer records. Existing zettel, object,
   derived-text, view, and source-map channels are each probed independently
   and report only current SQLite snapshot evidence; zettel-to-objet edges
-  remain unchecked and four future private/external/reference contracts
-  remain explicitly not implemented.
+  remain unchecked; private-name metadata, approved external-local-store, and
+  unrecovered-reference contracts remain explicitly not implemented; and the
+  existing query-independent external-store evidence status remains unchecked
+  with a static route to `archive backup-evidence <archive-root> --dry-run`.
 - Added content-free blocked results for invalid archives, unavailable or
   malformed SQLite, permission/decoder errors, pending WAL or rollback-journal
   content, unsafe local reparse boundaries, and an index snapshot that changes

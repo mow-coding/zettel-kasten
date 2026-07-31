@@ -10571,6 +10571,9 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         implementation_text = implementation_path.read_text(encoding="utf-8")
         guide_text = guide_path.read_text(encoding="utf-8")
         matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        changelog_text = (REPO_ROOT / "CHANGELOG.md").read_text(
+            encoding="utf-8"
+        )
         routing_text = (
             KIT_ROOT / "docs" / "ai-command-path-routing.md"
         ).read_text(encoding="utf-8")
@@ -10685,6 +10688,18 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         )
         self.assertIn("non-empty WAL", guide_text)
         self.assertIn("immutable", guide_text)
+        for text in (
+            release_text,
+            decision_text,
+            guide_text,
+            matrix_text,
+            changelog_text,
+        ):
+            with self.subTest(document="v03294-external-evidence-route"):
+                self.assertIn(
+                    "archive backup-evidence <archive-root> --dry-run",
+                    text,
+                )
         self.assertIn(CURRENT_RUNTIME_STATUS, runtime_entrypoints_text)
         self.assertIn(
             "No platform-signed served-model attestation",
