@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 import hashlib
 import io
 import json
@@ -614,12 +614,30 @@ class ObjetRediscoveryPlanTests(unittest.TestCase):
 
             real_scandir = os.scandir
             external_resolved = external_root.resolve()
+            external_stat = os.stat(
+                external_resolved,
+                follow_symlinks=False,
+            )
 
-            def guard_scandir(path: str | bytes | os.PathLike[str]) -> os.ScandirIterator[str]:
-                resolved = Path(path).resolve()
-                if resolved == external_resolved or resolved.is_relative_to(
-                    external_resolved
-                ):
+            def guard_scandir(
+                path: int | str | bytes | os.PathLike[str],
+            ) -> os.ScandirIterator[str]:
+                if isinstance(path, int):
+                    observed = os.fstat(path)
+                    scans_external = (
+                        observed.st_dev,
+                        observed.st_ino,
+                    ) == (
+                        external_stat.st_dev,
+                        external_stat.st_ino,
+                    )
+                else:
+                    resolved = Path(path).resolve()
+                    scans_external = (
+                        resolved == external_resolved
+                        or resolved.is_relative_to(external_resolved)
+                    )
+                if scans_external:
                     raise AssertionError("external directory enumeration attempted")
                 return real_scandir(path)
 
@@ -651,6 +669,258 @@ class ObjetRediscoveryPlanTests(unittest.TestCase):
             self.assertNotIn("PRIVATE_EXTERNAL_SENTINEL", serialized)
             self.assertNotIn("PRIVATE_EXTERNAL_BODY_CANARY", serialized)
             self.assert_fixed_private_boundary(result, serialized=serialized)
+
+    def test_strict_nested_snapshot_is_consumed_without_path_reopen_or_body_read(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_archive(Path(tmp)).resolve()
+            nested = archive_root / "zettels" / "nested" / "deeper"
+            nested.mkdir(parents=True)
+            target = nested / "strict-snapshot.md"
+            target.write_text(
+                "---\n"
+                "id: zet_strict_snapshot\n"
+                "status: canonical\n"
+                "kind: test_note\n"
+                "---\n\n"
+                "PRIVATE_BODY_MUST_NOT_BE_READ\n",
+                encoding="utf-8",
+            )
+            before = self.tree_digest(archive_root)
+            observations = {"zettel_body_text_read": False}
+            issues: list[dict[str, str]] = []
+
+            with (
+                mock.patch.object(
+                    archive_services,
+                    "archive_relative_path",
+                    side_effect=AssertionError("strict path was recomputed"),
+                ),
+                mock.patch.object(
+                    archive_services,
+                    "inspect_zettel_frontmatter_boundary",
+                    side_effect=AssertionError("strict path was reopened"),
+                ),
+            ):
+                entries = archive_services.live_zettel_index_entries(
+                    archive_root,
+                    read_observations=observations,
+                    inspection_issues=issues,
+                    reject_reparse_directories=True,
+                )
+
+            after = self.tree_digest(archive_root)
+
+        selected = [
+            entry
+            for entry in entries
+            if entry["path"] == "zettels/nested/deeper/strict-snapshot.md"
+        ]
+        self.assertEqual(len(selected), 1)
+        self.assertEqual(selected[0]["zettel_id"], "zet_strict_snapshot")
+        self.assertEqual(selected[0]["status"], "canonical")
+        self.assertEqual(selected[0]["kind"], "test_note")
+        self.assertTrue(selected[0]["metadata_readable"])
+        self.assertFalse(observations["zettel_body_text_read"])
+        self.assertEqual(issues, [])
+        self.assertEqual(before, after)
+
+    def test_same_name_zettel_replacement_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_archive(Path(tmp)).resolve()
+            target = archive_root / "zettels" / "replacement-race.md"
+            target.write_text(
+                "---\nid: zet_original\nstatus: canonical\nkind: test_note\n---\n",
+                encoding="utf-8",
+            )
+            replacement = archive_root / "replacement-race-candidate.tmp"
+            replacement.write_text(
+                "---\nid: zet_replacement\nstatus: canonical\nkind: test_note\n---\n",
+                encoding="utf-8",
+            )
+            displaced = archive_root / "replacement-race-displaced.tmp"
+            real_inspect = archive_services._inspect_bound_zettel_file
+            injected = False
+
+            def replace_while_held(
+                binding: object,
+            ) -> tuple[dict[str, object], float]:
+                nonlocal injected
+                if getattr(binding, "path", None) == target:
+                    injected = True
+                    os.replace(target, displaced)
+                    os.replace(replacement, target)
+                return real_inspect(binding)  # type: ignore[arg-type]
+
+            with mock.patch.object(
+                archive_services,
+                "_inspect_bound_zettel_file",
+                side_effect=replace_while_held,
+            ):
+                result = archive_services.objet_rediscovery_plan(
+                    archive_root,
+                    PRIVATE_QUERY,
+                    dry_run=True,
+                )
+
+        self.assertTrue(injected)
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(
+            result["diagnostic_codes"],
+            ["archive_scan_boundary_unsafe"],
+        )
+        self.assert_fixed_private_boundary(result)
+
+    @unittest.skipUnless(
+        os.name == "nt",
+        "Windows file-identity availability contract",
+    )
+    def test_windows_zero_file_identity_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = Path(tmp).resolve()
+            target = parent / "identity-canary.md"
+            target.write_text(
+                "---\nid: zet_identity\nstatus: canonical\nkind: test_note\n---\n",
+                encoding="utf-8",
+            )
+            observed = os.stat(target, follow_symlinks=False)
+            values = list(observed)
+            values[1] = 0
+            values[2] = 0
+            unavailable_identity = os.stat_result(values)
+            binding = archive_services._BoundDirectory(
+                path=parent,
+                descriptor=None,
+                windows_handles=(),
+            )
+
+            with self.assertRaises(OSError):
+                with archive_services._hold_bound_regular_file(
+                    binding,
+                    target,
+                    unavailable_identity,
+                ):
+                    self.fail("zero file identity must fail before inspection")
+
+    def test_strict_decoder_failure_returns_fixed_blocked_result(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_archive(Path(tmp)).resolve()
+            (archive_root / "zettels" / "invalid-utf8.md").write_bytes(
+                b"\xff\xfePRIVATE_DECODER_CANARY"
+            )
+
+            result = archive_services.objet_rediscovery_plan(
+                archive_root,
+                PRIVATE_QUERY,
+                dry_run=True,
+            )
+
+        serialized = json.dumps(result)
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(
+            result["diagnostic_codes"],
+            ["archive_index_unavailable"],
+        )
+        self.assertNotIn("PRIVATE_DECODER_CANARY", serialized)
+        self.assert_fixed_private_boundary(result, serialized=serialized)
+
+    def test_nested_directory_same_name_replacement_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = Path(tmp)
+            archive_root = self.copy_archive(parent / "local").resolve()
+            nested = archive_root / "zettels" / "replace-dir"
+            nested.mkdir()
+            (nested / "original.md").write_text(
+                "---\nid: zet_original\nstatus: canonical\nkind: test_note\n---\n",
+                encoding="utf-8",
+            )
+            replacement = parent / "replacement-dir"
+            replacement.mkdir()
+            (replacement / "PRIVATE_REPLACEMENT_CANARY.md").write_text(
+                "PRIVATE_REPLACEMENT_BODY",
+                encoding="utf-8",
+            )
+            displaced = parent / "displaced-dir"
+            real_scan = archive_services._scan_bound_directory
+            injected = False
+
+            @contextmanager
+            def replace_while_scanning(binding: object) -> object:
+                nonlocal injected
+                with real_scan(binding) as scanner:  # type: ignore[arg-type]
+                    if getattr(binding, "path", None) == nested:
+                        injected = True
+                        os.replace(nested, displaced)
+                        os.replace(replacement, nested)
+                    yield scanner
+
+            with mock.patch.object(
+                archive_services,
+                "_scan_bound_directory",
+                side_effect=replace_while_scanning,
+            ):
+                result = archive_services.objet_rediscovery_plan(
+                    archive_root,
+                    PRIVATE_QUERY,
+                    dry_run=True,
+                )
+
+        serialized = json.dumps(result)
+        self.assertTrue(injected)
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(
+            result["diagnostic_codes"],
+            ["archive_scan_boundary_unsafe"],
+        )
+        self.assertNotIn("PRIVATE_REPLACEMENT_CANARY", serialized)
+        self.assertNotIn("PRIVATE_REPLACEMENT_BODY", serialized)
+        self.assert_fixed_private_boundary(result, serialized=serialized)
+
+    def test_top_level_zettel_directory_replacement_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = Path(tmp)
+            archive_root = self.copy_archive(parent / "local").resolve()
+            zettels_root = archive_root / "zettels"
+            replacement = parent / "replacement-zettels"
+            replacement.mkdir()
+            (replacement / "PRIVATE_PARENT_REPLACEMENT_CANARY.md").write_text(
+                "PRIVATE_PARENT_REPLACEMENT_BODY",
+                encoding="utf-8",
+            )
+            displaced = parent / "displaced-zettels"
+            real_scan = archive_services._scan_bound_directory
+            injected = False
+
+            @contextmanager
+            def replace_while_scanning(binding: object) -> object:
+                nonlocal injected
+                with real_scan(binding) as scanner:  # type: ignore[arg-type]
+                    if getattr(binding, "path", None) == zettels_root:
+                        injected = True
+                        os.replace(zettels_root, displaced)
+                        os.replace(replacement, zettels_root)
+                    yield scanner
+
+            with mock.patch.object(
+                archive_services,
+                "_scan_bound_directory",
+                side_effect=replace_while_scanning,
+            ):
+                result = archive_services.objet_rediscovery_plan(
+                    archive_root,
+                    PRIVATE_QUERY,
+                    dry_run=True,
+                )
+
+        serialized = json.dumps(result)
+        self.assertTrue(injected)
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(
+            result["diagnostic_codes"],
+            ["archive_scan_boundary_unsafe"],
+        )
+        self.assertNotIn("PRIVATE_PARENT_REPLACEMENT_CANARY", serialized)
+        self.assertNotIn("PRIVATE_PARENT_REPLACEMENT_BODY", serialized)
+        self.assert_fixed_private_boundary(result, serialized=serialized)
 
     def test_cli_and_mcp_share_structured_result_and_private_summary(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
