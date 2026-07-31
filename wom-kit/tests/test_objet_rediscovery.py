@@ -486,6 +486,319 @@ class ObjetRediscoveryPlanTests(unittest.TestCase):
         )
         self.assert_fixed_private_boundary(changed)
 
+    def test_plan_uses_one_pinned_sqlite_snapshot_for_all_three_reads(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_archive(Path(tmp)).resolve()
+            real_connect = archive_services.connect_archive_index
+            real_health = archive_services.index_health_immutable_snapshot
+            real_search = archive_services.search_archive_immutable_snapshot
+            real_channels = archive_services.objet_rediscovery_index_channel_evidence
+            events: list[tuple[str, str]] = []
+            connect_calls: list[dict[str, object]] = []
+            helper_calls: list[tuple[str, object, bool]] = []
+
+            class RecordingConnection:
+                def __init__(self, connection: sqlite3.Connection) -> None:
+                    self.connection = connection
+
+                @property
+                def row_factory(self) -> object:
+                    return self.connection.row_factory
+
+                @property
+                def in_transaction(self) -> bool:
+                    return self.connection.in_transaction
+
+                def execute(
+                    self,
+                    sql: str,
+                    parameters: object = (),
+                ) -> sqlite3.Cursor:
+                    normalized = " ".join(sql.split())
+                    events.append(("execute", normalized))
+                    return self.connection.execute(sql, parameters)  # type: ignore[arg-type]
+
+                def rollback(self) -> None:
+                    events.append(("lifecycle", "rollback"))
+                    self.connection.rollback()
+
+                def close(self) -> None:
+                    events.append(("lifecycle", "close"))
+                    self.connection.close()
+
+            proxy: RecordingConnection | None = None
+
+            def connect_once(
+                db_path: Path,
+                **kwargs: object,
+            ) -> RecordingConnection:
+                nonlocal proxy
+                connect_calls.append(kwargs)
+                proxy = RecordingConnection(real_connect(db_path, **kwargs))  # type: ignore[arg-type]
+                return proxy
+
+            def record_helper(
+                name: str,
+                function: object,
+            ) -> object:
+                def invoke(*args: object, **kwargs: object) -> object:
+                    connection = kwargs.get("connection")
+                    helper_calls.append(
+                        (
+                            name,
+                            connection,
+                            bool(getattr(connection, "in_transaction", False)),
+                        )
+                    )
+                    return function(*args, **kwargs)  # type: ignore[operator]
+
+                return invoke
+
+            with (
+                mock.patch.object(
+                    archive_services,
+                    "connect_archive_index",
+                    side_effect=connect_once,
+                ),
+                mock.patch.object(
+                    archive_services,
+                    "index_health_immutable_snapshot",
+                    side_effect=record_helper("health", real_health),
+                ),
+                mock.patch.object(
+                    archive_services,
+                    "search_archive_immutable_snapshot",
+                    side_effect=record_helper("search", real_search),
+                ),
+                mock.patch.object(
+                    archive_services,
+                    "objet_rediscovery_index_channel_evidence",
+                    side_effect=record_helper("channels", real_channels),
+                ),
+            ):
+                result = archive_services.objet_rediscovery_plan(
+                    archive_root,
+                    PRIVATE_QUERY,
+                    dry_run=True,
+                    count_total=True,
+                )
+
+        self.assertTrue(result["ok"], result)
+        self.assertIsNotNone(proxy)
+        self.assertEqual(
+            connect_calls,
+            [{"row_factory": True, "immutable_read": True}],
+        )
+        self.assertEqual(
+            [name for name, _connection, _active in helper_calls],
+            ["health", "search", "channels"],
+        )
+        self.assertTrue(
+            all(connection is proxy for _name, connection, _active in helper_calls)
+        )
+        self.assertTrue(all(active for _name, _connection, active in helper_calls))
+        self.assertEqual(
+            [event for event in events if event == ("execute", "BEGIN")],
+            [("execute", "BEGIN")],
+        )
+        self.assertEqual(
+            [
+                event
+                for event in events
+                if event
+                == (
+                    "execute",
+                    "SELECT 1 FROM sqlite_master LIMIT 1",
+                )
+            ],
+            [
+                (
+                    "execute",
+                    "SELECT 1 FROM sqlite_master LIMIT 1",
+                )
+            ],
+        )
+        self.assertEqual(events[-2:], [("lifecycle", "rollback"), ("lifecycle", "close")])
+
+    def test_borrowed_sqlite_helpers_do_not_manage_connection_lifecycle(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_archive(Path(tmp)).resolve()
+            db_path = archive_root / archive_services.INDEX_RELATIVE_PATH
+            connection = archive_services.connect_archive_index(
+                db_path,
+                row_factory=True,
+                immutable_read=True,
+            )
+            connection.execute("BEGIN")
+            connection.execute(
+                "SELECT 1 FROM sqlite_master LIMIT 1"
+            ).fetchone()
+
+            class BorrowedConnection:
+                @property
+                def row_factory(self) -> object:
+                    return connection.row_factory
+
+                @property
+                def in_transaction(self) -> bool:
+                    return connection.in_transaction
+
+                def execute(
+                    self,
+                    sql: str,
+                    parameters: object = (),
+                ) -> sqlite3.Cursor:
+                    if " ".join(sql.split()).upper() == "BEGIN":
+                        raise AssertionError("borrowed helper began a transaction")
+                    return connection.execute(sql, parameters)  # type: ignore[arg-type]
+
+                def rollback(self) -> None:
+                    raise AssertionError("borrowed helper rolled back")
+
+                def close(self) -> None:
+                    raise AssertionError("borrowed helper closed")
+
+            borrowed = BorrowedConnection()
+            try:
+                with mock.patch.object(
+                    archive_services,
+                    "connect_archive_index",
+                    side_effect=AssertionError("borrowed helper reconnected"),
+                ):
+                    health = archive_services.index_health_immutable_snapshot(
+                        archive_root,
+                        dry_run=True,
+                        max_items=1,
+                        connection=borrowed,  # type: ignore[arg-type]
+                    )
+                    search = archive_services.search_archive_immutable_snapshot(
+                        archive_root,
+                        PRIVATE_QUERY,
+                        count_total=True,
+                        connection=borrowed,  # type: ignore[arg-type]
+                    )
+                    channels = archive_services.objet_rediscovery_index_channel_evidence(
+                        archive_root,
+                        PRIVATE_QUERY,
+                        limit=20,
+                        connection=borrowed,  # type: ignore[arg-type]
+                    )
+                self.assertTrue(connection.in_transaction)
+            finally:
+                connection.rollback()
+                connection.close()
+
+        self.assertIn(health["index_state"], {"current", "stale_or_incomplete"})
+        self.assertTrue(search["total_matches_known"])
+        self.assertEqual(set(channels), set(archive_services.SEARCH_CHANNEL_TABLES[index][0] for index in range(len(archive_services.SEARCH_CHANNEL_TABLES))))
+
+    def test_borrowed_sqlite_helpers_reject_unpinned_or_non_row_connections(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_archive(Path(tmp)).resolve()
+
+            class InvalidConnection:
+                def __init__(self, *, row_factory: object, in_transaction: bool) -> None:
+                    self.row_factory = row_factory
+                    self.in_transaction = in_transaction
+
+                def execute(self, *_args: object, **_kwargs: object) -> object:
+                    raise AssertionError("invalid borrowed connection executed SQL")
+
+            calls = (
+                lambda connection: archive_services.index_health_immutable_snapshot(
+                    archive_root,
+                    connection=connection,  # type: ignore[arg-type]
+                ),
+                lambda connection: archive_services.search_archive_immutable_snapshot(
+                    archive_root,
+                    PRIVATE_QUERY,
+                    connection=connection,  # type: ignore[arg-type]
+                ),
+                lambda connection: archive_services.objet_rediscovery_index_channel_evidence(
+                    archive_root,
+                    PRIVATE_QUERY,
+                    limit=20,
+                    connection=connection,  # type: ignore[arg-type]
+                ),
+            )
+            invalid_connections = (
+                InvalidConnection(
+                    row_factory=None,
+                    in_transaction=True,
+                ),
+                InvalidConnection(
+                    row_factory=sqlite3.Row,
+                    in_transaction=False,
+                ),
+            )
+            for call in calls:
+                for connection in invalid_connections:
+                    with self.subTest(
+                        helper=call,
+                        row_factory=connection.row_factory,
+                        in_transaction=connection.in_transaction,
+                    ):
+                        with self.assertRaises(archive_services.ArchiveServiceError):
+                            call(connection)
+
+    def test_shared_sqlite_rollback_failure_still_closes_without_leak(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_archive(Path(tmp)).resolve()
+            real_connect = archive_services.connect_archive_index
+            connection = real_connect(
+                archive_root / archive_services.INDEX_RELATIVE_PATH,
+                row_factory=True,
+                immutable_read=True,
+            )
+            closed = False
+
+            class RollbackFailureConnection:
+                @property
+                def row_factory(self) -> object:
+                    return connection.row_factory
+
+                @property
+                def in_transaction(self) -> bool:
+                    return connection.in_transaction
+
+                def execute(
+                    self,
+                    sql: str,
+                    parameters: object = (),
+                ) -> sqlite3.Cursor:
+                    return connection.execute(sql, parameters)  # type: ignore[arg-type]
+
+                def rollback(self) -> None:
+                    raise sqlite3.OperationalError(PRIVATE_EXCEPTION)
+
+                def close(self) -> None:
+                    nonlocal closed
+                    closed = True
+                    connection.close()
+
+            with mock.patch.object(
+                archive_services,
+                "connect_archive_index",
+                return_value=RollbackFailureConnection(),
+            ):
+                result = archive_services.objet_rediscovery_plan(
+                    archive_root,
+                    PRIVATE_QUERY,
+                    dry_run=True,
+                )
+
+        serialized = json.dumps(result)
+        self.assertTrue(closed)
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(
+            result["diagnostic_codes"],
+            ["archive_index_unavailable"],
+        )
+        self.assertNotIn(PRIVATE_EXCEPTION, serialized)
+        self.assert_fixed_private_boundary(result, serialized=serialized)
+
     def test_blob_typed_search_columns_fail_closed_without_private_output(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_archive(Path(tmp))
