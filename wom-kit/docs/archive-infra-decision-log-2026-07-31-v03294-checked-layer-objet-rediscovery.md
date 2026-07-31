@@ -34,8 +34,10 @@ privacy and approval decisions.
   early global result truncation cannot mark an unvisited later channel as
   checked.
 - Leave `zettel_objet_edges` unchecked without a reviewed zettel selection.
-- Mark private-name, approved-local-store, external-evidence, and unrecovered-
-  reference contracts as unknown and not implemented.
+- Mark private-name, approved-local-store, and unrecovered-reference contracts
+  as unknown and not implemented. Mark `external_store_evidence` unknown and
+  unchecked, because the existing read-only `backup-evidence` command reports
+  storage evidence without consuming the submitted private query.
 - Keep successful plans at `status: search_incomplete`,
   `rediscovery_complete: false`, and `negative_claim_supported: false`.
 - Normalize invalid archives, unavailable/malformed index data, expected read

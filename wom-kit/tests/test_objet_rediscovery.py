@@ -150,7 +150,20 @@ class ObjetRediscoveryPlanTests(unittest.TestCase):
         )
         self.assertEqual(
             [layer["check_state"] for layer in result["checked_layers"][6:]],
-            ["not_implemented"] * 4,
+            [
+                "not_implemented",
+                "not_implemented",
+                "unchecked",
+                "not_implemented",
+            ],
+        )
+        self.assertEqual(
+            result["checked_layers"][8]["reason_codes"],
+            ["backup_evidence_status_not_checked"],
+        )
+        self.assertIn(
+            "archive backup-evidence <archive-root> --dry-run",
+            result["next_safe_commands"],
         )
         self.assertTrue(
             result["index_health"]["zettel_identity_metadata_current"]

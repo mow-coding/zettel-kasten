@@ -79,7 +79,7 @@ order:
 | `zettel_objet_edges` | `unchecked` until a reviewed zettel is selected for exact traversal. |
 | `private_original_name_metadata` | `not_implemented`; reserved for the reviewed v0.3.295+ contract. |
 | `approved_external_local_store` | `not_implemented`; no registration or scan lifecycle exists here. |
-| `external_store_evidence` | `not_implemented`; no provider or external-store check is performed. |
+| `external_store_evidence` | `unchecked`; the existing local `backup-evidence` status is not run because it does not consume the submitted private query. |
 | `unrecovered_source_references` | `not_implemented`; reserved for the v0.3.299 coverage contract. |
 
 Each index channel receives its own bounded `limit + 1` probe even when an
@@ -113,6 +113,9 @@ commands cross the output boundary.
 The plan does not rebuild the index; write a manifest, receipt, or metadata;
 open objet bytes; scan an external directory; call a provider or network;
 access a credential store; install a Runtime Skill; or modify `AGENTS.md`.
+The static next-command list routes external evidence review to
+`archive backup-evidence <archive-root> --dry-run`; naming that existing
+read-only command does not mean this plan executed it.
 
 The plan uses a dedicated immutable read of the last complete SQLite main-file
 snapshot so it cannot create `-wal` or `-shm` sidecars. Because immutable reads
