@@ -14675,7 +14675,17 @@ def command_objet_rediscovery_plan(args: argparse.Namespace) -> int:
         print_json(result)
     elif result.get("status") == "search_incomplete":
         print("SEARCH INCOMPLETE. No global absence claim is supported.")
-        print(f"Checked matches: {result.get('checked_match_count', 0)}")
+        checked_match_count = result.get("checked_match_count", 0)
+        if result.get("checked_match_count_exact") is True:
+            print(
+                "Checked generated-index matches (exact): "
+                f"{checked_match_count}"
+            )
+        else:
+            print(
+                "Checked generated-index matches (bounded lower bound): "
+                f"at least {checked_match_count}"
+            )
         index_search = (
             result.get("index_search")
             if isinstance(result.get("index_search"), dict)
