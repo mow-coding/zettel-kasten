@@ -4179,7 +4179,6 @@ def command_runtime_guidance_readiness(args: argparse.Namespace) -> int:
         )
     except runtime_guidance.EXPECTED_LOCAL_INSPECTION_ERRORS:
         result = runtime_guidance.blocked_runtime_guidance_result(
-            Path(args.archive_root),
             host=args.host,
             scope=args.scope,
             diagnostic_code="runtime_guidance_inspection_failed",
@@ -4187,6 +4186,7 @@ def command_runtime_guidance_readiness(args: argparse.Namespace) -> int:
                 "Runtime guidance readiness could not complete a safe local "
                 "inspection."
             ),
+            observation_status="conservative_after_failure",
         )
     print_json(result)
     return 0 if result.get("ok") else 1

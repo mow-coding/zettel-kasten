@@ -10513,7 +10513,10 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                 self.assertIn("operator-feedback-record", text)
 
         self.assertIn("runtime_skill_absent", decision_text)
-        self.assertIn("legacy_agents_routing_absent", decision_text)
+        self.assertIn(
+            "agents_routing_contract_not_current",
+            decision_text,
+        )
         self.assertIn("exact public v0.3.292 predecessor", release_text)
         self.assertIn("exact public v0.3.292", implementation_text)
 

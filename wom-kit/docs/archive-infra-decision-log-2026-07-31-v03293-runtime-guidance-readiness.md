@@ -5,8 +5,9 @@ Date: 2026-07-31
 ## Context
 
 An archive can ship correct runtime guidance while an AI host lacks the Skill,
-the repository lacks legacy `AGENTS.md` routing, or both. Conversely, the
-presence of files cannot prove that a particular host consumed them.
+the repository lacks the exact versioned `AGENTS.md` routing contract, or
+both. Conversely, the presence of files cannot prove that a particular host
+consumed them.
 Automatically performing host checks during every archive entry would mix a
 portable archive read with host-specific machine inspection.
 
@@ -19,12 +20,15 @@ not express the complete plan-to-approval sequence and its human gate.
   `archive runtime-guidance-readiness <archive-root> --host codex --scope repo
   --repo-root <repo-root> --format json`.
 - Support only the explicit Codex/repository combination in v0.3.293.
-- Inspect actual runtime Skill state and bounded safe repository `AGENTS.md`
-  routing anchors.
-- Distinguish `runtime_skill_absent`,
-  `legacy_agents_routing_absent`, unreadable evidence, and unsupported scope.
-- Redact local paths and document bodies and perform no writes, network calls,
-  provider calls, secret reads, or credential-store access.
+- Inspect actual runtime Skill state and one bounded, sentinel-delimited,
+  byte-exact repository `AGENTS.md` routing contract.
+- Distinguish `runtime_skill_absent`, `agents_routing_contract_absent`,
+  `agents_routing_contract_not_current`, unreadable evidence, and unsupported
+  scope.
+- Redact local paths and document bodies, expose archive identity only through
+  an exact safe projection, report actual archive-configuration/AGENTS read
+  observations separately from credential-store access, and perform no
+  writes, network calls, provider calls, or credential-store access.
 - Never auto-install a Skill or modify `AGENTS.md`; suggest only the exact
   `runtime-skill-install --dry-run` preview when applicable.
 - Keep `host_guidance_consumption: not_proven` even when file readiness passes.
@@ -83,3 +87,32 @@ Two P1 findings were corrected before handoff:
 
 These corrections preserve read-only behavior and add no write, install,
 `AGENTS.md` rewrite, network, provider, model, or credential action.
+
+## Exact-Final P1 Corrections
+
+The final pre-push review found three additional P1 gaps. They are part of the
+normative decision:
+
+- A readable `archive_id` is not automatically shareable. WOM exposes it only
+  when the existing safe projection equals the original string exactly.
+  Otherwise fixed diagnostic `archive_identity_unshareable` is returned after
+  one archive configuration read and before any host Skill or AGENTS
+  inspection. The blocked constructor is pure and performs no retry I/O.
+- Four phrases anywhere in `AGENTS.md` are not positive routing evidence. New
+  personal, family, and company templates contain exactly one v0.3.293
+  sentinel block. Readiness compares the inclusive block after CRLF-to-LF
+  normalization only. The fixed current-authority sentence is inside the
+  canonical unit; missing or internally negated/historical authority,
+  quoted/fenced context, duplicate sentinels, reordering, truncation, or any
+  other byte edit is rejected. Prose outside the sentinels is not parsed as a
+  natural-language override, so examples and historical copies must be
+  structurally quoted/fenced or byte-distinct. Legacy anchors are a human
+  migration hint only.
+- Stable manifest versions use ASCII digits, the exact
+  `v?MAJOR.MINOR.PATCH` shape, and a 64-character raw-input ceiling.
+  Unicode-digit and oversized inputs become `managed_invalid`, project
+  `installed_version: null`, and are never echoed.
+
+The exact public v0.3.292 merge
+`4130c9ef4c68ce1445446f0964d5edc89745b0d9` became the implementation base
+before these corrections were applied.

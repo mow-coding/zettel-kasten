@@ -42,13 +42,14 @@ archive runtime-guidance-readiness <archive-root> --host codex --scope repo --re
 ```
 
 The explicit command checks the current Codex runtime Skill state and the
-repository-level routing anchors without writing either location. Missing
-Skill installation and missing legacy `AGENTS.md` routing are separate
-diagnostics. Unreadable or unsupported inputs fail closed. If installation is
-needed, the result offers only the exact `runtime-skill-install --dry-run`
-command; it never installs automatically and never rewrites `AGENTS.md`.
-Successful inspection still reports host guidance consumption as
-`not_proven`.
+repository-level exact routing contract without writing either location.
+Missing Skill installation, an absent exact `AGENTS.md` contract, and a
+present but non-current contract are separate diagnostics. Legacy phrase
+anchors are human migration hints only. Unreadable or unsupported inputs fail
+closed. If installation is needed, the result offers only the exact
+`runtime-skill-install --dry-run` command; it never installs automatically and
+never rewrites `AGENTS.md`. Successful inspection still reports host guidance
+consumption as `not_proven`.
 
 ## Official Action Routing
 
@@ -247,6 +248,33 @@ Use `runtime-context --no-redact-local-paths` only for trusted local debugging.
 Use `runtime-context --full-doctor --progress` only when complete validation is
 needed. Quick mode reports `doctor_summary.checked: false` and is not an archive
 health claim.
+
+## Exact New-Archive AGENTS Routing Contract
+
+New archive templates include exactly one versioned positive routing block:
+
+```markdown
+<!-- WOM-RUNTIME-GUIDANCE-ROUTING v0.3.293 BEGIN -->
+This is the current authoritative WOM runtime guidance routing contract. Follow every directive in this block.
+Run `archive ai-start-here <archive-root> --dry-run --progress --format json` before choosing an archive action.
+Read and follow the returned `action_routing`.
+Use `archive search <archive-root> <query> --count-total --format json` for official WOM search.
+Raw grep and raw SQL are not authoritative WOM search results.
+For operator feedback, run `archive operator-feedback-plan <archive-root> --dry-run --format json`, inspect `archive operator-feedback-ledger <archive-root> --dry-run --format json`, require human review, preview `archive operator-feedback-record <archive-root> ... --dry-run --format json`, and only then use the reviewed `--approve` replay.
+<!-- WOM-RUNTIME-GUIDANCE-ROUTING v0.3.293 END -->
+```
+
+`runtime-guidance-readiness` accepts the block only when both sentinels occur
+once, in order, and the inclusive block matches these bytes after CRLF-to-LF
+normalization only. The fixed authority sentence is part of that canonical
+machine-readable unit; deleting it or changing it into a negation or historical
+label makes the unit non-current. A quoted, fenced, duplicated, truncated,
+reordered, or otherwise edited copy is also non-current. Arbitrary prose
+outside the sentinels is not natural-language parsed as an override of an
+otherwise exact active unit; an example or historical copy must therefore be
+quoted, fenced, or byte-distinct. Legacy phrases elsewhere are migration hints
+only and never support `ready: true`. Existing `AGENTS.md` files are never
+rewritten automatically.
 
 ## Not Implemented
 

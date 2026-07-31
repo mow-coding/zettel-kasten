@@ -10,9 +10,9 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 - Added explicit read-only `runtime-guidance-readiness` for the Codex
   repository scope with required host, scope, and repository-root selectors.
-- Distinguished missing runtime Skill material from missing legacy
-  `AGENTS.md` routing; unreadable, unsafe, and unsupported evidence fails
-  closed.
+- Distinguished missing runtime Skill material from an absent or non-current
+  exact `AGENTS.md` routing contract; unreadable, unsafe, and unsupported
+  evidence fails closed.
 - Kept ordinary runtime entry host-neutral with `not_checked`, an exact opt-in
   command, and host consumption permanently `not_proven`.
 - Added the exact operator-feedback plan, ledger, human-review, preview, and

@@ -62,7 +62,7 @@ readiness discovery:
 wom-kit/ai-command-path-routing/v0.7
 ```
 
-The feedback route is ordered and cannot skip the human gate:
+The feedback route is ordered and an AI must not skip the human gate:
 
 ```text
 operator-feedback-plan --dry-run
@@ -71,6 +71,12 @@ required human review
 operator-feedback-record --dry-run
 operator-feedback-record --approve --reviewed-by <human-actor>
 ```
+
+This is guidance, not proof that the earlier steps or human review occurred.
+The record command requires an attributed reviewer for approval but does not
+technically verify plan, ledger, preview, or independent human-review
+evidence. The route therefore reports `approval_inferred: false`; operators
+and AI hosts remain responsible for following and reviewing the full sequence.
 
 It is returned by:
 
