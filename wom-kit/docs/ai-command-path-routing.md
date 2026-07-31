@@ -1,6 +1,6 @@
 # AI Command-Path Routing
 
-Status: implemented in v0.3.278, extended through v0.3.284
+Status: implemented in v0.3.278, extended through v0.3.293
 
 ## Purpose
 
@@ -54,6 +54,29 @@ recovery-plan/separately approved recovery routes:
 ```text
 wom-kit/ai-command-path-routing/v0.6
 ```
+
+v0.3.293 adds explicit operator-feedback sequencing and runtime-guidance
+readiness discovery:
+
+```text
+wom-kit/ai-command-path-routing/v0.7
+```
+
+The feedback route is ordered and an AI must not skip the human gate:
+
+```text
+operator-feedback-plan --dry-run
+operator-feedback-ledger --dry-run
+required human review
+operator-feedback-record --dry-run
+operator-feedback-record --approve --reviewed-by <human-actor>
+```
+
+This is guidance, not proof that the earlier steps or human review occurred.
+The record command requires an attributed reviewer for approval but does not
+technically verify plan, ledger, preview, or independent human-review
+evidence. The route therefore reports `approval_inferred: false`; operators
+and AI hosts remain responsible for following and reviewing the full sequence.
 
 It is returned by:
 
@@ -120,6 +143,9 @@ Every write remains preview-first and human-reviewed.
 - v0.3.284 advances routing to
   `wom-kit/ai-command-path-routing/v0.6`, preserves existing addition artifact
   schemas, and adds separate removal receipt/journal v0.1 schemas.
+- v0.3.293 advances routing to
+  `wom-kit/ai-command-path-routing/v0.7` and adds the complete
+  operator-feedback sequence without changing existing action contracts.
 - Human approval is still required for every listed write route.
 
 ## v0.3.279 Detection Boundary

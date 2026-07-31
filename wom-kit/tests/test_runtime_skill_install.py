@@ -36,7 +36,7 @@ class RuntimeSkillInstallTests(unittest.TestCase):
         root: Path,
         source: Path,
         *,
-        version: str = "test-v1",
+        version: str = "0.3.293",
     ) -> dict[str, object]:
         return {
             "host": "custom",
@@ -51,7 +51,7 @@ class RuntimeSkillInstallTests(unittest.TestCase):
         root: Path,
         source: Path,
         *,
-        version: str = "test-v1",
+        version: str = "0.3.293",
     ) -> dict[str, object]:
         kwargs = self.custom_kwargs(root, source, version=version)
         preview = runtime_skill_install.runtime_skill_install(
@@ -198,7 +198,7 @@ class RuntimeSkillInstallTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source = self.make_source(root, marker="one")
-            installed = self.install_from_preview(root, source, version="test-v1")
+            installed = self.install_from_preview(root, source, version="0.3.292")
             self.assertTrue(installed["ok"], installed)
 
             (source / "SKILL.md").write_text(
@@ -207,7 +207,7 @@ class RuntimeSkillInstallTests(unittest.TestCase):
                 encoding="utf-8",
                 newline="\n",
             )
-            kwargs = self.custom_kwargs(root, source, version="test-v2")
+            kwargs = self.custom_kwargs(root, source, version="0.3.293")
             preview = runtime_skill_install.runtime_skill_install(
                 dry_run=True, approve=False, **kwargs
             )
@@ -233,7 +233,7 @@ class RuntimeSkillInstallTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source = self.make_source(root, marker="one")
-            installed = self.install_from_preview(root, source, version="test-v1")
+            installed = self.install_from_preview(root, source, version="0.3.292")
             self.assertTrue(installed["ok"], installed)
             target = root / "skills" / "wom-archive"
 
@@ -243,7 +243,7 @@ class RuntimeSkillInstallTests(unittest.TestCase):
                 encoding="utf-8",
                 newline="\n",
             )
-            kwargs = self.custom_kwargs(root, source, version="test-v2")
+            kwargs = self.custom_kwargs(root, source, version="0.3.293")
             preview = runtime_skill_install.runtime_skill_install(
                 dry_run=True, approve=False, **kwargs
             )
@@ -473,7 +473,7 @@ class RuntimeSkillInstallTests(unittest.TestCase):
                 scope="custom",
                 skills_root=linked_root,
                 source_root=source,
-                package_version="test-v1",
+                package_version="0.3.293",
             )
 
         self.assertFalse(result["ok"])

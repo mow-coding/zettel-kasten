@@ -15,6 +15,7 @@ import uuid
 
 from . import __version__
 from .resource_paths import runtime_resource_root
+from .version_policy import stable_version_value
 
 
 SKILL_NAME = "wom-archive"
@@ -301,8 +302,19 @@ def inspect_target(
         )
 
     file_rows = validate_manifest_files(manifest.get("files"))
-    installed_version = manifest.get("package_version")
-    installed_source_sha256 = manifest.get("source_package_sha256")
+    raw_installed_version = manifest.get("package_version")
+    installed_version = stable_version_value(
+        raw_installed_version
+        if isinstance(raw_installed_version, str)
+        else None
+    )
+    raw_installed_source_sha256 = manifest.get("source_package_sha256")
+    installed_source_sha256 = (
+        raw_installed_source_sha256
+        if isinstance(raw_installed_source_sha256, str)
+        and SHA256_RE.fullmatch(raw_installed_source_sha256) is not None
+        else None
+    )
     installed_at = manifest.get("installed_at")
     reviewed_by = manifest.get("reviewed_by")
     manifest_payload_sha256 = manifest.get("manifest_payload_sha256")
@@ -329,10 +341,8 @@ def inspect_target(
         or manifest.get("skill_name") != SKILL_NAME
         or manifest.get("host") != location.host
         or manifest.get("scope") != location.scope
-        or not isinstance(installed_version, str)
-        or not installed_version
-        or not isinstance(installed_source_sha256, str)
-        or SHA256_RE.fullmatch(installed_source_sha256) is None
+        or installed_version is None
+        or installed_source_sha256 is None
         or not isinstance(installed_at, str)
         or UTC_TIMESTAMP_RE.fullmatch(installed_at) is None
         or safe_reviewer(
@@ -345,8 +355,8 @@ def inspect_target(
     ):
         return TargetInspection(
             "managed_invalid", manifest, sha256_bytes(raw_manifest),
-            installed_version if isinstance(installed_version, str) else None,
-            installed_source_sha256 if isinstance(installed_source_sha256, str) else None,
+            installed_version,
+            installed_source_sha256,
             ("Existing WOM-kit skill manifest does not match this installation contract.",), (),
         )
 
@@ -453,13 +463,24 @@ def source_projection(source: SourcePackage, package_version: str) -> dict[str, 
 
 
 def inspection_projection(inspection: TargetInspection) -> dict[str, object]:
+    installed_version_status = (
+        "valid"
+        if inspection.installed_version is not None
+        else (
+            "invalid_or_untrusted"
+            if inspection.manifest is not None
+            else "not_available"
+        )
+    )
     return {
         "state": inspection.state,
         "managed": inspection.state.startswith("managed_"),
         "installed_version": inspection.installed_version,
+        "installed_version_status": installed_version_status,
         "installed_source_package_sha256": inspection.installed_source_sha256,
         "install_manifest_sha256": inspection.manifest_sha256,
         "file_bodies_exposed": False,
+        "untrusted_manifest_values_exposed": False,
     }
 
 
@@ -613,6 +634,7 @@ def build_operation_result(
             "local_paths_redacted": redact_local_paths,
             "file_bodies_exposed": False,
             "secret_values_exposed": False,
+            "untrusted_manifest_values_exposed": False,
         },
         "closed_actions": common_closed_actions(wrote_host_files=False),
         "next_safe_actions": next_actions,

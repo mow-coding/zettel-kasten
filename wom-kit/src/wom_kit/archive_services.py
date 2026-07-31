@@ -51,6 +51,11 @@ from .paths import (
 )
 from .resource_paths import runtime_resource_root
 from .schema_validator import validate_schema
+from .version_policy import (
+    STABLE_VERSION_TAG_RE,
+    normalize_version_label,
+    stable_version_value,
+)
 
 try:
     import yaml
@@ -685,7 +690,7 @@ WOM_KIT_VERSION_PIN_CANDIDATES = (
     ".zettel-kasten/installed-version.txt",
     "installed-version.txt",
 )
-WOM_KIT_PROJECT_UPDATE_TAG_RE = re.compile(r"^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
+WOM_KIT_PROJECT_UPDATE_TAG_RE = STABLE_VERSION_TAG_RE
 WOM_KIT_PROJECT_UPDATE_RECEIPTS_RELATIVE = ".zettel-kasten/receipts/version-updates"
 WOM_KIT_PROJECT_UPDATE_LOCK_RELATIVE = ".zettel-kasten/version-update.lock"
 PROFILE_WALLET_NODE_KINDS = {"person", "organization", "team", "family", "project", "agent"}
@@ -1003,6 +1008,7 @@ RUNTIME_CONTEXT_SAFE_ACTIONS = [
     "run ai-response-concept-guide dry-run",
     "run operational-context dry-run",
     "run operator-feedback-plan dry-run",
+    "run operator-feedback-ledger dry-run before preparing a feedback record",
     "run identity-reconcile dry-run",
     "search archive content through archive search with explicit truncation handling",
     "create draft through archive create-draft dry-run and reviewed replay",
@@ -4415,6 +4421,76 @@ def operator_feedback_receipt_relative_path(feedback_id: str, timestamp: str) ->
     return f"{OPERATOR_FEEDBACK_RECEIPTS_DIR}/{feedback_id}.{compact}.json"
 
 
+def operator_feedback_runtime_routing() -> dict[str, Any]:
+    return {
+        "schema": "wom-kit/operator-feedback-runtime-routing/v0.1",
+        "canonical_metadata_dir": OPERATOR_FEEDBACK_DIR,
+        "canonical_receipt_dir": OPERATOR_FEEDBACK_RECEIPTS_DIR,
+        "user_knowledge_objets_are_canonical_feedback_tracker": False,
+        "sequence": [
+            {
+                "step": 1,
+                "action": "read_feedback_policy",
+                "command": (
+                    "archive operator-feedback-plan <archive-root> "
+                    "--dry-run --format json"
+                ),
+                "writes": False,
+            },
+            {
+                "step": 2,
+                "action": "inspect_feedback_ledger",
+                "command": (
+                    "archive operator-feedback-ledger <archive-root> "
+                    "--dry-run --format json"
+                ),
+                "writes": False,
+            },
+            {
+                "step": 3,
+                "action": "human_review",
+                "command": None,
+                "required_gate": True,
+                "meaning": (
+                    "A human reviews the existing ledger and the intended "
+                    "feedback metadata before any record preview."
+                ),
+                "writes": False,
+            },
+            {
+                "step": 4,
+                "action": "preview_feedback_record",
+                "command": (
+                    "archive operator-feedback-record <archive-root> "
+                    "--feedback-id <safe-id> --feedback-ref <safe-ref> "
+                    "--status draft --dry-run --format json"
+                ),
+                "requires_completed_human_review": True,
+                "writes": False,
+            },
+            {
+                "step": 5,
+                "action": "approve_feedback_record",
+                "command": (
+                    "archive operator-feedback-record <archive-root> "
+                    "--feedback-id <safe-id> --feedback-ref <safe-ref> "
+                    "--status draft --approve --reviewed-by <human-actor> "
+                    "--format json"
+                ),
+                "requires_completed_human_review": True,
+                "writes": True,
+            },
+        ],
+        "truth_boundaries": {
+            "feedback_body_read": False,
+            "external_submission_performed": False,
+            "delivered_status_proves_external_submission": False,
+            "delivered_status_proves_human_receipt": False,
+            "approval_inferred": False,
+        },
+    }
+
+
 def operator_feedback_plan(archive_root: Path | str, *, dry_run: bool = True) -> dict[str, Any]:
     root = require_existing_archive_root(archive_root)
     blockers: list[str] = []
@@ -4452,6 +4528,7 @@ def operator_feedback_plan(archive_root: Path | str, *, dry_run: bool = True) ->
                 "user knowledge objets should not be used as the canonical lifecycle tracker for tool feedback",
                 "this command does not copy, move, read, or submit feedback body files",
             ],
+            "runtime_routing": operator_feedback_runtime_routing(),
         },
         "blockers": blockers,
         "warnings": [],
@@ -89925,36 +90002,6 @@ def redacted_path_value(path: Path, *, redact_local_paths: bool) -> str:
     return "<local-path-redacted>" if redact_local_paths else str(path)
 
 
-def normalize_version_label(value: str | None) -> str | None:
-    if value is None:
-        return None
-    normalized = value.strip().lstrip("\ufeff").strip()
-    if normalized.lower().startswith("v"):
-        normalized = normalized[1:]
-    return normalized or None
-
-
-def stable_version_value(
-    value: str | None,
-    *,
-    include_prefix: bool = False,
-) -> str | None:
-    """Return only a public, exact stable WOM version label.
-
-    Version files and local Git metadata are untrusted local inputs.  Keep
-    arbitrary payloads available only to the fail-closed validity decision;
-    never project them into shareable version results.
-    """
-
-    normalized = normalize_version_label(value)
-    if normalized is None:
-        return None
-    label = f"v{normalized}"
-    if not WOM_KIT_PROJECT_UPDATE_TAG_RE.fullmatch(label):
-        return None
-    return label if include_prefix else normalized
-
-
 def version_sort_key(value: str | None) -> tuple[int, int, int, str] | None:
     normalized = normalize_version_label(value)
     if not normalized:
@@ -93690,6 +93737,17 @@ def runtime_context(
         "wom_kit_version": wom_kit_version_info(root, redact_local_paths=redact_local_paths),
         "storage_authority": local_sovereignty_authority_model(),
         "operational_context": operational_context_summary,
+        "runtime_guidance_readiness": {
+            "status": "not_checked",
+            "checked": False,
+            "automatic_check_performed": False,
+            "reason_code": "explicit_host_specific_check_required",
+            "check_command": (
+                "archive runtime-guidance-readiness <archive-root> "
+                "--host codex --scope repo --repo-root <repo-root> --format json"
+            ),
+            "host_guidance_consumption": "not_proven",
+        },
         "canonical_entrypoints": canonical_entrypoints,
         "action_routing": canonical_entrypoints["action_routing"],
         "handoff": {
@@ -97989,6 +98047,7 @@ def ai_start_here(
         "ai_runtime_order": ai_runtime_order,
         "remaining_ai_runtime_order": remaining_ai_runtime_order,
         "action_routing": action_routing,
+        "runtime_guidance_readiness": context.get("runtime_guidance_readiness"),
         "operational_context": {
             "status": operational_context.get("status") or "unknown",
             "record_path": operational_context.get("record_path"),
@@ -98482,7 +98541,7 @@ def runtime_context_write_action_routes() -> list[dict[str, Any]]:
 
 def runtime_context_action_routing() -> dict[str, Any]:
     return {
-        "schema": "wom-kit/ai-command-path-routing/v0.6",
+        "schema": "wom-kit/ai-command-path-routing/v0.7",
         "official_wom_command_required_for_archive_actions": True,
         "location_policy_alone_is_sufficient": False,
         "raw_filesystem_search_is_authoritative": False,
@@ -98493,6 +98552,7 @@ def runtime_context_action_routing() -> dict[str, Any]:
         "existing_archive_agents_auto_rewritten": False,
         "read_action_routes": runtime_context_read_action_routes(),
         "write_action_routes": runtime_context_write_action_routes(),
+        "operator_feedback_routing": operator_feedback_runtime_routing(),
     }
 
 
@@ -98620,6 +98680,10 @@ def runtime_context_recommended_first_commands() -> list[dict[str, str]]:
             "command": "archive operator-feedback-plan <archive-root> --dry-run --format json",
             "purpose": "discover where operator tool-feedback records live (ops/feedback/) and which feedback is still open before starting new work",
         },
+        {
+            "command": "archive operator-feedback-ledger <archive-root> --dry-run --format json",
+            "purpose": "inspect current feedback lifecycle metadata before human review and any record preview",
+        },
     ]
 
 
@@ -98689,7 +98753,9 @@ def runtime_context_ai_runtime_order() -> list[dict[str, Any]]:
             "action": "plan_operator_feedback",
             "command": "archive operator-feedback-plan <archive-root> --dry-run --format json",
             "when": "the human reports tool friction, a workflow gap, or asks where feedback records live",
-            "reason": "surface the operator feedback lifecycle (ops/feedback/) so frictions become durable records; recording still needs a separate operator-feedback-record approval",
+            "workflow_field": "canonical_entrypoints.action_routing.operator_feedback_routing",
+            "next_command": "archive operator-feedback-ledger <archive-root> --dry-run --format json",
+            "reason": "start the official plan, ledger, human-review, record-preview, and explicit-approval sequence; recording still needs a separate operator-feedback-record approval",
         },
     ]
 

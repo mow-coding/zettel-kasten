@@ -160,10 +160,10 @@ MCP clients must not request `redact_local_paths: false` unless trusted local de
 
 ## AI Command-Path Routing
 
-Introduced in v0.3.278 and extended through v0.3.284, runtime-context,
+Introduced in v0.3.278 and extended through v0.3.293, runtime-context,
 ai-start-here, operational-context, and
 canonical entrypoint metadata return
-`wom-kit/ai-command-path-routing/v0.6`.
+`wom-kit/ai-command-path-routing/v0.7`.
 
 The routing object names official WOM commands for search, local version
 truth, saved-view inspection, conservative inbox pipeline-shape review,
@@ -174,8 +174,9 @@ non-authoritative search surfaces and forbids direct AI Markdown writes to
 `inbox/`. The inbox audit proves no writer identity and performs no repair.
 The event-membership route supports exact reviewed additions and removals
 through separate digest-bound CLI writers and separate interruption recovery,
-but infers no member and exposes no MCP writer. v0.3.284 advances routing to
-v0.6. Both operations refuse retained add or removal journals before and
+but infers no member and exposes no MCP writer. v0.3.293 adds the
+operator-feedback plan, ledger, required human-review, record preview, and
+explicit approval sequence. Both operations refuse retained add or removal journals before and
 under one shared lock, while their requests, journals, receipts, and recovery
 contracts stay separate. Mismatched evidence remains in forensic hold.
 
