@@ -1,6 +1,6 @@
 # WOM-kit Python 도구 설치
 
-상태: v0.3.293 GitHub wheel 및 runtime-guidance 준비 상태 체크포인트
+상태: v0.3.294 GitHub wheel 및 checked-layer objet 재발견 체크포인트
 
 WOM-kit은 명령줄 도구입니다. 일반 앱 프로젝트의 Python 의존성과 섞지 말고
 별도의 격리된 Python 환경에 설치하는 것이 좋습니다.
@@ -12,7 +12,7 @@ WOM-kit은 명령줄 도구입니다. 일반 앱 프로젝트의 Python 의존�
 증거가 되지는 않습니다.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.293/wom_kit-0.3.293-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.294/wom_kit-0.3.294-py3-none-any.whl"
 archive --version
 ```
 
@@ -30,7 +30,7 @@ archive --version
 
 ```powershell
 py -m venv "$HOME\.wom-tools\wom-kit"
-& "$HOME\.wom-tools\wom-kit\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.293/wom_kit-0.3.293-py3-none-any.whl"
+& "$HOME\.wom-tools\wom-kit\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.294/wom_kit-0.3.294-py3-none-any.whl"
 & "$HOME\.wom-tools\wom-kit\Scripts\archive.exe" --version
 ```
 
@@ -178,7 +178,10 @@ python wom-kit/tools/check_wheel_install.py --format json
 ```
 
 두 번째 명령은 깨끗한 소스 사본에서 wheel을 만들고, manifest의 모든 자원을
-검사하고, 새 가상환경에 설치하고, 네 실행 명령을 확인하고, 버릴 수 있는
-호스트 폴더에서 Agent Skill 미리보기·설치·검증·제거를 실행하고, 버릴 수
-있는 아카이브를 미리 본 뒤 실제 생성하고, 엄격한 검진까지 실행합니다.
-이 전체 검사가 통과한 wheel만 릴리스 자산으로 보존할 수 있습니다.
+검사한 뒤 새 가상환경에 설치합니다. 두 CLI의 버전 출력을 실제로 실행하고,
+두 MCP 별칭에는 초기화·도구 목록·EOF 절차를 실행합니다. 이때 엄격한 UTF-8,
+비어 있는 표준 오류, 제한된 출력량과 실행 시간, 하위 프로세스 격리, 완전하고
+바이트 단위로 같은 도구 목록을 요구합니다. 이어서 버릴 수 있는 호스트
+폴더에서 Agent Skill 미리보기·설치·검증·제거를 실행하고, 버릴 수 있는
+아카이브를 미리 본 뒤 실제 생성하고, 엄격한 검진까지 실행합니다. 이 전체
+검사가 통과한 wheel만 릴리스 자산으로 보존할 수 있습니다.

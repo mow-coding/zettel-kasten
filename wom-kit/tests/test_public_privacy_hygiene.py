@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -25,6 +27,59 @@ class PublicPrivacyHygieneTests(unittest.TestCase):
     def test_full_checker_passes_current_repository(self) -> None:
         problems = check_public_privacy.check_public_privacy(REPO_ROOT)
         self.assertEqual([problem.format() for problem in problems], [])
+
+    def test_git_listing_scans_forced_tracked_ignored_records_only(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo_root = Path(temp_dir)
+            subprocess.run(
+                ["git", "init", "--quiet"],
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            (repo_root / ".gitignore").write_text(
+                "meeting-minutes/\narchive-infra-decision-log-*.md\n",
+                encoding="utf-8",
+            )
+            meeting_minutes = repo_root / "meeting-minutes"
+            meeting_minutes.mkdir()
+            tracked_minute = meeting_minutes / "tracked-record.md"
+            ignored_local_minute = meeting_minutes / "local-record.md"
+            tracked_decision = repo_root / "archive-infra-decision-log-tracked.md"
+            ignored_local_decision = repo_root / "archive-infra-decision-log-local.md"
+            synthetic_home = "C:" + "\\Users\\" + "private-person" + "\\Documents\\archive"
+            for path in (
+                tracked_minute,
+                ignored_local_minute,
+                tracked_decision,
+                ignored_local_decision,
+            ):
+                path.write_text(synthetic_home, encoding="utf-8")
+
+            subprocess.run(
+                [
+                    "git",
+                    "add",
+                    "--force",
+                    tracked_minute.relative_to(repo_root).as_posix(),
+                    tracked_decision.relative_to(repo_root).as_posix(),
+                ],
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+
+            problems = check_public_privacy.check_public_privacy(repo_root)
+            problem_paths = {problem.file for problem in problems}
+            self.assertEqual(
+                problem_paths,
+                {
+                    "archive-infra-decision-log-tracked.md",
+                    "meeting-minutes/tracked-record.md",
+                },
+            )
 
     def test_windows_user_path_with_non_placeholder_user_fails(self) -> None:
         text = "C:" + "\\Users\\" + "private-person" + "\\Documents\\dev\\zettel-kasten"

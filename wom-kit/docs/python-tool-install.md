@@ -1,6 +1,6 @@
 # Install WOM-kit As A Python Tool
 
-Status: v0.3.293 GitHub wheel and runtime-guidance readiness checkpoint
+Status: v0.3.294 GitHub wheel and checked-layer objet rediscovery checkpoint
 
 WOM-kit is a command-line tool. It should live in its own Python environment
 instead of being mixed into an application project's dependencies.
@@ -12,7 +12,7 @@ verified wheel. The versioned URL alone is not proof that the asset is
 available:
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.293/wom_kit-0.3.293-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.294/wom_kit-0.3.294-py3-none-any.whl"
 archive --version
 ```
 
@@ -30,7 +30,7 @@ Plain `pip` works when it is placed inside a dedicated virtual environment:
 
 ```powershell
 py -m venv "$HOME\.wom-tools\wom-kit"
-& "$HOME\.wom-tools\wom-kit\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.293/wom_kit-0.3.293-py3-none-any.whl"
+& "$HOME\.wom-tools\wom-kit\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.294/wom_kit-0.3.294-py3-none-any.whl"
 & "$HOME\.wom-tools\wom-kit\Scripts\archive.exe" --version
 ```
 
@@ -174,8 +174,11 @@ python wom-kit/tools/check_wheel_install.py --format json
 ```
 
 The second command builds a wheel from a clean source copy, inspects every
-manifested resource, installs it in a fresh virtual environment, checks all
-four entrypoints, previews/installs/verifies/uninstalls the Agent Skill in a
-disposable host directory, previews and creates a disposable archive, and runs
-strict Doctor. A release wheel may be preserved only after that entire check
-passes.
+manifested resource, and installs it in a fresh virtual environment. It
+executes both CLI version probes and performs initialize/list/EOF handshakes
+against both MCP aliases, requiring strict UTF-8, empty stderr, bounded
+output/runtime, descendant-process containment, and byte-identical complete
+tool inventories. It then previews/installs/verifies/uninstalls the Agent Skill
+in a disposable host directory, previews and creates a disposable archive, and
+runs strict Doctor. A release wheel may be preserved only after that entire
+check passes.

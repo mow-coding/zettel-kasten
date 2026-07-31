@@ -1,6 +1,6 @@
 # AI Command-Path Routing
 
-Status: implemented in v0.3.278, extended through v0.3.293
+Status: implemented in v0.3.278, extended through v0.3.294
 
 ## Purpose
 
@@ -62,6 +62,14 @@ readiness discovery:
 wom-kit/ai-command-path-routing/v0.7
 ```
 
+v0.3.294 adds the checked-layer rediscovery route that must precede any
+global objet/source absence claim:
+
+```text
+wom-kit/ai-command-path-routing/v0.8
+action: plan_objet_rediscovery_before_negative_claim
+```
+
 The feedback route is ordered and an AI must not skip the human gate:
 
 ```text
@@ -108,6 +116,7 @@ packaged runtime skill, the fake archive, and live read-only command output.
 | --- | --- | --- |
 | Enter or resume an archive | `archive ai-start-here <archive-root> --dry-run --progress --format json` | Quick mode is not a full archive health claim. |
 | Search archive records | `archive search <archive-root> <query> --count-total --format json` | Inspect complete/truncated metadata. Raw grep and raw SQL are not authoritative WOM search results. |
+| Plan checked-layer rediscovery before a global absence claim | `archive objet-rediscovery-plan <archive-root> <query> --dry-run --count-total --format json` | Preserves index completeness as snapshot-only evidence, lists all ten fixed layers, echoes no private query/results, and supports no global absence claim while any applicable or unknown layer is incomplete. |
 | Inspect installed version truth | `archive version <project-or-archive-root> --format json` | Proves local runtime/source/pin and already-fetched tag state; it does not verify remote release freshness. |
 | Inspect saved-view state | `archive view-health <archive-root> --dry-run --format json` | Follow with `view-recommendation-plan`; both are read-only. |
 | Inspect possible historical inbox pipeline bypasses | `archive inbox-pipeline-audit <archive-root> --dry-run --format json` | Structural classes are conservative signals, not proof of command execution; no automatic repair exists. |
@@ -146,6 +155,9 @@ Every write remains preview-first and human-reviewed.
 - v0.3.293 advances routing to
   `wom-kit/ai-command-path-routing/v0.7` and adds the complete
   operator-feedback sequence without changing existing action contracts.
+- v0.3.294 advances routing to
+  `wom-kit/ai-command-path-routing/v0.8`, adds checked-layer rediscovery before
+  a negative claim, and preserves v0.3.293 readiness and feedback semantics.
 - Human approval is still required for every listed write route.
 
 ## v0.3.279 Detection Boundary

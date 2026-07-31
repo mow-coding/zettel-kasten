@@ -10,12 +10,12 @@ It is not a website, SaaS app, dashboard, or visual note-taking product. The int
 
 ## Install The Command-Line Tool
 
-The exact v0.3.293 GitHub Release, when present, uses the self-contained wheel
+The exact v0.3.294 GitHub Release, when present, uses the self-contained wheel
 below. Confirm that the release exists and lists the wheel before installing
 it. The versioned URL alone is not proof that the asset is available.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.293/wom_kit-0.3.293-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.294/wom_kit-0.3.294-py3-none-any.whl"
 archive --version
 ```
 
@@ -51,6 +51,14 @@ v0.3.293 adds an explicit read-only Codex/repository runtime-guidance
 readiness check and a complete operator-feedback route without claiming host
 consumption, rewriting `AGENTS.md`, or installing a Skill automatically. See
 [`docs/releases/v0.3.293.md`](docs/releases/v0.3.293.md).
+
+v0.3.294 adds the read-only, privacy-safe
+`archive objet-rediscovery-plan` and matching MCP tool. They preserve ordinary
+index `complete`/`truncated` truth while listing ten fixed checked and
+unchecked rediscovery layers, so an index-only zero result never becomes a
+global claim that an objet or source file does not exist. See
+[`docs/objet-rediscovery-plan.md`](docs/objet-rediscovery-plan.md) and
+[`docs/releases/v0.3.294.md`](docs/releases/v0.3.294.md).
 
 v0.3.292 keeps those runtime safeguards and makes objet relationship counts
 honest across overview and catalog surfaces. See

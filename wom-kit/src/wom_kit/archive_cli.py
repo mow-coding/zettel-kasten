@@ -8,6 +8,8 @@ Commands:
           Inspect the packaged WOM archive Agent Skill installation without writes.
   runtime-guidance-readiness
           Inspect explicit host Skill and repository guidance readiness without writes.
+  objet-rediscovery-plan
+          Summarize checked and unchecked rediscovery layers before any absence claim.
   runtime-skill-install
           Preview or approve a manifest-bound Codex/custom Agent Skill install or update.
   runtime-skill-uninstall
@@ -14653,6 +14655,66 @@ def command_search(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_objet_rediscovery_plan(args: argparse.Namespace) -> int:
+    try:
+        result = archive_services.objet_rediscovery_plan(
+            Path(args.archive_root),
+            args.query,
+            dry_run=bool(args.dry_run),
+            limit=args.limit,
+            count_total=bool(args.count_total),
+        )
+    except archive_services.OBJET_REDISCOVERY_INSPECTION_ERRORS:
+        result = archive_services.blocked_objet_rediscovery_result(
+            diagnostic_code="rediscovery_inspection_failed",
+            blocker="Objet rediscovery planning could not complete a safe local inspection.",
+            query_present=bool(isinstance(args.query, str) and args.query.strip()),
+        )
+
+    if args.format == "json":
+        print_json(result)
+    elif result.get("status") == "search_incomplete":
+        print("SEARCH INCOMPLETE. No global absence claim is supported.")
+        checked_match_count = result.get("checked_match_count", 0)
+        if result.get("checked_match_count_exact") is True:
+            print(
+                "Checked generated-index matches (exact): "
+                f"{checked_match_count}"
+            )
+        else:
+            print(
+                "Checked generated-index matches (bounded lower bound): "
+                f"at least {checked_match_count}"
+            )
+        index_search = (
+            result.get("index_search")
+            if isinstance(result.get("index_search"), dict)
+            else {}
+        )
+        print(
+            "Index result set complete: "
+            + ("yes" if index_search.get("complete") else "no")
+        )
+        print(
+            "Unchecked or unavailable layers: "
+            f"{result.get('unchecked_or_unavailable_layer_count', 0)}"
+        )
+        for layer in result.get("checked_layers") or []:
+            if not isinstance(layer, dict):
+                continue
+            print(
+                f"- {layer.get('layer_id') or 'unknown'}: "
+                f"{layer.get('check_state') or 'unknown'} / "
+                f"{layer.get('match_state') or 'unknown'}"
+            )
+    else:
+        print("Objet rediscovery plan blocked safely.")
+        codes = result.get("diagnostic_codes")
+        if isinstance(codes, list) and codes:
+            print(f"Diagnostic: {codes[0]}")
+    return 0 if result.get("ok") else 1
+
+
 def command_pack(args: argparse.Namespace) -> int:
     try:
         result = archive_services.pack_work_context(
@@ -24788,6 +24850,50 @@ def build_parser() -> argparse.ArgumentParser:
     )
     search.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     search.set_defaults(func=command_search)
+
+    objet_rediscovery_plan_parser = subcommands.add_parser(
+        "objet-rediscovery-plan",
+        help=(
+            "Summarize checked and unchecked rediscovery layers before any "
+            "global absence claim."
+        ),
+    )
+    objet_rediscovery_plan_parser.add_argument(
+        "archive_root",
+        help="Archive root whose generated search evidence is being inspected.",
+    )
+    objet_rediscovery_plan_parser.add_argument(
+        "query",
+        help="Private local query. The command never echoes it.",
+    )
+    objet_rediscovery_plan_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Required. Inspect local evidence without writing files.",
+    )
+    objet_rediscovery_plan_parser.add_argument(
+        "--limit",
+        type=int,
+        default=20,
+        help="Maximum generated-index result rows to inspect (ceiling 100).",
+    )
+    objet_rediscovery_plan_parser.add_argument(
+        "--count-total",
+        action="store_true",
+        help=(
+            "Count every generated-index match beyond the limit. This does not "
+            "make rediscovery complete."
+        ),
+    )
+    objet_rediscovery_plan_parser.add_argument(
+        "--format",
+        choices=["text", "json"],
+        default="text",
+        help="Output format.",
+    )
+    objet_rediscovery_plan_parser.set_defaults(
+        func=command_objet_rediscovery_plan
+    )
 
     pack = subcommands.add_parser(
         "parcel",

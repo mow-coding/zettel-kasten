@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+from contextlib import redirect_stderr, redirect_stdout
 import hashlib
 import importlib.util
+import io
 import json
+import os
 from pathlib import Path
 import struct
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 import warnings
@@ -95,6 +99,691 @@ def patch_zip_member_name_bytes(wheel: Path, old_name: str, new_name: str) -> No
             f"Expected local and central member names, found {occurrence_count}: {old_name}"
         )
     wheel.write_bytes(data.replace(old_bytes, new_bytes))
+
+
+class InstalledEntrypointTests(unittest.TestCase):
+    PACKAGE_VERSION = "0.3.294"
+    SERVER_NAME = "zettel-kasten-archive-mcp"
+
+    def setUp(self) -> None:
+        self.temp_directory = tempfile.TemporaryDirectory(
+            prefix="wom-entrypoint-test-"
+        )
+        self.temp_root = Path(self.temp_directory.name)
+        self.scripts = self.temp_root / "Scripts"
+        self.scripts.mkdir()
+        for name in ("archive", "archive-mcp", "wom", "wom-mcp"):
+            check_wheel_install.executable(self.scripts, name).touch()
+
+    def tearDown(self) -> None:
+        self.temp_directory.cleanup()
+
+    @staticmethod
+    def completed(
+        command: list[str],
+        *,
+        stdout: str = "",
+        stderr: str = "",
+        returncode: int = 0,
+    ) -> object:
+        return check_wheel_install.subprocess.CompletedProcess(
+            command,
+            returncode,
+            stdout,
+            stderr,
+        )
+
+    def cli_stdout(self, *, version: str | None = None) -> str:
+        return json.dumps(
+            {
+                "ok": True,
+                "version": version or self.PACKAGE_VERSION,
+                "consistency_state": "package_version_only",
+            }
+        )
+
+    def mcp_stdout(
+        self,
+        tools: list[dict[str, object]],
+        *,
+        protocol_version: str | None = None,
+        server_name: str | None = None,
+        server_version: str | None = None,
+        capabilities: object | None = None,
+        next_cursor: object | None = None,
+    ) -> str:
+        tools_result: dict[str, object] = {"tools": tools}
+        if next_cursor is not None:
+            tools_result["nextCursor"] = next_cursor
+        responses = [
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {
+                    "protocolVersion": (
+                        protocol_version or check_wheel_install.MCP_PROTOCOL_VERSION
+                    ),
+                    "capabilities": (
+                        {"tools": {"listChanged": False}}
+                        if capabilities is None
+                        else capabilities
+                    ),
+                    "serverInfo": {
+                        "name": server_name or self.SERVER_NAME,
+                        "version": server_version or self.PACKAGE_VERSION,
+                    },
+                },
+            },
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "result": tools_result,
+            },
+        ]
+        return "".join(json.dumps(response) + "\n" for response in responses)
+
+    @staticmethod
+    def executable_name(command: list[str]) -> str:
+        name = Path(command[0]).name
+        return name[:-4] if name.casefold().endswith(".exe") else name
+
+    def test_all_four_entrypoints_are_executed_and_report_truthful_evidence(
+        self,
+    ) -> None:
+        archive_tools = [
+            {
+                "name": "zeta",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "b": {"type": "integer"},
+                        "a": {"type": "string"},
+                    },
+                },
+            },
+            {
+                "name": "alpha",
+                "inputSchema": {"type": "object", "properties": {}},
+            },
+        ]
+        wom_tools = [
+            {
+                "inputSchema": {"properties": {}, "type": "object"},
+                "name": "alpha",
+            },
+            {
+                "inputSchema": {
+                    "properties": {
+                        "a": {"type": "string"},
+                        "b": {"type": "integer"},
+                    },
+                    "type": "object",
+                },
+                "name": "zeta",
+            },
+        ]
+        calls: list[tuple[list[str], dict[str, object]]] = []
+
+        def fake_run(command: list[str], **kwargs: object) -> str:
+            calls.append((command, kwargs))
+            name = self.executable_name(command)
+            if name in {"archive", "wom"}:
+                self.assertEqual(command[1:], ["version", "--format", "json"])
+                self.assertIsNone(kwargs.get("input_text"))
+                return self.cli_stdout()
+            self.assertEqual(command, [str(check_wheel_install.executable(self.scripts, name))])
+            tools = archive_tools if name == "archive-mcp" else wom_tools
+            return self.mcp_stdout(tools)
+
+        with mock.patch.object(
+            check_wheel_install,
+            "_run_installed_entrypoint",
+            side_effect=fake_run,
+        ):
+            package_version, checked, evidence = (
+                check_wheel_install._check_installed_entrypoints(
+                    self.scripts,
+                    cwd=self.temp_root,
+                )
+            )
+
+        self.assertEqual(package_version, self.PACKAGE_VERSION)
+        self.assertEqual(
+            checked,
+            ["archive", "wom", "archive-mcp", "wom-mcp"],
+        )
+        self.assertEqual(len(calls), 4)
+        for _command, kwargs in calls[2:]:
+            request_lines = str(kwargs["input_text"]).splitlines()
+            requests = [json.loads(line) for line in request_lines]
+            self.assertEqual(
+                [request["method"] for request in requests],
+                [
+                    "initialize",
+                    "notifications/initialized",
+                    "tools/list",
+                ],
+            )
+            self.assertTrue(str(kwargs["input_text"]).endswith("\n"))
+
+        agreement = evidence["agreement"]
+        self.assertTrue(agreement["cli_versions_match"])
+        self.assertTrue(agreement["mcp_server_versions_match_package"])
+        self.assertTrue(
+            agreement["mcp_canonical_inventories_byte_identical"]
+        )
+        archive_mcp = evidence["mcp_servers"]["archive-mcp"]
+        wom_mcp = evidence["mcp_servers"]["wom-mcp"]
+        self.assertEqual(archive_mcp["tool_count"], 2)
+        self.assertEqual(
+            archive_mcp["canonical_inventory_sha256"],
+            wom_mcp["canonical_inventory_sha256"],
+        )
+        self.assertEqual(
+            agreement["mcp_canonical_inventory_sha256"],
+            archive_mcp["canonical_inventory_sha256"],
+        )
+        self.assertEqual(
+            archive_mcp["request_sequence"],
+            [
+                "initialize",
+                "notifications/initialized",
+                "tools/list",
+                "EOF",
+            ],
+        )
+        self.assertTrue(archive_mcp["pagination_complete"])
+
+    def test_entrypoint_process_failures_and_stderr_are_rejected(self) -> None:
+        process_cases = {
+            "nonzero exit": "import sys; raise SystemExit(7)",
+            "nonempty stderr": (
+                "import sys; sys.stderr.write('unexpected warning\\n')"
+            ),
+        }
+        for case, script in process_cases.items():
+            with self.subTest(case=case):
+                with self.assertRaises(check_wheel_install.WheelCheckError):
+                    check_wheel_install._run_installed_entrypoint(
+                        [sys.executable, "-c", script],
+                        cwd=self.temp_root,
+                        label=case,
+                    )
+
+    def test_entrypoint_runner_sanitizes_python_environment(self) -> None:
+        script = (
+            "import json, os; "
+            "print(json.dumps({"
+            "'pythonpath': os.environ.get('PYTHONPATH'),"
+            "'pythonhome': os.environ.get('PYTHONHOME'),"
+            "'nousersite': os.environ.get('PYTHONNOUSERSITE'),"
+            "'ioencoding': os.environ.get('PYTHONIOENCODING'),"
+            "'utf8': os.environ.get('PYTHONUTF8')"
+            "}))"
+        )
+        with mock.patch.dict(
+            os.environ,
+            {
+                "PYTHONPATH": "PRIVATE_SOURCE_CHECKOUT",
+                "PYTHONHOME": "PRIVATE_PYTHON_HOME",
+                "PYTHONNOUSERSITE": "0",
+                "PYTHONIOENCODING": "cp1252:ignore",
+                "PYTHONUTF8": "0",
+            },
+        ):
+            stdout = check_wheel_install._run_installed_entrypoint(
+                [sys.executable, "-c", script],
+                cwd=self.temp_root,
+                label="environment probe",
+            )
+
+        self.assertEqual(
+            json.loads(stdout),
+            {
+                "pythonpath": None,
+                "pythonhome": None,
+                "nousersite": "1",
+                "ioencoding": "utf-8:strict",
+                "utf8": "1",
+            },
+        )
+
+    def test_entrypoint_runner_rejects_invalid_utf8_and_bounded_output(
+        self,
+    ) -> None:
+        cases = {
+            "invalid UTF-8": (
+                "import sys; sys.stdout.buffer.write(bytes([255]))"
+            ),
+            "oversized output": (
+                "import sys; sys.stdout.buffer.write(b'x' * 4096)"
+            ),
+        }
+        for case, script in cases.items():
+            output_limit = (
+                64
+                if case == "oversized output"
+                else check_wheel_install.ENTRYPOINT_OUTPUT_LIMIT_BYTES
+            )
+            with self.subTest(case=case), mock.patch.object(
+                check_wheel_install,
+                "ENTRYPOINT_OUTPUT_LIMIT_BYTES",
+                output_limit,
+            ):
+                with self.assertRaises(check_wheel_install.WheelCheckError):
+                    check_wheel_install._run_installed_entrypoint(
+                        [sys.executable, "-c", script],
+                        cwd=self.temp_root,
+                        label=case,
+                    )
+
+    def test_entrypoint_runner_checks_overflow_after_reader_join(self) -> None:
+        class DelayedReader:
+            def __init__(
+                self,
+                *,
+                target: object,
+                args: tuple[object, ...],
+                daemon: bool,
+            ) -> None:
+                del daemon
+                self._target = target
+                self._args = args
+                self._finished = False
+
+            def start(self) -> None:
+                pass
+
+            def join(self, timeout: float | None = None) -> None:
+                del timeout
+                self._target(*self._args)  # type: ignore[operator]
+                self._finished = True
+
+            def is_alive(self) -> bool:
+                return not self._finished
+
+        script = (
+            "import sys; "
+            "sys.stdout.buffer.write(b'{}' + (b' ' * 63))"
+        )
+        with (
+            mock.patch.object(
+                check_wheel_install.threading,
+                "Thread",
+                DelayedReader,
+            ),
+            mock.patch.object(
+                check_wheel_install,
+                "ENTRYPOINT_OUTPUT_LIMIT_BYTES",
+                64,
+            ),
+            self.assertRaises(check_wheel_install.WheelCheckError),
+        ):
+            check_wheel_install._run_installed_entrypoint(
+                [sys.executable, "-c", script],
+                cwd=self.temp_root,
+                label="delayed overflow reader",
+            )
+
+    def test_entrypoint_timeout_includes_inherited_pipe_readers(self) -> None:
+        script = (
+            "import subprocess, sys; "
+            "subprocess.Popen([sys.executable, '-c', "
+            "'import time; time.sleep(1.5)']); "
+            "raise SystemExit(0)"
+        )
+        started = time.monotonic()
+        with (
+            mock.patch.object(
+                check_wheel_install,
+                "ENTRYPOINT_TIMEOUT_SECONDS",
+                0.25,
+            ),
+            self.assertRaises(check_wheel_install.WheelCheckError),
+        ):
+            check_wheel_install._run_installed_entrypoint(
+                [sys.executable, "-c", script],
+                cwd=self.temp_root,
+                label="inherited pipe timeout",
+            )
+        elapsed = time.monotonic() - started
+
+        self.assertLess(elapsed, 1.25)
+
+    def test_entrypoint_rejects_detached_stdio_descendant(self) -> None:
+        script = (
+            "import subprocess, sys; "
+            "subprocess.Popen("
+            "[sys.executable, '-c', 'import time; time.sleep(5)'], "
+            "stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, "
+            "stderr=subprocess.DEVNULL); "
+            "raise SystemExit(0)"
+        )
+        started = time.monotonic()
+        with self.assertRaises(check_wheel_install.WheelCheckError):
+            check_wheel_install._run_installed_entrypoint(
+                [sys.executable, "-c", script],
+                cwd=self.temp_root,
+                label="detached stdio descendant",
+            )
+        elapsed = time.monotonic() - started
+
+        self.assertLess(elapsed, 2)
+
+    @unittest.skipUnless(
+        os.name == "nt",
+        "Windows Job Object containment contract",
+    )
+    def test_windows_job_assignment_failure_is_fail_closed(self) -> None:
+        with (
+            mock.patch.object(
+                check_wheel_install,
+                "_assign_windows_kill_on_close_job",
+                return_value=None,
+            ),
+            self.assertRaises(check_wheel_install.WheelCheckError),
+        ):
+            check_wheel_install._run_installed_entrypoint(
+                [sys.executable, "-c", "print('must not pass')"],
+                cwd=self.temp_root,
+                label="job assignment failure",
+            )
+
+    def test_cli_version_probe_rejects_malformed_or_inconsistent_output(self) -> None:
+        payload_cases = {
+            "malformed JSON": "{not-json",
+            "non-object JSON": "[]",
+            "missing version": json.dumps(
+                {"consistency_state": "package_version_only"}
+            ),
+            "invalid version": json.dumps(
+                {
+                    "version": " 0.3.294",
+                    "consistency_state": "package_version_only",
+                }
+            ),
+            "not package-only": json.dumps(
+                {
+                    "version": self.PACKAGE_VERSION,
+                    "consistency_state": "source_checkout_match",
+                }
+            ),
+            "reported failure": json.dumps(
+                {
+                    "ok": False,
+                    "version": self.PACKAGE_VERSION,
+                    "consistency_state": "package_version_only",
+                }
+            ),
+        }
+        for case, stdout in payload_cases.items():
+            with self.subTest(case=case), mock.patch.object(
+                check_wheel_install,
+                "_run_installed_entrypoint",
+                return_value=stdout,
+            ):
+                with self.assertRaises(check_wheel_install.WheelCheckError):
+                    check_wheel_install._probe_cli_version(
+                        Path("archive"),
+                        cwd=self.temp_root,
+                        entrypoint_name="archive",
+                    )
+
+    def test_mcp_probe_rejects_malformed_protocol_version_and_tools(self) -> None:
+        valid_tool = {
+            "name": "archive_doctor",
+            "inputSchema": {"type": "object", "properties": {}},
+        }
+        malformed_cases = {
+            "malformed JSON": "{not-json\n{}\n",
+            "extra response": self.mcp_stdout([valid_tool]) + "{}\n",
+            "protocol mismatch": self.mcp_stdout(
+                [valid_tool],
+                protocol_version="1900-01-01",
+            ),
+            "tools capability missing": self.mcp_stdout(
+                [valid_tool],
+                capabilities={},
+            ),
+            "unexpected server name": self.mcp_stdout(
+                [valid_tool],
+                server_name="unexpected-server",
+            ),
+            "package version mismatch": self.mcp_stdout(
+                [valid_tool],
+                server_version="0.0.0",
+            ),
+            "paginated inventory": self.mcp_stdout(
+                [valid_tool],
+                next_cursor="PRIVATE_NEXT_CURSOR",
+            ),
+            "duplicate tool name": self.mcp_stdout(
+                [valid_tool, dict(valid_tool)]
+            ),
+            "empty tool inventory": self.mcp_stdout([]),
+            "empty tool name": self.mcp_stdout(
+                [
+                    {
+                        "name": "",
+                        "inputSchema": {"type": "object"},
+                    }
+                ]
+            ),
+            "non-object input schema": self.mcp_stdout(
+                [
+                    {
+                        "name": "archive_doctor",
+                        "inputSchema": [],
+                    }
+                ]
+            ),
+            "wrong schema type": self.mcp_stdout(
+                [
+                    {
+                        "name": "archive_doctor",
+                        "inputSchema": {"type": "array"},
+                    }
+                ]
+            ),
+        }
+        for case, stdout in malformed_cases.items():
+            with self.subTest(case=case), mock.patch.object(
+                check_wheel_install,
+                "_run_installed_entrypoint",
+                return_value=stdout,
+            ):
+                with self.assertRaises(check_wheel_install.WheelCheckError):
+                    check_wheel_install._probe_mcp_server(
+                        Path("archive-mcp"),
+                        cwd=self.temp_root,
+                        entrypoint_name="archive-mcp",
+                        expected_package_version=self.PACKAGE_VERSION,
+                    )
+
+    def test_mcp_aliases_must_agree_on_server_name_and_inventory(self) -> None:
+        mismatch_cases = {
+            "server name": {
+                "wom_server_name": "different-server",
+                "wom_tools": [
+                    {
+                        "name": "same",
+                        "inputSchema": {"type": "object"},
+                    }
+                ],
+            },
+            "inventory": {
+                "wom_server_name": self.SERVER_NAME,
+                "wom_tools": [
+                    {
+                        "name": "different",
+                        "inputSchema": {"type": "object"},
+                    }
+                ],
+            },
+            "tool metadata": {
+                "wom_server_name": self.SERVER_NAME,
+                "wom_tools": [
+                    {
+                        "name": "same",
+                        "description": "different description",
+                        "inputSchema": {"type": "object"},
+                    }
+                ],
+            },
+        }
+        archive_tools = [
+            {
+                "name": "same",
+                "inputSchema": {"type": "object"},
+            }
+        ]
+        for case, settings in mismatch_cases.items():
+            def fake_run(command: list[str], **_kwargs: object) -> str:
+                name = self.executable_name(command)
+                if name in {"archive", "wom"}:
+                    return self.cli_stdout()
+                if name == "archive-mcp":
+                    return self.mcp_stdout(archive_tools)
+                return self.mcp_stdout(
+                    settings["wom_tools"],  # type: ignore[arg-type]
+                    server_name=str(settings["wom_server_name"]),
+                )
+
+            with self.subTest(case=case), mock.patch.object(
+                check_wheel_install,
+                "_run_installed_entrypoint",
+                side_effect=fake_run,
+            ):
+                with self.assertRaises(check_wheel_install.WheelCheckError):
+                    check_wheel_install._check_installed_entrypoints(
+                        self.scripts,
+                        cwd=self.temp_root,
+                    )
+
+    def test_success_result_assembly_preserves_v02_contract(self) -> None:
+        wheel_counts = {
+            "manifested_resource_count": 103,
+            "verified_resource_count": 103,
+            "verified_resource_bytes": 123456,
+            "wheel_file_count": 120,
+        }
+        evidence = {
+            "agreement": {
+                "package_version": self.PACKAGE_VERSION,
+                "mcp_canonical_inventories_byte_identical": True,
+            }
+        }
+        result = check_wheel_install._wheel_install_success_result(
+            package_version=self.PACKAGE_VERSION,
+            wheel_counts=wheel_counts,
+            entrypoints_checked=[
+                "archive",
+                "wom",
+                "archive-mcp",
+                "wom-mcp",
+            ],
+            entrypoint_evidence=evidence,
+            wheel_filename="wom_kit-0.3.294-py3-none-any.whl",
+            wheel_sha256="a" * 64,
+            artifact_preserved=True,
+        )
+
+        self.assertEqual(
+            result,
+            {
+                "ok": True,
+                "schema": "wom-kit/wheel-install-check/v0.2",
+                "package_version": self.PACKAGE_VERSION,
+                **wheel_counts,
+                "entrypoints_checked": [
+                    "archive",
+                    "wom",
+                    "archive-mcp",
+                    "wom-mcp",
+                ],
+                "entrypoint_evidence": evidence,
+                "runtime_skill_lifecycle": "passed",
+                "onboarding_preview": "passed",
+                "onboarding_write": "passed",
+                "strict_doctor": "passed",
+                "wheel_filename": "wom_kit-0.3.294-py3-none-any.whl",
+                "wheel_sha256": "a" * 64,
+                "wheel_artifact_preserved": True,
+                "temporary_environment_removed_on_exit": True,
+            },
+        )
+
+    def test_main_uses_v02_success_and_failure_envelopes(self) -> None:
+        success = {
+            "ok": True,
+            "schema": check_wheel_install.WHEEL_INSTALL_CHECK_SCHEMA,
+            "package_version": self.PACKAGE_VERSION,
+            "entrypoints_checked": [
+                "archive",
+                "wom",
+                "archive-mcp",
+                "wom-mcp",
+            ],
+            "entrypoint_evidence": {"agreement": {"cli_versions_match": True}},
+        }
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with (
+            mock.patch.object(
+                check_wheel_install,
+                "check_wheel",
+                return_value=success,
+            ),
+            mock.patch.object(
+                check_wheel_install,
+                "parse_args",
+                return_value=check_wheel_install.argparse.Namespace(
+                    format="json",
+                    wheel_output_dir=None,
+                ),
+            ),
+            redirect_stdout(stdout),
+            redirect_stderr(stderr),
+        ):
+            code = check_wheel_install.main()
+
+        self.assertEqual(code, 0)
+        self.assertEqual(stderr.getvalue(), "")
+        self.assertEqual(json.loads(stdout.getvalue()), success)
+
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with (
+            mock.patch.object(
+                check_wheel_install,
+                "check_wheel",
+                side_effect=check_wheel_install.WheelCheckError(
+                    "fixed failure"
+                ),
+            ),
+            mock.patch.object(
+                check_wheel_install,
+                "parse_args",
+                return_value=check_wheel_install.argparse.Namespace(
+                    format="json",
+                    wheel_output_dir=None,
+                ),
+            ),
+            redirect_stdout(stdout),
+            redirect_stderr(stderr),
+        ):
+            code = check_wheel_install.main()
+
+        self.assertEqual(code, 1)
+        self.assertEqual(stderr.getvalue(), "")
+        self.assertEqual(
+            json.loads(stdout.getvalue()),
+            {
+                "ok": False,
+                "schema": check_wheel_install.WHEEL_INSTALL_CHECK_SCHEMA,
+                "error": "fixed failure",
+            },
+        )
 
 
 class WheelResourceIntegrityTests(unittest.TestCase):
