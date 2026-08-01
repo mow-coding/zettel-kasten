@@ -1,3 +1,8 @@
 # Test/CI-only standards validator for v0.3.295 public JSON schemas.
 # Keep this dependency out of WOM-kit's runtime and container surfaces.
 jsonschema[format-nongpl]==4.26.0
+
+# v0.3.296 retained-handle and authority tests use pytest-native fixtures,
+# parametrization, and monkeypatching. Keep pytest CI-only and pinned to the
+# exact locally reviewed runner version.
+pytest==9.0.3

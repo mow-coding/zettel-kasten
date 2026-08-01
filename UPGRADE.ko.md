@@ -2,6 +2,50 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.3.296 검토형 비공개 objet 메타데이터 등록
+
+v0.3.296은 기존 v0.3.295 아카이브와 호환되며 아카이브 마이그레이션이
+필요하지 않습니다. 기존 비공개 메타데이터·안전 label schema가 계속
+정본입니다. 이번 릴리스는 사람이 검토한 비공개 파일명 관찰 한 건을
+등록하는 CLI 전용 lifecycle 하나를 추가합니다.
+
+```powershell
+archive objet-source-metadata-write <archive-root> `
+  --intake <archive-relative-private-json> `
+  --expected-intake-sha256 sha256:<64-lowercase-hex> `
+  --dry-run `
+  --format json
+```
+
+dry-run은 cross-platform이고 비공개 내용을 출력하지 않으며 lock, 폴더,
+manifest, journal, 영수증, database 행, index를 쓰지 않습니다. 승인은
+local NTFS의 Windows 10 version 1607 이상과 Windows 11에서만 지원합니다.
+정확한 intake/plan digest, 안전한 `operator:` token, 명시적 비공개 검토,
+전체 작업 동안 다른 모든 WOM·비WOM 아카이브 writer가 멈췄다는
+`--affirm-external-writers-quiescent` 확인이 필요합니다.
+
+승인 등록은 canonical 비공개 행 하나를 append하고 privacy가 같은
+private/restricted 불변 영수증 하나를 공개합니다. 정확한 replay, rollback,
+중단된 append recovery는 retained Win32 identity·lock·journal profile로
+처리합니다. 이는 process interruption 근거이며 sudden power loss 때
+directory entry나 volume metadata가 영속된다는 증명은 아닙니다.
+
+보유한 raw Windows handle의 terminal release를 close·validity cycle 3회
+연속으로도 증명하지 못하는 비정상 Windows API 상태에서는 정상 JSON
+결과 대신 process exit code 74로 fail-stop합니다. 이후 fresh dry-run으로
+현재 상태를 다시 분류해야 하며, 실패한 실행은 해당 residue의 존속 여부를
+주장하지 않습니다.
+
+이번 릴리스는 아카이브 migration, private index ingestion, private finder
+query, database/index 쓰기, objet byte 읽기, provider/network/credential
+store 호출, external store scan, MCP writer, UI 변경을 하지 않습니다.
+따라서 등록한 이름은 아직 검색할 수 없고, 등록은 objet byte 가용성이나
+출처 coverage를 증명하지 않습니다.
+
+자세한 내용은
+[`wom-kit/docs/releases/v0.3.296.md`](wom-kit/docs/releases/v0.3.296.md)를
+참고하십시오.
+
 ## v0.3.295 비공개 objet 메타데이터 계약
 
 v0.3.295는 아카이브 마이그레이션이나 비공개 메타데이터 쓰기를 하지

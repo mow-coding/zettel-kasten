@@ -11,10 +11,15 @@ from pathlib import Path
 from pkgutil import extend_path
 
 
-__path__ = extend_path(__path__, __name__)
-
 _SOURCE_PACKAGE = Path(__file__).resolve().parents[1] / "wom-kit" / "src" / "wom_kit"
+_extended_path = list(extend_path(__path__, __name__))
 if _SOURCE_PACKAGE.is_dir():
-    __path__.append(str(_SOURCE_PACKAGE))
+    _source_text = str(_SOURCE_PACKAGE)
+    __path__ = [
+        _source_text,
+        *(entry for entry in _extended_path if entry != _source_text),
+    ]
+else:
+    __path__ = _extended_path
 
-__version__ = "0.3.295"
+__version__ = "0.3.296"

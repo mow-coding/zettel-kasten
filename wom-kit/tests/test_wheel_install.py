@@ -102,7 +102,7 @@ def patch_zip_member_name_bytes(wheel: Path, old_name: str, new_name: str) -> No
 
 
 class InstalledEntrypointTests(unittest.TestCase):
-    PACKAGE_VERSION = "0.3.295"
+    PACKAGE_VERSION = "0.3.296"
     SERVER_NAME = "zettel-kasten-archive-mcp"
 
     def setUp(self) -> None:
@@ -636,7 +636,7 @@ class InstalledEntrypointTests(unittest.TestCase):
             ),
             "invalid version": json.dumps(
                 {
-                    "version": " 0.3.295",
+                    "version": " 0.3.296",
                     "consistency_state": "package_version_only",
                 }
             ),
@@ -821,7 +821,7 @@ class InstalledEntrypointTests(unittest.TestCase):
                 "wom-mcp",
             ],
             entrypoint_evidence=evidence,
-            wheel_filename="wom_kit-0.3.295-py3-none-any.whl",
+            wheel_filename="wom_kit-0.3.296-py3-none-any.whl",
             wheel_sha256="a" * 64,
             artifact_preserved=True,
         )
@@ -844,7 +844,7 @@ class InstalledEntrypointTests(unittest.TestCase):
                 "onboarding_preview": "passed",
                 "onboarding_write": "passed",
                 "strict_doctor": "passed",
-                "wheel_filename": "wom_kit-0.3.295-py3-none-any.whl",
+                "wheel_filename": "wom_kit-0.3.296-py3-none-any.whl",
                 "wheel_sha256": "a" * 64,
                 "wheel_artifact_preserved": True,
                 "temporary_environment_removed_on_exit": True,

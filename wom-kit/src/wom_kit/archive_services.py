@@ -108353,16 +108353,16 @@ def objet_rediscovery_plan(
             objet_rediscovery_layer(
                 "private_original_name_metadata",
                 applicability="unknown",
-                check_state="not_implemented",
+                check_state="unchecked",
                 match_state="unknown",
                 evidence_scope=(
-                    "The v0.3.295 schema and pure normalization contract exist, but no "
-                    "approved writer, receipt-bound index, or private rediscovery query "
-                    "is implemented in this release."
+                    "The v0.3.296 approved private metadata writer exists, but this "
+                    "release implements no receipt-bound private metadata index or "
+                    "private rediscovery query and proves no private index freshness."
                 ),
                 freshness_proven=False,
                 negative_claim_contribution=False,
-                reason_codes=["private_metadata_rediscovery_not_implemented"],
+                reason_codes=["private_metadata_rediscovery_not_checked"],
             ),
             objet_rediscovery_layer(
                 "approved_external_local_store",
@@ -109309,6 +109309,43 @@ def read_archive_config(archive_root: Path) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise ArchiveServiceError("archive.yml is not a readable object.")
     return data
+
+
+def private_objet_source_metadata_write(
+    archive_root: Path | str,
+    *,
+    intake: str,
+    expected_intake_sha256: str | None,
+    expected_plan_sha256: str | None = None,
+    dry_run: bool,
+    approve: bool,
+    reviewed_by: str | None = None,
+    affirm_private_metadata_reviewed: bool = False,
+    affirm_external_writers_quiescent: bool = False,
+) -> dict[str, Any]:
+    """Plan or apply one reviewed private objet metadata observation."""
+
+    from .private_objet_metadata_writer import private_objet_metadata_write
+
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    return private_objet_metadata_write(
+        root,
+        archive_id=archive_id,
+        safe_projection=safe_projection_scalar,
+        intake_relative_path=intake,
+        expected_intake_sha256=expected_intake_sha256,
+        expected_plan_sha256=expected_plan_sha256,
+        dry_run=dry_run,
+        approve=approve,
+        reviewed_by=reviewed_by,
+        affirm_private_metadata_reviewed=(
+            affirm_private_metadata_reviewed
+        ),
+        affirm_external_writers_quiescent=(
+            affirm_external_writers_quiescent
+        ),
+    )
 
 
 def migrate_archive(
@@ -113232,42 +113269,75 @@ def _objet_capture_sha256_and_head_fd(fd: int) -> tuple[str, bytes]:
 
 class _ObjetCaptureManifestLock:
     def __init__(self, root: Path) -> None:
-        manifests_dir = archive_internal_path(root, "objects/manifests")
-        manifests_dir.mkdir(parents=True, exist_ok=True)
+        resolved_root = Path(root).resolve()
+        if os.name == "nt":
+            # Keep child lookup lexical until the resolved root is retained by
+            # PrivateMetadataMutationGuard.  Resolving this path here would
+            # follow an attacker-controlled reparse point before the guard can
+            # inspect and reject it.
+            manifests_dir = resolved_root / "objects" / "manifests"
+        else:
+            manifests_dir = archive_internal_path(
+                resolved_root,
+                "objects/manifests",
+            )
+            manifests_dir.mkdir(parents=True, exist_ok=True)
+        # Derive the guard root and lexical child paths from the same resolved
+        # spelling. On Windows, tempfile may expose an 8.3 short root while
+        # Path.resolve() expands it to the long form; mixing those spellings
+        # makes a contained directory look like an escape.
+        self._root = resolved_root
+        self._manifests_dir = manifests_dir
         self._path = manifests_dir / ".files.jsonl.lock"
         self._handle: Any = None
+        self._guard: Any = None
+        self._win32_lock: Any = None
 
     def __enter__(self) -> "_ObjetCaptureManifestLock":
-        self._handle = open(self._path, "a+b")
         if os.name == "nt":
-            import msvcrt
+            from . import private_metadata_win32 as win32
 
-            self._handle.seek(0)
-            while True:
+            self._guard = win32.PrivateMetadataMutationGuard(self._root)
+            try:
+                win32.bootstrap_object_manifest_lock_directories(self._guard)
+                self._win32_lock = win32.PersistentCoordinationLock(
+                    self._guard,
+                    win32.CoordinationLockKind.OBJECT_MANIFEST,
+                )
+                self._win32_lock.acquire()
+            except BaseException:
                 try:
-                    msvcrt.locking(self._handle.fileno(), msvcrt.LK_LOCK, 1)
-                    break
-                except OSError:
-                    continue
+                    if self._win32_lock is not None:
+                        self._win32_lock.release()
+                finally:
+                    self._guard.close()
+                self._guard = None
+                self._win32_lock = None
+                raise
         else:
             import fcntl
 
+            self._handle = open(self._path, "a+b")
             fcntl.flock(self._handle.fileno(), fcntl.LOCK_EX)
         return self
 
     def __exit__(self, *exc_info: Any) -> bool:
-        try:
-            if os.name == "nt":
-                import msvcrt
-
-                self._handle.seek(0)
-                msvcrt.locking(self._handle.fileno(), msvcrt.LK_UNLCK, 1)
-            else:
+        if os.name == "nt":
+            try:
+                if self._win32_lock is not None:
+                    self._win32_lock.release()
+            finally:
+                if self._guard is not None:
+                    self._guard.close()
+                self._win32_lock = None
+                self._guard = None
+        else:
+            try:
                 import fcntl
 
                 fcntl.flock(self._handle.fileno(), fcntl.LOCK_UN)
-        finally:
-            self._handle.close()
+            finally:
+                self._handle.close()
         return False
 
 
