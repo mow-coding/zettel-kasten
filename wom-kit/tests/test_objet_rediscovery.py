@@ -151,7 +151,7 @@ class ObjetRediscoveryPlanTests(unittest.TestCase):
         self.assertEqual(
             [layer["check_state"] for layer in result["checked_layers"][6:]],
             [
-                "not_implemented",
+                "unchecked",
                 "not_implemented",
                 "unchecked",
                 "not_implemented",
@@ -168,13 +168,13 @@ class ObjetRediscoveryPlanTests(unittest.TestCase):
         )
         self.assertEqual(
             private_metadata_layer["evidence_scope"],
-            "The v0.3.295 schema and pure normalization contract exist, but no "
-            "approved writer, receipt-bound index, or private rediscovery query "
-            "is implemented in this release.",
+            "The v0.3.296 approved private metadata writer exists, but this release "
+            "implements no receipt-bound private metadata index or private "
+            "rediscovery query and proves no private index freshness.",
         )
         self.assertEqual(
             private_metadata_layer["reason_codes"],
-            ["private_metadata_rediscovery_not_implemented"],
+            ["private_metadata_rediscovery_not_checked"],
         )
         self.assertFalse(private_metadata_layer["freshness_proven"])
         self.assertFalse(private_metadata_layer["negative_claim_contribution"])

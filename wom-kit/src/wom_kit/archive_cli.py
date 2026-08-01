@@ -10,6 +10,8 @@ Commands:
           Inspect explicit host Skill and repository guidance readiness without writes.
   objet-rediscovery-plan
           Summarize checked and unchecked rediscovery layers before any absence claim.
+  objet-source-metadata-write
+          Persist one reviewed private filename observation with a digest-bound plan and receipt.
   runtime-skill-install
           Preview or approve a manifest-bound Codex/custom Agent Skill install or update.
   runtime-skill-uninstall
@@ -14715,6 +14717,77 @@ def command_objet_rediscovery_plan(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 1
 
 
+def command_objet_source_metadata_write(args: argparse.Namespace) -> int:
+    if args.dry_run is args.approve:
+        print(
+            "objet-source-metadata-write requires exactly one of --dry-run and --approve.",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        result = archive_services.private_objet_source_metadata_write(
+            Path(args.archive_root),
+            intake=args.intake,
+            expected_intake_sha256=args.expected_intake_sha256,
+            expected_plan_sha256=args.expected_plan_sha256,
+            dry_run=bool(args.dry_run),
+            approve=bool(args.approve),
+            reviewed_by=args.reviewed_by,
+            affirm_private_metadata_reviewed=bool(
+                args.affirm_private_metadata_reviewed
+            ),
+            affirm_external_writers_quiescent=bool(
+                args.affirm_external_writers_quiescent
+            ),
+        )
+    except (archive_services.ArchiveServiceError, OSError, ValueError):
+        result = {
+            "schema": (
+                "wom-kit/private-objet-source-metadata-write-result/v0.1"
+            ),
+            "lifecycle": "private_objet_source_metadata_write",
+            "ok": False,
+            "dry_run": bool(args.dry_run),
+            "status": "blocked",
+            "action": "blocked",
+            "plan": None,
+            "plan_sha256": None,
+            "hold_context": None,
+            "blockers": ["private_metadata_authority_state_unavailable"],
+            "warnings": [],
+        }
+    if args.format == "json":
+        print_json(result)
+    else:
+        print(
+            "Private objet metadata writer: "
+            f"{result.get('action') or 'blocked'}"
+        )
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Intake digest: {result.get('intake_sha256') or '-'}")
+        print(
+            "Canonical row digest: "
+            f"{result.get('canonical_row_sha256') or '-'}"
+        )
+        print(f"Plan digest: {result.get('plan_sha256') or '-'}")
+        print(
+            "Private values echoed: "
+            + (
+                "yes"
+                if (
+                    isinstance(result.get("privacy"), dict)
+                    and result["privacy"].get("private_values_echoed")
+                )
+                else "no"
+            )
+        )
+        for blocker in result.get("blockers") or []:
+            print(f"Blocked: {blocker}")
+        for next_action in result.get("next_safe_actions") or []:
+            print(f"Next: {next_action}")
+    return 0 if result.get("ok") else 1
+
+
 def command_pack(args: argparse.Namespace) -> int:
     try:
         result = archive_services.pack_work_context(
@@ -24893,6 +24966,71 @@ def build_parser() -> argparse.ArgumentParser:
     )
     objet_rediscovery_plan_parser.set_defaults(
         func=command_objet_rediscovery_plan
+    )
+
+    private_metadata_write = subcommands.add_parser(
+        "objet-source-metadata-write",
+        help=(
+            "Dry-run or approve one reviewed private filename observation as "
+            "a canonical private metadata row and immutable receipt."
+        ),
+    )
+    private_metadata_write.add_argument(
+        "archive_root",
+        help="Archive root receiving the private metadata row.",
+    )
+    private_metadata_write.add_argument(
+        "--intake",
+        required=True,
+        help="Archive-relative private intake JSON path. Never echoed.",
+    )
+    private_metadata_write.add_argument(
+        "--expected-intake-sha256",
+        required=True,
+        help="Exact sha256:<64 lowercase hex> digest of the intake bytes.",
+    )
+    private_metadata_write.add_argument(
+        "--expected-plan-sha256",
+        help="Exact dry-run plan digest required for --approve.",
+    )
+    private_metadata_write.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Build a deterministic content-free plan without writes or locks.",
+    )
+    private_metadata_write.add_argument(
+        "--approve",
+        action="store_true",
+        help=(
+            "Apply the exact plan on supported Windows NTFS after both "
+            "affirmations."
+        ),
+    )
+    private_metadata_write.add_argument(
+        "--reviewed-by",
+        help="Closed operator:<safe-token> required for --approve.",
+    )
+    private_metadata_write.add_argument(
+        "--affirm-private-metadata-reviewed",
+        action="store_true",
+        help="Affirm that the private observation and evidence were reviewed.",
+    )
+    private_metadata_write.add_argument(
+        "--affirm-external-writers-quiescent",
+        action="store_true",
+        help=(
+            "Affirm that every other WOM and non-WOM archive writer is stopped "
+            "for the complete approval duration."
+        ),
+    )
+    private_metadata_write.add_argument(
+        "--format",
+        choices=["text", "json"],
+        default="text",
+        help="Output format.",
+    )
+    private_metadata_write.set_defaults(
+        func=command_objet_source_metadata_write
     )
 
     pack = subcommands.add_parser(

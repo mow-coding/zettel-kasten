@@ -10,12 +10,12 @@ It is not a website, SaaS app, dashboard, or visual note-taking product. The int
 
 ## Install The Command-Line Tool
 
-The exact v0.3.295 GitHub Release, when present, uses the self-contained wheel
+The exact v0.3.296 GitHub Release, when present, uses the self-contained wheel
 below. Confirm that the release exists and lists the wheel before installing
 it. The versioned URL alone is not proof that the asset is available.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.295/wom_kit-0.3.295-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.296/wom_kit-0.3.296-py3-none-any.whl"
 archive --version
 ```
 
@@ -28,7 +28,7 @@ exact one-invocation project-scoped bridge argv only when
 project-local Git-metadata, raw worktree/index/flag, exact source/resource-byte,
 closed-import-tree, annotated-tag, tagged-version, and `origin/main` ancestry
 checks. The Python `-I -S` bootstrap is bound to the expected commit, tag,
-wrapper blob, and all 105 synchronized resources, executes the wrapper from
+wrapper blob, and all 110 synchronized resources, executes the wrapper from
 verified memory, and permits only the `version` command. `-S` blocks site,
 executable `.pth`, and `sitecustomize` processing; only after verification are
 stdlib-`sysconfig` `purelib`/`platlib` paths added. Project path aliases are
@@ -66,6 +66,16 @@ writer or finder, and structurally prevents free-form private names from
 entering `public_generic` projections. See
 [`docs/private-objet-metadata-safe-label.md`](docs/private-objet-metadata-safe-label.md)
 and [`docs/releases/v0.3.295.md`](docs/releases/v0.3.295.md).
+
+v0.3.296 adds CLI-only, digest-bound dry-run and approval for registering one
+human-reviewed private filename observation as one append-only metadata row
+and one immutable privacy-matched receipt. Approval is limited to local NTFS
+on supported Windows versions and requires every other archive writer to stay
+stopped for the complete operation. Replay, rollback, and interrupted-append
+recovery remain content-free, while private indexing and finding remain
+unimplemented. See
+[`docs/private-objet-metadata-safe-label.md`](docs/private-objet-metadata-safe-label.md)
+and [`docs/releases/v0.3.296.md`](docs/releases/v0.3.296.md).
 
 v0.3.292 keeps those runtime safeguards and makes objet relationship counts
 honest across overview and catalog surfaces. See
@@ -913,6 +923,7 @@ The planner proposes a private bucket/container, `archives/<archive_id>/objets/`
 From inside `wom-kit/`, the package can also be tested with:
 
 ```powershell
+$env:PYTHONPATH = (Resolve-Path .\src).Path
 python -m unittest discover -s tests
 ```
 

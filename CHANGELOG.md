@@ -6,6 +6,33 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.296 - 2026-08-01
+
+- Added five closed Draft 2020-12 contracts for reviewed private metadata
+  intake, deterministic write plans, authority chains, immutable receipts, and
+  interruption journals.
+- Added CLI-only `archive objet-source-metadata-write --dry-run|--approve`.
+  Dry-run returns a deterministic content-free plan; approval requires exact
+  intake and plan digests, an attributed safe operator token, explicit private
+  review, and a truthful all-other-writer quiescence affirmation.
+- Added a Windows 10 version 1607+/Windows 11 local-NTFS approval path using
+  retained directory and file identities, hardened shared manifest locks, and
+  documented Win32 create, hard-link, rename, disposition, and flush
+  primitives. Read-only planning remains cross-platform.
+- Added semantically append-only private-row registration, one immutable
+  privacy-matched receipt, deterministic replay, rollback, interrupted-append
+  recovery, complete prior-authority validation, and fail-closed manual holds.
+- Kept result envelopes content-free. Observation-time holds bind the current
+  hold plan, while execution-time holds retain the exact accepted action plan
+  and add only a closed, non-authoritative `hold_context`.
+- Updated checked-layer rediscovery to report the private metadata layer as
+  `unchecked` with `private_metadata_rediscovery_not_checked`. This release
+  writes no receipt-bound index and ships no private finder.
+- Opened no objet bytes and added no provider, network, credential-store,
+  database, MCP-writer, or UI surface. Process-interruption recovery evidence
+  is not a claim of sudden-power-loss directory-entry durability, source
+  coverage, byte availability, or search completeness.
+
 ## v0.3.295 - 2026-08-01
 
 - Added closed Draft 2020-12 contracts for private objet source metadata and

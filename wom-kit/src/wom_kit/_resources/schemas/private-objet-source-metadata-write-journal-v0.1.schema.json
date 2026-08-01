@@ -1,0 +1,226 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wom-kit/private-objet-source-metadata-write-journal/v0.1",
+  "title": "WOM-kit private objet source metadata write journal v0.1",
+  "type": "object",
+  "required": [
+    "schema",
+    "writer_state_machine_version",
+    "transition",
+    "plan_sha256",
+    "authority_chain_before_sha256",
+    "authority_key_sha256",
+    "receipt_relative_path",
+    "receipt_document",
+    "receipt_sha256",
+    "object_manifest_state",
+    "private_manifest_before",
+    "private_manifest_after",
+    "owned_temp_relative_paths"
+  ],
+  "properties": {
+    "schema": {
+      "const": "wom-kit/private-objet-source-metadata-write-journal/v0.1"
+    },
+    "writer_state_machine_version": {
+      "const": "wom-kit/private-objet-source-metadata-writer-state/v0.1"
+    },
+    "transition": {
+      "const": "append"
+    },
+    "plan_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "authority_chain_before_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "authority_key_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "receipt_relative_path": {
+      "type": "string",
+      "pattern": "^receipts/objects/private-source-metadata/[0-9a-f]{64}\\.json$"
+    },
+    "receipt_document": {
+      "$ref": "../../../wom-kit/private-objet-source-metadata-write-receipt/v0.1"
+    },
+    "receipt_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "object_manifest_state": {
+      "$ref": "#/$defs/fileState"
+    },
+    "private_manifest_before": {
+      "$ref": "#/$defs/fileState"
+    },
+    "private_manifest_after": {
+      "$ref": "#/$defs/fileState"
+    },
+    "owned_temp_relative_paths": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "prefixItems": [
+        {
+          "type": "string",
+          "pattern": "^objects/manifests/\\.private-source-metadata-write\\.[0-9a-f]{64}\\.journal\\.tmp$"
+        },
+        {
+          "type": "string",
+          "pattern": "^objects/manifests/\\.private-source-metadata-write\\.[0-9a-f]{64}\\.manifest\\.tmp$"
+        },
+        {
+          "type": "string",
+          "pattern": "^receipts/objects/private-source-metadata/\\.[0-9a-f]{64}\\.receipt\\.tmp$"
+        }
+      ],
+      "items": false
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "minLength": 71,
+      "maxLength": 71,
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "nonNegativeInteger": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "fileState": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "state",
+            "sha256",
+            "byte_count",
+            "row_count",
+            "link_count"
+          ],
+          "properties": {
+            "state": {
+              "const": "absent"
+            },
+            "sha256": {
+              "const": null
+            },
+            "byte_count": {
+              "type": "integer",
+              "const": 0
+            },
+            "row_count": {
+              "type": "integer",
+              "const": 0
+            },
+            "link_count": {
+              "type": "integer",
+              "const": 0
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "state",
+            "sha256",
+            "byte_count",
+            "row_count",
+            "link_count"
+          ],
+          "properties": {
+            "state": {
+              "const": "present"
+            },
+            "sha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "byte_count": {
+              "$ref": "#/$defs/nonNegativeInteger"
+            },
+            "row_count": {
+              "$ref": "#/$defs/nonNegativeInteger"
+            },
+            "link_count": {
+              "$ref": "#/$defs/nonNegativeInteger"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "state",
+            "sha256",
+            "byte_count",
+            "row_count",
+            "link_count"
+          ],
+          "properties": {
+            "state": {
+              "const": "present_invalid"
+            },
+            "sha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "byte_count": {
+              "$ref": "#/$defs/nonNegativeInteger"
+            },
+            "row_count": {
+              "const": null
+            },
+            "link_count": {
+              "$ref": "#/$defs/nonNegativeInteger"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "state",
+            "sha256",
+            "byte_count",
+            "row_count",
+            "link_count"
+          ],
+          "properties": {
+            "state": {
+              "const": "unavailable"
+            },
+            "sha256": {
+              "const": null
+            },
+            "byte_count": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/$defs/nonNegativeInteger"
+                }
+              ]
+            },
+            "row_count": {
+              "const": null
+            },
+            "link_count": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/$defs/nonNegativeInteger"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    }
+  }
+}

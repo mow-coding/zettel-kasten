@@ -9,7 +9,7 @@ from wom_kit import __version__
 
 KIT_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = KIT_ROOT.parent
-EXPECTED_CURRENT_VERSION = "0.3.295"
+EXPECTED_CURRENT_VERSION = "0.3.296"
 EXPECTED_CURRENT_TAG = f"v{EXPECTED_CURRENT_VERSION}"
 CURRENT_VERSION = f"v{__version__}"
 CURRENT_RELEASE_NOTE = f"{EXPECTED_CURRENT_TAG}.md"
@@ -20,9 +20,9 @@ CURRENT_WHEEL_URL = (
     f"wom_kit-{EXPECTED_CURRENT_VERSION}-py3-none-any.whl"
 )
 CURRENT_RUNTIME_STATUS = (
-    f"Status: {CURRENT_VERSION} checked-layer objet rediscovery, explicit "
-    "runtime-guidance readiness, operator-feedback routing, and prior "
-    "runtime safeguards checkpoint"
+    f"Status: {CURRENT_VERSION} reviewed private metadata registration, "
+    "checked-layer objet rediscovery, explicit runtime-guidance readiness, "
+    "operator-feedback routing, and prior runtime safeguards checkpoint"
 )
 MATRIX_PATH = KIT_ROOT / "docs" / "capability-matrix.md"
 PRODUCT_ROADMAP_PATH = KIT_ROOT / "docs" / "product-roadmap.md"
@@ -10108,6 +10108,9 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             encoding="utf-8"
         )
         kit_readme_text = (KIT_ROOT / "README.md").read_text(encoding="utf-8")
+        phase2_quickstart_text = (
+            KIT_ROOT / "docs" / "phase-2-quickstart.md"
+        ).read_text(encoding="utf-8")
         cli_readme_text = (KIT_ROOT / "cli" / "README.md").read_text(
             encoding="utf-8"
         )
@@ -10221,12 +10224,34 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             startup_text,
         )
         self.assertIn(
-            "PYTHONPATH=src python -m wom_kit.archive_cli doctor",
+            "PYTHONPATH=wom-kit/src python -m unittest discover "
+            "-s wom-kit/tests",
             root_readme_text,
         )
         self.assertIn(
-            "PYTHONPATH=src python -m wom_kit.archive_cli doctor",
+            "PYTHONPATH=wom-kit/src python -m unittest discover "
+            "-s wom-kit/tests",
             root_readme_ko_text,
+        )
+        for text in (root_readme_text, root_readme_ko_text):
+            with self.subTest(document="checkout-pinned-quick-verification"):
+                self.assertIn(
+                    "PYTHONPATH=wom-kit/src "
+                    "python -m wom_kit.archive_cli doctor "
+                    "wom-kit/examples/fake-life-archive --strict",
+                    text,
+                )
+        self.assertIn(
+            "$env:PYTHONPATH = (Resolve-Path .\\src).Path",
+            kit_readme_text,
+        )
+        self.assertIn(
+            "python -m unittest discover -s wom-kit\\tests",
+            phase2_quickstart_text,
+        )
+        self.assertNotIn(
+            "cd wom-kit\npython -m unittest discover -s tests",
+            phase2_quickstart_text,
         )
         self.assertNotIn(
             "python cli/archive.py doctor examples/fake-life-archive --strict",
