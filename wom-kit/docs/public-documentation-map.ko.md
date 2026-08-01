@@ -111,6 +111,7 @@
 - [Notion Import Locator Evidence Plan](notion-import-locator-evidence-plan.md)
 - [AI Command-Path Routing](ai-command-path-routing.md)
 - [Checked-Layer Objet Rediscovery Plan](objet-rediscovery-plan.md)
+- [Private Objet Metadata And Safe Labels](private-objet-metadata-safe-label.md)
 - [Inbox Pipeline Audit](inbox-pipeline-audit.md)
 - [Activity-Group Membership Plan](activity-group-membership-plan.md)
 - [Activity-Group Membership Removal Plan](activity-group-membership-removal-plan.md)

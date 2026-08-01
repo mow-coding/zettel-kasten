@@ -1,1 +1,2 @@
 PyYAML>=6.0
+unicodedata2==17.0.1

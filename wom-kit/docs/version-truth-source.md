@@ -141,7 +141,7 @@ pointer, alternate object store, graft, symlink, junction, or reparse route.
 It directly compares the commit tree, stage-zero index, index flags, bounded
 raw worktree bytes, and allowed untracked `installed-version.txt`; it does not
 use `git status` or repository-configured filters. It requires an untracked
-pin, the complete tracked runtime Python source set, all 103 synchronized
+pin, the complete tracked runtime Python source set, all 105 synchronized
 runtime resources, safe index flags, exact index/`HEAD` and raw-byte agreement,
 and a closed source tree with no extra importable Python, bytecode cache, or
 native extension. It also requires the fixed origin configuration key, the

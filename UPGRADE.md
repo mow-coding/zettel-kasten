@@ -24,6 +24,25 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.295 Private Objet Metadata Contract
+
+v0.3.295 requires no archive migration and writes no private metadata. It
+publishes two schemas plus a pure normalization and projection reference
+module for later approved writers and finders.
+
+The wheel now depends on `unicodedata2==17.0.1`; normal package installation
+resolves the platform dependency automatically. The installed-wheel checker
+requires both distribution version `17.0.1` and Unicode data version
+`17.0.0`.
+
+The existing `objet-rediscovery-plan` private metadata layer remains
+`not_implemented`. Its new reason means that the contract exists while the
+approved writer, receipt-bound index, and private query remain absent. Do not
+interpret this release as real private-name ingestion or search.
+
+See
+[`wom-kit/docs/releases/v0.3.295.md`](wom-kit/docs/releases/v0.3.295.md).
+
 ## v0.3.294 Checked-Layer Objet Rediscovery
 
 v0.3.294 requires no archive migration and rewrites no zettel, index,
@@ -3723,8 +3742,10 @@ Operator-visible notes:
 
 - No archive migration and no hash change. Existing receipts and manifests are
   unaffected until you choose to run an upload command.
-- Still no dependency added. The transport is hand-rolled `hashlib`/`hmac`/`base64`
-  over the existing `urllib` seam; `wom-kit/pyproject.toml` stays PyYAML-only.
+- At this v0.3.164 checkpoint the transport added no dependency. It is
+  hand-rolled `hashlib`/`hmac`/`base64` over the existing `urllib` seam, so
+  `wom-kit/pyproject.toml` remained PyYAML-only at that time. v0.3.295 later
+  added the separately scoped pinned `unicodedata2` normalization dependency.
 - A live `--approve` upload requires ALL of: env-only credential refs
   (`--access-key-id-ref env:...` and `--secret-access-key-ref env:...`), a safe
   `--reviewed-by`, a resolvable non-secret `--endpoint-host` and `--bucket`
