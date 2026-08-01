@@ -2,6 +2,25 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.3.295 비공개 objet 메타데이터 계약
+
+v0.3.295는 아카이브 마이그레이션이나 비공개 메타데이터 쓰기를 하지
+않습니다. 이후 승인형 writer와 finder가 재사용할 두 schema와 순수
+정규화·projection reference module을 먼저 공개합니다.
+
+wheel에는 `unicodedata2==17.0.1` 의존성이 추가되며 일반 설치 과정에서
+플랫폼에 맞는 패키지가 함께 설치됩니다. 설치 검증은 배포 버전
+`17.0.1`과 Unicode 데이터 버전 `17.0.0`을 모두 확인합니다.
+
+기존 `objet-rediscovery-plan`의 private metadata 계층은 여전히
+`not_implemented`입니다. 이번 릴리스는 계약만 만들며 승인 writer,
+receipt 기반 index, private query는 아직 없으므로 실제 원본명 수집이나
+검색이 가능해졌다고 해석하면 안 됩니다.
+
+자세한 내용은
+[`wom-kit/docs/releases/v0.3.295.md`](wom-kit/docs/releases/v0.3.295.md)를
+참고하십시오.
+
 ## v0.3.294 checked-layer objet 재발견
 
 v0.3.294는 아카이브 마이그레이션이 필요하지 않으며 zet, index,
@@ -3589,9 +3608,10 @@ R2/S3 호환 업로드 전송 계층을 추가합니다. 이제 WOM은 승인된
 
 - archive 마이그레이션이나 해시 변경은 없습니다. 업로드 명령을 직접 실행하기
   전까지 기존 receipt와 manifest는 영향을 받지 않습니다.
-- 여전히 의존성 추가는 없습니다. 전송 계층은 기존 `urllib` seam 위에
-  `hashlib`/`hmac`/`base64`로 손수 구현했으며 `wom-kit/pyproject.toml`은 계속
-  PyYAML 전용입니다.
+- 이 v0.3.164 시점에는 전송 계층이 의존성을 추가하지 않았습니다. 기존
+  `urllib` seam 위에 `hashlib`/`hmac`/`base64`로 손수 구현했으므로 당시
+  `wom-kit/pyproject.toml`은 PyYAML 전용이었습니다. v0.3.295에서 별도
+  범위의 고정 `unicodedata2` 정규화 의존성이 나중에 추가됐습니다.
 - 라이브 `--approve` 업로드는 다음을 모두 요구합니다: env 전용 자격 증명 ref
   (`--access-key-id-ref env:...`, `--secret-access-key-ref env:...`), 안전한
   `--reviewed-by`, 확인 가능한 비밀 아닌 `--endpoint-host`와 `--bucket`

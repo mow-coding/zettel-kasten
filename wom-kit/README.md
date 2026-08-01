@@ -10,12 +10,12 @@ It is not a website, SaaS app, dashboard, or visual note-taking product. The int
 
 ## Install The Command-Line Tool
 
-The exact v0.3.294 GitHub Release, when present, uses the self-contained wheel
+The exact v0.3.295 GitHub Release, when present, uses the self-contained wheel
 below. Confirm that the release exists and lists the wheel before installing
 it. The versioned URL alone is not proof that the asset is available.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.294/wom_kit-0.3.294-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.295/wom_kit-0.3.295-py3-none-any.whl"
 archive --version
 ```
 
@@ -28,7 +28,7 @@ exact one-invocation project-scoped bridge argv only when
 project-local Git-metadata, raw worktree/index/flag, exact source/resource-byte,
 closed-import-tree, annotated-tag, tagged-version, and `origin/main` ancestry
 checks. The Python `-I -S` bootstrap is bound to the expected commit, tag,
-wrapper blob, and all 103 synchronized resources, executes the wrapper from
+wrapper blob, and all 105 synchronized resources, executes the wrapper from
 verified memory, and permits only the `version` command. `-S` blocks site,
 executable `.pth`, and `sitecustomize` processing; only after verification are
 stdlib-`sysconfig` `purelib`/`platlib` paths added. Project path aliases are
@@ -59,6 +59,13 @@ unchecked rediscovery layers, so an index-only zero result never becomes a
 global claim that an objet or source file does not exist. See
 [`docs/objet-rediscovery-plan.md`](docs/objet-rediscovery-plan.md) and
 [`docs/releases/v0.3.294.md`](docs/releases/v0.3.294.md).
+
+v0.3.295 adds two closed private-metadata/safe-label schemas and a pure
+Unicode 17 reference module. It keeps SHA-256 as identity, exposes no new
+writer or finder, and structurally prevents free-form private names from
+entering `public_generic` projections. See
+[`docs/private-objet-metadata-safe-label.md`](docs/private-objet-metadata-safe-label.md)
+and [`docs/releases/v0.3.295.md`](docs/releases/v0.3.295.md).
 
 v0.3.292 keeps those runtime safeguards and makes objet relationship counts
 honest across overview and catalog surfaces. See

@@ -36,8 +36,18 @@ class SecurityHardeningTests(unittest.TestCase):
         self.assertIn("pip==26.1.1", requirements)
         self.assertIn("setuptools==82.0.1", requirements)
         self.assertIn("PyYAML==6.0.3", requirements)
+        self.assertIn("unicodedata2==17.0.1", requirements)
+        self.assertIn(
+            "sha256:b9cceda1f25498670245c79a6a1b3e2bc310b629693934075c388cc02585a686",
+            requirements,
+        )
+        self.assertIn(
+            "sha256:88a32dc5372787f9cc0bfaf0a39b38a72e3f703111efa84a550cc228b85f2a30",
+            requirements,
+        )
         self.assertIn("--hash=sha256:", requirements)
         self.assertNotIn("PyYAML>=", requirements)
+        self.assertNotIn("unicodedata2>=", requirements)
 
     def test_compose_runtime_security_defaults(self) -> None:
         compose = yaml.safe_load((KIT_ROOT / "compose.yaml").read_text(encoding="utf-8"))

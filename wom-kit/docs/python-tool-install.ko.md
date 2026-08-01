@@ -1,6 +1,6 @@
 # WOM-kit Python 도구 설치
 
-상태: v0.3.294 GitHub wheel 및 checked-layer objet 재발견 체크포인트
+상태: v0.3.295 GitHub wheel 및 비공개 메타데이터 계약 체크포인트
 
 WOM-kit은 명령줄 도구입니다. 일반 앱 프로젝트의 Python 의존성과 섞지 말고
 별도의 격리된 Python 환경에 설치하는 것이 좋습니다.
@@ -12,7 +12,7 @@ WOM-kit은 명령줄 도구입니다. 일반 앱 프로젝트의 Python 의존�
 증거가 되지는 않습니다.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.294/wom_kit-0.3.294-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.295/wom_kit-0.3.295-py3-none-any.whl"
 archive --version
 ```
 
@@ -30,7 +30,7 @@ archive --version
 
 ```powershell
 py -m venv "$HOME\.wom-tools\wom-kit"
-& "$HOME\.wom-tools\wom-kit\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.294/wom_kit-0.3.294-py3-none-any.whl"
+& "$HOME\.wom-tools\wom-kit\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.295/wom_kit-0.3.295-py3-none-any.whl"
 & "$HOME\.wom-tools\wom-kit\Scripts\archive.exe" --version
 ```
 
@@ -76,7 +76,7 @@ v0.3.291부터 프로젝트 미러와 핀끼리는 일치하지만 현재 import
 로컬 디버깅에서는 `--no-redact-local-paths`로 정확한 구조화 bridge argv를
 받을 수 있습니다. 단, 프로젝트 안의 실제 경로와 `.git` 메타데이터,
 worktree 원본 바이트·index·flag, 닫힌 import 트리, 정확한 annotated tag,
-태그 안 버전, `origin/main` 계보, 동기화된 리소스 103개가 모두 맞아
+태그 안 버전, `origin/main` 계보, 동기화된 리소스 105개가 모두 맞아
 `runtime_alignment.integrity.verified`가 true여야 합니다. Python `-I -S`
 bootstrap은 예상 commit·tag·wrapper blob·리소스 blob을 argv에 묶고,
 검증한 wrapper를 메모리에서 실행하며 읽기 전용 `version` 명령만

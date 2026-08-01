@@ -108356,12 +108356,13 @@ def objet_rediscovery_plan(
                 check_state="not_implemented",
                 match_state="unknown",
                 evidence_scope=(
-                    "Private original-name metadata and normalization are reserved "
-                    "for the reviewed v0.3.295+ contracts."
+                    "The v0.3.295 schema and pure normalization contract exist, but no "
+                    "approved writer, receipt-bound index, or private rediscovery query "
+                    "is implemented in this release."
                 ),
                 freshness_proven=False,
                 negative_claim_contribution=False,
-                reason_codes=["private_metadata_contract_not_implemented"],
+                reason_codes=["private_metadata_rediscovery_not_implemented"],
             ),
             objet_rediscovery_layer(
                 "approved_external_local_store",

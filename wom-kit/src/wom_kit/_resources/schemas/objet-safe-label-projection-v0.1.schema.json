@@ -1,0 +1,528 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wom-kit/objet-safe-label-projection/v0.1",
+  "title": "WOM-kit objet safe-label projection v0.1",
+  "oneOf": [
+    {
+      "allOf": [
+        {
+          "$ref": "#/$defs/privateProjection"
+        },
+        {
+          "properties": {
+            "audience": {
+              "const": "private_archive"
+            }
+          },
+          "required": [
+            "audience"
+          ]
+        }
+      ]
+    },
+    {
+      "allOf": [
+        {
+          "$ref": "#/$defs/privateProjection"
+        },
+        {
+          "properties": {
+            "audience": {
+              "const": "restricted"
+            }
+          },
+          "required": [
+            "audience"
+          ]
+        }
+      ]
+    },
+    {
+      "$ref": "#/$defs/publicGenericProjection"
+    }
+  ],
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "minLength": 71,
+      "maxLength": 71,
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "selectedLabel": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^(?![\\s\\S]*[\\uD800-\\uDFFF])[\\s\\S]*$"
+    },
+    "candidateKind": {
+      "enum": [
+        "human_reviewed_label",
+        "original_filename",
+        "decoded_filename",
+        "normalized_filename_nfc",
+        "extension_generic",
+        "media_type_generic",
+        "object_id_fallback"
+      ]
+    },
+    "genericFamily": {
+      "enum": [
+        "archive",
+        "audio",
+        "data",
+        "document",
+        "image",
+        "text",
+        "video",
+        "other",
+        "unknown"
+      ]
+    },
+    "privacy": {
+      "type": "object",
+      "required": [
+        "private_filename_exposed",
+        "source_identifier_exposed",
+        "local_path_exposed",
+        "provider_locator_exposed",
+        "secret_value_exposed"
+      ],
+      "properties": {
+        "private_filename_exposed": {
+          "type": "boolean"
+        },
+        "source_identifier_exposed": {
+          "const": false
+        },
+        "local_path_exposed": {
+          "const": false
+        },
+        "provider_locator_exposed": {
+          "const": false
+        },
+        "secret_value_exposed": {
+          "const": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "privateProjection": {
+      "type": "object",
+      "required": [
+        "schema",
+        "object_id",
+        "audience",
+        "status",
+        "selected_label",
+        "selected_kind",
+        "alternative_count",
+        "ambiguity",
+        "reason_codes",
+        "privacy"
+      ],
+      "properties": {
+        "schema": {
+          "const": "wom-kit/objet-safe-label-projection/v0.1"
+        },
+        "object_id": {
+          "$ref": "#/$defs/sha256"
+        },
+        "audience": {
+          "enum": [
+            "private_archive",
+            "restricted"
+          ]
+        },
+        "status": {
+          "enum": [
+            "selected",
+            "ambiguous",
+            "blocked"
+          ]
+        },
+        "selected_label": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/selectedLabel"
+            }
+          ]
+        },
+        "selected_kind": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/candidateKind"
+            }
+          ]
+        },
+        "alternative_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 256
+        },
+        "ambiguity": {
+          "oneOf": [
+            {
+              "type": "object",
+              "required": [
+                "state"
+              ],
+              "properties": {
+                "state": {
+                  "const": "none"
+                }
+              },
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "required": [
+                "state"
+              ],
+              "properties": {
+                "state": {
+                  "const": "multiple_labels_for_object"
+                }
+              },
+              "additionalProperties": false
+            }
+          ]
+        },
+        "reason_codes": {
+          "type": "array",
+          "maxItems": 16,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "multiple_labels_for_object",
+              "source_derivation_blocked",
+              "no_eligible_label_candidate",
+              "candidate_evidence_invalid",
+              "private_value_forbidden_for_audience"
+            ]
+          }
+        },
+        "privacy": {
+          "$ref": "#/$defs/privacy"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "selected"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "selected_label": {
+                "$ref": "#/$defs/selectedLabel"
+              },
+              "selected_kind": {
+                "$ref": "#/$defs/candidateKind"
+              },
+              "ambiguity": {
+                "type": "object",
+                "required": [
+                  "state"
+                ],
+                "properties": {
+                  "state": {
+                    "const": "none"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "reason_codes": {
+                "maxItems": 0
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "ambiguous"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "selected_label": {
+                "const": null
+              },
+              "selected_kind": {
+                "const": null
+              },
+              "alternative_count": {
+                "type": "integer",
+                "minimum": 2,
+                "maximum": 256
+              },
+              "ambiguity": {
+                "type": "object",
+                "required": [
+                  "state"
+                ],
+                "properties": {
+                  "state": {
+                    "const": "multiple_labels_for_object"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "reason_codes": {
+                "const": [
+                  "multiple_labels_for_object"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "blocked"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "selected_label": {
+                "const": null
+              },
+              "selected_kind": {
+                "const": null
+              },
+              "alternative_count": {
+                "const": 0
+              },
+              "ambiguity": {
+                "type": "object",
+                "required": [
+                  "state"
+                ],
+                "properties": {
+                  "state": {
+                    "const": "none"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "reason_codes": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 16,
+                "uniqueItems": true,
+                "items": {
+                  "enum": [
+                    "source_derivation_blocked",
+                    "no_eligible_label_candidate",
+                    "candidate_evidence_invalid",
+                    "private_value_forbidden_for_audience"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "selected_kind": {
+                "enum": [
+                  "human_reviewed_label",
+                  "original_filename",
+                  "decoded_filename",
+                  "normalized_filename_nfc"
+                ]
+              }
+            },
+            "required": [
+              "selected_kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "privacy": {
+                "properties": {
+                  "private_filename_exposed": {
+                    "const": true
+                  }
+                }
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "privacy": {
+                "properties": {
+                  "private_filename_exposed": {
+                    "const": false
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "additionalProperties": false
+    },
+    "genericLabel": {
+      "type": "object",
+      "required": [
+        "generic_family"
+      ],
+      "properties": {
+        "generic_family": {
+          "$ref": "#/$defs/genericFamily"
+        }
+      },
+      "additionalProperties": false
+    },
+    "publicGenericProjection": {
+      "type": "object",
+      "required": [
+        "schema",
+        "object_id",
+        "audience",
+        "status",
+        "generic_label",
+        "alternative_count",
+        "reason_codes",
+        "privacy"
+      ],
+      "properties": {
+        "schema": {
+          "const": "wom-kit/objet-safe-label-projection/v0.1"
+        },
+        "object_id": {
+          "$ref": "#/$defs/sha256"
+        },
+        "audience": {
+          "const": "public_generic"
+        },
+        "status": {
+          "enum": [
+            "generic_only",
+            "blocked"
+          ]
+        },
+        "generic_label": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/genericLabel"
+            }
+          ]
+        },
+        "alternative_count": {
+          "const": 0
+        },
+        "reason_codes": {
+          "type": "array",
+          "maxItems": 16,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "candidate_evidence_invalid",
+              "generic_family_unavailable"
+            ]
+          }
+        },
+        "privacy": {
+          "type": "object",
+          "required": [
+            "private_filename_exposed",
+            "source_identifier_exposed",
+            "local_path_exposed",
+            "provider_locator_exposed",
+            "secret_value_exposed"
+          ],
+          "properties": {
+            "private_filename_exposed": {
+              "const": false
+            },
+            "source_identifier_exposed": {
+              "const": false
+            },
+            "local_path_exposed": {
+              "const": false
+            },
+            "provider_locator_exposed": {
+              "const": false
+            },
+            "secret_value_exposed": {
+              "const": false
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "generic_only"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "generic_label": {
+                "$ref": "#/$defs/genericLabel"
+              },
+              "reason_codes": {
+                "maxItems": 0
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "generic_label": {
+                "const": null
+              },
+              "reason_codes": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 16,
+                "uniqueItems": true,
+                "items": {
+                  "enum": [
+                    "candidate_evidence_invalid",
+                    "generic_family_unavailable"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      ],
+      "additionalProperties": false
+    }
+  }
+}

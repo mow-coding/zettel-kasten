@@ -39,9 +39,9 @@ jobs:
         with:
           python-version: '3.12'
 
-      # PyYAML is wom-kit's only runtime dependency (wom-kit/pyproject.toml).
-      - name: Install runtime dependency
-        run: python -m pip install --disable-pip-version-check "PyYAML>=6.0"
+      # Install the same runtime dependency surface declared for the CLI.
+      - name: Install runtime dependencies
+        run: python -m pip install --disable-pip-version-check -r wom-kit/cli/requirements.txt
 
       # Same four hygiene checkers the local pre-release gate runs:
       # public links, Korean product language, public privacy, runtime skill.
@@ -82,8 +82,11 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Install runtime dependency
-        run: python -m pip install --disable-pip-version-check "PyYAML>=6.0"
+      - name: Install runtime and test dependencies
+        run: >-
+          python -m pip install --disable-pip-version-check
+          -r wom-kit/cli/requirements.txt
+          -r wom-kit/requirements-test.txt
 
       # The suite is plain unittest with subTest; pytest is not a dependency.
       # Docker-backed cases stay opt-in via AI_ARCHIVE_RUN_DOCKER_TESTS.
