@@ -36,11 +36,15 @@ RESOURCE_ROW_KEYS = frozenset({"source", "packaged", "bytes", "sha256"})
 SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 RESOURCE_READ_CHUNK_SIZE = 64 * 1024
 WHEEL_INSTALL_CHECK_SCHEMA = "wom-kit/wheel-install-check/v0.2"
+EXPECTED_UNICODEDATA2_DISTRIBUTION_VERSION = "17.0.1"
+EXPECTED_UNICODEDATA_VERSION = "17.0.0"
 MCP_PROTOCOL_VERSION = "2025-03-26"
 MCP_SERVER_NAME = "zettel-kasten-archive-mcp"
 ENTRYPOINT_TIMEOUT_SECONDS = 60
 ENTRYPOINT_OUTPUT_LIMIT_BYTES = 8 * 1024 * 1024
 ENTRYPOINT_READ_CHUNK_BYTES = 64 * 1024
+WINDOWS_CREATE_SUSPENDED = 0x00000004
+WINDOWS_JOB_TERMINATION_TIMEOUT_MILLISECONDS = 1000
 WINDOWS_FORBIDDEN_SEGMENT_CHARACTERS = frozenset('<>:"|?*')
 WINDOWS_RESERVED_DEVICE_BASENAMES = frozenset(
     {
@@ -113,6 +117,40 @@ def scripts_directory(venv: Path) -> Path:
 def executable(scripts: Path, name: str) -> Path:
     suffix = ".exe" if os.name == "nt" else ""
     return scripts / f"{name}{suffix}"
+
+
+def _check_installed_runtime_dependencies(python: Path, *, cwd: Path) -> None:
+    """Verify dependency resolution and the pinned Unicode runtime in isolation."""
+
+    run(
+        [str(python), "-m", "pip", "check"],
+        cwd=cwd,
+        label="installed wheel dependency check",
+    )
+    evidence = run(
+        [
+            str(python),
+            "-I",
+            "-c",
+            (
+                "import importlib.metadata as m, json, unicodedata2 as u; "
+                "print(json.dumps({"
+                "'distribution_version': m.version('unicodedata2'), "
+                "'unicode_version': u.unidata_version"
+                "}, sort_keys=True))"
+            ),
+        ],
+        cwd=cwd,
+        label="installed Unicode runtime attestation",
+        parse_json=True,
+    )
+    if evidence != {
+        "distribution_version": EXPECTED_UNICODEDATA2_DISTRIBUTION_VERSION,
+        "unicode_version": EXPECTED_UNICODEDATA_VERSION,
+    }:
+        raise WheelCheckError(
+            "Installed Unicode runtime did not match the pinned v0.3.295 profile."
+        )
 
 
 def _package_resource_root() -> Path:
@@ -522,7 +560,10 @@ def _run_installed_entrypoint(
     )
     process_options: dict[str, Any] = {}
     if os.name == "nt":
-        process_options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+        process_options["creationflags"] = (
+            subprocess.CREATE_NEW_PROCESS_GROUP
+            | WINDOWS_CREATE_SUSPENDED
+        )
     else:
         process_options["start_new_session"] = True
     try:
@@ -556,6 +597,23 @@ def _run_installed_entrypoint(
         process.stderr.close()
         raise WheelCheckError(
             f"{label} could not establish descendant containment."
+        )
+    if os.name == "nt" and not _resume_windows_process(process):
+        _close_windows_job(windows_job)
+        windows_job = None
+        _terminate_installed_process_tree(process)
+        try:
+            process.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            pass
+        if process.stdin is not None:
+            process.stdin.close()
+        assert process.stdout is not None
+        assert process.stderr is not None
+        process.stdout.close()
+        process.stderr.close()
+        raise WheelCheckError(
+            f"{label} could not start inside descendant containment."
         )
 
     assert process.stdout is not None
@@ -627,13 +685,14 @@ def _run_installed_entrypoint(
                 pass
 
     timed_out = False
+    windows_job_closed = True
     try:
         returncode = process.wait(
             timeout=max(0.0, deadline - time.monotonic()),
         )
     except subprocess.TimeoutExpired:
         timed_out = True
-        _close_windows_job(windows_job)
+        windows_job_closed = _close_windows_job(windows_job)
         windows_job = None
         _terminate_installed_process_tree(process)
         try:
@@ -643,7 +702,9 @@ def _run_installed_entrypoint(
     active_descendant_processes = (
         _windows_job_active_processes(windows_job)
     )
-    _close_windows_job(windows_job)
+    windows_job_closed = (
+        _close_windows_job(windows_job) and windows_job_closed
+    )
     windows_job = None
     posix_descendants_active = (
         _posix_process_group_has_descendants(process)
@@ -678,6 +739,10 @@ def _run_installed_entrypoint(
 
     if timed_out or readers_still_running:
         raise WheelCheckError(f"{label} exceeded the execution timeout.")
+    if os.name == "nt" and not windows_job_closed:
+        raise WheelCheckError(
+            f"{label} descendant containment could not close safely."
+        )
     if (
         active_descendant_processes is not None
         and active_descendant_processes > 0
@@ -840,19 +905,107 @@ def _assign_windows_kill_on_close_job(
     return job
 
 
-def _close_windows_job(job: Any | None) -> None:
-    if os.name != "nt" or job is None:
-        return
+def _resume_windows_process(process: subprocess.Popen[bytes]) -> bool:
+    """Resume the one main thread after fail-closed Job Object assignment."""
+
+    if os.name != "nt":
+        return True
     import ctypes
     from ctypes import wintypes
 
-    close_handle = ctypes.WinDLL(
-        "kernel32",
-        use_last_error=True,
-    ).CloseHandle
+    class ThreadEntry32(ctypes.Structure):
+        _fields_ = [
+            ("dwSize", wintypes.DWORD),
+            ("cntUsage", wintypes.DWORD),
+            ("th32ThreadID", wintypes.DWORD),
+            ("th32OwnerProcessID", wintypes.DWORD),
+            ("tpBasePri", wintypes.LONG),
+            ("tpDeltaPri", wintypes.LONG),
+            ("dwFlags", wintypes.DWORD),
+        ]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    create_snapshot = kernel32.CreateToolhelp32Snapshot
+    create_snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+    create_snapshot.restype = wintypes.HANDLE
+    thread_first = kernel32.Thread32First
+    thread_first.argtypes = [
+        wintypes.HANDLE,
+        ctypes.POINTER(ThreadEntry32),
+    ]
+    thread_first.restype = wintypes.BOOL
+    thread_next = kernel32.Thread32Next
+    thread_next.argtypes = [
+        wintypes.HANDLE,
+        ctypes.POINTER(ThreadEntry32),
+    ]
+    thread_next.restype = wintypes.BOOL
+    open_thread = kernel32.OpenThread
+    open_thread.argtypes = [
+        wintypes.DWORD,
+        wintypes.BOOL,
+        wintypes.DWORD,
+    ]
+    open_thread.restype = wintypes.HANDLE
+    resume_thread = kernel32.ResumeThread
+    resume_thread.argtypes = [wintypes.HANDLE]
+    resume_thread.restype = wintypes.DWORD
+    close_handle = kernel32.CloseHandle
     close_handle.argtypes = [wintypes.HANDLE]
     close_handle.restype = wintypes.BOOL
-    close_handle(job)
+
+    snapshot = create_snapshot(0x00000004, 0)
+    if snapshot == wintypes.HANDLE(-1).value:
+        return False
+    try:
+        entry = ThreadEntry32()
+        entry.dwSize = ctypes.sizeof(entry)
+        found = bool(thread_first(snapshot, ctypes.byref(entry)))
+        while found:
+            if int(entry.th32OwnerProcessID) == process.pid:
+                thread = open_thread(0x0002, False, entry.th32ThreadID)
+                if not thread:
+                    return False
+                try:
+                    return resume_thread(thread) != 0xFFFFFFFF
+                finally:
+                    close_handle(thread)
+            found = bool(thread_next(snapshot, ctypes.byref(entry)))
+    finally:
+        close_handle(snapshot)
+    return False
+
+
+def _close_windows_job(job: Any | None) -> bool:
+    if os.name != "nt" or job is None:
+        return True
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL(
+        "kernel32",
+        use_last_error=True,
+    )
+    terminate_job = kernel32.TerminateJobObject
+    terminate_job.argtypes = [wintypes.HANDLE, wintypes.UINT]
+    terminate_job.restype = wintypes.BOOL
+    wait_for_single_object = kernel32.WaitForSingleObject
+    wait_for_single_object.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    wait_for_single_object.restype = wintypes.DWORD
+    close_handle = kernel32.CloseHandle
+    close_handle.argtypes = [wintypes.HANDLE]
+    close_handle.restype = wintypes.BOOL
+    terminated = bool(terminate_job(job, 1))
+    wait_result = (
+        wait_for_single_object(
+            job,
+            WINDOWS_JOB_TERMINATION_TIMEOUT_MILLISECONDS,
+        )
+        if terminated
+        else 0xFFFFFFFF
+    )
+    closed = bool(close_handle(job))
+    return terminated and wait_result == 0 and closed
 
 
 def _windows_job_active_processes(job: Any | None) -> int | None:
@@ -1295,6 +1448,7 @@ def check_wheel(output_dir: Path | None = None) -> dict[str, Any]:
             cwd=temp_root,
             label="wheel install",
         )
+        _check_installed_runtime_dependencies(python, cwd=temp_root)
         package_version, entrypoints_checked, entrypoint_evidence = (
             _check_installed_entrypoints(
                 scripts,

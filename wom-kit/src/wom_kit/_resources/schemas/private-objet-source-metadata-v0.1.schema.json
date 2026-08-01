@@ -1,0 +1,713 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wom-kit/private-objet-source-metadata/v0.1",
+  "title": "WOM-kit private objet source metadata v0.1",
+  "type": "object",
+  "required": [
+    "schema",
+    "privacy_class",
+    "object_id",
+    "names",
+    "media_type",
+    "size_bytes",
+    "size_bytes_basis",
+    "source_provenance",
+    "label_candidates",
+    "normalization_profile"
+  ],
+  "properties": {
+    "schema": {
+      "const": "wom-kit/private-objet-source-metadata/v0.1"
+    },
+    "privacy_class": {
+      "enum": [
+        "private_archive",
+        "restricted"
+      ]
+    },
+    "object_id": {
+      "$ref": "#/$defs/sha256"
+    },
+    "names": {
+      "$ref": "#/$defs/names"
+    },
+    "media_type": {
+      "$ref": "#/$defs/mediaType"
+    },
+    "size_bytes": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "integer",
+          "minimum": 0
+        }
+      ]
+    },
+    "size_bytes_basis": {
+      "enum": [
+        "unknown",
+        "source_observed"
+      ]
+    },
+    "source_provenance": {
+      "$ref": "#/$defs/sourceProvenance"
+    },
+    "label_candidates": {
+      "type": "array",
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/labelCandidate"
+      }
+    },
+    "normalization_profile": {
+      "$ref": "#/$defs/normalizationProfile"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "size_bytes_basis": {
+            "const": "unknown"
+          }
+        },
+        "required": [
+          "size_bytes_basis"
+        ]
+      },
+      "then": {
+        "properties": {
+          "size_bytes": {
+            "const": null
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "size_bytes": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "privacy_class": {
+            "const": "restricted"
+          }
+        },
+        "required": [
+          "privacy_class"
+        ]
+      },
+      "then": {
+        "properties": {
+          "label_candidates": {
+            "items": {
+              "properties": {
+                "privacy_class": {
+                  "const": "restricted"
+                }
+              },
+              "required": [
+                "privacy_class"
+              ]
+            }
+          }
+        }
+      }
+    }
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "minLength": 71,
+      "maxLength": 71,
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "scalar512": {
+      "type": "string",
+      "maxLength": 512,
+      "pattern": "^(?![\\s\\S]*[\\uD800-\\uDFFF])[\\s\\S]*$"
+    },
+    "nonEmptyScalar512": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^(?![\\s\\S]*[\\uD800-\\uDFFF])[\\s\\S]*$"
+    },
+    "opaqueSourceId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^(?![\\s\\S]*[\\uD800-\\uDFFF])[\\s\\S]*$"
+    },
+    "nameReasonCode": {
+      "enum": [
+        "malformed_percent_escape",
+        "invalid_utf8",
+        "utf8_bom_forbidden",
+        "residual_percent_triplet",
+        "path_separator_forbidden",
+        "nul_forbidden",
+        "c0_control_forbidden",
+        "c1_control_forbidden",
+        "del_forbidden",
+        "bidi_control_forbidden",
+        "unicode_separator_forbidden",
+        "empty_filename_forbidden",
+        "reserved_path_segment_forbidden",
+        "derived_name_length_exceeded"
+      ]
+    },
+    "names": {
+      "type": "object",
+      "required": [
+        "original_filename",
+        "name_input_profile",
+        "decode_status",
+        "decoded_filename",
+        "normalized_filename_nfc",
+        "normalized_filename_nfd",
+        "filename_stem_nfc",
+        "extension_ascii_lower",
+        "derivation_status",
+        "reason_codes"
+      ],
+      "properties": {
+        "original_filename": {
+          "$ref": "#/$defs/scalar512"
+        },
+        "name_input_profile": {
+          "enum": [
+            "literal_unicode",
+            "utf8_percent_encoded_component"
+          ]
+        },
+        "decode_status": {
+          "enum": [
+            "not_requested",
+            "decoded",
+            "blocked"
+          ]
+        },
+        "decoded_filename": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/nonEmptyScalar512"
+            }
+          ]
+        },
+        "normalized_filename_nfc": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/nonEmptyScalar512"
+            }
+          ]
+        },
+        "normalized_filename_nfd": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/nonEmptyScalar512"
+            }
+          ]
+        },
+        "filename_stem_nfc": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/nonEmptyScalar512"
+            }
+          ]
+        },
+        "extension_ascii_lower": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512,
+              "pattern": "^[\\u0020-\\u002E\\u0030-\\u005B\\u005D-\\u007E]+$"
+            }
+          ]
+        },
+        "derivation_status": {
+          "enum": [
+            "valid",
+            "blocked"
+          ]
+        },
+        "reason_codes": {
+          "type": "array",
+          "maxItems": 16,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/nameReasonCode"
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "derivation_status": {
+                "const": "valid"
+              }
+            },
+            "required": [
+              "derivation_status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "normalized_filename_nfc": {
+                "$ref": "#/$defs/nonEmptyScalar512"
+              },
+              "normalized_filename_nfd": {
+                "$ref": "#/$defs/nonEmptyScalar512"
+              },
+              "filename_stem_nfc": {
+                "$ref": "#/$defs/nonEmptyScalar512"
+              },
+              "reason_codes": {
+                "maxItems": 0
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "decoded_filename": {
+                "const": null
+              },
+              "normalized_filename_nfc": {
+                "const": null
+              },
+              "normalized_filename_nfd": {
+                "const": null
+              },
+              "filename_stem_nfc": {
+                "const": null
+              },
+              "extension_ascii_lower": {
+                "const": null
+              },
+              "reason_codes": {
+                "minItems": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "name_input_profile": {
+                "const": "literal_unicode"
+              }
+            },
+            "required": [
+              "name_input_profile"
+            ]
+          },
+          "then": {
+            "properties": {
+              "decode_status": {
+                "const": "not_requested"
+              },
+              "decoded_filename": {
+                "const": null
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "name_input_profile": {
+                "const": "utf8_percent_encoded_component"
+              },
+              "derivation_status": {
+                "const": "valid"
+              }
+            },
+            "required": [
+              "name_input_profile",
+              "derivation_status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "decode_status": {
+                "const": "decoded"
+              },
+              "decoded_filename": {
+                "$ref": "#/$defs/nonEmptyScalar512"
+              }
+            }
+          },
+          "else": {
+            "if": {
+              "properties": {
+                "name_input_profile": {
+                  "const": "utf8_percent_encoded_component"
+                }
+              },
+              "required": [
+                "name_input_profile"
+              ]
+            },
+            "then": {
+              "properties": {
+                "decode_status": {
+                  "const": "blocked"
+                },
+                "decoded_filename": {
+                  "const": null
+                }
+              }
+            }
+          }
+        }
+      ],
+      "additionalProperties": false
+    },
+    "mediaType": {
+      "type": "object",
+      "required": [
+        "value",
+        "basis",
+        "registered_status",
+        "extension_agreement",
+        "extension_comparison_evidence_sha256",
+        "registry_evidence"
+      ],
+      "properties": {
+        "value": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "minLength": 3,
+              "maxLength": 127,
+              "pattern": "^[a-z0-9][a-z0-9!#$&^_.+\\-]{0,126}/[a-z0-9][a-z0-9!#$&^_.+\\-]{0,126}$"
+            }
+          ]
+        },
+        "basis": {
+          "enum": [
+            "unknown",
+            "source_declared"
+          ]
+        },
+        "registered_status": {
+          "const": "not_checked"
+        },
+        "extension_agreement": {
+          "const": "unknown"
+        },
+        "extension_comparison_evidence_sha256": {
+          "const": null
+        },
+        "registry_evidence": {
+          "const": null
+        }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "basis": {
+              "const": "unknown"
+            },
+            "value": {
+              "const": null
+            }
+          },
+          "required": [
+            "basis",
+            "value"
+          ]
+        },
+        {
+          "properties": {
+            "basis": {
+              "const": "source_declared"
+            },
+            "value": {
+              "type": "string",
+              "minLength": 3,
+              "maxLength": 127,
+              "pattern": "^[a-z0-9][a-z0-9!#$&^_.+\\-]{0,126}/[a-z0-9][a-z0-9!#$&^_.+\\-]{0,126}$"
+            }
+          },
+          "required": [
+            "basis",
+            "value"
+          ]
+        }
+      ],
+      "additionalProperties": false
+    },
+    "sourceProvenance": {
+      "type": "object",
+      "required": [
+        "source_system",
+        "source_record_id",
+        "source_attachment_id",
+        "source_snapshot_sha256",
+        "observation_evidence_sha256",
+        "evidence_kind",
+        "captured_at"
+      ],
+      "properties": {
+        "source_system": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-z0-9](?:[a-z0-9._-]{0,63})$"
+        },
+        "source_record_id": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/opaqueSourceId"
+            }
+          ]
+        },
+        "source_attachment_id": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/opaqueSourceId"
+            }
+          ]
+        },
+        "source_snapshot_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "observation_evidence_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "evidence_kind": {
+          "enum": [
+            "source_record_field",
+            "source_attachment_metadata",
+            "source_snapshot_extract"
+          ]
+        },
+        "captured_at": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "minLength": 20,
+              "maxLength": 64,
+              "pattern": "^(?!0000)[0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](?:\\.[0-9]{1,9})?(?:Z|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])$",
+              "format": "date-time"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "evidence_kind": {
+                "const": "source_record_field"
+              }
+            },
+            "required": [
+              "evidence_kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "source_record_id": {
+                "$ref": "#/$defs/opaqueSourceId"
+              },
+              "source_attachment_id": {
+                "const": null
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "evidence_kind": {
+                "const": "source_attachment_metadata"
+              }
+            },
+            "required": [
+              "evidence_kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "source_attachment_id": {
+                "$ref": "#/$defs/opaqueSourceId"
+              }
+            }
+          }
+        }
+      ],
+      "additionalProperties": false
+    },
+    "labelCandidate": {
+      "type": "object",
+      "required": [
+        "kind",
+        "value",
+        "privacy_class",
+        "evidence_sha256",
+        "review_status",
+        "review_evidence_sha256"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "human_reviewed_label",
+            "original_filename",
+            "decoded_filename",
+            "normalized_filename_nfc",
+            "extension_generic",
+            "media_type_generic",
+            "object_id_fallback"
+          ]
+        },
+        "value": {
+          "$ref": "#/$defs/nonEmptyScalar512"
+        },
+        "privacy_class": {
+          "enum": [
+            "private_archive",
+            "restricted"
+          ]
+        },
+        "evidence_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "review_status": {
+          "enum": [
+            "unreviewed",
+            "accepted",
+            "rejected"
+          ]
+        },
+        "review_evidence_sha256": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/sha256"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "extension_generic",
+                  "media_type_generic"
+                ]
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "enum": [
+                  "archive",
+                  "audio",
+                  "data",
+                  "document",
+                  "image",
+                  "text",
+                  "video",
+                  "other",
+                  "unknown"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "object_id_fallback"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "$ref": "#/$defs/sha256"
+              }
+            }
+          }
+        }
+      ],
+      "additionalProperties": false
+    },
+    "normalizationProfile": {
+      "type": "object",
+      "required": [
+        "id",
+        "unicode_version",
+        "confusables_data_sha256",
+        "confusable_status"
+      ],
+      "properties": {
+        "id": {
+          "const": "wom-kit/filename-normalization/v0.1"
+        },
+        "unicode_version": {
+          "const": "17.0.0"
+        },
+        "confusables_data_sha256": {
+          "const": null
+        },
+        "confusable_status": {
+          "const": "not_checked"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

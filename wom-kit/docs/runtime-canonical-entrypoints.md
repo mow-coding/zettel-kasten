@@ -1,6 +1,6 @@
 # Runtime Canonical Entry Points
 
-Status: v0.3.294 checked-layer objet rediscovery, explicit runtime-guidance readiness, operator-feedback routing, and prior runtime safeguards checkpoint
+Status: v0.3.295 checked-layer objet rediscovery, explicit runtime-guidance readiness, operator-feedback routing, and prior runtime safeguards checkpoint
 
 When an AI runtime enters a WOM archive, it needs a small, explicit "start
 here" map. The archive may contain zets, source bindings, provider metadata,

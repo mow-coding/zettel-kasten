@@ -1,0 +1,3 @@
+# Test/CI-only standards validator for v0.3.295 public JSON schemas.
+# Keep this dependency out of WOM-kit's runtime and container surfaces.
+jsonschema[format-nongpl]==4.26.0

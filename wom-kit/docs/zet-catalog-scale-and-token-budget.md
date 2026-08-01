@@ -147,5 +147,8 @@ billing. It does not justify skipping the full first page or any node.
 
 When available, WOM-kit uses PyYAML's C safe loader and otherwise falls back to
 the prior safe loader. Cold catalog frontmatter parsing uses at most eight
-threads. No dependency beyond PyYAML, generated SQLite index, vector database,
-provider call, or body scan is required.
+threads. The catalog path uses PyYAML for parsing and requires no generated
+SQLite index, vector database, provider call, or body scan. The package also
+carries pinned `unicodedata2==17.0.1` for the separate
+v0.3.295 private-filename normalization contract; catalog parsing does not use
+that engine.
