@@ -12,11 +12,11 @@ import unittest
 KIT_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = KIT_ROOT.parent
 SRC_ROOT = KIT_ROOT / "src"
-FIXTURE_PATH = Path(__file__).resolve().parent / "fixtures" / "v0.3.294-surface-baseline.json"
+FIXTURE_PATH = Path(__file__).resolve().parent / "fixtures" / "v0.3.295-surface-baseline.json"
 RESOURCE_MANIFEST_PATH = SRC_ROOT / "wom_kit" / "_resources" / "resource-manifest.json"
 
-PREDECESSOR_COMMIT = "845588144c713b585e67985bc93a0f341e6fe53c"
-FIXTURE_SCHEMA = "wom-kit/test-fixture/v0.3.294-predecessor-surfaces/v0.1"
+PREDECESSOR_COMMIT = "d73c10e13b9bdc714aa5346c4a2327cd7c48559f"
+FIXTURE_SCHEMA = "wom-kit/test-fixture/v0.3.295-predecessor-surfaces/v0.1"
 SERIALIZER_METADATA = {
     "algorithm": (
         "json.dumps(value, ensure_ascii=True, sort_keys=True, "
@@ -45,17 +45,29 @@ BASELINE_EXPECTATIONS = {
         "value_key": "sources",
     },
     "package_resources": {
-        "count": 103,
-        "canonical_sha256": "369dfcf6a6f1d842e9eeabb34f81c0721567827f852914a42e97f9b8cccb3e78",
+        "count": 105,
+        "canonical_sha256": "af5980b0e176cc7d534f3a5390a6353d03b144706d48352083277e45a4cacffe",
         "value_key": "packaged_paths",
     },
 }
+CLI_ADDITIONS = {("objet-source-metadata-write",)}
+CURRENT_CLI_COUNT = 503
+CURRENT_CLI_CANONICAL_SHA256 = (
+    "88b1996bee09d35a422e53a6791e3b9b1c776a8892d0113f2172c926b3a9e77d"
+)
 RESOURCE_ADDITIONS = {
-    "schemas/private-objet-source-metadata-v0.1.schema.json",
-    "schemas/objet-safe-label-projection-v0.1.schema.json",
-    "release-notes/v0.3.295.md",
+    "schemas/private-objet-source-metadata-authority-chain-v0.1.schema.json",
+    "schemas/private-objet-source-metadata-intake-v0.1.schema.json",
+    "schemas/private-objet-source-metadata-write-journal-v0.1.schema.json",
+    "schemas/private-objet-source-metadata-write-plan-v0.1.schema.json",
+    "schemas/private-objet-source-metadata-write-receipt-v0.1.schema.json",
+    "release-notes/v0.3.296.md",
 }
-RESOURCE_REMOVALS = {"release-notes/v0.3.294.md"}
+RESOURCE_REMOVALS = {"release-notes/v0.3.295.md"}
+CURRENT_RESOURCE_COUNT = 110
+CURRENT_RESOURCE_CANONICAL_SHA256 = (
+    "3a3fc7f9202fc1eefb05534dad0d44615ee36e4ce096a1eea30a5e4d9334047a"
+)
 
 
 # Put this worktree's source checkout ahead of installed packages and repository
@@ -155,7 +167,7 @@ def path_diff_message(expected: list[list[str]], actual: list[list[str]]) -> str
     expected_paths = {" ".join(path) for path in expected}
     actual_paths = {" ".join(path) for path in actual}
     return (
-        "CLI command paths differ from the exact v0.3.294 predecessor surface. "
+        "CLI command paths differ from the exact v0.3.295 predecessor surface. "
         f"missing={compact(sorted(expected_paths - actual_paths))}; "
         f"extra={compact(sorted(actual_paths - expected_paths))}"
     )
@@ -177,14 +189,14 @@ def named_row_diff_message(
         if expected_by_key[row_key] != actual_by_key[row_key]
     )
     return (
-        f"{label} differs from the exact v0.3.294 predecessor surface. "
+        f"{label} differs from the exact v0.3.295 predecessor surface. "
         f"missing={compact(sorted(expected_keys - actual_keys))}; "
         f"extra={compact(sorted(actual_keys - expected_keys))}; "
         f"changed={compact(changed)}"
     )
 
 
-class V03295PredecessorSurfaceTests(unittest.TestCase):
+class V03296PredecessorSurfaceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.fixture = load_fixture()
@@ -248,17 +260,23 @@ class V03295PredecessorSurfaceTests(unittest.TestCase):
                         f"{module.__name__} was imported outside this worktree's source checkout."
                     )
 
-    def test_cli_nested_paths_exactly_match_v03294(self) -> None:
-        expected = self.fixture["cli"]["paths"]
+    def test_cli_nested_paths_are_v03295_plus_exact_v03296_delta(self) -> None:
+        predecessor = self.fixture["cli"]["paths"]
+        predecessor_set = {tuple(path) for path in predecessor}
+        self.assertFalse(CLI_ADDITIONS & predecessor_set)
+        expected = [
+            list(path)
+            for path in sorted(predecessor_set | CLI_ADDITIONS)
+        ]
         actual = current_cli_paths()
         self.assertEqual(actual, expected, path_diff_message(expected, actual))
-        self.assertEqual(len(actual), BASELINE_EXPECTATIONS["cli"]["count"])
+        self.assertEqual(len(actual), CURRENT_CLI_COUNT)
         self.assertEqual(
             canonical_sha256(actual),
-            BASELINE_EXPECTATIONS["cli"]["canonical_sha256"],
+            CURRENT_CLI_CANONICAL_SHA256,
         )
 
-    def test_database_source_rows_exactly_match_v03294(self) -> None:
+    def test_database_source_rows_exactly_match_v03295(self) -> None:
         expected = self.fixture["database"]["sources"]
         actual = current_database_sources()
         self.assertEqual(
@@ -272,7 +290,7 @@ class V03295PredecessorSurfaceTests(unittest.TestCase):
             BASELINE_EXPECTATIONS["database"]["canonical_sha256"],
         )
 
-    def test_mcp_name_and_input_schema_rows_exactly_match_v03294(self) -> None:
+    def test_mcp_name_and_input_schema_rows_exactly_match_v03295(self) -> None:
         expected = self.fixture["mcp"]["tools"]
         actual = current_mcp_tools()
         self.assertEqual(
@@ -286,18 +304,18 @@ class V03295PredecessorSurfaceTests(unittest.TestCase):
             BASELINE_EXPECTATIONS["mcp"]["canonical_sha256"],
         )
 
-    def test_package_resource_paths_are_exact_v03294_plus_v03295_delta(self) -> None:
+    def test_package_resource_paths_are_exact_v03295_plus_v03296_delta(self) -> None:
         predecessor_paths = set(self.fixture["package_resources"]["packaged_paths"])
         self.assertTrue(
             RESOURCE_REMOVALS <= predecessor_paths,
-            "The declared removal must exist in the v0.3.294 predecessor fixture.",
+            "The declared removal must exist in the v0.3.295 predecessor fixture.",
         )
         self.assertFalse(
             RESOURCE_ADDITIONS & predecessor_paths,
-            "The declared additions must be new relative to v0.3.294.",
+            "The declared additions must be new relative to v0.3.295.",
         )
         expected = sorted((predecessor_paths - RESOURCE_REMOVALS) | RESOURCE_ADDITIONS)
-        self.assertEqual(len(expected), 105)
+        self.assertEqual(len(expected), CURRENT_RESOURCE_COUNT)
 
         manifest = json.loads(RESOURCE_MANIFEST_PATH.read_text(encoding="utf-8"))
         rows = manifest["files"]
@@ -315,12 +333,60 @@ class V03295PredecessorSurfaceTests(unittest.TestCase):
         self.assertEqual(
             actual,
             expected,
-            "Current package-resource paths must be the full v0.3.294 set plus "
-            "the exact v0.3.295 delta. "
+            "Current package-resource paths must be the full v0.3.295 set plus "
+            "the exact cumulative v0.3.296 delta. "
             f"missing={compact(missing)}; extra={compact(extra)}",
         )
-        self.assertEqual(manifest["version"], "0.3.295")
-        self.assertEqual(len(actual), 105)
+        self.assertEqual(manifest["version"], "0.3.296")
+        self.assertEqual(len(actual), CURRENT_RESOURCE_COUNT)
+        self.assertEqual(
+            canonical_sha256(actual),
+            CURRENT_RESOURCE_CANONICAL_SHA256,
+        )
+
+    def test_terminal_failstop_operator_boundary_is_public_and_synchronized(
+        self,
+    ) -> None:
+        source_release = KIT_ROOT / "docs" / "releases" / "v0.3.296.md"
+        packaged_release = (
+            SRC_ROOT
+            / "wom_kit"
+            / "_resources"
+            / "release-notes"
+            / "v0.3.296.md"
+        )
+        self.assertEqual(
+            source_release.read_bytes(),
+            packaged_release.read_bytes(),
+        )
+
+        english_documents = (
+            source_release,
+            KIT_ROOT / "docs" / "private-objet-metadata-safe-label.md",
+            REPO_ROOT / "UPGRADE.md",
+        )
+        for path in english_documents:
+            with self.subTest(document=path.name):
+                text = path.read_text(encoding="utf-8")
+                flat = " ".join(text.split())
+                self.assertIn("exit code 74", flat)
+                self.assertIn("fresh dry-run", flat)
+                self.assertIn("normal JSON result", flat)
+                self.assertIn("three consecutive", flat)
+                self.assertNotIn("C:\\Users\\", text)
+
+        korean_upgrade = (REPO_ROOT / "UPGRADE.ko.md").read_text(
+            encoding="utf-8"
+        )
+        for phrase in (
+            "process exit code 74",
+            "fresh dry-run",
+            "정상 JSON",
+            "3회",
+        ):
+            with self.subTest(korean_phrase=phrase):
+                self.assertIn(phrase, korean_upgrade)
+        self.assertNotIn("C:\\Users\\", korean_upgrade)
 
 
 if __name__ == "__main__":
