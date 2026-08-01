@@ -1,6 +1,6 @@
 # Install WOM-kit As A Python Tool
 
-Status: v0.3.295 GitHub wheel and private metadata contract checkpoint
+Status: v0.3.296 GitHub wheel and reviewed private metadata writer checkpoint
 
 WOM-kit is a command-line tool. It should live in its own Python environment
 instead of being mixed into an application project's dependencies.
@@ -12,7 +12,7 @@ verified wheel. The versioned URL alone is not proof that the asset is
 available:
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.295/wom_kit-0.3.295-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.296/wom_kit-0.3.296-py3-none-any.whl"
 archive --version
 ```
 
@@ -30,7 +30,7 @@ Plain `pip` works when it is placed inside a dedicated virtual environment:
 
 ```powershell
 py -m venv "$HOME\.wom-tools\wom-kit"
-& "$HOME\.wom-tools\wom-kit\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.295/wom_kit-0.3.295-py3-none-any.whl"
+& "$HOME\.wom-tools\wom-kit\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.296/wom_kit-0.3.296-py3-none-any.whl"
 & "$HOME\.wom-tools\wom-kit\Scripts\archive.exe" --version
 ```
 
@@ -79,7 +79,7 @@ The argv exists only when `runtime_alignment.integrity.verified` is true after
 local real-path, project-local Git-metadata, raw worktree/index/flag, exact
 source/resource-byte, closed-import, annotated-tag, tagged-version, and
 `origin/main` ancestry checks. Its Python `-I -S` bootstrap binds the expected
-commit, tag, wrapper blob, and all 105 synchronized resources, executes the
+commit, tag, wrapper blob, and all 110 synchronized resources, executes the
 wrapper from verified memory, and permits only the read-only `version`
 command. It does not put the project source root on `sys.path`: it purges
 project aliases and an exact-object-id custom finder loads only `wom_kit`, so

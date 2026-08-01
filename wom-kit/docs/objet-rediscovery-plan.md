@@ -1,6 +1,7 @@
 # Checked-Layer Objet Rediscovery Plan
 
-Status: read-only CLI and MCP contract implemented in v0.3.294
+Status: read-only CLI and MCP contract implemented in v0.3.294; private
+metadata layer status updated in v0.3.296
 
 ## Why This Exists
 
@@ -77,7 +78,7 @@ order:
 | `indexed_views` | Generated-index snapshot only; view freshness is not proven. |
 | `indexed_source_records` | Generated-index snapshot only; source-map freshness is not proven. |
 | `zettel_objet_edges` | `unchecked` until a reviewed zettel is selected for exact traversal. |
-| `private_original_name_metadata` | `not_implemented`; v0.3.295 provides the schema and pure normalization contract, but no approved writer, receipt-bound index, or private rediscovery query. |
+| `private_original_name_metadata` | `unchecked`; v0.3.296 provides an approved private metadata writer, but no receipt-bound private metadata index or private rediscovery query, and no private index freshness is proven. |
 | `approved_external_local_store` | `not_implemented`; no registration or scan lifecycle exists here. |
 | `external_store_evidence` | `unchecked`; the existing local `backup-evidence` status is not run because it does not consume the submitted private query. |
 | `unrecovered_source_references` | `not_implemented`; reserved for the v0.3.299 coverage contract. |
@@ -135,15 +136,22 @@ Ordinary `archive search` is unchanged and keeps its existing transaction and
 ## Follow-Up Release Boundary
 
 v0.3.295 implements the private original-name schema and pure normalization
-contract only. It does not implement approved metadata registration,
-receipt-bound index ingestion, a private finder, approved external
+contract. v0.3.296 adds approval-gated local registration plus an immutable
+private receipt and interruption recovery. The rediscovery plan does not call
+that writer or inspect its rows, receipts, or private values.
+
+Receipt-bound index ingestion/freshness, a private finder, approved external
 local-store lifecycle, exact external object resolution, provider retrieval,
-or source-reference coverage. Writer/recovery, indexing/freshness, finding,
-and coverage remain separate v0.3.296-v0.3.299 review batches; external-store
-registration and resolution remain later work.
+and source-reference coverage remain separate work. v0.3.297 owns private
+index ingestion/freshness, v0.3.298 owns private finding, and v0.3.299 owns
+coverage-versus-integrity reporting; external-store registration and
+resolution remain later work.
 
 Decision:
 [v0.3.294 checked-layer rediscovery decision](archive-infra-decision-log-2026-07-31-v03294-checked-layer-objet-rediscovery.md).
 
 Private metadata contract:
 [v0.3.295 private objet metadata decision](archive-infra-decision-log-2026-08-01-v03295-private-objet-metadata-contract.md).
+
+Private metadata writer:
+[v0.3.296 reviewed registration decision](archive-infra-decision-log-2026-08-01-v03296-private-objet-metadata-writer.md).

@@ -24,6 +24,49 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.296 Reviewed Private Objet Metadata Registration
+
+v0.3.296 is compatible with existing v0.3.295 archives and requires no archive
+migration. The existing private metadata and safe-label schemas remain
+normative. The release adds one new CLI-only lifecycle for registering one
+human-reviewed private filename observation:
+
+```powershell
+archive objet-source-metadata-write <archive-root> `
+  --intake <archive-relative-private-json> `
+  --expected-intake-sha256 sha256:<64-lowercase-hex> `
+  --dry-run `
+  --format json
+```
+
+Dry-run is cross-platform, content-free, and writes no lock, directory,
+manifest, journal, receipt, database row, or index. Approval is supported only
+on Windows 10 version 1607 or newer and Windows 11, on a local NTFS volume. It
+requires the exact intake and plan digests, a safe `operator:` token, explicit
+private review, and `--affirm-external-writers-quiescent` while every other WOM
+and non-WOM archive writer stays stopped for the complete operation.
+
+Approved registration appends one canonical private row and publishes one
+immutable private or restricted receipt. Exact replay, rollback, and
+interrupted-append recovery are supported through the retained Win32
+identity/lock/journal profile. This is process-interruption evidence, not proof
+of sudden-power-loss directory-entry or volume-metadata durability.
+
+If terminal release of a retained raw Windows handle remains unproved after
+three consecutive close-and-validity cycles, the writer fail-stops with process
+exit code 74 instead of returning a normal JSON result. Run a fresh dry-run
+afterward to reclassify the current state; the failed invocation does not claim
+whether the affected residue survived.
+
+The release performs no archive migration, private index ingestion, private
+finder query, database/index write, object-byte read, provider/network/
+credential-store call, external-store scan, MCP write, or UI change. A
+registered name is therefore not searchable yet, and registration does not
+prove object-byte availability or source coverage.
+
+See
+[`wom-kit/docs/releases/v0.3.296.md`](wom-kit/docs/releases/v0.3.296.md).
+
 ## v0.3.295 Private Objet Metadata Contract
 
 v0.3.295 requires no archive migration and writes no private metadata. It

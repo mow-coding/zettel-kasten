@@ -1,0 +1,363 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wom-kit/private-objet-source-metadata-write-receipt/v0.1",
+  "title": "WOM-kit private objet source metadata write receipt v0.1",
+  "type": "object",
+  "required": [
+    "schema",
+    "writer_state_machine_version",
+    "lifecycle",
+    "action",
+    "artifact_class",
+    "archive_id",
+    "record_privacy_class",
+    "object_id",
+    "authority_key_sha256",
+    "intake_sha256",
+    "canonical_row_sha256",
+    "observation_evidence_sha256",
+    "review_evidence_sha256",
+    "reviewed_by",
+    "external_writers_quiescent_affirmed",
+    "mutation_platform_profile",
+    "power_loss_durability_verified",
+    "plan_binding",
+    "plan_sha256",
+    "object_manifest_state",
+    "authority_chain_before_sha256",
+    "private_manifest_before",
+    "private_manifest_after",
+    "intake_schema",
+    "durable_schema",
+    "normalization_profile",
+    "derived_alias_count",
+    "closed_actions"
+  ],
+  "properties": {
+    "schema": {
+      "const": "wom-kit/private-objet-source-metadata-write-receipt/v0.1"
+    },
+    "writer_state_machine_version": {
+      "const": "wom-kit/private-objet-source-metadata-writer-state/v0.1"
+    },
+    "lifecycle": {
+      "const": "private_objet_source_metadata_write"
+    },
+    "action": {
+      "const": "applied"
+    },
+    "artifact_class": {
+      "enum": [
+        "private_archive",
+        "restricted"
+      ]
+    },
+    "archive_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "^(?![\\s\\S]*[\\uD800-\\uDFFF])[\\s\\S]+$"
+    },
+    "record_privacy_class": {
+      "enum": [
+        "private_archive",
+        "restricted"
+      ]
+    },
+    "object_id": {
+      "$ref": "#/$defs/sha256"
+    },
+    "authority_key_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "intake_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "canonical_row_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "observation_evidence_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "review_evidence_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "reviewed_by": {
+      "type": "string",
+      "minLength": 10,
+      "maxLength": 200,
+      "pattern": "^operator:[A-Za-z0-9][A-Za-z0-9._-]{0,190}$"
+    },
+    "external_writers_quiescent_affirmed": {
+      "type": "boolean",
+      "const": true
+    },
+    "mutation_platform_profile": {
+      "const": "windows_ntfs_win32_process_interruption/v0.1"
+    },
+    "power_loss_durability_verified": {
+      "type": "boolean",
+      "const": false
+    },
+    "plan_binding": {
+      "$ref": "../../../wom-kit/private-objet-source-metadata-write-plan/v0.1"
+    },
+    "plan_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "object_manifest_state": {
+      "$ref": "#/$defs/fileState"
+    },
+    "authority_chain_before_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "private_manifest_before": {
+      "$ref": "#/$defs/fileState"
+    },
+    "private_manifest_after": {
+      "$ref": "#/$defs/fileState"
+    },
+    "intake_schema": {
+      "const": "wom-kit/private-objet-source-metadata-intake/v0.1"
+    },
+    "durable_schema": {
+      "const": "wom-kit/private-objet-source-metadata/v0.1"
+    },
+    "normalization_profile": {
+      "$ref": "#/$defs/normalizationProfile"
+    },
+    "derived_alias_count": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "closed_actions": {
+      "type": "object",
+      "required": [
+        "source_artifact_modified",
+        "object_bytes_opened",
+        "provider_or_network_called",
+        "database_or_index_written"
+      ],
+      "properties": {
+        "source_artifact_modified": {
+          "type": "boolean",
+          "const": false
+        },
+        "object_bytes_opened": {
+          "type": "boolean",
+          "const": false
+        },
+        "provider_or_network_called": {
+          "type": "boolean",
+          "const": false
+        },
+        "database_or_index_written": {
+          "type": "boolean",
+          "const": false
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "artifact_class": {
+          "const": "private_archive"
+        },
+        "record_privacy_class": {
+          "const": "private_archive"
+        }
+      },
+      "required": [
+        "artifact_class",
+        "record_privacy_class"
+      ]
+    },
+    {
+      "properties": {
+        "artifact_class": {
+          "const": "restricted"
+        },
+        "record_privacy_class": {
+          "const": "restricted"
+        }
+      },
+      "required": [
+        "artifact_class",
+        "record_privacy_class"
+      ]
+    }
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "minLength": 71,
+      "maxLength": 71,
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "nonNegativeInteger": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "normalizationProfile": {
+      "type": "object",
+      "required": [
+        "id",
+        "unicode_version",
+        "confusables_data_sha256",
+        "confusable_status"
+      ],
+      "properties": {
+        "id": {
+          "const": "wom-kit/filename-normalization/v0.1"
+        },
+        "unicode_version": {
+          "const": "17.0.0"
+        },
+        "confusables_data_sha256": {
+          "const": null
+        },
+        "confusable_status": {
+          "const": "not_checked"
+        }
+      },
+      "additionalProperties": false
+    },
+    "fileState": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "state",
+            "sha256",
+            "byte_count",
+            "row_count",
+            "link_count"
+          ],
+          "properties": {
+            "state": {
+              "const": "absent"
+            },
+            "sha256": {
+              "const": null
+            },
+            "byte_count": {
+              "type": "integer",
+              "const": 0
+            },
+            "row_count": {
+              "type": "integer",
+              "const": 0
+            },
+            "link_count": {
+              "type": "integer",
+              "const": 0
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "state",
+            "sha256",
+            "byte_count",
+            "row_count",
+            "link_count"
+          ],
+          "properties": {
+            "state": {
+              "const": "present"
+            },
+            "sha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "byte_count": {
+              "$ref": "#/$defs/nonNegativeInteger"
+            },
+            "row_count": {
+              "$ref": "#/$defs/nonNegativeInteger"
+            },
+            "link_count": {
+              "$ref": "#/$defs/nonNegativeInteger"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "state",
+            "sha256",
+            "byte_count",
+            "row_count",
+            "link_count"
+          ],
+          "properties": {
+            "state": {
+              "const": "present_invalid"
+            },
+            "sha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "byte_count": {
+              "$ref": "#/$defs/nonNegativeInteger"
+            },
+            "row_count": {
+              "const": null
+            },
+            "link_count": {
+              "$ref": "#/$defs/nonNegativeInteger"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "state",
+            "sha256",
+            "byte_count",
+            "row_count",
+            "link_count"
+          ],
+          "properties": {
+            "state": {
+              "const": "unavailable"
+            },
+            "sha256": {
+              "const": null
+            },
+            "byte_count": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/$defs/nonNegativeInteger"
+                }
+              ]
+            },
+            "row_count": {
+              "const": null
+            },
+            "link_count": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/$defs/nonNegativeInteger"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    }
+  }
+}

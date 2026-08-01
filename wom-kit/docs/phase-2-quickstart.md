@@ -60,9 +60,7 @@ Expected result:
 Run the tests:
 
 ```powershell
-cd wom-kit
-python -m unittest discover -s tests
-cd ..
+python -m unittest discover -s wom-kit\tests
 ```
 
 Expected result:

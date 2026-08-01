@@ -1,8 +1,8 @@
 {
   "schema": "wom-kit/package-resource-manifest/v0.1",
-  "version": "0.3.295",
+  "version": "0.3.296",
   "source_of_truth": "wom-kit source resource directories",
-  "file_count": 105,
+  "file_count": 110,
   "files": [
     {
       "source": "schemas/activity-group-membership-receipt.schema.json",
@@ -167,10 +167,40 @@
       "sha256": "d099584291588b8231ad22f59650d17ec26d071804c238f0e029db1f81d4c0b3"
     },
     {
+      "source": "schemas/private-objet-source-metadata-authority-chain-v0.1.schema.json",
+      "packaged": "schemas/private-objet-source-metadata-authority-chain-v0.1.schema.json",
+      "bytes": 5350,
+      "sha256": "b9704fabf8c718b79f21497cb4c163bb89eecc7ca7620f297a63c402e7155da9"
+    },
+    {
+      "source": "schemas/private-objet-source-metadata-intake-v0.1.schema.json",
+      "packaged": "schemas/private-objet-source-metadata-intake-v0.1.schema.json",
+      "bytes": 6326,
+      "sha256": "e5edf67b1cb77dfaca7c96080ace250d42b2ff370bf2170bff776dac3de8c5ac"
+    },
+    {
       "source": "schemas/private-objet-source-metadata-v0.1.schema.json",
       "packaged": "schemas/private-objet-source-metadata-v0.1.schema.json",
       "bytes": 16566,
       "sha256": "c5f2aae02b068bca976ed256e45bea33c8ec44e004df89adc4e15113c09c2150"
+    },
+    {
+      "source": "schemas/private-objet-source-metadata-write-journal-v0.1.schema.json",
+      "packaged": "schemas/private-objet-source-metadata-write-journal-v0.1.schema.json",
+      "bytes": 5676,
+      "sha256": "6a9ab51a92f9c1abb1453ff314ab36ba606f614e0a42d37eadc4fba54d5e07ef"
+    },
+    {
+      "source": "schemas/private-objet-source-metadata-write-plan-v0.1.schema.json",
+      "packaged": "schemas/private-objet-source-metadata-write-plan-v0.1.schema.json",
+      "bytes": 16510,
+      "sha256": "0ee2e31e674703e9662bf012e6ba8478f0860b498c295cb08163e7c51ca58839"
+    },
+    {
+      "source": "schemas/private-objet-source-metadata-write-receipt-v0.1.schema.json",
+      "packaged": "schemas/private-objet-source-metadata-write-receipt-v0.1.schema.json",
+      "bytes": 8665,
+      "sha256": "d56f48ba45094b9bd7fecebf3739700ecd7e4e02f607d709101e02bcf6dd0149"
     },
     {
       "source": "schemas/project-version-update-receipt-v0.2.schema.json",
@@ -629,10 +659,10 @@
       "sha256": "d619dc26af3216498c8392dfe838b0fe752d4bad9da998a58ca682d668fc510c"
     },
     {
-      "source": "docs/releases/v0.3.295.md",
-      "packaged": "release-notes/v0.3.295.md",
-      "bytes": 3616,
-      "sha256": "7a36165f4f6255568271aa461fb35fac0623a8170ab863c2010c27b111c581fa"
+      "source": "docs/releases/v0.3.296.md",
+      "packaged": "release-notes/v0.3.296.md",
+      "bytes": 7449,
+      "sha256": "5c7fc5e710b6b9fc0b239ec79fdc10afe195be0512ea76bca1a0b461021b0e8d"
     }
   ]
 }
