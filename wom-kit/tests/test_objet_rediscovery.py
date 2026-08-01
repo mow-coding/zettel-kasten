@@ -161,6 +161,23 @@ class ObjetRediscoveryPlanTests(unittest.TestCase):
             result["checked_layers"][8]["reason_codes"],
             ["backup_evidence_status_not_checked"],
         )
+        private_metadata_layer = result["checked_layers"][6]
+        self.assertEqual(
+            private_metadata_layer["layer_id"],
+            "private_original_name_metadata",
+        )
+        self.assertEqual(
+            private_metadata_layer["evidence_scope"],
+            "The v0.3.295 schema and pure normalization contract exist, but no "
+            "approved writer, receipt-bound index, or private rediscovery query "
+            "is implemented in this release.",
+        )
+        self.assertEqual(
+            private_metadata_layer["reason_codes"],
+            ["private_metadata_rediscovery_not_implemented"],
+        )
+        self.assertFalse(private_metadata_layer["freshness_proven"])
+        self.assertFalse(private_metadata_layer["negative_claim_contribution"])
         self.assertIn(
             "archive backup-evidence <archive-root> --dry-run",
             result["next_safe_commands"],

@@ -102,7 +102,7 @@ def patch_zip_member_name_bytes(wheel: Path, old_name: str, new_name: str) -> No
 
 
 class InstalledEntrypointTests(unittest.TestCase):
-    PACKAGE_VERSION = "0.3.294"
+    PACKAGE_VERSION = "0.3.295"
     SERVER_NAME = "zettel-kasten-archive-mcp"
 
     def setUp(self) -> None:
@@ -117,6 +117,62 @@ class InstalledEntrypointTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.temp_directory.cleanup()
+
+    def test_installed_runtime_dependencies_are_pip_clean_and_unicode17(self) -> None:
+        python = self.scripts / "python.exe"
+        with mock.patch.object(
+            check_wheel_install,
+            "run",
+            side_effect=[
+                check_wheel_install.subprocess.CompletedProcess(
+                    [str(python), "-m", "pip", "check"],
+                    0,
+                    "",
+                    "",
+                ),
+                {
+                    "distribution_version": "17.0.1",
+                    "unicode_version": "17.0.0",
+                },
+            ],
+        ) as run_mock:
+            check_wheel_install._check_installed_runtime_dependencies(
+                python,
+                cwd=self.temp_root,
+            )
+
+        self.assertEqual(run_mock.call_count, 2)
+        self.assertEqual(
+            run_mock.call_args_list[0].args[0],
+            [str(python), "-m", "pip", "check"],
+        )
+        isolated_command = run_mock.call_args_list[1].args[0]
+        self.assertEqual(isolated_command[:3], [str(python), "-I", "-c"])
+        self.assertTrue(run_mock.call_args_list[1].kwargs["parse_json"])
+
+    def test_installed_unicode_runtime_mismatch_fails_closed(self) -> None:
+        python = self.scripts / "python.exe"
+        with mock.patch.object(
+            check_wheel_install,
+            "run",
+            side_effect=[
+                check_wheel_install.subprocess.CompletedProcess(
+                    [str(python), "-m", "pip", "check"],
+                    0,
+                    "",
+                    "",
+                ),
+                {
+                    "distribution_version": "17.0.1",
+                    "unicode_version": "unexpected",
+                },
+            ],
+        ):
+            with self.assertRaises(check_wheel_install.WheelCheckError):
+                check_wheel_install._check_installed_runtime_dependencies(
+                    python,
+                    cwd=self.temp_root,
+                )
 
     @staticmethod
     def completed(
@@ -472,6 +528,88 @@ class InstalledEntrypointTests(unittest.TestCase):
 
     @unittest.skipUnless(
         os.name == "nt",
+        "Windows suspended-launch containment contract",
+    )
+    def test_windows_entrypoint_is_contained_before_first_instruction(
+        self,
+    ) -> None:
+        original_popen = check_wheel_install.subprocess.Popen
+        original_assign = check_wheel_install._assign_windows_kill_on_close_job
+        original_resume = check_wheel_install._resume_windows_process
+        events: list[str] = []
+
+        def recording_popen(*args: object, **kwargs: object) -> object:
+            creationflags = kwargs.get("creationflags")
+            self.assertIs(type(creationflags), int)
+            self.assertNotEqual(
+                creationflags & check_wheel_install.WINDOWS_CREATE_SUSPENDED,
+                0,
+            )
+            events.append("popen_suspended")
+            return original_popen(*args, **kwargs)
+
+        def recording_assign(process: object) -> object:
+            events.append("job_assigned")
+            return original_assign(process)  # type: ignore[arg-type]
+
+        def recording_resume(process: object) -> bool:
+            events.append("process_resumed")
+            return original_resume(process)  # type: ignore[arg-type]
+
+        with (
+            mock.patch.object(
+                check_wheel_install.subprocess,
+                "Popen",
+                side_effect=recording_popen,
+            ),
+            mock.patch.object(
+                check_wheel_install,
+                "_assign_windows_kill_on_close_job",
+                side_effect=recording_assign,
+            ),
+            mock.patch.object(
+                check_wheel_install,
+                "_resume_windows_process",
+                side_effect=recording_resume,
+            ),
+        ):
+            output = check_wheel_install._run_installed_entrypoint(
+                [
+                    sys.executable,
+                    "-c",
+                    "import sys; sys.stdout.buffer.write(b'{}\\n')",
+                ],
+                cwd=self.temp_root,
+                label="suspended launch ordering",
+            )
+
+        self.assertEqual(output, "{}\n")
+        self.assertEqual(
+            events[:3],
+            ["popen_suspended", "job_assigned", "process_resumed"],
+        )
+
+    @unittest.skipUnless(
+        os.name == "nt",
+        "Windows suspended-launch containment contract",
+    )
+    def test_windows_process_resume_failure_is_fail_closed(self) -> None:
+        with (
+            mock.patch.object(
+                check_wheel_install,
+                "_resume_windows_process",
+                return_value=False,
+            ),
+            self.assertRaises(check_wheel_install.WheelCheckError),
+        ):
+            check_wheel_install._run_installed_entrypoint(
+                [sys.executable, "-c", "print('must not execute')"],
+                cwd=self.temp_root,
+                label="process resume failure",
+            )
+
+    @unittest.skipUnless(
+        os.name == "nt",
         "Windows Job Object containment contract",
     )
     def test_windows_job_assignment_failure_is_fail_closed(self) -> None:
@@ -498,7 +636,7 @@ class InstalledEntrypointTests(unittest.TestCase):
             ),
             "invalid version": json.dumps(
                 {
-                    "version": " 0.3.294",
+                    "version": " 0.3.295",
                     "consistency_state": "package_version_only",
                 }
             ),
@@ -683,7 +821,7 @@ class InstalledEntrypointTests(unittest.TestCase):
                 "wom-mcp",
             ],
             entrypoint_evidence=evidence,
-            wheel_filename="wom_kit-0.3.294-py3-none-any.whl",
+            wheel_filename="wom_kit-0.3.295-py3-none-any.whl",
             wheel_sha256="a" * 64,
             artifact_preserved=True,
         )
@@ -706,7 +844,7 @@ class InstalledEntrypointTests(unittest.TestCase):
                 "onboarding_preview": "passed",
                 "onboarding_write": "passed",
                 "strict_doctor": "passed",
-                "wheel_filename": "wom_kit-0.3.294-py3-none-any.whl",
+                "wheel_filename": "wom_kit-0.3.295-py3-none-any.whl",
                 "wheel_sha256": "a" * 64,
                 "wheel_artifact_preserved": True,
                 "temporary_environment_removed_on_exit": True,

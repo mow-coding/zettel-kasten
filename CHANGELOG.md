@@ -6,6 +6,25 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.295 - 2026-08-01
+
+- Added closed Draft 2020-12 contracts for private objet source metadata and
+  audience-safe label projection.
+- Added pure in-memory filename normalization, private-record validation,
+  deterministic label projection, and alias ambiguity resolution without a
+  new CLI, MCP, database, writer, index, finder, or provider surface.
+- Pinned NFC/NFD and full non-Turkic case folding to Unicode 17.0.0 with
+  exact official data digests, deterministic committed tables, and a proven
+  2,048-scalar search-key bound.
+- Kept SHA-256 as object identity, provenance-bound names as aliases, and
+  public output structurally limited to closed generic families.
+- Kept MIME, extension, size, registry, and confusable evidence independent;
+  v0.1 does not infer MIME or claim unimplemented evidence.
+- Updated checked-layer rediscovery to report that the pure contract exists
+  while keeping the private metadata layer non-complete.
+- Added exact predecessor-surface regressions plus isolated installed-wheel
+  dependency and Unicode-runtime attestation.
+
 ## v0.3.294 - 2026-07-31
 
 - Added read-only `archive objet-rediscovery-plan <archive-root> <query>

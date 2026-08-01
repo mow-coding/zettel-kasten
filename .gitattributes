@@ -8,6 +8,8 @@ wom-kit/templates/** text eol=lf
 wom-kit/zettel-kasten/** text eol=lf
 wom-kit/docs/releases/*.md text eol=lf
 wom-kit/src/wom_kit/_resources/** text eol=lf
+wom-kit/tests/fixtures/unicode-17.0.0/*.txt text eol=lf
+wom-kit/tests/fixtures/v0.3.294-surface-baseline.json text eol=lf
 
 # The project-scoped runtime bridge verifies executed source bytes against the
 # exact release tag, so these Python sources must materialize identically on

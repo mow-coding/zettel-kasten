@@ -1,8 +1,8 @@
 {
   "schema": "wom-kit/package-resource-manifest/v0.1",
-  "version": "0.3.294",
+  "version": "0.3.295",
   "source_of_truth": "wom-kit source resource directories",
-  "file_count": 103,
+  "file_count": 105,
   "files": [
     {
       "source": "schemas/activity-group-membership-receipt.schema.json",
@@ -137,6 +137,12 @@
       "sha256": "b2cd8e6c2da6df13b7db140c47d598b55faf4e4c8a57cbcddb8623cda7964d74"
     },
     {
+      "source": "schemas/objet-safe-label-projection-v0.1.schema.json",
+      "packaged": "schemas/objet-safe-label-projection-v0.1.schema.json",
+      "bytes": 12511,
+      "sha256": "baf23a8c453ffd61d32a9d6a7b9cf2024073d91aa821e7712190c28374952d66"
+    },
+    {
       "source": "schemas/operator-feedback-delivery-receipt.schema.json",
       "packaged": "schemas/operator-feedback-delivery-receipt.schema.json",
       "bytes": 1113,
@@ -159,6 +165,12 @@
       "packaged": "schemas/ownership-transfer-receipt.schema.json",
       "bytes": 2058,
       "sha256": "d099584291588b8231ad22f59650d17ec26d071804c238f0e029db1f81d4c0b3"
+    },
+    {
+      "source": "schemas/private-objet-source-metadata-v0.1.schema.json",
+      "packaged": "schemas/private-objet-source-metadata-v0.1.schema.json",
+      "bytes": 16566,
+      "sha256": "c5f2aae02b068bca976ed256e45bea33c8ec44e004df89adc4e15113c09c2150"
     },
     {
       "source": "schemas/project-version-update-receipt-v0.2.schema.json",
@@ -617,10 +629,10 @@
       "sha256": "d619dc26af3216498c8392dfe838b0fe752d4bad9da998a58ca682d668fc510c"
     },
     {
-      "source": "docs/releases/v0.3.294.md",
-      "packaged": "release-notes/v0.3.294.md",
-      "bytes": 5165,
-      "sha256": "34d06d5200fe26fb7038bd40b074eeb44690817bfdaed1eff7729cfb04809e78"
+      "source": "docs/releases/v0.3.295.md",
+      "packaged": "release-notes/v0.3.295.md",
+      "bytes": 3616,
+      "sha256": "7a36165f4f6255568271aa461fb35fac0623a8170ab863c2010c27b111c581fa"
     }
   ]
 }

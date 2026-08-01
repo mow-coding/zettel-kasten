@@ -26,14 +26,17 @@ search patch.
 3. Add a checked-layer rediscovery plan with fail-closed
    `search_incomplete` in v0.3.294 without changing the meaning of the existing
    `search.complete` field.
-4. Define private original-name/provenance and safe-label contracts before
-   adding any writer or finder.
-5. Add approval-gated private metadata registration and search only after that
-   contract is stable.
-6. Separate external-local-store trust registration from later one-object
-   resolver access.
-7. Add source-reference coverage only after all applicable layers have stable
-   states, and keep it independent from successful-object storage integrity.
+4. In v0.3.295, define private original-name/provenance and safe-label
+   contracts before adding any writer or finder.
+5. In v0.3.296, add only approval-gated private metadata writing, an immutable
+   receipt, and replay/recovery.
+6. In v0.3.297, add receipt-bound generated-index ingestion and freshness; in
+   v0.3.298, add the bounded local private finder.
+7. In v0.3.299, add source-reference coverage after applicable layers have
+   stable states, and keep it independent from successful-object storage
+   integrity.
+8. Keep external-local-store trust registration and later one-object resolver
+   access outside those private-metadata slices.
 
 ## Consequences
 
@@ -49,3 +52,6 @@ search patch.
 - Each slice requires focused regressions, independent review, exact-predecessor
   rebase, complete suite, clean-wheel verification, and public artifact
   verification before beta semantic retesting.
+- v0.3.295 supplies only schemas and pure in-memory reference behavior. The
+  checked-layer private metadata state remains non-complete until the later
+  writer, index, and finder releases exist.

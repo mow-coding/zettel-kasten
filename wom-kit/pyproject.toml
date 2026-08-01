@@ -4,12 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "wom-kit"
-version = "0.3.294"
+version = "0.3.295"
 description = "WOM-kit local-first, AI-native CLI and MCP tooling for zet-centered WOM nodes."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
   "PyYAML>=6.0",
+  "unicodedata2==17.0.1",
 ]
 
 [project.scripts]

@@ -51,7 +51,14 @@ python:3.12-slim@sha256:...
 
 Container Python dependencies are installed from `requirements-container.txt` with `--require-hashes`.
 
-The container lock currently pins `pip`, `setuptools`, and `PyYAML`. This is intentional: even packaging tools that are mainly used at build time can remain present in the final image and show up in CVE scans.
+The container lock currently pins `pip`, `setuptools`, `PyYAML`, and
+`unicodedata2==17.0.1`. The Unicode dependency is limited to the reviewed
+normalization engine and must report Unicode data version `17.0.0`; the
+project's pinned case-fold, whitespace, and bidi tables remain committed
+source rather than a runtime download. The lock includes only the approved
+CPython 3.12 manylinux x86-64 and AArch64 hashes used by the container
+targets. This is intentional: even packaging tools that are mainly used at
+build time can remain present in the final image and show up in CVE scans.
 
 The local package is installed with:
 

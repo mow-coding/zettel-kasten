@@ -28,8 +28,11 @@ the gate on Linux.
    complete WOM-kit suite. It changes no repository setting and is not a
    required status check. Stages 1, 2, 4, and 5 alter GitHub configuration and
    remain separate, explicitly approved steps.
-2. The workflow installs only PyYAML. The suite is stdlib `unittest` with
-   `subTest`; pytest is declared nowhere and is not introduced as a dependency.
+2. At the v0.3.260 checkpoint the workflow installed only PyYAML. Since
+   v0.3.295 it installs the declared runtime set, PyYAML plus pinned
+   `unicodedata2==17.0.1`, and the pinned test-only JSON Schema oracle. The
+   suite itself remains stdlib `unittest` with `subTest`; pytest is declared
+   nowhere and is not introduced as a dependency.
 3. Coverage is `ubuntu-latest` on 3.12 and on the 3.10 `requires-python` floor,
    plus `windows-latest` on 3.12 to keep parity with the machine releases are
    cut on. `fail-fast` is disabled so one platform cannot mask the other.
