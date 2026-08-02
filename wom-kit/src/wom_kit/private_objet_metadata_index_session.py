@@ -666,7 +666,7 @@ class PrivateObjetIndexReadAPI:
                 inspect_private_objet_index_semantics,
             )
 
-            self.__connection.set_authorizer(None)
+            self.__connection.set_authorizer(_sqlite_allow_authorizer)
             try:
                 if expected is None:
                     return inspect_private_objet_index_semantics(
@@ -724,6 +724,18 @@ def _sqlite_read_authorizer(
 ) -> int:
     if action_code in _SQLITE_DENIED_ACTIONS:
         return sqlite3.SQLITE_DENY
+    return sqlite3.SQLITE_OK
+
+
+def _sqlite_allow_authorizer(
+    _action_code: int,
+    _argument_1: str | None,
+    _argument_2: str | None,
+    _database_name: str | None,
+    _trigger_or_view: str | None,
+) -> int:
+    """Clear read restrictions without Python 3.11's ``None`` API."""
+
     return sqlite3.SQLITE_OK
 
 
@@ -876,7 +888,7 @@ def _with_private_objet_index_read_session(
             read_api._deactivate()
         if connection is not None:
             try:
-                connection.set_authorizer(None)
+                connection.set_authorizer(_sqlite_allow_authorizer)
             except BaseException:
                 cleanup_failed = True
             try:

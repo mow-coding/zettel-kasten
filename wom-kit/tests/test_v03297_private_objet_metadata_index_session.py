@@ -61,8 +61,17 @@ class RecordingConnection:
         return self._connection.execute(sql, parameters)  # type: ignore[arg-type]
 
     def set_authorizer(self, callback: object) -> None:
+        if callback is None:
+            raise AssertionError(
+                "Python 3.10 does not support set_authorizer(None)"
+            )
         self._events.append(
-            ("authorizer", "clear" if callback is None else "install")
+            (
+                "authorizer",
+                "clear"
+                if callback is session._sqlite_allow_authorizer
+                else "install",
+            )
         )
         self._connection.set_authorizer(callback)  # type: ignore[arg-type]
 
@@ -961,6 +970,20 @@ class PrivateObjetIndexReadSessionTests(unittest.TestCase):
                 None,
             ),
             sqlite3.SQLITE_OK,
+        )
+        self.assertEqual(
+            session._sqlite_allow_authorizer(
+                sqlite3.SQLITE_TRANSACTION,
+                None,
+                None,
+                None,
+                None,
+            ),
+            sqlite3.SQLITE_OK,
+        )
+        self.assertNotIn(
+            "set_authorizer(None)",
+            inspect.getsource(session),
         )
 
     def test_fixed_batch_a_inspector_gets_connection_without_exposing_it(self) -> None:
