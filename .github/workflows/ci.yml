@@ -77,6 +77,10 @@ jobs:
             timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Privacy gates compare the candidate against an exact predecessor
+          # Git object. A one-commit shallow clone cannot run that evidence.
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:

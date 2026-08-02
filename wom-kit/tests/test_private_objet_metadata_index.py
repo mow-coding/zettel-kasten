@@ -1244,6 +1244,18 @@ class PrivateObjetMetadataIndexPrivacyGateTests(unittest.TestCase):
             combined.lower(),
         )
 
+    def test_10_ci_test_jobs_fetch_the_exact_predecessor_object(self) -> None:
+        workflow = (
+            REPO_ROOT / ".github" / "workflows" / "ci.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("\n  tests:\n", workflow)
+        tests_job = workflow.split("\n  tests:\n", 1)[1]
+        checkout_block = tests_job.split(
+            "- uses: actions/setup-python@v5",
+            1,
+        )[0]
+        self.assertIn("fetch-depth: 0", checkout_block)
+
 
 class PrivateObjetMetadataIndexReleaseArtifactGateTests(unittest.TestCase):
     def test_release_only_predecessor_and_candidate_wheels(self) -> None:
