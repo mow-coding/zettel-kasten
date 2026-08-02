@@ -169,7 +169,7 @@ class RuntimeGuidanceReadinessTests(unittest.TestCase):
         self.assertEqual(result["runtime_skill"]["status"], "managed_current")
         self.assertEqual(
             result["runtime_skill"]["installation"]["installed_version"],
-            "0.3.296",
+            "0.3.297",
         )
         self.assertEqual(
             result["runtime_skill"]["installation"][

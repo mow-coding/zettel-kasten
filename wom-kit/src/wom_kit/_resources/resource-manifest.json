@@ -1,8 +1,8 @@
 {
   "schema": "wom-kit/package-resource-manifest/v0.1",
-  "version": "0.3.296",
+  "version": "0.3.297",
   "source_of_truth": "wom-kit source resource directories",
-  "file_count": 110,
+  "file_count": 111,
   "files": [
     {
       "source": "schemas/activity-group-membership-receipt.schema.json",
@@ -165,6 +165,12 @@
       "packaged": "schemas/ownership-transfer-receipt.schema.json",
       "bytes": 2058,
       "sha256": "d099584291588b8231ad22f59650d17ec26d071804c238f0e029db1f81d4c0b3"
+    },
+    {
+      "source": "schemas/private-objet-generated-schema-manifest-v0.1.json",
+      "packaged": "schemas/private-objet-generated-schema-manifest-v0.1.json",
+      "bytes": 28859,
+      "sha256": "a521cf945384ea8cb653fb39fdfec38821e6e0c549f4a2d57af4acb1dc89ef0a"
     },
     {
       "source": "schemas/private-objet-source-metadata-authority-chain-v0.1.schema.json",
@@ -659,10 +665,10 @@
       "sha256": "d619dc26af3216498c8392dfe838b0fe752d4bad9da998a58ca682d668fc510c"
     },
     {
-      "source": "docs/releases/v0.3.296.md",
-      "packaged": "release-notes/v0.3.296.md",
-      "bytes": 7449,
-      "sha256": "5c7fc5e710b6b9fc0b239ec79fdc10afe195be0512ea76bca1a0b461021b0e8d"
+      "source": "docs/releases/v0.3.297.md",
+      "packaged": "release-notes/v0.3.297.md",
+      "bytes": 6156,
+      "sha256": "76099307fbba2800ef6e4102c46fa5df433cf4120a187c227081801cbb12688f"
     }
   ]
 }

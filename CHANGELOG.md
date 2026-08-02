@@ -6,6 +6,42 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.297 - 2026-08-02
+
+- Added a receipt-bound disposable private objet projection to the existing
+  archive SQLite index. Its exact four-table schema stores approved source
+  observations, deterministic private-name aliases, two audience-safe label
+  projections per objet, and one fingerprint-bearing singleton.
+- Rebuilds inherited public and new private rows in one transaction and one
+  final commit. Windows retains the mutation guard and object-then-private
+  persistent-lock order; non-Windows uses exact authority snapshot A/B
+  comparison without a lock-file substitute.
+- Added exact schema, foreign-key, count, row-digest, authority-fingerprint,
+  receipt-chain, object-manifest, and zero-authority validation. Handled
+  pre-commit failure preserves the previous complete snapshot.
+- Exact schema validation also rejects every persisted view or trigger that
+  refers to a private table, including a trigger attached to a public table.
+  When a stored fingerprint matches live authority, health recompiles that
+  authority and exact-compares all generated rows and the singleton, so a
+  coupled row-plus-digest rewrite is invalid rather than current.
+- Added a closed 19-key `private_objet_metadata` envelope to existing
+  `index-health` results. Its strict eleven-state classifier distinguishes
+  unavailable, blocked, invalid, missing, stale, empty-current, and
+  nonempty-current private layers without exposing filenames, labels, paths,
+  identifiers, receipts, fingerprints, row digests, or exception text.
+- Added an opaque pinned `mode=ro` private-index session with `query_only=ON`
+  and DB/WAL/SHM identity checks. It does not use `immutable=1`, accept a raw
+  borrowed connection, or create a write-capable fallback. A database whose
+  header advertises WAL but lacks an already coherent WAL/SHM pair now returns
+  closed projection-unavailable evidence before opening SQLite or consuming
+  a private query, and creates no sidecar as part of that decision.
+- Added no CLI command, MCP tool, finder, search result, object-byte read,
+  provider call, credential lookup, external-store scan, database template,
+  or UI surface. Private lookup remains deferred to v0.3.298.
+- Limited public privacy evidence to the sealed v0.3.296 canary corpus and
+  runtime-synthetic gates. Runtime private artifacts remain intentionally
+  private, and pre-existing public privacy cleanup remains the v0.3.302 gate.
+
 ## v0.3.296 - 2026-08-01
 
 - Added five closed Draft 2020-12 contracts for reviewed private metadata

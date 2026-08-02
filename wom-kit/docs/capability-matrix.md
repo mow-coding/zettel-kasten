@@ -1,9 +1,10 @@
 ﻿# WOM-kit Capability Matrix
 
-Status: v0.3.296 approval-gated private objet metadata writer checkpoint
-Date: 2026-08-01
-Version: v0.3.296, release candidate
+Status: v0.3.297 receipt-bound private objet generated-index checkpoint
+Date: 2026-08-02
+Version: v0.3.297, release candidate
 
+Previous checkpoint: Status: v0.3.296 approval-gated private objet metadata writer checkpoint
 Previous checkpoint: Status: v0.3.295 private objet metadata and safe-label contract checkpoint
 Previous checkpoint: Status: v0.3.294 checked-layer objet rediscovery checkpoint
 Previous checkpoint: Status: v0.3.293 runtime-guidance readiness checkpoint
@@ -102,6 +103,28 @@ Previous checkpoint: Status: v0.3.199 object-storage WOM location reconcile chec
 Previous checkpoint: Status: v0.3.198 reconcile approval-result status checkpoint
 Previous checkpoint: Status: v0.3.197 reconcile dry-run next-action guidance checkpoint
 Previous checkpoint: Status: v0.3.196 doctor progress-log path-policy clarification checkpoint
+
+## v0.3.297 Private Objet Generated Index
+
+- The existing `archive index` operation projects the complete validated
+  private metadata authority into four disposable tables in the same SQLite
+  transaction and final commit as the inherited public index.
+- On Windows, rebuild uses the existing retained mutation guard and acquires
+  the object-manifest lock before the private-metadata lock. On non-Windows it
+  uses exact authority snapshot A/B comparison and creates no substitute lock.
+- `archive index-health <archive-root> --dry-run` keeps its inherited
+  top-level fields and adds one exact, content-free
+  `private_objet_metadata` envelope with closed states, bounded counts,
+  booleans, safe schema identifiers, and at most one closed diagnostic code.
+- Private inspection uses a pinned opaque SQLite `mode=ro` session with
+  `query_only=ON`; it exposes no raw connection and has no `immutable=1` or
+  write-capable fallback.
+- This checkpoint adds no CLI command, MCP tool, finder, private search
+  result, object-byte read, provider/credential/external-store call, template
+  database change, or UI. Finder consumption remains deferred to v0.3.298.
+- Health proves only the validated generated authority projection and its
+  freshness. It is not object-byte, storage-integrity, provider, source
+  coverage, remote-backup, external-store, or global privacy-clean evidence.
 
 ## v0.3.293 Runtime Guidance Readiness
 

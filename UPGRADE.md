@@ -24,6 +24,46 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.297 Receipt-Bound Private Objet Generated Index
+
+v0.3.297 is compatible with existing v0.3.296 archives and requires no
+archive migration. Run the ordinary rebuild to create or refresh the new
+disposable private projection:
+
+```powershell
+archive index <archive-root> --format json
+archive index-health <archive-root> --dry-run --format json
+```
+
+The rebuild validates the complete v0.3.296 private manifest and immutable
+receipts, generates deterministic aliases and audience-safe labels, and writes
+the inherited public and new four-table private layers in one SQLite
+transaction. On Windows, keep every other WOM and non-WOM archive writer
+stopped for the complete operation; the rebuild uses the retained mutation
+guard and object-then-private persistent-lock order. Non-Windows uses exact
+authority snapshot A/B comparison without a substitute lock.
+
+Do not interpret a failed command after the commit boundary as proof that the
+database is stale. Output or progress transport failure returns exit code `1`
+but does not undo a successful commit. Run fresh `index-health` and trust its
+current on-disk evidence.
+
+Private health never creates WAL/SHM files to make a clean WAL database
+readable. If the database header advertises WAL but an already coherent
+WAL/SHM pair is absent, the private envelope reports
+`private_objet_metadata_projection_unavailable` before private query
+consumption. Re-run after a coherent pair already exists; do not treat that
+closed availability result as proof that the committed index was rolled back.
+
+This release adds no private finder or search result. The generated database
+is private and disposable; the manifest and receipts remain authoritative.
+Health does not prove objet-byte availability, storage integrity, provider
+state, source coverage, external-store completeness, remote backup, or global
+privacy cleanliness.
+
+See
+[`wom-kit/docs/releases/v0.3.297.md`](wom-kit/docs/releases/v0.3.297.md).
+
 ## v0.3.296 Reviewed Private Objet Metadata Registration
 
 v0.3.296 is compatible with existing v0.3.295 archives and requires no archive

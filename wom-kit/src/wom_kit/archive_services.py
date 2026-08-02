@@ -56,6 +56,15 @@ from .version_policy import (
     normalize_version_label,
     stable_version_value,
 )
+from .private_objet_metadata_index_rebuild import (
+    PrivateObjetIndexRebuildError,
+    private_objet_index_rebuild_session,
+)
+from .private_objet_metadata_index_health import (
+    compose_private_objet_metadata_index_health,
+    evaluate_private_objet_metadata_index_health,
+    unavailable_private_objet_metadata_index_health,
+)
 
 try:
     import yaml
@@ -105906,6 +105915,7 @@ def index_archive(
     progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
 ) -> dict[str, Any]:
     root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
     db_path = archive_internal_path(root, INDEX_RELATIVE_PATH)
     db_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -105917,10 +105927,20 @@ def index_archive(
     edge_count = 0
     facet_count = 0
     quarantined_zettels: list[dict[str, str]] = []
-    if progress_callback is not None:
-        progress_callback("index-lock-and-schema", "start", None, None)
-    conn = connect_archive_index(db_path, write=True)
+    rebuild_session = private_objet_index_rebuild_session(
+        root,
+        archive_id,
+        db_path,
+        busy_timeout_ms=ARCHIVE_INDEX_BUSY_TIMEOUT_MS,
+    )
     try:
+        rebuild_session.__enter__()
+    except PrivateObjetIndexRebuildError as exc:
+        raise ArchiveServiceError(exc.code) from None
+    conn = rebuild_session.connection
+    try:
+        if progress_callback is not None:
+            progress_callback("index-lock-and-schema", "start", None, None)
         conn.executescript(
             """
             BEGIN IMMEDIATE;
@@ -106331,16 +106351,32 @@ def index_archive(
             index_complete=not bool(quarantined_zettels),
             quarantined_zettel_count=len(quarantined_zettels),
         )
-        conn.commit()
-        if progress_callback is not None:
-            try:
-                progress_callback("index-commit", "done", None, None)
-            except Exception:
-                # The database is already committed.  A progress transport
-                # failure must not relabel the completed rebuild as failed.
-                pass
-    finally:
-        conn.close()
+        rebuild_session.install_private_rows_after_public()
+        rebuild_session.validate_and_commit()
+    except BaseException as exc:
+        try:
+            rebuild_session.__exit__(type(exc), exc, exc.__traceback__)
+        except PrivateObjetIndexRebuildError as rebuild_exc:
+            raise ArchiveServiceError(rebuild_exc.code) from None
+        raise
+    else:
+        try:
+            rebuild_session.__exit__(None, None, None)
+        except PrivateObjetIndexRebuildError as exc:
+            raise ArchiveServiceError(exc.code) from None
+
+    if progress_callback is not None:
+        try:
+            progress_callback("index-commit", "done", None, None)
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except Exception:
+            # The public/private transaction is already committed and every
+            # database/coordination handle has been released.  Report a
+            # sanitized delivery failure without relabeling on-disk truth.
+            raise ArchiveServiceError(
+                "archive_index_post_commit_progress_failed"
+            ) from None
 
     index_complete = not quarantined_zettels
     return {
@@ -107381,7 +107417,6 @@ def _index_health_impl(
     indexed_entries: list[dict[str, Any]] = []
     index_schema_incomplete = False
     index_schema_complete = False
-
     if db_path.is_file():
         owns_connection = connection is None
         if connection is not None:
@@ -107431,7 +107466,11 @@ def _index_health_impl(
                 progress_callback(
                     "index-health-index-rows", "done", indexed_row_count, indexed_row_count
                 )
-        finally:
+        except BaseException:
+            if owns_connection:
+                conn.close()
+            raise
+        else:
             if owns_connection:
                 conn.close()
     elif progress_callback is not None:
@@ -107500,7 +107539,7 @@ def _index_health_impl(
     else:
         next_safe_actions.append("Generated index matches the live zettel path/id/status/kind snapshot checked here.")
 
-    return {
+    public_health = {
         "ok": not blockers and not stale_reasons,
         "dry_run": True,
         "lifecycle_action": "index_health",
@@ -107553,6 +107592,18 @@ def _index_health_impl(
         "blockers": unique_preserve_order(blockers),
         "warnings": unique_preserve_order(warnings),
     }
+    private_health = (
+        unavailable_private_objet_metadata_index_health()
+        if immutable_index_read
+        else evaluate_private_objet_metadata_index_health(
+            root,
+            archive_id,
+        )
+    )
+    return compose_private_objet_metadata_index_health(
+        public_health,
+        private_health,
+    )
 
 
 def get_related_zets(
@@ -107740,6 +107791,15 @@ OBJET_REDISCOVERY_INDEX_STALE_REASON_CODES = {
     "live_zettel_modified_after_index",
     "live_zettel_frontmatter_unreadable_or_invalid",
     "index_health_blocked",
+}
+OBJET_REDISCOVERY_PRIVATE_HEALTH_CODES = {
+    "private_objet_metadata_missing",
+    "private_objet_metadata_stale",
+    "private_objet_metadata_authority_invalid",
+    "private_objet_metadata_authority_blocked",
+    "private_objet_metadata_snapshot_changed",
+    "private_objet_metadata_projection_unavailable",
+    "private_objet_metadata_projection_invalid",
 }
 OBJET_REDISCOVERY_INSPECTION_ERRORS: tuple[type[BaseException], ...] = (
     ArchiveServiceError,
@@ -108097,14 +108157,48 @@ def objet_rediscovery_plan(
             query_present=True,
         )
 
-    raw_index_state = health.get("index_state")
-    if raw_index_state not in {"current", "stale_or_incomplete", "blocked"}:
+    raw_composed_index_state = health.get("index_state")
+    if raw_composed_index_state not in {
+        "current",
+        "stale_or_incomplete",
+        "blocked",
+    }:
         return blocked_objet_rediscovery_result(
             diagnostic_code="index_health_invalid",
             blocker="Objet rediscovery planning received invalid index-health evidence.",
             query_present=True,
         )
-    index_state = str(raw_index_state)
+    raw_health_blockers = health.get("blockers")
+    raw_stale_reasons = health.get("stale_reasons")
+    legacy_blockers = (
+        [
+            code
+            for code in raw_health_blockers
+            if isinstance(code, str)
+            and code not in OBJET_REDISCOVERY_PRIVATE_HEALTH_CODES
+        ]
+        if isinstance(raw_health_blockers, list)
+        else []
+    )
+    legacy_stale_reasons = (
+        [
+            code
+            for code in raw_stale_reasons
+            if isinstance(code, str)
+            and code not in OBJET_REDISCOVERY_PRIVATE_HEALTH_CODES
+        ]
+        if isinstance(raw_stale_reasons, list)
+        else []
+    )
+    index_state = (
+        "blocked"
+        if legacy_blockers
+        else (
+            "stale_or_incomplete"
+            if legacy_stale_reasons
+            else "current"
+        )
+    )
     if index_state == "blocked":
         return blocked_objet_rediscovery_result(
             diagnostic_code="archive_index_unavailable",
@@ -108275,7 +108369,6 @@ def objet_rediscovery_plan(
                 query_present=True,
             )
 
-    raw_stale_reasons = health.get("stale_reasons")
     stale_reason_codes = (
         [
             reason
@@ -108289,7 +108382,7 @@ def objet_rediscovery_plan(
     if index_state != "current" and not stale_reason_codes:
         stale_reason_codes = ["index_health_unavailable"]
     zettel_identity_metadata_current = (
-        index_state == "current" and health.get("ok") is True
+        index_state == "current"
     )
 
     layers: list[dict[str, Any]] = []

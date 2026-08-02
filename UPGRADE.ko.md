@@ -2,6 +2,45 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.3.297 영수증 결합 비공개 objet 생성 index
+
+v0.3.297은 기존 v0.3.296 아카이브와 호환되며 아카이브 마이그레이션이
+필요하지 않습니다. 새 폐기 가능 비공개 projection을 만들거나 갱신하려면
+기존 명령을 실행합니다.
+
+```powershell
+archive index <archive-root> --format json
+archive index-health <archive-root> --dry-run --format json
+```
+
+rebuild는 v0.3.296 비공개 manifest와 불변 영수증 전체를 검증하고,
+결정론적 alias와 audience-safe label을 생성한 다음 기존 public layer와
+새 네 table private layer를 하나의 SQLite transaction에 기록합니다.
+Windows에서는 전체 작업 동안 다른 모든 WOM·비WOM archive writer를
+멈춰야 하며, retained mutation guard와 object-then-private persistent lock
+순서를 사용합니다. 비Windows에서는 가짜 lock 없이 정확한 authority
+snapshot A/B 비교를 사용합니다.
+
+commit 이후 output 또는 progress 전달 실패는 exit code `1`을 반환하지만
+성공한 commit을 되돌리지 않습니다. fresh `archive index-health --dry-run`
+결과를 현재 on-disk 권위로 사용하십시오.
+
+private health는 clean WAL database를 읽기 위해 WAL/SHM 파일을 새로 만들지
+않습니다. database header가 WAL을 가리키지만 이미 일관된 WAL/SHM 쌍이
+없다면 private query를 시작하기 전에
+`private_objet_metadata_projection_unavailable`을 보고합니다. 이 닫힌
+가용성 결과만으로 성공한 index commit이 rollback됐다고 해석하지 마십시오.
+
+이번 release는 private finder나 search 결과를 추가하지 않습니다. 생성
+database는 비공개이며 폐기 가능하고, manifest와 영수증이 계속 durable
+authority입니다. health는 objet byte 가용성, storage integrity, provider
+상태, source coverage, external store 완전성, remote backup 또는 전역
+privacy-clean 상태를 증명하지 않습니다.
+
+자세한 내용은
+[`wom-kit/docs/releases/v0.3.297.md`](wom-kit/docs/releases/v0.3.297.md)를
+참고하십시오.
+
 ## v0.3.296 검토형 비공개 objet 메타데이터 등록
 
 v0.3.296은 기존 v0.3.295 아카이브와 호환되며 아카이브 마이그레이션이
