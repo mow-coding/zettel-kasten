@@ -55,3 +55,7 @@ search patch.
 - v0.3.295 supplies only schemas and pure in-memory reference behavior. The
   checked-layer private metadata state remains non-complete until the later
   writer, index, and finder releases exist.
+- v0.3.298 completes the planned bounded local finder slice with exact
+  generated-index equality and a scoped negative result. It does not complete
+  source-reference, external-store, storage-integrity, or global absence
+  coverage.

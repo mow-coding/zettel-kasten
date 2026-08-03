@@ -32,12 +32,12 @@ RESOURCE_MANIFEST_PATH = PACKAGED_RESOURCE_ROOT / "resource-manifest.json"
 PREDECESSOR_FIXTURE_PATH = (
     Path(__file__).resolve().parent
     / "fixtures"
-    / "v0.3.296-surface-baseline.json"
+    / "v0.3.297-surface-baseline.json"
 )
 
-PREDECESSOR_COMMIT = "b798854ca7898b786bee108e1584c7ef358dbb2d"
+PREDECESSOR_COMMIT = "96a37f10907951039130ea0b1cc574e2b3f80ffa"
 PREDECESSOR_WHEEL_SHA256 = (
-    "b1be273610ae2b76e9485963819b262642c525ec951fa92913d1a8bcf9d81e8c"
+    "28ac3f6f25a0c352becdb274f3214ed34b375123c13ec1e7a5c108b13c1e4653"
 )
 SEALED_CORPUS_SCHEMA = (
     "wom-kit/sealed-public-private-policy-canary-corpus/v0.1"
@@ -58,9 +58,9 @@ EMPTY_ALLOWLIST_SHA256 = (
     "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
 )
 
-CLI_COUNT = 503
+CLI_COUNT = 504
 CLI_CANONICAL_SHA256 = (
-    "88b1996bee09d35a422e53a6791e3b9b1c776a8892d0113f2172c926b3a9e77d"
+    "eb52f341acdf9ead65f07b2cc385079401bf75d1f1d0906d381f84936fe04354"
 )
 MCP_COUNT = 121
 MCP_CANONICAL_SHA256 = (
@@ -72,16 +72,17 @@ DB_SOURCE_CANONICAL_SHA256 = (
 )
 RESOURCE_ADDITIONS = frozenset(
     {
-        "release-notes/v0.3.297.md",
-        "schemas/private-objet-generated-schema-manifest-v0.1.json",
+        "release-notes/v0.3.298.md",
+        "schemas/private-objet-finder-request-v0.1.schema.json",
+        "schemas/private-objet-finder-result-v0.1.schema.json",
     }
 )
-RESOURCE_REMOVALS = frozenset({"release-notes/v0.3.296.md"})
+RESOURCE_REMOVALS = frozenset({"release-notes/v0.3.297.md"})
 
-PREDECESSOR_WHEEL_ENV = "WOM_V03297_PREDECESSOR_WHEEL"
-CANDIDATE_WHEEL_ENV = "WOM_V03297_CANDIDATE_WHEEL"
-PREDECESSOR_INSTALL_ENV = "WOM_V03297_PREDECESSOR_SITE_PACKAGES"
-CANDIDATE_INSTALL_ENV = "WOM_V03297_CANDIDATE_SITE_PACKAGES"
+PREDECESSOR_WHEEL_ENV = "WOM_V03298_PREDECESSOR_WHEEL"
+CANDIDATE_WHEEL_ENV = "WOM_V03298_CANDIDATE_WHEEL"
+PREDECESSOR_INSTALL_ENV = "WOM_V03298_PREDECESSOR_SITE_PACKAGES"
+CANDIDATE_INSTALL_ENV = "WOM_V03298_CANDIDATE_SITE_PACKAGES"
 
 ASCII_LOWER_TABLE = bytes.maketrans(
     bytes(range(256)),
@@ -455,7 +456,7 @@ def _candidate_entries() -> tuple[Mapping[bytes, bytes], str]:
 
 
 def _runtime_canaries() -> dict[str, str]:
-    prefix = "_".join(("WOMV03297", "PRIVATE")) + "_"
+    prefix = "_".join(("WOMV03298", "PRIVATE")) + "_"
     plain_suffixes = {
         "filename": "FILENAME_CANARY_N1.DAT",
         "label": "LABEL_CANARY_N1",
@@ -1145,7 +1146,7 @@ class PrivateObjetMetadataIndexPrivacyGateTests(unittest.TestCase):
             manifest["schema"],
             "wom-kit/package-resource-manifest/v0.1",
         )
-        self.assertEqual(manifest["version"], "0.3.297")
+        self.assertEqual(manifest["version"], "0.3.298")
         self.assertEqual(manifest["file_count"], len(manifest["files"]))
         current_paths = {row["packaged"] for row in manifest["files"]}
         self.assertEqual(
@@ -1226,7 +1227,7 @@ class PrivateObjetMetadataIndexPrivacyGateTests(unittest.TestCase):
 
     def test_09_public_release_copy_keeps_the_narrow_claim_boundary(self) -> None:
         release_note = (
-            KIT_ROOT / "docs" / "releases" / "v0.3.297.md"
+            KIT_ROOT / "docs" / "releases" / "v0.3.298.md"
         ).read_text(encoding="utf-8")
         changelog = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
         capability = (

@@ -1,0 +1,1332 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wom-kit/private-objet-finder-result/v0.1",
+  "title": "WOM-kit private objet finder result v0.1",
+  "oneOf": [
+    {
+      "allOf": [
+        {
+          "$ref": "#/$defs/baseResult"
+        },
+        {
+          "properties": {
+            "ok": {
+              "const": false
+            },
+            "status": {
+              "const": "blocked"
+            },
+            "distinct_object_count": {
+              "const": null
+            },
+            "count_exact": {
+              "const": false
+            },
+            "count_lower_bound": {
+              "const": null
+            },
+            "returned": {
+              "const": 0
+            },
+            "has_more": {
+              "const": false
+            },
+            "results": {
+              "maxItems": 0
+            },
+            "blockers": {
+              "minItems": 1,
+              "maxItems": 1
+            }
+          }
+        }
+      ]
+    },
+    {
+      "allOf": [
+        {
+          "$ref": "#/$defs/baseResult"
+        },
+        {
+          "properties": {
+            "ok": {
+              "const": false
+            },
+            "status": {
+              "const": "search_incomplete"
+            },
+            "distinct_object_count": {
+              "const": null
+            },
+            "count_exact": {
+              "const": false
+            },
+            "count_lower_bound": {
+              "const": null
+            },
+            "returned": {
+              "const": 0
+            },
+            "has_more": {
+              "const": false
+            },
+            "results": {
+              "maxItems": 0
+            },
+            "blockers": {
+              "maxItems": 0
+            }
+          }
+        }
+      ]
+    },
+    {
+      "allOf": [
+        {
+          "$ref": "#/$defs/baseResult"
+        },
+        {
+          "properties": {
+            "ok": {
+              "const": true
+            },
+            "status": {
+              "const": "not_found_in_index"
+            },
+            "distinct_object_count": {
+              "const": 0
+            },
+            "count_exact": {
+              "const": true
+            },
+            "count_lower_bound": {
+              "const": 0
+            },
+            "returned": {
+              "const": 0
+            },
+            "has_more": {
+              "const": false
+            },
+            "results": {
+              "maxItems": 0
+            },
+            "blockers": {
+              "maxItems": 0
+            }
+          }
+        }
+      ]
+    },
+    {
+      "allOf": [
+        {
+          "$ref": "#/$defs/baseResult"
+        },
+        {
+          "properties": {
+            "ok": {
+              "const": true
+            },
+            "status": {
+              "const": "found"
+            },
+            "distinct_object_count": {
+              "const": 1
+            },
+            "count_exact": {
+              "const": true
+            },
+            "count_lower_bound": {
+              "const": 1
+            },
+            "returned": {
+              "const": 1
+            },
+            "has_more": {
+              "const": false
+            },
+            "results": {
+              "minItems": 1,
+              "maxItems": 1
+            },
+            "blockers": {
+              "maxItems": 0
+            }
+          }
+        }
+      ]
+    },
+    {
+      "allOf": [
+        {
+          "$ref": "#/$defs/baseResult"
+        },
+        {
+          "properties": {
+            "ok": {
+              "const": true
+            },
+            "status": {
+              "const": "ambiguous"
+            },
+            "distinct_object_count": {
+              "oneOf": [
+                {
+                  "type": "integer",
+                  "minimum": 2,
+                  "maximum": 100000
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "count_lower_bound": {
+              "type": "integer",
+              "minimum": 2,
+              "maximum": 101
+            },
+            "returned": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            },
+            "results": {
+              "minItems": 1,
+              "maxItems": 100
+            },
+            "blockers": {
+              "maxItems": 0
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "$defs": {
+    "layer": {
+      "enum": [
+        "request",
+        "archive_boundary",
+        "private_authority",
+        "private_generated_index",
+        "private_alias_index",
+        "private_label_projection"
+      ]
+    },
+    "diagnosticCode": {
+      "enum": [
+        "find_objet_archive_root_missing",
+        "find_objet_archive_root_extra",
+        "find_objet_unexpected_positional",
+        "find_objet_unknown_option",
+        "find_objet_option_value_missing",
+        "find_objet_audience_missing",
+        "find_objet_audience_duplicate",
+        "find_objet_audience_unsupported",
+        "find_objet_query_profile_missing",
+        "find_objet_query_profile_duplicate",
+        "find_objet_query_profile_unsupported",
+        "find_objet_query_transport_missing",
+        "find_objet_query_transport_conflicting",
+        "find_objet_query_transport_duplicate",
+        "find_objet_limit_duplicate",
+        "find_objet_limit_invalid",
+        "find_objet_format_duplicate",
+        "find_objet_format_unsupported",
+        "find_objet_request_schema_unsupported",
+        "find_objet_request_type_invalid",
+        "find_objet_request_extra_property",
+        "find_objet_query_raw_scalar_limit_exceeded",
+        "find_objet_query_raw_utf8_limit_exceeded",
+        "find_objet_query_stdin_bom_forbidden",
+        "find_objet_query_stdin_second_line_forbidden",
+        "find_objet_query_stdin_read_failed",
+        "find_objet_query_unpaired_surrogate",
+        "find_objet_query_utf8_bom_forbidden",
+        "find_objet_query_malformed_percent_escape",
+        "find_objet_query_invalid_utf8",
+        "find_objet_query_residual_percent_triplet",
+        "find_objet_query_path_separator_forbidden",
+        "find_objet_query_nul_forbidden",
+        "find_objet_query_c0_control_forbidden",
+        "find_objet_query_c1_control_forbidden",
+        "find_objet_query_del_forbidden",
+        "find_objet_query_bidi_control_forbidden",
+        "find_objet_query_unicode_separator_forbidden",
+        "find_objet_query_empty_forbidden",
+        "find_objet_query_reserved_path_segment_forbidden",
+        "find_objet_query_logical_scalar_limit_exceeded",
+        "find_objet_query_logical_utf8_limit_exceeded",
+        "find_objet_query_derived_name_length_exceeded",
+        "find_objet_query_derived_invariant_invalid",
+        "find_objet_archive_boundary_unsafe",
+        "find_objet_result_serialization_failed",
+        "private_objet_metadata_missing",
+        "private_objet_metadata_stale",
+        "private_objet_metadata_authority_invalid",
+        "private_objet_metadata_authority_blocked",
+        "private_objet_metadata_snapshot_changed",
+        "private_objet_metadata_projection_unavailable",
+        "private_objet_metadata_projection_invalid",
+        "find_objet_private_index_database_absent",
+        "find_objet_exact_match_not_found",
+        "find_objet_exact_match_found",
+        "find_objet_exact_match_ambiguous",
+        "find_objet_result_truncated"
+      ]
+    },
+    "blockerCode": {
+      "enum": [
+        "find_objet_archive_root_missing",
+        "find_objet_archive_root_extra",
+        "find_objet_unexpected_positional",
+        "find_objet_unknown_option",
+        "find_objet_option_value_missing",
+        "find_objet_audience_missing",
+        "find_objet_audience_duplicate",
+        "find_objet_audience_unsupported",
+        "find_objet_query_profile_missing",
+        "find_objet_query_profile_duplicate",
+        "find_objet_query_profile_unsupported",
+        "find_objet_query_transport_missing",
+        "find_objet_query_transport_conflicting",
+        "find_objet_query_transport_duplicate",
+        "find_objet_limit_duplicate",
+        "find_objet_limit_invalid",
+        "find_objet_format_duplicate",
+        "find_objet_format_unsupported",
+        "find_objet_request_schema_unsupported",
+        "find_objet_request_type_invalid",
+        "find_objet_request_extra_property",
+        "find_objet_query_raw_scalar_limit_exceeded",
+        "find_objet_query_raw_utf8_limit_exceeded",
+        "find_objet_query_stdin_bom_forbidden",
+        "find_objet_query_stdin_second_line_forbidden",
+        "find_objet_query_stdin_read_failed",
+        "find_objet_query_unpaired_surrogate",
+        "find_objet_query_utf8_bom_forbidden",
+        "find_objet_query_malformed_percent_escape",
+        "find_objet_query_invalid_utf8",
+        "find_objet_query_residual_percent_triplet",
+        "find_objet_query_path_separator_forbidden",
+        "find_objet_query_nul_forbidden",
+        "find_objet_query_c0_control_forbidden",
+        "find_objet_query_c1_control_forbidden",
+        "find_objet_query_del_forbidden",
+        "find_objet_query_bidi_control_forbidden",
+        "find_objet_query_unicode_separator_forbidden",
+        "find_objet_query_empty_forbidden",
+        "find_objet_query_reserved_path_segment_forbidden",
+        "find_objet_query_logical_scalar_limit_exceeded",
+        "find_objet_query_logical_utf8_limit_exceeded",
+        "find_objet_query_derived_name_length_exceeded",
+        "find_objet_query_derived_invariant_invalid",
+        "find_objet_archive_boundary_unsafe",
+        "find_objet_result_serialization_failed",
+        "private_objet_metadata_authority_blocked",
+        "private_objet_metadata_authority_invalid",
+        "private_objet_metadata_projection_invalid"
+      ]
+    },
+    "warningCode": {
+      "enum": [
+        "find_objet_argv_query_exposure_possible",
+        "find_objet_private_projection_exposed",
+        "find_objet_ambiguous_no_winner",
+        "find_objet_negative_scope_limited"
+      ]
+    },
+    "privacy": {
+      "type": "object",
+      "required": [
+        "wom_request_value_reflected",
+        "wom_request_value_stored",
+        "stored_private_projection_exposed",
+        "source_identifier_exposed",
+        "local_path_exposed",
+        "provider_locator_exposed",
+        "secret_value_exposed",
+        "argv_query_exposure_possible"
+      ],
+      "properties": {
+        "wom_request_value_reflected": {
+          "const": false
+        },
+        "wom_request_value_stored": {
+          "const": false
+        },
+        "stored_private_projection_exposed": {
+          "type": "boolean"
+        },
+        "source_identifier_exposed": {
+          "const": false
+        },
+        "local_path_exposed": {
+          "const": false
+        },
+        "provider_locator_exposed": {
+          "const": false
+        },
+        "secret_value_exposed": {
+          "const": false
+        },
+        "argv_query_exposure_possible": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "evidence": {
+      "type": "object",
+      "required": [
+        "generated_schema_id",
+        "normalization_profile_id",
+        "projection_schema_id",
+        "observation_count",
+        "candidate_count"
+      ],
+      "properties": {
+        "generated_schema_id": {
+          "const": "wom-kit/private-objet-generated-index/v0.1"
+        },
+        "normalization_profile_id": {
+          "const": "wom-kit/filename-normalization/v0.1"
+        },
+        "projection_schema_id": {
+          "const": "wom-kit/objet-safe-label-projection/v0.1"
+        },
+        "observation_count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64
+        },
+        "candidate_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 256
+        }
+      },
+      "additionalProperties": false
+    },
+    "resultItem": {
+      "type": "object",
+      "required": [
+        "object_id",
+        "safe_label",
+        "matched_alias_kinds",
+        "matched_alias_count",
+        "evidence"
+      ],
+      "properties": {
+        "object_id": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "safe_label": {
+          "allOf": [
+            {
+              "$ref": "objet-safe-label-projection-v0.1.schema.json#/$defs/privateProjection"
+            },
+            {
+              "properties": {
+                "audience": {
+                  "const": "private_archive"
+                }
+              },
+              "required": [
+                "audience"
+              ]
+            }
+          ]
+        },
+        "matched_alias_kinds": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 5,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "filename_canonical_caseless",
+              "filename_separator_folded",
+              "stem_canonical_caseless",
+              "stem_separator_folded",
+              "extension_ascii_lower"
+            ]
+          }
+        },
+        "matched_alias_count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 320
+        },
+        "evidence": {
+          "$ref": "#/$defs/evidence"
+        }
+      },
+      "additionalProperties": false
+    },
+    "healthCountOrNull": {
+      "oneOf": [
+        {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 500000
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "privateHealth": {
+      "type": "object",
+      "required": [
+        "schema",
+        "authority_validity",
+        "projection_validity",
+        "freshness",
+        "index_state",
+        "empty_authority",
+        "private_layer_complete",
+        "fingerprint_matches",
+        "schema_matches",
+        "observation_rows_digest_matches",
+        "alias_rows_digest_matches",
+        "projection_rows_digest_matches",
+        "observation_count",
+        "alias_count",
+        "distinct_object_count",
+        "projection_count",
+        "blocked_alias_derivation_count",
+        "blocked_label_projection_count",
+        "diagnostic_codes"
+      ],
+      "properties": {
+        "schema": {
+          "const": "wom-kit/private-objet-index-health/v0.1"
+        },
+        "authority_validity": {
+          "enum": [
+            "unavailable",
+            "valid",
+            "blocked",
+            "invalid"
+          ]
+        },
+        "projection_validity": {
+          "enum": [
+            "unverifiable",
+            "missing",
+            "invalid",
+            "valid"
+          ]
+        },
+        "freshness": {
+          "enum": [
+            "unverifiable",
+            "missing",
+            "stale",
+            "current"
+          ]
+        },
+        "index_state": {
+          "enum": [
+            "blocked",
+            "missing",
+            "stale_or_incomplete",
+            "current"
+          ]
+        },
+        "empty_authority": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "private_layer_complete": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "fingerprint_matches": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "schema_matches": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "observation_rows_digest_matches": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "alias_rows_digest_matches": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "projection_rows_digest_matches": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "observation_count": {
+          "$ref": "#/$defs/healthCountOrNull"
+        },
+        "alias_count": {
+          "$ref": "#/$defs/healthCountOrNull"
+        },
+        "distinct_object_count": {
+          "$ref": "#/$defs/healthCountOrNull"
+        },
+        "projection_count": {
+          "$ref": "#/$defs/healthCountOrNull"
+        },
+        "blocked_alias_derivation_count": {
+          "$ref": "#/$defs/healthCountOrNull"
+        },
+        "blocked_label_projection_count": {
+          "$ref": "#/$defs/healthCountOrNull"
+        },
+        "diagnostic_codes": {
+          "type": "array",
+          "maxItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "private_objet_metadata_missing",
+              "private_objet_metadata_stale",
+              "private_objet_metadata_authority_invalid",
+              "private_objet_metadata_authority_blocked",
+              "private_objet_metadata_snapshot_changed",
+              "private_objet_metadata_projection_unavailable",
+              "private_objet_metadata_projection_invalid"
+            ]
+          }
+        }
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/healthC1"
+        },
+        {
+          "$ref": "#/$defs/healthC2OrC6"
+        },
+        {
+          "$ref": "#/$defs/healthC3"
+        },
+        {
+          "$ref": "#/$defs/healthC4"
+        },
+        {
+          "$ref": "#/$defs/healthC5"
+        },
+        {
+          "$ref": "#/$defs/healthC7"
+        },
+        {
+          "$ref": "#/$defs/healthC8"
+        },
+        {
+          "$ref": "#/$defs/healthC9"
+        },
+        {
+          "$ref": "#/$defs/healthC10"
+        },
+        {
+          "$ref": "#/$defs/healthC11"
+        }
+      ],
+      "additionalProperties": false
+    },
+    "healthNullCounts": {
+      "properties": {
+        "observation_count": {
+          "const": null
+        },
+        "alias_count": {
+          "const": null
+        },
+        "distinct_object_count": {
+          "const": null
+        },
+        "projection_count": {
+          "const": null
+        },
+        "blocked_alias_derivation_count": {
+          "const": null
+        },
+        "blocked_label_projection_count": {
+          "const": null
+        }
+      }
+    },
+    "healthNullBooleans": {
+      "properties": {
+        "empty_authority": {
+          "const": null
+        },
+        "private_layer_complete": {
+          "const": null
+        },
+        "fingerprint_matches": {
+          "const": null
+        },
+        "schema_matches": {
+          "const": null
+        },
+        "observation_rows_digest_matches": {
+          "const": null
+        },
+        "alias_rows_digest_matches": {
+          "const": null
+        },
+        "projection_rows_digest_matches": {
+          "const": null
+        }
+      }
+    },
+    "healthC1": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/healthNullCounts"
+        },
+        {
+          "$ref": "#/$defs/healthNullBooleans"
+        },
+        {
+          "properties": {
+            "authority_validity": {
+              "const": "unavailable"
+            },
+            "projection_validity": {
+              "const": "unverifiable"
+            },
+            "freshness": {
+              "const": "unverifiable"
+            },
+            "index_state": {
+              "const": "blocked"
+            },
+            "diagnostic_codes": {
+              "const": [
+                "private_objet_metadata_snapshot_changed"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "healthC2OrC6": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/healthNullCounts"
+        },
+        {
+          "$ref": "#/$defs/healthNullBooleans"
+        },
+        {
+          "properties": {
+            "authority_validity": {
+              "const": "valid"
+            },
+            "projection_validity": {
+              "const": "unverifiable"
+            },
+            "freshness": {
+              "const": "unverifiable"
+            },
+            "index_state": {
+              "const": "blocked"
+            },
+            "diagnostic_codes": {
+              "const": [
+                "private_objet_metadata_projection_unavailable"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "healthC3": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/healthNullCounts"
+        },
+        {
+          "$ref": "#/$defs/healthNullBooleans"
+        },
+        {
+          "properties": {
+            "authority_validity": {
+              "const": "blocked"
+            },
+            "projection_validity": {
+              "const": "unverifiable"
+            },
+            "freshness": {
+              "const": "unverifiable"
+            },
+            "index_state": {
+              "const": "blocked"
+            },
+            "diagnostic_codes": {
+              "const": [
+                "private_objet_metadata_authority_blocked"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "healthC4": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/healthNullCounts"
+        },
+        {
+          "$ref": "#/$defs/healthNullBooleans"
+        },
+        {
+          "properties": {
+            "authority_validity": {
+              "const": "invalid"
+            },
+            "projection_validity": {
+              "const": "unverifiable"
+            },
+            "freshness": {
+              "const": "unverifiable"
+            },
+            "index_state": {
+              "const": "blocked"
+            },
+            "diagnostic_codes": {
+              "const": [
+                "private_objet_metadata_authority_invalid"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "healthC5": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/healthNullCounts"
+        },
+        {
+          "$ref": "#/$defs/healthNullBooleans"
+        },
+        {
+          "properties": {
+            "authority_validity": {
+              "const": "valid"
+            },
+            "projection_validity": {
+              "const": "missing"
+            },
+            "freshness": {
+              "const": "missing"
+            },
+            "index_state": {
+              "const": "missing"
+            },
+            "diagnostic_codes": {
+              "const": []
+            }
+          }
+        }
+      ]
+    },
+    "healthC7": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/healthNullCounts"
+        },
+        {
+          "properties": {
+            "authority_validity": {
+              "const": "valid"
+            },
+            "projection_validity": {
+              "const": "invalid"
+            },
+            "freshness": {
+              "const": "unverifiable"
+            },
+            "index_state": {
+              "const": "blocked"
+            },
+            "empty_authority": {
+              "const": null
+            },
+            "private_layer_complete": {
+              "const": false
+            },
+            "fingerprint_matches": {
+              "const": null
+            },
+            "schema_matches": {
+              "const": null
+            },
+            "observation_rows_digest_matches": {
+              "const": null
+            },
+            "alias_rows_digest_matches": {
+              "const": null
+            },
+            "projection_rows_digest_matches": {
+              "const": null
+            },
+            "diagnostic_codes": {
+              "const": [
+                "private_objet_metadata_projection_invalid"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "healthC8": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/healthNullCounts"
+        },
+        {
+          "properties": {
+            "authority_validity": {
+              "const": "valid"
+            },
+            "projection_validity": {
+              "const": "missing"
+            },
+            "freshness": {
+              "const": "missing"
+            },
+            "index_state": {
+              "const": "missing"
+            },
+            "empty_authority": {
+              "const": null
+            },
+            "private_layer_complete": {
+              "const": false
+            },
+            "fingerprint_matches": {
+              "const": null
+            },
+            "schema_matches": {
+              "const": null
+            },
+            "observation_rows_digest_matches": {
+              "const": null
+            },
+            "alias_rows_digest_matches": {
+              "const": null
+            },
+            "projection_rows_digest_matches": {
+              "const": null
+            },
+            "diagnostic_codes": {
+              "const": [
+                "private_objet_metadata_missing"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "healthC9": {
+      "properties": {
+        "authority_validity": {
+          "const": "valid"
+        },
+        "projection_validity": {
+          "const": "valid"
+        },
+        "freshness": {
+          "const": "stale"
+        },
+        "index_state": {
+          "const": "stale_or_incomplete"
+        },
+        "empty_authority": {
+          "const": null
+        },
+        "private_layer_complete": {
+          "const": true
+        },
+        "fingerprint_matches": {
+          "const": false
+        },
+        "schema_matches": {
+          "const": true
+        },
+        "observation_rows_digest_matches": {
+          "const": true
+        },
+        "alias_rows_digest_matches": {
+          "const": true
+        },
+        "projection_rows_digest_matches": {
+          "const": true
+        },
+        "observation_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100000
+        },
+        "alias_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 500000
+        },
+        "distinct_object_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100000
+        },
+        "projection_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 200000
+        },
+        "blocked_alias_derivation_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100000
+        },
+        "blocked_label_projection_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 200000
+        },
+        "diagnostic_codes": {
+          "const": [
+            "private_objet_metadata_stale"
+          ]
+        }
+      }
+    },
+    "healthC10": {
+      "properties": {
+        "authority_validity": {
+          "const": "valid"
+        },
+        "projection_validity": {
+          "const": "valid"
+        },
+        "freshness": {
+          "const": "current"
+        },
+        "index_state": {
+          "const": "current"
+        },
+        "empty_authority": {
+          "const": true
+        },
+        "private_layer_complete": {
+          "const": true
+        },
+        "fingerprint_matches": {
+          "const": true
+        },
+        "schema_matches": {
+          "const": true
+        },
+        "observation_rows_digest_matches": {
+          "const": true
+        },
+        "alias_rows_digest_matches": {
+          "const": true
+        },
+        "projection_rows_digest_matches": {
+          "const": true
+        },
+        "observation_count": {
+          "const": 0
+        },
+        "alias_count": {
+          "const": 0
+        },
+        "distinct_object_count": {
+          "const": 0
+        },
+        "projection_count": {
+          "const": 0
+        },
+        "blocked_alias_derivation_count": {
+          "const": 0
+        },
+        "blocked_label_projection_count": {
+          "const": 0
+        },
+        "diagnostic_codes": {
+          "const": []
+        }
+      }
+    },
+    "healthC11": {
+      "properties": {
+        "authority_validity": {
+          "const": "valid"
+        },
+        "projection_validity": {
+          "const": "valid"
+        },
+        "freshness": {
+          "const": "current"
+        },
+        "index_state": {
+          "const": "current"
+        },
+        "empty_authority": {
+          "const": false
+        },
+        "private_layer_complete": {
+          "const": true
+        },
+        "fingerprint_matches": {
+          "const": true
+        },
+        "schema_matches": {
+          "const": true
+        },
+        "observation_rows_digest_matches": {
+          "const": true
+        },
+        "alias_rows_digest_matches": {
+          "const": true
+        },
+        "projection_rows_digest_matches": {
+          "const": true
+        },
+        "observation_count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100000
+        },
+        "alias_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 500000
+        },
+        "distinct_object_count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100000
+        },
+        "projection_count": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 200000
+        },
+        "blocked_alias_derivation_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100000
+        },
+        "blocked_label_projection_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 200000
+        },
+        "diagnostic_codes": {
+          "const": []
+        }
+      }
+    },
+    "baseResult": {
+      "type": "object",
+      "required": [
+        "schema",
+        "ok",
+        "status",
+        "audience",
+        "search_method",
+        "query_present",
+        "query_profile_validated",
+        "limit",
+        "checked_layers",
+        "incomplete_layers",
+        "private_health_case",
+        "private_health",
+        "distinct_object_count",
+        "count_exact",
+        "count_lower_bound",
+        "returned",
+        "has_more",
+        "results",
+        "diagnostic_codes",
+        "blockers",
+        "warnings",
+        "privacy"
+      ],
+      "properties": {
+        "schema": {
+          "const": "wom-kit/private-objet-finder-result/v0.1"
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "status": {
+          "enum": [
+            "blocked",
+            "search_incomplete",
+            "not_found_in_index",
+            "found",
+            "ambiguous"
+          ]
+        },
+        "audience": {
+          "const": "private_archive"
+        },
+        "search_method": {
+          "const": "exact_indexed_alias_key_v1"
+        },
+        "query_present": {
+          "type": "boolean"
+        },
+        "query_profile_validated": {
+          "type": "boolean"
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        },
+        "checked_layers": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 6,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/layer"
+          }
+        },
+        "incomplete_layers": {
+          "type": "array",
+          "maxItems": 2,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/layer"
+          }
+        },
+        "private_health_case": {
+          "oneOf": [
+            {
+              "enum": [
+                "C1",
+                "C2",
+                "C3",
+                "C4",
+                "C5",
+                "C6",
+                "C7",
+                "C8",
+                "C9",
+                "C10",
+                "C11"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "private_health": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/privateHealth"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "distinct_object_count": {
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "count_exact": {
+          "type": "boolean"
+        },
+        "count_lower_bound": {
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100001
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "returned": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "has_more": {
+          "type": "boolean"
+        },
+        "results": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "$ref": "#/$defs/resultItem"
+          }
+        },
+        "diagnostic_codes": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/diagnosticCode"
+          }
+        },
+        "blockers": {
+          "type": "array",
+          "maxItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/blockerCode"
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "maxItems": 4,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/warningCode"
+          }
+        },
+        "privacy": {
+          "$ref": "#/$defs/privacy"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

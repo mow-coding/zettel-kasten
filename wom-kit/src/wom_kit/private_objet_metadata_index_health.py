@@ -7,7 +7,7 @@ without accepting a borrowed SQLite connection or exposing private values.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
@@ -292,11 +292,15 @@ def _decision_from_session_error(
     )
 
 
-def evaluate_private_objet_metadata_index_health(
+def _evaluate_private_objet_metadata_index_with_consumer(
     root: Path | str,
     archive_id: str,
+    internal_consumer: Callable[
+        [PrivateObjetIndexReadAPI, Mapping[str, object]],
+        None,
+    ],
 ) -> PrivateObjetMetadataHealthDecision:
-    """Read and classify the private layer without exposing a DB connection."""
+    """Run the shared opaque health/consumer/final-check read lifecycle."""
 
     final_probe: _ProjectionProbe | None = None
     final_expected: PrivateObjetIndexProjection | None = None
@@ -348,7 +352,7 @@ def evaluate_private_objet_metadata_index_health(
     try:
         envelope = _with_private_objet_index_read_session(
             root,
-            lambda _api, _health: None,
+            internal_consumer,
             capture_authority=capture_authority,
             inspect_health=inspect_health,
             final_check=final_check,
@@ -365,6 +369,19 @@ def evaluate_private_objet_metadata_index_health(
                 "private_objet_metadata_projection_unavailable"
             )
         )
+
+
+def evaluate_private_objet_metadata_index_health(
+    root: Path | str,
+    archive_id: str,
+) -> PrivateObjetMetadataHealthDecision:
+    """Read and classify the private layer without exposing a DB connection."""
+
+    return _evaluate_private_objet_metadata_index_with_consumer(
+        root,
+        archive_id,
+        lambda _api, _health: None,
+    )
 
 
 def unavailable_private_objet_metadata_index_health(
