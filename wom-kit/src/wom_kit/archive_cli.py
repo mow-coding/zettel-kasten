@@ -107,6 +107,8 @@ Commands:
           Preview or approve-register an already-hashed external objet ledger without reading blob bytes.
   resolve-objet-ref
           Resolve one sha256 objet reference to safe local/external candidates.
+  find-objet
+          Search the private generated alias index without reflecting the query.
   presigned-url-plan
           Plan a future provider presigned URL request without creating URLs.
   object-storage-operation-request-plan
@@ -19556,6 +19558,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"archive {__version__}")
     subcommands = parser.add_subparsers(dest="command", required=True)
 
+    find_objet_parser = subcommands.add_parser(
+        "find-objet",
+        add_help=False,
+        help=(
+            "Search the private generated alias index without reflecting "
+            "the query."
+        ),
+    )
+    find_objet_parser.add_argument("finder_argv", nargs=argparse.REMAINDER)
+    find_objet_parser.set_defaults(func=command_find_objet)
+
     version = subcommands.add_parser("version", help="Print the running WOM-kit version and optional project pin status.")
     version.add_argument(
         "inspection_root",
@@ -27785,11 +27798,24 @@ def _harden_std_streams() -> None:
             continue
 
 
+def command_find_objet(args: argparse.Namespace) -> int:
+    """Fallback parser dispatch; ``main`` uses the private-safe raw route."""
+
+    from .private_objet_finder import command_find_objet_argv
+
+    return command_find_objet_argv(args.finder_argv)
+
+
 def main(argv: list[str] | None = None) -> int:
     _harden_std_streams()
+    raw_argv = sys.argv[1:] if argv is None else list(argv)
+    if raw_argv[:1] == ["find-objet"]:
+        from .private_objet_finder import command_find_objet_argv
+
+        return command_find_objet_argv(raw_argv[1:])
     parser = build_parser()
     try:
-        args = parser.parse_args(argv)
+        args = parser.parse_args(raw_argv)
     except SystemExit as exc:
         return int(exc.code or 0)
     return int(args.func(args))
