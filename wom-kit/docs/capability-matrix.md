@@ -1,9 +1,10 @@
 ﻿# WOM-kit Capability Matrix
 
-Status: v0.3.297 receipt-bound private objet generated-index checkpoint
-Date: 2026-08-02
-Version: v0.3.297, release candidate
+Status: v0.3.298 bounded private objet finder checkpoint
+Date: 2026-08-03
+Version: v0.3.298, release candidate
 
+Previous checkpoint: Status: v0.3.297 receipt-bound private objet generated-index checkpoint
 Previous checkpoint: Status: v0.3.296 approval-gated private objet metadata writer checkpoint
 Previous checkpoint: Status: v0.3.295 private objet metadata and safe-label contract checkpoint
 Previous checkpoint: Status: v0.3.294 checked-layer objet rediscovery checkpoint
@@ -103,6 +104,26 @@ Previous checkpoint: Status: v0.3.199 object-storage WOM location reconcile chec
 Previous checkpoint: Status: v0.3.198 reconcile approval-result status checkpoint
 Previous checkpoint: Status: v0.3.197 reconcile dry-run next-action guidance checkpoint
 Previous checkpoint: Status: v0.3.196 doctor progress-log path-policy clarification checkpoint
+
+## v0.3.298 Private Objet Finder
+
+- `archive find-objet` is a CLI-only, read-only lookup for the explicit
+  `private_archive` audience. It accepts one literal-Unicode or UTF-8
+  percent-encoded-component query through argv or bounded stdin.
+- Query values are ephemeral and never reflected, stored, logged, or placed
+  in parser diagnostics. The result reports only whether argv exposure was
+  possible.
+- The finder reuses the pinned normalizer, performs exact SQLite `BINARY`
+  alias equality, deduplicates by objet identity, and returns only stored,
+  exact-validated private safe-label projections.
+- Results use five closed states: `blocked`, `search_incomplete`,
+  `not_found_in_index`, `found`, and `ambiguous`. A complete scoped negative
+  applies only to the complete current private index and never proves global
+  absence.
+- Health, lookup, projection validation, and final identity checks share the
+  existing opaque read session and pinned transaction. There is no database
+  schema or MCP delta, object-byte read, provider/network/credential call,
+  external-store scan, writer, migration, or UI.
 
 ## v0.3.297 Private Objet Generated Index
 

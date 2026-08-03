@@ -6,6 +6,26 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.298 - 2026-08-03
+
+- Added CLI-only `archive find-objet` for exact, bounded private generated-index
+  lookup. Queries may use literal Unicode or UTF-8 percent-encoded-component
+  profiles and argv or bounded stdin transport.
+- Kept query values ephemeral and out of results, diagnostics, exceptions,
+  logs, and storage. Standard parser diagnostics are bypassed for this command,
+  and argv exposure is reported only as a Boolean warning.
+- Added exact SQLite `BINARY` alias equality, global distinct-objet semantics,
+  stored private safe-label projection verification, deterministic ordering,
+  honest counts, and no-winner ambiguity.
+- Added closed request/result schemas and the statuses `blocked`,
+  `search_incomplete`, `not_found_in_index`, `found`, and `ambiguous`, with
+  fixed JSON/text serialization fallbacks and status-aligned exit codes.
+- Reused the opaque read-only private-index session and one pinned transaction.
+  Added no database schema, migration, MCP, object-byte, provider, credential,
+  external-store, writer, or UI surface.
+- Limited negative evidence to the complete current private index and retained
+  the v0.3.302 public privacy-cleanup boundary.
+
 ## v0.3.297 - 2026-08-02
 
 - Added a receipt-bound disposable private objet projection to the existing

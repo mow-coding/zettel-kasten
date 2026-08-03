@@ -10,12 +10,12 @@ It is not a website, SaaS app, dashboard, or visual note-taking product. The int
 
 ## Install The Command-Line Tool
 
-The exact v0.3.297 GitHub Release, when present, uses the self-contained wheel
+The exact v0.3.298 GitHub Release, when present, uses the self-contained wheel
 below. Confirm that the release exists and lists the wheel before installing
 it. The versioned URL alone is not proof that the asset is available.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.297/wom_kit-0.3.297-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.298/wom_kit-0.3.298-py3-none-any.whl"
 archive --version
 ```
 
@@ -28,7 +28,7 @@ exact one-invocation project-scoped bridge argv only when
 project-local Git-metadata, raw worktree/index/flag, exact source/resource-byte,
 closed-import-tree, annotated-tag, tagged-version, and `origin/main` ancestry
 checks. The Python `-I -S` bootstrap is bound to the expected commit, tag,
-wrapper blob, and all 110 synchronized resources, executes the wrapper from
+wrapper blob, and all 113 synchronized resources, executes the wrapper from
 verified memory, and permits only the `version` command. `-S` blocks site,
 executable `.pth`, and `sitecustomize` processing; only after verification are
 stdlib-`sysconfig` `purelib`/`platlib` paths added. Project path aliases are
@@ -71,10 +71,11 @@ v0.3.297 projects receipt-bound, human-reviewed private objet metadata into
 four disposable private index tables in the same transaction as the public
 index. Content-free private-layer health reports validity and freshness
 without exposing private labels, paths, identifiers, receipts, or digests.
-The durable manifest and receipts remain authoritative; finder and private
-search surfaces remain unimplemented. See
-[`docs/private-objet-metadata-safe-label.md`](docs/private-objet-metadata-safe-label.md)
-and [`docs/releases/v0.3.297.md`](docs/releases/v0.3.297.md).
+v0.3.298 adds the CLI-only, read-only `archive find-objet` exact alias lookup
+without reflecting or storing its ephemeral private query. The durable
+manifest and receipts remain authoritative. See
+[`docs/private-objet-finder.md`](docs/private-objet-finder.md)
+and [`docs/releases/v0.3.298.md`](docs/releases/v0.3.298.md).
 
 v0.3.292 keeps those runtime safeguards and makes objet relationship counts
 honest across overview and catalog surfaces. See

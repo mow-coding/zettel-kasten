@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wom-kit/private-objet-finder-request/v0.1",
+  "title": "WOM-kit private objet finder request v0.1",
+  "type": "object",
+  "required": [
+    "schema",
+    "archive_root",
+    "audience",
+    "query_profile",
+    "query_transport",
+    "query",
+    "limit",
+    "format"
+  ],
+  "properties": {
+    "schema": {
+      "const": "wom-kit/private-objet-finder-request/v0.1"
+    },
+    "archive_root": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096
+    },
+    "audience": {
+      "const": "private_archive"
+    },
+    "query_profile": {
+      "enum": [
+        "literal_unicode",
+        "utf8_percent_encoded_component"
+      ]
+    },
+    "query_transport": {
+      "enum": [
+        "argv",
+        "stdin"
+      ]
+    },
+    "query": {
+      "type": "string",
+      "minLength": 0,
+      "maxLength": 6144,
+      "pattern": "^(?![\\s\\S]*[\\uD800-\\uDFFF])[\\s\\S]*$"
+    },
+    "limit": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100
+    },
+    "format": {
+      "enum": [
+        "json",
+        "text"
+      ]
+    }
+  },
+  "additionalProperties": false
+}
