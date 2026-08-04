@@ -6,6 +6,23 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.299 - 2026-08-04
+
+- Added CLI-only, read-only
+  `python -B -m wom_kit.archive_cli source-reference-coverage-audit` for valid
+  current canonical `source_refs` rows and exact Notion omission markers.
+- Separated safe traversal of that observed population from archive-wide
+  source completeness. The command permanently reports that no exhaustive
+  archive-wide population authority is available in this release.
+- Classified source-reference coverage independently from local recorded
+  storage evidence. Manifest identity is not byte proof, and a linked provider
+  receipt is evidence only for its recorded event.
+- Added stable bounded traversal, duplicate/conflict detection, closed
+  structural and semantic result validation, privacy-safe ordinal detail, and
+  exact aggregate/exit-code invariants.
+- Consumed no generated-index rows and added no object-byte read, file write,
+  network/provider/credential/external-store call, MCP surface, or UI.
+
 ## v0.3.298 - 2026-08-03
 
 - Added CLI-only `archive find-objet` for exact, bounded private generated-index

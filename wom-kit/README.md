@@ -10,12 +10,12 @@ It is not a website, SaaS app, dashboard, or visual note-taking product. The int
 
 ## Install The Command-Line Tool
 
-The exact v0.3.298 GitHub Release, when present, uses the self-contained wheel
+The exact v0.3.299 GitHub Release, when present, uses the self-contained wheel
 below. Confirm that the release exists and lists the wheel before installing
 it. The versioned URL alone is not proof that the asset is available.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.298/wom_kit-0.3.298-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.299/wom_kit-0.3.299-py3-none-any.whl"
 archive --version
 ```
 
@@ -76,6 +76,13 @@ without reflecting or storing its ephemeral private query. The durable
 manifest and receipts remain authoritative. See
 [`docs/private-objet-finder.md`](docs/private-objet-finder.md)
 and [`docs/releases/v0.3.298.md`](docs/releases/v0.3.298.md).
+
+v0.3.299 adds a CLI-only, read-only observed source-reference coverage and
+recorded storage-evidence audit. It keeps safe traversal of current canonical
+`source_refs` and exact Notion omission markers separate from both
+archive-wide source completeness and live byte/storage claims. See
+[`docs/source-reference-coverage-audit.md`](docs/source-reference-coverage-audit.md)
+and [`docs/releases/v0.3.299.md`](docs/releases/v0.3.299.md).
 
 v0.3.292 keeps those runtime safeguards and makes objet relationship counts
 honest across overview and catalog surfaces. See

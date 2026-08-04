@@ -98437,6 +98437,27 @@ def runtime_context_read_action_routes() -> list[dict[str, Any]]:
             "writes": False,
         },
         {
+            "action": "inspect_observed_source_coverage_and_recorded_storage_evidence",
+            "when": (
+                "the AI needs to distinguish current canonical source-reference "
+                "coverage from separately recorded local storage evidence"
+            ),
+            "command": (
+                "python -B -m wom_kit.archive_cli "
+                "source-reference-coverage-audit <archive-root> "
+                "--dry-run --format json"
+            ),
+            "authoritative_for": (
+                "safe traversal of observed canonical source_refs and exact "
+                "Notion omission markers, plus separate local recorded "
+                "storage evidence"
+            ),
+            "archive_wide_population_authority_available": False,
+            "live_storage_checked": False,
+            "generated_index_used": False,
+            "writes": False,
+        },
+        {
             "action": "inspect_version_truth",
             "when": "the AI needs the running version, project pin, source mirror, exact local tag, or latest fetched tag",
             "command": "archive version <project-or-archive-root> --format json",
@@ -98601,7 +98622,7 @@ def runtime_context_write_action_routes() -> list[dict[str, Any]]:
 
 def runtime_context_action_routing() -> dict[str, Any]:
     return {
-        "schema": "wom-kit/ai-command-path-routing/v0.8",
+        "schema": "wom-kit/ai-command-path-routing/v0.9",
         "official_wom_command_required_for_archive_actions": True,
         "location_policy_alone_is_sufficient": False,
         "raw_filesystem_search_is_authoritative": False,

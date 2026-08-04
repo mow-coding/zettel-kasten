@@ -1,0 +1,627 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wom.local/schemas/source-reference-coverage-audit-result-v0.1.schema.json",
+  "title": "WOM observed source-reference coverage and recorded storage-evidence audit",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "ok",
+    "dry_run",
+    "lifecycle_action",
+    "status",
+    "exit_code",
+    "execution_guard",
+    "assessment_scope",
+    "issues",
+    "authority_summary",
+    "index_observation",
+    "source_reference_coverage",
+    "recorded_storage_evidence",
+    "claim_separation",
+    "details_returned",
+    "details_truncated",
+    "details",
+    "resource_limits",
+    "privacy_guards"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "audit_complete"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "ok": {
+            "const": true
+          },
+          "exit_code": {
+            "const": 0
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "audit_incomplete"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "ok": {
+            "const": false
+          },
+          "exit_code": {
+            "const": 1
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "blocked"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "ok": {
+            "const": false
+          },
+          "exit_code": {
+            "const": 2
+          }
+        }
+      }
+    }
+  ],
+  "properties": {
+    "schema": {
+      "const": "wom-kit/source-reference-coverage-audit-result/v0.1"
+    },
+    "ok": {
+      "type": "boolean"
+    },
+    "dry_run": {
+      "const": true
+    },
+    "lifecycle_action": {
+      "const": "source_reference_coverage_audit"
+    },
+    "status": {
+      "enum": [
+        "audit_complete",
+        "audit_incomplete",
+        "blocked"
+      ]
+    },
+    "exit_code": {
+      "type": "integer",
+      "enum": [0, 1, 2]
+    },
+    "execution_guard": {
+      "$ref": "#/$defs/execution_guard"
+    },
+    "assessment_scope": {
+      "const": "observed_current_canonical_source_occurrences_and_local_recorded_storage_evidence"
+    },
+    "issues": {
+      "type": "array",
+      "maxItems": 14,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/issue"
+      }
+    },
+    "authority_summary": {
+      "$ref": "#/$defs/authority_summary"
+    },
+    "index_observation": {
+      "$ref": "#/$defs/index_observation"
+    },
+    "source_reference_coverage": {
+      "$ref": "#/$defs/coverage"
+    },
+    "recorded_storage_evidence": {
+      "$ref": "#/$defs/storage"
+    },
+    "claim_separation": {
+      "$ref": "#/$defs/claim_separation"
+    },
+    "details_returned": {
+      "$ref": "#/$defs/count"
+    },
+    "details_truncated": {
+      "type": "boolean"
+    },
+    "details": {
+      "type": "array",
+      "maxItems": 500,
+      "items": {
+        "$ref": "#/$defs/detail"
+      }
+    },
+    "resource_limits": {
+      "$ref": "#/$defs/resource_limits"
+    },
+    "privacy_guards": {
+      "$ref": "#/$defs/privacy_guards"
+    }
+  },
+  "$defs": {
+    "count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "execution_guard": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "interpreter_no_bytecode_mode",
+        "wom_command_body_writes_prohibited",
+        "self_reexec_used",
+        "environment_mutated"
+      ],
+      "properties": {
+        "interpreter_no_bytecode_mode": {
+          "type": "boolean"
+        },
+        "wom_command_body_writes_prohibited": {
+          "const": true
+        },
+        "self_reexec_used": {
+          "const": false
+        },
+        "environment_mutated": {
+          "const": false
+        }
+      }
+    },
+    "issue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "severity",
+        "code",
+        "count"
+      ],
+      "properties": {
+        "severity": {
+          "enum": [
+            "info",
+            "warning",
+            "error"
+          ]
+        },
+        "code": {
+          "enum": [
+            "interpreter_no_bytecode_mode_required",
+            "request_invalid",
+            "archive_boundary_unsafe",
+            "population_authority_unreadable",
+            "population_authority_invalid",
+            "population_authority_changed",
+            "population_identity_conflict",
+            "archive_wide_population_authority_unavailable",
+            "storage_manifest_unreadable",
+            "storage_manifest_invalid",
+            "storage_evidence_contradictory",
+            "storage_evidence_unreadable",
+            "result_semantic_validation_failed",
+            "result_serialization_blocked"
+          ]
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "authority_summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "population_authority_family_count",
+        "population_authority_files_scanned",
+        "population_traversal_complete",
+        "archive_wide_population_authority_available",
+        "storage_manifest_present",
+        "storage_manifest_records_scanned",
+        "storage_traversal_complete",
+        "before_after_identity_equal"
+      ],
+      "properties": {
+        "population_authority_family_count": {
+          "type": "integer",
+          "const": 2
+        },
+        "population_authority_files_scanned": {
+          "$ref": "#/$defs/count"
+        },
+        "population_traversal_complete": {
+          "type": "boolean"
+        },
+        "archive_wide_population_authority_available": {
+          "const": false
+        },
+        "storage_manifest_present": {
+          "type": "boolean"
+        },
+        "storage_manifest_records_scanned": {
+          "$ref": "#/$defs/count"
+        },
+        "storage_traversal_complete": {
+          "type": "boolean"
+        },
+        "before_after_identity_equal": {
+          "type": "boolean"
+        }
+      }
+    },
+    "index_observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "index_rows_consumed"
+      ],
+      "properties": {
+        "state": {
+          "const": "not_used"
+        },
+        "index_rows_consumed": {
+          "type": "integer",
+          "const": 0
+        }
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "population_complete",
+        "archive_wide_population_authority_available",
+        "state",
+        "population_count",
+        "applicable_count",
+        "recovered_count",
+        "candidate_only_count",
+        "unrecovered_count",
+        "retry_residue_count",
+        "not_applicable_count",
+        "blocked_or_unknown_count",
+        "archive_wide_coverage_claim_supported"
+      ],
+      "properties": {
+        "population_complete": {
+          "type": "boolean"
+        },
+        "archive_wide_population_authority_available": {
+          "const": false
+        },
+        "state": {
+          "enum": [
+            "complete",
+            "partial",
+            "none",
+            "not_applicable",
+            "indeterminate"
+          ]
+        },
+        "population_count": {
+          "$ref": "#/$defs/count"
+        },
+        "applicable_count": {
+          "$ref": "#/$defs/count"
+        },
+        "recovered_count": {
+          "$ref": "#/$defs/count"
+        },
+        "candidate_only_count": {
+          "$ref": "#/$defs/count"
+        },
+        "unrecovered_count": {
+          "$ref": "#/$defs/count"
+        },
+        "retry_residue_count": {
+          "$ref": "#/$defs/count"
+        },
+        "not_applicable_count": {
+          "$ref": "#/$defs/count"
+        },
+        "blocked_or_unknown_count": {
+          "$ref": "#/$defs/count"
+        },
+        "archive_wide_coverage_claim_supported": {
+          "const": false
+        }
+      }
+    },
+    "storage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "assessment_scope",
+        "assessment_complete",
+        "state",
+        "assessment_count",
+        "applicable_assessment_count",
+        "recorded_time_evidence_count",
+        "manifest_identity_only_count",
+        "contradictory_count",
+        "no_evidence_count",
+        "not_applicable_count",
+        "indeterminate_count",
+        "distinct_bound_object_count_known",
+        "distinct_bound_object_count",
+        "current_bytes_checked",
+        "live_local_availability_claim_supported",
+        "live_remote_availability_claim_supported",
+        "live_storage_integrity_claim_supported"
+      ],
+      "properties": {
+        "assessment_scope": {
+          "const": "local_recorded_evidence_only"
+        },
+        "assessment_complete": {
+          "type": "boolean"
+        },
+        "state": {
+          "enum": [
+            "recorded_time_full",
+            "recorded_time_partial",
+            "manifest_identity_only",
+            "mixed_nonrecorded_evidence",
+            "contradictory",
+            "no_evidence",
+            "not_applicable",
+            "indeterminate"
+          ]
+        },
+        "assessment_count": {
+          "$ref": "#/$defs/count"
+        },
+        "applicable_assessment_count": {
+          "$ref": "#/$defs/count"
+        },
+        "recorded_time_evidence_count": {
+          "$ref": "#/$defs/count"
+        },
+        "manifest_identity_only_count": {
+          "$ref": "#/$defs/count"
+        },
+        "contradictory_count": {
+          "$ref": "#/$defs/count"
+        },
+        "no_evidence_count": {
+          "$ref": "#/$defs/count"
+        },
+        "not_applicable_count": {
+          "$ref": "#/$defs/count"
+        },
+        "indeterminate_count": {
+          "$ref": "#/$defs/count"
+        },
+        "distinct_bound_object_count_known": {
+          "const": true
+        },
+        "distinct_bound_object_count": {
+          "$ref": "#/$defs/count"
+        },
+        "current_bytes_checked": {
+          "const": false
+        },
+        "live_local_availability_claim_supported": {
+          "const": false
+        },
+        "live_remote_availability_claim_supported": {
+          "const": false
+        },
+        "live_storage_integrity_claim_supported": {
+          "const": false
+        }
+      }
+    },
+    "claim_separation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_coverage_implies_storage_integrity",
+        "storage_integrity_implies_source_coverage",
+        "source_state_changes_storage_state",
+        "storage_state_changes_source_state"
+      ],
+      "properties": {
+        "source_coverage_implies_storage_integrity": {
+          "const": false
+        },
+        "storage_integrity_implies_source_coverage": {
+          "const": false
+        },
+        "source_state_changes_storage_state": {
+          "const": false
+        },
+        "storage_state_changes_source_state": {
+          "const": false
+        }
+      }
+    },
+    "detail": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reference_ordinal",
+        "authority_family",
+        "coverage_state",
+        "storage_evidence_state",
+        "reason_codes",
+        "evidence_kind_codes",
+        "applicable",
+        "durable_reference_present",
+        "exact_object_binding_present"
+      ],
+      "properties": {
+        "reference_ordinal": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "authority_family": {
+          "enum": [
+            "canonical_zettel_source_refs",
+            "canonical_notion_omission_markers"
+          ]
+        },
+        "coverage_state": {
+          "enum": [
+            "recovered_durable_reference",
+            "recoverable_candidate_only",
+            "unrecovered_reference",
+            "retry_residue",
+            "not_applicable",
+            "blocked_or_unknown"
+          ]
+        },
+        "storage_evidence_state": {
+          "enum": [
+            "recorded_time_evidence",
+            "manifest_identity_only",
+            "contradictory",
+            "no_evidence",
+            "not_applicable",
+            "indeterminate"
+          ]
+        },
+        "reason_codes": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 13,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "exact_durable_reference",
+              "explicit_unrecovered_marker",
+              "authority_unreadable",
+              "authority_changed",
+              "authority_invalid",
+              "duplicate_identity_conflict",
+              "exact_linked_provider_receipt",
+              "exact_manifest_identity",
+              "no_recorded_storage_evidence",
+              "storage_evidence_unreadable",
+              "storage_evidence_contradictory",
+              "object_binding_absent",
+              "reviewed_not_applicable"
+            ]
+          }
+        },
+        "evidence_kind_codes": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 6,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "population_authority",
+              "durable_source_reference",
+              "explicit_omission_marker",
+              "object_manifest",
+              "linked_provider_receipt",
+              "none"
+            ]
+          }
+        },
+        "applicable": {
+          "type": "boolean"
+        },
+        "durable_reference_present": {
+          "type": "boolean"
+        },
+        "exact_object_binding_present": {
+          "type": "boolean"
+        }
+      }
+    },
+    "resource_limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "max_items",
+        "zettel_file_bytes",
+        "object_manifest_bytes",
+        "object_manifest_records"
+      ],
+      "properties": {
+        "max_items": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500
+        },
+        "zettel_file_bytes": {
+          "type": "integer",
+          "const": 16777216
+        },
+        "object_manifest_bytes": {
+          "type": "integer",
+          "const": 536870912
+        },
+        "object_manifest_records": {
+          "type": "integer",
+          "const": 1000000
+        }
+      }
+    },
+    "privacy_guards": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_identifier_exposed",
+        "object_identifier_exposed",
+        "local_path_exposed",
+        "provider_locator_exposed",
+        "secret_value_exposed",
+        "object_bytes_read",
+        "provider_api_called",
+        "network_used",
+        "files_written"
+      ],
+      "properties": {
+        "source_identifier_exposed": {
+          "const": false
+        },
+        "object_identifier_exposed": {
+          "const": false
+        },
+        "local_path_exposed": {
+          "const": false
+        },
+        "provider_locator_exposed": {
+          "const": false
+        },
+        "secret_value_exposed": {
+          "const": false
+        },
+        "object_bytes_read": {
+          "const": false
+        },
+        "provider_api_called": {
+          "const": false
+        },
+        "network_used": {
+          "const": false
+        },
+        "files_written": {
+          "const": false
+        }
+      }
+    }
+  }
+}

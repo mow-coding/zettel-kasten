@@ -1,9 +1,10 @@
 ﻿# WOM-kit Capability Matrix
 
-Status: v0.3.298 bounded private objet finder checkpoint
-Date: 2026-08-03
-Version: v0.3.298, release candidate
+Status: v0.3.299 observed source-reference and storage-evidence diagnostics checkpoint
+Date: 2026-08-04
+Version: v0.3.299, release candidate
 
+Previous checkpoint: Status: v0.3.298 bounded private objet finder checkpoint
 Previous checkpoint: Status: v0.3.297 receipt-bound private objet generated-index checkpoint
 Previous checkpoint: Status: v0.3.296 approval-gated private objet metadata writer checkpoint
 Previous checkpoint: Status: v0.3.295 private objet metadata and safe-label contract checkpoint
@@ -104,6 +105,25 @@ Previous checkpoint: Status: v0.3.199 object-storage WOM location reconcile chec
 Previous checkpoint: Status: v0.3.198 reconcile approval-result status checkpoint
 Previous checkpoint: Status: v0.3.197 reconcile dry-run next-action guidance checkpoint
 Previous checkpoint: Status: v0.3.196 doctor progress-log path-policy clarification checkpoint
+
+## v0.3.299 Observed Source Coverage And Recorded Storage Evidence
+
+- `python -B -m wom_kit.archive_cli
+  source-reference-coverage-audit <archive-root> --dry-run --format json`
+  safely traverses valid current canonical `source_refs` and exact Notion
+  omission markers under `zettels/`.
+- The result reports observed-population traversal separately from the
+  unavailable archive-wide population authority. It never turns a complete
+  observed scan into an exhaustive source-coverage claim.
+- Source-reference coverage and local recorded storage evidence are
+  independent axes. Manifest identity is not byte proof; an exact linked
+  provider receipt is evidence at its recorded time only.
+- The command uses closed structural and semantic result validation,
+  deterministic bounded ordinals, stable before/after authority checks, and
+  explicit `0` complete / `1` incomplete / `2` blocked exit semantics.
+- It consumes zero generated-index rows, writes no file, opens no object
+  bytes, and calls no network, provider, credential store, external store,
+  MCP tool, or UI.
 
 ## v0.3.298 Private Objet Finder
 

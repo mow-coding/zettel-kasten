@@ -9,7 +9,7 @@ from wom_kit import __version__
 
 KIT_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = KIT_ROOT.parent
-EXPECTED_CURRENT_VERSION = "0.3.298"
+EXPECTED_CURRENT_VERSION = "0.3.299"
 EXPECTED_CURRENT_TAG = f"v{EXPECTED_CURRENT_VERSION}"
 CURRENT_VERSION = f"v{__version__}"
 CURRENT_RELEASE_NOTE = f"{EXPECTED_CURRENT_TAG}.md"
@@ -10771,7 +10771,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             guide_text,
         )
         self.assertIn(
-            "wom-kit/ai-command-path-routing/v0.8",
+            "wom-kit/ai-command-path-routing/v0.9",
             routing_text,
         )
         self.assertIn(

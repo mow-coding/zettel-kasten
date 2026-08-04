@@ -95,14 +95,14 @@ jobs:
       # The established suite remains unittest-based. Docker-backed cases stay
       # opt-in via AI_ARCHIVE_RUN_DOCKER_TESTS.
       - name: WOM-kit unittest suite
-        run: python -m unittest discover -s wom-kit/tests -v
+        run: python -B -m unittest discover -s wom-kit/tests -v
 
       # v0.3.296 adds two pytest-native modules whose fixtures,
       # parametrization, and monkeypatching are not collected by unittest.
       # Keep this list explicit so pytest does not duplicate the whole suite.
       - name: WOM-kit pytest-native Win32 and authority suite
         run: >-
-          python -m pytest -q
+          python -B -m pytest -q
           wom-kit/tests/test_v03296_private_metadata_win32.py
           wom-kit/tests/test_v03296_private_metadata_writer_authority.py
 
