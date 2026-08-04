@@ -50,8 +50,10 @@ AGENTS_ROUTING_BLOCK = "\n".join(
             "<archive-root> --dry-run --format json`, inspect `archive "
             "operator-feedback-ledger <archive-root> --dry-run --format json`, "
             "require human review, preview `archive operator-feedback-record "
-            "<archive-root> ... --dry-run --format json`, and only then use "
-            "the reviewed `--approve` replay."
+            "<archive-root> ... --intent create|update --dry-run --format "
+            "json`, and only then use the reviewed `--approve` replay; create "
+            "never overwrites, while update also requires the fresh "
+            "`--expected-record-sha256`."
         ),
         AGENTS_ROUTING_BLOCK_END,
     )

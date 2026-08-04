@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wom-kit/relation-judgment-receipt/v0.1",
+  "title": "WOM-kit relation judgment receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "archive_id", "candidate_id", "decision", "judgment_path", "judgment_sha256", "edge_id", "edge_receipt_path", "reviewed_by", "created_at"],
+  "properties": {
+    "schema": {"const": "wom-kit/relation-judgment-receipt/v0.1"},
+    "archive_id": {"type": "string", "minLength": 1},
+    "candidate_id": {"type": "string", "pattern": "^candidate:[0-9a-f]{64}$"},
+    "decision": {"enum": ["accept", "reject"]},
+    "judgment_path": {"type": "string", "minLength": 1},
+    "judgment_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "edge_id": {"type": ["string", "null"]},
+    "edge_receipt_path": {"type": ["string", "null"]},
+    "reviewed_by": {"type": "string", "minLength": 1},
+    "created_at": {"type": "string", "minLength": 1}
+  }
+}

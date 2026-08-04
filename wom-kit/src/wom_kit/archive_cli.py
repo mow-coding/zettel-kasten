@@ -111,6 +111,16 @@ Commands:
           Search the private generated alias index without reflecting the query.
   source-reference-coverage-audit
           Compare observed canonical source-reference coverage with separate recorded storage evidence.
+  external-locator-plan / external-locator-record / external-locator-revert
+          Review, record, recover, and exactly revert provider-neutral external locators.
+  objet-capture-batch
+          Preflight and execute one bounded reviewed multi-item Objet capture request.
+  markup-normalization-plan / markup-normalization / markup-normalization-recovery
+          Review, apply, recover, or exactly revert migration-markup normalization.
+  relation-candidate-plan / relation-candidate-decide
+          Discover local metadata candidates and durably record a human relation judgment.
+  project-bytecode-repair-plan / project-bytecode-repair
+          Remove only verified untracked derived bytecode from a project source mirror.
   presigned-url-plan
           Plan a future provider presigned URL request without creating URLs.
   object-storage-operation-request-plan
@@ -351,7 +361,13 @@ from datetime import date, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterable
 
-from . import __version__, archive_services, runtime_guidance, runtime_skill_install
+from . import (
+    __version__,
+    archive_services,
+    completion_workflows,
+    runtime_guidance,
+    runtime_skill_install,
+)
 from .paths import (
     ArchivePathError,
     archive_relative_path,
@@ -4473,6 +4489,8 @@ def command_operator_feedback_record(args: argparse.Namespace) -> int:
             feedback_id=args.feedback_id,
             feedback_ref=args.feedback_ref,
             status=args.status,
+            intent=args.intent,
+            expected_record_sha256=args.expected_record_sha256,
             title=args.title,
             related_release=args.related_release,
             resolved_in=args.resolved_in,
@@ -4920,6 +4938,7 @@ def command_migrate(args: argparse.Namespace) -> int:
             approve=bool(args.approve),
             revert=bool(args.revert),
             reviewed_by=reviewed_by,
+            selected_link_types=getattr(args, "link_type", None),
         )
     except archive_services.ArchiveServiceError as exc:
         print(str(exc), file=sys.stderr)
@@ -11755,6 +11774,120 @@ def command_notion_import_locator_evidence_plan(
     return 0 if result.get("ok", False) else 1
 
 
+def _print_external_locator_result(result: dict[str, Any], output_format: str) -> None:
+    if output_format == "json":
+        print_json(result)
+        return
+    summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+    print(f"External locator: {result.get('state') or '-'}")
+    print(f"- zettel: {summary.get('zettel_id') or '-'}")
+    print(f"- locator type: {summary.get('locator_type') or '-'}")
+    print(
+        "- locator count: "
+        f"{summary.get('current_locator_count', summary.get('locator_count', 0))}"
+    )
+    print(f"- record: {summary.get('record_path') or '-'}")
+    if summary.get("plan_sha256"):
+        print(f"- plan sha256: {summary['plan_sha256']}")
+    for blocker in result.get("blockers", []):
+        print(f"BLOCKED: {blocker}")
+    for warning in result.get("warnings", []):
+        print(f"WARNING: {warning}")
+
+
+def command_external_locator_plan(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print(
+            "external-locator-plan is read-only and requires --dry-run.",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        result = completion_workflows.external_locator_plan(
+            Path(args.archive_root),
+            zettel_id=args.zettel_id,
+            locator_type=args.locator_type,
+            locator_ref=args.locator_ref,
+        )
+    except Exception:
+        print("external-locator-plan failed safely.", file=sys.stderr)
+        return 1
+    _print_external_locator_result(result, args.format)
+    return 0 if result.get("ok") else 1
+
+
+def command_external_locator_record(args: argparse.Namespace) -> int:
+    if not args.approve:
+        print(
+            "external-locator-record requires --approve.",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        result = completion_workflows.external_locator_record(
+            Path(args.archive_root),
+            zettel_id=args.zettel_id,
+            locator_type=args.locator_type,
+            locator_ref=args.locator_ref,
+            expected_plan_sha256=args.expected_plan_sha256,
+            reviewed_by=args.reviewed_by,
+        )
+    except Exception:
+        print("external-locator-record failed safely.", file=sys.stderr)
+        return 1
+    _print_external_locator_result(result, args.format)
+    return 0 if result.get("ok") else 1
+
+
+def command_external_locator_recovery_plan(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print(
+            "external-locator-recovery-plan is read-only and requires --dry-run.",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        result = completion_workflows.external_locator_recovery_plan(
+            Path(args.archive_root),
+            zettel_id=args.zettel_id,
+        )
+    except Exception:
+        print(
+            "external-locator-recovery-plan failed safely.",
+            file=sys.stderr,
+        )
+        return 1
+    _print_external_locator_result(result, args.format)
+    return 0 if result.get("ok") else 1
+
+
+def command_external_locator_revert(args: argparse.Namespace) -> int:
+    if args.dry_run == args.approve:
+        print(
+            "external-locator-revert requires exactly one of --dry-run or --approve.",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        if args.dry_run:
+            result = completion_workflows.external_locator_revert_plan(
+                Path(args.archive_root),
+                receipt=args.receipt,
+            )
+        else:
+            result = completion_workflows.external_locator_revert(
+                Path(args.archive_root),
+                receipt=args.receipt,
+                expected_plan_sha256=args.expected_plan_sha256,
+                reviewed_by=args.reviewed_by,
+            )
+    except Exception:
+        print("external-locator-revert failed safely.", file=sys.stderr)
+        return 1
+    _print_external_locator_result(result, args.format)
+    return 0 if result.get("ok") else 1
+
+
 def command_notion_objet_link_rewrite_plan(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print("notion-objet-link-rewrite-plan is read-only and requires --dry-run.", file=sys.stderr)
@@ -14881,6 +15014,432 @@ def command_staged_cleanup_check(args: argparse.Namespace) -> int:
         for blocker in result.get("blockers", []):
             print(f"BLOCKED: {blocker}")
     return 0 if result.get("ok") and result.get("safe_to_cleanup") else 1
+
+
+def command_objet_capture_batch(args: argparse.Namespace) -> int:
+    if args.dry_run == args.approve:
+        print(
+            "objet-capture-batch requires exactly one of --dry-run or --approve.",
+            file=sys.stderr,
+        )
+        return 1
+    if args.approve and (
+        not args.reviewed_by or not args.expected_plan_sha256
+    ):
+        print(
+            "objet-capture-batch approval requires --reviewed-by and --expected-plan-sha256.",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        if args.dry_run:
+            result = completion_workflows.objet_capture_batch_plan(
+                Path(args.archive_root),
+                manifest_path=args.manifest,
+            )
+        else:
+            result = completion_workflows.objet_capture_batch_apply(
+                Path(args.archive_root),
+                manifest_path=args.manifest,
+                expected_plan_sha256=args.expected_plan_sha256,
+                reviewed_by=args.reviewed_by,
+            )
+    except Exception:
+        print("objet-capture-batch failed safely.", file=sys.stderr)
+        return 1
+    if args.format == "json":
+        print_json(result)
+    else:
+        summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+        print(f"Objet capture batch: {result.get('state') or '-'}")
+        print(f"- batch: {summary.get('batch_id') or '-'}")
+        print(f"- items: {summary.get('item_count', 0)}")
+        print(f"- ready/blocked: {summary.get('ready_item_count', 0)}/{summary.get('blocked_item_count', 0)}")
+        print(f"- convergence: {summary.get('convergence_model') or '-'}")
+        if summary.get("plan_sha256"):
+            print(f"- plan sha256: {summary['plan_sha256']}")
+        for blocker in result.get("blockers", []):
+            print(f"BLOCKED: {blocker}")
+        for warning in result.get("warnings", []):
+            print(f"WARNING: {warning}")
+    return 0 if result.get("ok") else 1
+
+
+def _print_markup_result(result: dict[str, Any], output_format: str) -> None:
+    if output_format == "json":
+        print_json(result)
+        return
+    summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+    print(f"Markup workflow: {result.get('state') or '-'}")
+    print(f"- scanned: {summary.get('scanned_zettel_count', summary.get('item_count', 0))}")
+    print(f"- candidates: {summary.get('candidate_zettel_count', 0)}")
+    print(f"- ready changes: {summary.get('ready_change_count', summary.get('ready_revert_count', 0))}")
+    if summary.get("plan_sha256"):
+        print(f"- plan sha256: {summary['plan_sha256']}")
+    for blocker in result.get("blockers", []):
+        print(f"BLOCKED: {blocker}")
+    for warning in result.get("warnings", []):
+        print(f"WARNING: {warning}")
+
+
+def command_markup_style_guide(args: argparse.Namespace) -> int:
+    result = completion_workflows.markup_style_guide()
+    if args.format == "json":
+        print_json(result)
+    else:
+        print("WOM markup style guide:")
+        for rule in result["rules"]:
+            print(f"- {rule['markup']}: {rule['action']}")
+    return 0
+
+
+def command_markup_normalization_plan(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print(
+            "markup-normalization-plan is read-only and requires --dry-run.",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        result = completion_workflows.markup_normalization_plan(
+            Path(args.archive_root),
+            policy=args.policy,
+            max_items=args.max_items,
+            max_changes=args.max_changes,
+            binding_manifest=args.binding_manifest,
+        )
+    except Exception:
+        print("markup-normalization-plan failed safely.", file=sys.stderr)
+        return 1
+    _print_markup_result(result, args.format)
+    return 0 if result.get("ok") else 1
+
+
+def command_markup_normalization(args: argparse.Namespace) -> int:
+    if not args.approve:
+        print("markup-normalization requires --approve.", file=sys.stderr)
+        return 1
+    try:
+        result = completion_workflows.markup_normalization_apply(
+            Path(args.archive_root),
+            policy=args.policy,
+            max_items=args.max_items,
+            max_changes=args.max_changes,
+            binding_manifest=args.binding_manifest,
+            expected_plan_sha256=args.expected_plan_sha256,
+            reviewed_by=args.reviewed_by,
+        )
+    except Exception:
+        print("markup-normalization failed safely.", file=sys.stderr)
+        return 1
+    _print_markup_result(result, args.format)
+    return 0 if result.get("ok") else 1
+
+
+def command_markup_normalization_revert(args: argparse.Namespace) -> int:
+    if args.dry_run == args.approve:
+        print(
+            "markup-normalization-revert requires exactly one of --dry-run or --approve.",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        if args.dry_run:
+            result = completion_workflows.markup_normalization_revert_plan(
+                Path(args.archive_root),
+                receipt=args.receipt,
+            )
+        else:
+            result = completion_workflows.markup_normalization_revert(
+                Path(args.archive_root),
+                receipt=args.receipt,
+                expected_plan_sha256=args.expected_plan_sha256,
+                reviewed_by=args.reviewed_by,
+            )
+    except Exception:
+        print("markup-normalization-revert failed safely.", file=sys.stderr)
+        return 1
+    _print_markup_result(result, args.format)
+    return 0 if result.get("ok") else 1
+
+
+def command_markup_normalization_recovery(args: argparse.Namespace) -> int:
+    if args.dry_run == args.approve:
+        print(
+            "markup-normalization-recovery requires exactly one of --dry-run or --approve.",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        if args.dry_run:
+            result = (
+                completion_workflows.markup_normalization_recovery_plan(
+                    Path(args.archive_root),
+                    journal=args.journal,
+                    mode=args.mode,
+                )
+            )
+        else:
+            result = completion_workflows.markup_normalization_recover(
+                Path(args.archive_root),
+                journal=args.journal,
+                mode=args.mode,
+                expected_plan_sha256=args.expected_plan_sha256,
+                reviewed_by=args.reviewed_by,
+            )
+    except Exception:
+        print(
+            "markup-normalization-recovery failed safely.",
+            file=sys.stderr,
+        )
+        return 1
+    _print_markup_result(result, args.format)
+    return 0 if result.get("ok") else 1
+
+
+def command_relation_semantics_guide(args: argparse.Namespace) -> int:
+    result = completion_workflows.relation_semantics_guide()
+    if args.format == "json":
+        print_json(result)
+    else:
+        print("Relation semantics guide:")
+        for item in result["distinctions"]:
+            print(f"- {item['concept']}: {item['meaning']}")
+    return 0
+
+
+def command_principal_register_plan(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print(
+            "principal-register-plan is read-only and requires --dry-run.",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        result = completion_workflows.principal_registration_plan(
+            Path(args.archive_root),
+            principal_id=args.principal_id,
+            kind=args.kind,
+            display_name=args.display_name,
+        )
+    except Exception:
+        print("principal-register-plan failed safely.", file=sys.stderr)
+        return 1
+    print_json(result)
+    return 0 if result.get("ok") else 1
+
+
+def command_principal_register(args: argparse.Namespace) -> int:
+    if not args.approve:
+        print("principal-register requires --approve.", file=sys.stderr)
+        return 1
+    try:
+        result = completion_workflows.principal_register(
+            Path(args.archive_root),
+            principal_id=args.principal_id,
+            kind=args.kind,
+            display_name=args.display_name,
+            expected_plan_sha256=args.expected_plan_sha256,
+            reviewed_by=args.reviewed_by,
+        )
+    except Exception:
+        print("principal-register failed safely.", file=sys.stderr)
+        return 1
+    print_json(result)
+    return 0 if result.get("ok") else 1
+
+
+def command_principal_list(args: argparse.Namespace) -> int:
+    try:
+        result = completion_workflows.principal_list(
+            Path(args.archive_root),
+            include_display_names=args.include_display_names,
+        )
+    except Exception:
+        print("principal-list failed safely.", file=sys.stderr)
+        return 1
+    print_json(result)
+    return 0 if result.get("ok") else 1
+
+
+def command_principal_unregister_plan(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print(
+            "principal-unregister-plan is read-only and requires --dry-run.",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        result = completion_workflows.principal_unregistration_plan(
+            Path(args.archive_root),
+            principal_id=args.principal_id,
+        )
+    except Exception:
+        print("principal-unregister-plan failed safely.", file=sys.stderr)
+        return 1
+    print_json(result)
+    return 0 if result.get("ok") else 1
+
+
+def command_principal_unregister(args: argparse.Namespace) -> int:
+    if not args.approve:
+        print("principal-unregister requires --approve.", file=sys.stderr)
+        return 1
+    try:
+        result = completion_workflows.principal_unregister(
+            Path(args.archive_root),
+            principal_id=args.principal_id,
+            expected_plan_sha256=args.expected_plan_sha256,
+            reviewed_by=args.reviewed_by,
+        )
+    except Exception:
+        print("principal-unregister failed safely.", file=sys.stderr)
+        return 1
+    print_json(result)
+    return 0 if result.get("ok") else 1
+
+
+def command_relation_candidate_plan(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print(
+            "relation-candidate-plan is read-only and requires --dry-run.",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        result = completion_workflows.relation_candidate_plan(
+            Path(args.archive_root),
+            from_zettel=args.from_zettel,
+            max_candidates=args.max_candidates,
+            include_rejected=args.include_rejected,
+            suppress_zero_edge_advisory=args.suppress_zero_edge_advisory,
+        )
+    except Exception:
+        print("relation-candidate-plan failed safely.", file=sys.stderr)
+        return 1
+    if args.format == "json":
+        print_json(result)
+    else:
+        summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+        print(f"Relation candidates for {summary.get('source_zettel_id') or '-'}")
+        print(f"Plan SHA-256: {summary.get('plan_sha256') or '-'}")
+        for candidate in result.get("candidates", []):
+            target = candidate.get("target") if isinstance(candidate.get("target"), dict) else {}
+            print(
+                f"- {candidate.get('candidate_id')}: "
+                f"{target.get('title') or '[title withheld]'} "
+                f"({target.get('zettel_id') or '-'})"
+            )
+            print(
+                "  signals: "
+                + ", ".join(
+                    str(signal.get("kind"))
+                    for signal in candidate.get("signals", [])
+                    if isinstance(signal, dict)
+                )
+            )
+            print(
+                "  suggested types (human must choose): "
+                + ", ".join(candidate.get("suggested_edge_types", []))
+            )
+        if result.get("advisory"):
+            print(f"ADVISORY: {result['advisory']['message']}")
+        for blocker in result.get("blockers", []):
+            print(f"BLOCKED: {blocker}")
+    return 0 if result.get("ok") else 1
+
+
+def command_relation_candidate_decide(args: argparse.Namespace) -> int:
+    if not args.approve:
+        print("relation-candidate-decide requires --approve.", file=sys.stderr)
+        return 1
+    try:
+        result = completion_workflows.relation_candidate_decide(
+            Path(args.archive_root),
+            from_zettel=args.from_zettel,
+            candidate_id=args.candidate_id,
+            decision=args.decision,
+            edge_type=args.edge_type,
+            visibility=args.visibility,
+            reason=args.reason,
+            confidence=args.confidence,
+            expected_plan_sha256=args.expected_plan_sha256,
+            reviewed_by=args.reviewed_by,
+            max_candidates=args.max_candidates,
+            include_rejected=args.include_rejected,
+        )
+    except Exception:
+        print("relation-candidate-decide failed safely.", file=sys.stderr)
+        return 1
+    if args.format == "json":
+        print_json(result)
+    else:
+        print(f"Relation judgment: {result.get('state') or '-'}")
+        print(f"- candidate: {result.get('candidate_id') or '-'}")
+        print(f"- decision: {result.get('decision') or '-'}")
+        print(f"- judgment: {result.get('judgment_path') or '-'}")
+        edge = result.get("edge_result") if isinstance(result.get("edge_result"), dict) else {}
+        if edge:
+            print(f"- edge: {edge.get('edge_id') or '-'}")
+            print(f"- edge receipt: {edge.get('receipt_path') or '-'}")
+        for blocker in result.get("blockers", []):
+            print(f"BLOCKED: {blocker}")
+    return 0 if result.get("ok") else 1
+
+
+def command_project_bytecode_repair_plan(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print(
+            "project-bytecode-repair-plan is read-only and requires --dry-run.",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        result = completion_workflows.project_bytecode_repair_plan(
+            Path(args.project_root),
+            max_files=args.max_files,
+        )
+    except Exception:
+        print("project-bytecode-repair-plan failed safely.", file=sys.stderr)
+        return 1
+    if args.format == "json":
+        print_json(result)
+    else:
+        summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+        print(f"Project bytecode repair: {result.get('state') or '-'}")
+        print(f"- files: {summary.get('bytecode_file_count', 0)}")
+        print(f"- bytes: {summary.get('bytecode_total_bytes', 0)}")
+        print(f"- plan sha256: {summary.get('plan_sha256') or '-'}")
+        for blocker in result.get("blockers", []):
+            print(f"BLOCKED: {blocker}")
+    return 0 if result.get("ok") else 1
+
+
+def command_project_bytecode_repair(args: argparse.Namespace) -> int:
+    if not args.approve:
+        print("project-bytecode-repair requires --approve.", file=sys.stderr)
+        return 1
+    try:
+        result = completion_workflows.project_bytecode_repair(
+            Path(args.project_root),
+            max_files=args.max_files,
+            expected_plan_sha256=args.expected_plan_sha256,
+            reviewed_by=args.reviewed_by,
+        )
+    except Exception:
+        print("project-bytecode-repair failed safely.", file=sys.stderr)
+        return 1
+    if args.format == "json":
+        print_json(result)
+    else:
+        summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+        print(f"Project bytecode repair: {result.get('state') or '-'}")
+        print(f"- removed files: {summary.get('removed_count', 0)}")
+        print(f"- source files modified: {summary.get('source_files_modified')}")
+        print(f"- receipt: {summary.get('receipt_path') or '-'}")
+        for blocker in result.get("blockers", []):
+            print(f"BLOCKED: {blocker}")
+    return 0 if result.get("ok") else 1
 
 
 def command_objet_capture_selection(args: argparse.Namespace) -> int:
@@ -19784,6 +20343,16 @@ def build_parser() -> argparse.ArgumentParser:
     operator_feedback_record.add_argument("--feedback-id", required=True, help="Safe feedback id for ops/feedback/<id>.yml.")
     operator_feedback_record.add_argument("--feedback-ref", required=True, help="Safe non-secret feedback ref; no URLs, emails, tokens, or local paths.")
     operator_feedback_record.add_argument("--status", required=True, choices=archive_services.OPERATOR_FEEDBACK_STATUSES, help="Feedback lifecycle status.")
+    operator_feedback_record.add_argument(
+        "--intent",
+        choices=archive_services.OPERATOR_FEEDBACK_RECORD_INTENTS,
+        default="create",
+        help="Create a new id or update an existing record. Defaults to create.",
+    )
+    operator_feedback_record.add_argument(
+        "--expected-record-sha256",
+        help="Required for approved updates; copy current_record_sha256 from a fresh dry-run.",
+    )
     operator_feedback_record.add_argument("--title", help="Optional safe single-line label stored in the record but not echoed.")
     operator_feedback_record.add_argument("--related-release", action="append", help="Safe related release label. May be repeated.")
     operator_feedback_record.add_argument("--resolved-in", help="Safe release/decision label required when --status resolved.")
@@ -20040,6 +20609,14 @@ def build_parser() -> argparse.ArgumentParser:
     migrate.add_argument("--dry-run", action="store_true", help="Preview migration changes without writing files.")
     migrate.add_argument("--approve", action="store_true", help="Apply the reviewed migration changes.")
     migrate.add_argument("--revert", action="store_true", help="Preview or apply a safe migration rollback where the target supports it.")
+    migrate.add_argument(
+        "--link-type",
+        action="append",
+        help=(
+            "For base-link-types only, adopt or revert only this exact base "
+            "link type. May be repeated."
+        ),
+    )
     migrate.add_argument("--reviewed-by", help="Reviewer id required with --approve for the base-link-types target.")
     migrate.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     migrate.set_defaults(func=command_migrate)
@@ -23599,6 +24176,78 @@ def build_parser() -> argparse.ArgumentParser:
         func=command_notion_import_locator_evidence_plan
     )
 
+    external_locator_plan = subcommands.add_parser(
+        "external-locator-plan",
+        help="Plan one provider-neutral locator record without echoing the locator value.",
+    )
+    external_locator_plan.add_argument("archive_root", help="Archive root to inspect.")
+    external_locator_plan.add_argument("--zettel-id", required=True, help="Target zettel id.")
+    external_locator_plan.add_argument(
+        "--locator-type",
+        required=True,
+        choices=completion_workflows.EXTERNAL_LOCATOR_TYPES,
+        help="Typed provider-neutral locator kind.",
+    )
+    external_locator_plan.add_argument(
+        "--locator-ref",
+        required=True,
+        help="Private locator value. It is validated and stored only after approval, never echoed.",
+    )
+    external_locator_plan.add_argument("--dry-run", action="store_true", help="Required. Write nothing.")
+    external_locator_plan.add_argument("--format", choices=["text", "json"], default="text")
+    external_locator_plan.set_defaults(func=command_external_locator_plan)
+
+    external_locator_record = subcommands.add_parser(
+        "external-locator-record",
+        help="Approve one digest-bound provider-neutral locator record.",
+    )
+    external_locator_record.add_argument("archive_root", help="Archive root to update.")
+    external_locator_record.add_argument("--zettel-id", required=True, help="Target zettel id.")
+    external_locator_record.add_argument(
+        "--locator-type",
+        required=True,
+        choices=completion_workflows.EXTERNAL_LOCATOR_TYPES,
+    )
+    external_locator_record.add_argument(
+        "--locator-ref",
+        required=True,
+        help="Private locator value. Never echoed.",
+    )
+    external_locator_record.add_argument(
+        "--expected-plan-sha256",
+        required=True,
+        help="Exact plan SHA-256 from a fresh external-locator-plan.",
+    )
+    external_locator_record.add_argument("--approve", action="store_true", help="Required approval gate.")
+    external_locator_record.add_argument("--reviewed-by", required=True, help="Safe reviewer id.")
+    external_locator_record.add_argument("--format", choices=["text", "json"], default="text")
+    external_locator_record.set_defaults(func=command_external_locator_record)
+
+    external_locator_recovery_plan = subcommands.add_parser(
+        "external-locator-recovery-plan",
+        help="List typed local locator candidates without echoing locator values or claiming reachability.",
+    )
+    external_locator_recovery_plan.add_argument("archive_root", help="Archive root to inspect.")
+    external_locator_recovery_plan.add_argument("--zettel-id", required=True, help="Target zettel id.")
+    external_locator_recovery_plan.add_argument("--dry-run", action="store_true", help="Required. Write nothing.")
+    external_locator_recovery_plan.add_argument("--format", choices=["text", "json"], default="text")
+    external_locator_recovery_plan.set_defaults(
+        func=command_external_locator_recovery_plan
+    )
+
+    external_locator_revert = subcommands.add_parser(
+        "external-locator-revert",
+        help="Preview or approve exact restoration of a locator record from its receipt.",
+    )
+    external_locator_revert.add_argument("archive_root", help="Archive root to restore.")
+    external_locator_revert.add_argument("--receipt", required=True)
+    external_locator_revert.add_argument("--dry-run", action="store_true")
+    external_locator_revert.add_argument("--approve", action="store_true")
+    external_locator_revert.add_argument("--expected-plan-sha256")
+    external_locator_revert.add_argument("--reviewed-by")
+    external_locator_revert.add_argument("--format", choices=["text", "json"], default="text")
+    external_locator_revert.set_defaults(func=command_external_locator_revert)
+
     notion_objet_link_rewrite_plan = subcommands.add_parser(
         "notion-objet-link-rewrite-plan",
         help="Validate one reviewed Notion locator to objet conversion plan without writing.",
@@ -25106,6 +25755,278 @@ def build_parser() -> argparse.ArgumentParser:
     staged_cleanup.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     staged_cleanup.add_argument("--progress", action="store_true", help="Stream content-free stage progress to stderr.")
     staged_cleanup.set_defaults(func=command_staged_cleanup_check)
+
+    project_bytecode_repair_plan = subcommands.add_parser(
+        "project-bytecode-repair-plan",
+        help="Inventory only untracked Python bytecode under the project runtime source mirror.",
+    )
+    project_bytecode_repair_plan.add_argument("project_root", help="Project or mounted archive root.")
+    project_bytecode_repair_plan.add_argument("--max-files", type=int, default=completion_workflows.PROJECT_BYTECODE_REPAIR_MAX_FILES)
+    project_bytecode_repair_plan.add_argument("--dry-run", action="store_true", help="Required. Write nothing.")
+    project_bytecode_repair_plan.add_argument("--format", choices=["text", "json"], default="text")
+    project_bytecode_repair_plan.set_defaults(func=command_project_bytecode_repair_plan)
+
+    project_bytecode_repair = subcommands.add_parser(
+        "project-bytecode-repair",
+        help="Delete only freshly revalidated untracked runtime .pyc/.pyo files after approval.",
+    )
+    project_bytecode_repair.add_argument("project_root", help="Project or mounted archive root.")
+    project_bytecode_repair.add_argument("--max-files", type=int, default=completion_workflows.PROJECT_BYTECODE_REPAIR_MAX_FILES)
+    project_bytecode_repair.add_argument("--expected-plan-sha256", required=True)
+    project_bytecode_repair.add_argument("--approve", action="store_true")
+    project_bytecode_repair.add_argument("--reviewed-by", required=True)
+    project_bytecode_repair.add_argument("--format", choices=["text", "json"], default="text")
+    project_bytecode_repair.set_defaults(func=command_project_bytecode_repair)
+
+    relation_semantics_guide = subcommands.add_parser(
+        "relation-semantics-guide",
+        help="Explain continues, sequence, recurrence, Principal, and format-variant boundaries.",
+    )
+    relation_semantics_guide.add_argument("--format", choices=["text", "json"], default="text")
+    relation_semantics_guide.set_defaults(func=command_relation_semantics_guide)
+
+    principal_register_plan = subcommands.add_parser(
+        "principal-register-plan",
+        help=(
+            "Preview registration of one non-owner person, institution, "
+            "team, role, or other Principal."
+        ),
+    )
+    principal_register_plan.add_argument("archive_root")
+    principal_register_plan.add_argument("--principal-id", required=True)
+    principal_register_plan.add_argument(
+        "--kind",
+        choices=sorted(archive_services.PRINCIPAL_KINDS),
+        required=True,
+    )
+    principal_register_plan.add_argument("--display-name", required=True)
+    principal_register_plan.add_argument("--dry-run", action="store_true")
+    principal_register_plan.add_argument(
+        "--format",
+        choices=["json"],
+        default="json",
+    )
+    principal_register_plan.set_defaults(
+        func=command_principal_register_plan
+    )
+
+    principal_register = subcommands.add_parser(
+        "principal-register",
+        help=(
+            "Register one reviewed non-owner Principal in durable local "
+            "storage."
+        ),
+    )
+    principal_register.add_argument("archive_root")
+    principal_register.add_argument("--principal-id", required=True)
+    principal_register.add_argument(
+        "--kind",
+        choices=sorted(archive_services.PRINCIPAL_KINDS),
+        required=True,
+    )
+    principal_register.add_argument("--display-name", required=True)
+    principal_register.add_argument(
+        "--expected-plan-sha256",
+        required=True,
+    )
+    principal_register.add_argument("--approve", action="store_true")
+    principal_register.add_argument("--reviewed-by", required=True)
+    principal_register.add_argument(
+        "--format",
+        choices=["json"],
+        default="json",
+    )
+    principal_register.set_defaults(func=command_principal_register)
+
+    principal_list = subcommands.add_parser(
+        "principal-list",
+        help="List archive owner and registered third-party Principal ids.",
+    )
+    principal_list.add_argument("archive_root")
+    principal_list.add_argument(
+        "--include-display-names",
+        action="store_true",
+        help="Explicitly include local human-readable names.",
+    )
+    principal_list.add_argument(
+        "--format",
+        choices=["json"],
+        default="json",
+    )
+    principal_list.set_defaults(func=command_principal_list)
+
+    principal_unregister_plan = subcommands.add_parser(
+        "principal-unregister-plan",
+        help=(
+            "Preview removal of one unused registered third-party Principal."
+        ),
+    )
+    principal_unregister_plan.add_argument("archive_root")
+    principal_unregister_plan.add_argument(
+        "--principal-id",
+        required=True,
+    )
+    principal_unregister_plan.add_argument("--dry-run", action="store_true")
+    principal_unregister_plan.add_argument(
+        "--format",
+        choices=["json"],
+        default="json",
+    )
+    principal_unregister_plan.set_defaults(
+        func=command_principal_unregister_plan
+    )
+
+    principal_unregister = subcommands.add_parser(
+        "principal-unregister",
+        help=(
+            "Remove one unused registered third-party Principal after an "
+            "exact reviewed plan."
+        ),
+    )
+    principal_unregister.add_argument("archive_root")
+    principal_unregister.add_argument(
+        "--principal-id",
+        required=True,
+    )
+    principal_unregister.add_argument(
+        "--expected-plan-sha256",
+        required=True,
+    )
+    principal_unregister.add_argument("--approve", action="store_true")
+    principal_unregister.add_argument("--reviewed-by", required=True)
+    principal_unregister.add_argument(
+        "--format",
+        choices=["json"],
+        default="json",
+    )
+    principal_unregister.set_defaults(func=command_principal_unregister)
+
+    relation_candidate_plan = subcommands.add_parser(
+        "relation-candidate-plan",
+        help="Discover deterministic local candidate pairs without writing edges.",
+    )
+    relation_candidate_plan.add_argument("archive_root", help="Archive root to inspect.")
+    relation_candidate_plan.add_argument("--from-zettel", required=True, help="Source zettel id.")
+    relation_candidate_plan.add_argument("--max-candidates", type=int, default=50)
+    relation_candidate_plan.add_argument("--include-rejected", action="store_true")
+    relation_candidate_plan.add_argument("--suppress-zero-edge-advisory", action="store_true")
+    relation_candidate_plan.add_argument("--dry-run", action="store_true", help="Required. Write nothing.")
+    relation_candidate_plan.add_argument("--format", choices=["text", "json"], default="text")
+    relation_candidate_plan.set_defaults(func=command_relation_candidate_plan)
+
+    relation_candidate_decide = subcommands.add_parser(
+        "relation-candidate-decide",
+        help="Record one digest-bound human accept/reject judgment and write an accepted edge.",
+    )
+    relation_candidate_decide.add_argument("archive_root", help="Archive root to update.")
+    relation_candidate_decide.add_argument("--from-zettel", required=True)
+    relation_candidate_decide.add_argument("--candidate-id", required=True)
+    relation_candidate_decide.add_argument("--decision", choices=completion_workflows.RELATION_DECISIONS, required=True)
+    relation_candidate_decide.add_argument("--edge-type", help="Required only for accept; never inferred.")
+    relation_candidate_decide.add_argument("--visibility", default="private")
+    relation_candidate_decide.add_argument("--reason", required=True, help="Safe human review reason.")
+    relation_candidate_decide.add_argument("--confidence", choices=["low", "medium", "high"], required=True)
+    relation_candidate_decide.add_argument("--expected-plan-sha256", required=True)
+    relation_candidate_decide.add_argument("--max-candidates", type=int, default=50)
+    relation_candidate_decide.add_argument("--include-rejected", action="store_true")
+    relation_candidate_decide.add_argument("--approve", action="store_true")
+    relation_candidate_decide.add_argument("--reviewed-by", required=True)
+    relation_candidate_decide.add_argument("--format", choices=["text", "json"], default="text")
+    relation_candidate_decide.set_defaults(func=command_relation_candidate_decide)
+
+    markup_style_guide = subcommands.add_parser(
+        "markup-style-guide",
+        help="Show preserve/normalize and safe markup conversion rules.",
+    )
+    markup_style_guide.add_argument("--format", choices=["text", "json"], default="text")
+    markup_style_guide.set_defaults(func=command_markup_style_guide)
+
+    markup_normalization_plan = subcommands.add_parser(
+        "markup-normalization-plan",
+        help="Inventory migration markup and build a deterministic normalization plan.",
+    )
+    markup_normalization_plan.add_argument("archive_root", help="Archive root to inspect.")
+    markup_normalization_plan.add_argument(
+        "--policy",
+        choices=completion_workflows.MARKUP_NORMALIZATION_POLICIES,
+        default="normalize",
+        help="Preserve source markup or plan reviewed normalization.",
+    )
+    markup_normalization_plan.add_argument("--max-items", type=int, default=completion_workflows.MARKUP_NORMALIZATION_MAX_ITEMS)
+    markup_normalization_plan.add_argument("--max-changes", type=int, default=completion_workflows.MARKUP_NORMALIZATION_MAX_CHANGES)
+    markup_normalization_plan.add_argument(
+        "--binding-manifest",
+        help="Optional reviewed archive-local reference binding manifest.",
+    )
+    markup_normalization_plan.add_argument("--dry-run", action="store_true", help="Required. Write nothing.")
+    markup_normalization_plan.add_argument("--format", choices=["text", "json"], default="text")
+    markup_normalization_plan.set_defaults(func=command_markup_normalization_plan)
+
+    markup_normalization = subcommands.add_parser(
+        "markup-normalization",
+        help="Apply one reviewed normalization plan with snapshots, journal, and receipt.",
+    )
+    markup_normalization.add_argument("archive_root", help="Archive root to update.")
+    markup_normalization.add_argument("--policy", choices=["normalize"], default="normalize")
+    markup_normalization.add_argument("--max-items", type=int, default=completion_workflows.MARKUP_NORMALIZATION_MAX_ITEMS)
+    markup_normalization.add_argument("--max-changes", type=int, default=completion_workflows.MARKUP_NORMALIZATION_MAX_CHANGES)
+    markup_normalization.add_argument(
+        "--binding-manifest",
+        help="Reviewed archive-local reference binding manifest used by the plan.",
+    )
+    markup_normalization.add_argument("--expected-plan-sha256", required=True)
+    markup_normalization.add_argument("--approve", action="store_true")
+    markup_normalization.add_argument("--reviewed-by", required=True)
+    markup_normalization.add_argument("--format", choices=["text", "json"], default="text")
+    markup_normalization.set_defaults(func=command_markup_normalization)
+
+    markup_normalization_revert = subcommands.add_parser(
+        "markup-normalization-revert",
+        help="Preview or approve exact-byte restoration from a normalization receipt.",
+    )
+    markup_normalization_revert.add_argument("archive_root", help="Archive root to restore.")
+    markup_normalization_revert.add_argument("--receipt", required=True)
+    markup_normalization_revert.add_argument("--dry-run", action="store_true")
+    markup_normalization_revert.add_argument("--approve", action="store_true")
+    markup_normalization_revert.add_argument("--expected-plan-sha256")
+    markup_normalization_revert.add_argument("--reviewed-by")
+    markup_normalization_revert.add_argument("--format", choices=["text", "json"], default="text")
+    markup_normalization_revert.set_defaults(func=command_markup_normalization_revert)
+
+    markup_normalization_recovery = subcommands.add_parser(
+        "markup-normalization-recovery",
+        help="Preview or approve exact-byte resume/rollback for an interrupted normalization journal.",
+    )
+    markup_normalization_recovery.add_argument("archive_root", help="Archive root to recover.")
+    markup_normalization_recovery.add_argument("--journal", required=True)
+    markup_normalization_recovery.add_argument(
+        "--mode",
+        choices=completion_workflows.MARKUP_NORMALIZATION_RECOVERY_MODES,
+        required=True,
+    )
+    markup_normalization_recovery.add_argument("--dry-run", action="store_true")
+    markup_normalization_recovery.add_argument("--approve", action="store_true")
+    markup_normalization_recovery.add_argument("--expected-plan-sha256")
+    markup_normalization_recovery.add_argument("--reviewed-by")
+    markup_normalization_recovery.add_argument("--format", choices=["text", "json"], default="text")
+    markup_normalization_recovery.set_defaults(func=command_markup_normalization_recovery)
+
+    objet_capture_batch = subcommands.add_parser(
+        "objet-capture-batch",
+        help="Preflight and execute one reviewed bounded multi-item capture request.",
+    )
+    objet_capture_batch.add_argument("archive_root", help="Archive root receiving the batch.")
+    objet_capture_batch.add_argument(
+        "--manifest",
+        required=True,
+        help="Batch request JSON. Relative paths resolve from the archive root.",
+    )
+    objet_capture_batch.add_argument("--dry-run", action="store_true", help="Build and preflight the complete selection without writes.")
+    objet_capture_batch.add_argument("--approve", action="store_true", help="Persist the reviewed selection and execute capture.")
+    objet_capture_batch.add_argument("--expected-plan-sha256", help="Exact SHA-256 from a fresh batch dry-run.")
+    objet_capture_batch.add_argument("--reviewed-by", help="Safe reviewer id required for approval.")
+    objet_capture_batch.add_argument("--format", choices=["text", "json"], default="text")
+    objet_capture_batch.set_defaults(func=command_objet_capture_batch)
 
     objet_capture_selection = subcommands.add_parser(
         "objet-capture-selection",

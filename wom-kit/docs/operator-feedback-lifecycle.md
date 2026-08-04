@@ -40,7 +40,8 @@ Preview a metadata record:
 archive operator-feedback-record <archive-root> `
   --feedback-id agent_operator_retro_20260623 `
   --feedback-ref feedback:agent-operator-retro `
-  --status delivered `
+  --status draft `
+  --intent create `
   --dry-run `
   --format json
 ```
@@ -51,12 +52,42 @@ Approve the metadata write:
 archive operator-feedback-record <archive-root> `
   --feedback-id agent_operator_retro_20260623 `
   --feedback-ref feedback:agent-operator-retro `
-  --status resolved `
-  --resolved-in v0.3.149 `
+  --status draft `
+  --intent create `
   --approve `
   --reviewed-by person:me `
   --format json
 ```
+
+Creation is the default, but spelling out `--intent create` makes the
+no-overwrite boundary visible. To update the same record later, first preview
+the intended update and copy the returned `current_record_sha256`:
+
+```powershell
+archive operator-feedback-record <archive-root> `
+  --feedback-id agent_operator_retro_20260623 `
+  --feedback-ref feedback:agent-operator-retro `
+  --status resolved `
+  --intent update `
+  --resolved-in v0.3.300 `
+  --dry-run `
+  --format json
+
+archive operator-feedback-record <archive-root> `
+  --feedback-id agent_operator_retro_20260623 `
+  --feedback-ref feedback:agent-operator-retro `
+  --status resolved `
+  --intent update `
+  --resolved-in v0.3.300 `
+  --expected-record-sha256 <current-record-sha256> `
+  --approve `
+  --reviewed-by person:me `
+  --format json
+```
+
+Update preserves omitted title, related-release, and delivery/acknowledgment
+timestamps. It cannot change `feedback_ref`. A stale digest or concurrent
+change blocks before overwrite.
 
 Aliases:
 

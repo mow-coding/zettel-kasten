@@ -34,10 +34,10 @@ not re-grow baseline ladders or tag lists here.
 Current public baseline:
 
 ```text
-v0.3.299 pre-release
+v0.3.300 pre-release
 ```
 
-Previous public baseline: v0.3.298 pre-release.
+Previous public baseline: v0.3.299 pre-release.
 
 Full release history: see [CHANGELOG.md](CHANGELOG.md) and [wom-kit/docs/releases/](wom-kit/docs/releases/).
 
@@ -57,7 +57,7 @@ matching GitHub Release exists and lists this wheel. The versioned URL alone is
 not proof that the asset is available.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.299/wom_kit-0.3.299-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.300/wom_kit-0.3.300-py3-none-any.whl"
 archive --version
 ```
 
@@ -92,6 +92,7 @@ approval-gated write, or docs-only), see the
 - a public version-line roadmap that explains how the pre-1.0 minor lines map to idea, implementation, WOM feedback, UI/control-layer, and ZET feedback phases,
 - a machine-readable local-sovereignty contract: local reviewed WOM state is canonical, GitHub backs up metadata/version history, object storage backs up objet bytes, and external databases hold regenerable map backups or replicas; runtime/start-here/recovery surfaces share the same offline, conflict, recovery, and receipt boundaries, while read-only `backup-evidence` reports only locally verifiable lane evidence and never turns local commits, declared labels, generated indexes, or receipt-time coverage into a false current-remote or whole-backup claim,
 - a read-only observed source-reference audit that keeps current canonical `source_refs` and exact Notion omission-marker coverage separate from local recorded storage evidence, refuses archive access without explicit Python `-B`, and never turns a complete observed scan, a manifest identity, or a historical provider receipt into an archive-wide source or live-byte claim,
+- one integrated Letters 098-111 completion surface with collision-safe feedback records, archive-root path authority, bounded batch Objet capture, reviewed external locators and relation judgments, exact-byte markup normalization/recovery/revert, project bytecode repair, and complete deterministic CI shards,
 - WOM-kit local CLI and MCP tooling under `wom-kit/`, importing as `wom_kit`,
 - an exact installed-wheel resource integrity gate: release checking rejects
   duplicate or unsafe ZIP members, malformed or duplicate-key manifests,
@@ -189,9 +190,10 @@ Notion:
 - approved external imports that preserve explicit safe object refs, safe `source_refs`, safe facets, and safe zettel id overrides from manifests into imported drafts, optionally convert a Notion body locator to a reviewed `objet:` ref, and for a new Notion JSON/YAML manifest item use its exact lowercase top-level `index` string as the title only when the primary title is identifier-shaped and that same-item fallback passes the existing title and privacy gates,
 - read-only Notion connection import planning for typed-edge candidates with base connection edge vocabulary including `contains` for structural child page/database/view containment and model-gap escalation when no active edge type fits,
 - approval-gated link type migration for stale archive-local `types.yml`, plus receipt-backed safe `link-types-v0.3` migration revert when the migration receipt says which edge types were added and those types remain unused and unchanged from the base template,
-- approval-gated `archive migrate --target base-link-types` that appends every base WOM-kit link type missing from a vendored `types.yml` (a superset of the recommended-9 set, so it also pulls `continues`) without removing, renaming, reordering, or overwriting any existing entry — append-only, no-clobber, no revert, `--reviewed-by`-gated, safe no-op when the archive has no local `types.yml` (it already inherits the base), and honest that it normalizes the whole file via `safe_dump` like the sibling migration,
+- approval-gated `archive migrate --target base-link-types` that appends every base WOM-kit link type missing from a vendored `types.yml` or only repeated exact `--link-type` selections without overwriting same-id custom records; a receipt-bound partial `--revert` removes only selected records that are still base-equivalent and unused, while an archive with no local `types.yml` remains a safe no-op because it already inherits the base,
 - a read-only connection evidence parser contract before real export parsing, and a sanitized fixture parser that emits candidate edge previews without writes,
-- read-only connection edge intelligence planning that separates relationship meaning from source mechanism, distinguishes ambiguous candidates from human-review-required candidates, recommends `supersedes` for sanitized version-chain hints plus `contains` for sanitized containment hints, and recognizes the active WOM-local `format_variant` meaning only when a human explicitly chooses an alternate rendition of the same intellectual content; the stored direction names a review anchor rather than an older, original, or canonical record, creates no reciprocal edge, adds no filename/title/provider inference or corpus migration, and cannot be auto-written through `zettel-edge-batch`; since v0.3.290 the shared single-edge gate also fails closed unless the resolved `Zettel`/`OriginalObject` endpoints satisfy the selected active `types.yml` record's non-empty `from` and `to` entity-type lists,
+- read-only relation review that reserves `continues` for the next week/installment of the same course or work and activates manual-only `sequence` for a generic process's next step; `sequence` and `format_variant` cannot be auto-written through `zettel-edge-batch`, recurrence remains a coordinate rather than an edge, and reviewed non-owner actors can be registered as durable Principal targets without replacing the archive owner,
+- read-only connection edge intelligence planning that separates relationship meaning from source mechanism, distinguishes ambiguous candidates from human-review-required candidates, recommends `supersedes` for sanitized version-chain hints plus `contains` for sanitized containment hints, and recognizes active manual-only meanings without inferring them from titles, filenames, provider mechanisms, or the existing corpus; since v0.3.290 the shared single-edge gate also fails closed unless the resolved `Zettel`/`OriginalObject`/`Principal` endpoint satisfies the selected active `types.yml` record's non-empty `from` and `to` entity-type lists,
 - read-only Notion nested tree recovery planning that assigns leaf pages to known generation roots, derives safe content classes from node kinds when needed, blocks oversized nested-tree fixtures instead of returning partial success, and reports untraceable parent chains instead of guessing from partial mirrors,
 - read-only Notion ancestor crawl request planning with generation/ref scope filters and a recursive fetch adapter execution contract, plus documentation that untraceable leaf recovery should be scoped by leaf/root/ancestor refs rather than generation id when the generation is still unknown,
 - the first approval-gated local Notion ancestor structure fetch adapter, which writes only sanitized ancestor fixtures plus non-secret receipts after credential approval, while Notion media byte fetch and page body capture stay behind separate future gates,
@@ -509,7 +511,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
-v0.3.299 (current checkpoint)
+v0.3.300 (current checkpoint)
 ```
 
 Public releases from `v0.2.5` onward are tagged as compatibility checkpoints.

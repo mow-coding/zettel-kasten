@@ -17,6 +17,7 @@
     "schema": {"type": "string", "const": "wom-kit/operator-feedback-receipt/v0.1"},
     "dry_run": {"type": "boolean"},
     "approved": {"type": "boolean"},
+    "intent": {"type": "string", "enum": ["create", "update"]},
     "feedback_id": {"type": "string"},
     "record_path": {"type": "string"},
     "status": {
@@ -24,6 +25,7 @@
       "enum": ["draft", "delivered", "acknowledged", "resolved", "archived"]
     },
     "reviewed_by": {"type": ["string", "null"]},
+    "previous_record_sha256": {"type": ["string", "null"]},
     "record_sha256": {"type": ["string", "null"]},
     "created_at": {"type": "string"}
   }

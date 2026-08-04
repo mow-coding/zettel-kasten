@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wom-kit/markup-normalization-receipt/v0.1",
+  "title": "WOM-kit markup normalization receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "archive_id", "plan_sha256", "policy", "binding_manifest_sha256", "journal_path", "reviewed_by", "created_at", "item_count", "items", "source_bytes_snapshotted", "exact_byte_revert_supported"],
+  "properties": {
+    "schema": {"const": "wom-kit/markup-normalization-receipt/v0.1"},
+    "archive_id": {"type": "string", "minLength": 1},
+    "plan_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "policy": {"const": "normalize"},
+    "binding_manifest_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+    "journal_path": {"type": "string", "minLength": 1},
+    "reviewed_by": {"type": "string", "minLength": 1},
+    "created_at": {"type": "string", "minLength": 1},
+    "item_count": {"type": "integer", "minimum": 0, "maximum": 5000},
+    "items": {"type": "array", "maxItems": 5000, "items": {"type": "object"}},
+    "source_bytes_snapshotted": {"const": true},
+    "exact_byte_revert_supported": {"const": true},
+    "completed_by_recovery": {"type": "boolean"},
+    "recovery_receipt_path": {"type": "string", "minLength": 1}
+  }
+}

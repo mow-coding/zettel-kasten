@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wom-kit/markup-normalization-recovery-receipt/v0.1",
+  "title": "WOM-kit interrupted markup normalization recovery receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "archive_id", "source_journal_sha256", "source_plan_sha256", "recovery_plan_sha256", "mode", "reviewed_by", "created_at", "item_count", "changed_count", "exact_byte_recovery", "items"],
+  "properties": {
+    "schema": {"const": "wom-kit/markup-normalization-recovery-receipt/v0.1"},
+    "archive_id": {"type": "string", "minLength": 1},
+    "source_journal_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "source_plan_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "recovery_plan_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "mode": {"enum": ["resume", "rollback"]},
+    "reviewed_by": {"type": "string", "minLength": 1},
+    "created_at": {"type": "string", "minLength": 1},
+    "item_count": {"type": "integer", "minimum": 0, "maximum": 5000},
+    "changed_count": {"type": "integer", "minimum": 0, "maximum": 5000},
+    "exact_byte_recovery": {"const": true},
+    "items": {
+      "type": "array",
+      "maxItems": 5000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "restored_sha256"],
+        "properties": {
+          "path": {"type": "string", "minLength": 1},
+          "restored_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+        }
+      }
+    }
+  }
+}

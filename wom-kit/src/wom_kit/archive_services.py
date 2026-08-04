@@ -409,9 +409,11 @@ CONNECTION_EDGE_RELATIONSHIP_VOCABULARY = [
     },
     {
         "meaning_id": "sequence",
-        "status": "provisional_collect_under_neither_fits",
-        "active_edge_type": None,
+        "status": "active_mapping",
+        "active_edge_type": "sequence",
         "meaning": "The source and target are ordered steps in a process or life/event sequence.",
+        "write_policy": "manual_human_review_only",
+        "direction_policy": "source_precedes_target",
     },
 ]
 CONNECTION_EDGE_MECHANISM_AXIS = {
@@ -435,6 +437,7 @@ CONNECTION_EDGE_ACTIVE_MEANING_BY_EDGE_TYPE = {
     "view_query": "view_snapshot_context",
     "comment_context": "comment_context",
     "format_variant": "format_variant",
+    "sequence": "sequence",
 }
 NOTION_NESTED_TREE_SOURCES = {"notion"}
 NOTION_NESTED_TREE_NODE_KINDS = {
@@ -1041,6 +1044,7 @@ OPERATOR_FEEDBACK_DELIVERY_RECEIPT_SCHEMA = "wom-kit/operator-feedback-delivery-
 OPERATOR_FEEDBACK_DIR = "ops/feedback"
 OPERATOR_FEEDBACK_RECEIPTS_DIR = "receipts/operator-feedback"
 OPERATOR_FEEDBACK_STATUSES = ("draft", "delivered", "acknowledged", "resolved", "archived")
+OPERATOR_FEEDBACK_RECORD_INTENTS = ("create", "update")
 # Not-yet-delivered lifecycle state: the only status mark-delivered may transition from.
 OPERATOR_FEEDBACK_PENDING_STATUS = "draft"
 OPERATOR_FEEDBACK_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{2,120}$")
@@ -1207,6 +1211,25 @@ NOTION_PROVIDER_LOCATOR_RE = re.compile(
 ZETTEL_EDGE_ZETTEL_ID_RE = re.compile(r"^zet_[A-Za-z0-9][A-Za-z0-9_-]{0,159}$")
 ZETTEL_EDGE_FILENAME_SEGMENT_RE = re.compile(r"[^A-Za-z0-9._-]+")
 ZETTEL_EDGE_ENTITY_TYPE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,79}$")
+PRINCIPAL_ID_RE = re.compile(
+    r"^[a-z][a-z0-9_]{1,31}:[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+)
+PRINCIPAL_RECORD_SCHEMA = "wom-kit/principal-record/v0.1"
+PRINCIPAL_RECORDS_DIR = "principals"
+PRINCIPAL_KINDS = frozenset(
+    {
+        "person",
+        "family",
+        "household",
+        "child",
+        "company",
+        "team",
+        "project",
+        "role",
+        "client",
+        "future_successor",
+    }
+)
 DRAFT_CREATION_MODES = {"human_written", "ai_assisted", "ai_generated", "imported", "derived"}
 SOURCE_INTAKE_ROLES = {"primary_source", "context", "attachment", "derived_context"}
 SOURCE_INTAKE_DEFAULT_ROLE = "primary_source"
@@ -4448,9 +4471,101 @@ def operator_feedback_record_relative_path(feedback_id: str) -> str:
     return f"{OPERATOR_FEEDBACK_DIR}/{feedback_id}.yml"
 
 
-def operator_feedback_receipt_relative_path(feedback_id: str, timestamp: str) -> str:
+def operator_feedback_receipt_relative_path(
+    feedback_id: str,
+    timestamp: str,
+    record_sha256: str | None = None,
+) -> str:
     compact = re.sub(r"[^0-9TZ]", "", timestamp)
-    return f"{OPERATOR_FEEDBACK_RECEIPTS_DIR}/{feedback_id}.{compact}.json"
+    digest_suffix = f".{record_sha256[:16]}" if record_sha256 else ""
+    return f"{OPERATOR_FEEDBACK_RECEIPTS_DIR}/{feedback_id}.{compact}{digest_suffix}.json"
+
+
+class _OperatorFeedbackRecordLock:
+    """Serialize cooperating feedback writers without storing operator content."""
+
+    def __init__(self, root: Path, feedback_id: str) -> None:
+        lock_dir = archive_internal_path(
+            root,
+            f"{OPERATOR_FEEDBACK_RECEIPTS_DIR}/.locks",
+        )
+        lock_dir.mkdir(parents=True, exist_ok=True)
+        lock_name = hashlib.sha256(feedback_id.encode("utf-8")).hexdigest()
+        self._path = lock_dir / f"{lock_name}.lock"
+        self._handle: Any = None
+
+    def __enter__(self) -> "_OperatorFeedbackRecordLock":
+        self._handle = self._path.open("a+b")
+        self._handle.seek(0, os.SEEK_END)
+        if self._handle.tell() == 0:
+            self._handle.write(b"\0")
+            self._handle.flush()
+            os.fsync(self._handle.fileno())
+        self._handle.seek(0)
+        if os.name == "nt":
+            import msvcrt
+
+            while True:
+                try:
+                    msvcrt.locking(self._handle.fileno(), msvcrt.LK_LOCK, 1)
+                    break
+                except OSError:
+                    continue
+        else:
+            import fcntl
+
+            fcntl.flock(self._handle.fileno(), fcntl.LOCK_EX)
+        return self
+
+    def __exit__(self, *exc_info: Any) -> bool:
+        try:
+            self._handle.seek(0)
+            if os.name == "nt":
+                import msvcrt
+
+                msvcrt.locking(self._handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(self._handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            self._handle.close()
+        return False
+
+
+def _write_bytes_create_if_absent(path: Path, value: bytes) -> None:
+    """Publish complete bytes atomically and never replace an existing file."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path: Path | None = None
+    descriptor: int | None = None
+    try:
+        for _ in range(8):
+            candidate = path.with_name(f".{path.name}.{secrets.token_hex(8)}.tmp")
+            try:
+                descriptor = os.open(
+                    candidate,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    0o600,
+                )
+                temporary_path = candidate
+                break
+            except FileExistsError:
+                continue
+        if temporary_path is None or descriptor is None:
+            raise OSError("could_not_reserve_create_temporary_file")
+        with os.fdopen(descriptor, "wb") as handle:
+            descriptor = None
+            handle.write(value)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.link(temporary_path, path)
+        fsync_directory(path.parent)
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
 
 
 def operator_feedback_runtime_routing() -> dict[str, Any]:
@@ -4495,7 +4610,7 @@ def operator_feedback_runtime_routing() -> dict[str, Any]:
                 "command": (
                     "archive operator-feedback-record <archive-root> "
                     "--feedback-id <safe-id> --feedback-ref <safe-ref> "
-                    "--status draft --dry-run --format json"
+                    "--status draft --intent create --dry-run --format json"
                 ),
                 "requires_completed_human_review": True,
                 "writes": False,
@@ -4506,7 +4621,8 @@ def operator_feedback_runtime_routing() -> dict[str, Any]:
                 "command": (
                     "archive operator-feedback-record <archive-root> "
                     "--feedback-id <safe-id> --feedback-ref <safe-ref> "
-                    "--status draft --approve --reviewed-by <human-actor> "
+                    "--status draft --intent create --approve "
+                    "--reviewed-by <human-actor> "
                     "--format json"
                 ),
                 "requires_completed_human_review": True,
@@ -4546,7 +4662,8 @@ def operator_feedback_plan(archive_root: Path | str, *, dry_run: bool = True) ->
             "receipt_schema": OPERATOR_FEEDBACK_RECEIPT_SCHEMA,
             "recommended_record_command": (
                 "archive operator-feedback-record <archive-root> --feedback-id <safe-id> "
-                "--feedback-ref <safe-ref> --status draft --dry-run --format json"
+                "--feedback-ref <safe-ref> --status draft --intent create "
+                "--dry-run --format json"
             ),
             "lifecycle": [
                 {"status": "draft", "meaning": "feedback exists but has not been sent or recorded as delivered"},
@@ -4584,6 +4701,8 @@ def operator_feedback_record(
     feedback_id: str | None,
     feedback_ref: str | None,
     status: str,
+    intent: str = "create",
+    expected_record_sha256: str | None = None,
     title: str | None = None,
     related_release: list[str] | None = None,
     resolved_in: str | None = None,
@@ -4593,84 +4712,264 @@ def operator_feedback_record(
 ) -> dict[str, Any]:
     root = require_existing_archive_root(archive_root)
     blockers: list[str] = []
+    blocker_codes: list[str] = []
     warnings: list[str] = []
+
+    def block(code: str, message: str) -> None:
+        if code not in blocker_codes:
+            blocker_codes.append(code)
+        if message not in blockers:
+            blockers.append(message)
+
     if dry_run == approve:
-        blockers.append("operator-feedback-record requires exactly one of --dry-run or --approve.")
+        block(
+            "operator_feedback_mode_invalid",
+            "operator-feedback-record requires exactly one of --dry-run or --approve.",
+        )
 
     safe_id = safe_operator_feedback_id(feedback_id)
     if safe_id is None:
-        blockers.append("feedback_id must be a safe id using letters, numbers, dot, underscore, or hyphen.")
+        block(
+            "feedback_id_invalid",
+            "feedback_id must be a safe id using letters, numbers, dot, underscore, or hyphen.",
+        )
 
     safe_ref = safe_operator_feedback_scalar(feedback_ref, max_length=240)
     if safe_ref is None:
-        blockers.append("feedback_ref must be a safe non-secret ref, not a URL, email, token, or local path.")
+        block(
+            "feedback_ref_invalid",
+            "feedback_ref must be a safe non-secret ref, not a URL, email, token, or local path.",
+        )
 
     normalized_status = (status or "").strip().lower()
     if normalized_status not in OPERATOR_FEEDBACK_STATUSES:
-        blockers.append("status must be one of: " + ", ".join(OPERATOR_FEEDBACK_STATUSES) + ".")
+        block(
+            "feedback_status_invalid",
+            "status must be one of: " + ", ".join(OPERATOR_FEEDBACK_STATUSES) + ".",
+        )
+
+    normalized_intent = (intent or "").strip().lower()
+    if normalized_intent not in OPERATOR_FEEDBACK_RECORD_INTENTS:
+        block(
+            "feedback_record_intent_invalid",
+            "intent must be one of: " + ", ".join(OPERATOR_FEEDBACK_RECORD_INTENTS) + ".",
+        )
+
+    expected_digest = (
+        expected_record_sha256.strip().lower()
+        if isinstance(expected_record_sha256, str)
+        else None
+    )
+    if expected_digest and not re.fullmatch(r"[0-9a-f]{64}", expected_digest):
+        block(
+            "expected_record_sha256_invalid",
+            "expected_record_sha256 must be exactly 64 lowercase hexadecimal characters.",
+        )
+    if approve and normalized_intent == "update" and not expected_digest:
+        block(
+            "expected_record_sha256_required",
+            "update approval requires --expected-record-sha256 from a fresh dry-run.",
+        )
 
     safe_title = safe_operator_feedback_scalar(title, max_length=240) if title else None
     if title and safe_title is None:
-        blockers.append("title must be a safe non-secret single-line label.")
+        block("feedback_title_invalid", "title must be a safe non-secret single-line label.")
 
     releases: list[str] = []
     for item in related_release or []:
         safe_release = safe_operator_feedback_scalar(item, max_length=80)
         if safe_release is None:
-            blockers.append("related_release values must be safe non-secret labels.")
+            block(
+                "related_release_invalid",
+                "related_release values must be safe non-secret labels.",
+            )
         elif safe_release not in releases:
             releases.append(safe_release)
 
     safe_resolved_in = safe_operator_feedback_scalar(resolved_in, max_length=80) if resolved_in else None
     if resolved_in and safe_resolved_in is None:
-        blockers.append("resolved_in must be a safe non-secret release label.")
+        block(
+            "resolved_in_invalid",
+            "resolved_in must be a safe non-secret release label.",
+        )
     if normalized_status == "resolved" and not safe_resolved_in:
-        blockers.append("resolved status requires --resolved-in.")
+        block("resolved_in_required", "resolved status requires --resolved-in.")
 
     reviewer = safe_project_intake_actor_id(reviewed_by)
     if approve and reviewer is None:
-        blockers.append("--approve requires a safe --reviewed-by actor id.")
+        block(
+            "reviewer_required",
+            "--approve requires a safe --reviewed-by actor id.",
+        )
     if reviewed_by and reviewer is None:
-        blockers.append("reviewed_by must be a safe non-secret actor id.")
+        block(
+            "reviewer_invalid",
+            "reviewed_by must be a safe non-secret actor id.",
+        )
 
-    now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    now = datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
     record_relative = operator_feedback_record_relative_path(safe_id or "invalid-feedback-id")
-    receipt_relative = operator_feedback_receipt_relative_path(safe_id or "invalid-feedback-id", now)
-    target_path = root / record_relative
-    receipt_path = root / receipt_relative
-    if target_path.exists() and approve:
-        warnings.append("Existing operator feedback record will be replaced with the approved metadata update.")
+    target_path = archive_internal_path(root, record_relative)
+    current_record_sha256: str | None = None
+    current_record: dict[str, Any] | None = None
 
+    def inspect_current_record() -> None:
+        nonlocal current_record, current_record_sha256
+        current_record = None
+        current_record_sha256 = None
+        if normalized_intent == "create":
+            if target_path.exists() or target_path.is_symlink():
+                block(
+                    "feedback_record_exists",
+                    "create intent requires the feedback record to be absent.",
+                )
+            return
+        if not target_path.is_file() or target_path.is_symlink():
+            block(
+                "feedback_record_missing",
+                "update intent requires an existing regular feedback record.",
+            )
+            return
+        try:
+            current_bytes = target_path.read_bytes()
+            current_record = load_yaml(current_bytes.decode("utf-8"))
+        except (OSError, UnicodeDecodeError, yaml.YAMLError):  # type: ignore[union-attr]
+            block(
+                "feedback_record_unreadable",
+                "the existing feedback record could not be safely decoded.",
+            )
+            return
+        if not isinstance(current_record, dict):
+            block(
+                "feedback_record_unreadable",
+                "the existing feedback record must be a YAML mapping.",
+            )
+            return
+        normalized_current = json_safe(current_record)
+        if (
+            not isinstance(normalized_current, dict)
+            or validate_schema(
+                normalized_current,
+                "operator-feedback.schema.json",
+            )
+        ):
+            block(
+                "feedback_record_unreadable",
+                "the existing feedback record does not match the public schema.",
+            )
+            return
+        current_record = normalized_current
+        if current_record.get("feedback_id") != safe_id:
+            block(
+                "feedback_record_identity_mismatch",
+                "the existing feedback record identity does not match the requested id.",
+            )
+        if current_record.get("feedback_ref") != safe_ref:
+            block(
+                "feedback_ref_rebind_forbidden",
+                "update intent cannot change the existing feedback_ref.",
+            )
+        current_record_sha256 = hashlib.sha256(current_bytes).hexdigest()
+        if approve and expected_digest and current_record_sha256 != expected_digest:
+            block(
+                "feedback_record_changed",
+                "the existing feedback record changed after review; run a fresh dry-run.",
+            )
+
+    if safe_id and safe_ref and normalized_intent in OPERATOR_FEEDBACK_RECORD_INTENTS:
+        inspect_current_record()
+
+    updating = normalized_intent == "update" and current_record is not None
     record = {
         "schema": OPERATOR_FEEDBACK_SCHEMA,
         "feedback_id": safe_id,
         "feedback_ref": safe_ref,
         "status": normalized_status,
-        "title": safe_title,
-        "related_releases": releases,
-        "resolved_in": safe_resolved_in,
+        "title": (
+            safe_title
+            if title
+            else (current_record.get("title") if updating else None)
+        ),
+        "related_releases": (
+            releases
+            if related_release is not None
+            else (
+                list(current_record.get("related_releases", []))
+                if updating
+                else []
+            )
+        ),
+        "resolved_in": (
+            safe_resolved_in
+            if resolved_in
+            else (current_record.get("resolved_in") if updating else None)
+        ),
         "updated_at": now,
         "reviewed_by": reviewer if approve else None,
         "body_managed_by_this_record": False,
         "external_submission_performed": False,
     }
+    if updating:
+        for timestamp_field in ("delivered_at", "acknowledged_at"):
+            timestamp_value = current_record.get(timestamp_field)
+            if isinstance(timestamp_value, str) and timestamp_value:
+                record[timestamp_field] = timestamp_value
+    if validate_schema(json_safe(record), "operator-feedback.schema.json"):
+        block(
+            "feedback_record_proposed_schema_invalid",
+            "the proposed feedback record does not match the public schema.",
+        )
+    record_bytes = dump_yaml(json_safe(record)).encode("utf-8")
+    proposed_record_sha256 = hashlib.sha256(record_bytes).hexdigest()
+    receipt_relative = operator_feedback_receipt_relative_path(
+        safe_id or "invalid-feedback-id",
+        now,
+        proposed_record_sha256,
+    )
+    receipt_path = archive_internal_path(root, receipt_relative)
     receipt = {
         "schema": OPERATOR_FEEDBACK_RECEIPT_SCHEMA,
         "dry_run": dry_run,
         "approved": approve,
+        "intent": normalized_intent,
         "feedback_id": safe_id,
         "record_path": record_relative,
         "status": normalized_status,
         "reviewed_by": reviewer if approve else None,
-        "record_sha256": sha256_text(dump_yaml(record)) if safe_id and safe_ref and normalized_status in OPERATOR_FEEDBACK_STATUSES else None,
+        "previous_record_sha256": current_record_sha256,
+        "record_sha256": proposed_record_sha256 if safe_id and safe_ref and normalized_status in OPERATOR_FEEDBACK_STATUSES else None,
         "created_at": now,
     }
 
     if approve and not blockers:
-        target_path.parent.mkdir(parents=True, exist_ok=True)
-        receipt_path.parent.mkdir(parents=True, exist_ok=True)
-        write_text_atomic(target_path, dump_yaml(json_safe(record)))
-        write_text_atomic(receipt_path, json.dumps(json_safe(receipt), indent=2, ensure_ascii=False) + "\n")
+        receipt_bytes = (
+            json.dumps(json_safe(receipt), indent=2, ensure_ascii=False) + "\n"
+        ).encode("utf-8")
+        with _OperatorFeedbackRecordLock(root, safe_id):
+            # Re-evaluate the create/update precondition while holding the same
+            # cross-process lock used by every sanctioned writer.
+            before_commit_blocker_count = len(blockers)
+            inspect_current_record()
+            if len(blockers) == before_commit_blocker_count:
+                try:
+                    _write_bytes_create_if_absent(receipt_path, receipt_bytes)
+                    if normalized_intent == "create":
+                        _write_bytes_create_if_absent(target_path, record_bytes)
+                    else:
+                        write_bytes_atomic(target_path, record_bytes)
+                    fsync_directory(target_path.parent)
+                except FileExistsError:
+                    receipt_path.unlink(missing_ok=True)
+                    block(
+                        "feedback_record_concurrent_conflict",
+                        "the feedback record or receipt was created concurrently; run a fresh dry-run.",
+                    )
+                except OSError:
+                    receipt_path.unlink(missing_ok=True)
+                    block(
+                        "feedback_record_write_failed",
+                        "the approved feedback record could not be committed safely.",
+                    )
 
     state = "blocked" if blockers else ("written" if approve else "preview")
     return {
@@ -4683,8 +4982,11 @@ def operator_feedback_record(
         "summary": {
             "feedback_id": safe_id,
             "status": normalized_status if normalized_status in OPERATOR_FEEDBACK_STATUSES else None,
+            "intent": normalized_intent if normalized_intent in OPERATOR_FEEDBACK_RECORD_INTENTS else None,
             "record_path": record_relative if safe_id else None,
             "receipt_path": receipt_relative if approve and not blockers else None,
+            "current_record_sha256": current_record_sha256,
+            "proposed_record_sha256": proposed_record_sha256 if not blockers else None,
             "title_present": bool(safe_title),
             "feedback_ref_present": bool(safe_ref),
             "related_release_count": len(releases),
@@ -4694,9 +4996,13 @@ def operator_feedback_record(
             "record_schema": OPERATOR_FEEDBACK_SCHEMA,
             "receipt_schema": OPERATOR_FEEDBACK_RECEIPT_SCHEMA,
             "status_lifecycle": list(OPERATOR_FEEDBACK_STATUSES),
+            "record_intents": list(OPERATOR_FEEDBACK_RECORD_INTENTS),
+            "update_requires_expected_record_sha256": True,
+            "feedback_ref_rebinding_allowed": False,
             "body_managed_by_this_command": False,
             "external_submission_performed": False,
         },
+        "blocker_codes": blocker_codes,
         "blockers": blockers,
         "warnings": warnings,
         "would_change": [] if approve and not blockers else ([record_relative, receipt_relative] if not blockers else []),
@@ -62577,6 +62883,165 @@ def resolve_zettel_external_ref(root: Path, target_ref: str, blockers: list[str]
     }
 
 
+def principal_record_relative_path(principal_id: str) -> str:
+    digest = hashlib.sha256(principal_id.encode("utf-8")).hexdigest()
+    return f"{PRINCIPAL_RECORDS_DIR}/{digest}.yml"
+
+
+def load_registered_principals(
+    root: Path,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Load the owner plus reviewed third-party Principal records.
+
+    A malformed registry is never treated as an empty registry.  That would
+    make duplicate detection and Principal edge resolution nondeterministic.
+    """
+
+    records: list[dict[str, Any]] = []
+    issues: list[str] = []
+    archive_path = archive_internal_path(root, "archive.yml")
+    try:
+        archive_doc = load_yaml(archive_path.read_text(encoding="utf-8"))
+    except Exception:
+        archive_doc = None
+        issues.append("principal_archive_owner_record_unavailable")
+    if isinstance(archive_doc, dict):
+        owner = archive_doc.get("principal")
+        if isinstance(owner, dict):
+            owner_id = str(owner.get("principal_id") or "").strip()
+            owner_kind = str(owner.get("kind") or "").strip()
+            owner_name = owner.get("display_name")
+            if (
+                PRINCIPAL_ID_RE.fullmatch(owner_id)
+                and owner_kind in PRINCIPAL_KINDS
+                and isinstance(owner_name, str)
+                and owner_name.strip()
+            ):
+                records.append(
+                    {
+                        "schema": "wom-kit/archive-owner-principal/v0.1",
+                        "principal_id": owner_id,
+                        "kind": owner_kind,
+                        "display_name": owner_name.strip(),
+                        "status": "active",
+                        "storage": "archive.yml",
+                        "record_path": "archive.yml",
+                    }
+                )
+            else:
+                issues.append("principal_archive_owner_record_invalid")
+        else:
+            issues.append("principal_archive_owner_record_invalid")
+
+    principals_root = archive_internal_path(root, PRINCIPAL_RECORDS_DIR)
+    paths = (
+        safe_archive_glob(principals_root, "*.yml", root)
+        if principals_root.is_dir()
+        else []
+    )
+    if len(paths) > 10000:
+        issues.append("principal_registry_limit_exceeded")
+        paths = paths[:10000]
+    for path in paths:
+        try:
+            if path.is_symlink() or not path.is_file():
+                issues.append("principal_record_unsafe_file")
+                continue
+            raw = path.read_text(encoding="utf-8")
+            record = load_yaml(raw)
+        except Exception:
+            issues.append("principal_record_unreadable")
+            continue
+        if not isinstance(record, dict):
+            issues.append("principal_record_invalid")
+            continue
+        principal_id = str(record.get("principal_id") or "").strip()
+        principal_kind = str(record.get("kind") or "").strip()
+        display_name = record.get("display_name")
+        expected_relative = (
+            principal_record_relative_path(principal_id)
+            if PRINCIPAL_ID_RE.fullmatch(principal_id)
+            else None
+        )
+        actual_relative = archive_relative_path(path, root)
+        if (
+            record.get("schema") != PRINCIPAL_RECORD_SCHEMA
+            or expected_relative != actual_relative
+            or principal_kind not in PRINCIPAL_KINDS
+            or not isinstance(display_name, str)
+            or not display_name.strip()
+            or len(display_name.strip()) > 300
+            or record.get("status") != "active"
+        ):
+            issues.append("principal_record_invalid")
+            continue
+        records.append(
+            {
+                **json_safe(record),
+                "display_name": display_name.strip(),
+                "storage": "registered_third_party",
+                "record_path": actual_relative,
+                "record_sha256": sha256_text(raw),
+            }
+        )
+
+    seen: set[str] = set()
+    for record in records:
+        principal_id = str(record.get("principal_id") or "")
+        if principal_id in seen:
+            issues.append("principal_id_duplicate")
+        seen.add(principal_id)
+    return records, unique_preserve_order(issues)
+
+
+def resolve_zettel_principal_ref(
+    root: Path,
+    target_ref: str,
+    blockers: list[str],
+) -> dict[str, Any] | None:
+    if not PRINCIPAL_ID_RE.fullmatch(target_ref):
+        return None
+    records, issues = load_registered_principals(root)
+    if issues:
+        blockers.extend(issues)
+        return {
+            "ref": target_ref,
+            "kind": "principal",
+            "verified": False,
+            "registry_state": "blocked",
+        }
+    matches = [
+        record
+        for record in records
+        if record.get("principal_id") == target_ref
+    ]
+    if not matches:
+        blockers.append("target principal id is not registered.")
+        return {
+            "ref": target_ref,
+            "kind": "principal",
+            "verified": False,
+            "registry_state": "not_found",
+        }
+    if len(matches) != 1:
+        blockers.append("target principal id is ambiguous.")
+        return {
+            "ref": target_ref,
+            "kind": "principal",
+            "verified": False,
+            "registry_state": "ambiguous",
+        }
+    match = matches[0]
+    return {
+        "ref": target_ref,
+        "kind": "principal",
+        "verified": True,
+        "principal_kind": match.get("kind"),
+        "registry_state": "resolved",
+        "record_path": match.get("record_path"),
+    }
+
+
 def zettel_edge_target_summary(
     root: Path,
     target_ref: str,
@@ -62638,7 +63103,14 @@ def zettel_edge_target_summary(
             "manifest_record_count": record_count,
         }
 
-    blockers.append("target_ref must be an existing zet_<id>, sha256:<64hex>, or objet:sha256:<64hex> ref.")
+    principal_summary = resolve_zettel_principal_ref(root, text, blockers)
+    if principal_summary is not None:
+        return principal_summary
+
+    blockers.append(
+        "target_ref must be an existing zet_<id>, registered Principal id, "
+        "sha256:<64hex>, or objet:sha256:<64hex> ref."
+    )
     return {"ref": text, "kind": "unknown", "verified": False}
 
 
@@ -62681,7 +63153,11 @@ def zettel_edge_entity_type_contract(
     registry_source = "archive_local" if local_registry_path.exists() else "packaged_kit"
     registry_path = local_registry_path if registry_source == "archive_local" else KIT_ZETTEL_KASTEN_ROOT / "types.yml"
     target_entity_type = (
-        {"zettel": "Zettel", "objet": "OriginalObject"}.get(str(target_summary.get("kind") or ""))
+        {
+            "zettel": "Zettel",
+            "objet": "OriginalObject",
+            "principal": "Principal",
+        }.get(str(target_summary.get("kind") or ""))
         if target_summary.get("verified") is True
         else None
     )
@@ -63288,7 +63764,7 @@ def zettel_edge_batch_candidate_rows(plan: dict[str, Any], blockers: list[str]) 
 
 
 def zettel_edge_batch_item_policy_state(item: dict[str, Any], policy: dict[str, Any]) -> tuple[str, str]:
-    if item.get("edge_type") == "format_variant":
+    if item.get("edge_type") in {"format_variant", "sequence"}:
         return "review_queue", "manual_single_edge_review_required"
     if item.get("requires_human_review"):
         return "review_queue", "candidate_requires_human_review"
@@ -86471,10 +86947,36 @@ def upgrade_check(
     }
 
 
+def resolve_project_intake_staged_folder(
+    root: Path,
+    staged_folder: Path | str,
+) -> tuple[Path, str, str | None]:
+    """Resolve relative intake paths from archive authority, never process CWD."""
+
+    candidate = Path(staged_folder).expanduser()
+    if candidate.is_absolute():
+        staged = candidate.resolve()
+        relative = (
+            staged.relative_to(root).as_posix()
+            if is_path_within_root(staged, root)
+            else None
+        )
+        return staged, "absolute_compatibility", relative
+    try:
+        relative = normalize_archive_relative_path(os.fspath(staged_folder))
+        return archive_internal_path(root, relative), "archive_root_relative", relative
+    except (ArchivePathError, ArchiveServiceError, OSError, ValueError) as exc:
+        raise ArchiveServiceError(
+            "Staged folder path is not a safe archive-relative path."
+        ) from exc
+
+
 def project_intake_plan(archive_root: Path | str, staged_folder: Path | str) -> dict[str, Any]:
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
-    staged = Path(staged_folder).expanduser().resolve()
+    staged, staged_folder_basis, staged_folder_relative = (
+        resolve_project_intake_staged_folder(root, staged_folder)
+    )
     if not staged.exists():
         raise ArchiveServiceError(f"Staged folder does not exist: {staged}")
     if not staged.is_dir():
@@ -86497,6 +86999,8 @@ def project_intake_plan(archive_root: Path | str, staged_folder: Path | str) -> 
         "archive_root": str(root),
         "archive_id": archive_id,
         "staged_folder": str(staged),
+        "staged_folder_basis": staged_folder_basis,
+        "staged_folder_relative": staged_folder_relative,
         "follows_staging_convention": staging_convention["follows_staging_convention"],
         "staging_convention": staging_convention,
         "folder_summary": folder_summary,
@@ -86565,7 +87069,9 @@ def project_intake_unpack_queue(
         raise ArchiveServiceError("project-intake-unpack-queue is dry-run only.")
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
-    staged = Path(staged_folder).expanduser().resolve()
+    staged, staged_folder_basis, staged_folder_relative = (
+        resolve_project_intake_staged_folder(root, staged_folder)
+    )
     if not staged.exists():
         raise ArchiveServiceError(f"Staged folder does not exist: {staged}")
     if not staged.is_dir():
@@ -86613,6 +87119,8 @@ def project_intake_unpack_queue(
         "archive_id": archive_id,
         "state": state,
         "receipt_path": receipt_status.get("receipt_path") if receipt_status else None,
+        "staged_folder_basis": staged_folder_basis,
+        "staged_folder_relative": staged_folder_relative,
         "staged_folder_path_included": False,
         "folder_summary": folder_summary,
         "staging_convention": staging_convention,
@@ -98458,6 +98966,61 @@ def runtime_context_read_action_routes() -> list[dict[str, Any]]:
             "writes": False,
         },
         {
+            "action": "plan_external_locator_change",
+            "when": "a human wants to retain or inspect a provider-neutral recovery coordinate for one zet",
+            "command": "archive external-locator-plan <archive-root> --zettel-id <id> --locator-type <type> --locator-ref <private-value> --dry-run --format json",
+            "recovery_command": "archive external-locator-recovery-plan <archive-root> --zettel-id <id> --dry-run --format json",
+            "authoritative_for": "local reviewed locator record state and safe digest-based recovery candidates",
+            "locator_presence_proves_remote_reachability": False,
+            "writes": False,
+        },
+        {
+            "action": "plan_relation_candidate_review",
+            "when": "a human wants local metadata-based relationship candidates before deciding any edge",
+            "command": "archive relation-candidate-plan <archive-root> --from-zettel <id> --dry-run --format json",
+            "semantics_command": "archive relation-semantics-guide --format json",
+            "authoritative_for": "bounded deterministic candidates and prior rejection suppression",
+            "candidate_is_edge": False,
+            "writes": False,
+        },
+        {
+            "action": "inspect_registered_principals_and_relation_rules",
+            "when": (
+                "the AI needs to distinguish an archive owner, a reviewed "
+                "third-party Principal, same-work continuation, generic "
+                "process sequence, or recurring-series context"
+            ),
+            "command": (
+                "archive principal-list <archive-root> --format json"
+            ),
+            "semantics_command": (
+                "archive relation-semantics-guide --format json"
+            ),
+            "authoritative_for": (
+                "registered Principal ids and the active human-review "
+                "relation decision rules"
+            ),
+            "display_names_included_by_default": False,
+            "writes": False,
+        },
+        {
+            "action": "plan_markup_normalization",
+            "when": "migration markup may need to be preserved or normalized without losing visible text or references",
+            "command": "archive markup-normalization-plan <archive-root> --policy normalize --dry-run --format json",
+            "style_guide_command": "archive markup-style-guide --format json",
+            "authoritative_for": "bounded exact-byte normalization candidates, blockers, and reviewed reference-binding requirements",
+            "unknown_markup_deleted": False,
+            "writes": False,
+        },
+        {
+            "action": "plan_project_bytecode_repair",
+            "when": "derived Python bytecode is present in the verified project-local source mirror",
+            "command": "archive project-bytecode-repair-plan <project-root> --dry-run --format json",
+            "authoritative_for": "verified untracked derived bytecode candidates under the runtime package",
+            "source_files_modified": False,
+            "writes": False,
+        },
+        {
             "action": "inspect_version_truth",
             "when": "the AI needs the running version, project pin, source mirror, exact local tag, or latest fetched tag",
             "command": "archive version <project-or-archive-root> --format json",
@@ -98541,11 +99104,71 @@ def runtime_context_write_action_routes() -> list[dict[str, Any]]:
         },
         {
             "action": "write_typed_edge",
-            "when": "a reviewed relationship must be added between a zet and a zet or manifested objet",
+            "when": (
+                "a reviewed relationship must be added between a zet and a "
+                "zet, manifested objet, or registered Principal"
+            ),
             "preview_command": "archive zettel-edge <archive-root> --from-zettel <id> --target <ref> --edge-type <type> --dry-run --format json",
             "approved_command": "archive zettel-edge <archive-root> --from-zettel <id> --target <ref> --edge-type <type> --approve --reviewed-by <human-actor> --format json",
             "requires_human_approval": True,
             "direct_file_write_allowed": False,
+            "receipt_required": True,
+        },
+        {
+            "action": "register_or_unregister_third_party_principal",
+            "when": (
+                "a reviewed person, institution, team, role, or other actor "
+                "must become or stop being a Zettel relation target"
+            ),
+            "preview_command": (
+                "archive principal-register-plan <archive-root> "
+                "--principal-id <kind:id> --kind <kind> "
+                "--display-name <reviewed-name> --dry-run --format json"
+            ),
+            "approved_command": (
+                "archive principal-register <archive-root> "
+                "--principal-id <kind:id> --kind <kind> "
+                "--display-name <same-reviewed-name> "
+                "--expected-plan-sha256 <sha256> --approve "
+                "--reviewed-by <human-actor> --format json"
+            ),
+            "unregister_preview_command": (
+                "archive principal-unregister-plan <archive-root> "
+                "--principal-id <kind:id> --dry-run --format json"
+            ),
+            "unregister_approved_command": (
+                "archive principal-unregister <archive-root> "
+                "--principal-id <kind:id> "
+                "--expected-plan-sha256 <sha256> --approve "
+                "--reviewed-by <human-actor> --format json"
+            ),
+            "requires_human_approval": True,
+            "owner_replacement_allowed": False,
+            "in_use_principal_removal_allowed": False,
+            "receipt_required": True,
+        },
+        {
+            "action": "adopt_or_revert_base_link_type",
+            "when": (
+                "a vendored archive type model needs one reviewed base edge "
+                "type such as sequence or format_variant"
+            ),
+            "preview_command": (
+                "archive migrate <archive-root> --target base-link-types "
+                "--link-type <exact-type> --dry-run --format json"
+            ),
+            "approved_command": (
+                "archive migrate <archive-root> --target base-link-types "
+                "--link-type <exact-type> --approve "
+                "--reviewed-by <human-actor> --format json"
+            ),
+            "revert_preview_command": (
+                "archive migrate <archive-root> --target base-link-types "
+                "--link-type <exact-type> --revert --dry-run --format json"
+            ),
+            "requires_human_approval": True,
+            "custom_same_id_overwritten": False,
+            "in_use_type_removal_allowed": False,
             "receipt_required": True,
         },
         {
@@ -98559,6 +99182,62 @@ def runtime_context_write_action_routes() -> list[dict[str, Any]]:
             ],
             "requires_human_approval": True,
             "direct_file_write_allowed": False,
+            "receipt_required": True,
+        },
+        {
+            "action": "capture_reviewed_objet_batch",
+            "when": "one reviewed request contains many staged files that should use one whole-request preflight",
+            "preview_command": "archive objet-capture-batch <archive-root> --manifest <archive-relative-json> --dry-run --format json",
+            "approved_command": "archive objet-capture-batch <archive-root> --manifest <same-json> --expected-plan-sha256 <sha256> --approve --reviewed-by <human-actor> --format json",
+            "requires_human_approval": True,
+            "whole_manifest_preflight": True,
+            "convergence_model": "bounded_per_item_with_replay",
+            "all_or_nothing_claimed": False,
+            "direct_file_write_allowed": False,
+            "receipt_required": True,
+        },
+        {
+            "action": "record_or_revert_external_locator",
+            "when": "a reviewed private coordinate should be added to or exactly reverted from one zet's locator record",
+            "preview_command": "archive external-locator-plan <archive-root> --zettel-id <id> --locator-type <type> --locator-ref <private-value> --dry-run --format json",
+            "approved_command": "archive external-locator-record <archive-root> --zettel-id <id> --locator-type <type> --locator-ref <same-private-value> --expected-plan-sha256 <sha256> --approve --reviewed-by <human-actor> --format json",
+            "revert_command": "archive external-locator-revert <archive-root> --receipt <receipt> --dry-run --format json",
+            "requires_human_approval": True,
+            "locator_value_echoed": False,
+            "remote_reachability_claimed": False,
+            "receipt_required": True,
+        },
+        {
+            "action": "decide_relation_candidate",
+            "when": "a human has reviewed one deterministic relation candidate and wants to accept or reject it",
+            "preview_command": "archive relation-candidate-plan <archive-root> --from-zettel <id> --dry-run --format json",
+            "approved_command": "archive relation-candidate-decide <archive-root> --from-zettel <id> --candidate-id <candidate> --decision accept|reject --edge-type <human-confirmed-type-for-accept> --reason <review-reason> --confidence low|medium|high --expected-plan-sha256 <sha256> --approve --reviewed-by <human-actor> --format json",
+            "requires_human_approval": True,
+            "edge_type_inferred": False,
+            "rejection_memory_written": True,
+            "receipt_required": True,
+        },
+        {
+            "action": "normalize_or_recover_markup",
+            "when": "reviewed migration markup should be normalized or an interrupted normalization journal must converge",
+            "preview_command": "archive markup-normalization-plan <archive-root> --policy normalize --dry-run --format json",
+            "approved_command": "archive markup-normalization <archive-root> --policy normalize --expected-plan-sha256 <sha256> --approve --reviewed-by <human-actor> --format json",
+            "recovery_command": "archive markup-normalization-recovery <archive-root> --journal <journal> --mode resume|rollback --dry-run --format json",
+            "revert_command": "archive markup-normalization-revert <archive-root> --receipt <receipt> --dry-run --format json",
+            "requires_human_approval": True,
+            "unknown_markup_deleted": False,
+            "reference_binding_must_preexist": True,
+            "exact_byte_recovery": True,
+            "receipt_required": True,
+        },
+        {
+            "action": "repair_project_derived_bytecode",
+            "when": "a reviewed project source mirror contains verified untracked derived bytecode",
+            "preview_command": "archive project-bytecode-repair-plan <project-root> --dry-run --format json",
+            "approved_command": "archive project-bytecode-repair <project-root> --expected-plan-sha256 <sha256> --approve --reviewed-by <human-actor> --format json",
+            "requires_human_approval": True,
+            "tracked_files_deleted": False,
+            "source_files_modified": False,
             "receipt_required": True,
         },
         {
@@ -98622,7 +99301,7 @@ def runtime_context_write_action_routes() -> list[dict[str, Any]]:
 
 def runtime_context_action_routing() -> dict[str, Any]:
     return {
-        "schema": "wom-kit/ai-command-path-routing/v0.9",
+        "schema": "wom-kit/ai-command-path-routing/v0.10",
         "official_wom_command_required_for_archive_actions": True,
         "location_policy_alone_is_sufficient": False,
         "raw_filesystem_search_is_authoritative": False,
@@ -105947,6 +106626,7 @@ def index_archive(
     source_map_count = 0
     edge_count = 0
     facet_count = 0
+    principal_count = 0
     quarantined_zettels: list[dict[str, str]] = []
     rebuild_session = private_objet_index_rebuild_session(
         root,
@@ -106011,6 +106691,14 @@ def index_archive(
               scan_status TEXT,
               source_json TEXT
             );
+            CREATE TABLE IF NOT EXISTS principals (
+              principal_id TEXT PRIMARY KEY,
+              kind TEXT NOT NULL,
+              display_name TEXT NOT NULL,
+              status TEXT NOT NULL,
+              record_path TEXT NOT NULL,
+              principal_json TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS edges (
               from_id TEXT,
               to_id TEXT,
@@ -106033,6 +106721,7 @@ def index_archive(
             DELETE FROM derived_texts;
             DELETE FROM views;
             DELETE FROM source_map_entries;
+            DELETE FROM principals;
             DELETE FROM edges;
             DELETE FROM zettel_facets;
             DELETE FROM index_metadata;
@@ -106045,6 +106734,32 @@ def index_archive(
         warnings: list[str] = []
         canonical_metadata_count = 0
         canonical_metadata_max_mtime_ns = 0
+
+        principal_records, principal_issues = load_registered_principals(root)
+        warnings.extend(principal_issues)
+        for principal_record in principal_records:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO principals(
+                  principal_id, kind, display_name, status, record_path,
+                  principal_json
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    principal_record.get("principal_id"),
+                    principal_record.get("kind"),
+                    principal_record.get("display_name"),
+                    principal_record.get("status"),
+                    principal_record.get("record_path"),
+                    json.dumps(
+                        json_safe(principal_record),
+                        ensure_ascii=False,
+                        default=str,
+                    ),
+                ),
+            )
+            principal_count += 1
 
         def insert_facet_row(zettel_id: str, facet_key: str, facet_value: Any) -> bool:
             if not isinstance(facet_value, (str, int, float, bool)):
@@ -106411,6 +107126,7 @@ def index_archive(
         "derived_texts": derived_text_count,
         "views": view_count,
         "source_map_entries": source_map_count,
+        "principals": principal_count,
         "edges": edge_count,
         "facets": facet_count,
         "quarantined_zettel_count": len(quarantined_zettels),
@@ -109470,7 +110186,12 @@ def migrate_archive(
     approve: bool,
     revert: bool = False,
     reviewed_by: str | None = None,
+    selected_link_types: list[str] | None = None,
 ) -> dict[str, Any]:
+    if selected_link_types and target != BASE_LINK_TYPES_TARGET:
+        raise ArchiveServiceError(
+            "--link-type is supported only with --target base-link-types."
+        )
     if target == FRONTMATTER_V03_TARGET:
         if revert:
             return migrate_frontmatter_v03_revert(archive_root, target=target, dry_run=dry_run, approve=approve)
@@ -109481,13 +110202,21 @@ def migrate_archive(
         return migrate_link_types_v03(archive_root, target=target, dry_run=dry_run, approve=approve)
     if target == BASE_LINK_TYPES_TARGET:
         if revert:
-            raise ArchiveServiceError("base-link-types migration does not support --revert.")
+            return sync_base_link_types_revert(
+                archive_root,
+                target=target,
+                dry_run=dry_run,
+                approve=approve,
+                reviewed_by=reviewed_by,
+                selected_link_types=selected_link_types,
+            )
         return sync_base_link_types(
             archive_root,
             target=target,
             dry_run=dry_run,
             approve=approve,
             reviewed_by=reviewed_by,
+            selected_link_types=selected_link_types,
         )
     raise ArchiveServiceError(f"Unsupported migration target: {target}")
 
@@ -109498,10 +110227,52 @@ def migration_receipt_relative_path(target: str, seed: dict[str, Any]) -> str:
     return f"{MIGRATION_RECEIPTS_DIR}/{target_segment}.{digest[:24]}.migration.json"
 
 
-def migration_revert_receipt_relative_path(target: str, source_receipt_relative: str) -> str:
-    digest = sha256_json_hex({"target": target, "source_receipt_path": source_receipt_relative})
+def migration_revert_receipt_relative_path(
+    target: str,
+    source_receipt_relative: str,
+    removed_link_type_ids: list[str] | None = None,
+) -> str:
+    seed: dict[str, Any] = {
+        "target": target,
+        "source_receipt_path": source_receipt_relative,
+    }
+    if removed_link_type_ids is not None:
+        seed["removed_link_type_ids"] = sorted(removed_link_type_ids)
+    digest = sha256_json_hex(seed)
     target_segment = zettel_edge_filename_segment(target)
     return f"{MIGRATION_REVERT_RECEIPTS_DIR}/{target_segment}.{digest[:24]}.migration-revert.json"
+
+
+def base_link_types_adoption_generation(root: Path, archive_id: str) -> int:
+    """Return the count of valid prior base-link-type revert receipts.
+
+    The generation prevents a safe adopt -> revert -> re-adopt cycle from
+    colliding with the first deterministic sync receipt path.
+    """
+
+    receipts_root = archive_internal_path(root, MIGRATION_REVERT_RECEIPTS_DIR)
+    if not receipts_root.is_dir():
+        return 0
+    target_segment = zettel_edge_filename_segment(BASE_LINK_TYPES_TARGET)
+    generation = 0
+    for path in receipts_root.glob(
+        f"{target_segment}.*.migration-revert.json"
+    ):
+        candidate = load_json_object_for_review(
+            path,
+            "base link type revert receipt",
+            [],
+        )
+        if (
+            isinstance(candidate, dict)
+            and candidate.get("schema_version")
+            == "wom-kit/base-link-types-revert-receipt/v0.1"
+            and candidate.get("receipt_kind") == "base_link_types_revert"
+            and candidate.get("target") == BASE_LINK_TYPES_TARGET
+            and candidate.get("archive_id") == archive_id
+        ):
+            generation += 1
+    return generation
 
 
 def latest_migration_receipt(root: Path, target: str, blockers: list[dict[str, Any]]) -> tuple[dict[str, Any] | None, str | None]:
@@ -109726,6 +110497,7 @@ def sync_base_link_types(
     dry_run: bool,
     approve: bool,
     reviewed_by: str | None = None,
+    selected_link_types: list[str] | None = None,
 ) -> dict[str, Any]:
     if target != BASE_LINK_TYPES_TARGET:
         raise ArchiveServiceError(f"Unsupported migration target: {target}")
@@ -109734,10 +110506,39 @@ def sync_base_link_types(
 
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
+    adoption_generation = base_link_types_adoption_generation(
+        root,
+        archive_id,
+    )
     types_relative = "zettel-kasten/types.yml"
     types_path = archive_internal_path(root, types_relative)
+    requested_ids = unique_preserve_order(
+        [
+            str(item or "").strip().lower().replace("-", "_")
+            for item in (selected_link_types or [])
+        ]
+    )
 
     if not types_path.is_file():
+        inherited_types = load_yaml(
+            (KIT_ZETTEL_KASTEN_ROOT / "types.yml").read_text(
+                encoding="utf-8"
+            )
+        )
+        inherited_ids = {
+            item.get("id")
+            for item in (
+                inherited_types.get("link_types", [])
+                if isinstance(inherited_types, dict)
+                else []
+            )
+            if isinstance(item, dict)
+            and isinstance(item.get("id"), str)
+        }
+        if any(item not in inherited_ids for item in requested_ids):
+            raise ArchiveServiceError(
+                "Every --link-type must name an exact base link type."
+            )
         # Safe no-op: an archive with no local types.yml transparently inherits ALL
         # current and future base link types via load_allowed_link_types's base
         # fallback. Creating a local types.yml here would permanently shadow (freeze)
@@ -109756,9 +110557,11 @@ def sync_base_link_types(
             "blockers": [],
             "warnings": [],
             "appended_link_type_ids": [],
+            "selected_link_type_ids": requested_ids,
             "present_not_overwritten": [],
             "inherits_base_directly": True,
             "receipt_path": None,
+            "adoption_generation": adoption_generation,
             "would_change": [],
             "message": "archive inherits base directly; nothing to sync",
             "new_text": None,
@@ -109783,7 +110586,16 @@ def sync_base_link_types(
         for item in base_types["link_types"]
         if isinstance(item, dict) and isinstance(item.get("id"), str) and item.get("id")
     }
-    base_ids = sorted(base_by_id)
+    invalid_requested_ids = [
+        item
+        for item in requested_ids
+        if not item or item not in base_by_id
+    ]
+    if invalid_requested_ids:
+        raise ArchiveServiceError(
+            "Every --link-type must name an exact base link type."
+        )
+    base_ids = sorted(requested_ids or base_by_id)
     missing = [bid for bid in base_ids if bid not in present_ids]
     missing_records = [copy.deepcopy(base_by_id[bid]) for bid in missing]
     present_not_overwritten = sorted(bid for bid in base_ids if bid in present_ids)
@@ -109799,15 +110611,18 @@ def sync_base_link_types(
         new_types["link_types"] = new_link_types
         new_types.setdefault("schema_version", archive_types.get("schema_version") or "wom-kit/zettel-kasten-types/v0.2-draft")
         new_text = dump_yaml(new_types)
+        receipt_seed = {
+            "archive_id": archive_id,
+            "target": BASE_LINK_TYPES_TARGET,
+            "appended_link_type_ids": missing,
+            "before_sha256": sha256_text(original_text),
+            "after_sha256": sha256_text(new_text),
+        }
+        if adoption_generation:
+            receipt_seed["adoption_generation"] = adoption_generation
         receipt_relative = migration_receipt_relative_path(
             target,
-            {
-                "archive_id": archive_id,
-                "target": BASE_LINK_TYPES_TARGET,
-                "appended_link_type_ids": missing,
-                "before_sha256": sha256_text(original_text),
-                "after_sha256": sha256_text(new_text),
-            },
+            receipt_seed,
         )
         receipt_path = archive_internal_path(root, receipt_relative)
         if receipt_path.exists():
@@ -109820,7 +110635,11 @@ def sync_base_link_types(
                 }
             )
         if approve and not blockers:
-            now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+            now = (
+                datetime.now(timezone.utc)
+                .isoformat(timespec="microseconds")
+                .replace("+00:00", "Z")
+            )
             receipt = {
                 "schema_version": "wom-kit/base-link-types-sync-receipt/v0.1",
                 "lifecycle_action": "base_link_types_sync",
@@ -109829,6 +110648,8 @@ def sync_base_link_types(
                 "archive_id": archive_id,
                 "target": BASE_LINK_TYPES_TARGET,
                 "reviewed_by": reviewed_by,
+                "adoption_generation": adoption_generation,
+                "selected_link_type_ids": requested_ids,
                 "files_changed": [types_relative],
                 "appended_link_type_ids": missing,
                 "before_sha256": sha256_text(original_text),
@@ -109882,9 +110703,11 @@ def sync_base_link_types(
         "blockers": blockers,
         "warnings": [],
         "appended_link_type_ids": missing,
+        "selected_link_type_ids": requested_ids,
         "present_not_overwritten": present_not_overwritten,
         "inherits_base_directly": False,
         "receipt_path": receipt_relative,
+        "adoption_generation": adoption_generation,
         "would_change": [
             {
                 "path": types_relative,
@@ -109944,6 +110767,329 @@ def used_zettel_edge_types(
         },
         unavailable_count,
     )
+
+
+def sync_base_link_types_revert(
+    archive_root: Path | str,
+    *,
+    target: str,
+    dry_run: bool,
+    approve: bool,
+    reviewed_by: str | None = None,
+    selected_link_types: list[str] | None = None,
+) -> dict[str, Any]:
+    """Revert only untouched, unused records added by one exact sync receipt."""
+
+    if target != BASE_LINK_TYPES_TARGET:
+        raise ArchiveServiceError(f"Unsupported migration target: {target}")
+    if dry_run == approve:
+        raise ArchiveServiceError(
+            "archive migrate --revert requires exactly one of --dry-run or "
+            "--approve."
+        )
+    if approve and not reviewed_by:
+        raise ArchiveServiceError(
+            "base-link-types migration requires --reviewed-by when "
+            "--approve is used."
+        )
+
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    types_relative = "zettel-kasten/types.yml"
+    types_path = archive_internal_path(root, types_relative)
+    if not types_path.is_file():
+        raise ArchiveServiceError(
+            "base-link-types revert requires an archive-local "
+            "zettel-kasten/types.yml."
+        )
+    original_text = types_path.read_text(encoding="utf-8")
+    archive_types = load_yaml(original_text)
+    base_types = load_yaml(
+        (KIT_ZETTEL_KASTEN_ROOT / "types.yml").read_text(encoding="utf-8")
+    )
+    if (
+        not isinstance(archive_types, dict)
+        or not isinstance(archive_types.get("link_types"), list)
+        or not isinstance(base_types, dict)
+        or not isinstance(base_types.get("link_types"), list)
+    ):
+        raise ArchiveServiceError(
+            "zettel-kasten/types.yml and the base type model must define "
+            "link_types lists."
+        )
+    base_by_id = {
+        item.get("id"): item
+        for item in base_types["link_types"]
+        if isinstance(item, dict)
+        and isinstance(item.get("id"), str)
+        and item.get("id")
+    }
+    requested_ids = unique_preserve_order(
+        [
+            str(item or "").strip().lower().replace("-", "_")
+            for item in (selected_link_types or [])
+        ]
+    )
+    if any(item not in base_by_id for item in requested_ids):
+        raise ArchiveServiceError(
+            "Every --link-type must name an exact base link type."
+        )
+
+    blockers: list[dict[str, Any]] = []
+    receipts_root = archive_internal_path(root, MIGRATION_RECEIPTS_DIR)
+    target_segment = zettel_edge_filename_segment(BASE_LINK_TYPES_TARGET)
+    receipt_candidates = (
+        list(receipts_root.glob(f"{target_segment}.*.migration.json"))
+        if receipts_root.is_dir()
+        else []
+    )
+    source_receipt: dict[str, Any] | None = None
+    source_receipt_relative: str | None = None
+    valid_receipts: list[tuple[int, str, str, dict[str, Any]]] = []
+    for receipt_path in receipt_candidates:
+        candidate = load_json_object_for_review(
+            receipt_path,
+            "base link type sync receipt",
+            [],
+        )
+        if (
+            not isinstance(candidate, dict)
+            or candidate.get("schema_version")
+            != "wom-kit/base-link-types-sync-receipt/v0.1"
+            or candidate.get("receipt_kind") != "base_link_types_sync"
+            or candidate.get("target") != BASE_LINK_TYPES_TARGET
+            or candidate.get("archive_id") != archive_id
+        ):
+            continue
+        appended = candidate.get("appended_link_type_ids")
+        if not isinstance(appended, list) or not all(
+            isinstance(item, str) for item in appended
+        ):
+            continue
+        if requested_ids and not set(requested_ids).issubset(set(appended)):
+            continue
+        created_at = candidate.get("created_at")
+        if not isinstance(created_at, str) or not created_at:
+            continue
+        generation = candidate.get("adoption_generation", 0)
+        if not isinstance(generation, int) or generation < 0:
+            continue
+        relative = archive_relative_path(receipt_path, root)
+        valid_receipts.append(
+            (generation, created_at, relative, candidate)
+        )
+    if valid_receipts:
+        _, _, source_receipt_relative, source_receipt = max(valid_receipts)
+    if source_receipt is None or source_receipt_relative is None:
+        blockers.append(
+            {
+                "path": MIGRATION_RECEIPTS_DIR,
+                "field": "receipt",
+                "code": "base_link_types_sync_receipt_required",
+                "message": (
+                    "A matching base-link-types sync receipt is required "
+                    "before revert."
+                ),
+            }
+        )
+        appended_ids: list[str] = []
+    else:
+        appended_ids = [
+            str(item)
+            for item in source_receipt.get("appended_link_type_ids", [])
+            if isinstance(item, str) and item in base_by_id
+        ]
+    candidate_ids = requested_ids or appended_ids
+    candidate_set = set(candidate_ids)
+
+    used_types, unavailable_count = used_zettel_edge_types(
+        root,
+        candidate_set,
+    )
+    if unavailable_count:
+        blockers.append(
+            {
+                "path": types_relative,
+                "field": "link_types",
+                "code": "zettel_edge_usage_unavailable",
+                "message": (
+                    "Cannot safely revert while one or more zettels have "
+                    "unreadable or unavailable edge metadata."
+                ),
+            }
+        )
+
+    removable_ids: list[str] = []
+    kept_records: list[Any] = []
+    changed_records: list[str] = []
+    present_candidate_ids: set[str] = set()
+    for item in archive_types["link_types"]:
+        if not isinstance(item, dict):
+            kept_records.append(item)
+            continue
+        edge_type = item.get("id")
+        if not isinstance(edge_type, str) or edge_type not in candidate_set:
+            kept_records.append(item)
+            continue
+        present_candidate_ids.add(edge_type)
+        if edge_type in used_types:
+            kept_records.append(item)
+            blockers.append(
+                {
+                    "path": types_relative,
+                    "field": "link_types",
+                    "code": "link_type_in_use",
+                    "id": edge_type,
+                    "message": (
+                        "Cannot revert a link type used by an existing "
+                        f"zettel edge: {edge_type}"
+                    ),
+                    "used_in": used_types[edge_type],
+                }
+            )
+            continue
+        if json_safe(item) != json_safe(base_by_id.get(edge_type)):
+            kept_records.append(item)
+            changed_records.append(edge_type)
+            blockers.append(
+                {
+                    "path": types_relative,
+                    "field": "link_types",
+                    "code": "link_type_record_changed",
+                    "id": edge_type,
+                    "message": (
+                        "Cannot revert a link type whose adopted record was "
+                        f"changed: {edge_type}"
+                    ),
+                }
+            )
+            continue
+        removable_ids.append(edge_type)
+
+    already_absent = sorted(candidate_set - present_candidate_ids)
+    changes = [
+        {
+            "action": "remove_link_type",
+            "field": "link_types",
+            "id": edge_type,
+            "source": source_receipt_relative,
+        }
+        for edge_type in removable_ids
+    ]
+    new_text = original_text
+    if removable_ids and not blockers:
+        new_types = copy.deepcopy(archive_types)
+        new_types["link_types"] = kept_records
+        new_text = dump_yaml(new_types)
+
+    revert_receipt_relative = (
+        migration_revert_receipt_relative_path(
+            BASE_LINK_TYPES_TARGET,
+            source_receipt_relative,
+            removable_ids,
+        )
+        if source_receipt_relative and removable_ids
+        else None
+    )
+    if (
+        revert_receipt_relative
+        and archive_internal_path(root, revert_receipt_relative).exists()
+    ):
+        blockers.append(
+            {
+                "path": revert_receipt_relative,
+                "field": "receipt",
+                "code": "migration_revert_receipt_exists",
+                "message": "This exact base-link-types revert already exists.",
+            }
+        )
+
+    files_written: list[str] = []
+    if approve and removable_ids and not blockers:
+        assert revert_receipt_relative is not None
+        timestamp = (
+            datetime.now(timezone.utc)
+            .isoformat(timespec="microseconds")
+            .replace("+00:00", "Z")
+        )
+        receipt = {
+            "schema_version": "wom-kit/base-link-types-revert-receipt/v0.1",
+            "lifecycle_action": "base_link_types_revert",
+            "receipt_kind": "base_link_types_revert",
+            "created_at": timestamp,
+            "archive_id": archive_id,
+            "target": BASE_LINK_TYPES_TARGET,
+            "reviewed_by": reviewed_by,
+            "source_migration_receipt_path": source_receipt_relative,
+            "selected_link_type_ids": requested_ids,
+            "removed_link_type_ids": removable_ids,
+            "before_sha256": sha256_text(original_text),
+            "after_sha256": sha256_text(new_text),
+            "files_changed": [types_relative],
+            "closed_actions": {
+                "provider_api_called": False,
+                "real_source_export_files_read": False,
+                "zettel_files_written": False,
+                "edge_receipts_deleted": False,
+            },
+        }
+        revert_path = archive_internal_path(
+            root,
+            revert_receipt_relative,
+        )
+        try:
+            write_text_atomic(types_path, new_text)
+            files_written.append(types_relative)
+            revert_path.parent.mkdir(parents=True, exist_ok=True)
+            write_json_new_file(revert_path, receipt)
+            files_written.append(revert_receipt_relative)
+        except OSError:
+            write_text_atomic(types_path, original_text)
+            if revert_path.exists():
+                try:
+                    revert_path.unlink()
+                except OSError:
+                    pass
+            raise
+
+    return {
+        "ok": not blockers,
+        "lifecycle_action": "base_link_types_revert",
+        "target": BASE_LINK_TYPES_TARGET,
+        "revert": True,
+        "dry_run": bool(dry_run),
+        "approved": bool(approve),
+        "archive_id": archive_id,
+        "files_scanned": 1 + len(iter_zettel_paths(root)),
+        "files_with_changes": 1 if removable_ids and not blockers else 0,
+        "files_written": files_written,
+        "blocked": bool(blockers),
+        "blockers": blockers,
+        "warnings": [],
+        "selected_link_type_ids": requested_ids,
+        "source_receipt_appended_link_type_ids": appended_ids,
+        "removable_link_type_ids": removable_ids,
+        "already_absent_link_type_ids": already_absent,
+        "used_link_type_ids": sorted(used_types),
+        "changed_link_type_ids": sorted(changed_records),
+        "receipt_path": source_receipt_relative,
+        "revert_receipt_path": revert_receipt_relative,
+        "would_change": [
+            {
+                "path": types_relative,
+                "changes": changes,
+                "manual_review_required": bool(blockers),
+                "blockers": blockers,
+            }
+        ]
+        if changes or blockers
+        else [],
+        "new_text": (
+            new_text
+            if dry_run and removable_ids and not blockers
+            else None
+        ),
+    }
 
 
 def migrate_link_types_v03_revert(
@@ -114382,13 +115528,70 @@ OBJET_CAPTURE_PARTIAL_NEXT_SAFE_ACTIONS = [
 ]
 
 
+def _objet_capture_selection_input(
+    root: Path,
+    selection_path: Path | str,
+) -> tuple[dict[str, Any] | None, str | None, str | None]:
+    """Read one selection using archive-root authority, never process CWD.
+
+    Absolute paths remain compatible for callers that already produced them.
+    Relative paths are always resolved from the archive root, never process CWD.
+    The returned blocker vocabulary is intentionally small and content-free.
+    """
+
+    root = root.resolve()
+    raw_value = os.fspath(selection_path).strip()
+    if not raw_value:
+        return None, None, "selection_path_not_archive_relative"
+    candidate = Path(raw_value)
+    try:
+        if candidate.is_absolute():
+            resolved = candidate.resolve()
+            relative = (
+                resolved.relative_to(root).as_posix()
+                if is_path_within_root(resolved, root)
+                else None
+            )
+        else:
+            relative = normalize_archive_relative_path(raw_value)
+            resolved = archive_internal_path(root, relative)
+    except (ArchivePathError, ArchiveServiceError, OSError, ValueError):
+        return None, None, "selection_path_not_archive_relative"
+
+    if (
+        not resolved.is_file()
+        or resolved.is_symlink()
+        or (
+            is_path_within_root(resolved, root)
+            and zet_revision_path_has_symlink_component(root, resolved)
+        )
+    ):
+        return None, relative, "selection_file_missing_or_not_regular"
+    try:
+        raw_bytes = resolved.read_bytes()
+    except OSError:
+        return None, relative, "selection_file_unreadable"
+    try:
+        text = raw_bytes.decode("utf-8")
+    except UnicodeDecodeError:
+        return None, relative, "selection_manifest_invalid_utf8"
+    try:
+        loaded = json.loads(text)
+    except json.JSONDecodeError:
+        return None, relative, "selection_manifest_invalid_json"
+    if not isinstance(loaded, dict):
+        return None, relative, "selection_manifest_not_object"
+    return loaded, relative, None
+
+
 def _objet_capture_run(
     archive_root: Path | str,
-    selection_path: Path | str,
+    selection_path: Path | str | None,
     *,
     approve: bool,
     reviewed_by: str | None,
     project_intake_receipt: str | None = None,
+    selection_document: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     root = Path(archive_root).resolve()
     enablement = read_capture_enablement(root)
@@ -114402,19 +115605,36 @@ def _objet_capture_run(
     archive_id = read_archive_id(root)
     captured_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
-    try:
-        selection_raw = json.loads(Path(selection_path).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        selection_raw = None
-    if not isinstance(selection_raw, dict):
+    if selection_document is None:
+        selection_raw, selection_relative, selection_input_blocker = (
+            _objet_capture_selection_input(root, selection_path or "")
+        )
+    else:
+        selection_raw = copy.deepcopy(selection_document)
+        selection_relative = None
+        selection_input_blocker = (
+            None
+            if isinstance(selection_raw, dict)
+            else "selection_manifest_not_object"
+        )
+    if selection_input_blocker is not None or selection_raw is None:
         return {
             "ok": False,
             "dry_run": not approve,
             "lifecycle_action": "objet_capture_plan" if not approve else "objet_capture",
             "archive_id": archive_id,
+            "status_class": "blocked",
+            "selection_path": selection_relative,
             "items": [],
-            "blockers": ["selection_manifest_unreadable"],
+            "blockers": [selection_input_blocker or "selection_manifest_not_object"],
             "warnings": [],
+            "would_change": [],
+            "privacy_guards": {
+                "selection_value_echoed": False,
+                "local_absolute_paths_echoed": False,
+                "exception_text_echoed": False,
+                "writes": False,
+            },
         }
     selection = selection_raw
     selection_sha256 = sha256_json_value(selection)
@@ -114431,6 +115651,7 @@ def _objet_capture_run(
         "dry_run": not approve,
         "lifecycle_action": "objet_capture_plan" if not approve else "objet_capture",
         "archive_id": archive_id,
+        "selection_path": selection_relative,
         "selection_manifest_id": str(selection.get("manifest_id") or ""),
         "selection_manifest_sha256": selection_sha256,
         "project_intake_context": project_intake_context,
@@ -114979,6 +116200,24 @@ def objet_capture_dry_run(
         approve=False,
         reviewed_by=None,
         project_intake_receipt=project_intake_receipt,
+    )
+
+
+def objet_capture_document_dry_run(
+    archive_root: Path | str,
+    selection: dict[str, Any],
+    *,
+    project_intake_receipt: str | None = None,
+) -> dict[str, Any]:
+    """Preview an already parsed selection without writing a temporary file."""
+
+    return _objet_capture_run(
+        archive_root,
+        None,
+        approve=False,
+        reviewed_by=None,
+        project_intake_receipt=project_intake_receipt,
+        selection_document=selection,
     )
 
 
