@@ -50,20 +50,24 @@ BASELINE_EXPECTATIONS = {
         "value_key": "packaged_paths",
     },
 }
-CLI_ADDITIONS = {("find-objet",)}
-CURRENT_CLI_COUNT = 504
+CLI_ADDITIONS = {
+    ("find-objet",),
+    ("source-reference-coverage-audit",),
+}
+CURRENT_CLI_COUNT = 505
 CURRENT_CLI_CANONICAL_SHA256 = (
-    "eb52f341acdf9ead65f07b2cc385079401bf75d1f1d0906d381f84936fe04354"
+    "c7afdc18d047bcced078605c83958ac35ca61bdf20dc1b44ea290c5de0d79e2a"
 )
 RESOURCE_ADDITIONS = {
-    "release-notes/v0.3.298.md",
+    "release-notes/v0.3.299.md",
     "schemas/private-objet-finder-request-v0.1.schema.json",
     "schemas/private-objet-finder-result-v0.1.schema.json",
+    "schemas/source-reference-coverage-audit-result-v0.1.schema.json",
 }
 RESOURCE_REMOVALS = {"release-notes/v0.3.297.md"}
-CURRENT_RESOURCE_COUNT = 113
+CURRENT_RESOURCE_COUNT = 114
 CURRENT_RESOURCE_CANONICAL_SHA256 = (
-    "b26fadc32cb6f6e7375b363c2a4ca11b19323023ae023f8c7b94a2b87ea301dd"
+    "7ab5cf48a2d5da87220395248970d9408abe6ead248ffc2a2022d7e52bf8aa26"
 )
 
 
@@ -193,7 +197,7 @@ def named_row_diff_message(
     )
 
 
-class V03298PredecessorSurfaceTests(unittest.TestCase):
+class V03299PredecessorSurfaceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.fixture = load_fixture()
@@ -257,7 +261,7 @@ class V03298PredecessorSurfaceTests(unittest.TestCase):
                         f"{module.__name__} was imported outside this worktree's source checkout."
                     )
 
-    def test_cli_nested_paths_are_v03297_plus_exact_v03298_delta(self) -> None:
+    def test_cli_paths_are_v03297_plus_exact_v03298_v03299_delta(self) -> None:
         predecessor = self.fixture["cli"]["paths"]
         predecessor_set = {tuple(path) for path in predecessor}
         self.assertFalse(CLI_ADDITIONS & predecessor_set)
@@ -301,7 +305,7 @@ class V03298PredecessorSurfaceTests(unittest.TestCase):
             BASELINE_EXPECTATIONS["mcp"]["canonical_sha256"],
         )
 
-    def test_package_resource_paths_are_exact_v03297_plus_v03298_delta(self) -> None:
+    def test_resource_paths_are_v03297_plus_exact_v03298_v03299_delta(self) -> None:
         predecessor_paths = set(self.fixture["package_resources"]["packaged_paths"])
         self.assertTrue(
             RESOURCE_REMOVALS <= predecessor_paths,
@@ -331,10 +335,10 @@ class V03298PredecessorSurfaceTests(unittest.TestCase):
             actual,
             expected,
             "Current package-resource paths must be the full v0.3.297 set plus "
-            "the exact v0.3.298 delta. "
+            "the exact cumulative v0.3.298 and v0.3.299 delta. "
             f"missing={compact(missing)}; extra={compact(extra)}",
         )
-        self.assertEqual(manifest["version"], "0.3.298")
+        self.assertEqual(manifest["version"], "0.3.299")
         self.assertEqual(len(actual), CURRENT_RESOURCE_COUNT)
         self.assertEqual(
             canonical_sha256(actual),
@@ -353,14 +357,14 @@ class V03298PredecessorSurfaceTests(unittest.TestCase):
         self.assertIn("does not undo", predecessor_flat)
         self.assertNotIn("C:\\Users\\", predecessor_text)
 
-    def test_v03298_release_note_is_public_and_synchronized(self) -> None:
-        current_source_release = KIT_ROOT / "docs" / "releases" / "v0.3.298.md"
+    def test_v03299_release_note_is_public_and_synchronized(self) -> None:
+        current_source_release = KIT_ROOT / "docs" / "releases" / "v0.3.299.md"
         current_packaged_release = (
             SRC_ROOT
             / "wom_kit"
             / "_resources"
             / "release-notes"
-            / "v0.3.298.md"
+            / "v0.3.299.md"
         )
         self.assertEqual(
             current_source_release.read_bytes(),
@@ -369,11 +373,11 @@ class V03298PredecessorSurfaceTests(unittest.TestCase):
         current_text = current_source_release.read_text(encoding="utf-8")
         current_flat = " ".join(current_text.split())
         for token in (
-            "archive find-objet",
-            "private_archive",
+            "source-reference-coverage-audit",
+            "python -B",
             "read-only",
-            "not_found_in_index",
-            "complete current private index",
+            "archive-wide",
+            "recorded-time",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, current_flat)
@@ -381,6 +385,7 @@ class V03298PredecessorSurfaceTests(unittest.TestCase):
             "C:\\Users\\",
             "private-canary.hwpx",
             "DO-NOT-REFLECT-PRIVATE-QUERY",
+            "https://private.example",
         ):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, current_text)

@@ -1,6 +1,6 @@
 # AI Command-Path Routing
 
-Status: implemented in v0.3.278, extended through v0.3.298
+Status: implemented in v0.3.278, extended through v0.3.299
 
 ## Purpose
 
@@ -78,6 +78,24 @@ archive find-objet <archive-root> --audience private_archive \
   --query-profile literal_unicode --query-stdin --format json
 ```
 
+v0.3.299 advances the routing envelope to:
+
+```text
+wom-kit/ai-command-path-routing/v0.9
+action: inspect_observed_source_coverage_and_recorded_storage_evidence
+```
+
+The exact route is:
+
+```text
+python -B -m wom_kit.archive_cli source-reference-coverage-audit \
+  <archive-root> --dry-run --format json
+```
+
+It is authoritative only for safely traversed current canonical `source_refs`,
+exact Notion omission markers, and separately recorded local storage evidence.
+It does not supply an archive-wide source population or a live storage check.
+
 The feedback route is ordered and an AI must not skip the human gate:
 
 ```text
@@ -126,6 +144,7 @@ packaged runtime skill, the fake archive, and live read-only command output.
 | Search archive records | `archive search <archive-root> <query> --count-total --format json` | Inspect complete/truncated metadata. Raw grep and raw SQL are not authoritative WOM search results. |
 | Find an objet by a reviewed private-name alias | `archive find-objet <archive-root> --audience private_archive --query-profile literal_unicode --query-stdin --format json` | Exact generated-index equality only. `not_found_in_index` means no match in the complete current private index, not global absence. |
 | Plan checked-layer rediscovery before a global absence claim | `archive objet-rediscovery-plan <archive-root> <query> --dry-run --count-total --format json` | Preserves index completeness as snapshot-only evidence, lists all ten fixed layers, echoes no private query/results, and supports no global absence claim while any applicable or unknown layer is incomplete. |
+| Inspect observed source-reference coverage separately from recorded storage evidence | `python -B -m wom_kit.archive_cli source-reference-coverage-audit <archive-root> --dry-run --format json` | Covers only current canonical `source_refs` and exact Notion omission markers. It has no archive-wide denominator and performs no live byte/storage check. |
 | Inspect installed version truth | `archive version <project-or-archive-root> --format json` | Proves local runtime/source/pin and already-fetched tag state; it does not verify remote release freshness. |
 | Inspect saved-view state | `archive view-health <archive-root> --dry-run --format json` | Follow with `view-recommendation-plan`; both are read-only. |
 | Inspect possible historical inbox pipeline bypasses | `archive inbox-pipeline-audit <archive-root> --dry-run --format json` | Structural classes are conservative signals, not proof of command execution; no automatic repair exists. |

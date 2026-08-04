@@ -1,8 +1,8 @@
 {
   "schema": "wom-kit/package-resource-manifest/v0.1",
-  "version": "0.3.298",
+  "version": "0.3.299",
   "source_of_truth": "wom-kit source resource directories",
-  "file_count": 113,
+  "file_count": 114,
   "files": [
     {
       "source": "schemas/activity-group-membership-receipt.schema.json",
@@ -263,6 +263,12 @@
       "sha256": "04c81da5125f06e8b538064fd8c5e798768590fa2cb421b530a8c810f23a08cc"
     },
     {
+      "source": "schemas/source-reference-coverage-audit-result-v0.1.schema.json",
+      "packaged": "schemas/source-reference-coverage-audit-result-v0.1.schema.json",
+      "bytes": 15689,
+      "sha256": "1248f14c0e09260b4c301e6119262241d8ef9c55d483ee9d8671bc35309c6cd4"
+    },
+    {
       "source": "schemas/source-scan-receipt.schema.json",
       "packaged": "schemas/source-scan-receipt.schema.json",
       "bytes": 1202,
@@ -385,8 +391,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/SKILL.md",
       "packaged": "templates/ai-runtime/wom-archive/SKILL.md",
-      "bytes": 7660,
-      "sha256": "64de45aa21f6f90d8b5a63d45ddb6b2bd88511c0220b887ff607d6159d49faa3"
+      "bytes": 7991,
+      "sha256": "9ccd72b339b187b75592addf5be3ddd4c10ec36859aafbd4c34dc1413ebab9f1"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/capture-draft-and-publication.md",
@@ -409,8 +415,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/references/reading-memory-and-revision.md",
       "packaged": "templates/ai-runtime/wom-archive/references/reading-memory-and-revision.md",
-      "bytes": 7902,
-      "sha256": "9ef9454341041b81b26932d7201d06b001219e56be7b98dfc93b84c68d514900"
+      "bytes": 8232,
+      "sha256": "c7449ddfc92ed5ff5867ca0ad715a8f63e689ab141d673ac1fd782086ff2514c"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/safety-results-and-human-language.md",
@@ -677,10 +683,10 @@
       "sha256": "d619dc26af3216498c8392dfe838b0fe752d4bad9da998a58ca682d668fc510c"
     },
     {
-      "source": "docs/releases/v0.3.298.md",
-      "packaged": "release-notes/v0.3.298.md",
-      "bytes": 1809,
-      "sha256": "ffa5a7217435096fc8fc0501c5c374fe5d5e9c114128d23f920ed6444e7af6bf"
+      "source": "docs/releases/v0.3.299.md",
+      "packaged": "release-notes/v0.3.299.md",
+      "bytes": 1691,
+      "sha256": "88436c3871f812a90ab05541f5cc3a7100e26d323b37d6dfb77e74ff34e4e0b8"
     }
   ]
 }

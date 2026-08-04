@@ -109,6 +109,8 @@ Commands:
           Resolve one sha256 objet reference to safe local/external candidates.
   find-objet
           Search the private generated alias index without reflecting the query.
+  source-reference-coverage-audit
+          Compare observed canonical source-reference coverage with separate recorded storage evidence.
   presigned-url-plan
           Plan a future provider presigned URL request without creating URLs.
   object-storage-operation-request-plan
@@ -19569,6 +19571,22 @@ def build_parser() -> argparse.ArgumentParser:
     find_objet_parser.add_argument("finder_argv", nargs=argparse.REMAINDER)
     find_objet_parser.set_defaults(func=command_find_objet)
 
+    source_reference_coverage_parser = subcommands.add_parser(
+        "source-reference-coverage-audit",
+        add_help=False,
+        help=(
+            "Compare observed canonical source-reference coverage with "
+            "separate recorded storage evidence."
+        ),
+    )
+    source_reference_coverage_parser.add_argument(
+        "coverage_audit_argv",
+        nargs=argparse.REMAINDER,
+    )
+    source_reference_coverage_parser.set_defaults(
+        func=command_source_reference_coverage_audit
+    )
+
     version = subcommands.add_parser("version", help="Print the running WOM-kit version and optional project pin status.")
     version.add_argument(
         "inspection_root",
@@ -27806,6 +27824,20 @@ def command_find_objet(args: argparse.Namespace) -> int:
     return command_find_objet_argv(args.finder_argv)
 
 
+def command_source_reference_coverage_audit(
+    args: argparse.Namespace,
+) -> int:
+    """Fallback dispatch; ``main`` uses the raw privacy-safe route."""
+
+    from .source_reference_coverage_audit import (
+        command_source_reference_coverage_audit_argv,
+    )
+
+    return command_source_reference_coverage_audit_argv(
+        args.coverage_audit_argv
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     _harden_std_streams()
     raw_argv = sys.argv[1:] if argv is None else list(argv)
@@ -27813,6 +27845,12 @@ def main(argv: list[str] | None = None) -> int:
         from .private_objet_finder import command_find_objet_argv
 
         return command_find_objet_argv(raw_argv[1:])
+    if raw_argv[:1] == ["source-reference-coverage-audit"]:
+        from .source_reference_coverage_audit import (
+            command_source_reference_coverage_audit_argv,
+        )
+
+        return command_source_reference_coverage_audit_argv(raw_argv[1:])
     parser = build_parser()
     try:
         args = parser.parse_args(raw_argv)
