@@ -32,10 +32,10 @@ wom-kit/docs/releases/에만 쌓고, baseline 사다리와 tag 목록을 여기�
 현재 공개 기준:
 
 ```text
-v0.3.299 pre-release
+v0.3.300 pre-release
 ```
 
-이전 공개 기준: v0.3.298 pre-release.
+이전 공개 기준: v0.3.299 pre-release.
 
 전체 릴리스 이력은 [CHANGELOG.md](CHANGELOG.md)와 [wom-kit/docs/releases/](wom-kit/docs/releases/)를 보세요.
 
@@ -54,7 +54,7 @@ Roadmap 요약: `v0.1.x`는 아이디어/프로토콜 언어 라인, `v0.2.x`는
 파일이 실제 공개되었다는 증거가 되지는 않습니다.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.299/wom_kit-0.3.299-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.300/wom_kit-0.3.300-py3-none-any.whl"
 archive --version
 ```
 
@@ -165,7 +165,7 @@ Tiro:
 
 Notion:
 
-- 승인형 `archive migrate --target base-link-types`: 자체 `types.yml`을 vendoring한 archive에 누락된 모든 base WOM-kit link type을 덧붙입니다(recommended-9 집합의 상위집합이라 `continues`도 함께 끌어옵니다). 기존 항목은 제거·개명·재정렬·덮어쓰기하지 않는 append-only, no-clobber이며, revert는 없고 `--reviewed-by` 게이트를 걸며, 로컬 `types.yml`이 아예 없는 archive에서는 아무것도 쓰지 않는 안전 no-op입니다(이미 base를 상속). 형제 마이그레이션처럼 `safe_dump`로 파일 전체를 정규화한다는 점을 정직하게 밝힙니다.
+- 승인형 `archive migrate --target base-link-types`: 자체 `types.yml`을 vendoring한 archive에 누락된 모든 base link type 또는 반복 지정한 정확한 `--link-type`만 덧붙입니다. 같은 id의 사용자 정의 항목은 덮어쓰지 않습니다. 영수증에 결속된 부분 `--revert`는 선택 항목이 여전히 base와 같고 어떤 edge도 사용하지 않을 때만 제거합니다. 로컬 `types.yml`이 없는 archive는 이미 base를 상속하므로 안전한 no-op입니다.
 - Notion child page/database/view 구조를 `contains` edge type으로 다루는 read-only connection planning과, 맞는 edge type이 없을 때 AI가 억지 매핑하지 않고 model gap으로 올리는 안전 가드,
 - read-only nested tree recovery planning: 중첩 child page leaf를 세대 root에 귀속하고 `node_kind` 기반 content class를 보수적으로 도출하며, 큰 fixture가 부분 성공으로 위장하지 않도록 차단하고, 추적불능 parent chain과 조상 crawl 요청 큐를 버리지 않고 보고합니다.
 - broad workspace 큐를 generation/ref scope filter로 좁힌 뒤 adapter 입력으로 넘길 수 있게 하는 read-only 조상 crawl 요청 계획과, 고정된 recursive fetch adapter execution contract,
@@ -178,7 +178,7 @@ Notion:
 
 Zettel edge write:
 
-- approval-gated single-edge zettel edge write(reviewed zet-to-zet/zet-to-objet, `zet:notion:<id>` 안전 해소)와, 고신뢰 policy 매치만 게이트로 보내고 나머지는 human review 큐에 남기는 approval-gated policy batch write. v0.3.286은 사람이 같은 지적 내용을 다른 형식으로 표현한 한 쌍이라고 직접 판단했을 때만 쓰는 WOM-local `format_variant`를 활성화합니다. source 방향은 검토 anchor일 뿐 더 오래되거나 원본이거나 canonical이라는 뜻이 아니며, reciprocal edge·제목/파일명/provider 기반 추론·기존 corpus 자동 이관은 만들지 않습니다. `zettel-edge-batch`는 policy가 이 유형을 허용해도 항상 `manual_single_edge_review_required`로 사람 검토 큐에 보내며 쓰지 않습니다. v0.3.290부터 공용 single-edge gate는 해소된 `Zettel`/`OriginalObject` endpoint가 선택한 active `types.yml` 항목의 비어 있지 않은 `from`·`to` entity-type 목록을 만족하지 않으면 쓰기 전에 닫힌 상태로 실패합니다.
+- approval-gated single-edge zettel edge write(reviewed zet-to-zet/zet-to-objet/zet-to-Principal)와, 고신뢰 policy 매치만 게이트로 보내고 나머지는 human review 큐에 남기는 approval-gated policy batch write. 같은 강좌·같은 작업의 다음 주차는 `continues`, 일반 절차의 다음 단계는 사람 검토 전용 `sequence`입니다. `sequence`와 `format_variant`는 policy가 허용해도 항상 `manual_single_edge_review_required`로 사람 검토 큐에 남아 일괄 기록되지 않습니다. 반복 프로그램은 좌표일 뿐 자동 edge가 아니며, 제3자 사람·기관·팀·역할은 소유자를 바꾸지 않고 durable Principal로 등록한 뒤 edge target으로 사용합니다. 공용 single-edge gate는 해소된 endpoint가 active `types.yml`의 `from`·`to` entity type을 만족하지 않으면 쓰기 전에 닫힌 상태로 실패합니다.
 - 원본 receipt를 지우지 않는 receipt 기반 `revert-edge`/`revert-batch` edge 롤백,
 
 Object storage:
@@ -404,7 +404,7 @@ WOM, `zettel-kasten`, `zet`, `ZET`는 버전이 있는 protocol family로 관리
 Release tag는 compatibility checkpoint입니다.
 
 ```text
-v0.3.299 (현재 checkpoint)
+v0.3.300 (현재 checkpoint)
 ```
 
 `v0.2.5` 이후의 공개 릴리스에는 compatibility checkpoint tag가 붙습니다. 전체

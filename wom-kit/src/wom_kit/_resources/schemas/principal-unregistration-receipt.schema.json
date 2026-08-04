@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wom.example/schemas/principal-unregistration-receipt.schema.json",
+  "title": "WOM Principal Unregistration Receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "archive_id",
+    "principal_id",
+    "record_path",
+    "removed_record_sha256",
+    "plan_sha256",
+    "reviewed_by",
+    "created_at"
+  ],
+  "properties": {
+    "schema": {
+      "const": "wom-kit/principal-unregistration-receipt/v0.1"
+    },
+    "archive_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "principal_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]{1,31}:[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "record_path": {
+      "type": "string",
+      "pattern": "^principals/[0-9a-f]{64}\\.yml$"
+    },
+    "removed_record_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "plan_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "reviewed_by": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

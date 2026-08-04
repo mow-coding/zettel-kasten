@@ -9,6 +9,15 @@ CREATE TABLE IF NOT EXISTS archives (
   updated_at TEXT
 );
 
+CREATE TABLE IF NOT EXISTS principals (
+  principal_id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  status TEXT NOT NULL,
+  record_path TEXT NOT NULL,
+  principal_json TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS zettels (
   zettel_id TEXT PRIMARY KEY,
   archive_id TEXT NOT NULL,

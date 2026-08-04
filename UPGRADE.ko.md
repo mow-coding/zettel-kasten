@@ -2,6 +2,57 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.3.300 Letters 098-111 통합 완료
+
+v0.3.300은 기존 v0.3.299 아카이브와 호환되며 자동 마이그레이션이
+필요하지 않습니다. 새 locator, 관계 판단, 일괄 capture, 마크업 정규화
+기록은 사용자가 새 명령을 명시적으로 실행할 때만 만들어집니다.
+
+실제 아카이브의 마크업을 바꾸기 전에는 `markup-style-guide`와 전체
+`markup-normalization-plan`을 먼저 실행하십시오. 알 수 없는 의미 태그는
+삭제하지 않고 검토해야 합니다. 참조 태그는 이미 존재하는 locator 또는
+edge에 대한 검토된 binding이 필요합니다. 쓰기 도중 중단되면 남아 있는
+journal을 대상으로 `markup-normalization-recovery --mode resume|rollback`을
+사용하십시오. journal을 지우거나 영향을 받은 zet을 손으로 고쳐서
+우회하면 안 됩니다.
+
+Objet selection과 project-intake staged-folder의 상대 경로는 이제 shell
+현재 폴더가 아니라 아카이브 루트를 기준으로 해석됩니다. 기존 스크립트가
+현재 폴더에 의존했다면 절대 경로를 넘기거나 문서화된 아카이브 상대 경로로
+수정하십시오.
+
+`sequence`는 이제 사람 검토 전용 base edge입니다. 같은 강좌·같은 작업의
+다음 주차나 다음 편은 `continues`, 일반 행정·운영·생애 절차의 다음 단계는
+`sequence`를 사용합니다. 둘 다 자동 추론하거나 일괄 기록하지 않습니다.
+오래된 local `types.yml`에는 필요한 유형만 선택해 채택할 수 있습니다.
+
+```powershell
+archive migrate <archive-root> --target base-link-types --link-type sequence --dry-run --format json
+archive migrate <archive-root> --target base-link-types --link-type sequence --approve --reviewed-by <actor> --format json
+```
+
+같은 `--link-type` 선택에 `--revert --dry-run`을 붙이면 부분 되돌리기를
+미리 볼 수 있습니다. 채택된 항목이 base와 같은 값으로 남아 있고 어떤
+zet edge도 사용하지 않을 때만 승인된 되돌리기가 허용됩니다.
+
+아카이브 소유자가 아닌 사람·기관·팀·역할을 edge 대상으로 쓰기 전에는
+`principal-register-plan`과 `principal-register`로 Principal을
+등록하십시오. 소유자는 계속 `archive.yml`에, 검토된 제3자는
+`principals/*.yml`에 남습니다. `archive index`는 둘을 SQLite
+`principals` table에 투영합니다. 사용 중인 Principal은 등록 해제할 수
+없으며, 등록은 소유자를 바꾸지 않습니다.
+
+반복 프로그램은 `facets.recurring_series` 좌표를 공유할 뿐 자동 edge를
+만들지 않습니다. 한 회차의 여러 zet을 묶는 `activity_group`은 검토된
+event anchor zet이 먼저 있어야 합니다. 비공개 Notion 복구 join은 정확한
+`facets.source_page_id`만 사용하고, 비슷해 보이는 mirror 필드로 대체하지
+마십시오.
+
+자세한 내용은
+[`wom-kit/docs/letters098-111-completion.md`](wom-kit/docs/letters098-111-completion.md)와
+[`wom-kit/docs/releases/v0.3.300.md`](wom-kit/docs/releases/v0.3.300.md)를
+참조하십시오.
+
 ## v0.3.297 영수증 결합 비공개 objet 생성 index
 
 v0.3.297은 기존 v0.3.296 아카이브와 호환되며 아카이브 마이그레이션이

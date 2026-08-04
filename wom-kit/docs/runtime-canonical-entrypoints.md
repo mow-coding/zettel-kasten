@@ -1,6 +1,6 @@
 # Runtime Canonical Entry Points
 
-Status: v0.3.299 reviewed private metadata registration, checked-layer objet rediscovery, explicit runtime-guidance readiness, operator-feedback routing, and prior runtime safeguards checkpoint
+Status: v0.3.300 Letters 098-111 integrated completion routing checkpoint
 
 When an AI runtime enters a WOM archive, it needs a small, explicit "start
 here" map. The archive may contain zets, source bindings, provider metadata,
@@ -53,12 +53,23 @@ consumption as `not_proven`.
 
 ## Official Action Routing
 
-Introduced in v0.3.278 and extended through v0.3.299, `action_routing` uses
-`wom-kit/ai-command-path-routing/v0.9`. It tells an AI which official command
+Introduced in v0.3.278 and extended through v0.3.300, `action_routing` uses
+`wom-kit/ai-command-path-routing/v0.10`. It tells an AI which official command
 handles session entry, search, local version truth, saved-view inspection,
 inbox pipeline-shape review, explicit event-membership add/removal planning, command
 discovery, draft creation, minting, typed edges, source capture, and
 operational-context updates.
+
+v0.3.300 adds official plan/write/recovery routes for provider-neutral
+external locators, local relation candidate judgment, migration-markup
+normalization, bounded batch Objet capture, and project derived-bytecode
+repair. It also routes reviewed third-party Principal registration and
+unregistration, Principal listing, and selected base link-type
+adoption/revert. The relation rule reserves `continues` for the next
+week/installment of the same course or work and `sequence` for the next
+reviewed generic process step. Candidates and plans remain non-authorizing.
+Every listed mutation still requires a separate exact plan SHA-256 and
+attributed human approval.
 
 When the question is observed current canonical source-reference coverage
 versus separately recorded storage evidence, use `python -B -m
@@ -271,7 +282,7 @@ Run `archive ai-start-here <archive-root> --dry-run --progress --format json` be
 Read and follow the returned `action_routing`.
 Use `archive search <archive-root> <query> --count-total --format json` for official WOM search.
 Raw grep and raw SQL are not authoritative WOM search results.
-For operator feedback, run `archive operator-feedback-plan <archive-root> --dry-run --format json`, inspect `archive operator-feedback-ledger <archive-root> --dry-run --format json`, require human review, preview `archive operator-feedback-record <archive-root> ... --dry-run --format json`, and only then use the reviewed `--approve` replay.
+For operator feedback, run `archive operator-feedback-plan <archive-root> --dry-run --format json`, inspect `archive operator-feedback-ledger <archive-root> --dry-run --format json`, require human review, preview `archive operator-feedback-record <archive-root> ... --intent create|update --dry-run --format json`, and only then use the reviewed `--approve` replay; create never overwrites, while update also requires the fresh `--expected-record-sha256`.
 <!-- WOM-RUNTIME-GUIDANCE-ROUTING v0.3.293 END -->
 ```
 

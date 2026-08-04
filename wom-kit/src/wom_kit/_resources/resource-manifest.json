@@ -1,8 +1,8 @@
 {
   "schema": "wom-kit/package-resource-manifest/v0.1",
-  "version": "0.3.299",
+  "version": "0.3.300",
   "source_of_truth": "wom-kit source resource directories",
-  "file_count": 114,
+  "file_count": 132,
   "files": [
     {
       "source": "schemas/activity-group-membership-receipt.schema.json",
@@ -89,10 +89,64 @@
       "sha256": "7859d09c68e1d5416a5e21bc478c5e050944c43474ed1fa7b6e97f0262c3fb04"
     },
     {
+      "source": "schemas/external-locator-receipt.schema.json",
+      "packaged": "schemas/external-locator-receipt.schema.json",
+      "bytes": 1761,
+      "sha256": "ed96c27a60683588087fb05b506d0793d0093de3846e8ca59c98e736731dd7b0"
+    },
+    {
+      "source": "schemas/external-locator-record.schema.json",
+      "packaged": "schemas/external-locator-record.schema.json",
+      "bytes": 1783,
+      "sha256": "0a646738dfafd93eff4f34370888fcc80dd86a4c7878a61e2f193885e5a17e63"
+    },
+    {
+      "source": "schemas/external-locator-revert-receipt.schema.json",
+      "packaged": "schemas/external-locator-revert-receipt.schema.json",
+      "bytes": 1086,
+      "sha256": "736cae8ba937fd16a60499d7ed6b6315f92071c1a661994d2c9c96eeb546d284"
+    },
+    {
       "source": "schemas/imap-mailbox-adapter-manifest.schema.json",
       "packaged": "schemas/imap-mailbox-adapter-manifest.schema.json",
       "bytes": 6806,
       "sha256": "9f1de60c058ae624d4f402aaa9f4f41b9cd13f520488f3a4ed9f02870b30ad2c"
+    },
+    {
+      "source": "schemas/markup-normalization-journal.schema.json",
+      "packaged": "schemas/markup-normalization-journal.schema.json",
+      "bytes": 2262,
+      "sha256": "0ab54444a4fd86f9bf04bf476ffaed846afd51eaf4b26563d82cc76a0d101cf6"
+    },
+    {
+      "source": "schemas/markup-normalization-plan.schema.json",
+      "packaged": "schemas/markup-normalization-plan.schema.json",
+      "bytes": 882,
+      "sha256": "96886c340840f8cc2cb323baad6883240c9071874730f85031b55733632de2a4"
+    },
+    {
+      "source": "schemas/markup-normalization-receipt.schema.json",
+      "packaged": "schemas/markup-normalization-receipt.schema.json",
+      "bytes": 1313,
+      "sha256": "a9274139f1af5387266ec99e40a0c3133908afa1d4bfe075bcad985212a1e860"
+    },
+    {
+      "source": "schemas/markup-normalization-recovery-receipt.schema.json",
+      "packaged": "schemas/markup-normalization-recovery-receipt.schema.json",
+      "bytes": 1563,
+      "sha256": "eb1d086e735778eaa19b5ebe064c3556478b0ee606fbefd9ed5c2f5385b02d44"
+    },
+    {
+      "source": "schemas/markup-normalization-revert-receipt.schema.json",
+      "packaged": "schemas/markup-normalization-revert-receipt.schema.json",
+      "bytes": 1309,
+      "sha256": "5233c16298f9c8526779ab3c93678e76acfe62117f83c81cc6a513590d0a3b6f"
+    },
+    {
+      "source": "schemas/markup-reference-binding-manifest.schema.json",
+      "packaged": "schemas/markup-reference-binding-manifest.schema.json",
+      "bytes": 1093,
+      "sha256": "d5250ac86a124f49fcdb64a6d0146d5af4dcd56e72c537f35afd5552e470a014"
     },
     {
       "source": "schemas/mint-receipt.schema.json",
@@ -137,6 +191,18 @@
       "sha256": "b2cd8e6c2da6df13b7db140c47d598b55faf4e4c8a57cbcddb8623cda7964d74"
     },
     {
+      "source": "schemas/objet-capture-batch-receipt.schema.json",
+      "packaged": "schemas/objet-capture-batch-receipt.schema.json",
+      "bytes": 1663,
+      "sha256": "e0992bd65cd0dd3baaf678737366e4b4e5bf2dd9ac032dd67d71ec6daca877e3"
+    },
+    {
+      "source": "schemas/objet-capture-batch-request.schema.json",
+      "packaged": "schemas/objet-capture-batch-request.schema.json",
+      "bytes": 1621,
+      "sha256": "43f581b3c08cff47252be431b39cb7eaec6a3cb4867a0faaf21cb33ea867e757"
+    },
+    {
       "source": "schemas/objet-safe-label-projection-v0.1.schema.json",
       "packaged": "schemas/objet-safe-label-projection-v0.1.schema.json",
       "bytes": 12511,
@@ -151,8 +217,8 @@
     {
       "source": "schemas/operator-feedback-receipt.schema.json",
       "packaged": "schemas/operator-feedback-receipt.schema.json",
-      "bytes": 827,
-      "sha256": "a27e30e3386d88053a226567419df98cd2cbc0b9d5bb912fad201fee90fd4151"
+      "bytes": 951,
+      "sha256": "6cf99a496aa9f67fc34bd79080b928b30cb221be0054092ce78e15d08e693167"
     },
     {
       "source": "schemas/operator-feedback.schema.json",
@@ -165,6 +231,24 @@
       "packaged": "schemas/ownership-transfer-receipt.schema.json",
       "bytes": 2058,
       "sha256": "d099584291588b8231ad22f59650d17ec26d071804c238f0e029db1f81d4c0b3"
+    },
+    {
+      "source": "schemas/principal-record.schema.json",
+      "packaged": "schemas/principal-record.schema.json",
+      "bytes": 1144,
+      "sha256": "1df0070d9bfb4b0ee935f951d40c1928958cda1d9fed23011e0243dfb2a60d65"
+    },
+    {
+      "source": "schemas/principal-registration-receipt.schema.json",
+      "packaged": "schemas/principal-registration-receipt.schema.json",
+      "bytes": 1254,
+      "sha256": "66569e395a1699d96819377b1f2a717040b195a3e4d93fc757036d38b5eee6b4"
+    },
+    {
+      "source": "schemas/principal-unregistration-receipt.schema.json",
+      "packaged": "schemas/principal-unregistration-receipt.schema.json",
+      "bytes": 1198,
+      "sha256": "bafce0fbca971a319f1751a14f66c89a1b788fd504f608ee18211334043df7ce"
     },
     {
       "source": "schemas/private-objet-finder-request-v0.1.schema.json",
@@ -221,6 +305,12 @@
       "sha256": "d56f48ba45094b9bd7fecebf3739700ecd7e4e02f607d709101e02bcf6dd0149"
     },
     {
+      "source": "schemas/project-bytecode-repair-receipt.schema.json",
+      "packaged": "schemas/project-bytecode-repair-receipt.schema.json",
+      "bytes": 1050,
+      "sha256": "7edeeded93e1eebb3f942ce4d7aeaf72cf7d0975c38c6a774b695b4b7671c030"
+    },
+    {
       "source": "schemas/project-version-update-receipt-v0.2.schema.json",
       "packaged": "schemas/project-version-update-receipt-v0.2.schema.json",
       "bytes": 4663,
@@ -237,6 +327,24 @@
       "packaged": "schemas/provider-bindings.schema.json",
       "bytes": 1093,
       "sha256": "50775690d3644cd7983b900f297d3c07d1e6c9b26b424711034424ce04b49353"
+    },
+    {
+      "source": "schemas/relation-candidate-plan.schema.json",
+      "packaged": "schemas/relation-candidate-plan.schema.json",
+      "bytes": 837,
+      "sha256": "1f32cc2e6986143962e4ee03402cdc2f912cbcd237afe5a8e9d46d367af76b47"
+    },
+    {
+      "source": "schemas/relation-judgment-receipt.schema.json",
+      "packaged": "schemas/relation-judgment-receipt.schema.json",
+      "bytes": 989,
+      "sha256": "fa94ba0b4b5b16462297482503f4771a057cf9557e8fbfe620de275cd0e83a80"
+    },
+    {
+      "source": "schemas/relation-judgment.schema.json",
+      "packaged": "schemas/relation-judgment.schema.json",
+      "bytes": 1786,
+      "sha256": "f04d5660c7f099219aeba35a4f44e449adca79e57622ca2e52fbd7a7852d8e4b"
     },
     {
       "source": "schemas/restore-drill-receipt.schema.json",
@@ -391,8 +499,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/SKILL.md",
       "packaged": "templates/ai-runtime/wom-archive/SKILL.md",
-      "bytes": 7991,
-      "sha256": "9ccd72b339b187b75592addf5be3ddd4c10ec36859aafbd4c34dc1413ebab9f1"
+      "bytes": 9946,
+      "sha256": "048176bdafa39745a1b0b49d9d8a57f4bce0caadc7a795bb57d9b405e18b1757"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/capture-draft-and-publication.md",
@@ -409,8 +517,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/references/operator-contract.md",
       "packaged": "templates/ai-runtime/wom-archive/references/operator-contract.md",
-      "bytes": 55731,
-      "sha256": "9ea4180b7804041db1924cf32240e0770cc3bb5930b6fec75e8c6dda7d80e5d6"
+      "bytes": 60065,
+      "sha256": "f6be17296df6b9bd17916c60f725d03a866a3943ad752cf2775f1f7b09e2723f"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/reading-memory-and-revision.md",
@@ -433,8 +541,8 @@
     {
       "source": "templates/company/AGENTS.md",
       "packaged": "templates/company/AGENTS.md",
-      "bytes": 9091,
-      "sha256": "a8aa032493a1b6466ad02e4654c60de8a41c4d5b1cbf1d00fc99ebf89b7125d9"
+      "bytes": 9204,
+      "sha256": "2f897f3ed73cae8e1b875a211f51b36b9f1da5b240dc444bbfcc5b6ad9c1ad16"
     },
     {
       "source": "templates/company/archive-identity.yml",
@@ -451,8 +559,8 @@
     {
       "source": "templates/company/db/schema.sql",
       "packaged": "templates/company/db/schema.sql",
-      "bytes": 2041,
-      "sha256": "0efd69399c493fa54249746c3932770da8e86e8acc3ffaf6bffef1be1e2ad110"
+      "bytes": 2254,
+      "sha256": "ae8bc386e555fff10e5d81f4cc0e56e1aeea8da36cedac6a2b76e6983da76204"
     },
     {
       "source": "templates/company/inbox/.gitkeep",
@@ -505,8 +613,8 @@
     {
       "source": "templates/family/AGENTS.md",
       "packaged": "templates/family/AGENTS.md",
-      "bytes": 9231,
-      "sha256": "856630fce582a1787347bd88d7b965af400c375ace07ac185553964c48397a3a"
+      "bytes": 9344,
+      "sha256": "6942d209e0f7c3c1e437b1e58da05acfb34e739253821d05d8fb4235b46953f7"
     },
     {
       "source": "templates/family/archive-identity.yml",
@@ -523,8 +631,8 @@
     {
       "source": "templates/family/db/schema.sql",
       "packaged": "templates/family/db/schema.sql",
-      "bytes": 2041,
-      "sha256": "0efd69399c493fa54249746c3932770da8e86e8acc3ffaf6bffef1be1e2ad110"
+      "bytes": 2254,
+      "sha256": "ae8bc386e555fff10e5d81f4cc0e56e1aeea8da36cedac6a2b76e6983da76204"
     },
     {
       "source": "templates/family/inbox/.gitkeep",
@@ -577,8 +685,8 @@
     {
       "source": "templates/personal/AGENTS.md",
       "packaged": "templates/personal/AGENTS.md",
-      "bytes": 9200,
-      "sha256": "e4c0241c048008bda6952362abb52ef80cde2713aaf7acd5df00b37724b0e05c"
+      "bytes": 9313,
+      "sha256": "a9248fcf97d59e4c53b7377dfadd27b4153a970daad68997970953b862d17e61"
     },
     {
       "source": "templates/personal/archive-identity.yml",
@@ -595,8 +703,8 @@
     {
       "source": "templates/personal/db/schema.sql",
       "packaged": "templates/personal/db/schema.sql",
-      "bytes": 2041,
-      "sha256": "0efd69399c493fa54249746c3932770da8e86e8acc3ffaf6bffef1be1e2ad110"
+      "bytes": 2254,
+      "sha256": "ae8bc386e555fff10e5d81f4cc0e56e1aeea8da36cedac6a2b76e6983da76204"
     },
     {
       "source": "templates/personal/inbox/.gitkeep",
@@ -673,8 +781,8 @@
     {
       "source": "zettel-kasten/types.yml",
       "packaged": "zettel-kasten/types.yml",
-      "bytes": 15681,
-      "sha256": "8e371e851ab19a5e81af8262612c54159b9b1f3cb2f7eba9a71e0dbe2d4a89de"
+      "bytes": 16548,
+      "sha256": "cef544fe245a5a34a334426b87530ef74b209aa1fd2f294844c6dbed31b08d99"
     },
     {
       "source": "zettel-kasten/zettel-rules.yml",
@@ -683,10 +791,10 @@
       "sha256": "d619dc26af3216498c8392dfe838b0fe752d4bad9da998a58ca682d668fc510c"
     },
     {
-      "source": "docs/releases/v0.3.299.md",
-      "packaged": "release-notes/v0.3.299.md",
-      "bytes": 1691,
-      "sha256": "88436c3871f812a90ab05541f5cc3a7100e26d323b37d6dfb77e74ff34e4e0b8"
+      "source": "docs/releases/v0.3.300.md",
+      "packaged": "release-notes/v0.3.300.md",
+      "bytes": 3084,
+      "sha256": "8e6f9f3cca7bfe34652da5d460f8353c1f0810dcbc4678a44d4e614a16181cff"
     }
   ]
 }

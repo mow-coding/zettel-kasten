@@ -9,7 +9,7 @@ Run `archive ai-start-here <archive-root> --dry-run --progress --format json` be
 Read and follow the returned `action_routing`.
 Use `archive search <archive-root> <query> --count-total --format json` for official WOM search.
 Raw grep and raw SQL are not authoritative WOM search results.
-For operator feedback, run `archive operator-feedback-plan <archive-root> --dry-run --format json`, inspect `archive operator-feedback-ledger <archive-root> --dry-run --format json`, require human review, preview `archive operator-feedback-record <archive-root> ... --dry-run --format json`, and only then use the reviewed `--approve` replay.
+For operator feedback, run `archive operator-feedback-plan <archive-root> --dry-run --format json`, inspect `archive operator-feedback-ledger <archive-root> --dry-run --format json`, require human review, preview `archive operator-feedback-record <archive-root> ... --intent create|update --dry-run --format json`, and only then use the reviewed `--approve` replay; create never overwrites, while update also requires the fresh `--expected-record-sha256`.
 <!-- WOM-RUNTIME-GUIDANCE-ROUTING v0.3.293 END -->
 
 ## Read Order

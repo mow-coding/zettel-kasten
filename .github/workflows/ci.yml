@@ -1,10 +1,9 @@
 name: CI
 
-# Stage 3 of wom-kit/docs/main-branch-protection-readiness.md: introduce an
-# optional GitHub Actions workflow that runs the existing local release gate and
-# the WOM-kit test suite. This workflow is deliberately NOT a required status
-# check yet. Stage 4 (requiring it) and stricter branch protection remain
-# separate, explicit decisions.
+# Pull requests run every established test across the supported platform
+# matrix. Main and annotated release-tag pushes reuse that required candidate
+# evidence and run the fast release/resource gate without repeating the same
+# long test matrix.
 
 on:
   push:
@@ -52,7 +51,8 @@ jobs:
         run: python wom-kit/tools/sync_package_resources.py --check
 
   tests:
-    name: Tests ${{ matrix.os }} py${{ matrix.python-version }}
+    name: Tests ${{ matrix.os }} py${{ matrix.python-version }} shard ${{ matrix.shard_index }}/${{ matrix.shard_count }}
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
     runs-on: ${{ matrix.os }}
     timeout-minutes: ${{ matrix.timeout-minutes }}
     strategy:
@@ -64,17 +64,59 @@ jobs:
           # one the local Windows development machine never exercises.
           - os: ubuntu-latest
             python-version: '3.12'
+            shard_index: 1
+            shard_index_zero: 0
+            shard_count: 2
+            timeout-minutes: 75
+          - os: ubuntu-latest
+            python-version: '3.12'
+            shard_index: 2
+            shard_index_zero: 1
+            shard_count: 2
             timeout-minutes: 45
           # Lowest supported interpreter (requires-python = ">=3.10").
           - os: ubuntu-latest
             python-version: '3.10'
+            shard_index: 1
+            shard_index_zero: 0
+            shard_count: 2
+            timeout-minutes: 75
+          - os: ubuntu-latest
+            python-version: '3.10'
+            shard_index: 2
+            shard_index_zero: 1
+            shard_count: 2
             timeout-minutes: 45
           # Keeps parity with the machine releases are currently cut on.
-          # The full Windows suite normally takes 37-44 minutes and can take
-          # about 55 minutes on a slow hosted runner, so keep real headroom.
+          # The unsharded Windows suite reached 59 minutes on v0.3.299. Four
+          # deterministic source-balanced shards retain every module while
+          # reducing wall-clock time. The deterministic zero shard receives
+          # the monolithic test_cli.py module, so zero shards get the longer
+          # timeout on every interpreter/platform.
           - os: windows-latest
             python-version: '3.12'
+            shard_index: 1
+            shard_index_zero: 0
+            shard_count: 4
             timeout-minutes: 75
+          - os: windows-latest
+            python-version: '3.12'
+            shard_index: 2
+            shard_index_zero: 1
+            shard_count: 4
+            timeout-minutes: 45
+          - os: windows-latest
+            python-version: '3.12'
+            shard_index: 3
+            shard_index_zero: 2
+            shard_count: 4
+            timeout-minutes: 45
+          - os: windows-latest
+            python-version: '3.12'
+            shard_index: 4
+            shard_index_zero: 3
+            shard_count: 4
+            timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:
@@ -95,12 +137,17 @@ jobs:
       # The established suite remains unittest-based. Docker-backed cases stay
       # opt-in via AI_ARCHIVE_RUN_DOCKER_TESTS.
       - name: WOM-kit unittest suite
-        run: python -B -m unittest discover -s wom-kit/tests -v
+        run: >-
+          python -B wom-kit/tools/run_unittest_shard.py
+          --tests-dir wom-kit/tests
+          --shard-count ${{ matrix.shard_count }}
+          --shard-index ${{ matrix.shard_index_zero }}
 
       # v0.3.296 adds two pytest-native modules whose fixtures,
       # parametrization, and monkeypatching are not collected by unittest.
       # Keep this list explicit so pytest does not duplicate the whole suite.
       - name: WOM-kit pytest-native Win32 and authority suite
+        if: runner.os == 'Windows' && matrix.shard_index_zero == 0
         run: >-
           python -B -m pytest -q
           wom-kit/tests/test_v03296_private_metadata_win32.py
@@ -116,3 +163,19 @@ jobs:
             git status --porcelain
             exit 1
           fi
+
+  required:
+    name: Required CI
+    if: always() && (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch')
+    needs:
+      - gate
+      - tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every gate and test shard
+        env:
+          GATE_RESULT: ${{ needs.gate.result }}
+          TESTS_RESULT: ${{ needs.tests.result }}
+        run: |
+          test "$GATE_RESULT" = "success"
+          test "$TESTS_RESULT" = "success"

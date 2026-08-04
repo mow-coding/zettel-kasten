@@ -135,9 +135,11 @@ entity_types:
     description: A person, family, company, team, role, child, or other actor that owns or uses records.
     primary_key: principal_id
     storage:
-      yaml: archive.yml
+      yaml:
+        archive_owner: archive.yml
+        registered_third_parties: principals/*.yml
       sqlite_table: principals
-      sqlite_status: planned
+      sqlite_status: implemented_projection
     required_properties:
       - principal_id
       - kind
@@ -477,6 +479,20 @@ link_types:
       - Zettel
     to:
       - Zettel
+    policy_notes:
+      - Consecutive weeks of the same course or the same continuing work use continues.
+      - Record only after human review; shared numbering or a similar title is not enough.
+
+  - id: sequence
+    description: The target zet is the next reviewed step in a generic administrative, operational, or life-event process; it is not necessarily the same continuing work.
+    from:
+      - Zettel
+    to:
+      - Zettel
+    policy_notes:
+      - Use continues, not sequence, for consecutive weeks or installments of the same course or work.
+      - Record only after human review; do not infer from dates, numbering, titles, or shared facets alone.
+      - Store one directed assertion per reviewed adjacent step and do not automatically create a reciprocal edge.
 
   - id: semantic
     description: The target zet is meaningfully related, but the relation needs human wording before it becomes more specific.

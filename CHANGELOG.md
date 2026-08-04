@@ -6,6 +6,30 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.300 - 2026-08-04
+
+- Completed the remaining source-confirmed public work from beta Letters
+  098-111 in one integrated release train rather than one release per letter.
+- Added collision-safe feedback create/update, archive-root-relative input
+  authority, bounded batch Objet capture, provider-neutral locator lifecycle,
+  reviewed relation candidates/judgments, crash-recoverable exact-byte markup
+  normalization, and verified derived-bytecode repair.
+- Activated manual-only `sequence` for generic process steps while reserving
+  `continues` for the next week/installment of the same course or work.
+- Added reviewed third-party Principal registration/list/unregistration,
+  Principal-target edge resolution, disposable SQLite projection, and
+  in-use removal blocking without changing archive ownership.
+- Added selected `base-link-types --link-type` adoption and exact
+  receipt-bound partial revert for unchanged, unused adopted records.
+- Added 18 Draft 2020-12 schemas and runtime action routing v0.10 for the new
+  plans, records, manifests, journals, judgments, receipts, recovery, and
+  revert paths.
+- Made full pull-request CI deterministic and complete through unique
+  source-balanced shards, one Windows pytest-native authority pass, and one
+  stable aggregate check.
+- Kept external host adoption, client-private corpus execution, and the
+  reported edge-count discrepancy behind honest external-evidence boundaries.
+
 ## v0.3.299 - 2026-08-04
 
 - Added CLI-only, read-only

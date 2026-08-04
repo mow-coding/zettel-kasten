@@ -9,7 +9,7 @@ from wom_kit import __version__
 
 KIT_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = KIT_ROOT.parent
-EXPECTED_CURRENT_VERSION = "0.3.299"
+EXPECTED_CURRENT_VERSION = "0.3.300"
 EXPECTED_CURRENT_TAG = f"v{EXPECTED_CURRENT_VERSION}"
 CURRENT_VERSION = f"v{__version__}"
 CURRENT_RELEASE_NOTE = f"{EXPECTED_CURRENT_TAG}.md"
@@ -20,9 +20,8 @@ CURRENT_WHEEL_URL = (
     f"wom_kit-{EXPECTED_CURRENT_VERSION}-py3-none-any.whl"
 )
 CURRENT_RUNTIME_STATUS = (
-    f"Status: {CURRENT_VERSION} reviewed private metadata registration, "
-    "checked-layer objet rediscovery, explicit runtime-guidance readiness, "
-    "operator-feedback routing, and prior runtime safeguards checkpoint"
+    f"Status: {CURRENT_VERSION} Letters 098-111 integrated completion "
+    "routing checkpoint"
 )
 MATRIX_PATH = KIT_ROOT / "docs" / "capability-matrix.md"
 PRODUCT_ROADMAP_PATH = KIT_ROOT / "docs" / "product-roadmap.md"
@@ -10771,7 +10770,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             guide_text,
         )
         self.assertIn(
-            "wom-kit/ai-command-path-routing/v0.9",
+            "wom-kit/ai-command-path-routing/v0.10",
             routing_text,
         )
         self.assertIn(

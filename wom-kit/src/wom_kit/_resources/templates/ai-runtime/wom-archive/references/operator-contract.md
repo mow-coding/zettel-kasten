@@ -498,6 +498,90 @@ archive source-intake <archive-root> --dry-run --local-path <local-file> --forma
 
 Follow the returned `next_safe_actions`: stage the file inside the archive root (recommended `staging/incoming/<YYYY-MM-DD>/<project_slug>/`; capture requires archive-relative staged paths), prepare ONE reviewed selection with `objet-capture-selection` (optionally pairing an existing vendor transcript through `--derived-text-staged-path` so a single approval covers both halves), then capture only through `objet-capture --selection <path> --dry-run` first and `--approve --reviewed-by <actor-id>` after human approval. Real (non-sandbox) archives additionally need an owner-approved `objet-capture-enable` record. For bulk stores whose bytes already live in an external content-addressed store, register evidence with `prehashed-objet-ledger` and `object-storage-upload-evidence` instead of copying files in. Capture authority comes ONLY from the reviewed selection plus the approved capture (plus enablement); a source-intake plan is never permission to copy, capture, import, or upload, and a raw in-root `objets/` folder is not an approved destination.
 
+For one reviewed request containing many ordinary staged files, prefer:
+
+```text
+archive objet-capture-batch <archive-root> --manifest <archive-relative-json> --dry-run --format json
+archive objet-capture-batch <archive-root> --manifest <same-json> --expected-plan-sha256 <exact-plan-sha256> --approve --reviewed-by <actor> --format json
+```
+
+The complete request is structurally checked before source bytes are opened.
+The operation is bounded to 2,000 items and converges per item on replay. It
+does not promise transaction-wide atomicity.
+
+## External Locators, Relation Review, And Markup Normalization
+
+Use `external-locator-plan` before `external-locator-record`. Ordinary output
+never reflects the locator value. Multiple locators may coexist, but their
+presence proves neither live remote reachability nor global recoverability.
+Use `external-locator-recovery-plan` to inspect safe candidates and the
+dedicated `external-locator-revert` dry-run/approval path to restore exact
+prior state.
+
+Use `relation-semantics-guide` before reviewing ambiguous continuation,
+recurrence, sequence, third-party Principal, or format-variant meaning.
+`relation-candidate-plan` reads frontmatter only and creates no edge.
+`relation-candidate-decide` requires a human reason, confidence, decision, and
+explicit edge type on acceptance. Rejection is durable suppression evidence.
+
+The decision rule is exact:
+
+- the next week or installment of the same course or continuing work uses
+  `continues`;
+- the next step in a generic administrative, operational, or life-event
+  process uses `sequence`;
+- a repeated annual/program occurrence shares
+  `facets.recurring_series`, but recurrence alone creates no edge;
+- several zets from one occurrence may use `activity_group` only after the
+  reviewed event-anchor zet already exists.
+
+Both `continues` and `sequence` require one human-reviewed directed edge.
+`zettel-edge-batch` cannot write `sequence`. A stale local type model can
+adopt only the selected record and safely revert it while it remains exact and
+unused:
+
+```text
+archive migrate <archive-root> --target base-link-types --link-type sequence --dry-run --format json
+archive migrate <archive-root> --target base-link-types --link-type sequence --approve --reviewed-by <actor> --format json
+archive migrate <archive-root> --target base-link-types --link-type sequence --revert --dry-run --format json
+```
+
+Register a third-party Principal before using a person, institution, team, or
+role as a Zettel edge target:
+
+```text
+archive principal-register-plan <archive-root> --principal-id company:example --kind company --display-name <reviewed-name> --dry-run --format json
+archive principal-register <archive-root> --principal-id company:example --kind company --display-name <same-name> --expected-plan-sha256 <sha256> --approve --reviewed-by <actor> --format json
+archive principal-list <archive-root> --format json
+```
+
+Registration never changes the archive owner. Unregistration is a separate
+digest-bound approval and blocks while any zettel edge still targets that
+Principal. The generated SQLite `principals` table is a disposable projection;
+`archive.yml` plus `principals/*.yml` remain authoritative.
+
+For private Notion recovery joins, use exact nested
+`facets.source_page_id`. Never substitute a mirror-zettel field that merely
+looks equivalent: mismatched join authority can silently drop rows.
+
+Use `markup-style-guide` and `markup-normalization-plan` before changing
+migration markup. `preserve` records the inventory and writes nothing.
+`normalize` may remove only reviewed migration wrappers while preserving
+visible text. Unknown semantic tags block. File/media/mention/synced-ref tags
+require an archive-local binding manifest whose exact tag SHA-256 points to an
+already-existing active external locator or source-zettel edge.
+
+Approval snapshots exact before and after bytes and writes a journal before
+the first canonical mutation. If a process stops, inspect that journal with:
+
+```text
+archive markup-normalization-recovery <archive-root> --journal <archive-relative-journal> --mode resume|rollback --dry-run --format json
+```
+
+Approve only the fresh recovery SHA-256. Do not delete the journal or edit
+affected zets by hand. Completed normalization uses the separate exact-byte
+`markup-normalization-revert` path.
+
 ```bash
 archive create-draft <archive-root> --dry-run --source-intake-plan <source-intake-plan.json> --prompt-boundary-report <prompt-boundary-report.json> --expected-archive-id <id> --expected-type <type> --profile-id <profile-id> --creation-mode ai_assisted --created-by ai_runtime:codex --assisted-by ai_runtime:codex --format json
 ```
