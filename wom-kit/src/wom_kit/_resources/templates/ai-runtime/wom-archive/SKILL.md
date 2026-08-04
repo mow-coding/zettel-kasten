@@ -81,6 +81,34 @@ token-budget contract.
   source-reference-coverage-audit <archive-root> --dry-run --format json`.
   Its observed population is not archive-wide, and it performs no live
   object-byte or remote-storage check.
+- Treat relative `objet-capture --selection` and project-intake staged-folder
+  paths as archive-root coordinates. For many reviewed capture items, use one
+  complete `objet-capture-batch --dry-run` and its exact approved replay
+  instead of starting one process per file. Batch success is per-item
+  convergence, not all-or-nothing atomicity.
+- Record a private provider/storage coordinate only through
+  `external-locator-plan` and the exact approved
+  `external-locator-record`. A locator is a recovery clue, not proof that a
+  remote object is currently reachable. Use the dedicated revert plan before
+  removing a reviewed locator.
+- Use `relation-candidate-plan` only as a review queue. A candidate is not an
+  edge. The human must confirm accept/reject and the exact edge type through
+  `relation-candidate-decide`; recurrence alone never proves `continues`.
+  Consecutive weeks of the same course use `continues`; the next reviewed step
+  in a generic administrative or operational process uses `sequence`.
+  Neither may be batch-written. Register a non-owner person, institution,
+  team, or role through `principal-register-plan` and `principal-register`
+  before using its Principal id as an edge target. Never replace the archive
+  owner merely to name a third party.
+- For private Notion recovery joins, use exact `facets.source_page_id` only.
+  Never join through a similarly named mirror zettel field; that can silently
+  drop rows. A shared recurring-series coordinate is context, not an edge.
+  `activity_group` requires an already-existing reviewed event-anchor zet.
+- Before changing migration markup, run `markup-style-guide` and
+  `markup-normalization-plan`. Unknown tags must block. Reference tags require
+  an exact reviewed binding to an existing locator or edge. If a normalization
+  journal is interrupted, use only `markup-normalization-recovery` with a
+  fresh `resume` or `rollback` plan; do not hand-edit around the journal.
 - Inspect possible historical direct inbox writes only with
   `archive inbox-pipeline-audit <archive-root> --dry-run --format json`.
   Treat its classes as review signals, not proof, and never repair a draft

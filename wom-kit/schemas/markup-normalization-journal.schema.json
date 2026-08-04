@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wom-kit/markup-normalization-journal/v0.1",
+  "title": "WOM-kit crash-recoverable markup normalization journal",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "archive_id", "plan_sha256", "policy", "binding_manifest_sha256", "state", "applied_count", "item_count", "items", "reviewed_by", "created_at", "updated_at"],
+  "properties": {
+    "schema": {"const": "wom-kit/markup-normalization-journal/v0.1"},
+    "archive_id": {"type": "string", "minLength": 1},
+    "plan_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "policy": {"const": "normalize"},
+    "binding_manifest_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+    "state": {"enum": ["prepared", "applying", "applied", "interrupted", "committed", "rolled_back"]},
+    "applied_count": {"type": "integer", "minimum": 0, "maximum": 5000},
+    "item_count": {"type": "integer", "minimum": 0, "maximum": 5000},
+    "items": {
+      "type": "array",
+      "maxItems": 5000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["index", "zettel_id", "path", "before_sha256", "after_sha256", "snapshot_path", "before_snapshot_path", "after_snapshot_path"],
+        "properties": {
+          "index": {"type": "integer", "minimum": 0},
+          "zettel_id": {"type": ["string", "null"]},
+          "path": {"type": "string", "minLength": 1},
+          "before_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "after_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "snapshot_path": {"type": "string", "minLength": 1},
+          "before_snapshot_path": {"type": "string", "minLength": 1},
+          "after_snapshot_path": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "reviewed_by": {"type": "string", "minLength": 1},
+    "created_at": {"type": "string", "minLength": 1},
+    "updated_at": {"type": "string", "minLength": 1},
+    "receipt_path": {"type": "string", "minLength": 1},
+    "recovery_mode": {"enum": ["resume", "rollback"]},
+    "recovery_receipt_path": {"type": "string", "minLength": 1},
+    "recovered_by": {"type": "string", "minLength": 1}
+  }
+}

@@ -24,6 +24,72 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.300 Letters 098-111 Integrated Completion
+
+v0.3.300 is compatible with existing v0.3.299 archives and requires no
+automatic migration. The new locator, relation-judgment, batch-capture, and
+markup-normalization records are created only when their new commands are
+explicitly used.
+
+Before using markup normalization on a real archive, run
+`markup-style-guide` and a complete `markup-normalization-plan`. Unknown
+semantic tags must be reviewed rather than deleted. Reference tags need a
+reviewed binding to an already-existing locator or edge. If a writer is
+interrupted, use `markup-normalization-recovery --mode resume|rollback`
+against the retained journal; never remove the journal or hand-edit affected
+zets to bypass it.
+
+Relative Objet selection and project-intake staged-folder paths now resolve
+from the archive root. Scripts that intentionally relied on the process
+working directory should pass an absolute path or update to the documented
+archive-relative coordinate.
+
+`operator-feedback-record` now defaults to collision-safe
+`--intent create`, so an existing feedback id is never overwritten. Automation
+that deliberately updates a record must first run `--intent update --dry-run`,
+then replay with the returned `current_record_sha256` as
+`--expected-record-sha256`. Omitted title, related-release, and recorded
+delivery/acknowledgment timestamps are preserved during that update.
+
+`sequence` is now an active manual-only base edge. Use `continues` for the next
+week or installment of the same course/work, and `sequence` for the next
+reviewed step in a generic administrative, operational, or life-event process.
+Preview and adopt only the needed type in a vendored archive:
+
+```powershell
+archive migrate <archive-root> --target base-link-types --link-type sequence --dry-run --format json
+archive migrate <archive-root> --target base-link-types --link-type sequence --approve --reviewed-by <actor> --format json
+```
+
+The same `--link-type` selection supports `--revert --dry-run` and approved
+revert while the adopted record remains equivalent to the base record and no
+zettel edge uses it. Custom same-id records and used types block removal.
+
+Register a reviewed non-owner person, institution, team, or role before using
+its Principal id as a Zettel edge target:
+
+```powershell
+archive principal-register-plan <archive-root> --principal-id company:example --kind company --display-name "<reviewed name>" --dry-run --format json
+archive principal-register <archive-root> --principal-id company:example --kind company --display-name "<same name>" --expected-plan-sha256 <sha256> --approve --reviewed-by <actor> --format json
+archive principal-list <archive-root> --format json
+```
+
+The owner stays in `archive.yml`; reviewed third parties live under
+`principals/*.yml`. `archive index` projects both into SQLite. Unregister only
+through its plan/approval pair; any live Zettel edge to that Principal blocks
+removal.
+
+Recurring occurrences share `facets.recurring_series` without automatically
+creating an edge. One occurrence's multi-zet grouping requires an existing
+reviewed event anchor before `activity_group` membership. Private Notion
+recovery joins must use exact `facets.source_page_id`, never a similarly named
+mirror field.
+
+See
+[`wom-kit/docs/letters098-111-completion.md`](wom-kit/docs/letters098-111-completion.md)
+and
+[`wom-kit/docs/releases/v0.3.300.md`](wom-kit/docs/releases/v0.3.300.md).
+
 ## v0.3.297 Receipt-Bound Private Objet Generated Index
 
 v0.3.297 is compatible with existing v0.3.296 archives and requires no

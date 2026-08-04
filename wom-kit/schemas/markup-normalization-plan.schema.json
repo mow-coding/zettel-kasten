@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wom-kit/markup-normalization-plan/v0.1",
+  "title": "WOM-kit markup normalization deterministic plan document",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "archive_id", "policy", "max_items", "max_changes", "binding_manifest_sha256", "items"],
+  "properties": {
+    "schema": {"const": "wom-kit/markup-normalization-plan/v0.1"},
+    "archive_id": {"type": "string", "minLength": 1},
+    "policy": {"enum": ["preserve", "normalize"]},
+    "max_items": {"type": "integer", "minimum": 1, "maximum": 10000},
+    "max_changes": {"type": "integer", "minimum": 1, "maximum": 5000},
+    "binding_manifest_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+    "items": {
+      "type": "array",
+      "maxItems": 10000,
+      "items": {"type": "object"}
+    }
+  }
+}

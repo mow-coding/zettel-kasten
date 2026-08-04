@@ -58,9 +58,9 @@ EMPTY_ALLOWLIST_SHA256 = (
     "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
 )
 
-CLI_COUNT = 505
+CLI_COUNT = 525
 CLI_CANONICAL_SHA256 = (
-    "c7afdc18d047bcced078605c83958ac35ca61bdf20dc1b44ea290c5de0d79e2a"
+    "0a92d9648402b3346ddb482ebb56185f40c2ad771126f5691efc3b818d4a3ce3"
 )
 MCP_COUNT = 121
 MCP_CANONICAL_SHA256 = (
@@ -68,13 +68,31 @@ MCP_CANONICAL_SHA256 = (
 )
 DB_SOURCE_COUNT = 3
 DB_SOURCE_CANONICAL_SHA256 = (
-    "06173af07c47ea345c7b94c447832142f2c1da615e6e3681a020b3078dbabfe5"
+    "d9a42f08ee12a6d42e40214cfb12441e4077bf50c38c25b2692ec1344328294a"
 )
 RESOURCE_ADDITIONS = frozenset(
     {
-        "release-notes/v0.3.299.md",
+        "release-notes/v0.3.300.md",
+        "schemas/external-locator-receipt.schema.json",
+        "schemas/external-locator-record.schema.json",
+        "schemas/external-locator-revert-receipt.schema.json",
+        "schemas/markup-normalization-journal.schema.json",
+        "schemas/markup-normalization-plan.schema.json",
+        "schemas/markup-normalization-receipt.schema.json",
+        "schemas/markup-normalization-recovery-receipt.schema.json",
+        "schemas/markup-normalization-revert-receipt.schema.json",
+        "schemas/markup-reference-binding-manifest.schema.json",
+        "schemas/objet-capture-batch-receipt.schema.json",
+        "schemas/objet-capture-batch-request.schema.json",
+        "schemas/principal-record.schema.json",
+        "schemas/principal-registration-receipt.schema.json",
+        "schemas/principal-unregistration-receipt.schema.json",
         "schemas/private-objet-finder-request-v0.1.schema.json",
         "schemas/private-objet-finder-result-v0.1.schema.json",
+        "schemas/project-bytecode-repair-receipt.schema.json",
+        "schemas/relation-candidate-plan.schema.json",
+        "schemas/relation-judgment-receipt.schema.json",
+        "schemas/relation-judgment.schema.json",
         "schemas/source-reference-coverage-audit-result-v0.1.schema.json",
     }
 )
@@ -1132,7 +1150,19 @@ class PrivateObjetMetadataIndexPrivacyGateTests(unittest.TestCase):
         fixture = json.loads(
             PREDECESSOR_FIXTURE_PATH.read_text(encoding="utf-8")
         )
-        self.assertEqual(database, fixture["database"]["sources"])
+        predecessor_database = fixture["database"]["sources"]
+        self.assertEqual(
+            [row["path"] for row in database],
+            [row["path"] for row in predecessor_database],
+        )
+        self.assertNotEqual(database, predecessor_database)
+        self.assertTrue(
+            all(
+                "CREATE TABLE IF NOT EXISTS principals"
+                in (REPO_ROOT / row["path"]).read_text(encoding="utf-8")
+                for row in database
+            )
+        )
 
     def test_07_resource_delta_and_source_package_mirror_are_exact(self) -> None:
         fixture = json.loads(
@@ -1147,7 +1177,7 @@ class PrivateObjetMetadataIndexPrivacyGateTests(unittest.TestCase):
             manifest["schema"],
             "wom-kit/package-resource-manifest/v0.1",
         )
-        self.assertEqual(manifest["version"], "0.3.299")
+        self.assertEqual(manifest["version"], "0.3.300")
         self.assertEqual(manifest["file_count"], len(manifest["files"]))
         current_paths = {row["packaged"] for row in manifest["files"]}
         self.assertEqual(

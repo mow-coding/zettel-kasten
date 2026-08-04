@@ -51,23 +51,65 @@ BASELINE_EXPECTATIONS = {
     },
 }
 CLI_ADDITIONS = {
+    ("external-locator-plan",),
+    ("external-locator-record",),
+    ("external-locator-recovery-plan",),
+    ("external-locator-revert",),
     ("find-objet",),
+    ("markup-normalization",),
+    ("markup-normalization-plan",),
+    ("markup-normalization-recovery",),
+    ("markup-normalization-revert",),
+    ("markup-style-guide",),
+    ("objet-capture-batch",),
+    ("principal-list",),
+    ("principal-register",),
+    ("principal-register-plan",),
+    ("principal-unregister",),
+    ("principal-unregister-plan",),
+    ("project-bytecode-repair",),
+    ("project-bytecode-repair-plan",),
+    ("relation-candidate-decide",),
+    ("relation-candidate-plan",),
+    ("relation-semantics-guide",),
     ("source-reference-coverage-audit",),
 }
-CURRENT_CLI_COUNT = 505
+CURRENT_CLI_COUNT = 525
 CURRENT_CLI_CANONICAL_SHA256 = (
-    "c7afdc18d047bcced078605c83958ac35ca61bdf20dc1b44ea290c5de0d79e2a"
+    "0a92d9648402b3346ddb482ebb56185f40c2ad771126f5691efc3b818d4a3ce3"
+)
+CURRENT_DATABASE_COUNT = 3
+CURRENT_DATABASE_CANONICAL_SHA256 = (
+    "d9a42f08ee12a6d42e40214cfb12441e4077bf50c38c25b2692ec1344328294a"
 )
 RESOURCE_ADDITIONS = {
-    "release-notes/v0.3.299.md",
+    "release-notes/v0.3.300.md",
+    "schemas/external-locator-receipt.schema.json",
+    "schemas/external-locator-record.schema.json",
+    "schemas/external-locator-revert-receipt.schema.json",
+    "schemas/markup-normalization-journal.schema.json",
+    "schemas/markup-normalization-plan.schema.json",
+    "schemas/markup-normalization-receipt.schema.json",
+    "schemas/markup-normalization-recovery-receipt.schema.json",
+    "schemas/markup-normalization-revert-receipt.schema.json",
+    "schemas/markup-reference-binding-manifest.schema.json",
+    "schemas/objet-capture-batch-receipt.schema.json",
+    "schemas/objet-capture-batch-request.schema.json",
+    "schemas/principal-record.schema.json",
+    "schemas/principal-registration-receipt.schema.json",
+    "schemas/principal-unregistration-receipt.schema.json",
     "schemas/private-objet-finder-request-v0.1.schema.json",
     "schemas/private-objet-finder-result-v0.1.schema.json",
+    "schemas/project-bytecode-repair-receipt.schema.json",
+    "schemas/relation-candidate-plan.schema.json",
+    "schemas/relation-judgment-receipt.schema.json",
+    "schemas/relation-judgment.schema.json",
     "schemas/source-reference-coverage-audit-result-v0.1.schema.json",
 }
 RESOURCE_REMOVALS = {"release-notes/v0.3.297.md"}
-CURRENT_RESOURCE_COUNT = 114
+CURRENT_RESOURCE_COUNT = 132
 CURRENT_RESOURCE_CANONICAL_SHA256 = (
-    "7ab5cf48a2d5da87220395248970d9408abe6ead248ffc2a2022d7e52bf8aa26"
+    "3708ba194d1d35b21c098e2bc07e05446dcfc3f3d99398e900eb75cd6a6bc873"
 )
 
 
@@ -261,7 +303,7 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
                         f"{module.__name__} was imported outside this worktree's source checkout."
                     )
 
-    def test_cli_paths_are_v03297_plus_exact_v03298_v03299_delta(self) -> None:
+    def test_cli_paths_are_v03297_plus_exact_v03298_v03300_delta(self) -> None:
         predecessor = self.fixture["cli"]["paths"]
         predecessor_set = {tuple(path) for path in predecessor}
         self.assertFalse(CLI_ADDITIONS & predecessor_set)
@@ -277,18 +319,25 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
             CURRENT_CLI_CANONICAL_SHA256,
         )
 
-    def test_database_source_rows_exactly_match_v03297(self) -> None:
-        expected = self.fixture["database"]["sources"]
+    def test_database_sources_add_only_the_v03300_principal_projection(self) -> None:
+        predecessor = self.fixture["database"]["sources"]
         actual = current_database_sources()
         self.assertEqual(
-            actual,
-            expected,
-            named_row_diff_message("Database source rows", expected, actual, "path"),
+            [row["path"] for row in actual],
+            [row["path"] for row in predecessor],
         )
-        self.assertEqual(len(actual), BASELINE_EXPECTATIONS["database"]["count"])
+        self.assertNotEqual(actual, predecessor)
+        self.assertTrue(
+            all(
+                "CREATE TABLE IF NOT EXISTS principals"
+                in (REPO_ROOT / row["path"]).read_text(encoding="utf-8")
+                for row in actual
+            )
+        )
+        self.assertEqual(len(actual), CURRENT_DATABASE_COUNT)
         self.assertEqual(
             canonical_sha256(actual),
-            BASELINE_EXPECTATIONS["database"]["canonical_sha256"],
+            CURRENT_DATABASE_CANONICAL_SHA256,
         )
 
     def test_mcp_name_and_input_schema_rows_exactly_match_v03297(self) -> None:
@@ -305,7 +354,7 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
             BASELINE_EXPECTATIONS["mcp"]["canonical_sha256"],
         )
 
-    def test_resource_paths_are_v03297_plus_exact_v03298_v03299_delta(self) -> None:
+    def test_resource_paths_are_v03297_plus_exact_v03298_v03300_delta(self) -> None:
         predecessor_paths = set(self.fixture["package_resources"]["packaged_paths"])
         self.assertTrue(
             RESOURCE_REMOVALS <= predecessor_paths,
@@ -335,10 +384,10 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
             actual,
             expected,
             "Current package-resource paths must be the full v0.3.297 set plus "
-            "the exact cumulative v0.3.298 and v0.3.299 delta. "
+            "the exact cumulative v0.3.298 through v0.3.300 delta. "
             f"missing={compact(missing)}; extra={compact(extra)}",
         )
-        self.assertEqual(manifest["version"], "0.3.299")
+        self.assertEqual(manifest["version"], "0.3.300")
         self.assertEqual(len(actual), CURRENT_RESOURCE_COUNT)
         self.assertEqual(
             canonical_sha256(actual),
@@ -357,14 +406,14 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
         self.assertIn("does not undo", predecessor_flat)
         self.assertNotIn("C:\\Users\\", predecessor_text)
 
-    def test_v03299_release_note_is_public_and_synchronized(self) -> None:
-        current_source_release = KIT_ROOT / "docs" / "releases" / "v0.3.299.md"
+    def test_v03300_release_note_is_public_and_synchronized(self) -> None:
+        current_source_release = KIT_ROOT / "docs" / "releases" / "v0.3.300.md"
         current_packaged_release = (
             SRC_ROOT
             / "wom_kit"
             / "_resources"
             / "release-notes"
-            / "v0.3.299.md"
+            / "v0.3.300.md"
         )
         self.assertEqual(
             current_source_release.read_bytes(),
@@ -373,11 +422,11 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
         current_text = current_source_release.read_text(encoding="utf-8")
         current_flat = " ".join(current_text.split())
         for token in (
-            "source-reference-coverage-audit",
-            "python -B",
-            "read-only",
-            "archive-wide",
-            "recorded-time",
+            "Letters 098-111",
+            "objet-capture-batch",
+            "relation candidates",
+            "markup",
+            "bytecode",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, current_flat)

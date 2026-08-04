@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wom-kit/markup-normalization-revert-receipt/v0.1",
+  "title": "WOM-kit markup normalization exact-byte revert receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "archive_id", "source_receipt_sha256", "revert_plan_sha256", "reviewed_by", "created_at", "item_count", "exact_byte_restore", "items"],
+  "properties": {
+    "schema": {"const": "wom-kit/markup-normalization-revert-receipt/v0.1"},
+    "archive_id": {"type": "string", "minLength": 1},
+    "source_receipt_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "revert_plan_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "reviewed_by": {"type": "string", "minLength": 1},
+    "created_at": {"type": "string", "minLength": 1},
+    "item_count": {"type": "integer", "minimum": 0, "maximum": 5000},
+    "exact_byte_restore": {"const": true},
+    "items": {
+      "type": "array",
+      "maxItems": 5000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "restored_sha256"],
+        "properties": {
+          "path": {"type": "string", "minLength": 1},
+          "restored_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+        }
+      }
+    }
+  }
+}

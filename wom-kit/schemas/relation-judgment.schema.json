@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wom-kit/relation-judgment/v0.1",
+  "title": "WOM-kit durable human relation judgment",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "archive_id", "candidate_id", "decision", "edge_type", "decision_envelope", "edge_id", "edge_receipt_path", "created_at"],
+  "properties": {
+    "schema": {"const": "wom-kit/relation-judgment/v0.1"},
+    "archive_id": {"type": "string", "minLength": 1},
+    "candidate_id": {"type": "string", "pattern": "^candidate:[0-9a-f]{64}$"},
+    "decision": {"enum": ["accept", "reject"]},
+    "edge_type": {"type": ["string", "null"]},
+    "decision_envelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_zettel_id", "target_zettel_id", "edge_type", "visibility", "review_scope", "recommendation_origin", "candidate_plan_sha256", "reason", "confidence", "reviewed_by"],
+      "properties": {
+        "source_zettel_id": {"type": "string", "minLength": 1},
+        "target_zettel_id": {"type": "string", "minLength": 1},
+        "edge_type": {"type": ["string", "null"]},
+        "visibility": {"type": "string", "minLength": 1},
+        "review_scope": {"const": "single_candidate_pair"},
+        "recommendation_origin": {"const": "deterministic_local_metadata"},
+        "candidate_plan_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "reason": {"type": "string", "minLength": 1, "maxLength": 600},
+        "confidence": {"enum": ["low", "medium", "high"]},
+        "reviewed_by": {"type": "string", "minLength": 1}
+      }
+    },
+    "edge_id": {"type": ["string", "null"]},
+    "edge_receipt_path": {"type": ["string", "null"]},
+    "created_at": {"type": "string", "minLength": 1}
+  }
+}

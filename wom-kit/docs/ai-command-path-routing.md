@@ -1,6 +1,6 @@
 # AI Command-Path Routing
 
-Status: implemented in v0.3.278, extended through v0.3.299
+Status: implemented in v0.3.278, extended through v0.3.300
 
 ## Purpose
 
@@ -96,14 +96,38 @@ It is authoritative only for safely traversed current canonical `source_refs`,
 exact Notion omission markers, and separately recorded local storage evidence.
 It does not supply an archive-wide source population or a live storage check.
 
+v0.3.300 advances the routing envelope to:
+
+```text
+wom-kit/ai-command-path-routing/v0.10
+```
+
+The additive routes cover:
+
+- provider-neutral locator plan, record, recovery, and exact revert;
+- frontmatter-only relation candidates and separately approved human
+  judgments;
+- third-party Principal registration, privacy-safe listing, in-use-guarded
+  unregistration, and Principal edge targeting;
+- selected base link-type adoption and receipt-bound revert, including the
+  manual-only `sequence` rule;
+- markup style/plan, approved normalization, interruption resume/rollback,
+  and exact-byte revert;
+- whole-request batch Objet capture with per-item convergence; and
+- verified untracked project-bytecode cleanup.
+
+These routes do not convert a candidate into an edge, a locator into remote
+availability proof, or a batch into an all-or-nothing transaction.
+
 The feedback route is ordered and an AI must not skip the human gate:
 
 ```text
 operator-feedback-plan --dry-run
 operator-feedback-ledger --dry-run
 required human review
-operator-feedback-record --dry-run
-operator-feedback-record --approve --reviewed-by <human-actor>
+operator-feedback-record --intent create|update --dry-run
+operator-feedback-record --intent create --approve --reviewed-by <human-actor>
+operator-feedback-record --intent update --expected-record-sha256 <sha256> --approve --reviewed-by <human-actor>
 ```
 
 This is guidance, not proof that the earlier steps or human review occurred.

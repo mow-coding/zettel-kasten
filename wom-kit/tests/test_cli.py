@@ -3215,6 +3215,275 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertIn(feedback_ref, record_text)
             self.assertIn(title_marker, record_text)
 
+    def test_operator_feedback_record_create_and_update_are_digest_bound(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            base_args = [
+                "operator-feedback-record",
+                str(archive_root),
+                "--feedback-id",
+                "collision_safe_feedback_20260804",
+                "--feedback-ref",
+                "feedback:collision-safe",
+                "--status",
+                "draft",
+                "--format",
+                "json",
+            ]
+            create_code, create_output = self.run_cli(
+                [*base_args, "--approve", "--reviewed-by", "person:test"]
+            )
+            self.assertEqual(create_code, 0, create_output)
+            created = json.loads(create_output)
+            record_path = archive_root / created["summary"]["record_path"]
+            original_bytes = record_path.read_bytes()
+
+            duplicate_code, duplicate_output = self.run_cli(
+                [
+                    *base_args,
+                    "--title",
+                    "must not replace",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                ]
+            )
+            duplicate = json.loads(duplicate_output)
+            self.assertEqual(duplicate_code, 1, duplicate_output)
+            self.assertIn("feedback_record_exists", duplicate["blocker_codes"])
+            self.assertEqual(record_path.read_bytes(), original_bytes)
+
+            update_preview_code, update_preview_output = self.run_cli(
+                [
+                    *base_args,
+                    "--intent",
+                    "update",
+                    "--status",
+                    "acknowledged",
+                    "--dry-run",
+                ]
+            )
+            update_preview = json.loads(update_preview_output)
+            self.assertEqual(update_preview_code, 0, update_preview_output)
+            current_digest = update_preview["summary"]["current_record_sha256"]
+            self.assertEqual(
+                current_digest,
+                hashlib.sha256(original_bytes).hexdigest(),
+            )
+
+            stale_code, stale_output = self.run_cli(
+                [
+                    *base_args,
+                    "--intent",
+                    "update",
+                    "--status",
+                    "acknowledged",
+                    "--expected-record-sha256",
+                    "0" * 64,
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                ]
+            )
+            stale = json.loads(stale_output)
+            self.assertEqual(stale_code, 1, stale_output)
+            self.assertIn("feedback_record_changed", stale["blocker_codes"])
+            self.assertEqual(record_path.read_bytes(), original_bytes)
+
+            update_code, update_output = self.run_cli(
+                [
+                    *base_args,
+                    "--intent",
+                    "update",
+                    "--status",
+                    "acknowledged",
+                    "--expected-record-sha256",
+                    current_digest,
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                ]
+            )
+            update = json.loads(update_output)
+            self.assertEqual(update_code, 0, update_output)
+            self.assertEqual(update["summary"]["intent"], "update")
+            updated = archive_cli.load_yaml(record_path.read_text(encoding="utf-8"))
+            self.assertEqual(updated["status"], "acknowledged")
+            receipt_paths = sorted(
+                (archive_root / "receipts" / "operator-feedback").glob("*.json")
+            )
+            self.assertEqual(len(receipt_paths), 2)
+            self.assertEqual(len({path.name for path in receipt_paths}), 2)
+
+            rebind_code, rebind_output = self.run_cli(
+                [
+                    "operator-feedback-record",
+                    str(archive_root),
+                    "--feedback-id",
+                    "collision_safe_feedback_20260804",
+                    "--feedback-ref",
+                    "feedback:different-authority",
+                    "--status",
+                    "acknowledged",
+                    "--intent",
+                    "update",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            rebind = json.loads(rebind_output)
+            self.assertEqual(rebind_code, 1, rebind_output)
+            self.assertIn("feedback_ref_rebind_forbidden", rebind["blocker_codes"])
+
+    def test_operator_feedback_record_two_process_create_has_one_winner(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            command = [
+                sys.executable,
+                "-B",
+                "-m",
+                "wom_kit.archive_cli",
+                "operator-feedback-record",
+                str(archive_root),
+                "--feedback-id",
+                "two_process_collision_20260804",
+                "--feedback-ref",
+                "feedback:two-process-collision",
+                "--status",
+                "draft",
+                "--approve",
+                "--reviewed-by",
+                "person:test",
+                "--format",
+                "json",
+            ]
+            env = dict(os.environ)
+            env["PYTHONDONTWRITEBYTECODE"] = "1"
+            env["PYTHONPATH"] = str(SRC_ROOT)
+            processes = [
+                subprocess.Popen(
+                    command,
+                    cwd=KIT_ROOT,
+                    env=env,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+                for _ in range(2)
+            ]
+            completed = [
+                (process.returncode, stdout, stderr)
+                for process in processes
+                for stdout, stderr in [process.communicate(timeout=30)]
+            ]
+            codes = sorted(code for code, _stdout, _stderr in completed)
+            self.assertEqual(codes, [0, 1], completed)
+            record_path = (
+                archive_root
+                / "ops"
+                / "feedback"
+                / "two_process_collision_20260804.yml"
+            )
+            self.assertTrue(record_path.is_file())
+            receipts = sorted(
+                (archive_root / "receipts" / "operator-feedback").glob("*.json")
+            )
+            self.assertEqual(len(receipts), 1)
+            loser = next(json.loads(stdout) for code, stdout, _stderr in completed if code == 1)
+            self.assertTrue(
+                {"feedback_record_exists", "feedback_record_concurrent_conflict"}
+                & set(loser["blocker_codes"])
+            )
+            serialized = json.dumps(completed, ensure_ascii=False)
+            self.assertNotIn("feedback:two-process-collision", serialized)
+
+    def test_operator_feedback_update_preserves_omitted_metadata_and_delivery_stamp(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            feedback_id = "preserve_feedback_metadata_20260804"
+            common = [
+                "operator-feedback-record",
+                str(archive_root),
+                "--feedback-id",
+                feedback_id,
+                "--feedback-ref",
+                "feedback:preserve-metadata",
+                "--format",
+                "json",
+            ]
+            create_code, create_output = self.run_cli(
+                [
+                    *common,
+                    "--status",
+                    "draft",
+                    "--title",
+                    "Preserved title",
+                    "--related-release",
+                    "v0.3.300",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:create-reviewer",
+                ]
+            )
+            self.assertEqual(create_code, 0, create_output)
+
+            delivered_code, delivered_output = self.run_cli(
+                [
+                    "operator-feedback-mark-delivered",
+                    str(archive_root),
+                    "--only",
+                    feedback_id,
+                    "--approve",
+                    "--reviewed-by",
+                    "person:delivery-reviewer",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(delivered_code, 0, delivered_output)
+            record_path = archive_root / "ops" / "feedback" / f"{feedback_id}.yml"
+            delivered = archive_cli.load_yaml(record_path.read_text(encoding="utf-8"))
+            delivered_at = delivered["delivered_at"]
+
+            preview_code, preview_output = self.run_cli(
+                [
+                    *common,
+                    "--status",
+                    "acknowledged",
+                    "--intent",
+                    "update",
+                    "--dry-run",
+                ]
+            )
+            self.assertEqual(preview_code, 0, preview_output)
+            current_digest = json.loads(preview_output)["summary"][
+                "current_record_sha256"
+            ]
+            update_code, update_output = self.run_cli(
+                [
+                    *common,
+                    "--status",
+                    "acknowledged",
+                    "--intent",
+                    "update",
+                    "--expected-record-sha256",
+                    current_digest,
+                    "--approve",
+                    "--reviewed-by",
+                    "person:update-reviewer",
+                ]
+            )
+            self.assertEqual(update_code, 0, update_output)
+            updated = archive_cli.load_yaml(record_path.read_text(encoding="utf-8"))
+            self.assertEqual(updated["status"], "acknowledged")
+            self.assertEqual(updated["title"], "Preserved title")
+            self.assertEqual(updated["related_releases"], ["v0.3.300"])
+            self.assertEqual(updated["delivered_at"], delivered_at)
+            self.assertEqual(updated["reviewed_by"], "person:update-reviewer")
+
     def test_operator_feedback_record_and_receipt_conform_to_shipped_schema_files(self) -> None:
         from wom_kit import schema_validator
 
@@ -11240,7 +11509,7 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertFalse(operational_context["closed_actions"]["files_written"])
             self.assertEqual(
                 operational_context["action_routing"]["schema"],
-                "wom-kit/ai-command-path-routing/v0.9",
+                "wom-kit/ai-command-path-routing/v0.10",
             )
             entrypoints = result["canonical_entrypoints"]
             self.assertEqual(entrypoints["lifecycle_action"], "runtime_canonical_entrypoints")
@@ -11759,7 +12028,7 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(result["first_read"]["source_truths"]["canonical_zets"], "zettels/")
             self.assertEqual(
                 result["action_routing"]["schema"],
-                "wom-kit/ai-command-path-routing/v0.9",
+                "wom-kit/ai-command-path-routing/v0.10",
             )
             self.assertEqual(
                 result["operational_context"]["action_routing"],
@@ -68120,6 +68389,42 @@ archive_services.zet_abstract_backfill_recover(
             self.assertTrue(result["follows_staging_convention"])
             self.assertEqual(result["staging_convention"]["matched_shape"], "in_archive_capture_staging")
 
+    def test_project_intake_relative_staged_folder_uses_archive_root_not_cwd(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "archive"
+            shutil.copytree(KIT_ROOT / "examples" / "fake-life-archive", archive_root)
+            relative = "staging/incoming/2026-08-04/completion-batch"
+            staged = archive_root / relative
+            staged.mkdir(parents=True)
+            (staged / "synthetic.txt").write_text(
+                "synthetic intake",
+                encoding="utf-8",
+            )
+            unrelated_cwd = Path(tmp) / "other-process-cwd"
+            unrelated_cwd.mkdir()
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(unrelated_cwd)
+                plan = archive_services.project_intake_plan(
+                    archive_root,
+                    relative,
+                )
+                queue = archive_services.project_intake_unpack_queue(
+                    archive_root,
+                    relative,
+                )
+            finally:
+                os.chdir(previous_cwd)
+
+            self.assertTrue(plan["ok"], plan)
+            self.assertEqual(plan["staged_folder_basis"], "archive_root_relative")
+            self.assertEqual(plan["staged_folder_relative"], relative)
+            self.assertEqual(plan["folder_summary"]["top_level_file_count"], 1)
+            self.assertTrue(queue["ok"], queue)
+            self.assertEqual(queue["staged_folder_basis"], "archive_root_relative")
+            self.assertEqual(queue["staged_folder_relative"], relative)
+            self.assertEqual(queue["unpack_queue"]["total_item_count"], 1)
+
     def test_project_intake_decisions_dry_run_writes_nothing_and_hides_answers(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = Path(tmp) / "archive"
@@ -75003,6 +75308,90 @@ class ObjetCaptureTests(unittest.TestCase):
             self.assertIn("proposed_receipt_path", result)
             self.assertEqual(self._inventory(archive_root), before, "dry-run must not write anything")
             self.assertFalse(list(archive_root.rglob("*.part-*")))
+
+    def test_objet_capture_selection_path_is_archive_root_relative_with_typed_refusals(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root, external_selection, _digest = self._simple_capture_setup(tmp)
+            relative = "receipts/objet-capture-selections/roundtrip.selection.json"
+            in_archive = archive_root / relative
+            in_archive.parent.mkdir(parents=True, exist_ok=True)
+            in_archive.write_bytes(external_selection.read_bytes())
+            unrelated_cwd = Path(tmp) / "unrelated-cwd"
+            unrelated_cwd.mkdir()
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(unrelated_cwd)
+                preview = archive_services.objet_capture_dry_run(
+                    archive_root,
+                    relative,
+                )
+            finally:
+                os.chdir(previous_cwd)
+            self.assertTrue(preview["ok"], preview)
+            self.assertEqual(preview["selection_path"], relative)
+
+            cases = {
+                "../outside.selection.json": "selection_path_not_archive_relative",
+                "receipts/objet-capture-selections/missing.selection.json": (
+                    "selection_file_missing_or_not_regular"
+                ),
+            }
+            invalid_utf8 = archive_root / "receipts" / "objet-capture-selections" / "invalid-utf8.json"
+            invalid_utf8.write_bytes(b"\xff\xfe")
+            cases[
+                "receipts/objet-capture-selections/invalid-utf8.json"
+            ] = "selection_manifest_invalid_utf8"
+            invalid_json = archive_root / "receipts" / "objet-capture-selections" / "invalid-json.json"
+            invalid_json.write_text("{", encoding="utf-8")
+            cases[
+                "receipts/objet-capture-selections/invalid-json.json"
+            ] = "selection_manifest_invalid_json"
+            not_object = archive_root / "receipts" / "objet-capture-selections" / "not-object.json"
+            not_object.write_text("[]", encoding="utf-8")
+            cases[
+                "receipts/objet-capture-selections/not-object.json"
+            ] = "selection_manifest_not_object"
+
+            for path_value, expected_code in cases.items():
+                before = self._inventory(archive_root)
+                dry = archive_services.objet_capture_dry_run(archive_root, path_value)
+                approved = archive_services.objet_capture_apply(
+                    archive_root,
+                    path_value,
+                    reviewed_by="person:test",
+                )
+                for result in (dry, approved):
+                    self.assertFalse(result["ok"], (path_value, result))
+                    self.assertEqual(result["blockers"], [expected_code])
+                    serialized = json.dumps(result, ensure_ascii=False)
+                    self.assertNotIn(str(archive_root), serialized)
+                    self.assertNotIn(str(unrelated_cwd), serialized)
+                self.assertEqual(
+                    self._inventory(archive_root),
+                    before,
+                    "typed selection refusal must not write in either mode",
+                )
+
+            unreadable = archive_root / "receipts" / "objet-capture-selections" / "unreadable.json"
+            unreadable.write_text("{}", encoding="utf-8")
+            original_read_bytes = Path.read_bytes
+
+            def fail_selected_read(path: Path) -> bytes:
+                if path.resolve() == unreadable.resolve():
+                    raise PermissionError("private path marker")
+                return original_read_bytes(path)
+
+            with patch.object(Path, "read_bytes", fail_selected_read):
+                loaded, safe_relative, blocker = archive_services._objet_capture_selection_input(
+                    archive_root,
+                    "receipts/objet-capture-selections/unreadable.json",
+                )
+            self.assertIsNone(loaded)
+            self.assertEqual(
+                safe_relative,
+                "receipts/objet-capture-selections/unreadable.json",
+            )
+            self.assertEqual(blocker, "selection_file_unreadable")
 
     def test_objet_capture_selection_approve_writes_selection_only_for_later_capture(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

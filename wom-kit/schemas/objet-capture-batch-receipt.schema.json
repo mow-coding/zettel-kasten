@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wom-kit/objet-capture-batch-receipt/v0.1",
+  "title": "WOM-kit Objet capture batch receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "archive_id", "batch_id", "request_sha256", "selection_sha256", "plan_sha256", "selection_path", "capture_receipt_path", "status_class", "ok", "reviewed_by", "created_at", "convergence_model", "all_or_nothing_claimed", "privacy"],
+  "properties": {
+    "schema": {"const": "wom-kit/objet-capture-batch-receipt/v0.1"},
+    "archive_id": {"type": "string", "minLength": 1},
+    "batch_id": {"type": "string", "minLength": 1},
+    "request_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "selection_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "plan_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "selection_path": {"type": "string", "minLength": 1},
+    "capture_receipt_path": {"type": ["string", "null"]},
+    "status_class": {"type": ["string", "null"]},
+    "ok": {"type": "boolean"},
+    "reviewed_by": {"type": "string", "minLength": 1},
+    "created_at": {"type": "string", "minLength": 1},
+    "convergence_model": {"const": "bounded_per_item_with_replay"},
+    "all_or_nothing_claimed": {"const": false},
+    "privacy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["manifest_values_included", "staged_paths_included", "titles_included"],
+      "properties": {
+        "manifest_values_included": {"const": false},
+        "staged_paths_included": {"const": false},
+        "titles_included": {"const": false}
+      }
+    }
+  }
+}

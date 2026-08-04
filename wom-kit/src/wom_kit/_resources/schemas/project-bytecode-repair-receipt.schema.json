@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wom-kit/project-bytecode-repair-receipt/v0.1",
+  "title": "WOM-kit project mirror derived-bytecode repair receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "plan_sha256", "mirror_head", "removed_file_count", "removed_total_bytes", "removed_empty_pycache_directory_count", "source_files_modified", "reviewed_by", "created_at"],
+  "properties": {
+    "schema": {"const": "wom-kit/project-bytecode-repair-receipt/v0.1"},
+    "plan_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "mirror_head": {"type": "string", "pattern": "^[0-9a-f]{40,64}$"},
+    "removed_file_count": {"type": "integer", "minimum": 0, "maximum": 10000},
+    "removed_total_bytes": {"type": "integer", "minimum": 0},
+    "removed_empty_pycache_directory_count": {"type": "integer", "minimum": 0},
+    "source_files_modified": {"const": false},
+    "reviewed_by": {"type": "string", "minLength": 1},
+    "created_at": {"type": "string", "minLength": 1}
+  }
+}
