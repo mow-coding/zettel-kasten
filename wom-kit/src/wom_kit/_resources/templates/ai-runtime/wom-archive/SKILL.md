@@ -76,6 +76,11 @@ token-budget contract.
   --count-total --format json`. A complete `archive search` page proves only
   the current generated-index result set; if the rediscovery plan reports
   `search_incomplete`, do not make a global absence claim.
+- To compare current canonical source-reference coverage with separately
+  recorded local storage evidence, run `python -B -m wom_kit.archive_cli
+  source-reference-coverage-audit <archive-root> --dry-run --format json`.
+  Its observed population is not archive-wide, and it performs no live
+  object-byte or remote-storage check.
 - Inspect possible historical direct inbox writes only with
   `archive inbox-pipeline-audit <archive-root> --dry-run --format json`.
   Treat its classes as review signals, not proof, and never repair a draft

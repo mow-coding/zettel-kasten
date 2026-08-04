@@ -18,7 +18,7 @@ Before claiming that an objet, source file, or preserved original does not
 exist, run `archive objet-rediscovery-plan <archive-root> <query> --dry-run
 --count-total --format json`. `archive search.complete` covers only index
 truncation, not source freshness, private names, objet edges, external stores,
-remote availability, or unrecovered refs; `search_incomplete` forbids global absence.
+remote availability, or unrecovered refs; `search_incomplete` forbids global absence. For directly observed canonical source coverage versus recorded local storage evidence, run `python -B -m wom_kit.archive_cli source-reference-coverage-audit <archive-root> --dry-run --format json`; its population is not archive-wide, manifest identity is not byte proof, and a receipt does not prove current remote availability.
 
 To inspect whether historical AI-declared inbox drafts contradict the current
 official draft shape, use:

@@ -58,9 +58,9 @@ EMPTY_ALLOWLIST_SHA256 = (
     "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
 )
 
-CLI_COUNT = 504
+CLI_COUNT = 505
 CLI_CANONICAL_SHA256 = (
-    "eb52f341acdf9ead65f07b2cc385079401bf75d1f1d0906d381f84936fe04354"
+    "c7afdc18d047bcced078605c83958ac35ca61bdf20dc1b44ea290c5de0d79e2a"
 )
 MCP_COUNT = 121
 MCP_CANONICAL_SHA256 = (
@@ -72,9 +72,10 @@ DB_SOURCE_CANONICAL_SHA256 = (
 )
 RESOURCE_ADDITIONS = frozenset(
     {
-        "release-notes/v0.3.298.md",
+        "release-notes/v0.3.299.md",
         "schemas/private-objet-finder-request-v0.1.schema.json",
         "schemas/private-objet-finder-result-v0.1.schema.json",
+        "schemas/source-reference-coverage-audit-result-v0.1.schema.json",
     }
 )
 RESOURCE_REMOVALS = frozenset({"release-notes/v0.3.297.md"})
@@ -1146,7 +1147,7 @@ class PrivateObjetMetadataIndexPrivacyGateTests(unittest.TestCase):
             manifest["schema"],
             "wom-kit/package-resource-manifest/v0.1",
         )
-        self.assertEqual(manifest["version"], "0.3.298")
+        self.assertEqual(manifest["version"], "0.3.299")
         self.assertEqual(manifest["file_count"], len(manifest["files"]))
         current_paths = {row["packaged"] for row in manifest["files"]}
         self.assertEqual(
