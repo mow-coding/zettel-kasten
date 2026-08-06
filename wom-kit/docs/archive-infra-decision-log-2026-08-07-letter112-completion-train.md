@@ -132,7 +132,9 @@ minutes without executing. The test matrix now uses the standard
 `strategy.max-parallel: 4` bound so it leaves capacity for the independent
 release gate and does not over-request the observed runner concurrency limit.
 No shard, operating system, interpreter, test, or required aggregation gate
-was removed.
+was removed. The workflow concurrency group also includes both
+`github.workflow` and `github.ref`, preventing an orphaned retry state or a
+different workflow on the same ref from occupying the old overly broad group.
 
 This checkpoint is not a release claim. Build, candidate wheel inspection,
 pull-request CI, merged-main tag verification, public asset digest/size, and a
