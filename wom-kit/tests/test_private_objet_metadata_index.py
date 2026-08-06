@@ -58,9 +58,9 @@ EMPTY_ALLOWLIST_SHA256 = (
     "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
 )
 
-CLI_COUNT = 525
+CLI_COUNT = 534
 CLI_CANONICAL_SHA256 = (
-    "0a92d9648402b3346ddb482ebb56185f40c2ad771126f5691efc3b818d4a3ce3"
+    "ce61a432445a9b7d3559ed242badeb7bff958ba00a6fa3e4656a8a0cce01f0c8"
 )
 MCP_COUNT = 121
 MCP_CANONICAL_SHA256 = (
@@ -72,7 +72,10 @@ DB_SOURCE_CANONICAL_SHA256 = (
 )
 RESOURCE_ADDITIONS = frozenset(
     {
-        "release-notes/v0.3.300.md",
+        "release-notes/v0.3.301.md",
+        "schemas/authoring-conventions.schema.json",
+        "schemas/draft-discard-receipt.schema.json",
+        "schemas/draft-discard-restore-receipt.schema.json",
         "schemas/external-locator-receipt.schema.json",
         "schemas/external-locator-record.schema.json",
         "schemas/external-locator-revert-receipt.schema.json",
@@ -94,6 +97,10 @@ RESOURCE_ADDITIONS = frozenset(
         "schemas/relation-judgment-receipt.schema.json",
         "schemas/relation-judgment.schema.json",
         "schemas/source-reference-coverage-audit-result-v0.1.schema.json",
+        "schemas/source-intake-batch-receipt.schema.json",
+        "schemas/source-intake-batch-request.schema.json",
+        "schemas/zettel-objet-link-receipt.schema.json",
+        "schemas/zettel-objet-link-revert-receipt.schema.json",
     }
 )
 RESOURCE_REMOVALS = frozenset({"release-notes/v0.3.297.md"})
@@ -1177,7 +1184,7 @@ class PrivateObjetMetadataIndexPrivacyGateTests(unittest.TestCase):
             manifest["schema"],
             "wom-kit/package-resource-manifest/v0.1",
         )
-        self.assertEqual(manifest["version"], "0.3.300")
+        self.assertEqual(manifest["version"], "0.3.301")
         self.assertEqual(manifest["file_count"], len(manifest["files"]))
         current_paths = {row["packaged"] for row in manifest["files"]}
         self.assertEqual(

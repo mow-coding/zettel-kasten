@@ -6,6 +6,21 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.301 - 2026-08-07
+
+- Closed the real-use gaps reported in beta Letter 112 with structured
+  zet-objet link/revert, GFM table normalization, locator occurrence
+  coordinates, archive-specific AI authoring conventions, and reversible
+  never-minted draft discard/restore.
+- Made source-intake plan paths archive-root authoritative, exact duplicates
+  idempotent, redacted same-shape files distinct without reading bodies, and
+  added one bounded 1-1,000-item source-intake batch review gate.
+- Added real archive date/category relation signals without value disclosure,
+  truncated object-id mint blocking, AI human-record review warnings, and
+  content-free JSON missing-argument envelopes.
+- Added Draft 2020-12 schemas, packaged Agent Skill guidance, focused privacy
+  and exact-restore regressions, and a 508-item plan/write/replay scale check.
+
 ## v0.3.300 - 2026-08-04
 
 - Completed the remaining source-confirmed public work from beta Letters

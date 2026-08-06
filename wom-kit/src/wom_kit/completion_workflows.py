@@ -15,14 +15,21 @@ import re
 import stat
 import urllib.parse
 from datetime import datetime, timezone
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 
 from . import archive_services
 
 
-EXTERNAL_LOCATOR_SCHEMA = "wom-kit/external-locator-record/v0.1"
-EXTERNAL_LOCATOR_RECEIPT_SCHEMA = "wom-kit/external-locator-receipt/v0.1"
+EXTERNAL_LOCATOR_SCHEMA = "wom-kit/external-locator-record/v0.2"
+EXTERNAL_LOCATOR_LEGACY_SCHEMAS = frozenset(
+    {"wom-kit/external-locator-record/v0.1"}
+)
+EXTERNAL_LOCATOR_RECEIPT_SCHEMA = "wom-kit/external-locator-receipt/v0.2"
+EXTERNAL_LOCATOR_LEGACY_RECEIPT_SCHEMAS = frozenset(
+    {"wom-kit/external-locator-receipt/v0.1"}
+)
 EXTERNAL_LOCATOR_REVERT_RECEIPT_SCHEMA = (
     "wom-kit/external-locator-revert-receipt/v0.1"
 )
@@ -39,6 +46,23 @@ EXTERNAL_LOCATOR_TYPES = (
     "export_coordinate",
     "other",
 )
+ZETTEL_OBJET_LINK_RECEIPT_SCHEMA = (
+    "wom-kit/zettel-objet-link-receipt/v0.1"
+)
+ZETTEL_OBJET_LINK_REVERT_RECEIPT_SCHEMA = (
+    "wom-kit/zettel-objet-link-revert-receipt/v0.1"
+)
+ZETTEL_OBJET_LINK_RECEIPTS_DIR = "receipts/objects/zettel-links"
+ZETTEL_OBJET_LINK_SNAPSHOT_DIR = (
+    "receipts/objects/zettel-links/snapshots"
+)
+ZETTEL_OBJET_ROLE_RE = re.compile(r"^[a-z][a-z0-9_]{0,79}$")
+DRAFT_DISCARD_RECEIPT_SCHEMA = "wom-kit/draft-discard-receipt/v0.1"
+DRAFT_DISCARD_RESTORE_RECEIPT_SCHEMA = (
+    "wom-kit/draft-discard-restore-receipt/v0.1"
+)
+DRAFT_DISCARD_RECEIPTS_DIR = "receipts/discarded-drafts"
+DRAFT_DISCARD_SNAPSHOT_DIR = "receipts/discarded-drafts/snapshots"
 OBJET_CAPTURE_BATCH_REQUEST_SCHEMA = (
     "wom-kit/objet-capture-batch-request/v0.1"
 )
@@ -101,7 +125,9 @@ _MARKDOWN_COMPATIBLE_HTML_TAGS = frozenset(
         "sup",
     }
 )
-_STRUCTURAL_MARKUP_TAGS = frozenset({"article", "div", "p", "section"})
+_STRUCTURAL_MARKUP_TAGS = frozenset(
+    {"article", "column", "columns", "div", "p", "section"}
+)
 _REFERENCE_MARKUP_TAGS = frozenset(
     {"file", "media", "mention", "synced-ref", "synced_ref"}
 )
@@ -195,6 +221,28 @@ def _safe_locator_ref(value: str | None) -> str | None:
         ):
             if key.casefold() in _SENSITIVE_QUERY_KEYS:
                 return None
+    return text
+
+
+def _safe_locator_coordinate(
+    value: str | None,
+    *,
+    max_length: int,
+) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if (
+        not text
+        or len(text) > max_length
+        or any(ord(character) < 32 for character in text)
+        or archive_services.source_intake_secret_like(text)
+        or archive_services.source_intake_has_provider_url(text)
+        or archive_services.contains_forbidden_location_reference(text)
+    ):
+        return None
     return text
 
 
@@ -296,7 +344,8 @@ def _read_locator_record(
         return None, None, "external_locator_record_unreadable"
     if (
         not isinstance(loaded, dict)
-        or loaded.get("schema") != EXTERNAL_LOCATOR_SCHEMA
+        or loaded.get("schema")
+        not in {EXTERNAL_LOCATOR_SCHEMA, *EXTERNAL_LOCATOR_LEGACY_SCHEMAS}
         or loaded.get("zettel_id") != zettel_id
         or not isinstance(loaded.get("locators"), list)
     ):
@@ -310,6 +359,9 @@ def _locator_plan_core(
     zettel_id: str | None,
     locator_type: str,
     locator_ref: str | None,
+    service_ref: str | None = None,
+    account_ref: str | None = None,
+    occurrence_anchor: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     root = archive_services.require_existing_archive_root(archive_root)
     archive_id = archive_services.read_archive_id(root)
@@ -323,6 +375,18 @@ def _locator_plan_core(
     safe_ref = _safe_locator_ref(locator_ref)
     if safe_ref is None:
         blockers.append("external_locator_ref_invalid_or_secret_like")
+    safe_service_ref = _safe_locator_coordinate(service_ref, max_length=120)
+    safe_account_ref = _safe_locator_coordinate(account_ref, max_length=320)
+    safe_occurrence_anchor = _safe_locator_coordinate(
+        occurrence_anchor,
+        max_length=240,
+    )
+    if service_ref is not None and safe_service_ref is None:
+        blockers.append("external_locator_service_ref_invalid_or_secret_like")
+    if account_ref is not None and safe_account_ref is None:
+        blockers.append("external_locator_account_ref_invalid_or_secret_like")
+    if occurrence_anchor is not None and safe_occurrence_anchor is None:
+        blockers.append("external_locator_occurrence_anchor_invalid_or_secret_like")
 
     zettel_path: Path | None = None
     if safe_id is not None:
@@ -343,9 +407,20 @@ def _locator_plan_core(
     locator_sha256 = (
         _sha256_bytes(safe_ref.encode("utf-8")) if safe_ref is not None else None
     )
+    locator_identity = {
+        "locator_ref": safe_ref,
+        "service_ref": safe_service_ref,
+        "account_ref": safe_account_ref,
+        "occurrence_anchor": safe_occurrence_anchor,
+    }
+    locator_identity_sha256 = (
+        _sha256_bytes(_canonical_json_bytes(locator_identity))
+        if safe_ref is not None
+        else None
+    )
     locator_id = (
-        f"locator:sha256:{locator_sha256}"
-        if locator_sha256 is not None
+        f"locator:sha256:{locator_identity_sha256}"
+        if locator_identity_sha256 is not None
         else None
     )
     current_record: dict[str, Any] | None = None
@@ -382,6 +457,12 @@ def _locator_plan_core(
             else None
         ),
         "locator_sha256": locator_sha256,
+        "locator_identity_sha256": locator_identity_sha256,
+        "coordinate_presence": {
+            "service_ref": safe_service_ref is not None,
+            "account_ref": safe_account_ref is not None,
+            "occurrence_anchor": safe_occurrence_anchor is not None,
+        },
         "current_record_sha256": current_sha256,
         "action": "add_locator",
     }
@@ -401,6 +482,11 @@ def _locator_plan_core(
                 else None
             ),
             "locator_id": locator_id,
+            "coordinate_presence": {
+                "service_ref": safe_service_ref is not None,
+                "account_ref": safe_account_ref is not None,
+                "occurrence_anchor": safe_occurrence_anchor is not None,
+            },
             "record_path": record_relative if safe_id else None,
             "current_locator_count": len(current_locators),
             "record_exists": current_record is not None,
@@ -412,6 +498,7 @@ def _locator_plan_core(
             "receipt_schema": EXTERNAL_LOCATOR_RECEIPT_SCHEMA,
             "locator_types": list(EXTERNAL_LOCATOR_TYPES),
             "multiple_locators_supported": True,
+            "same_locator_multiple_occurrences_supported": True,
             "provider_neutral": True,
             "global_recoverability_claimed": False,
         },
@@ -420,6 +507,9 @@ def _locator_plan_core(
         "would_change": [record_relative] if not blockers else [],
         "privacy_guards": {
             "locator_ref_echoed": False,
+            "service_ref_echoed": False,
+            "account_ref_echoed": False,
+            "occurrence_anchor_echoed": False,
             "provider_url_echoed": False,
             "local_absolute_path_echoed": False,
             "zettel_body_echoed": False,
@@ -435,6 +525,10 @@ def _locator_plan_core(
         "normalized_type": normalized_type,
         "locator_id": locator_id,
         "locator_sha256": locator_sha256,
+        "locator_identity_sha256": locator_identity_sha256,
+        "safe_service_ref": safe_service_ref,
+        "safe_account_ref": safe_account_ref,
+        "safe_occurrence_anchor": safe_occurrence_anchor,
         "current_record": current_record,
         "current_bytes": current_bytes,
         "current_sha256": current_sha256,
@@ -451,12 +545,18 @@ def external_locator_plan(
     zettel_id: str | None,
     locator_type: str,
     locator_ref: str | None,
+    service_ref: str | None = None,
+    account_ref: str | None = None,
+    occurrence_anchor: str | None = None,
 ) -> dict[str, Any]:
     result, _private = _locator_plan_core(
         archive_root,
         zettel_id=zettel_id,
         locator_type=locator_type,
         locator_ref=locator_ref,
+        service_ref=service_ref,
+        account_ref=account_ref,
+        occurrence_anchor=occurrence_anchor,
     )
     return result
 
@@ -467,6 +567,9 @@ def external_locator_record(
     zettel_id: str | None,
     locator_type: str,
     locator_ref: str | None,
+    service_ref: str | None = None,
+    account_ref: str | None = None,
+    occurrence_anchor: str | None = None,
     expected_plan_sha256: str | None,
     reviewed_by: str | None,
 ) -> dict[str, Any]:
@@ -475,6 +578,9 @@ def external_locator_record(
         zettel_id=zettel_id,
         locator_type=locator_type,
         locator_ref=locator_ref,
+        service_ref=service_ref,
+        account_ref=account_ref,
+        occurrence_anchor=occurrence_anchor,
     )
     blockers = list(result["blockers"])
     expected = str(expected_plan_sha256 or "").strip().lower()
@@ -506,6 +612,9 @@ def external_locator_record(
             zettel_id=safe_id,
             locator_type=locator_type,
             locator_ref=locator_ref,
+            service_ref=service_ref,
+            account_ref=account_ref,
+            occurrence_anchor=occurrence_anchor,
         )
         if (
             not fresh["ok"]
@@ -535,8 +644,7 @@ def external_locator_record(
             if isinstance(current_record, dict)
             else []
         )
-        locators.append(
-            {
+        locator_entry = {
                 "locator_id": fresh_private["locator_id"],
                 "locator_type": fresh_private["normalized_type"],
                 "locator_ref": fresh_private["safe_ref"],
@@ -548,7 +656,14 @@ def external_locator_record(
                     "automatic_recovery_claimed": False,
                 },
             }
-        )
+        for field_name, private_name in (
+            ("service_ref", "safe_service_ref"),
+            ("account_ref", "safe_account_ref"),
+            ("occurrence_anchor", "safe_occurrence_anchor"),
+        ):
+            if fresh_private[private_name] is not None:
+                locator_entry[field_name] = fresh_private[private_name]
+        locators.append(locator_entry)
         record = {
             "schema": EXTERNAL_LOCATOR_SCHEMA,
             "archive_id": archive_services.read_archive_id(root),
@@ -595,6 +710,7 @@ def external_locator_record(
             "zettel_id": safe_id,
             "locator_id": fresh_private["locator_id"],
             "locator_type": fresh_private["normalized_type"],
+            "coordinate_presence": fresh["summary"]["coordinate_presence"],
             "plan_sha256": expected,
             "before_record_sha256": fresh_private["current_sha256"],
             "after_record_sha256": after_sha256,
@@ -695,6 +811,11 @@ def external_locator_recovery_plan(
             "locator_id": item.get("locator_id"),
             "locator_type": item.get("locator_type"),
             "status": item.get("status"),
+            "coordinate_presence": {
+                "service_ref": isinstance(item.get("service_ref"), str),
+                "account_ref": isinstance(item.get("account_ref"), str),
+                "occurrence_anchor": isinstance(item.get("occurrence_anchor"), str),
+            },
         }
         for item in locators
         if isinstance(item, dict)
@@ -743,6 +864,9 @@ def external_locator_recovery_plan(
         "would_change": [],
         "privacy_guards": {
             "locator_ref_echoed": False,
+            "service_ref_echoed": False,
+            "account_ref_echoed": False,
+            "occurrence_anchor_echoed": False,
             "provider_url_echoed": False,
             "local_absolute_path_echoed": False,
             "zettel_body_echoed": False,
@@ -772,7 +896,11 @@ def _external_locator_revert_plan_core(
             loaded = None
         if (
             not isinstance(loaded, dict)
-            or loaded.get("schema") != EXTERNAL_LOCATOR_RECEIPT_SCHEMA
+            or loaded.get("schema")
+            not in {
+                EXTERNAL_LOCATOR_RECEIPT_SCHEMA,
+                *EXTERNAL_LOCATOR_LEGACY_RECEIPT_SCHEMAS,
+            }
             or loaded.get("archive_id") != archive_id
         ):
             blockers.append("external_locator_receipt_invalid")
@@ -1021,6 +1149,1306 @@ def external_locator_revert(
             **fresh["privacy_guards"],
             "writes": True,
         },
+    }
+
+
+class _ZettelObjetLinkLock(_LocatorLock):
+    def __init__(self, root: Path, zettel_id: str) -> None:
+        lock_dir = archive_services.archive_internal_path(
+            root,
+            f"{ZETTEL_OBJET_LINK_RECEIPTS_DIR}/.locks",
+        )
+        lock_dir.mkdir(parents=True, exist_ok=True)
+        lock_name = hashlib.sha256(zettel_id.encode("utf-8")).hexdigest()
+        self._path = lock_dir / f"{lock_name}.lock"
+        self._handle = None
+
+
+def _safe_zettel_objet_label(value: str | None) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if (
+        not text
+        or len(text) > 500
+        or any(ord(character) < 32 for character in text)
+        or archive_services.source_intake_secret_like(text)
+        or archive_services.contains_forbidden_location_reference(text)
+        or archive_services.source_intake_has_provider_url(text)
+    ):
+        return None
+    return text
+
+
+def _zettel_objet_link_plan_core(
+    archive_root: Path | str,
+    *,
+    zettel_id: str | None,
+    relative_path: str | None,
+    object_id: str | None,
+    role: str,
+    label: str | None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    root = archive_services.require_existing_archive_root(archive_root)
+    archive_id = archive_services.read_archive_id(root)
+    blockers: list[str] = []
+    if bool(zettel_id) == bool(relative_path):
+        blockers.append("zettel_objet_link_target_required")
+
+    normalized_object_id = str(object_id or "").strip().lower()
+    if archive_services.OBJECT_ID_RE.fullmatch(normalized_object_id) is None:
+        blockers.append("zettel_objet_link_object_id_invalid")
+    normalized_role = str(role or "").strip().lower().replace("-", "_")
+    if ZETTEL_OBJET_ROLE_RE.fullmatch(normalized_role) is None:
+        blockers.append("zettel_objet_link_role_invalid")
+    safe_label = _safe_zettel_objet_label(label)
+    if label is not None and safe_label is None:
+        blockers.append("zettel_objet_link_label_invalid_or_private")
+
+    zettel_path: Path | None = None
+    zettel_frontmatter: dict[str, Any] = {}
+    zettel_body = ""
+    before_bytes: bytes | None = None
+    before_sha256: str | None = None
+    safe_zettel_id: str | None = None
+    zettel_relative: str | None = None
+    if bool(zettel_id) != bool(relative_path):
+        try:
+            zettel_path = archive_services.resolve_zettel_path(
+                root,
+                zettel_id=zettel_id,
+                relative_path=relative_path,
+            )
+            zettel_frontmatter, zettel_body = (
+                archive_services.require_readable_zettel_content(zettel_path)
+            )
+            safe_zettel_id = _safe_zettel_id(zettel_frontmatter.get("id"))
+            if (
+                safe_zettel_id is None
+                or zettel_frontmatter.get("status")
+                not in archive_services.ZETTEL_QUERYABLE_STATUSES
+            ):
+                blockers.append("zettel_objet_link_zettel_unavailable")
+            zettel_relative = archive_services.archive_relative_path(
+                zettel_path,
+                root,
+            )
+            before_bytes = zettel_path.read_bytes()
+            before_sha256 = _sha256_bytes(before_bytes)
+        except (archive_services.ArchiveServiceError, OSError):
+            blockers.append("zettel_objet_link_zettel_unavailable")
+
+    manifest_record: dict[str, Any] | None = None
+    if archive_services.OBJECT_ID_RE.fullmatch(normalized_object_id):
+        manifest_record = archive_services.find_manifest_record(
+            root,
+            normalized_object_id,
+        )
+        if manifest_record is None:
+            blockers.append("zettel_objet_link_manifest_record_missing")
+
+    assets = zettel_frontmatter.get("assets")
+    if zettel_path is not None and not isinstance(assets, list):
+        blockers.append("zettel_objet_link_assets_not_array")
+        assets = []
+    existing_assets = assets if isinstance(assets, list) else []
+    if any(
+        isinstance(item, dict)
+        and item.get("object_id") == normalized_object_id
+        for item in existing_assets
+    ):
+        blockers.append("zettel_objet_link_already_present")
+
+    link_seed = {
+        "archive_id": archive_id,
+        "zettel_id": safe_zettel_id,
+        "object_id": normalized_object_id,
+        "role": normalized_role,
+    }
+    link_digest = _sha256_bytes(_canonical_json_bytes(link_seed))
+    link_id = f"asset:sha256:{link_digest}"
+    receipt_root = archive_services.archive_internal_path(
+        root,
+        ZETTEL_OBJET_LINK_RECEIPTS_DIR,
+    )
+    receipt_prefix = f"link.{link_digest[:24]}.g"
+    generation = 1 + sum(
+        1
+        for path in receipt_root.glob(f"{receipt_prefix}*.json")
+        if path.is_file()
+    ) if receipt_root.is_dir() else 1
+    receipt_relative = (
+        f"{ZETTEL_OBJET_LINK_RECEIPTS_DIR}/"
+        f"{receipt_prefix}{generation:04d}.json"
+    )
+    if archive_services.archive_internal_path(root, receipt_relative).exists():
+        blockers.append("zettel_objet_link_receipt_collision")
+
+    manifest_sha256 = (
+        _sha256_bytes(_canonical_json_bytes(manifest_record))
+        if manifest_record is not None
+        else None
+    )
+    label_sha256 = (
+        _sha256_bytes(safe_label.encode("utf-8"))
+        if safe_label is not None
+        else None
+    )
+    plan_binding = {
+        "schema": "wom-kit/zettel-objet-link-plan-binding/v0.1",
+        "archive_id": archive_id,
+        "zettel_id": safe_zettel_id,
+        "zettel_sha256": before_sha256,
+        "object_id": normalized_object_id,
+        "manifest_record_sha256": manifest_sha256,
+        "role": normalized_role,
+        "label_sha256": label_sha256,
+        "link_id": link_id,
+        "receipt_path": receipt_relative,
+        "generation": generation,
+    }
+    plan_sha256 = _sha256_bytes(_canonical_json_bytes(plan_binding))
+    result = {
+        "ok": not blockers,
+        "state": "ready" if not blockers else "blocked",
+        "dry_run": True,
+        "lifecycle_action": "zettel_objet_link_plan",
+        "archive_id": archive_id,
+        "summary": {
+            "zettel_id": safe_zettel_id,
+            "zettel_path": zettel_relative,
+            "object_id": normalized_object_id,
+            "role": normalized_role,
+            "label_present": safe_label is not None,
+            "link_id": link_id,
+            "current_asset_count": len(existing_assets),
+            "manifest_record_verified": manifest_record is not None,
+            "zettel_sha256": before_sha256,
+            "receipt_path": receipt_relative,
+            "plan_sha256": plan_sha256 if not blockers else None,
+        },
+        "data": {
+            "record_shape": {
+                "required_fields": ["object_id", "role"],
+                "optional_fields": ["label"],
+                "unknown_fields_allowed": False,
+            },
+            "receipt_schema": ZETTEL_OBJET_LINK_RECEIPT_SCHEMA,
+            "exact_byte_revert_supported": True,
+        },
+        "blockers": archive_services.unique_preserve_order(blockers),
+        "warnings": [],
+        "would_change": (
+            [
+                f"{zettel_relative} frontmatter.assets +1",
+                receipt_relative,
+            ]
+            if not blockers and zettel_relative
+            else []
+        ),
+        "privacy_guards": {
+            "label_echoed": False,
+            "zettel_body_echoed": False,
+            "object_bytes_read": False,
+            "provider_called": False,
+            "network_checked": False,
+            "local_absolute_path_echoed": False,
+            "writes": False,
+        },
+    }
+    return result, {
+        "root": root,
+        "zettel_path": zettel_path,
+        "zettel_frontmatter": zettel_frontmatter,
+        "zettel_body": zettel_body,
+        "zettel_relative": zettel_relative,
+        "safe_zettel_id": safe_zettel_id,
+        "before_bytes": before_bytes,
+        "before_sha256": before_sha256,
+        "object_id": normalized_object_id,
+        "role": normalized_role,
+        "safe_label": safe_label,
+        "link_id": link_id,
+        "receipt_relative": receipt_relative,
+        "plan_sha256": plan_sha256,
+        "existing_assets": existing_assets,
+    }
+
+
+def zettel_objet_link_plan(
+    archive_root: Path | str,
+    *,
+    zettel_id: str | None = None,
+    relative_path: str | None = None,
+    object_id: str | None,
+    role: str,
+    label: str | None = None,
+) -> dict[str, Any]:
+    result, _private = _zettel_objet_link_plan_core(
+        archive_root,
+        zettel_id=zettel_id,
+        relative_path=relative_path,
+        object_id=object_id,
+        role=role,
+        label=label,
+    )
+    return result
+
+
+def zettel_objet_link_apply(
+    archive_root: Path | str,
+    *,
+    zettel_id: str | None = None,
+    relative_path: str | None = None,
+    object_id: str | None,
+    role: str,
+    label: str | None = None,
+    expected_plan_sha256: str | None,
+    reviewed_by: str | None,
+) -> dict[str, Any]:
+    result, private = _zettel_objet_link_plan_core(
+        archive_root,
+        zettel_id=zettel_id,
+        relative_path=relative_path,
+        object_id=object_id,
+        role=role,
+        label=label,
+    )
+    blockers = list(result["blockers"])
+    expected = str(expected_plan_sha256 or "").strip().lower()
+    reviewer = archive_services.safe_project_intake_actor_id(reviewed_by)
+    if not re.fullmatch(r"[0-9a-f]{64}", expected):
+        blockers.append("zettel_objet_link_expected_plan_sha256_invalid")
+    elif expected != private["plan_sha256"]:
+        blockers.append("zettel_objet_link_plan_changed")
+    if reviewer is None:
+        blockers.append("zettel_objet_link_reviewer_invalid")
+    if blockers or private["safe_zettel_id"] is None:
+        return {
+            **result,
+            "ok": False,
+            "state": "blocked",
+            "dry_run": False,
+            "approved": False,
+            "lifecycle_action": "zettel_objet_link_apply",
+            "blockers": archive_services.unique_preserve_order(blockers),
+            "would_change": [],
+            "files_written": [],
+        }
+
+    root: Path = private["root"]
+    with _ZettelObjetLinkLock(root, private["safe_zettel_id"]):
+        fresh, fresh_private = _zettel_objet_link_plan_core(
+            root,
+            zettel_id=zettel_id,
+            relative_path=relative_path,
+            object_id=object_id,
+            role=role,
+            label=label,
+        )
+        if not fresh["ok"] or fresh_private["plan_sha256"] != expected:
+            return {
+                **fresh,
+                "ok": False,
+                "state": "blocked",
+                "dry_run": False,
+                "approved": False,
+                "lifecycle_action": "zettel_objet_link_apply",
+                "blockers": archive_services.unique_preserve_order(
+                    [*fresh["blockers"], "zettel_objet_link_plan_changed"]
+                ),
+                "would_change": [],
+                "files_written": [],
+            }
+
+        timestamp = _now()
+        asset = {
+            "object_id": fresh_private["object_id"],
+            "role": fresh_private["role"],
+        }
+        if fresh_private["safe_label"] is not None:
+            asset["label"] = fresh_private["safe_label"]
+        updated_frontmatter = dict(fresh_private["zettel_frontmatter"])
+        updated_frontmatter["assets"] = [
+            *fresh_private["existing_assets"],
+            asset,
+        ]
+        updated_frontmatter["updated_at"] = timestamp
+        updated_text = (
+            "---\n"
+            + archive_services.dump_yaml(updated_frontmatter)
+            + "---\n"
+            + fresh_private["zettel_body"]
+        )
+        updated_bytes = updated_text.encode("utf-8")
+        after_sha256 = _sha256_bytes(updated_bytes)
+        snapshot_relative = (
+            f"{ZETTEL_OBJET_LINK_SNAPSHOT_DIR}/"
+            f"{fresh_private['before_sha256']}.zettel.md"
+        )
+        snapshot_path = archive_services.archive_internal_path(
+            root,
+            snapshot_relative,
+        )
+        receipt_path = archive_services.archive_internal_path(
+            root,
+            fresh_private["receipt_relative"],
+        )
+        receipt = {
+            "schema": ZETTEL_OBJET_LINK_RECEIPT_SCHEMA,
+            "action": "add_zettel_objet_link",
+            "archive_id": archive_services.read_archive_id(root),
+            "zettel_id": fresh_private["safe_zettel_id"],
+            "zettel_path": fresh_private["zettel_relative"],
+            "object_id": fresh_private["object_id"],
+            "role": fresh_private["role"],
+            "label_sha256": (
+                _sha256_bytes(fresh_private["safe_label"].encode("utf-8"))
+                if fresh_private["safe_label"] is not None
+                else None
+            ),
+            "link_id": fresh_private["link_id"],
+            "plan_sha256": expected,
+            "before_zettel_sha256": fresh_private["before_sha256"],
+            "after_zettel_sha256": after_sha256,
+            "before_snapshot_path": snapshot_relative,
+            "reviewed_by": reviewer,
+            "created_at": timestamp,
+            "privacy": {
+                "label_included": False,
+                "zettel_body_included": False,
+                "object_bytes_read": False,
+                "provider_called": False,
+            },
+        }
+        snapshot_created = False
+        receipt_created = False
+        zettel_written = False
+        try:
+            if not snapshot_path.exists():
+                archive_services._write_bytes_create_if_absent(
+                    snapshot_path,
+                    fresh_private["before_bytes"],
+                )
+                snapshot_created = True
+            archive_services.write_bytes_atomic(
+                fresh_private["zettel_path"],
+                updated_bytes,
+            )
+            zettel_written = True
+            archive_services._write_bytes_create_if_absent(
+                receipt_path,
+                _canonical_json_bytes(receipt),
+            )
+            receipt_created = True
+        except OSError:
+            if zettel_written:
+                archive_services.write_bytes_atomic(
+                    fresh_private["zettel_path"],
+                    fresh_private["before_bytes"],
+                )
+            if receipt_created:
+                receipt_path.unlink(missing_ok=True)
+            if snapshot_created:
+                snapshot_path.unlink(missing_ok=True)
+            raise
+
+    return {
+        **fresh,
+        "ok": True,
+        "state": "written",
+        "dry_run": False,
+        "approved": True,
+        "lifecycle_action": "zettel_objet_link_apply",
+        "summary": {
+            **fresh["summary"],
+            "current_asset_count": len(fresh_private["existing_assets"]) + 1,
+            "zettel_sha256": after_sha256,
+            "snapshot_path": snapshot_relative,
+        },
+        "blockers": [],
+        "would_change": [],
+        "files_written": [
+            fresh_private["zettel_relative"],
+            snapshot_relative,
+            fresh_private["receipt_relative"],
+        ],
+        "privacy_guards": {**fresh["privacy_guards"], "writes": True},
+    }
+
+
+def _zettel_objet_link_revert_plan_core(
+    archive_root: Path | str,
+    *,
+    receipt: Path | str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    root = archive_services.require_existing_archive_root(archive_root)
+    archive_id = archive_services.read_archive_id(root)
+    blockers: list[str] = []
+    receipt_path, path_error = _resolve_json_input(root, receipt)
+    receipt_doc: dict[str, Any] | None = None
+    receipt_bytes: bytes | None = None
+    if path_error or receipt_path is None:
+        blockers.append("zettel_objet_link_receipt_path_invalid")
+    else:
+        try:
+            receipt_bytes = receipt_path.read_bytes()
+            loaded = json.loads(receipt_bytes.decode("utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            loaded = None
+        if (
+            not isinstance(loaded, dict)
+            or loaded.get("schema") != ZETTEL_OBJET_LINK_RECEIPT_SCHEMA
+            or loaded.get("archive_id") != archive_id
+            or archive_services.validate_schema(
+                loaded,
+                "zettel-objet-link-receipt.schema.json",
+            )
+        ):
+            blockers.append("zettel_objet_link_receipt_invalid")
+        else:
+            try:
+                receipt_relative = archive_services.archive_relative_path(
+                    receipt_path,
+                    root,
+                )
+            except Exception:
+                receipt_relative = ""
+            if (
+                not receipt_relative.startswith(
+                    f"{ZETTEL_OBJET_LINK_RECEIPTS_DIR}/link."
+                )
+                or not receipt_relative.endswith(".json")
+            ):
+                blockers.append("zettel_objet_link_receipt_path_invalid")
+            else:
+                receipt_doc = loaded
+
+    zettel_path: Path | None = None
+    current_bytes: bytes | None = None
+    snapshot_bytes: bytes | None = None
+    safe_zettel_id: str | None = None
+    revert_receipt_relative: str | None = None
+    if receipt_doc is not None:
+        safe_zettel_id = _safe_zettel_id(receipt_doc.get("zettel_id"))
+        try:
+            zettel_path = archive_services.archive_internal_path(
+                root,
+                str(receipt_doc.get("zettel_path") or ""),
+            )
+            current_bytes = zettel_path.read_bytes()
+        except (archive_services.ArchiveServiceError, OSError):
+            blockers.append("zettel_objet_link_current_zettel_unavailable")
+        if (
+            current_bytes is not None
+            and _sha256_bytes(current_bytes)
+            != receipt_doc.get("after_zettel_sha256")
+        ):
+            blockers.append("zettel_objet_link_current_zettel_changed")
+        try:
+            snapshot_path = archive_services.archive_internal_path(
+                root,
+                str(receipt_doc.get("before_snapshot_path") or ""),
+            )
+            snapshot_bytes = snapshot_path.read_bytes()
+        except (archive_services.ArchiveServiceError, OSError):
+            blockers.append("zettel_objet_link_snapshot_missing")
+        if (
+            snapshot_bytes is not None
+            and _sha256_bytes(snapshot_bytes)
+            != receipt_doc.get("before_zettel_sha256")
+        ):
+            blockers.append("zettel_objet_link_snapshot_mismatch")
+        if safe_zettel_id is None:
+            blockers.append("zettel_objet_link_receipt_invalid")
+        source_receipt_sha256 = _sha256_bytes(receipt_bytes or b"")
+        revert_receipt_relative = (
+            f"{ZETTEL_OBJET_LINK_RECEIPTS_DIR}/reverts/"
+            f"{source_receipt_sha256[:24]}.json"
+        )
+        if archive_services.archive_internal_path(
+            root,
+            revert_receipt_relative,
+        ).exists():
+            blockers.append("zettel_objet_link_revert_already_recorded")
+    else:
+        source_receipt_sha256 = None
+
+    binding = {
+        "schema": "wom-kit/zettel-objet-link-revert-plan-binding/v0.1",
+        "archive_id": archive_id,
+        "source_receipt_sha256": source_receipt_sha256,
+        "zettel_id": safe_zettel_id,
+        "current_zettel_sha256": (
+            _sha256_bytes(current_bytes) if current_bytes is not None else None
+        ),
+        "restore_zettel_sha256": (
+            _sha256_bytes(snapshot_bytes)
+            if snapshot_bytes is not None
+            else None
+        ),
+        "revert_receipt_path": revert_receipt_relative,
+    }
+    plan_sha256 = _sha256_bytes(_canonical_json_bytes(binding))
+    aggregate = archive_services.unique_preserve_order(blockers)
+    result = {
+        "ok": not aggregate,
+        "state": "ready" if not aggregate else "blocked",
+        "dry_run": True,
+        "lifecycle_action": "zettel_objet_link_revert_plan",
+        "archive_id": archive_id,
+        "summary": {
+            "zettel_id": safe_zettel_id,
+            "object_id": receipt_doc.get("object_id") if receipt_doc else None,
+            "link_id": receipt_doc.get("link_id") if receipt_doc else None,
+            "revert_receipt_path": revert_receipt_relative,
+            "plan_sha256": plan_sha256 if not aggregate else None,
+            "exact_byte_restore": True,
+        },
+        "blockers": aggregate,
+        "warnings": [],
+        "would_change": (
+            [str(receipt_doc.get("zettel_path")), revert_receipt_relative]
+            if not aggregate and receipt_doc and revert_receipt_relative
+            else []
+        ),
+        "privacy_guards": {
+            "label_echoed": False,
+            "zettel_body_echoed": False,
+            "snapshot_bytes_echoed": False,
+            "object_bytes_read": False,
+            "writes": False,
+        },
+    }
+    return result, {
+        "root": root,
+        "receipt_doc": receipt_doc,
+        "receipt_bytes": receipt_bytes,
+        "zettel_path": zettel_path,
+        "current_bytes": current_bytes,
+        "snapshot_bytes": snapshot_bytes,
+        "safe_zettel_id": safe_zettel_id,
+        "revert_receipt_relative": revert_receipt_relative,
+        "source_receipt_sha256": source_receipt_sha256,
+        "plan_sha256": plan_sha256,
+    }
+
+
+def zettel_objet_link_revert_plan(
+    archive_root: Path | str,
+    *,
+    receipt: Path | str,
+) -> dict[str, Any]:
+    result, _private = _zettel_objet_link_revert_plan_core(
+        archive_root,
+        receipt=receipt,
+    )
+    return result
+
+
+def zettel_objet_link_revert(
+    archive_root: Path | str,
+    *,
+    receipt: Path | str,
+    expected_plan_sha256: str | None,
+    reviewed_by: str | None,
+) -> dict[str, Any]:
+    result, private = _zettel_objet_link_revert_plan_core(
+        archive_root,
+        receipt=receipt,
+    )
+    blockers = list(result["blockers"])
+    expected = str(expected_plan_sha256 or "").strip().lower()
+    reviewer = archive_services.safe_project_intake_actor_id(reviewed_by)
+    if not re.fullmatch(r"[0-9a-f]{64}", expected):
+        blockers.append("zettel_objet_link_revert_plan_sha256_invalid")
+    elif expected != private["plan_sha256"]:
+        blockers.append("zettel_objet_link_revert_plan_changed")
+    if reviewer is None:
+        blockers.append("zettel_objet_link_revert_reviewer_invalid")
+    if blockers or private["safe_zettel_id"] is None:
+        return {
+            **result,
+            "ok": False,
+            "state": "blocked",
+            "dry_run": False,
+            "approved": False,
+            "lifecycle_action": "zettel_objet_link_revert",
+            "blockers": archive_services.unique_preserve_order(blockers),
+            "would_change": [],
+            "files_written": [],
+        }
+    root: Path = private["root"]
+    with _ZettelObjetLinkLock(root, private["safe_zettel_id"]):
+        fresh, fresh_private = _zettel_objet_link_revert_plan_core(
+            root,
+            receipt=receipt,
+        )
+        if not fresh["ok"] or fresh_private["plan_sha256"] != expected:
+            return {
+                **fresh,
+                "ok": False,
+                "state": "blocked",
+                "dry_run": False,
+                "approved": False,
+                "lifecycle_action": "zettel_objet_link_revert",
+                "blockers": archive_services.unique_preserve_order(
+                    [*fresh["blockers"], "zettel_objet_link_revert_plan_changed"]
+                ),
+                "would_change": [],
+                "files_written": [],
+            }
+        timestamp = _now()
+        revert_receipt = {
+            "schema": ZETTEL_OBJET_LINK_REVERT_RECEIPT_SCHEMA,
+            "action": "restore_zettel_before_objet_link",
+            "archive_id": archive_services.read_archive_id(root),
+            "zettel_id": fresh_private["safe_zettel_id"],
+            "source_receipt_sha256": fresh_private["source_receipt_sha256"],
+            "revert_plan_sha256": expected,
+            "restored_zettel_sha256": fresh_private["receipt_doc"]["before_zettel_sha256"],
+            "reviewed_by": reviewer,
+            "created_at": timestamp,
+        }
+        revert_receipt_path = archive_services.archive_internal_path(
+            root,
+            fresh_private["revert_receipt_relative"],
+        )
+        zettel_restored = False
+        try:
+            archive_services.write_bytes_atomic(
+                fresh_private["zettel_path"],
+                fresh_private["snapshot_bytes"],
+            )
+            zettel_restored = True
+            archive_services._write_bytes_create_if_absent(
+                revert_receipt_path,
+                _canonical_json_bytes(revert_receipt),
+            )
+        except OSError:
+            if zettel_restored:
+                archive_services.write_bytes_atomic(
+                    fresh_private["zettel_path"],
+                    fresh_private["current_bytes"],
+                )
+            revert_receipt_path.unlink(missing_ok=True)
+            raise
+    return {
+        **fresh,
+        "ok": True,
+        "state": "reverted",
+        "dry_run": False,
+        "approved": True,
+        "lifecycle_action": "zettel_objet_link_revert",
+        "blockers": [],
+        "would_change": [],
+        "files_written": [
+            fresh_private["receipt_doc"]["zettel_path"],
+            fresh_private["revert_receipt_relative"],
+        ],
+        "privacy_guards": {**fresh["privacy_guards"], "writes": True},
+    }
+
+
+class _DraftDiscardLock(_LocatorLock):
+    def __init__(self, root: Path, zettel_id: str) -> None:
+        lock_dir = archive_services.archive_internal_path(
+            root,
+            f"{DRAFT_DISCARD_RECEIPTS_DIR}/.locks",
+        )
+        lock_dir.mkdir(parents=True, exist_ok=True)
+        lock_name = hashlib.sha256(zettel_id.encode("utf-8")).hexdigest()
+        self._path = lock_dir / f"{lock_name}.lock"
+        self._handle = None
+
+
+def _safe_discard_reason(value: str | None) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if (
+        not text
+        or len(text) > 1000
+        or any(ord(character) < 32 for character in text)
+        or not archive_services.safe_source_intake_text(text)
+    ):
+        return None
+    return text
+
+
+def _draft_discard_plan_core(
+    archive_root: Path | str,
+    *,
+    zettel_id: str | None,
+    relative_path: str | None,
+    reason: str | None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    root = archive_services.require_existing_archive_root(archive_root)
+    archive_id = archive_services.read_archive_id(root)
+    blockers: list[str] = []
+    if bool(zettel_id) == bool(relative_path):
+        blockers.append("discard_draft_target_required")
+    safe_reason = _safe_discard_reason(reason)
+    if safe_reason is None:
+        blockers.append("discard_draft_reason_invalid_or_private")
+
+    draft_path: Path | None = None
+    draft_relative: str | None = None
+    draft_bytes: bytes | None = None
+    draft_sha256: str | None = None
+    safe_zettel_id: str | None = None
+    frontmatter: dict[str, Any] = {}
+    if bool(zettel_id) != bool(relative_path):
+        try:
+            draft_path = archive_services.resolve_inbox_draft_path(
+                root,
+                zettel_id,
+                relative_path,
+            )
+            frontmatter, _body = archive_services.require_readable_zettel_content(
+                draft_path
+            )
+            safe_zettel_id = _safe_zettel_id(frontmatter.get("id"))
+            if safe_zettel_id is None or frontmatter.get("status") != "draft":
+                blockers.append("discard_draft_source_invalid")
+            draft_relative = archive_services.archive_relative_path(
+                draft_path,
+                root,
+            )
+            draft_bytes = draft_path.read_bytes()
+            draft_sha256 = _sha256_bytes(draft_bytes)
+        except (archive_services.ArchiveServiceError, OSError):
+            blockers.append("discard_draft_source_unavailable")
+
+    mint_receipt_relative = (
+        f"{archive_services.MINT_RECEIPTS_DIR}/{safe_zettel_id}.mint.json"
+        if safe_zettel_id
+        else None
+    )
+    if (
+        mint_receipt_relative
+        and archive_services.archive_internal_path(root, mint_receipt_relative).exists()
+    ):
+        blockers.append("discard_draft_mint_receipt_present_use_retire_draft")
+    canonical_twin_present = False
+    if safe_zettel_id and (root / "zettels").is_dir():
+        for candidate in archive_services.safe_archive_glob(
+            root / "zettels",
+            "*.md",
+            root,
+            recursive=True,
+        ):
+            inspection = archive_services.inspect_zettel_frontmatter_boundary(
+                candidate
+            )
+            if (
+                inspection.get("metadata_readable")
+                and inspection.get("frontmatter", {}).get("id") == safe_zettel_id
+            ):
+                canonical_twin_present = True
+                break
+    if canonical_twin_present:
+        blockers.append("discard_draft_canonical_twin_present_use_retire_draft")
+
+    snapshot_relative = (
+        f"{DRAFT_DISCARD_SNAPSHOT_DIR}/{draft_sha256}.draft.md"
+        if draft_sha256
+        else None
+    )
+    receipt_relative = (
+        f"{DRAFT_DISCARD_RECEIPTS_DIR}/{safe_zettel_id}."
+        f"{str(draft_sha256 or '')[:16]}.discard.json"
+        if safe_zettel_id and draft_sha256
+        else None
+    )
+    if (
+        receipt_relative
+        and archive_services.archive_internal_path(root, receipt_relative).exists()
+    ):
+        blockers.append("discard_draft_receipt_already_exists")
+    reason_sha256 = (
+        _sha256_bytes(safe_reason.encode("utf-8"))
+        if safe_reason is not None
+        else None
+    )
+    plan_binding = {
+        "schema": "wom-kit/draft-discard-plan-binding/v0.1",
+        "archive_id": archive_id,
+        "zettel_id": safe_zettel_id,
+        "draft_path": draft_relative,
+        "draft_sha256": draft_sha256,
+        "reason_sha256": reason_sha256,
+        "snapshot_path": snapshot_relative,
+        "receipt_path": receipt_relative,
+    }
+    plan_sha256 = _sha256_bytes(_canonical_json_bytes(plan_binding))
+    aggregate = archive_services.unique_preserve_order(blockers)
+    next_safe_actions = (
+        [
+            f"archive retire-draft <archive-root> --zettel-id {safe_zettel_id} --dry-run --format json"
+        ]
+        if safe_zettel_id
+        and any("use_retire_draft" in item for item in aggregate)
+        else []
+    )
+    result = {
+        "ok": not aggregate,
+        "state": "ready" if not aggregate else "blocked",
+        "dry_run": True,
+        "lifecycle_action": "discard_draft_plan",
+        "archive_id": archive_id,
+        "summary": {
+            "zettel_id": safe_zettel_id,
+            "draft_path": draft_relative,
+            "draft_sha256": draft_sha256,
+            "reason_sha256": reason_sha256,
+            "snapshot_path": snapshot_relative,
+            "receipt_path": receipt_relative,
+            "plan_sha256": plan_sha256 if not aggregate else None,
+            "mint_receipt_present": (
+                "discard_draft_mint_receipt_present_use_retire_draft" in aggregate
+            ),
+            "canonical_twin_present": canonical_twin_present,
+            "exact_byte_restore_supported": True,
+        },
+        "blockers": aggregate,
+        "warnings": [],
+        "next_safe_actions": next_safe_actions,
+        "would_change": (
+            [
+                f"remove {draft_relative}",
+                f"write {snapshot_relative}",
+                f"write {receipt_relative}",
+            ]
+            if not aggregate
+            else []
+        ),
+        "privacy_guards": {
+            "reason_echoed": False,
+            "draft_body_echoed": False,
+            "snapshot_bytes_echoed": False,
+            "local_absolute_path_echoed": False,
+            "writes": False,
+        },
+    }
+    return result, {
+        "root": root,
+        "draft_path": draft_path,
+        "draft_relative": draft_relative,
+        "draft_bytes": draft_bytes,
+        "draft_sha256": draft_sha256,
+        "safe_zettel_id": safe_zettel_id,
+        "safe_reason": safe_reason,
+        "reason_sha256": reason_sha256,
+        "snapshot_relative": snapshot_relative,
+        "receipt_relative": receipt_relative,
+        "plan_sha256": plan_sha256,
+    }
+
+
+def draft_discard_plan(
+    archive_root: Path | str,
+    *,
+    zettel_id: str | None = None,
+    relative_path: str | None = None,
+    reason: str | None,
+) -> dict[str, Any]:
+    result, _private = _draft_discard_plan_core(
+        archive_root,
+        zettel_id=zettel_id,
+        relative_path=relative_path,
+        reason=reason,
+    )
+    return result
+
+
+def draft_discard_apply(
+    archive_root: Path | str,
+    *,
+    zettel_id: str | None = None,
+    relative_path: str | None = None,
+    reason: str | None,
+    expected_plan_sha256: str | None,
+    reviewed_by: str | None,
+) -> dict[str, Any]:
+    result, private = _draft_discard_plan_core(
+        archive_root,
+        zettel_id=zettel_id,
+        relative_path=relative_path,
+        reason=reason,
+    )
+    blockers = list(result["blockers"])
+    expected = str(expected_plan_sha256 or "").strip().lower()
+    reviewer = archive_services.safe_project_intake_actor_id(reviewed_by)
+    if not re.fullmatch(r"[0-9a-f]{64}", expected):
+        blockers.append("discard_draft_expected_plan_sha256_invalid")
+    elif expected != private["plan_sha256"]:
+        blockers.append("discard_draft_plan_changed")
+    if reviewer is None:
+        blockers.append("discard_draft_reviewer_invalid")
+    if blockers or private["safe_zettel_id"] is None:
+        return {
+            **result,
+            "ok": False,
+            "state": "blocked",
+            "dry_run": False,
+            "approved": False,
+            "lifecycle_action": "discard_draft_apply",
+            "blockers": archive_services.unique_preserve_order(blockers),
+            "would_change": [],
+            "files_written": [],
+        }
+    root: Path = private["root"]
+    with _DraftDiscardLock(root, private["safe_zettel_id"]):
+        fresh, fresh_private = _draft_discard_plan_core(
+            root,
+            zettel_id=zettel_id,
+            relative_path=relative_path,
+            reason=reason,
+        )
+        if not fresh["ok"] or fresh_private["plan_sha256"] != expected:
+            return {
+                **fresh,
+                "ok": False,
+                "state": "blocked",
+                "dry_run": False,
+                "approved": False,
+                "lifecycle_action": "discard_draft_apply",
+                "blockers": archive_services.unique_preserve_order(
+                    [*fresh["blockers"], "discard_draft_plan_changed"]
+                ),
+                "would_change": [],
+                "files_written": [],
+            }
+        timestamp = _now()
+        receipt = {
+            "schema": DRAFT_DISCARD_RECEIPT_SCHEMA,
+            "action": "discard_unminted_draft",
+            "archive_id": archive_services.read_archive_id(root),
+            "zettel_id": fresh_private["safe_zettel_id"],
+            "draft_path": fresh_private["draft_relative"],
+            "draft_sha256": fresh_private["draft_sha256"],
+            "reason": fresh_private["safe_reason"],
+            "reason_sha256": fresh_private["reason_sha256"],
+            "snapshot_path": fresh_private["snapshot_relative"],
+            "plan_sha256": expected,
+            "reviewed_by": reviewer,
+            "created_at": timestamp,
+            "result": {
+                "draft_removed": True,
+                "snapshot_written": True,
+                "exact_byte_restore_supported": True,
+            },
+        }
+        snapshot_path = archive_services.archive_internal_path(
+            root,
+            fresh_private["snapshot_relative"],
+        )
+        receipt_path = archive_services.archive_internal_path(
+            root,
+            fresh_private["receipt_relative"],
+        )
+        snapshot_created = False
+        draft_removed = False
+        try:
+            if not snapshot_path.exists():
+                archive_services._write_bytes_create_if_absent(
+                    snapshot_path,
+                    fresh_private["draft_bytes"],
+                )
+                snapshot_created = True
+            elif _sha256_bytes(snapshot_path.read_bytes()) != fresh_private["draft_sha256"]:
+                raise OSError("discard snapshot collision")
+            fresh_private["draft_path"].unlink()
+            draft_removed = True
+            archive_services._write_bytes_create_if_absent(
+                receipt_path,
+                _canonical_json_bytes(receipt),
+            )
+        except OSError:
+            if draft_removed:
+                archive_services._write_bytes_create_if_absent(
+                    fresh_private["draft_path"],
+                    fresh_private["draft_bytes"],
+                )
+            receipt_path.unlink(missing_ok=True)
+            if snapshot_created:
+                snapshot_path.unlink(missing_ok=True)
+            raise
+    return {
+        **fresh,
+        "ok": True,
+        "state": "discarded",
+        "dry_run": False,
+        "approved": True,
+        "lifecycle_action": "discard_draft_apply",
+        "blockers": [],
+        "would_change": [],
+        "files_written": [
+            fresh_private["snapshot_relative"],
+            fresh_private["receipt_relative"],
+        ],
+        "removed_paths": [fresh_private["draft_relative"]],
+        "privacy_guards": {**fresh["privacy_guards"], "writes": True},
+    }
+
+
+def _draft_discard_restore_plan_core(
+    archive_root: Path | str,
+    *,
+    receipt: Path | str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    root = archive_services.require_existing_archive_root(archive_root)
+    archive_id = archive_services.read_archive_id(root)
+    blockers: list[str] = []
+    receipt_path, path_error = _resolve_json_input(root, receipt)
+    receipt_doc: dict[str, Any] | None = None
+    receipt_bytes: bytes | None = None
+    if path_error or receipt_path is None:
+        blockers.append("discard_draft_receipt_path_invalid")
+    else:
+        try:
+            receipt_bytes = receipt_path.read_bytes()
+            loaded = json.loads(receipt_bytes.decode("utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            loaded = None
+        if (
+            not isinstance(loaded, dict)
+            or loaded.get("schema") != DRAFT_DISCARD_RECEIPT_SCHEMA
+            or loaded.get("archive_id") != archive_id
+            or archive_services.validate_schema(
+                loaded,
+                "draft-discard-receipt.schema.json",
+            )
+        ):
+            blockers.append("discard_draft_receipt_invalid")
+        else:
+            try:
+                receipt_relative = archive_services.archive_relative_path(
+                    receipt_path,
+                    root,
+                )
+            except Exception:
+                receipt_relative = ""
+            if (
+                not receipt_relative.startswith(
+                    f"{DRAFT_DISCARD_RECEIPTS_DIR}/"
+                )
+                or "/snapshots/" in f"/{receipt_relative}"
+                or not receipt_relative.endswith(".discard.json")
+            ):
+                blockers.append("discard_draft_receipt_path_invalid")
+            else:
+                receipt_doc = loaded
+    draft_path: Path | None = None
+    snapshot_bytes: bytes | None = None
+    safe_zettel_id: str | None = None
+    restore_receipt_relative: str | None = None
+    if receipt_doc is not None:
+        safe_zettel_id = _safe_zettel_id(receipt_doc.get("zettel_id"))
+        try:
+            draft_path = archive_services.archive_internal_path(
+                root,
+                str(receipt_doc.get("draft_path") or ""),
+            )
+        except archive_services.ArchiveServiceError:
+            blockers.append("discard_draft_receipt_invalid")
+        if draft_path is not None and draft_path.exists():
+            blockers.append("discard_draft_restore_target_exists")
+        try:
+            snapshot_path = archive_services.archive_internal_path(
+                root,
+                str(receipt_doc.get("snapshot_path") or ""),
+            )
+            snapshot_bytes = snapshot_path.read_bytes()
+        except (archive_services.ArchiveServiceError, OSError):
+            blockers.append("discard_draft_snapshot_missing")
+        if (
+            snapshot_bytes is not None
+            and _sha256_bytes(snapshot_bytes) != receipt_doc.get("draft_sha256")
+        ):
+            blockers.append("discard_draft_snapshot_mismatch")
+        if safe_zettel_id is None:
+            blockers.append("discard_draft_receipt_invalid")
+        source_receipt_sha256 = _sha256_bytes(receipt_bytes or b"")
+        restore_receipt_relative = (
+            f"{DRAFT_DISCARD_RECEIPTS_DIR}/restores/"
+            f"{source_receipt_sha256[:24]}.json"
+        )
+        if archive_services.archive_internal_path(
+            root,
+            restore_receipt_relative,
+        ).exists():
+            blockers.append("discard_draft_restore_already_recorded")
+    else:
+        source_receipt_sha256 = None
+    binding = {
+        "schema": "wom-kit/draft-discard-restore-plan-binding/v0.1",
+        "archive_id": archive_id,
+        "source_receipt_sha256": source_receipt_sha256,
+        "zettel_id": safe_zettel_id,
+        "restore_path": receipt_doc.get("draft_path") if receipt_doc else None,
+        "restore_sha256": (
+            _sha256_bytes(snapshot_bytes) if snapshot_bytes is not None else None
+        ),
+        "restore_receipt_path": restore_receipt_relative,
+    }
+    plan_sha256 = _sha256_bytes(_canonical_json_bytes(binding))
+    aggregate = archive_services.unique_preserve_order(blockers)
+    result = {
+        "ok": not aggregate,
+        "state": "ready" if not aggregate else "blocked",
+        "dry_run": True,
+        "lifecycle_action": "discard_draft_restore_plan",
+        "archive_id": archive_id,
+        "summary": {
+            "zettel_id": safe_zettel_id,
+            "restore_path": receipt_doc.get("draft_path") if receipt_doc else None,
+            "restore_sha256": receipt_doc.get("draft_sha256") if receipt_doc else None,
+            "restore_receipt_path": restore_receipt_relative,
+            "plan_sha256": plan_sha256 if not aggregate else None,
+            "exact_byte_restore": True,
+        },
+        "blockers": aggregate,
+        "warnings": [],
+        "would_change": (
+            [str(receipt_doc.get("draft_path")), restore_receipt_relative]
+            if not aggregate and receipt_doc and restore_receipt_relative
+            else []
+        ),
+        "privacy_guards": {
+            "reason_echoed": False,
+            "draft_body_echoed": False,
+            "snapshot_bytes_echoed": False,
+            "writes": False,
+        },
+    }
+    return result, {
+        "root": root,
+        "receipt_doc": receipt_doc,
+        "receipt_bytes": receipt_bytes,
+        "draft_path": draft_path,
+        "snapshot_bytes": snapshot_bytes,
+        "safe_zettel_id": safe_zettel_id,
+        "source_receipt_sha256": source_receipt_sha256,
+        "restore_receipt_relative": restore_receipt_relative,
+        "plan_sha256": plan_sha256,
+    }
+
+
+def draft_discard_restore_plan(
+    archive_root: Path | str,
+    *,
+    receipt: Path | str,
+) -> dict[str, Any]:
+    result, _private = _draft_discard_restore_plan_core(
+        archive_root,
+        receipt=receipt,
+    )
+    return result
+
+
+def draft_discard_restore(
+    archive_root: Path | str,
+    *,
+    receipt: Path | str,
+    expected_plan_sha256: str | None,
+    reviewed_by: str | None,
+) -> dict[str, Any]:
+    result, private = _draft_discard_restore_plan_core(
+        archive_root,
+        receipt=receipt,
+    )
+    blockers = list(result["blockers"])
+    expected = str(expected_plan_sha256 or "").strip().lower()
+    reviewer = archive_services.safe_project_intake_actor_id(reviewed_by)
+    if not re.fullmatch(r"[0-9a-f]{64}", expected):
+        blockers.append("discard_draft_restore_plan_sha256_invalid")
+    elif expected != private["plan_sha256"]:
+        blockers.append("discard_draft_restore_plan_changed")
+    if reviewer is None:
+        blockers.append("discard_draft_restore_reviewer_invalid")
+    if blockers or private["safe_zettel_id"] is None:
+        return {
+            **result,
+            "ok": False,
+            "state": "blocked",
+            "dry_run": False,
+            "approved": False,
+            "lifecycle_action": "discard_draft_restore",
+            "blockers": archive_services.unique_preserve_order(blockers),
+            "would_change": [],
+            "files_written": [],
+        }
+    root: Path = private["root"]
+    with _DraftDiscardLock(root, private["safe_zettel_id"]):
+        fresh, fresh_private = _draft_discard_restore_plan_core(
+            root,
+            receipt=receipt,
+        )
+        if not fresh["ok"] or fresh_private["plan_sha256"] != expected:
+            return {
+                **fresh,
+                "ok": False,
+                "state": "blocked",
+                "dry_run": False,
+                "approved": False,
+                "lifecycle_action": "discard_draft_restore",
+                "blockers": archive_services.unique_preserve_order(
+                    [*fresh["blockers"], "discard_draft_restore_plan_changed"]
+                ),
+                "would_change": [],
+                "files_written": [],
+            }
+        timestamp = _now()
+        restore_receipt = {
+            "schema": DRAFT_DISCARD_RESTORE_RECEIPT_SCHEMA,
+            "action": "restore_discarded_draft",
+            "archive_id": archive_services.read_archive_id(root),
+            "zettel_id": fresh_private["safe_zettel_id"],
+            "source_receipt_sha256": fresh_private["source_receipt_sha256"],
+            "restore_plan_sha256": expected,
+            "restored_path": fresh_private["receipt_doc"]["draft_path"],
+            "restored_sha256": fresh_private["receipt_doc"]["draft_sha256"],
+            "reviewed_by": reviewer,
+            "created_at": timestamp,
+        }
+        restore_receipt_path = archive_services.archive_internal_path(
+            root,
+            fresh_private["restore_receipt_relative"],
+        )
+        draft_created = False
+        try:
+            archive_services._write_bytes_create_if_absent(
+                fresh_private["draft_path"],
+                fresh_private["snapshot_bytes"],
+            )
+            draft_created = True
+            archive_services._write_bytes_create_if_absent(
+                restore_receipt_path,
+                _canonical_json_bytes(restore_receipt),
+            )
+        except OSError:
+            if draft_created:
+                fresh_private["draft_path"].unlink(missing_ok=True)
+            restore_receipt_path.unlink(missing_ok=True)
+            raise
+    return {
+        **fresh,
+        "ok": True,
+        "state": "restored",
+        "dry_run": False,
+        "approved": True,
+        "lifecycle_action": "discard_draft_restore",
+        "blockers": [],
+        "would_change": [],
+        "files_written": [
+            fresh_private["receipt_doc"]["draft_path"],
+            fresh_private["restore_receipt_relative"],
+        ],
+        "privacy_guards": {**fresh["privacy_guards"], "writes": True},
     }
 
 
@@ -1826,6 +3254,246 @@ def _markup_reference_bindings(
     )
 
 
+class _GfmTableParser(HTMLParser):
+    """Parse one reviewed table fragment without interpreting the whole zet."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.table_depth = 0
+        self.rows: list[list[dict[str, Any]]] = []
+        self.current_row: list[dict[str, Any]] | None = None
+        self.current_cell: dict[str, Any] | None = None
+        self.blockers: list[str] = []
+
+    def add_blocker(self, code: str) -> None:
+        if code not in self.blockers:
+            self.blockers.append(code)
+
+    def handle_starttag(
+        self,
+        tag: str,
+        attrs: list[tuple[str, str | None]],
+    ) -> None:
+        name = tag.casefold()
+        attributes = {key.casefold(): value for key, value in attrs}
+        if name == "table":
+            self.table_depth += 1
+            if self.table_depth != 1:
+                self.add_blocker("markup_table_nested_unsupported")
+            return
+        if self.table_depth != 1:
+            return
+        if name in {"thead", "tbody", "tfoot"}:
+            return
+        if name in {"col", "colgroup"}:
+            if attributes:
+                self.add_blocker("markup_table_column_semantics_unsupported")
+            return
+        if name == "tr":
+            if self.current_row is not None or self.current_cell is not None:
+                self.add_blocker("markup_table_structure_invalid")
+            self.current_row = []
+            return
+        if name in {"td", "th"}:
+            if self.current_row is None or self.current_cell is not None:
+                self.add_blocker("markup_table_structure_invalid")
+                return
+            for span_name in ("rowspan", "colspan"):
+                span_value = str(attributes.get(span_name) or "1").strip()
+                if span_value != "1":
+                    self.add_blocker("markup_table_span_unsupported")
+            alignment = str(attributes.get("align") or "").strip().casefold()
+            if alignment not in {"", "left", "center", "right"}:
+                self.add_blocker("markup_table_alignment_unsupported")
+            style = str(attributes.get("style") or "").strip().casefold()
+            if style:
+                match = re.fullmatch(
+                    r"\s*text-align\s*:\s*(left|center|right)\s*;?\s*",
+                    style,
+                )
+                if match is None:
+                    self.add_blocker("markup_table_cell_semantics_unsupported")
+                elif not alignment:
+                    alignment = match.group(1)
+            unsupported_attributes = set(attributes) - {
+                "align",
+                "colspan",
+                "rowspan",
+                "style",
+            }
+            if unsupported_attributes:
+                self.add_blocker("markup_table_cell_semantics_unsupported")
+            self.current_cell = {
+                "kind": name,
+                "parts": [],
+                "alignment": alignment or None,
+            }
+            return
+        if self.current_cell is None:
+            if name not in {"caption"}:
+                self.add_blocker("markup_table_structure_invalid")
+            else:
+                self.add_blocker("markup_table_caption_unsupported")
+            return
+        if name == "br":
+            self.current_cell["parts"].append("<br>")
+        elif name in {"article", "div", "p", "section"}:
+            self.current_cell["parts"].append("<br>")
+        elif name in _MARKDOWN_COMPATIBLE_HTML_TAGS:
+            self.current_cell["parts"].append(self.get_starttag_text())
+        else:
+            self.add_blocker("markup_table_cell_markup_unsupported")
+
+    def handle_startendtag(
+        self,
+        tag: str,
+        attrs: list[tuple[str, str | None]],
+    ) -> None:
+        self.handle_starttag(tag, attrs)
+
+    def handle_endtag(self, tag: str) -> None:
+        name = tag.casefold()
+        if name == "table":
+            if self.table_depth == 1 and (
+                self.current_row is not None or self.current_cell is not None
+            ):
+                self.add_blocker("markup_table_structure_invalid")
+            self.table_depth = max(0, self.table_depth - 1)
+            return
+        if self.table_depth != 1:
+            return
+        if name in {"td", "th"}:
+            if self.current_cell is None or self.current_row is None:
+                self.add_blocker("markup_table_structure_invalid")
+                return
+            if self.current_cell["kind"] != name:
+                self.add_blocker("markup_table_structure_invalid")
+            self.current_row.append(self.current_cell)
+            self.current_cell = None
+            return
+        if name == "tr":
+            if self.current_row is None or self.current_cell is not None:
+                self.add_blocker("markup_table_structure_invalid")
+                return
+            if self.current_row:
+                self.rows.append(self.current_row)
+            self.current_row = None
+            return
+        if self.current_cell is not None:
+            if name in {"article", "div", "p", "section"}:
+                self.current_cell["parts"].append("<br>")
+            elif name in _MARKDOWN_COMPATIBLE_HTML_TAGS and name != "br":
+                self.current_cell["parts"].append(f"</{name}>")
+
+    def handle_data(self, data: str) -> None:
+        if self.table_depth == 1 and self.current_cell is not None:
+            self.current_cell["parts"].append(data)
+
+    def close_and_render(self) -> tuple[str | None, list[str]]:
+        try:
+            self.close()
+        except Exception:
+            self.add_blocker("markup_table_parse_failed")
+        if self.table_depth or self.current_row is not None or self.current_cell is not None:
+            self.add_blocker("markup_table_structure_invalid")
+        if not self.rows:
+            self.add_blocker("markup_table_empty_unsupported")
+        if self.blockers:
+            return None, self.blockers
+
+        width = max(len(row) for row in self.rows)
+        if width == 0:
+            return None, ["markup_table_empty_unsupported"]
+        first_kinds = {cell["kind"] for cell in self.rows[0]}
+        if "th" in first_kinds and first_kinds != {"th"}:
+            return None, ["markup_table_header_layout_unsupported"]
+        if any(
+            cell["kind"] == "th"
+            for row in self.rows[1:]
+            for cell in row
+        ):
+            return None, ["markup_table_header_layout_unsupported"]
+
+        has_header = first_kinds == {"th"}
+        header = self.rows[0] if has_header else []
+        body_rows = self.rows[1:] if has_header else self.rows
+        alignments: list[str | None] = [None] * width
+        for index in range(width):
+            observed = {
+                row[index]["alignment"]
+                for row in self.rows
+                if index < len(row) and row[index].get("alignment")
+            }
+            if len(observed) > 1:
+                return None, ["markup_table_alignment_conflict"]
+            if observed:
+                alignments[index] = next(iter(observed))
+
+        def cell_text(cell: dict[str, Any] | None) -> str:
+            if cell is None:
+                return ""
+            value = "".join(str(part) for part in cell["parts"])
+            value = re.sub(r"[ \t\r\f\v]+", " ", value)
+            value = re.sub(r"\n+", "<br>", value)
+            value = re.sub(r"(?:<br>\s*){2,}", "<br>", value)
+            return value.strip().replace("|", r"\|")
+
+        def row_text(row: list[dict[str, Any]]) -> str:
+            cells = [
+                cell_text(row[index] if index < len(row) else None)
+                for index in range(width)
+            ]
+            return "| " + " | ".join(cells) + " |"
+
+        header_row = row_text(header) if has_header else row_text([])
+        delimiters = []
+        for alignment in alignments:
+            delimiters.append(
+                ":---:"
+                if alignment == "center"
+                else "---:"
+                if alignment == "right"
+                else ":---"
+                if alignment == "left"
+                else "---"
+            )
+        rendered = [header_row, "| " + " | ".join(delimiters) + " |"]
+        rendered.extend(row_text(row) for row in body_rows)
+        return "\n".join(rendered), []
+
+
+_TABLE_FRAGMENT_RE = re.compile(
+    r"(?is)<\s*table(?:\s+[^<>]*?)?\s*>.*?<\s*/\s*table\s*>"
+)
+
+
+def _normalize_gfm_tables(body: str) -> tuple[str, int, list[str]]:
+    converted_count = 0
+    blockers: list[str] = []
+
+    def replacement(match: re.Match[str]) -> str:
+        nonlocal converted_count
+        parser = _GfmTableParser()
+        try:
+            parser.feed(match.group(0))
+            rendered, fragment_blockers = parser.close_and_render()
+        except Exception:
+            rendered = None
+            fragment_blockers = ["markup_table_parse_failed"]
+        blockers.extend(fragment_blockers)
+        if rendered is None:
+            return match.group(0)
+        converted_count += 1
+        return "\n\n" + rendered + "\n\n"
+
+    normalized = _TABLE_FRAGMENT_RE.sub(replacement, body)
+    return (
+        normalized,
+        converted_count,
+        archive_services.unique_preserve_order(blockers),
+    )
+
+
 def _normalize_markup_body(
     body: str,
     *,
@@ -1835,17 +3503,34 @@ def _normalize_markup_body(
     counts = {
         "empty_block": 0,
         "span": 0,
+        "mention_date": 0,
+        "table": 0,
+        "table_blocked": 0,
         "structural_container": 0,
         "reference_binding_applied": 0,
         "reference_binding_required": 0,
         "unknown_semantic_tag": 0,
     }
+    normalized, table_count, table_blockers = _normalize_gfm_tables(body)
+    counts["table"] = table_count
+    counts["table_blocked"] = len(table_blockers)
+
     normalized, empty_count = re.subn(
         r"(?im)^[ \t]*<\s*empty-block\s*/\s*>[ \t]*(?:\r?\n|$)",
         "",
-        body,
+        normalized,
     )
     counts["empty_block"] = empty_count
+
+    for _pass in range(32):
+        normalized, mention_date_count = re.subn(
+            r"(?is)<\s*mention-date(?:\s+[^<>]*?)?\s*>(.*?)<\s*/\s*mention-date\s*>",
+            lambda match: match.group(1),
+            normalized,
+        )
+        counts["mention_date"] += mention_date_count
+        if mention_date_count == 0:
+            break
 
     # Repeated passes handle ordinary nested spans without interpreting their
     # attributes or changing the visible inner text.
@@ -1864,7 +3549,7 @@ def _normalize_markup_body(
         return "\n\n"
 
     normalized = re.sub(
-        r"(?is)<\s*/?\s*(?:article|div|section|p)(?:\s+[^<>]*?)?\s*>",
+        r"(?is)<\s*/?\s*(?:article|column|columns|div|section|p)(?:\s+[^<>]*?)?\s*>",
         structural_replacement,
         normalized,
     )
@@ -1912,7 +3597,7 @@ def _normalize_markup_body(
         counts["unknown_semantic_tag"] += 1
         unknown_names.add(name)
 
-    blocker_codes: list[str] = []
+    blocker_codes: list[str] = list(table_blockers)
     if reference_names:
         blocker_codes.append("markup_reference_binding_required")
     if unknown_names:
@@ -3328,6 +5013,15 @@ def _relation_values(value: Any) -> set[str]:
     return set()
 
 
+def _relation_time_values(value: Any) -> set[str]:
+    values: set[str] = set()
+    for raw in _relation_values(value):
+        date_match = re.match(r"^(\d{4}-\d{2}-\d{2})", raw.strip())
+        if date_match:
+            values.add(date_match.group(1))
+    return values
+
+
 def _relation_zettel_projection(
     root: Path,
     path: Path,
@@ -3396,6 +5090,16 @@ def _relation_zettel_projection(
         "title": title,
         "raw_sha256": raw_sha256,
         "activity_groups": _relation_values(facets.get("activity_group")),
+        "time_coordinates": (
+            _relation_time_values(facets.get("notion_event_time_start"))
+            | _relation_time_values(facets.get("notion_event_time_end"))
+            | _relation_time_values(facets.get("thought_date"))
+        ),
+        "category_coordinates": (
+            _relation_values(facets.get("source_category"))
+            | _relation_values(facets.get("db1_category"))
+            | _relation_values(facets.get("db1_subcategory"))
+        ),
         "series": (
             _relation_values(facets.get("recurring_series"))
             | _relation_values(facets.get("series"))
@@ -3476,6 +5180,26 @@ def _relation_signal(
             }
         )
         score += 35
+        suggested_types.append("semantic")
+    if source["time_coordinates"] & target["time_coordinates"]:
+        signals.append(
+            {
+                "kind": "shared_event_date_coordinate",
+                "strength": "medium",
+                "coordinate_values_echoed": False,
+            }
+        )
+        score += 28
+        suggested_types.append("semantic")
+    if source["category_coordinates"] & target["category_coordinates"]:
+        signals.append(
+            {
+                "kind": "shared_archive_category_coordinate",
+                "strength": "medium",
+                "coordinate_values_echoed": False,
+            }
+        )
+        score += 25
         suggested_types.append("semantic")
     if source["source_refs"] & target["source_refs"]:
         signals.append(
