@@ -52,18 +52,19 @@ jobs:
 
   tests:
     name: Tests ${{ matrix.os }} py${{ matrix.python-version }} shard ${{ matrix.shard_index }}/${{ matrix.shard_count }}
+    needs: gate
     if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
     runs-on: ${{ matrix.os }}
     timeout-minutes: ${{ matrix.timeout-minutes }}
     strategy:
       # One platform failing must not hide the result on the other.
       fail-fast: false
-      # Keep the matrix below the observed hosted-runner concurrency ceiling.
-      # Without this bound, excess jobs can remain runner-queued until GitHub
-      # cancels them before they execute, making Required CI fail without a
-      # test result. Four still keeps every OS/interpreter shard parallelized
-      # while leaving capacity for the independent release-readiness gate.
-      max-parallel: 4
+      # The hosted account currently supplies one reliable runner slot. Run
+      # the release gate first, then admit one matrix job at a time so no job
+      # sits in the external runner queue until GitHub cancels it before it
+      # executes. Every OS/interpreter shard still runs; only scheduling is
+      # serialized until runner capacity is deliberately raised.
+      max-parallel: 1
       matrix:
         include:
           # Primary Linux target: the default Docker runtime platform, and the

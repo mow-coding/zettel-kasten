@@ -153,7 +153,8 @@ class CiUnittestShardingTests(unittest.TestCase):
             "group: ci-${{ github.workflow }}-${{ github.ref }}",
             workflow,
         )
-        self.assertEqual(workflow.count("max-parallel: 4"), 1)
+        self.assertEqual(workflow.count("needs: gate"), 1)
+        self.assertEqual(workflow.count("max-parallel: 1"), 1)
         self.assertEqual(workflow.count("shard_index_zero:"), 8)
         matrix_rows = []
         current = None

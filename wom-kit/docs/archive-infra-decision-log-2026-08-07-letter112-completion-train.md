@@ -125,14 +125,15 @@ The public completion contract and human-run retest protocol are recorded in
 `docs/letter112-beta-retest-protocol.md`. Packaged resources contain 139
 validated files for v0.3.301.
 
-The first two remote workflow attempts exposed a hosted-runner scheduling
+Early remote workflow attempts exposed a hosted-runner scheduling
 boundary rather than a product failure: every matrix job that received a
 runner passed, while one or more excess queued jobs were cancelled after 15
 minutes without executing. The test matrix now uses the standard
-`strategy.max-parallel: 4` bound so it leaves capacity for the independent
-release gate and does not over-request the observed runner concurrency limit.
-No shard, operating system, interpreter, test, or required aggregation gate
-was removed. The workflow concurrency group also includes both
+`strategy.max-parallel: 1` bound and makes the test matrix depend on the fast
+release gate. This admits only one hosted matrix job at a time instead of
+leaving excess jobs in the external runner queue. No shard, operating system,
+interpreter, test, or required aggregation gate was removed. The workflow
+concurrency group also includes both
 `github.workflow` and `github.ref`, preventing an orphaned retry state or a
 different workflow on the same ref from occupying the old overly broad group.
 
