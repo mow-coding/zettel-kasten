@@ -136,6 +136,9 @@ interpreter, test, or required aggregation gate was removed. The workflow
 concurrency group also includes both
 `github.workflow` and `github.ref`, preventing an orphaned retry state or a
 different workflow on the same ref from occupying the old overly broad group.
+Its `ci-v2` namespace deliberately separates the corrected scheduler from
+already completed runs that the GitHub rerun/cancel API left as jobless
+`queued` records.
 
 This checkpoint is not a release claim. Build, candidate wheel inspection,
 pull-request CI, merged-main tag verification, public asset digest/size, and a

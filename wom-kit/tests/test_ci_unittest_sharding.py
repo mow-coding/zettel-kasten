@@ -150,7 +150,7 @@ class CiUnittestShardingTests(unittest.TestCase):
         )
         self.assertNotIn("matrix.shard_index - 1", workflow)
         self.assertIn(
-            "group: ci-${{ github.workflow }}-${{ github.ref }}",
+            "group: ci-v2-${{ github.workflow }}-${{ github.ref }}",
             workflow,
         )
         self.assertEqual(workflow.count("needs: gate"), 1)
