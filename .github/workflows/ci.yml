@@ -58,6 +58,12 @@ jobs:
     strategy:
       # One platform failing must not hide the result on the other.
       fail-fast: false
+      # Keep the matrix below the observed hosted-runner concurrency ceiling.
+      # Without this bound, excess jobs can remain runner-queued until GitHub
+      # cancels them before they execute, making Required CI fail without a
+      # test result. Four still keeps every OS/interpreter shard parallelized
+      # while leaving capacity for the independent release-readiness gate.
+      max-parallel: 4
       matrix:
         include:
           # Primary Linux target: the default Docker runtime platform, and the

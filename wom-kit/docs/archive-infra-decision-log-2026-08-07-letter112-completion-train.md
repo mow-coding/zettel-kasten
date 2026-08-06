@@ -125,6 +125,15 @@ The public completion contract and human-run retest protocol are recorded in
 `docs/letter112-beta-retest-protocol.md`. Packaged resources contain 139
 validated files for v0.3.301.
 
+The first two remote workflow attempts exposed a hosted-runner scheduling
+boundary rather than a product failure: every matrix job that received a
+runner passed, while one or more excess queued jobs were cancelled after 15
+minutes without executing. The test matrix now uses the standard
+`strategy.max-parallel: 4` bound so it leaves capacity for the independent
+release gate and does not over-request the observed runner concurrency limit.
+No shard, operating system, interpreter, test, or required aggregation gate
+was removed.
+
 This checkpoint is not a release claim. Build, candidate wheel inspection,
 pull-request CI, merged-main tag verification, public asset digest/size, and a
 fresh token-free install remain required release gates.
