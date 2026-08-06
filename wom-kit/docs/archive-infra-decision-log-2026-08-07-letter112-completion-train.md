@@ -125,20 +125,17 @@ The public completion contract and human-run retest protocol are recorded in
 `docs/letter112-beta-retest-protocol.md`. Packaged resources contain 139
 validated files for v0.3.301.
 
-Early remote workflow attempts exposed a hosted-runner scheduling
-boundary rather than a product failure: every matrix job that received a
-runner passed, while one or more excess queued jobs were cancelled after 15
-minutes without executing. The test matrix now uses the standard
-`strategy.max-parallel: 1` bound and makes the test matrix depend on the fast
-release gate. This admits only one hosted matrix job at a time instead of
-leaving excess jobs in the external runner queue. No shard, operating system,
-interpreter, test, or required aggregation gate was removed. The workflow
-concurrency group also includes both
-`github.workflow` and `github.ref`, preventing an orphaned retry state or a
-different workflow on the same ref from occupying the old overly broad group.
-Its `ci-v2` namespace deliberately separates the corrected scheduler from
-already completed runs that the GitHub rerun/cancel API left as jobless
-`queued` records.
+Remote verification coincided with GitHub's public
+[Actions incident](https://www.githubstatus.com/incidents/qcvjkzcs7j74).
+GitHub reported throttled webhook triggers, constrained runner capacity,
+queued-job timeouts, API errors, and runners receiving jobs that were no
+longer valid. Those symptoms exactly matched the missing PR trigger, cancelled
+never-started jobs, and jobless `queued` rerun records observed here. Every
+release gate or matrix job that actually received a runner completed
+successfully, but no single required run completed before the local watch
+window ended. The normal complete parallel matrix is retained; no permanent
+serialization workaround, shard removal, or weakened Required CI gate is
+accepted in response to an external outage.
 
 This checkpoint is not a release claim. Build, candidate wheel inspection,
 pull-request CI, merged-main tag verification, public asset digest/size, and a

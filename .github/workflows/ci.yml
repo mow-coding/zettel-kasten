@@ -17,7 +17,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-v2-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -52,19 +52,12 @@ jobs:
 
   tests:
     name: Tests ${{ matrix.os }} py${{ matrix.python-version }} shard ${{ matrix.shard_index }}/${{ matrix.shard_count }}
-    needs: gate
     if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
     runs-on: ${{ matrix.os }}
     timeout-minutes: ${{ matrix.timeout-minutes }}
     strategy:
       # One platform failing must not hide the result on the other.
       fail-fast: false
-      # The hosted account currently supplies one reliable runner slot. Run
-      # the release gate first, then admit one matrix job at a time so no job
-      # sits in the external runner queue until GitHub cancels it before it
-      # executes. Every OS/interpreter shard still runs; only scheduling is
-      # serialized until runner capacity is deliberately raised.
-      max-parallel: 1
       matrix:
         include:
           # Primary Linux target: the default Docker runtime platform, and the
