@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wom-kit/zettel-objet-link-revert-receipt/v0.1",
+  "title": "WOM-kit zettel to Objet link exact-byte revert receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "action", "archive_id", "zettel_id", "source_receipt_sha256", "revert_plan_sha256", "restored_zettel_sha256", "reviewed_by", "created_at"],
+  "properties": {
+    "schema": {"const": "wom-kit/zettel-objet-link-revert-receipt/v0.1"},
+    "action": {"const": "restore_zettel_before_objet_link"},
+    "archive_id": {"type": "string", "minLength": 1},
+    "zettel_id": {"type": "string", "pattern": "^zet_[A-Za-z0-9][A-Za-z0-9_-]{0,159}$"},
+    "source_receipt_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "revert_plan_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "restored_zettel_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "reviewed_by": {"type": "string", "minLength": 1},
+    "created_at": {"type": "string", "minLength": 1}
+  }
+}

@@ -32,10 +32,10 @@ wom-kit/docs/releases/에만 쌓고, baseline 사다리와 tag 목록을 여기�
 현재 공개 기준:
 
 ```text
-v0.3.300 pre-release
+v0.3.301 pre-release
 ```
 
-이전 공개 기준: v0.3.299 pre-release.
+이전 공개 기준: v0.3.300 pre-release.
 
 전체 릴리스 이력은 [CHANGELOG.md](CHANGELOG.md)와 [wom-kit/docs/releases/](wom-kit/docs/releases/)를 보세요.
 
@@ -54,7 +54,7 @@ Roadmap 요약: `v0.1.x`는 아이디어/프로토콜 언어 라인, `v0.2.x`는
 파일이 실제 공개되었다는 증거가 되지는 않습니다.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.300/wom_kit-0.3.300-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.301/wom_kit-0.3.301-py3-none-any.whl"
 archive --version
 ```
 
@@ -82,6 +82,7 @@ archive runtime-skill-install --dry-run --format json
 ### Archive 핵심과 lifecycle
 
 - WOM / zet / ZET 설계 기준, specs, schemas, fake archive, release notes, work logs,
+- Letter 112까지의 통합 실사용 피드백 기능. archive-root 경로, source-intake/Objet capture 배치, 구조화된 zet-objet 연결, occurrence 좌표가 있는 locator, 사람 검토 관계 판단, GFM 표·정확 바이트 마크업 복구, 미발행 초안 폐기·복원, archive별 AI 작성 규칙을 제공합니다.
 - 사람이 선택한 이벤트 anchor와 member 집합을 먼저 검증한 뒤, 정확한 해시에 묶인 `facets.activity_group` 추가와 제거를 서로 분리된 사람 승인·잠금·이전 상태 보존·journal·영수증 기반 CLI writer로 적용하고 각각 별도 승인 복구까지 제공하는 workflow. 추가와 제거는 하나의 전역 writer 잠금과 제한된 두 root 증거 검사를 공유하지만 요청·journal·영수증·복구 계약은 분리되며, 제거의 `already_absent` 항목은 변경 아티팩트에서 제외됩니다. 멤버십을 추론하거나 MCP writer를 제공하지 않습니다.
 - 새 Notion JSON/YAML manifest 항목의 기본 제목이 식별자 모양일 때만, 같은 항목의 정확한 소문자 top-level `index` 문자열을 기존 제목·비공개 정보 안전 검사를 통과한 경우 새 inbox 초안의 제목으로 사용하는 외부 import 보완. 사람이 쓴 일반 제목은 항상 우선하며 기존 zet는 바꾸지 않습니다.
 - 아티팩트 우선 인간 기억 원칙. 특정 시점의 로컬 아티팩트와 시간순 이력이 다시 만들 수 있는 엔티티·그래프 투영보다 우선하며, 같은 라벨은 자동 동일성 병합의 권한이 아니고, 정본은 객관적 진실이 아니라 사용자가 승인한 현재 아카이브 상태이며, AI가 맥락을 다시 추론하더라도 인간의 변화는 보이게 남깁니다. 자세한 내용은 [제품 철학](wom-kit/docs/concepts/product-philosophy.ko.md)과 원칙별 [설계 철학 구현 근거](wom-kit/docs/philosophy-implementation-evidence.ko.md)를 보세요.
@@ -404,7 +405,7 @@ WOM, `zettel-kasten`, `zet`, `ZET`는 버전이 있는 protocol family로 관리
 Release tag는 compatibility checkpoint입니다.
 
 ```text
-v0.3.300 (현재 checkpoint)
+v0.3.301 (현재 checkpoint)
 ```
 
 `v0.2.5` 이후의 공개 릴리스에는 compatibility checkpoint tag가 붙습니다. 전체

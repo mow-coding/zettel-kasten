@@ -24,6 +24,36 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.301 Letter 112 Real-Use Completion
+
+v0.3.301 is compatible with existing v0.3.300 archives and requires no
+automatic migration. External-locator v0.1 records and revert receipts remain
+readable; v0.2 writes add optional service/account/occurrence coordinates.
+
+Relative `source-intake-record --source-intake-plan` paths now resolve from
+the archive root. New `source-intake-batch` requests can record 1-1,000
+metadata-only local plans behind one exact human review gate. Existing capture
+approval remains separate.
+
+Before allowing an AI to draft or revise, run `authoring-conventions
+--dry-run`. A missing archive-specific declaration is valid but warns the AI
+not to invent a durable house format. Unminted drafts should be revised in
+place; intentional removal now uses the receipt-backed `discard-draft` and
+`discard-draft-restore` paths.
+
+Simple imported tables can now be normalized to GFM tables. Unknown or
+ambiguous markup still blocks the whole affected zet and remains unchanged.
+Run a complete normalization plan before any approval.
+
+zet-objet links now use `zettel-objet-link` and its exact revert. The objet
+must already be manifested and the complete SHA-256 must be supplied. No
+existing zet is migrated automatically.
+
+See
+[`wom-kit/docs/letter112-completion.md`](wom-kit/docs/letter112-completion.md)
+and
+[`wom-kit/docs/releases/v0.3.301.md`](wom-kit/docs/releases/v0.3.301.md).
+
 ## v0.3.300 Letters 098-111 Integrated Completion
 
 v0.3.300 is compatible with existing v0.3.299 archives and requires no

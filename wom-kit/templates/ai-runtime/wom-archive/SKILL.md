@@ -83,9 +83,8 @@ token-budget contract.
   object-byte or remote-storage check.
 - Treat relative `objet-capture --selection` and project-intake staged-folder
   paths as archive-root coordinates. For many reviewed capture items, use one
-  complete `objet-capture-batch --dry-run` and its exact approved replay
-  instead of starting one process per file. Batch success is per-item
-  convergence, not all-or-nothing atomicity.
+  reviewed `source-intake-batch`, then `objet-capture-batch`, instead of one
+  process per file. Both converge per item without claiming atomicity.
 - Record a private provider/storage coordinate only through
   `external-locator-plan` and the exact approved
   `external-locator-record`. A locator is a recovery clue, not proof that a
@@ -105,10 +104,11 @@ token-budget contract.
   drop rows. A shared recurring-series coordinate is context, not an edge.
   `activity_group` requires an already-existing reviewed event-anchor zet.
 - Before changing migration markup, run `markup-style-guide` and
-  `markup-normalization-plan`. Unknown tags must block. Reference tags require
-  an exact reviewed binding to an existing locator or edge. If a normalization
-  journal is interrupted, use only `markup-normalization-recovery` with a
-  fresh `resume` or `rollback` plan; do not hand-edit around the journal.
+  `markup-normalization-plan`. Simple tables become GFM tables; columns become
+  paragraph boundaries; paired `mention-date` preserves text. Unknown tags
+  and ambiguous tables block. Reference tags need an exact reviewed locator or
+  edge binding. Recover an interrupted journal only through
+  `markup-normalization-recovery`; never hand-edit around it.
 - Inspect possible historical direct inbox writes only with
   `archive inbox-pipeline-audit <archive-root> --dry-run --format json`.
   Treat its classes as review signals, not proof, and never repair a draft
@@ -130,8 +130,17 @@ token-budget contract.
   treat `already_absent` as a write candidate, or execute a manual forensic
   hold. Both writers share one lock and a two-root evidence scan but keep
   their request, journal, receipt, and recovery authority separate.
+- Before drafting or revising prose, run `archive authoring-conventions
+  <archive-root> --dry-run --format json`. Follow declared rules; if absent,
+  use conservative defaults and ask before inventing a format. Keep commands,
+  hashes, receipt counts, and tool traces out of ordinary zet prose. Re-read
+  after edits, resolve contradictions, and cite only openable archive files.
 - Create an AI-assisted draft only through `archive create-draft` dry-run and
   its exact reviewed replay. Never write Markdown directly into `inbox/`.
+  Revise unminted drafts in place, including title changes. Use
+  `discard-draft` and `discard-draft-restore` instead of `rm`.
+- Add a manifested objet to a zet's structured `assets` only through
+  `zettel-objet-link`. Require a complete SHA-256; truncated hashes block mint.
 - Before a write, show the human what will change, where it will change, and
   what will remain unchanged. Write only through the command's explicit
   `--approve` path and record `--reviewed-by` when required.

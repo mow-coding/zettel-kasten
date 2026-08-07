@@ -1204,6 +1204,10 @@ MINT_CHECKLIST_VERSION = "zet-mint/v0.2"
 SOURCE_SCAN_MODE = "metadata_only"
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 OBJECT_ID_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+TRUNCATED_OBJET_REF_RE = re.compile(
+    r"(?i)(?<![0-9a-f])(?:objet:)?sha256:[0-9a-f]{8,63}(?![0-9a-f])"
+    r"|objects/sha256/[0-9a-f]{2}/[0-9a-f]{8,63}(?![0-9a-f])"
+)
 OBJET_REF_TOKEN_RE = re.compile(r"\b(?P<prefix>objet:)?sha256:(?P<digest>[0-9a-fA-F]{64})\b")
 NOTION_PROVIDER_LOCATOR_RE = re.compile(
     r"(?i)\b(?:https?://(?:www\.)?notion\.so|https?://app\.notion\.com|notion://)[^\s<>\")\]]+"
@@ -1236,6 +1240,11 @@ SOURCE_INTAKE_DEFAULT_ROLE = "primary_source"
 SOURCE_INTAKE_RUNTIMES = {"codex", "claude_code", "other"}
 SOURCE_INTAKE_SAFE_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9:._+-]{0,199}$")
 SOURCE_INTAKE_ARTIFACT_KIND_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$")
+SOURCE_INTAKE_BATCH_REQUEST_SCHEMA = "wom-kit/source-intake-batch-request/v0.1"
+SOURCE_INTAKE_BATCH_PLAN_SCHEMA = "wom-kit/source-intake-batch-plan/v0.1"
+SOURCE_INTAKE_BATCH_RECEIPT_SCHEMA = "wom-kit/source-intake-batch-receipt/v0.1"
+SOURCE_INTAKE_BATCH_MAX_ITEMS = 1000
+SOURCE_INTAKE_BATCH_RECEIPTS_DIR = "receipts/source-intake-batches"
 SOURCE_INTAKE_CONTENT_ACCESS_EXPECTATIONS = {
     "metadata_only": True,
     "content_read": False,
@@ -2038,7 +2047,10 @@ AI_RESPONSE_CONCEPT_GUIDE_TOPICS = {
     "zet_markdown_style",
     "git_infra_terms",
 }
-ZET_MARKDOWN_STYLE_GUIDE_TOPICS = {"all", "range_tilde"}
+ZET_MARKDOWN_STYLE_GUIDE_TOPICS = {"all", "authoring_integrity", "range_tilde"}
+AUTHORING_CONVENTIONS_SCHEMA = "wom-kit/authoring-conventions/v0.1"
+AUTHORING_CONVENTIONS_PATH = "zettel-kasten/authoring-conventions.yml"
+AUTHORING_CONVENTIONS_MAX_BYTES = 64 * 1024
 AI_RESPONSE_CONCEPT_GUIDE_LOCALE_ALIASES = {
     "ko": "ko-KR",
     "ko-kr": "ko-KR",
@@ -6174,6 +6186,18 @@ def ai_response_contract(archive_root: Path | str, *, dry_run: bool = True) -> d
             "operator_rule": "surface blockers, warnings, incomplete coverage, and next safe action instead of burying them in a summary",
         },
         {
+            "section": "openable_archive_references",
+            "required": True,
+            "operator_rule": "when reporting an archive file, include an archive-relative path or another client-openable reference instead of an identifier alone",
+            "applies_to": ["zettels", "letters", "objets", "receipts", "plans", "scripts"],
+        },
+        {
+            "section": "human_record_integrity",
+            "required": True,
+            "operator_rule": "keep command names, plan hashes, receipt counts, and execution status in receipts or operator reports unless the human explicitly asked to preserve operations as zet content",
+            "draft_rule": "revise an unminted draft in place, including its title, rather than deleting and recreating it",
+        },
+        {
             "section": "conversation_status_board",
             "required": False,
             "operator_rule": "a compact conversational status board is allowed; a web UI is not required",
@@ -6207,6 +6231,7 @@ def ai_response_contract(archive_root: Path | str, *, dry_run: bool = True) -> d
                 "secret-signal-taxonomy",
                 "approval-handoff-audit",
                 "status-board",
+                "authoring-conventions",
             ],
             "minimum_result_fields_to_check": [
                 "ok",
@@ -6226,6 +6251,8 @@ def ai_response_contract(archive_root: Path | str, *, dry_run: bool = True) -> d
                 "a dry-run preview performed a write or live external action",
                 "a future adapter boundary has already executed",
                 "secret concept words are leaked secret values by themselves",
+                "an archive file is available when no openable archive reference was provided",
+                "tool execution metadata belongs in a human-facing zet body by default",
             ],
             "recommended_answer_order": [
                 "outcome",
@@ -33969,6 +33996,17 @@ def inbox_pipeline_audit(
         if inbox.is_dir()
         else []
     )
+    discarded_receipts_root = archive_internal_path(
+        root,
+        "receipts/discarded-drafts",
+    )
+    discarded_draft_receipt_count = len(
+        safe_archive_direct_files(
+            discarded_receipts_root,
+            "*.discard.json",
+            root,
+        )
+    ) if discarded_receipts_root.is_dir() else 0
     if len(draft_paths) > max_drafts:
         blockers.append("draft_count_exceeds_max_drafts")
 
@@ -34089,11 +34127,12 @@ def inbox_pipeline_audit(
             "findings_truncated": finding_total > len(findings),
             "frontmatter_bytes_read": frontmatter_bytes_read,
             "body_text_may_have_been_read": body_text_may_have_been_read,
+            "intentionally_discarded_draft_receipt_count": discarded_draft_receipt_count,
         },
         "findings": findings,
         "audit_digest": sha256_json_value(outcomes),
         "scope": {
-            "included": ["inbox/*.md"],
+            "included": ["inbox/*.md", "receipts/discarded-drafts/*.discard.json"],
             "nested_paths_scanned": False,
             "max_drafts": max_drafts,
             "max_findings": max_findings,
@@ -41868,6 +41907,11 @@ def mint_zettel_dry_run(
         if isinstance(issue, dict) and issue.get("severity") == "blocker":
             blockers.append(f"Zet quality check blocked: {issue.get('code')}.")
 
+    if zettel_body_has_tool_execution_trace(body):
+        warnings.append("tool_execution_trace_review_required")
+    if zettel_body_has_status_contradiction(body):
+        warnings.append("internal_status_consistency_review_required")
+
     receipt_preview = build_mint_receipt_preview(
         archive_root=root,
         source_path=source_path,
@@ -42729,6 +42773,13 @@ def minted_draft_retirement_plan(
     if "Mint receipt target sha256 does not match the referenced file." in blockers and zettel_id_value:
         next_safe_actions.append(
             f"archive remint-reconcile <archive-root> --zettel-id {zettel_id_value} --dry-run"
+        )
+    if (
+        any(blocker.startswith("Mint receipt path is missing:") for blocker in blockers)
+        and zettel_id_value
+    ):
+        next_safe_actions.append(
+            f"archive discard-draft <archive-root> --zettel-id {zettel_id_value} --reason <reviewed-reason> --dry-run --format json"
         )
     return {
         "ok": not blockers,
@@ -45771,6 +45822,8 @@ def infer_promotion_checklist_item(
     if item_id == "object_id_only":
         if zettel_body_has_forbidden_location_reference(body):
             return "blocked", "Body contains a private provider locator or local absolute path."
+        if zettel_has_truncated_objet_reference(frontmatter, body):
+            return "blocked", "Zet contains an incomplete SHA-256 Objet reference."
         return "passed", "No private provider locator or local absolute path was detected."
     if item_id == "stable_facets":
         if isinstance(facets, dict) and bool(facets):
@@ -72476,8 +72529,19 @@ def zet_markdown_style_section() -> dict[str, Any]:
             "prefer_words_when_space_would_be_ambiguous": True,
             "frontmatter_is_storage_metadata_not_document_body": True,
             "human_document_view_hides_frontmatter": True,
+            "tool_execution_metadata_stays_out_of_human_body_by_default": True,
+            "reported_archive_files_require_openable_references": True,
+            "unminted_drafts_are_revised_in_place": True,
+            "archive_specific_conventions_are_checked_before_authoring": True,
         },
-        "safe_script": "For ranges, write `A ~ B`. For human reading, use `read-zettel --section document` so YAML frontmatter stays metadata instead of document prose.",
+        "human_record_integrity_rule": {
+            "rule_id": "human_body_excludes_operator_trace_by_default",
+            "plain_meaning": "A zet body is for the future human reader. Commands, plan hashes, receipt counts, and tool status belong in receipts or operator reports unless the human explicitly asks to preserve them as subject matter.",
+            "openable_reference_rule": "When an AI says it created or found an archive file, it must provide an archive-relative path or another reference the client can open.",
+            "draft_revision_rule": "If an unminted draft needs a new title or corrected text, update that draft in place. Do not delete and recreate it merely to edit it.",
+            "archive_convention_rule": "Read the mounted archive's declared authoring rules before drafting; generic WOM defaults do not override archive-specific human conventions.",
+        },
+        "safe_script": "For ranges, write `A ~ B`. Keep tool execution evidence in receipts, report archive files with openable refs, and revise an unminted draft in place.",
     }
 
 
@@ -72497,7 +72561,11 @@ def zet_markdown_style_guide(
     if resolved_topic not in ZET_MARKDOWN_STYLE_GUIDE_TOPICS:
         blockers.append("topic must be one of: " + ", ".join(sorted(ZET_MARKDOWN_STYLE_GUIDE_TOPICS)) + ".")
         resolved_topic = "all"
-    sections = [zet_markdown_style_section()] if resolved_topic in {"all", "range_tilde"} else []
+    sections = (
+        [zet_markdown_style_section()]
+        if resolved_topic in {"all", "authoring_integrity", "range_tilde"}
+        else []
+    )
     return {
         "ok": not blockers,
         "dry_run": True,
@@ -72535,6 +72603,120 @@ def zet_markdown_style_guide(
         "would_change": [],
         "warnings": unique_preserve_order(warnings),
         "blockers": unique_preserve_order(blockers),
+    }
+
+
+def authoring_conventions(
+    archive_root: Path | str,
+    *,
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if not dry_run:
+        blockers.append("authoring-conventions is read-only and requires --dry-run.")
+    path = archive_internal_path(root, AUTHORING_CONVENTIONS_PATH)
+    declared = path.is_file() and not path.is_symlink()
+    conventions: dict[str, Any] | None = None
+    file_sha256: str | None = None
+    if path.exists() and not declared:
+        blockers.append("authoring_conventions_path_not_regular")
+    elif declared:
+        try:
+            raw = path.read_bytes()
+        except OSError:
+            raw = b""
+            blockers.append("authoring_conventions_unreadable")
+        if len(raw) > AUTHORING_CONVENTIONS_MAX_BYTES:
+            blockers.append("authoring_conventions_size_limit_exceeded")
+        elif not raw:
+            blockers.append("authoring_conventions_invalid_yaml")
+        elif raw:
+            try:
+                loaded = load_yaml(raw.decode("utf-8"))
+            except Exception:
+                loaded = None
+                blockers.append("authoring_conventions_invalid_yaml")
+            if isinstance(loaded, dict):
+                schema_issues = validate_schema(
+                    loaded,
+                    "authoring-conventions.schema.json",
+                )
+                if schema_issues:
+                    blockers.append("authoring_conventions_schema_invalid")
+                elif source_intake_plan_has_unsafe_stored_string(loaded):
+                    blockers.append("authoring_conventions_contains_private_or_secret_value")
+                else:
+                    conventions = json_safe(loaded)
+                    file_sha256 = hashlib.sha256(raw).hexdigest()
+            elif loaded is not None:
+                blockers.append("authoring_conventions_schema_invalid")
+    if not declared:
+        warnings.append(
+            "Archive-specific authoring conventions are not declared; use WOM defaults and ask the human before inventing a format."
+        )
+    state = (
+        "blocked"
+        if blockers
+        else "declared"
+        if conventions is not None
+        else "undeclared"
+    )
+    return {
+        "ok": not blockers,
+        "state": state,
+        "dry_run": True,
+        "lifecycle_action": "authoring_conventions",
+        "archive_id": archive_id,
+        "summary": {
+            "schema": AUTHORING_CONVENTIONS_SCHEMA,
+            "path": AUTHORING_CONVENTIONS_PATH,
+            "declared": conventions is not None,
+            "file_sha256": file_sha256,
+            "rule_counts": {
+                key: len(conventions.get(key, []))
+                if isinstance(conventions, dict)
+                and isinstance(conventions.get(key), list)
+                else 0
+                for key in (
+                    "title_rules",
+                    "body_rules",
+                    "required_sections",
+                    "forbidden_body_content",
+                    "examples",
+                )
+            },
+        },
+        "conventions": conventions,
+        "default_integrity_rules": {
+            "tool_execution_metadata_stays_out_of_human_body_by_default": True,
+            "reported_archive_files_require_openable_references": True,
+            "unminted_drafts_are_revised_in_place": True,
+        },
+        "template": {
+            "schema": AUTHORING_CONVENTIONS_SCHEMA,
+            "language": "ko-KR",
+            "title_rules": ["Describe the zet's durable human meaning."],
+            "body_rules": ["Write for the future human reader."],
+            "required_sections": [],
+            "forbidden_body_content": [
+                "Tool commands, plan hashes, and receipt counts unless they are the subject matter."
+            ],
+            "examples": [],
+        },
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+        "would_change": [],
+        "privacy_guards": {
+            "rule_values_echoed": conventions is not None,
+            "zettel_bodies_read": False,
+            "local_absolute_paths_echoed": False,
+            "provider_urls_echoed": False,
+            "tokens_or_secrets_echoed": False,
+            "writes": False,
+        },
     }
 
 
@@ -88688,7 +88870,20 @@ def source_intake_record(
     if reviewed_by and reviewer is None:
         blockers.append("reviewed_by must be a safe non-secret actor id.")
 
-    plan = load_json_object_for_review(Path(plan_path), "source intake plan", blockers)
+    requested_plan_path = Path(plan_path)
+    if requested_plan_path.is_absolute():
+        resolved_plan_path = requested_plan_path.resolve()
+    else:
+        try:
+            resolved_plan_path = resolve_archive_relative_path(root, str(requested_plan_path))
+        except ArchivePathError:
+            blockers.append("source_intake_plan_path_not_archive_relative")
+            resolved_plan_path = root / ".wom-invalid-source-intake-plan"
+    if not resolved_plan_path.is_file():
+        blockers.append("source_intake_plan_file_missing_or_not_regular")
+        plan = None
+    else:
+        plan = load_json_object_for_review(resolved_plan_path, "source intake plan", blockers)
     plan_sha256 = "sha256:" + ("0" * 64)
     receipt_relative = f"{SOURCE_SCAN_RECEIPTS_DIR}/source-intake-invalid.source-intake-plan.json"
     if plan is not None:
@@ -88705,8 +88900,18 @@ def source_intake_record(
         receipt_relative = source_intake_record_path(plan_sha256)
 
     receipt_path = archive_internal_path(root, receipt_relative)
-    if approve and receipt_path.exists():
-        blockers.append("Source intake plan record already exists for this plan hash.")
+    existing_matches = False
+    if plan is not None and receipt_path.exists():
+        existing_blockers: list[str] = []
+        existing_plan = load_json_object_for_review(
+            receipt_path,
+            "existing source intake plan record",
+            existing_blockers,
+        )
+        if existing_plan is not None and sha256_json_value(existing_plan) == plan_sha256:
+            existing_matches = True
+        else:
+            blockers.append("source_intake_record_path_collision")
 
     privacy_guards = {
         "source_plan_read": True,
@@ -88726,11 +88931,34 @@ def source_intake_record(
         "source_intake_plan_sha256": plan_sha256,
         "proposed_plan_path": receipt_relative,
         "privacy_guards": privacy_guards,
-        "would_change": [receipt_relative] if dry_run and not blockers else [],
+        "state": (
+            "already_recorded"
+            if existing_matches and not blockers
+            else "ready_to_record"
+            if dry_run and not blockers
+            else "blocked"
+            if blockers
+            else "recorded"
+        ),
+        "would_change": [receipt_relative] if dry_run and not blockers and not existing_matches else [],
         "blockers": unique_preserve_order(blockers),
         "warnings": unique_preserve_order(warnings),
     }
-    if blockers or dry_run:
+    if blockers:
+        return result
+    if existing_matches:
+        result.update(
+            {
+                "ok": True,
+                "dry_run": dry_run,
+                "plan_path": receipt_relative,
+                "files_written": [],
+                "would_change": [],
+                "privacy_guards": {**privacy_guards, "writes": False},
+            }
+        )
+        return result
+    if dry_run:
         return result
 
     assert plan is not None
@@ -100032,6 +100260,349 @@ def source_intake_plan(
     return json_safe(result_body)
 
 
+def source_intake_batch_receipt_path(plan_sha256: str) -> str:
+    digest = plan_sha256.removeprefix("sha256:")
+    return f"{SOURCE_INTAKE_BATCH_RECEIPTS_DIR}/{digest}.json"
+
+
+def source_intake_batch(
+    archive_root: Path | str,
+    manifest_path: Path | str,
+    *,
+    dry_run: bool = False,
+    approve: bool = False,
+    expected_plan_sha256: str | None = None,
+    reviewed_by: str | None = None,
+) -> dict[str, Any]:
+    """Plan or record many metadata-only local source intakes in one review gate."""
+
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if dry_run is approve:
+        blockers.append("choose_exactly_one_of_dry_run_or_approve")
+
+    reviewer = safe_project_intake_actor_id(reviewed_by)
+    if approve and reviewer is None:
+        blockers.append("source_intake_batch_reviewed_by_required")
+    elif reviewed_by and reviewer is None:
+        blockers.append("source_intake_batch_reviewed_by_invalid")
+    if approve and not re.fullmatch(r"sha256:[0-9a-f]{64}", str(expected_plan_sha256 or "")):
+        blockers.append("source_intake_batch_expected_plan_sha256_required")
+    elif dry_run and expected_plan_sha256:
+        blockers.append("source_intake_batch_expected_plan_sha256_only_valid_with_approve")
+
+    requested_manifest_path = Path(manifest_path)
+    if requested_manifest_path.is_absolute():
+        resolved_manifest_path = requested_manifest_path.expanduser().resolve()
+    else:
+        try:
+            resolved_manifest_path = resolve_archive_relative_path(root, str(requested_manifest_path))
+        except ArchivePathError:
+            blockers.append("source_intake_batch_manifest_path_not_archive_relative")
+            resolved_manifest_path = root / ".wom-invalid-source-intake-batch-manifest"
+
+    manifest: dict[str, Any] | None = None
+    if not resolved_manifest_path.is_file() or resolved_manifest_path.is_symlink():
+        blockers.append("source_intake_batch_manifest_file_missing_or_not_regular")
+    else:
+        manifest = load_json_object_for_review(
+            resolved_manifest_path,
+            "source intake batch manifest",
+            blockers,
+        )
+        if manifest is not None and validate_schema(
+            manifest,
+            "source-intake-batch-request.schema.json",
+        ):
+            blockers.append("source_intake_batch_manifest_schema_invalid")
+
+    batch_id = "invalid-batch"
+    request_items: list[Any] = []
+    if manifest is not None:
+        candidate_batch_id = manifest.get("batch_id")
+        if (
+            isinstance(candidate_batch_id, str)
+            and SOURCE_INTAKE_SAFE_REF_RE.fullmatch(candidate_batch_id)
+            and not source_intake_secret_like(candidate_batch_id)
+        ):
+            batch_id = candidate_batch_id
+        else:
+            blockers.append("source_intake_batch_id_invalid")
+        if isinstance(manifest.get("items"), list):
+            request_items = list(manifest["items"])
+        else:
+            blockers.append("source_intake_batch_items_invalid")
+    if len(request_items) > SOURCE_INTAKE_BATCH_MAX_ITEMS:
+        blockers.append("source_intake_batch_item_limit_exceeded")
+
+    planned_items: list[dict[str, Any]] = []
+    private_plans: list[dict[str, Any]] = []
+    seen_item_ids: set[str] = set()
+    seen_plan_hashes: set[str] = set()
+    for index, raw_item in enumerate(request_items[:SOURCE_INTAKE_BATCH_MAX_ITEMS]):
+        item_blockers: list[str] = []
+        if not isinstance(raw_item, dict):
+            item_blockers.append("item_not_object")
+            raw_item = {}
+        item_id_value = raw_item.get("item_id")
+        item_id = str(item_id_value or f"invalid-{index}")
+        if (
+            not isinstance(item_id_value, str)
+            or not SOURCE_INTAKE_SAFE_REF_RE.fullmatch(item_id_value)
+            or source_intake_secret_like(item_id_value)
+        ):
+            item_blockers.append("item_id_invalid")
+        elif item_id in seen_item_ids:
+            item_blockers.append("item_id_duplicate")
+        else:
+            seen_item_ids.add(item_id)
+
+        raw_local_path = raw_item.get("local_path")
+        resolved_local_path: Path | None = None
+        if (
+            not isinstance(raw_local_path, str)
+            or not raw_local_path.strip()
+            or "\x00" in str(raw_local_path)
+            or source_intake_has_provider_url(str(raw_local_path))
+            or source_intake_secret_like(str(raw_local_path))
+        ):
+            item_blockers.append("local_path_invalid")
+        else:
+            candidate_path = Path(raw_local_path)
+            if candidate_path.is_absolute():
+                resolved_local_path = candidate_path.expanduser().resolve()
+            else:
+                try:
+                    resolved_local_path = resolve_archive_relative_path(root, raw_local_path)
+                except ArchivePathError:
+                    item_blockers.append("local_path_not_archive_relative")
+
+        source_plan: dict[str, Any] | None = None
+        plan_sha256: str | None = None
+        receipt_relative: str | None = None
+        existing_matches = False
+        if not item_blockers and resolved_local_path is not None:
+            source_plan = source_intake_plan(
+                root,
+                local_path=resolved_local_path,
+                source_role=str(raw_item.get("source_role") or SOURCE_INTAKE_DEFAULT_ROLE),
+                title=raw_item.get("title") if isinstance(raw_item.get("title"), str) else None,
+                mime=raw_item.get("mime") if isinstance(raw_item.get("mime"), str) else None,
+                redact_local_paths=True,
+            )
+            if not source_plan.get("ok"):
+                item_blockers.extend(
+                    str(code) for code in source_plan.get("blockers", []) if isinstance(code, str)
+                )
+            elif source_intake_plan_has_unsafe_stored_string(source_plan):
+                item_blockers.append("source_intake_plan_contains_unsafe_stored_string")
+            else:
+                plan_sha256 = sha256_json_value(source_plan)
+                receipt_relative = source_intake_record_path(plan_sha256)
+                if plan_sha256 in seen_plan_hashes:
+                    item_blockers.append("duplicate_source_intake_plan_sha256_in_batch")
+                else:
+                    seen_plan_hashes.add(plan_sha256)
+                receipt_path = archive_internal_path(root, receipt_relative)
+                if receipt_path.exists():
+                    existing_blockers: list[str] = []
+                    existing = load_json_object_for_review(
+                        receipt_path,
+                        "existing source intake plan record",
+                        existing_blockers,
+                    )
+                    if existing is not None and sha256_json_value(existing) == plan_sha256:
+                        existing_matches = True
+                    else:
+                        item_blockers.append("source_intake_record_path_collision")
+
+        if item_blockers:
+            blockers.append(f"source_intake_batch_item_blocked:{item_id}")
+        planned_items.append(
+            {
+                "item_id": item_id,
+                "ok": not item_blockers,
+                "source_kind": source_plan.get("source_kind") if source_plan else None,
+                "objet_status": source_plan.get("objet_status") if source_plan else None,
+                "source_intake_plan_sha256": plan_sha256,
+                "source_intake_receipt_path": receipt_relative,
+                "already_recorded": existing_matches,
+                "blockers": unique_preserve_order(item_blockers),
+                "warnings": unique_preserve_order(
+                    [str(value) for value in (source_plan or {}).get("warnings", []) if isinstance(value, str)]
+                ),
+            }
+        )
+        if source_plan is not None and plan_sha256 and receipt_relative:
+            private_plans.append(
+                {
+                    "item_id": item_id,
+                    "plan": source_plan,
+                    "plan_sha256": plan_sha256,
+                    "receipt_relative": receipt_relative,
+                    "already_recorded": existing_matches,
+                }
+            )
+
+    plan_binding = {
+        "schema": SOURCE_INTAKE_BATCH_PLAN_SCHEMA,
+        "archive_id": archive_id,
+        "batch_id": batch_id,
+        "items": [
+            {
+                "item_id": item["item_id"],
+                "source_intake_plan_sha256": item["source_intake_plan_sha256"],
+                "source_intake_receipt_path": item["source_intake_receipt_path"],
+            }
+            for item in planned_items
+        ],
+    }
+    plan_sha256 = sha256_json_value(plan_binding)
+    batch_receipt_relative = source_intake_batch_receipt_path(plan_sha256)
+    batch_receipt_path = archive_internal_path(root, batch_receipt_relative)
+    expected_receipt_items = [
+        {
+            "item_id": item["item_id"],
+            "source_intake_plan_sha256": item["plan_sha256"],
+            "source_intake_receipt_path": item["receipt_relative"],
+        }
+        for item in private_plans
+    ]
+    batch_receipt_exists = False
+    if batch_receipt_path.exists():
+        existing_blockers: list[str] = []
+        existing_receipt = load_json_object_for_review(
+            batch_receipt_path,
+            "existing source intake batch receipt",
+            existing_blockers,
+        )
+        if (
+            existing_receipt is not None
+            and existing_receipt.get("schema") == SOURCE_INTAKE_BATCH_RECEIPT_SCHEMA
+            and existing_receipt.get("archive_id") == archive_id
+            and existing_receipt.get("batch_id") == batch_id
+            and existing_receipt.get("source_intake_batch_plan_sha256") == plan_sha256
+            and existing_receipt.get("items") == expected_receipt_items
+            and not validate_schema(existing_receipt, "source-intake-batch-receipt.schema.json")
+        ):
+            batch_receipt_exists = True
+        else:
+            blockers.append("source_intake_batch_receipt_path_collision")
+
+    if approve and expected_plan_sha256 != plan_sha256:
+        blockers.append("source_intake_batch_plan_sha256_mismatch")
+    blockers = unique_preserve_order(blockers)
+    new_item_plans = [item for item in private_plans if not item["already_recorded"]]
+    all_items_recorded = bool(private_plans) and len(private_plans) == len(planned_items) and not new_item_plans
+    already_recorded = all_items_recorded and batch_receipt_exists and not blockers
+    would_change = (
+        [item["receipt_relative"] for item in new_item_plans]
+        + ([] if batch_receipt_exists else [batch_receipt_relative])
+        if not blockers
+        else []
+    )
+
+    result: dict[str, Any] = {
+        "ok": not blockers,
+        "state": (
+            "blocked"
+            if blockers
+            else "already_recorded"
+            if already_recorded
+            else "ready_to_record"
+            if dry_run
+            else "recorded"
+        ),
+        "dry_run": dry_run,
+        "lifecycle_action": "source_intake_batch",
+        "archive_id": archive_id,
+        "batch_id": batch_id,
+        "source_intake_batch_plan_sha256": plan_sha256,
+        "batch_receipt_path": batch_receipt_relative,
+        "summary": {
+            "item_count": len(planned_items),
+            "ready_item_count": sum(1 for item in planned_items if item["ok"]),
+            "blocked_item_count": sum(1 for item in planned_items if not item["ok"]),
+            "already_recorded_item_count": sum(1 for item in planned_items if item["already_recorded"]),
+            "would_record_item_count": len(new_item_plans) if not blockers else 0,
+            "all_or_nothing_claimed": False,
+            "convergence_model": "bounded_per_item_with_replay",
+        },
+        "items": planned_items,
+        "files_written": [],
+        "would_change": would_change,
+        "blockers": blockers,
+        "warnings": unique_preserve_order(warnings),
+        "privacy_guards": {
+            "manifest_read": manifest is not None,
+            "local_path_values_echoed": False,
+            "file_bodies_read": False,
+            "content_hashes_calculated": False,
+            "provider_calls": False,
+            "tokens_or_secrets_echoed": False,
+            "writes": False,
+        },
+    }
+    if blockers or dry_run or already_recorded:
+        return result
+
+    assert reviewer is not None
+    batch_receipt = {
+        "schema": SOURCE_INTAKE_BATCH_RECEIPT_SCHEMA,
+        "archive_id": archive_id,
+        "batch_id": batch_id,
+        "source_intake_batch_plan_sha256": plan_sha256,
+        "reviewed_by": reviewer,
+        "item_count": len(expected_receipt_items),
+        "items": expected_receipt_items,
+    }
+    if validate_schema(batch_receipt, "source-intake-batch-receipt.schema.json"):
+        result["ok"] = False
+        result["state"] = "blocked"
+        result["blockers"] = ["source_intake_batch_receipt_schema_invalid"]
+        result["would_change"] = []
+        return result
+
+    target_paths = [archive_internal_path(root, item["receipt_relative"]) for item in new_item_plans]
+    if not batch_receipt_exists:
+        target_paths.append(batch_receipt_path)
+    created_dirs = missing_parent_dirs_before_write(root, target_paths)
+    created_paths: list[Path] = []
+    try:
+        for item in new_item_plans:
+            target = archive_internal_path(root, item["receipt_relative"])
+            target.parent.mkdir(parents=True, exist_ok=True)
+            write_json_new_file(target, item["plan"])
+            created_paths.append(target)
+        if not batch_receipt_exists:
+            batch_receipt_path.parent.mkdir(parents=True, exist_ok=True)
+            write_json_new_file(batch_receipt_path, batch_receipt)
+            created_paths.append(batch_receipt_path)
+    except Exception:
+        for path in reversed(created_paths):
+            try:
+                path.unlink()
+            except OSError:
+                pass
+        cleanup_created_empty_dirs(root, created_dirs)
+        raise
+
+    files_written = [archive_relative_path(path, root) for path in created_paths]
+    result.update(
+        {
+            "ok": True,
+            "state": "recorded",
+            "files_written": files_written,
+            "would_change": [],
+            "privacy_guards": {**result["privacy_guards"], "writes": bool(files_written)},
+        }
+    )
+    result["summary"]["recorded_item_count"] = len(new_item_plans)
+    return result
+
+
 def source_intake_empty_body(
     *,
     archive_id: str,
@@ -100189,6 +100760,17 @@ def apply_local_path_source_intake(
         return
 
     stat = candidate.stat()
+    identity_material = "\0".join(
+        [
+            str(read_archive_id(root)),
+            os.path.normcase(str(candidate)),
+            str(getattr(stat, "st_dev", 0)),
+            str(getattr(stat, "st_ino", 0)),
+            str(stat.st_size),
+            str(getattr(stat, "st_mtime_ns", int(stat.st_mtime * 1_000_000_000))),
+        ]
+    ).encode("utf-8")
+    local_file_identity_sha256 = "sha256:" + hashlib.sha256(identity_material).hexdigest()
     guessed_mime = safe_mime(mime or mimetypes.guess_type(candidate.name)[0])
     label = safe_source_label(title, candidate.name, redact_local_paths)
     result["source_kind"] = classify_source_kind(guessed_mime, candidate.suffix)
@@ -100199,6 +100781,8 @@ def apply_local_path_source_intake(
         "size_bytes": stat.st_size,
         "modified_at": datetime.fromtimestamp(stat.st_mtime).astimezone().replace(microsecond=0).isoformat(),
         "local_path": "<redacted-local-path>" if redact_local_paths else str(candidate),
+        "local_file_identity_sha256": local_file_identity_sha256,
+        "local_file_identity_kind": "path_stat_fingerprint_not_content_identity",
         "body_read": False,
         "full_hash_calculated": False,
     }
@@ -105773,6 +106357,50 @@ def zettel_body_has_private_provider_locator(value: str) -> bool:
 
 def zettel_body_has_forbidden_location_reference(value: str) -> bool:
     return contains_forbidden_location_reference(value) or zettel_body_has_private_provider_locator(value)
+
+
+def zettel_has_truncated_objet_reference(
+    frontmatter: dict[str, Any],
+    body: str,
+) -> bool:
+    frontmatter_text = json.dumps(
+        json_safe(frontmatter),
+        ensure_ascii=True,
+        sort_keys=True,
+    )
+    return bool(
+        TRUNCATED_OBJET_REF_RE.search(body)
+        or TRUNCATED_OBJET_REF_RE.search(frontmatter_text)
+    )
+
+
+def zettel_body_has_tool_execution_trace(body: str) -> bool:
+    lowered = body.casefold()
+    command_markers = (
+        "source-intake",
+        "source_intake",
+        "objet-capture",
+        "objet_capture",
+        "mint-zet",
+        "mint_zettel",
+        "stored_sha256_verified",
+        "files_written",
+        "receipt_path",
+        "plan_sha256",
+    )
+    flag_markers = ("--approve", "--dry-run", "--format json")
+    return any(marker in lowered for marker in command_markers) or sum(
+        marker in lowered for marker in flag_markers
+    ) >= 2
+
+
+def zettel_body_has_status_contradiction(body: str) -> bool:
+    lowered = body.casefold()
+    completed_markers = ("완료", "성공", "통과", "처리했습니다", "completed", "succeeded")
+    pending_markers = ("작업 중", "미정", "아직", "todo", "pending", "in progress", "not complete")
+    return any(marker in lowered for marker in completed_markers) and any(
+        marker in lowered for marker in pending_markers
+    )
 
 
 def source_intake_secret_like(value: str) -> bool:

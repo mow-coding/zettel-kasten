@@ -1,17 +1,27 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "wom-kit/external-locator-receipt/v0.1",
+  "$id": "wom-kit/external-locator-receipt/v0.2",
   "title": "WOM-kit external locator add receipt",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema", "action", "archive_id", "zettel_id", "locator_id", "locator_type", "plan_sha256", "before_record_sha256", "after_record_sha256", "before_snapshot_path", "record_path", "reviewed_by", "created_at", "privacy"],
+  "required": ["schema", "action", "archive_id", "zettel_id", "locator_id", "locator_type", "coordinate_presence", "plan_sha256", "before_record_sha256", "after_record_sha256", "before_snapshot_path", "record_path", "reviewed_by", "created_at", "privacy"],
   "properties": {
-    "schema": {"const": "wom-kit/external-locator-receipt/v0.1"},
+    "schema": {"const": "wom-kit/external-locator-receipt/v0.2"},
     "action": {"const": "add_locator"},
     "archive_id": {"type": "string", "minLength": 1},
     "zettel_id": {"type": "string", "pattern": "^zet_[A-Za-z0-9][A-Za-z0-9_-]{0,159}$"},
     "locator_id": {"type": "string", "pattern": "^locator:sha256:[0-9a-f]{64}$"},
     "locator_type": {"enum": ["source_url", "provider_page_id", "object_store_key", "filesystem_hint", "export_coordinate", "other"]},
+    "coordinate_presence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["service_ref", "account_ref", "occurrence_anchor"],
+      "properties": {
+        "service_ref": {"type": "boolean"},
+        "account_ref": {"type": "boolean"},
+        "occurrence_anchor": {"type": "boolean"}
+      }
+    },
     "plan_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "before_record_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
     "after_record_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},

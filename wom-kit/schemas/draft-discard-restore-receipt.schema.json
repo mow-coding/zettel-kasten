@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wom-kit/draft-discard-restore-receipt/v0.1",
+  "title": "WOM-kit discarded draft exact-byte restore receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "action", "archive_id", "zettel_id", "source_receipt_sha256", "restore_plan_sha256", "restored_path", "restored_sha256", "reviewed_by", "created_at"],
+  "properties": {
+    "schema": {"const": "wom-kit/draft-discard-restore-receipt/v0.1"},
+    "action": {"const": "restore_discarded_draft"},
+    "archive_id": {"type": "string", "minLength": 1},
+    "zettel_id": {"type": "string", "pattern": "^zet_[A-Za-z0-9][A-Za-z0-9_-]{0,159}$"},
+    "source_receipt_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "restore_plan_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "restored_path": {"type": "string", "pattern": "^inbox/.+\\.md$"},
+    "restored_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "reviewed_by": {"type": "string", "minLength": 1},
+    "created_at": {"type": "string", "minLength": 1}
+  }
+}

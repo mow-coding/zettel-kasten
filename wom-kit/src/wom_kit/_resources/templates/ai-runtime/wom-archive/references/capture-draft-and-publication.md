@@ -11,6 +11,21 @@ Run source intake before copying or interpreting material as an archive source:
 archive source-intake <archive-root> --dry-run --local-path <local-file> --format json
 ```
 
+For many reviewed local files, put safe item ids and local paths in a private
+`wom-kit/source-intake-batch-request/v0.1` manifest, then use one plan and one
+approval gate:
+
+```text
+archive source-intake-batch <archive-root> --manifest <archive-local-json> --dry-run --format json
+archive source-intake-batch <archive-root> --manifest <archive-local-json> --approve --expected-plan-sha256 <sha256:...> --reviewed-by <actor> --format json
+```
+
+The manifest's relative paths resolve from the archive root. Output and durable
+receipts omit those path values and file bodies. The batch creates the same
+individual source-intake plan records used by later capture and explicitly
+claims only bounded per-item replay convergence, not atomic all-or-nothing
+execution.
+
 Stage selected bytes inside the archive root, prepare one reviewed capture
 selection, and preview capture before approval. A source-intake plan is not
 permission to copy, capture, import, or upload anything.
@@ -33,6 +48,21 @@ the chronology remain auditable.
 
 ## Create A Draft Through The Command Surface
 
+First load this archive's human writing rules:
+
+```text
+archive authoring-conventions <archive-root> --dry-run --format json
+```
+
+When `state` is `declared`, follow those rules. When it is `undeclared`, use the
+returned conservative defaults and ask the human before inventing a durable
+format. Write for the future human reader. Do not put commands, pipeline stage
+names, plan hashes, receipt counts, or tool verification statuses in the zet
+body unless those operations are themselves the subject being documented.
+After each edit, re-read the whole draft, remove stale contradictions, and
+mention only archive files that the human can open from a real archive-relative
+reference.
+
 Use the validated source and prompt-boundary reports:
 
 ```text
@@ -43,6 +73,19 @@ Do not manually copy local paths or unsafe source excerpts into frontmatter.
 Never write Markdown directly into `inbox/`; a location policy is not a write
 route. Draft approval writes only to `inbox/` through `archive create-draft`;
 it does not approve minting.
+
+An unminted draft is a working document: revise it in place, including when its
+title changes. Do not delete and recreate it. If the human reviews and decides
+that it should not survive, use `discard-draft --dry-run`, then its exact
+plan-hash-bound `--approve --reviewed-by` replay. Restore only through the
+receipt-bound `discard-draft-restore` workflow. These commands never apply to
+a minted/canonical zet.
+
+To add a preserved objet to the draft's structured `assets`, use
+`zettel-objet-link --dry-run` and its exact approved replay. The objet must
+already exist in the manifest and the object id must contain all 64 SHA-256
+hexadecimal characters. Use `zettel-objet-link-revert` for exact-byte recovery;
+it refuses to overwrite unrelated later edits.
 
 ## Mint Only A Complete Reviewed zet
 

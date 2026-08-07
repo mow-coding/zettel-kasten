@@ -51,6 +51,10 @@ BASELINE_EXPECTATIONS = {
     },
 }
 CLI_ADDITIONS = {
+    ("archive-authoring-conventions",),
+    ("authoring-conventions",),
+    ("discard-draft",),
+    ("discard-draft-restore",),
     ("external-locator-plan",),
     ("external-locator-record",),
     ("external-locator-recovery-plan",),
@@ -73,17 +77,25 @@ CLI_ADDITIONS = {
     ("relation-candidate-plan",),
     ("relation-semantics-guide",),
     ("source-reference-coverage-audit",),
+    ("source-intake-batch",),
+    ("zet-objet-link",),
+    ("zet-objet-link-revert",),
+    ("zettel-objet-link",),
+    ("zettel-objet-link-revert",),
 }
-CURRENT_CLI_COUNT = 525
+CURRENT_CLI_COUNT = 534
 CURRENT_CLI_CANONICAL_SHA256 = (
-    "0a92d9648402b3346ddb482ebb56185f40c2ad771126f5691efc3b818d4a3ce3"
+    "ce61a432445a9b7d3559ed242badeb7bff958ba00a6fa3e4656a8a0cce01f0c8"
 )
 CURRENT_DATABASE_COUNT = 3
 CURRENT_DATABASE_CANONICAL_SHA256 = (
     "d9a42f08ee12a6d42e40214cfb12441e4077bf50c38c25b2692ec1344328294a"
 )
 RESOURCE_ADDITIONS = {
-    "release-notes/v0.3.300.md",
+    "release-notes/v0.3.301.md",
+    "schemas/authoring-conventions.schema.json",
+    "schemas/draft-discard-receipt.schema.json",
+    "schemas/draft-discard-restore-receipt.schema.json",
     "schemas/external-locator-receipt.schema.json",
     "schemas/external-locator-record.schema.json",
     "schemas/external-locator-revert-receipt.schema.json",
@@ -105,11 +117,15 @@ RESOURCE_ADDITIONS = {
     "schemas/relation-judgment-receipt.schema.json",
     "schemas/relation-judgment.schema.json",
     "schemas/source-reference-coverage-audit-result-v0.1.schema.json",
+    "schemas/source-intake-batch-receipt.schema.json",
+    "schemas/source-intake-batch-request.schema.json",
+    "schemas/zettel-objet-link-receipt.schema.json",
+    "schemas/zettel-objet-link-revert-receipt.schema.json",
 }
 RESOURCE_REMOVALS = {"release-notes/v0.3.297.md"}
-CURRENT_RESOURCE_COUNT = 132
+CURRENT_RESOURCE_COUNT = 139
 CURRENT_RESOURCE_CANONICAL_SHA256 = (
-    "3708ba194d1d35b21c098e2bc07e05446dcfc3f3d99398e900eb75cd6a6bc873"
+    "cc024e7c0a075008131f6b2adf4ac1f69e8a44ccacbaca3c6aaf018a8b4d4dcc"
 )
 
 
@@ -384,10 +400,10 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
             actual,
             expected,
             "Current package-resource paths must be the full v0.3.297 set plus "
-            "the exact cumulative v0.3.298 through v0.3.300 delta. "
+            "the exact cumulative v0.3.298 through v0.3.301 delta. "
             f"missing={compact(missing)}; extra={compact(extra)}",
         )
-        self.assertEqual(manifest["version"], "0.3.300")
+        self.assertEqual(manifest["version"], "0.3.301")
         self.assertEqual(len(actual), CURRENT_RESOURCE_COUNT)
         self.assertEqual(
             canonical_sha256(actual),
@@ -406,14 +422,14 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
         self.assertIn("does not undo", predecessor_flat)
         self.assertNotIn("C:\\Users\\", predecessor_text)
 
-    def test_v03300_release_note_is_public_and_synchronized(self) -> None:
-        current_source_release = KIT_ROOT / "docs" / "releases" / "v0.3.300.md"
+    def test_v03301_release_note_is_public_and_synchronized(self) -> None:
+        current_source_release = KIT_ROOT / "docs" / "releases" / "v0.3.301.md"
         current_packaged_release = (
             SRC_ROOT
             / "wom_kit"
             / "_resources"
             / "release-notes"
-            / "v0.3.300.md"
+            / "v0.3.301.md"
         )
         self.assertEqual(
             current_source_release.read_bytes(),
@@ -422,11 +438,11 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
         current_text = current_source_release.read_text(encoding="utf-8")
         current_flat = " ".join(current_text.split())
         for token in (
-            "Letters 098-111",
-            "objet-capture-batch",
-            "relation candidates",
-            "markup",
-            "bytecode",
+            "Letter 112",
+            "zettel-objet-link",
+            "source-intake-batch",
+            "authoring",
+            "discard-draft",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, current_flat)

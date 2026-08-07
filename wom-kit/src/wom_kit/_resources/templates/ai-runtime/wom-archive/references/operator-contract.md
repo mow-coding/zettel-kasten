@@ -496,6 +496,20 @@ The same gate applies BEFORE physically copying any local file into the archive 
 archive source-intake <archive-root> --dry-run --local-path <local-file> --format json
 ```
 
+For many reviewed local files, replace per-file planning and recording loops
+with one bounded manifest and one exact review gate:
+
+```text
+archive source-intake-batch <archive-root> --manifest <archive-relative-json> --dry-run --format json
+archive source-intake-batch <archive-root> --manifest <same-json> --expected-plan-sha256 <sha256:...> --approve --reviewed-by <actor> --format json
+```
+
+Relative item paths resolve from the archive root. The request is capped at
+1,000 items. The command stores the ordinary redacted per-item source-intake
+plans plus one aggregate receipt, does not read file bodies or calculate
+content hashes, and claims bounded per-item replay convergence rather than
+transaction-wide atomicity.
+
 Follow the returned `next_safe_actions`: stage the file inside the archive root (recommended `staging/incoming/<YYYY-MM-DD>/<project_slug>/`; capture requires archive-relative staged paths), prepare ONE reviewed selection with `objet-capture-selection` (optionally pairing an existing vendor transcript through `--derived-text-staged-path` so a single approval covers both halves), then capture only through `objet-capture --selection <path> --dry-run` first and `--approve --reviewed-by <actor-id>` after human approval. Real (non-sandbox) archives additionally need an owner-approved `objet-capture-enable` record. For bulk stores whose bytes already live in an external content-addressed store, register evidence with `prehashed-objet-ledger` and `object-storage-upload-evidence` instead of copying files in. Capture authority comes ONLY from the reviewed selection plus the approved capture (plus enablement); a source-intake plan is never permission to copy, capture, import, or upload, and a raw in-root `objets/` folder is not an approved destination.
 
 For one reviewed request containing many ordinary staged files, prefer:
@@ -512,11 +526,14 @@ does not promise transaction-wide atomicity.
 ## External Locators, Relation Review, And Markup Normalization
 
 Use `external-locator-plan` before `external-locator-record`. Ordinary output
-never reflects the locator value. Multiple locators may coexist, but their
-presence proves neither live remote reachability nor global recoverability.
-Use `external-locator-recovery-plan` to inspect safe candidates and the
-dedicated `external-locator-revert` dry-run/approval path to restore exact
-prior state.
+never reflects the locator value. A locator may carry safe `service_ref`,
+`account_ref`, and `occurrence_anchor` coordinates; this permits the same
+provider locator to appear more than once when each occurrence is distinct.
+Recovery output reveals only whether those coordinates exist, never their
+values. Multiple locators may coexist, but their presence proves neither live
+remote reachability nor global recoverability. Use
+`external-locator-recovery-plan` to inspect safe candidates and the dedicated
+`external-locator-revert` dry-run/approval path to restore exact prior state.
 
 Use `relation-semantics-guide` before reviewing ambiguous continuation,
 recurrence, sequence, third-party Principal, or format-variant meaning.
@@ -567,7 +584,13 @@ looks equivalent: mismatched join authority can silently drop rows.
 Use `markup-style-guide` and `markup-normalization-plan` before changing
 migration markup. `preserve` records the inventory and writes nothing.
 `normalize` may remove only reviewed migration wrappers while preserving
-visible text. Unknown semantic tags block. File/media/mention/synced-ref tags
+visible text. Simple `table`/`tr`/`td`/`th` markup becomes a GitHub Flavored
+Markdown table; `col`/`colgroup` carry alignment only when unambiguous;
+`columns`/`column` become paragraph boundaries; and paired `mention-date`
+wrappers preserve their visible text. Nested tables, spans, captions, or
+ambiguous cell semantics block and remain unchanged. Any remaining unknown
+semantic tag blocks the whole zet: known cleanup is not partially written into
+a zet that still needs semantic review. File/media/mention/synced-ref tags
 require an archive-local binding manifest whose exact tag SHA-256 points to an
 already-existing active external locator or source-zettel edge.
 
@@ -586,9 +609,37 @@ affected zets by hand. Completed normalization uses the separate exact-byte
 archive create-draft <archive-root> --dry-run --source-intake-plan <source-intake-plan.json> --prompt-boundary-report <prompt-boundary-report.json> --expected-archive-id <id> --expected-type <type> --profile-id <profile-id> --creation-mode ai_assisted --created-by ai_runtime:codex --assisted-by ai_runtime:codex --format json
 ```
 
+Before composing or revising the body, load the mounted archive's rules:
+
+```text
+archive authoring-conventions <archive-root> --dry-run --format json
+```
+
+When the archive has no declared conventions, use the conservative defaults
+and ask instead of inventing a durable house format. Tool commands, pipeline
+stages, receipt counts, plan hashes, and verification statuses belong in
+receipts, not ordinary human zet prose, unless the operation itself is the
+historical subject. Re-read the full draft after edits, remove stale internal
+contradictions, and report only archive files backed by openable
+archive-relative references.
+
 Do not manually copy local paths from source intake or prompt-boundary outputs into the draft. Let `create-draft --source-intake-plan` and `--prompt-boundary-report` validate and merge safe metadata.
 
 After human draft approval, replay the same `draft_id`, `created_at`, `expected_body_sha256`, expected archive id/type, and profile id. Draft approval is only for `inbox/`; minting still needs a separate `mint-zet --approve --reviewed-by` step.
+
+Revise an unminted draft in place; title changes do not authorize deletion and
+recreation. To intentionally remove a never-minted draft, run `discard-draft`
+first as a dry-run, then approve only the exact plan SHA-256 with a safe reason
+and reviewer. The command stores an exact private snapshot and immutable
+receipt. Restore only through `discard-draft-restore`; it refuses path
+collisions and unrelated later files.
+
+To bind an already-manifested objet into structured zettel frontmatter, use
+`zettel-objet-link --dry-run` and its exact approved replay. The strict `assets`
+item is `{object_id, role, label?}`; `object_id` must be the complete
+`sha256:<64 hex>` value. `zettel-objet-link-revert` restores exact prior bytes
+only while the zet still matches the link write. Mint review warns on truncated
+objet hashes and on likely tool traces or stale internal status claims.
 
 An incomplete draft may remain in `inbox/` without an abstract. Before minting or legacy promotion, require one human-reviewed, normalized, bounded, safe explicit `frontmatter.abstract`. `gist`, `summary`, `description`, and `overview` never authorize canonical publication. Inspect the dry-run `first_read_check` and proceed only when `ready_for_publication` is true. The real write binds the full draft SHA-256 and abstract SHA-256, rereads one byte snapshot, and blocks before canonical, receipt, or snapshot creation if any draft byte drifted or the abstract is missing or invalid. This structural gate does not judge semantic truth, completeness, freshness, or model consumption.
 

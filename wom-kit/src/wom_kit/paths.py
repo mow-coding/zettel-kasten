@@ -7,6 +7,7 @@ JSON/MCP output and archive metadata should be stable POSIX-style relative paths
 from __future__ import annotations
 
 import re
+import time
 from pathlib import Path, PurePosixPath
 
 
@@ -133,10 +134,21 @@ def resolve_archive_relative_path(archive_root: Path, raw_path: str) -> Path:
     """Resolve a safe archive-relative path against an archive root."""
 
     normalized = normalize_archive_relative_path(raw_path)
-    candidate = archive_root.resolve().joinpath(*PurePosixPath(normalized).parts).resolve()
-    if not candidate.is_relative_to(archive_root.resolve()):
-        raise ArchivePathError("Archive-relative path escapes archive root.")
-    return candidate
+    # Resolve the trusted root exactly once. On Windows another process can
+    # create an intermediate directory while ``Path.resolve`` is walking it;
+    # the API can then briefly return a non-comparable spelling even though the
+    # next stable resolution is inside the root. Retry only that failed
+    # containment result; a real symlink/junction escape remains outside on
+    # every attempt and still fails closed.
+    resolved_root = archive_root.resolve()
+    unresolved = resolved_root.joinpath(*PurePosixPath(normalized).parts)
+    for attempt in range(5):
+        candidate = unresolved.resolve()
+        if candidate.is_relative_to(resolved_root):
+            return candidate
+        if attempt < 4:
+            time.sleep(0.001)
+    raise ArchivePathError("Archive-relative path escapes archive root.")
 
 
 def contains_forbidden_location_reference(text: str) -> bool:

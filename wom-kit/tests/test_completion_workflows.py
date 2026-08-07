@@ -28,6 +28,13 @@ class CompletionWorkflowTests(unittest.TestCase):
         "external-locator-record.schema.json",
         "external-locator-receipt.schema.json",
         "external-locator-revert-receipt.schema.json",
+        "zettel-objet-link-receipt.schema.json",
+        "zettel-objet-link-revert-receipt.schema.json",
+        "draft-discard-receipt.schema.json",
+        "draft-discard-restore-receipt.schema.json",
+        "authoring-conventions.schema.json",
+        "source-intake-batch-request.schema.json",
+        "source-intake-batch-receipt.schema.json",
         "objet-capture-batch-request.schema.json",
         "objet-capture-batch-receipt.schema.json",
         "markup-reference-binding-manifest.schema.json",
@@ -472,6 +479,104 @@ class CompletionWorkflowTests(unittest.TestCase):
                 json.dumps(secret, ensure_ascii=False),
             )
 
+    def test_external_locator_distinguishes_service_account_and_repeated_occurrences(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.fake_archive(Path(tmp) / "archive")
+            zettel_id = "zet_20110228_fake_school_record"
+            locator_ref = "message-id:reviewed-synthetic-message"
+            service_ref = "mail-service"
+            account_ref = "reviewed-account@example.test"
+            first_anchor = "body:paragraph-2"
+            second_anchor = "body:paragraph-9"
+
+            first_plan = completion_workflows.external_locator_plan(
+                archive_root,
+                zettel_id=zettel_id,
+                locator_type="export_coordinate",
+                locator_ref=locator_ref,
+                service_ref=service_ref,
+                account_ref=account_ref,
+                occurrence_anchor=first_anchor,
+            )
+            self.assertTrue(first_plan["ok"], first_plan)
+            first = completion_workflows.external_locator_record(
+                archive_root,
+                zettel_id=zettel_id,
+                locator_type="export_coordinate",
+                locator_ref=locator_ref,
+                service_ref=service_ref,
+                account_ref=account_ref,
+                occurrence_anchor=first_anchor,
+                expected_plan_sha256=first_plan["summary"]["plan_sha256"],
+                reviewed_by="person:test",
+            )
+            self.assertTrue(first["ok"], first)
+
+            exact_duplicate = completion_workflows.external_locator_plan(
+                archive_root,
+                zettel_id=zettel_id,
+                locator_type="export_coordinate",
+                locator_ref=locator_ref,
+                service_ref=service_ref,
+                account_ref=account_ref,
+                occurrence_anchor=first_anchor,
+            )
+            self.assertFalse(exact_duplicate["ok"])
+            self.assertIn(
+                "external_locator_already_recorded",
+                exact_duplicate["blockers"],
+            )
+
+            second_plan = completion_workflows.external_locator_plan(
+                archive_root,
+                zettel_id=zettel_id,
+                locator_type="export_coordinate",
+                locator_ref=locator_ref,
+                service_ref=service_ref,
+                account_ref=account_ref,
+                occurrence_anchor=second_anchor,
+            )
+            self.assertTrue(second_plan["ok"], second_plan)
+            self.assertNotEqual(
+                first_plan["summary"]["locator_id"],
+                second_plan["summary"]["locator_id"],
+            )
+            second = completion_workflows.external_locator_record(
+                archive_root,
+                zettel_id=zettel_id,
+                locator_type="export_coordinate",
+                locator_ref=locator_ref,
+                service_ref=service_ref,
+                account_ref=account_ref,
+                occurrence_anchor=second_anchor,
+                expected_plan_sha256=second_plan["summary"]["plan_sha256"],
+                reviewed_by="person:test",
+            )
+            self.assertTrue(second["ok"], second)
+
+            record_path = archive_root / second["summary"]["record_path"]
+            stored = json.loads(record_path.read_text(encoding="utf-8"))
+            self.assertEqual(stored["schema"], "wom-kit/external-locator-record/v0.2")
+            self.assertEqual(len(stored["locators"]), 2)
+            self.assertEqual(stored["locators"][0]["account_ref"], account_ref)
+            self.assertEqual(stored["locators"][1]["occurrence_anchor"], second_anchor)
+            self.assert_schema_instance("external-locator-record.schema.json", stored)
+
+            recovery = completion_workflows.external_locator_recovery_plan(
+                archive_root,
+                zettel_id=zettel_id,
+            )
+            self.assertEqual(recovery["summary"]["locator_count"], 2)
+            self.assertTrue(
+                recovery["locators"][0]["coordinate_presence"]["account_ref"]
+            )
+            public = json.dumps(recovery, ensure_ascii=False)
+            self.assertNotIn(locator_ref, public)
+            self.assertNotIn(service_ref, public)
+            self.assertNotIn(account_ref, public)
+            self.assertNotIn(first_anchor, public)
+            self.assertFalse(recovery["privacy_guards"]["account_ref_echoed"])
+
     def test_objet_capture_batch_uses_one_reviewed_plan_and_converges(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.fake_archive(Path(tmp) / "archive")
@@ -569,6 +674,286 @@ class CompletionWorkflowTests(unittest.TestCase):
             self.assertEqual(
                 replay["summary"]["capture_summary"]["skipped"],
                 3,
+            )
+
+    def test_zettel_objet_link_writes_structured_asset_and_reverts_exact_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.fake_archive(Path(tmp) / "archive")
+            zettel_id = "zet_20240504_fake_lunch_thought"
+            zettel_path = archive_root / "zettels" / f"{zettel_id}.md"
+            before_bytes = zettel_path.read_bytes()
+            object_id = "sha256:9dabf9b965a3f789b1b36100f3f70515ce8dfd81b411b1503e1e2c3304303647"
+            private_label = "Reviewed private source label"
+
+            plan_code, plan_output = self.run_cli(
+                [
+                    "zettel-objet-link",
+                    str(archive_root),
+                    "--zettel-id",
+                    zettel_id,
+                    "--object-id",
+                    object_id,
+                    "--role",
+                    "source_document",
+                    "--label",
+                    private_label,
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(plan_code, 0, plan_output)
+            self.assertNotIn(private_label, plan_output)
+            plan = json.loads(plan_output)
+            self.assertTrue(plan["ok"], plan)
+            self.assertTrue(plan["summary"]["manifest_record_verified"])
+            self.assertEqual(plan["summary"]["current_asset_count"], 0)
+
+            apply_code, apply_output = self.run_cli(
+                [
+                    "zettel-objet-link",
+                    str(archive_root),
+                    "--zettel-id",
+                    zettel_id,
+                    "--object-id",
+                    object_id,
+                    "--role",
+                    "source_document",
+                    "--label",
+                    private_label,
+                    "--expected-plan-sha256",
+                    plan["summary"]["plan_sha256"],
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(apply_code, 0, apply_output)
+            self.assertNotIn(private_label, apply_output)
+            applied = json.loads(apply_output)
+            self.assertEqual(applied["state"], "written")
+            frontmatter, _body = (
+                completion_workflows.archive_services.require_readable_zettel_content(
+                    zettel_path
+                )
+            )
+            self.assertIn(
+                {
+                    "object_id": object_id,
+                    "role": "source_document",
+                    "label": private_label,
+                },
+                frontmatter["assets"],
+            )
+            self.assertEqual(
+                completion_workflows.archive_services.validate_schema(
+                    frontmatter,
+                    "zettel-frontmatter.schema.json",
+                ),
+                [],
+            )
+            receipt_path = archive_root / applied["summary"]["receipt_path"]
+            self.assert_schema_instance(
+                "zettel-objet-link-receipt.schema.json",
+                json.loads(receipt_path.read_text(encoding="utf-8")),
+            )
+
+            duplicate = completion_workflows.zettel_objet_link_plan(
+                archive_root,
+                zettel_id=zettel_id,
+                object_id=object_id,
+                role="evidence",
+            )
+            self.assertFalse(duplicate["ok"])
+            self.assertIn("zettel_objet_link_already_present", duplicate["blockers"])
+
+            revert_plan = completion_workflows.zettel_objet_link_revert_plan(
+                archive_root,
+                receipt=applied["summary"]["receipt_path"],
+            )
+            self.assertTrue(revert_plan["ok"], revert_plan)
+            reverted = completion_workflows.zettel_objet_link_revert(
+                archive_root,
+                receipt=applied["summary"]["receipt_path"],
+                expected_plan_sha256=revert_plan["summary"]["plan_sha256"],
+                reviewed_by="person:test",
+            )
+            self.assertTrue(reverted["ok"], reverted)
+            self.assertEqual(zettel_path.read_bytes(), before_bytes)
+            self.assert_schema_instance(
+                "zettel-objet-link-revert-receipt.schema.json",
+                json.loads(
+                    (
+                        archive_root
+                        / reverted["summary"]["revert_receipt_path"]
+                    ).read_text(encoding="utf-8")
+                ),
+            )
+
+    def test_zettel_objet_link_revert_blocks_after_unrelated_zettel_change(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.fake_archive(Path(tmp) / "archive")
+            zettel_id = "zet_20240504_fake_lunch_thought"
+            object_id = "sha256:9dabf9b965a3f789b1b36100f3f70515ce8dfd81b411b1503e1e2c3304303647"
+            plan = completion_workflows.zettel_objet_link_plan(
+                archive_root,
+                zettel_id=zettel_id,
+                object_id=object_id,
+                role="evidence",
+            )
+            applied = completion_workflows.zettel_objet_link_apply(
+                archive_root,
+                zettel_id=zettel_id,
+                object_id=object_id,
+                role="evidence",
+                expected_plan_sha256=plan["summary"]["plan_sha256"],
+                reviewed_by="person:test",
+            )
+            self.assertTrue(applied["ok"], applied)
+            zettel_path = archive_root / "zettels" / f"{zettel_id}.md"
+            zettel_path.write_bytes(zettel_path.read_bytes() + b"\nLater reviewed change.\n")
+
+            revert_plan = completion_workflows.zettel_objet_link_revert_plan(
+                archive_root,
+                receipt=applied["summary"]["receipt_path"],
+            )
+
+            self.assertFalse(revert_plan["ok"])
+            self.assertIn(
+                "zettel_objet_link_current_zettel_changed",
+                revert_plan["blockers"],
+            )
+
+    def test_discard_unminted_draft_is_receipted_and_exactly_restorable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.fake_archive(Path(tmp) / "archive")
+            draft_relative = "inbox/zet_20260519_draft_ai_lunch_note.md"
+            draft_path = archive_root / draft_relative
+            before_bytes = draft_path.read_bytes()
+            reason = "Human decided this captured note should not be published."
+
+            plan_code, plan_output = self.run_cli(
+                [
+                    "discard-draft",
+                    str(archive_root),
+                    "--path",
+                    draft_relative,
+                    "--reason",
+                    reason,
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(plan_code, 0, plan_output)
+            self.assertNotIn(reason, plan_output)
+            plan = json.loads(plan_output)
+            self.assertTrue(plan["ok"], plan)
+            self.assertTrue(plan["summary"]["exact_byte_restore_supported"])
+
+            apply_code, apply_output = self.run_cli(
+                [
+                    "discard-draft",
+                    str(archive_root),
+                    "--path",
+                    draft_relative,
+                    "--reason",
+                    reason,
+                    "--expected-plan-sha256",
+                    plan["summary"]["plan_sha256"],
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(apply_code, 0, apply_output)
+            self.assertNotIn(reason, apply_output)
+            discarded = json.loads(apply_output)
+            self.assertEqual(discarded["state"], "discarded")
+            self.assertFalse(draft_path.exists())
+            snapshot_path = archive_root / discarded["summary"]["snapshot_path"]
+            self.assertEqual(snapshot_path.read_bytes(), before_bytes)
+            receipt_path = archive_root / discarded["summary"]["receipt_path"]
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            self.assertEqual(receipt["reason"], reason)
+            self.assert_schema_instance("draft-discard-receipt.schema.json", receipt)
+
+            audit = completion_workflows.archive_services.inbox_pipeline_audit(
+                archive_root,
+                dry_run=True,
+            )
+            self.assertEqual(
+                audit["summary"]["intentionally_discarded_draft_receipt_count"],
+                1,
+            )
+
+            restore_plan = completion_workflows.draft_discard_restore_plan(
+                archive_root,
+                receipt=discarded["summary"]["receipt_path"],
+            )
+            self.assertTrue(restore_plan["ok"], restore_plan)
+            restored = completion_workflows.draft_discard_restore(
+                archive_root,
+                receipt=discarded["summary"]["receipt_path"],
+                expected_plan_sha256=restore_plan["summary"]["plan_sha256"],
+                reviewed_by="person:test",
+            )
+            self.assertTrue(restored["ok"], restored)
+            self.assertEqual(draft_path.read_bytes(), before_bytes)
+            restore_receipt = json.loads(
+                (
+                    archive_root
+                    / restored["summary"]["restore_receipt_path"]
+                ).read_text(encoding="utf-8")
+            )
+            self.assert_schema_instance(
+                "draft-discard-restore-receipt.schema.json",
+                restore_receipt,
+            )
+
+    def test_discard_draft_blocks_minted_twin_and_routes_to_retire(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.fake_archive(Path(tmp) / "archive")
+            draft_relative = "inbox/zet_20260519_draft_ai_lunch_note.md"
+            retire_plan = (
+                completion_workflows.archive_services.minted_draft_retirement_plan(
+                    archive_root,
+                    relative_path=draft_relative,
+                )
+            )
+            self.assertFalse(retire_plan["ok"])
+            self.assertTrue(
+                any(
+                    "discard-draft" in action
+                    for action in retire_plan["next_safe_actions"]
+                )
+            )
+            mint_receipt = (
+                archive_root
+                / "receipts"
+                / "mint"
+                / "zet_20260519_draft_ai_lunch_note.mint.json"
+            )
+            mint_receipt.parent.mkdir(parents=True, exist_ok=True)
+            mint_receipt.write_text("{}\n", encoding="utf-8")
+
+            discard = completion_workflows.draft_discard_plan(
+                archive_root,
+                relative_path=draft_relative,
+                reason="This must use the minted draft retirement path.",
+            )
+
+            self.assertFalse(discard["ok"])
+            self.assertIn(
+                "discard_draft_mint_receipt_present_use_retire_draft",
+                discard["blockers"],
+            )
+            self.assertTrue(
+                any("retire-draft" in action for action in discard["next_safe_actions"])
             )
 
     def test_objet_capture_batch_preflights_synthetic_508_and_names_title_limit(self) -> None:
@@ -700,6 +1085,103 @@ class CompletionWorkflowTests(unittest.TestCase):
                 ),
             )
             self.assertEqual(target.read_bytes(), before_bytes)
+
+    def test_markup_normalization_converts_reviewed_table_to_gfm_without_visible_text_loss(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.fake_archive(Path(tmp) / "archive")
+            target = self.write_markup_zettel(
+                archive_root,
+                "zet_20260807_table_normalization",
+                "<columns><column>Before table</column></columns>\n"
+                "<table class=\"notion-table\">\n"
+                "<colgroup><col><col></colgroup>\n"
+                "<thead><tr><th align=\"left\">Name</th><th style=\"text-align: right\">Value</th></tr></thead>\n"
+                "<tbody><tr><td>Alpha | Beta</td><td>42</td></tr></tbody>\n"
+                "</table>\n"
+                "<mention-date start=\"2026-08-07\">August 7</mention-date>\n",
+            )
+            before = target.read_bytes()
+
+            plan = completion_workflows.markup_normalization_plan(
+                archive_root,
+                policy="normalize",
+                max_items=1000,
+                max_changes=1000,
+            )
+
+            self.assertTrue(plan["ok"], plan)
+            item = next(
+                row
+                for row in plan["items"]
+                if row["zettel_id"] == "zet_20260807_table_normalization"
+            )
+            self.assertEqual(item["state"], "ready")
+            self.assertEqual(item["counts"]["table"], 1)
+            self.assertEqual(item["counts"]["table_blocked"], 0)
+            self.assertEqual(item["counts"]["mention_date"], 1)
+            applied = completion_workflows.markup_normalization_apply(
+                archive_root,
+                policy="normalize",
+                max_items=1000,
+                max_changes=1000,
+                expected_plan_sha256=plan["summary"]["plan_sha256"],
+                reviewed_by="person:test",
+            )
+            self.assertTrue(applied["ok"], applied)
+            after = target.read_text(encoding="utf-8")
+            self.assertIn("| Name | Value |", after)
+            self.assertIn("| :--- | ---: |", after)
+            self.assertIn(r"| Alpha \| Beta | 42 |", after)
+            self.assertIn("Before table", after)
+            self.assertIn("August 7", after)
+            self.assertNotIn("<table", after)
+            self.assertNotIn("<columns", after)
+            self.assertNotIn("<mention-date", after)
+
+            revert_plan = completion_workflows.markup_normalization_revert_plan(
+                archive_root,
+                receipt=applied["summary"]["receipt_path"],
+            )
+            reverted = completion_workflows.markup_normalization_revert(
+                archive_root,
+                receipt=applied["summary"]["receipt_path"],
+                expected_plan_sha256=revert_plan["summary"]["plan_sha256"],
+                reviewed_by="person:test",
+            )
+            self.assertTrue(reverted["ok"], reverted)
+            self.assertEqual(target.read_bytes(), before)
+
+    def test_markup_normalization_blocks_table_spans_and_nested_tables(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.fake_archive(Path(tmp) / "archive")
+            self.write_markup_zettel(
+                archive_root,
+                "zet_20260807_table_span_blocked",
+                "<table><tr><td rowspan=\"2\">A</td><td>B</td></tr><tr><td>C</td></tr></table>\n",
+            )
+            self.write_markup_zettel(
+                archive_root,
+                "zet_20260807_nested_table_blocked",
+                "<table><tr><td><table><tr><td>Nested</td></tr></table></td></tr></table>\n",
+            )
+
+            plan = completion_workflows.markup_normalization_plan(
+                archive_root,
+                policy="normalize",
+                max_items=1000,
+                max_changes=1000,
+            )
+
+            self.assertFalse(plan["ok"])
+            by_id = {item["zettel_id"]: item for item in plan["items"]}
+            self.assertIn(
+                "markup_table_span_unsupported",
+                by_id["zet_20260807_table_span_blocked"]["blocker_codes"],
+            )
+            self.assertIn(
+                "markup_table_nested_unsupported",
+                by_id["zet_20260807_nested_table_blocked"]["blocker_codes"],
+            )
 
     def test_markup_normalization_blocks_unknown_and_binding_tags_but_preserve_is_explicit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1105,6 +1587,47 @@ class CompletionWorkflowTests(unittest.TestCase):
                 if item["candidate_id"] == candidate["candidate_id"]
             )
             self.assertTrue(resurfaced["prior_rejected"])
+
+    def test_relation_candidate_uses_beta_archive_time_and_category_coordinates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.fake_archive(Path(tmp) / "archive")
+            source_id = "zet_20260807_coordinate_source"
+            target_id = "zet_20260807_coordinate_target"
+            for zettel_id, title in (
+                (source_id, "Alpha Unique Record"),
+                (target_id, "Beta Distinct Memo"),
+            ):
+                (archive_root / "zettels" / f"{zettel_id}.md").write_text(
+                    "---\n"
+                    f"id: {zettel_id}\n"
+                    f"title: {title}\n"
+                    "status: canonical\n"
+                    "kind: note\n"
+                    "facets:\n"
+                    "  notion_event_time_start: 2026-08-07T10:30:00+09:00\n"
+                    "  source_category: private-category-value\n"
+                    "---\n"
+                    "Body values are irrelevant to relation projection.\n",
+                    encoding="utf-8",
+                )
+
+            plan = completion_workflows.relation_candidate_plan(
+                archive_root,
+                from_zettel=source_id,
+            )
+
+            self.assertTrue(plan["ok"], plan)
+            candidate = next(
+                item
+                for item in plan["candidates"]
+                if item["target"]["zettel_id"] == target_id
+            )
+            signal_kinds = {item["kind"] for item in candidate["signals"]}
+            self.assertIn("shared_event_date_coordinate", signal_kinds)
+            self.assertIn("shared_archive_category_coordinate", signal_kinds)
+            serialized = json.dumps(candidate, ensure_ascii=False)
+            self.assertNotIn("private-category-value", serialized)
+            self.assertNotIn("2026-08-07T10:30:00", serialized)
 
     def test_relation_candidate_accept_writes_and_verifies_existing_edge_engine(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

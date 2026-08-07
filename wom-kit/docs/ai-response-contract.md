@@ -1,6 +1,6 @@
 # AI Response Contract
 
-Status: v0.3.155 AI response contract checkpoint
+Status: v0.3.301 human-record integrity checkpoint
 
 `archive ai-response-contract` gives AI operators a read-only contract for
 answering a human after running WOM commands.
@@ -31,6 +31,12 @@ archive operator-response-contract <archive-root> --dry-run
 - `privacy_boundary`: do not echo secret-like values, private locators, account identifiers, local absolute paths, tokens, or secret values.
 - `approval_boundary`: only claim writes, live fetches, uploads, or privileged execution after explicit approval and receipt evidence.
 - `remaining_work`: surface blockers, warnings, incomplete coverage, and next safe action.
+- `openable_archive_references`: only tell the human that an archive file exists
+  when the answer includes an archive-relative reference they can actually
+  open.
+- `human_record_integrity`: keep tool execution traces out of ordinary zet
+  prose, re-read the whole document after revisions, resolve stale
+  contradictions, and revise unminted drafts in place.
 
 The optional `conversation_status_board` section allows a compact status summary
 inside the AI answer. A separate web UI is not required.
@@ -49,6 +55,19 @@ available tools before declaring a task impossible, and carrying
 already-established/approved state instead of re-asking. Like the plain-language
 convention, these are guidance the AI applies; this contract validates nothing and
 enforces nothing about them.
+
+Before composing a zet, run `archive authoring-conventions <archive-root>
+--dry-run --format json`. An archive may declare its durable writing rules at
+`zettel-kasten/authoring-conventions.yml` using the
+`wom-kit/authoring-conventions/v0.1` schema. If it has not declared them, the
+command returns conservative defaults and an explicit warning; the AI should
+ask instead of inventing a house format.
+
+Commands, pipeline stage names, plan hashes, receipt counts, and internal tool
+status normally belong in receipts rather than a human-facing zet body. They
+may appear when the operation itself is the historical subject. The mint gate
+uses fixed warning codes for likely tool traces and internally contradictory
+status language, but these are review warnings rather than semantic proof.
 
 ## Related Taxonomies
 

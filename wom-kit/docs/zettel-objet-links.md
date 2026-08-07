@@ -1,7 +1,8 @@
 # Zettel Objet Links
 
 Status: v0.3.18 read-only preview
-Date: 2026-06-14
+Extended: v0.3.301 approval-gated structured link writer
+Date: 2026-08-07
 
 `zettel-objet-links` is the first small reading-side bridge between a human
 zettel and source objets referenced by content address.
@@ -51,6 +52,33 @@ Inputs:
 - `path` or `zettel_id`
 - `dry_run`, which must be true
 - optional `max_refs`
+
+## Add A Structured Link
+
+The read-only preview remains unchanged. v0.3.301 adds a separate CLI-only
+writer for one reviewed asset entry:
+
+```text
+archive zettel-objet-link <archive-root> --zettel-id <id> \
+  --object-id sha256:<64-hex> --role source --dry-run --format json
+
+archive zettel-objet-link <archive-root> --zettel-id <id> \
+  --object-id sha256:<64-hex> --role source \
+  --expected-plan-sha256 <sha256:...> --approve --reviewed-by <actor> \
+  --format json
+```
+
+The objet must already exist in `objects/manifests/files.jsonl`. The writer
+adds one strict `assets` entry containing `object_id`, a safe role, and an
+optional label. A complete SHA-256 is mandatory. Truncated hashes are not
+guessed or expanded.
+
+Before changing the zet, approval re-runs the full plan under a per-zettel
+lock. The workflow stores the exact earlier bytes privately and writes an
+immutable receipt. `zettel-objet-link-revert` restores those exact bytes only
+while the zet still equals the recorded post-write bytes, so unrelated later
+human edits cannot be overwritten. Neither command reads or echoes object
+bytes.
 
 ## What It Scans
 
@@ -134,7 +162,8 @@ store_ref: notion-export-20260614
 
 ## Privacy And Safety Boundaries
 
-`zettel-objet-links` is read-only.
+`zettel-objet-links` is read-only. The singular
+`zettel-objet-link` writer is CLI-only and approval-gated.
 
 It does not:
 
