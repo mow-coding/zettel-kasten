@@ -9,6 +9,7 @@
     "schema": {"const": "wom-kit/markup-normalization-plan/v0.1"},
     "archive_id": {"type": "string", "minLength": 1},
     "policy": {"enum": ["preserve", "normalize"]},
+    "selection_mode": {"enum": ["strict", "ready_only"]},
     "max_items": {"type": "integer", "minimum": 1, "maximum": 10000},
     "max_changes": {"type": "integer", "minimum": 1, "maximum": 5000},
     "binding_manifest_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},

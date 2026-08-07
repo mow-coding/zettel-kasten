@@ -1,13 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "wom-kit/external-locator-receipt/v0.2",
-  "title": "WOM-kit external locator add receipt",
+  "$id": "wom-kit/external-locator-receipt/v0.3",
+  "title": "WOM-kit external locator add or coordinate-update receipt",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema", "action", "archive_id", "zettel_id", "locator_id", "locator_type", "coordinate_presence", "plan_sha256", "before_record_sha256", "after_record_sha256", "before_snapshot_path", "record_path", "reviewed_by", "created_at", "privacy"],
   "properties": {
-    "schema": {"const": "wom-kit/external-locator-receipt/v0.2"},
-    "action": {"const": "add_locator"},
+    "schema": {"const": "wom-kit/external-locator-receipt/v0.3"},
+    "action": {"enum": ["add_locator", "update_locator_coordinates"]},
     "archive_id": {"type": "string", "minLength": 1},
     "zettel_id": {"type": "string", "pattern": "^zet_[A-Za-z0-9][A-Za-z0-9_-]{0,159}$"},
     "locator_id": {"type": "string", "pattern": "^locator:sha256:[0-9a-f]{64}$"},

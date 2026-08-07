@@ -1,6 +1,6 @@
 # AI Response Contract
 
-Status: v0.3.301 human-record integrity checkpoint
+Status: v0.3.305 human-record and publication-completion integrity checkpoint
 
 `archive ai-response-contract` gives AI operators a read-only contract for
 answering a human after running WOM commands.
@@ -41,6 +41,13 @@ archive operator-response-contract <archive-root> --dry-run
 The optional `conversation_status_board` section allows a compact status summary
 inside the AI answer. A separate web UI is not required.
 
+At session start, surface `ai-start-here.inbox_attention`; do not let an
+unpublished draft disappear behind unrelated work. A human publication request
+starts the mint preview workflow. A draft write is not publication, and the AI
+must not claim completion until an approved `mint-zet` result has canonical and
+receipt evidence. When preview or approval is blocked, report that boundary in
+the same response rather than silently deferring it.
+
 When the answer is for a human, follow the plain-language convention: translate
 git/infrastructure/WOM-internal jargon into everyday language and keep the exact
 term in parentheses or in the logs (see `wom-ai-runtime-skill-plugin-layer.md`
@@ -62,6 +69,11 @@ Before composing a zet, run `archive authoring-conventions <archive-root>
 `wom-kit/authoring-conventions/v0.1` schema. If it has not declared them, the
 command returns conservative defaults and an explicit warning; the AI should
 ask instead of inventing a house format.
+
+The command also returns `publication_completion_contract`: AI drafts use the
+official `create-draft` preview/replay route, carry explicit abstract and facet
+metadata, revise same-title unminted drafts in place, and treat publication as
+complete only after mint evidence exists.
 
 Commands, pipeline stage names, plan hashes, receipt counts, and internal tool
 status normally belong in receipts rather than a human-facing zet body. They

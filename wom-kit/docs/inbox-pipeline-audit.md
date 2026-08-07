@@ -1,6 +1,7 @@
 # Inbox Pipeline Audit
 
-Status: implemented in v0.3.279
+Status: implemented in v0.3.279; startup and publication-readiness visibility
+added in v0.3.305
 
 ## Purpose
 
@@ -28,6 +29,14 @@ The result schema is:
 ```text
 wom-kit/inbox-pipeline-audit/v0.1
 ```
+
+From v0.3.305, the same bounded frontmatter-only audit is summarized by every
+`archive ai-start-here` result as `inbox_attention`. It reports the unpublished
+draft count, oldest safely parseable draft age, possible current-pipeline shape
+bypasses, and drafts missing an explicit safe abstract or non-empty facets. The
+session-start summary returns no title, id, path, body, actor, or source value.
+The detailed audit remains the review route; startup visibility is not repair
+permission.
 
 ## Honest Evidence Classes
 
@@ -138,3 +147,17 @@ This release does not:
 Do not modify a historical draft merely to make the audit green. Any later
 repair must be a separate preview, human approval, exact replay, and receipt
 workflow.
+
+## Creation-Time Guard In v0.3.305
+
+The official `create-draft` AI route now blocks before writing when an
+`ai_assisted` or `ai_generated` draft lacks an explicit publication-safe
+abstract or has empty facets. It also checks bounded inbox frontmatter and
+blocks an AI-created same-normalized-title duplicate so the existing unminted
+draft can be revised in place. Human-owned rough drafts remain possible and
+receive a visible same-title warning rather than an automatic semantic merge.
+
+An arbitrary filesystem writer can still bypass a CLI; WOM does not claim to
+be an operating-system access-control service. The runtime skill, archive
+templates, creation-time guard, and session-start audit form the four explicit
+defense layers.

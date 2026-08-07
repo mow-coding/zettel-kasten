@@ -160,7 +160,7 @@ MCP clients must not request `redact_local_paths: false` unless trusted local de
 
 ## AI Command-Path Routing
 
-Introduced in v0.3.278 and extended through v0.3.304, runtime-context,
+Introduced in v0.3.278 and extended through v0.3.305, runtime-context,
 ai-start-here, operational-context, and
 canonical entrypoint metadata return
 `wom-kit/ai-command-path-routing/v0.12`.
@@ -800,7 +800,7 @@ An AI runtime should start with:
 5. call runtime context with expected archive id and type
 6. check ok/blockers/warnings
 7. run source-intake dry-run when a source/objet/provider/AI artifact is involved
-8. run create-draft dry-run with `--source-intake-plan` and `--prompt-boundary-report` when available, then show the proposed inbox draft
+8. run create-draft dry-run with a reviewed abstract, at least one stable facet, `--source-intake-plan`, and `--prompt-boundary-report` when available, then show the proposed inbox draft; revise an existing same-title draft instead of creating another
 9. replay the draft only after human draft approval
 10. optionally run block-header dry-run for the draft/header preview
 11. run foreign-block dry-run before any future shared/foreign block trust path
@@ -827,8 +827,8 @@ An AI runtime should start with:
 32. use `zet-transport-plan --dry-run` only to discuss future transport risks and controls, never to send or deliver anything
 33. read the v0.2.x freeze / v0.3.0 entry boundary only when discussing next-line planning, not as a transport/public-proof tool
 34. discuss the radio-frequency recommendation model only as a future docs/examples baseline, not as an executable feed feature
-35. run mint dry-run before asking for mint approval
-36. use CLI approval paths for real minting
+35. when the human requests publication, run mint dry-run in the same task and report blockers or a remaining approval gate immediately
+36. use CLI approval paths for real minting and claim publication complete only after canonical and receipt evidence exists
 ```
 
 This keeps the AI helpful without giving it a broad mutation surface.
@@ -862,7 +862,14 @@ The skill tells the AI to:
 - then run runtime context,
 - run source-intake dry-run before drafting from source/objet material,
 - run source-intake dry-run BEFORE physically copying any local file into the archive or an objet store, stage inside the archive root, and route captures only through the reviewed selection -> approved capture chain (bulk external stores go through prehashed-objet-ledger plus object-storage-upload-evidence instead),
-- use create-draft dry-run before any profile-bound draft write,
+- use create-draft dry-run before any profile-bound draft write, require an
+  explicit safe abstract plus non-empty facets for an AI draft, and revise a
+  same-title unminted draft in place,
+- surface `ai-start-here.inbox_attention` at session start; do not silently
+  carry unpublished work into a later session,
+- begin mint preview when the human requests publication, report blockers or
+  remaining approval immediately, and claim completion only after approved
+  canonical and receipt evidence,
 - run foreign-block dry-run before trusting or importing any shared/foreign block artifact,
 - run foreign-block-trust dry-run before discussing future attestation eligibility,
 - run foreign-block-attestation dry-run before discussing any future human attestation review packet,
