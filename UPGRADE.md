@@ -24,6 +24,24 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.302 Saved-View Lifecycle
+
+v0.3.302 is compatible with valid v0.3.301 archives and requires no automatic
+migration. Saved-view discovery now fails closed: malformed YAML/UTF-8,
+unsafe or oversized entries, unsupported filters, invalid ids, and duplicate
+ids are reported rather than skipped.
+
+Run `archive view-health <archive-root> --dry-run --format json` after upgrade.
+If authority is valid, a new persistent navigation view can be created only
+through a private `saved-view-write-request/v0.1`, dry-run, exact plan digest,
+human reviewer, and `--affirm-view-reviewed`. Do not let an AI edit
+`views/*.yml` directly. `saved-view-revert` removes only unchanged files that
+the WOM writer created and refuses human drift.
+
+See
+[`wom-kit/docs/saved-view-write.md`](wom-kit/docs/saved-view-write.md) and
+[`wom-kit/docs/releases/v0.3.302.md`](wom-kit/docs/releases/v0.3.302.md).
+
 ## v0.3.301 Letter 112 Real-Use Completion
 
 v0.3.301 is compatible with existing v0.3.300 archives and requires no

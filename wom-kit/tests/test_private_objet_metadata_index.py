@@ -58,9 +58,9 @@ EMPTY_ALLOWLIST_SHA256 = (
     "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
 )
 
-CLI_COUNT = 534
+CLI_COUNT = 536
 CLI_CANONICAL_SHA256 = (
-    "ce61a432445a9b7d3559ed242badeb7bff958ba00a6fa3e4656a8a0cce01f0c8"
+    "aa29766a55e11f07bb042617e1155460d8a172083744bd4483e11b196e692efe"
 )
 MCP_COUNT = 121
 MCP_CANONICAL_SHA256 = (
@@ -72,7 +72,7 @@ DB_SOURCE_CANONICAL_SHA256 = (
 )
 RESOURCE_ADDITIONS = frozenset(
     {
-        "release-notes/v0.3.301.md",
+        "release-notes/v0.3.302.md",
         "schemas/authoring-conventions.schema.json",
         "schemas/draft-discard-receipt.schema.json",
         "schemas/draft-discard-restore-receipt.schema.json",
@@ -96,6 +96,10 @@ RESOURCE_ADDITIONS = frozenset(
         "schemas/relation-candidate-plan.schema.json",
         "schemas/relation-judgment-receipt.schema.json",
         "schemas/relation-judgment.schema.json",
+        "schemas/saved-view-revert-journal.schema.json",
+        "schemas/saved-view-revert-receipt.schema.json",
+        "schemas/saved-view-write-receipt.schema.json",
+        "schemas/saved-view-write-request.schema.json",
         "schemas/source-reference-coverage-audit-result-v0.1.schema.json",
         "schemas/source-intake-batch-receipt.schema.json",
         "schemas/source-intake-batch-request.schema.json",
@@ -1184,7 +1188,7 @@ class PrivateObjetMetadataIndexPrivacyGateTests(unittest.TestCase):
             manifest["schema"],
             "wom-kit/package-resource-manifest/v0.1",
         )
-        self.assertEqual(manifest["version"], "0.3.301")
+        self.assertEqual(manifest["version"], "0.3.302")
         self.assertEqual(manifest["file_count"], len(manifest["files"]))
         current_paths = {row["packaged"] for row in manifest["files"]}
         self.assertEqual(

@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wom-kit/saved-view-write-request/v0.1",
+  "title": "WOM-kit saved-view write request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "view_id", "name", "filters"],
+  "properties": {
+    "schema": {"const": "wom-kit/saved-view-write-request/v0.1"},
+    "view_id": {
+      "type": "string",
+      "pattern": "^view\\.[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "name": {"type": "string", "minLength": 1, "maxLength": 200},
+    "filters": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 8,
+      "propertyNames": {"pattern": "^facets\\.[a-z][a-z0-9_]{0,79}$"},
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 500
+      }
+    }
+  }
+}

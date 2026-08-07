@@ -32,10 +32,10 @@ wom-kit/docs/releases/에만 쌓고, baseline 사다리와 tag 목록을 여기�
 현재 공개 기준:
 
 ```text
-v0.3.301 pre-release
+v0.3.302 pre-release
 ```
 
-이전 공개 기준: v0.3.300 pre-release.
+이전 공개 기준: v0.3.301 pre-release.
 
 전체 릴리스 이력은 [CHANGELOG.md](CHANGELOG.md)와 [wom-kit/docs/releases/](wom-kit/docs/releases/)를 보세요.
 
@@ -54,7 +54,7 @@ Roadmap 요약: `v0.1.x`는 아이디어/프로토콜 언어 라인, `v0.2.x`는
 파일이 실제 공개되었다는 증거가 되지는 않습니다.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.301/wom_kit-0.3.301-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.302/wom_kit-0.3.302-py3-none-any.whl"
 archive --version
 ```
 
@@ -122,7 +122,7 @@ archive runtime-skill-install --dry-run --format json
 
 ### 조회와 view
 
-- runtime-context, ai-start-here, operational-context, canonical entrypoint의 읽기 전용 `action_routing`은 검색, 전역 부재 결론 전 checked-layer objet 재발견 계획, 로컬 버전 확인, inbox 파이프라인 모양 조사, 초안 생성, 발행, 타이핑된 엣지, 출처 capture, 작업기록 갱신에 어떤 공식 WOM 명령을 써야 하는지 AI에게 알려줍니다. `archive objet-rediscovery-plan --dry-run`은 비공개 query나 검색 행을 출력하지 않고 고정된 10개 계층의 확인/미확인 상태를 보여 주며, 인덱스 0건을 곧바로 "파일이 없다"는 결론으로 올리지 않습니다. 새 AGENTS 템플릿은 `ai-start-here`로 시작하고, raw grep/SQL은 WOM의 권위 있는 검색이 아니며, AI가 `inbox/`에 Markdown을 직접 쓰는 행위는 금지됩니다. 로컬 버전 출력은 원격 최신 릴리스 증거가 아니고, 영구 saved-view writer는 아직 구현되지 않았습니다. [Objet Rediscovery Plan](wom-kit/docs/objet-rediscovery-plan.md), [AI Command-Path Routing](wom-kit/docs/ai-command-path-routing.md), [Inbox Pipeline Audit](wom-kit/docs/inbox-pipeline-audit.md)을 보세요.
+- runtime-context, ai-start-here, operational-context, canonical entrypoint의 읽기 전용 `action_routing`은 검색, 전역 부재 결론 전 checked-layer objet 재발견 계획, 로컬 버전 확인, inbox 파이프라인 모양 조사, 초안 생성, 발행, 타이핑된 엣지, 출처 capture, 작업기록 갱신, 정확한 저장 뷰 lifecycle에 어떤 공식 WOM 명령을 써야 하는지 AI에게 알려줍니다. 새 AGENTS 템플릿은 `ai-start-here`로 시작하고, raw grep/SQL은 권위 있는 WOM 검색이 아니며, AI가 `inbox/` 또는 영구 `views/*.yml`을 직접 쓰는 행위는 금지됩니다. `saved-view-write`와 `saved-view-revert`는 사람 승인을 정확한 현재 권한 상태에 묶고 drift를 거부합니다. 로컬 버전 출력은 원격 최신 릴리스 증거가 아니며, checked-layer 재발견은 인덱스 0건을 전역 부재로 올리지 않습니다. [Objet Rediscovery Plan](wom-kit/docs/objet-rediscovery-plan.md), [AI Command-Path Routing](wom-kit/docs/ai-command-path-routing.md), [Saved-View Write And Exact Revert](wom-kit/docs/saved-view-write.md), [Inbox Pipeline Audit](wom-kit/docs/inbox-pipeline-audit.md)을 보세요.
 - 닫힌 비공개 objet 출처 메타데이터·안전 label schema와 순수 Unicode 17 정규화/projection reference module에 이어, 사람이 검토한 비공개 관찰 한 건을 위한 CLI 전용 `archive objet-source-metadata-write --dry-run|--approve`를 제공합니다. 승인은 local NTFS의 지원 Windows에서만 가능하고 정확한 intake/plan digest, 비공개 검토 확인, 다른 모든 writer의 정지 확인을 요구하며, append-only 행 하나와 privacy가 같은 불변 영수증 하나를 쓰고 결정론적 replay/recovery를 제공합니다. 기존 `archive index`는 이제 이 영수증 결합 권위만 네 개의 폐기 가능한 비공개 table로 같은 public/private transaction 안에서 projection하고, `archive index-health --dry-run`은 opaque `mode=ro` session을 통해 내용 없는 validity/freshness envelope를 보고합니다. SHA-256은 계속 신원이고 runtime private artifact는 비공개로 유지되며, finder, private search 결과, 새 CLI/MCP surface, objet byte 읽기, provider 호출, template database 변경, 공개 원본명 projection은 추가하지 않습니다. [Private Objet Metadata And Safe Labels](wom-kit/docs/private-objet-metadata-safe-label.md)와 [v0.3.297 release notes](wom-kit/docs/releases/v0.3.297.md)를 보세요.
 - runtime context, profile, source/objet intake, block header, prompt boundary를 위한 read-only preview layer. 선택형 360자 `frontmatter.abstract`와 CLI/MCP `zet-catalog`는 모든 zet를 초록+타이 compact projection으로 열거하고, strict 연속 zet 완주, snapshot/항목/전체 응답/envelope 예상 토큰 증거와 선택형 envelope 예비 공간을 제공합니다. 첫 페이지는 전체 진단을 유지하고 이후에는 항목과 완주 증거를 그대로 둔 채 반복 진단만 줄이는 선택형 compact continuation 응답을 쓸 수 있습니다. 검증된 seed의 가까운 타이부터 읽되 끊어진 모든 component까지 포함하는 연결 순서와, 각 항목이 seed인지 어떤 타이를 따라왔는지 설명하는 선택형 `routed_reading`도 제공합니다. 별도 준비 상태는 모든 zet 방문, 비공개 처리되지 않은 초록의 실제 이용 가능 여부, 후속 본문 읽기를 위한 고유 ID 상태를 구분하며, generated index/map이나 영구 WOM goal/loop 상태를 만들지 않습니다. 비공개 처리되지 않은 `read-zettel`은 AI가 실제로 읽은 파일·본문의 정확한 해시를 함께 주고, 큰 본문은 첫 페이지의 전체 본문 해시에 묶인 선택형 Unicode 글자 단위 페이지로 이어 읽을 수 있습니다. `zet-abstract-backfill-plan`은 초록 누락 후보를 현재 정본 바이트와 대조합니다. `zet-abstract-backfill-write`는 사람이 검토한 SHA 기반 초록만 반영하고, `zet-abstract-backfill-revert`는 이후 정본 수정이 없을 때만 삽입 전 바이트를 복원합니다. 두 방향 모두 첫 정본 수정 전에 비공개·텍스트 없는 저널을 남기므로, `zet-abstract-backfill-receipt-audit`은 중단 상태를 시작 전·일부 반영·전부 반영됐지만 영수증 없음·외부 변경 불일치로 구분합니다. v0.3.266의 읽기 전용 `zet-abstract-backfill-recovery-plan`은 각 상태를 증거 정리·apply 되돌리기·revert 계속 진행/영수증 마무리·수동 보류로 구분합니다. v0.3.267의 승인형 `zet-abstract-backfill-recover`는 전체 계획 digest, 한 사건의 SHA/action, 새 사람 검토, 명시적 아카이브 정지 확인을 모두 받은 비포렌식 사건 한 건만 안전 방향으로 실행하거나 증거를 정리합니다. 공개 출력에는 아이디·경로·본문·초록·검수자 값이 나오지 않습니다.
 - read-only objet reference resolution 및 zettel objet link preview,
@@ -405,7 +405,7 @@ WOM, `zettel-kasten`, `zet`, `ZET`는 버전이 있는 protocol family로 관리
 Release tag는 compatibility checkpoint입니다.
 
 ```text
-v0.3.301 (현재 checkpoint)
+v0.3.302 (현재 checkpoint)
 ```
 
 `v0.2.5` 이후의 공개 릴리스에는 compatibility checkpoint tag가 붙습니다. 전체

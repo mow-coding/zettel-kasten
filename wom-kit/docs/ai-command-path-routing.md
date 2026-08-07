@@ -1,6 +1,6 @@
 # AI Command-Path Routing
 
-Status: implemented in v0.3.278, extended through v0.3.300
+Status: implemented in v0.3.278, extended through v0.3.302
 
 ## Purpose
 
@@ -96,10 +96,10 @@ It is authoritative only for safely traversed current canonical `source_refs`,
 exact Notion omission markers, and separately recorded local storage evidence.
 It does not supply an archive-wide source population or a live storage check.
 
-v0.3.300 advances the routing envelope to:
+v0.3.302 advances the routing envelope to:
 
 ```text
-wom-kit/ai-command-path-routing/v0.10
+wom-kit/ai-command-path-routing/v0.11
 ```
 
 The additive routes cover:
@@ -187,7 +187,8 @@ Every write remains preview-first and human-reviewed.
 | Add a typed edge | `archive zettel-edge <archive-root> --from-zettel <id> --target <ref> --edge-type <type> --dry-run --format json` | Use the separate `--approve --reviewed-by <human-actor>` path and retain its receipt. |
 | Capture source material | `archive source-intake <archive-root> --dry-run --local-path <file> --format json` | Continue through `source-intake-record`, `objet-capture-selection`, and `objet-capture`; a source-intake preview alone grants no copy/upload authority. |
 | Update operating context | `archive operational-context <archive-root> --record workbench/operational-context.next.yml --dry-run --format json` | Use the separate `--approve --reviewed-by <human-actor>` path and retain its receipt. |
-| Create a persistent saved-view | `archive view-recommendation-plan <archive-root> --dry-run --format json` | No dedicated writer exists. An AI must not edit `views/*.yml` directly. |
+| Create a persistent saved-view | Run `view-recommendation-plan`, then preview `archive saved-view-write <archive-root> --request .wom-scratch/private/saved-views/<reviewed>.json --dry-run --format json` | Approve only the exact fresh plan using `--expected-plan-sha256`, `--approve`, `--reviewed-by`, and `--affirm-view-reviewed`. Never edit `views/*.yml` directly. |
+| Revert a WOM-written saved-view | `archive saved-view-revert <archive-root> --receipt receipts/views/<receipt>.saved-view-write.json --dry-run --format json` | Approve only the exact fresh revert plan. It refuses changed bytes and never removes a human-authored view. |
 | Add reviewed event memberships | Run `activity-group-membership-plan`, then preview `archive activity-group-membership-write <archive-root> --request <private-reviewed-request> --expected-request-sha256 <sha256> --expected-review-plan-sha256 <sha256> --dry-run --progress --format json` | Approve the same digest-bound writer with `--approve --reviewed-by <human-actor> --affirm-memberships-reviewed`. It writes a journal and receipt; it does not infer or remove memberships. |
 | Recover an interrupted event-membership write | `archive activity-group-membership-recovery-plan <archive-root> --expected-request-sha256 <sha256> --dry-run --format json` | First confirm the old writer is no longer running. Approve only the exact recovery-plan digest with `activity-group-membership-recover`; unknown drift remains a manual forensic hold. |
 | Remove reviewed event memberships | Run `activity-group-membership-removal-plan`, then preview `archive activity-group-membership-removal-write <archive-root> --request <private-reviewed-request> --expected-request-sha256 <sha256> --expected-review-plan-sha256 <sha256> --dry-run --progress --format json`. | Approve the unchanged digest-bound writer with `--approve --reviewed-by <human-actor> --affirm-removals-reviewed`. It removes only explicitly reviewed anchors, writes a separate removal journal and receipt, and performs no inference. |
@@ -201,9 +202,9 @@ Every write remains preview-first and human-reviewed.
 - It writes no archive, host configuration, or existing `AGENTS.md`.
 - The routing object has its own schema, so the existing
   `ai-start-here/v0.3` response remains additively compatible.
-- v0.3.284 advances routing to
-  `wom-kit/ai-command-path-routing/v0.6`, preserves existing addition artifact
-  schemas, and adds separate removal receipt/journal v0.1 schemas.
+- v0.3.302 advances routing to
+  `wom-kit/ai-command-path-routing/v0.11` and adds the separate digest-bound
+  saved-view write and exact-revert routes.
 - v0.3.293 advances routing to
   `wom-kit/ai-command-path-routing/v0.7` and adds the complete
   operator-feedback sequence without changing existing action contracts.

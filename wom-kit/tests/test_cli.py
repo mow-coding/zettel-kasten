@@ -11512,7 +11512,7 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertFalse(operational_context["closed_actions"]["files_written"])
             self.assertEqual(
                 operational_context["action_routing"]["schema"],
-                "wom-kit/ai-command-path-routing/v0.10",
+                "wom-kit/ai-command-path-routing/v0.11",
             )
             entrypoints = result["canonical_entrypoints"]
             self.assertEqual(entrypoints["lifecycle_action"], "runtime_canonical_entrypoints")
@@ -11638,8 +11638,11 @@ class ArchiveCliTests(unittest.TestCase):
                 for item in action_routing["write_action_routes"]
                 if item["action"] == "create_saved_view"
             )
-            self.assertFalse(view_route["write_implemented"])
-            self.assertIsNone(view_route["approved_command"])
+            self.assertTrue(view_route["write_implemented"])
+            self.assertTrue(view_route["revert_implemented"])
+            self.assertIn("archive saved-view-write", view_route["write_plan_command"])
+            self.assertIn("--affirm-view-reviewed", view_route["approved_command"])
+            self.assertIn("archive saved-view-revert", view_route["revert_command"])
             activity_group_write_route = next(
                 item
                 for item in action_routing["write_action_routes"]
@@ -12031,7 +12034,7 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(result["first_read"]["source_truths"]["canonical_zets"], "zettels/")
             self.assertEqual(
                 result["action_routing"]["schema"],
-                "wom-kit/ai-command-path-routing/v0.10",
+                "wom-kit/ai-command-path-routing/v0.11",
             )
             self.assertEqual(
                 result["operational_context"]["action_routing"],
@@ -12170,7 +12173,8 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertIn("## Official Write Command Paths", markdown_output)
             self.assertIn("`create_ai_draft` preview", markdown_output)
             self.assertIn("archive create-draft", markdown_output)
-            self.assertIn("Persistent write command: not implemented", markdown_output)
+            self.assertNotIn("Persistent write command: not implemented", markdown_output)
+            self.assertIn("archive saved-view-write", markdown_output)
             self.assertIn("do not run again before using this map", markdown_output)
             self.assertIn("## Storage Authority", markdown_output)
             self.assertIn("metadata_and_version_history_backup", markdown_output)
@@ -12204,7 +12208,7 @@ class ArchiveCliTests(unittest.TestCase):
                 self.assertIn(search_command, source_text)
                 self.assertIn("raw grep and raw SQL are not authoritative", source_text)
                 self.assertIn("Never write Markdown directly into `inbox/`", source_text)
-                self.assertIn("Saved-view recommendations are read-only", source_text)
+                self.assertIn("preview `archive saved-view-write`", source_text)
                 self.assertIn("remote release surface separately", source_text)
 
         fake_agents = (
@@ -77014,11 +77018,6 @@ class ObjetCaptureTests(unittest.TestCase):
                             "name": "Education Memories",
                             "filters": {"facets.domain": "education", "facets.record_type": "memory"},
                         },
-                        {
-                            "id": "view.test.unsupported",
-                            "name": "Unsupported Filter",
-                            "filters": {"status": "canonical"},
-                        },
                     ],
                 }
             ),
@@ -77055,10 +77054,24 @@ class ObjetCaptureTests(unittest.TestCase):
     def test_view_zets_unsupported_filter_blocks_not_silently_broadens(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self._facet_archive(tmp)
-            result = archive_services.view_zets(archive_root, view_id="view.test.unsupported")
-            self.assertFalse(result["ok"])
-            self.assertEqual(result["zettels"], [])
-            self.assertTrue(any("not supported" in blocker for blocker in result["blockers"]))
+            (archive_root / "views" / "unsupported.yml").write_text(
+                archive_cli.dump_yaml(
+                    {
+                        "id": "view.test.unsupported",
+                        "name": "Unsupported Filter",
+                        "filters": {"status": "canonical"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                archive_services.ArchiveServiceError,
+                "authority is blocked",
+            ):
+                archive_services.view_zets(
+                    archive_root,
+                    view_id="view.test.unsupported",
+                )
 
     def test_view_zets_list_facet_contains_scalar_filter_and_excludes_redacted(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -77115,10 +77128,14 @@ class ObjetCaptureTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            result = archive_services.view_zets(archive_root, view_id="view.test.list-filter")
-            self.assertFalse(result["ok"])
-            self.assertEqual(result["zettels"], [])
-            self.assertTrue(any("filter value list not supported" in blocker for blocker in result["blockers"]))
+            with self.assertRaisesRegex(
+                archive_services.ArchiveServiceError,
+                "authority is blocked",
+            ):
+                archive_services.view_zets(
+                    archive_root,
+                    view_id="view.test.list-filter",
+                )
 
     def test_view_zets_cli_roundtrip_and_argument_contract(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -77165,6 +77182,16 @@ class ObjetCaptureTests(unittest.TestCase):
                         "id": "view.test.empty",
                         "name": "Empty View",
                         "filters": {"facets.domain": "missing-domain"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (archive_root / "views" / "unsupported.yml").write_text(
+                archive_cli.dump_yaml(
+                    {
+                        "id": "view.test.unsupported",
+                        "name": "Unsupported Filter",
+                        "filters": {"status": "canonical"},
                     }
                 ),
                 encoding="utf-8",
