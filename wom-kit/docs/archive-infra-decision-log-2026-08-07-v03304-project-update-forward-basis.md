@@ -12,7 +12,7 @@ checkout. Its own output already showed the intended pin transition and that
 the import origin was outside the project mirror.
 
 The defect remained reproducible with the public v0.3.303 wheel against the
-real basoon project: project pin and mirror v0.3.300, target v0.3.301, external
+beta-test project: project pin and mirror v0.3.300, target v0.3.301, external
 runtime v0.3.303, and one false forward-only blocker.
 
 ## Decision
@@ -42,7 +42,7 @@ quiescence, receipt, rollback, and restart boundary remains unchanged.
 - Prove the old behavior with a failing regression before the code change.
 - Prove an external newer runtime does not block a forward project update.
 - Prove a target below the actual project source and pins remains blocked.
-- Re-run the exact Letter 112 dry-run against the basoon project without
+- Re-run the exact Letter 112 dry-run against the beta-test project without
   changing its source mirror or pin.
 - Complete focused, full-suite, platform CI, wheel, exact-tag, release-asset,
   and anonymous-install gates before claiming the patch released.
@@ -52,7 +52,7 @@ quiescence, receipt, rollback, and restart boundary remains unchanged.
 - The new regression failed against the old comparison and passed after the
   change. All 28 updater-focused tests pass, including real downgrade, tag,
   path, lock, interruption, rollback, and external-runtime cases.
-- The real basoon project dry-run now returns `ready_for_approval` for
+- The real beta-test project dry-run now returns `ready_for_approval` for
   v0.3.300 to v0.3.301 with zero blockers, zero files written, and unchanged
   pin bytes, mirror `HEAD`, and mirror status.
 - 166 version, documentation, package-resource, predecessor-surface, and root
@@ -62,5 +62,8 @@ quiescence, receipt, rollback, and restart boundary remains unchanged.
   checks, all four entrypoints, both 121-tool MCP inventories, runtime Skill,
   onboarding preview/write, and strict Doctor. Candidate SHA-256 is
   `a92b79ef32bf9c96c55903010880fc65a05539198102294dc648cdeda7954fcd`.
+- The first PR CI run caught three new occurrences of a private project label
+  in this public decision log. The wording was generalized, and the exact
+  sealed privacy regression now passes locally before the CI rerun.
 - PR platform CI, exact merge-tag rebuild, GitHub Release asset agreement, and
   anonymous public reinstall remain separate release gates.
