@@ -24,6 +24,29 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.304 Project Update Forward-Only Fix
+
+v0.3.304 is compatible with v0.3.303 archives and requires no migration. It
+fixes a project updater comparison defect reported in beta Letter 112.
+
+Run the normal no-write preview:
+
+```powershell
+archive project-version-update <project-or-archive-root> --target v0.3.304 --dry-run --format json
+```
+
+`forward_only.comparison_basis` is now
+`recognized_project_pins_and_project_source_versions`, and
+`runtime.used_for_forward_only_decision` is false. A newer runtime loaded
+outside the project mirror may produce an informational warning, but does not
+block an update that is forward relative to the project itself. A target below
+any recognized project pin or source version still blocks.
+
+Windows approval retains every existing exact-tag, origin, clean-tree,
+external-writer-quiescence, receipt, rollback, and restart gate. See
+[`wom-kit/docs/project-version-update.md`](wom-kit/docs/project-version-update.md)
+and [`wom-kit/docs/releases/v0.3.304.md`](wom-kit/docs/releases/v0.3.304.md).
+
 ## v0.3.303 Artifact Lifecycle Inventory
 
 v0.3.303 is compatible with v0.3.302 archives and requires no migration. It

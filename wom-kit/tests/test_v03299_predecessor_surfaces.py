@@ -97,7 +97,7 @@ CURRENT_DATABASE_CANONICAL_SHA256 = (
     "d9a42f08ee12a6d42e40214cfb12441e4077bf50c38c25b2692ec1344328294a"
 )
 RESOURCE_ADDITIONS = {
-    "release-notes/v0.3.303.md",
+    "release-notes/v0.3.304.md",
     "schemas/artifact-lifecycle-inventory.schema.json",
     "schemas/authoring-conventions.schema.json",
     "schemas/draft-discard-receipt.schema.json",
@@ -135,7 +135,7 @@ RESOURCE_ADDITIONS = {
 RESOURCE_REMOVALS = {"release-notes/v0.3.297.md"}
 CURRENT_RESOURCE_COUNT = 144
 CURRENT_RESOURCE_CANONICAL_SHA256 = (
-    "e3e64ab16ccbdaa18b2d94ed690061f791886bae6e02144bf65252900bea7b8a"
+    "9845997047513b40ec1edc7054f5509a78e02ba18d36bdedc01cf14dda1fa23a"
 )
 
 
@@ -380,7 +380,7 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
             BASELINE_EXPECTATIONS["mcp"]["canonical_sha256"],
         )
 
-    def test_resource_paths_are_v03297_plus_exact_v03298_v03303_delta(self) -> None:
+    def test_resource_paths_are_v03297_plus_exact_v03298_v03304_delta(self) -> None:
         predecessor_paths = set(self.fixture["package_resources"]["packaged_paths"])
         self.assertTrue(
             RESOURCE_REMOVALS <= predecessor_paths,
@@ -410,10 +410,10 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
             actual,
             expected,
             "Current package-resource paths must be the full v0.3.297 set plus "
-            "the exact cumulative v0.3.298 through v0.3.303 delta. "
+            "the exact cumulative v0.3.298 through v0.3.304 delta. "
             f"missing={compact(missing)}; extra={compact(extra)}",
         )
-        self.assertEqual(manifest["version"], "0.3.303")
+        self.assertEqual(manifest["version"], "0.3.304")
         self.assertEqual(len(actual), CURRENT_RESOURCE_COUNT)
         self.assertEqual(
             canonical_sha256(actual),
@@ -432,14 +432,14 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
         self.assertIn("does not undo", predecessor_flat)
         self.assertNotIn("C:\\Users\\", predecessor_text)
 
-    def test_v03303_release_note_is_public_and_synchronized(self) -> None:
-        current_source_release = KIT_ROOT / "docs" / "releases" / "v0.3.303.md"
+    def test_v03304_release_note_is_public_and_synchronized(self) -> None:
+        current_source_release = KIT_ROOT / "docs" / "releases" / "v0.3.304.md"
         current_packaged_release = (
             SRC_ROOT
             / "wom_kit"
             / "_resources"
             / "release-notes"
-            / "v0.3.303.md"
+            / "v0.3.304.md"
         )
         self.assertEqual(
             current_source_release.read_bytes(),
@@ -448,11 +448,11 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
         current_text = current_source_release.read_text(encoding="utf-8")
         current_flat = " ".join(current_text.split())
         for token in (
-            "artifact-lifecycle-inventory",
-            "unmanifested_local_object_candidate",
-            "fail-closed",
-            "cleanup authority",
-            "object bytes",
+            "project-version-update",
+            "recognized project pins",
+            "project-local source",
+            "informational",
+            "forward-only",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, current_flat)

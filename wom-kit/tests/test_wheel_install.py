@@ -102,7 +102,7 @@ def patch_zip_member_name_bytes(wheel: Path, old_name: str, new_name: str) -> No
 
 
 class InstalledEntrypointTests(unittest.TestCase):
-    PACKAGE_VERSION = "0.3.303"
+    PACKAGE_VERSION = "0.3.304"
     SERVER_NAME = "zettel-kasten-archive-mcp"
 
     def setUp(self) -> None:
