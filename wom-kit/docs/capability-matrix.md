@@ -1,8 +1,8 @@
 ﻿# WOM-kit Capability Matrix
 
-Status: v0.3.303 artifact lifecycle inventory and fail-closed review checkpoint
+Status: v0.3.304 project-update forward-basis patch and fail-closed review checkpoint
 Date: 2026-08-07
-Version: v0.3.303, release candidate
+Version: v0.3.304, release candidate
 
 Previous checkpoint: Status: v0.3.301 Letter 112 real-use completion checkpoint
 Previous checkpoint: Status: v0.3.300 Letters 098-111 integrated completion checkpoint

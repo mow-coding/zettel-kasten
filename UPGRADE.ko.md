@@ -2,6 +2,31 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.3.304 프로젝트 업데이트 전진 판정 수정
+
+v0.3.304는 v0.3.303 아카이브와 호환되며 마이그레이션이 필요하지
+않습니다. 베타 편지 112에서 확인된 프로젝트 업데이트 비교 오류를
+수정합니다.
+
+먼저 쓰기 없는 미리보기를 실행하십시오.
+
+```powershell
+archive project-version-update <project-or-archive-root> --target v0.3.304 --dry-run --format json
+```
+
+이제 `forward_only.comparison_basis`는
+`recognized_project_pins_and_project_source_versions`이고,
+`runtime.used_for_forward_only_decision`은 false입니다. 프로젝트 미러 밖에서
+불러온 실행 도구가 목표보다 새 버전이면 참고 경고만 나오며, 프로젝트 자체의
+핀과 소스가 앞으로 가는 업데이트는 막지 않습니다. 목표가 실제 프로젝트 핀
+또는 소스보다 낮은 진짜 다운그레이드는 계속 차단합니다.
+
+Windows 승인에 필요한 정확한 태그, origin, clean tree, 외부 writer 정지,
+영수증, rollback, 새 프로세스 확인 관문은 그대로입니다. 자세한 내용은
+[`wom-kit/docs/project-version-update.md`](wom-kit/docs/project-version-update.md)와
+[`wom-kit/docs/releases/v0.3.304.md`](wom-kit/docs/releases/v0.3.304.md)를
+참조하십시오.
+
 ## v0.3.303 아티팩트 수명주기 인벤토리
 
 v0.3.303은 v0.3.302 아카이브와 호환되며 마이그레이션이 필요하지

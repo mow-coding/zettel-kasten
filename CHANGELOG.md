@@ -6,6 +6,16 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.304 - 2026-08-07
+
+- Fixed `project-version-update` forward-only evaluation to compare the target
+  with recognized project pins and project-local source versions, not the
+  unrelated already loaded runtime.
+- Added an explicit informational warning and structured comparison-boundary
+  evidence when a newer runtime was loaded outside the project mirror.
+- Preserved fail-closed real downgrade blocking and added actionable next-step
+  guidance plus focused regressions for both cases.
+
 ## v0.3.303 - 2026-08-07
 
 - Added CLI-only `artifact-lifecycle-inventory` over fixed archive-owned

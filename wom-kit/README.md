@@ -10,12 +10,12 @@ It is not a website, SaaS app, dashboard, or visual note-taking product. The int
 
 ## Install The Command-Line Tool
 
-The exact v0.3.303 GitHub Release, when present, uses the self-contained wheel
+The exact v0.3.304 GitHub Release, when present, uses the self-contained wheel
 below. Confirm that the release exists and lists the wheel before installing
 it. The versioned URL alone is not proof that the asset is available.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.303/wom_kit-0.3.303-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.304/wom_kit-0.3.304-py3-none-any.whl"
 archive --version
 ```
 
@@ -28,7 +28,7 @@ exact one-invocation project-scoped bridge argv only when
 project-local Git-metadata, raw worktree/index/flag, exact source/resource-byte,
 closed-import-tree, annotated-tag, tagged-version, and `origin/main` ancestry
 checks. The Python `-I -S` bootstrap is bound to the expected commit, tag,
-wrapper blob, and all 113 synchronized resources, executes the wrapper from
+wrapper blob, and all 144 synchronized resources, executes the wrapper from
 verified memory, and permits only the `version` command. `-S` blocks site,
 executable `.pth`, and `sitecustomize` processing; only after verification are
 stdlib-`sysconfig` `purelib`/`platlib` paths added. Project path aliases are
@@ -113,6 +113,14 @@ refs, strict local object-manifest candidates, and workpack expiry review
 without reading ordinary artifact/object bodies or granting cleanup authority.
 See [`docs/artifact-lifecycle-inventory.md`](docs/artifact-lifecycle-inventory.md)
 and [`docs/releases/v0.3.303.md`](docs/releases/v0.3.303.md).
+
+v0.3.304 fixes the Letter 112 project updater defect: forward-only decisions
+now use recognized project pins and project-local source versions, while a
+newer runtime loaded from outside the project mirror is explicit informational
+context rather than a false downgrade blocker. Real project downgrades remain
+blocked. See
+[`docs/project-version-update.md`](docs/project-version-update.md) and
+[`docs/releases/v0.3.304.md`](docs/releases/v0.3.304.md).
 
 v0.3.292 keeps those runtime safeguards and makes objet relationship counts
 honest across overview and catalog surfaces. See

@@ -1,6 +1,6 @@
 # Runtime Canonical Entry Points
 
-Status: v0.3.303 artifact lifecycle inventory routing checkpoint
+Status: v0.3.304 artifact lifecycle inventory routing checkpoint
 
 When an AI runtime enters a WOM archive, it needs a small, explicit "start
 here" map. The archive may contain zets, source bindings, provider metadata,
@@ -53,7 +53,7 @@ consumption as `not_proven`.
 
 ## Official Action Routing
 
-Introduced in v0.3.278 and extended through v0.3.303, `action_routing` uses
+Introduced in v0.3.278 and extended through v0.3.304, `action_routing` uses
 `wom-kit/ai-command-path-routing/v0.12`. It tells an AI which official command
 handles session entry, search, local version truth, saved-view inspection,
 inbox pipeline-shape review, explicit event-membership add/removal planning, command
