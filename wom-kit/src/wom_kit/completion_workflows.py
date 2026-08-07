@@ -9,6 +9,7 @@ absolute paths, zettel bodies, or exception text.
 from __future__ import annotations
 
 import hashlib
+import html
 import json
 import os
 import re
@@ -26,9 +27,12 @@ EXTERNAL_LOCATOR_SCHEMA = "wom-kit/external-locator-record/v0.2"
 EXTERNAL_LOCATOR_LEGACY_SCHEMAS = frozenset(
     {"wom-kit/external-locator-record/v0.1"}
 )
-EXTERNAL_LOCATOR_RECEIPT_SCHEMA = "wom-kit/external-locator-receipt/v0.2"
+EXTERNAL_LOCATOR_RECEIPT_SCHEMA = "wom-kit/external-locator-receipt/v0.3"
 EXTERNAL_LOCATOR_LEGACY_RECEIPT_SCHEMAS = frozenset(
-    {"wom-kit/external-locator-receipt/v0.1"}
+    {
+        "wom-kit/external-locator-receipt/v0.1",
+        "wom-kit/external-locator-receipt/v0.2",
+    }
 )
 EXTERNAL_LOCATOR_REVERT_RECEIPT_SCHEMA = (
     "wom-kit/external-locator-revert-receipt/v0.1"
@@ -129,11 +133,21 @@ _STRUCTURAL_MARKUP_TAGS = frozenset(
     {"article", "column", "columns", "div", "p", "section"}
 )
 _REFERENCE_MARKUP_TAGS = frozenset(
-    {"file", "media", "mention", "synced-ref", "synced_ref"}
+    {
+        "audio",
+        "file",
+        "media",
+        "mention",
+        "synced-ref",
+        "synced_ref",
+        "video",
+    }
 )
+_PAIRED_REFERENCE_MARKUP_TAGS = frozenset({"audio", "video"})
 MARKUP_REFERENCE_BINDING_KINDS = (
     "external_locator",
     "zettel_edge",
+    "objet",
 )
 RELATION_CANDIDATE_PLAN_SCHEMA = (
     "wom-kit/relation-candidate-plan/v0.1"
@@ -438,11 +452,100 @@ def _locator_plan_core(
         if isinstance(current_record, dict)
         else []
     )
-    if locator_id and any(
-        isinstance(item, dict) and item.get("locator_id") == locator_id
-        for item in current_locators
-    ):
+    requested_coordinates = {
+        "service_ref": safe_service_ref,
+        "account_ref": safe_account_ref,
+        "occurrence_anchor": safe_occurrence_anchor,
+    }
+    matching_reference_indexes = [
+        index
+        for index, item in enumerate(current_locators)
+        if isinstance(item, dict)
+        and item.get("locator_type") == normalized_type
+        and item.get("locator_ref") == safe_ref
+        and item.get("status") == "active"
+    ]
+    exact_match_indexes = [
+        index
+        for index in matching_reference_indexes
+        if all(
+            current_locators[index].get(field_name) == requested_value
+            for field_name, requested_value in requested_coordinates.items()
+        )
+    ]
+    occurrence_match_indexes = [
+        index
+        for index in matching_reference_indexes
+        if (
+            current_locators[index].get("occurrence_anchor")
+            in {None, safe_occurrence_anchor}
+            if safe_occurrence_anchor is not None
+            else current_locators[index].get("occurrence_anchor") is None
+        )
+    ]
+    planned_action = "add_locator"
+    target_locator_index: int | None = None
+    target_locator_id = locator_id
+    if exact_match_indexes:
         blockers.append("external_locator_already_recorded")
+        target_locator_index = exact_match_indexes[0]
+        target_locator_id = current_locators[target_locator_index].get(
+            "locator_id"
+        )
+    elif len(occurrence_match_indexes) > 1:
+        blockers.append("external_locator_matching_occurrence_ambiguous")
+    elif len(occurrence_match_indexes) == 1:
+        candidate_index = occurrence_match_indexes[0]
+        candidate = current_locators[candidate_index]
+        conflicts = [
+            field_name
+            for field_name, requested_value in requested_coordinates.items()
+            if requested_value is not None
+            and candidate.get(field_name) is not None
+            and candidate.get(field_name) != requested_value
+        ]
+        additions = [
+            field_name
+            for field_name, requested_value in requested_coordinates.items()
+            if requested_value is not None
+            and candidate.get(field_name) is None
+        ]
+        if conflicts:
+            blockers.append("external_locator_coordinate_conflict")
+        elif additions:
+            planned_action = "update_locator_coordinates"
+            target_locator_index = candidate_index
+            target_locator_id = candidate.get("locator_id")
+        else:
+            blockers.append("external_locator_already_recorded")
+    elif matching_reference_indexes and safe_occurrence_anchor is None:
+        blockers.append("external_locator_matching_occurrence_ambiguous")
+    if (
+        planned_action == "update_locator_coordinates"
+        and (
+            not isinstance(target_locator_id, str)
+            or re.fullmatch(
+                r"locator:sha256:[0-9a-f]{64}",
+                target_locator_id,
+            )
+            is None
+        )
+    ):
+        blockers.append("external_locator_record_invalid")
+    target_locator = (
+        current_locators[target_locator_index]
+        if isinstance(target_locator_index, int)
+        and 0 <= target_locator_index < len(current_locators)
+        and isinstance(current_locators[target_locator_index], dict)
+        else {}
+    )
+    resulting_coordinate_presence = {
+        field_name: (
+            requested_value is not None
+            or isinstance(target_locator.get(field_name), str)
+        )
+        for field_name, requested_value in requested_coordinates.items()
+    }
 
     current_sha256 = (
         _sha256_bytes(current_bytes) if current_bytes is not None else None
@@ -458,13 +561,14 @@ def _locator_plan_core(
         ),
         "locator_sha256": locator_sha256,
         "locator_identity_sha256": locator_identity_sha256,
+        "target_locator_id": target_locator_id,
         "coordinate_presence": {
             "service_ref": safe_service_ref is not None,
             "account_ref": safe_account_ref is not None,
             "occurrence_anchor": safe_occurrence_anchor is not None,
         },
         "current_record_sha256": current_sha256,
-        "action": "add_locator",
+        "action": planned_action,
     }
     plan_sha256 = _sha256_bytes(_canonical_json_bytes(plan_binding))
     record_relative = _record_relative(safe_id or "invalid-zettel")
@@ -481,14 +585,17 @@ def _locator_plan_core(
                 if normalized_type in EXTERNAL_LOCATOR_TYPES
                 else None
             ),
-            "locator_id": locator_id,
+            "locator_id": target_locator_id,
+            "planned_action": planned_action,
             "coordinate_presence": {
                 "service_ref": safe_service_ref is not None,
                 "account_ref": safe_account_ref is not None,
                 "occurrence_anchor": safe_occurrence_anchor is not None,
             },
+            "resulting_coordinate_presence": resulting_coordinate_presence,
             "record_path": record_relative if safe_id else None,
             "current_locator_count": len(current_locators),
+            "matching_locator_ref_count": len(matching_reference_indexes),
             "record_exists": current_record is not None,
             "current_record_sha256": current_sha256,
             "plan_sha256": plan_sha256 if not blockers else None,
@@ -499,6 +606,8 @@ def _locator_plan_core(
             "locator_types": list(EXTERNAL_LOCATOR_TYPES),
             "multiple_locators_supported": True,
             "same_locator_multiple_occurrences_supported": True,
+            "matching_locator_coordinate_enrichment_in_place": True,
+            "coordinate_conflicts_overwritten": False,
             "provider_neutral": True,
             "global_recoverability_claimed": False,
         },
@@ -523,12 +632,15 @@ def _locator_plan_core(
         "safe_id": safe_id,
         "safe_ref": safe_ref,
         "normalized_type": normalized_type,
-        "locator_id": locator_id,
+        "locator_id": target_locator_id,
+        "new_locator_id": locator_id,
         "locator_sha256": locator_sha256,
         "locator_identity_sha256": locator_identity_sha256,
         "safe_service_ref": safe_service_ref,
         "safe_account_ref": safe_account_ref,
         "safe_occurrence_anchor": safe_occurrence_anchor,
+        "planned_action": planned_action,
+        "target_locator_index": target_locator_index,
         "current_record": current_record,
         "current_bytes": current_bytes,
         "current_sha256": current_sha256,
@@ -663,7 +775,31 @@ def external_locator_record(
         ):
             if fresh_private[private_name] is not None:
                 locator_entry[field_name] = fresh_private[private_name]
-        locators.append(locator_entry)
+        if fresh_private["planned_action"] == "update_locator_coordinates":
+            target_index = fresh_private["target_locator_index"]
+            if not isinstance(target_index, int) or not 0 <= target_index < len(locators):
+                return {
+                    **fresh,
+                    "ok": False,
+                    "state": "blocked",
+                    "dry_run": False,
+                    "approved": False,
+                    "lifecycle_action": "external_locator_record",
+                    "blockers": ["external_locator_plan_changed"],
+                    "would_change": [],
+                    "files_written": [],
+                }
+            locator_entry = dict(locators[target_index])
+            for field_name, private_name in (
+                ("service_ref", "safe_service_ref"),
+                ("account_ref", "safe_account_ref"),
+                ("occurrence_anchor", "safe_occurrence_anchor"),
+            ):
+                if fresh_private[private_name] is not None:
+                    locator_entry[field_name] = fresh_private[private_name]
+            locators[target_index] = locator_entry
+        else:
+            locators.append(locator_entry)
         record = {
             "schema": EXTERNAL_LOCATOR_SCHEMA,
             "archive_id": archive_services.read_archive_id(root),
@@ -705,7 +841,7 @@ def external_locator_record(
         )
         receipt = {
             "schema": EXTERNAL_LOCATOR_RECEIPT_SCHEMA,
-            "action": "add_locator",
+            "action": fresh_private["planned_action"],
             "archive_id": archive_services.read_archive_id(root),
             "zettel_id": safe_id,
             "locator_id": fresh_private["locator_id"],
@@ -3072,9 +3208,20 @@ def markup_style_guide() -> dict[str, Any]:
                 "visible_text_preserved": True,
             },
             {
-                "markup": "file_media_mention_synced_ref",
-                "action": "require_reviewed_edge_or_locator_binding",
+                "markup": "file_audio_video_media_mention_synced_ref",
+                "action": "require_reviewed_objet_edge_or_locator_binding",
                 "silent_deletion_allowed": False,
+            },
+            {
+                "markup": "self_closing_mention_date",
+                "action": "render_strict_iso_date_time_and_timezone_as_text",
+                "visible_text_preserved": True,
+            },
+            {
+                "markup": "synced_block_and_synced_block_reference",
+                "action": "remove_migration_wrapper_preserve_complete_inner_snapshot",
+                "visible_text_preserved": True,
+                "live_sync_claimed": False,
             },
             {
                 "markup": "unknown_semantic_tag",
@@ -3091,6 +3238,7 @@ def markup_style_guide() -> dict[str, Any]:
             "normalization_is_import": False,
             "normalization_infers_relations": False,
             "normalization_deletes_unknown_semantics": False,
+            "normalization_preserves_live_provider_sync": False,
             "source_bytes_snapshotted_before_write": True,
             "revert_is_exact_byte_restore": True,
         },
@@ -3144,6 +3292,18 @@ def _verified_locator_binding(
     )
 
 
+def _verified_objet_binding(
+    root: Path,
+    *,
+    object_id: str,
+    manifest_index: dict[str, dict[str, Any]],
+) -> bool:
+    return (
+        archive_services.OBJECT_ID_RE.fullmatch(object_id) is not None
+        and object_id in manifest_index
+    )
+
+
 def _markup_reference_bindings(
     root: Path,
     *,
@@ -3182,6 +3342,7 @@ def _markup_reference_bindings(
 
     blockers: list[str] = []
     bindings: dict[str, dict[str, dict[str, str]]] = {}
+    objet_manifest_index: dict[str, dict[str, Any]] | None = None
     for item in loaded["bindings"]:
         if not isinstance(item, dict):
             blockers.append("markup_binding_manifest_invalid")
@@ -3217,7 +3378,7 @@ def _markup_reference_bindings(
                     "[External reference]"
                     f"(wom-locator://sha256/{match.group('digest')})"
                 )
-        else:
+        elif binding_kind == "zettel_edge":
             match = re.fullmatch(
                 r"edge:(?P<digest>[0-9a-f]{64})",
                 binding_id,
@@ -3235,6 +3396,36 @@ def _markup_reference_bindings(
                 replacement = (
                     "[Related zettel]"
                     f"(wom-edge://sha256/{match.group('digest')})"
+                )
+        else:
+            match = re.fullmatch(
+                r"sha256:(?P<digest>[0-9a-f]{64})",
+                binding_id,
+            )
+            if objet_manifest_index is None:
+                try:
+                    objet_manifest_index = (
+                        archive_services.manifest_records_by_object_id(root)
+                    )
+                except (
+                    archive_services.ArchiveServiceError,
+                    OSError,
+                    ValueError,
+                ):
+                    objet_manifest_index = {}
+            if (
+                match is None
+                or not _verified_objet_binding(
+                    root,
+                    object_id=binding_id,
+                    manifest_index=objet_manifest_index,
+                )
+            ):
+                blockers.append("markup_objet_binding_unverified")
+            else:
+                replacement = (
+                    "[Attached objet]"
+                    f"(wom-objet:sha256:{match.group('digest')})"
                 )
         if replacement is None:
             continue
@@ -3264,6 +3455,9 @@ class _GfmTableParser(HTMLParser):
         self.current_row: list[dict[str, Any]] | None = None
         self.current_cell: dict[str, Any] | None = None
         self.blockers: list[str] = []
+        self.header_row_hint: bool | None = None
+        self.header_column_hint: bool | None = None
+        self.presentational_col_width_count = 0
 
     def add_blocker(self, code: str) -> None:
         if code not in self.blockers:
@@ -3280,14 +3474,39 @@ class _GfmTableParser(HTMLParser):
             self.table_depth += 1
             if self.table_depth != 1:
                 self.add_blocker("markup_table_nested_unsupported")
+                return
+            for attribute_name, target_name in (
+                ("header-row", "header_row_hint"),
+                ("header-column", "header_column_hint"),
+            ):
+                if attribute_name not in attributes:
+                    continue
+                value = str(attributes[attribute_name] or "").strip().casefold()
+                if value not in {"true", "false"}:
+                    self.add_blocker("markup_table_header_semantics_unsupported")
+                else:
+                    setattr(self, target_name, value == "true")
+            if set(attributes) - {"class", "header-row", "header-column"}:
+                self.add_blocker("markup_table_attributes_unsupported")
             return
         if self.table_depth != 1:
             return
         if name in {"thead", "tbody", "tfoot"}:
             return
-        if name in {"col", "colgroup"}:
+        if name == "colgroup":
             if attributes:
                 self.add_blocker("markup_table_column_semantics_unsupported")
+            return
+        if name == "col":
+            unsupported = set(attributes) - {"width"}
+            width = str(attributes.get("width") or "").strip()
+            if unsupported or (
+                "width" in attributes
+                and re.fullmatch(r"[1-9][0-9]*(?:\.[0-9]+)?", width) is None
+            ):
+                self.add_blocker("markup_table_column_semantics_unsupported")
+            elif "width" in attributes:
+                self.presentational_col_width_count += 1
             return
         if name == "tr":
             if self.current_row is not None or self.current_cell is not None:
@@ -3414,7 +3633,7 @@ class _GfmTableParser(HTMLParser):
         ):
             return None, ["markup_table_header_layout_unsupported"]
 
-        has_header = first_kinds == {"th"}
+        has_header = first_kinds == {"th"} or self.header_row_hint is True
         header = self.rows[0] if has_header else []
         body_rows = self.rows[1:] if has_header else self.rows
         alignments: list[str | None] = [None] * width
@@ -3438,11 +3657,17 @@ class _GfmTableParser(HTMLParser):
             value = re.sub(r"(?:<br>\s*){2,}", "<br>", value)
             return value.strip().replace("|", r"\|")
 
-        def row_text(row: list[dict[str, Any]]) -> str:
+        def row_text(
+            row: list[dict[str, Any]],
+            *,
+            body_row: bool = False,
+        ) -> str:
             cells = [
                 cell_text(row[index] if index < len(row) else None)
                 for index in range(width)
             ]
+            if body_row and self.header_column_hint is True and cells and cells[0]:
+                cells[0] = f"**{cells[0]}**"
             return "| " + " | ".join(cells) + " |"
 
         header_row = row_text(header) if has_header else row_text([])
@@ -3458,7 +3683,7 @@ class _GfmTableParser(HTMLParser):
                 else "---"
             )
         rendered = [header_row, "| " + " | ".join(delimiters) + " |"]
-        rendered.extend(row_text(row) for row in body_rows)
+        rendered.extend(row_text(row, body_row=True) for row in body_rows)
         return "\n".join(rendered), []
 
 
@@ -3494,6 +3719,70 @@ def _normalize_gfm_tables(body: str) -> tuple[str, int, list[str]]:
     )
 
 
+_STRICT_MARKUP_ATTRIBUTE_RE = re.compile(
+    r"\s+(?P<name>[A-Za-z_:][A-Za-z0-9_.:-]*)\s*=\s*"
+    r"(?P<quote>[\"'])(?P<value>.*?)(?P=quote)",
+    re.DOTALL,
+)
+
+
+def _strict_markup_attributes(raw: str) -> dict[str, str] | None:
+    attributes: dict[str, str] = {}
+    position = 0
+    for match in _STRICT_MARKUP_ATTRIBUTE_RE.finditer(raw):
+        if raw[position : match.start()].strip():
+            return None
+        name = match.group("name").casefold()
+        if name in attributes:
+            return None
+        attributes[name] = html.unescape(match.group("value")).strip()
+        position = match.end()
+    if raw[position:].strip():
+        return None
+    return attributes
+
+
+def _render_self_closing_mention_date(raw_attributes: str) -> str | None:
+    attributes = _strict_markup_attributes(raw_attributes)
+    allowed = {"start", "end", "starttime", "endtime", "timezone"}
+    if attributes is None or set(attributes) - allowed:
+        return None
+    start = attributes.get("start")
+    end = attributes.get("end")
+    starttime = attributes.get("starttime")
+    endtime = attributes.get("endtime")
+    timezone_name = attributes.get("timezone")
+    try:
+        if start is None:
+            return None
+        datetime.strptime(start, "%Y-%m-%d")
+        if end is not None:
+            datetime.strptime(end, "%Y-%m-%d")
+        for value in (starttime, endtime):
+            if value is not None and re.fullmatch(
+                r"(?:[01][0-9]|2[0-3]):[0-5][0-9](?::[0-5][0-9])?",
+                value,
+            ) is None:
+                return None
+    except ValueError:
+        return None
+    if endtime is not None and end is None:
+        return None
+    if timezone_name is not None and re.fullmatch(
+        r"[A-Za-z_]+(?:/[A-Za-z0-9_+\-]+)+",
+        timezone_name,
+    ) is None:
+        return None
+
+    start_text = start + (f" {starttime}" if starttime else "")
+    rendered = start_text
+    if end is not None:
+        rendered += " – " + end + (f" {endtime}" if endtime else "")
+    if timezone_name is not None:
+        rendered += f" ({timezone_name})"
+    return rendered
+
+
 def _normalize_markup_body(
     body: str,
     *,
@@ -3504,6 +3793,8 @@ def _normalize_markup_body(
         "empty_block": 0,
         "span": 0,
         "mention_date": 0,
+        "synced_block": 0,
+        "synced_block_reference": 0,
         "table": 0,
         "table_blocked": 0,
         "structural_container": 0,
@@ -3522,6 +3813,59 @@ def _normalize_markup_body(
     )
     counts["empty_block"] = empty_count
 
+    mention_date_blockers: list[str] = []
+
+    def self_closing_mention_date_replacement(
+        match: re.Match[str],
+    ) -> str:
+        rendered = _render_self_closing_mention_date(
+            match.group("attrs") or ""
+        )
+        if rendered is None:
+            mention_date_blockers.append(
+                "markup_mention_date_attributes_unsupported"
+            )
+            return match.group(0)
+        counts["mention_date"] += 1
+        return rendered
+
+    normalized = re.sub(
+        r"(?is)<\s*mention-date(?P<attrs>\s+[^<>]*?)?\s*/\s*>",
+        self_closing_mention_date_replacement,
+        normalized,
+    )
+
+    reference_tag_digests: list[dict[str, str]] = []
+    used_binding_sha256s: set[str] = set()
+    paired_unbound_reference_counts = {
+        name: 0 for name in _PAIRED_REFERENCE_MARKUP_TAGS
+    }
+
+    paired_reference_re = re.compile(
+        r"(?is)<\s*(?P<name>audio|video)(?:\s+[^<>]*?)?\s*>"
+        r"(?P<inner>.*?)<\s*/\s*(?P=name)\s*>"
+    )
+
+    def paired_reference_replacement(match: re.Match[str]) -> str:
+        name = match.group("name").casefold()
+        fragment = match.group(0)
+        tag_sha256 = _sha256_bytes(fragment.encode("utf-8"))
+        reference_tag_digests.append(
+            {"tag_name": name, "tag_sha256": tag_sha256}
+        )
+        binding = active_bindings.get(tag_sha256)
+        if binding is None:
+            paired_unbound_reference_counts[name] += 1
+            return fragment
+        used_binding_sha256s.add(tag_sha256)
+        counts["reference_binding_applied"] += 1
+        return binding["replacement"]
+
+    normalized = paired_reference_re.sub(
+        paired_reference_replacement,
+        normalized,
+    )
+
     for _pass in range(32):
         normalized, mention_date_count = re.subn(
             r"(?is)<\s*mention-date(?:\s+[^<>]*?)?\s*>(.*?)<\s*/\s*mention-date\s*>",
@@ -3531,6 +3875,23 @@ def _normalize_markup_body(
         counts["mention_date"] += mention_date_count
         if mention_date_count == 0:
             break
+
+    for tag_name, count_key in (
+        ("synced_block_reference", "synced_block_reference"),
+        ("synced_block", "synced_block"),
+    ):
+        tag_pattern = re.compile(
+            rf"(?is)<\s*{tag_name}(?:\s+[^<>]*?)?\s*>"
+            rf"(.*?)<\s*/\s*{tag_name}\s*>"
+        )
+        for _pass in range(32):
+            normalized, wrapper_count = tag_pattern.subn(
+                lambda match: match.group(1),
+                normalized,
+            )
+            counts[count_key] += wrapper_count
+            if wrapper_count == 0:
+                break
 
     # Repeated passes handle ordinary nested spans without interpreting their
     # attributes or changing the visible inner text.
@@ -3554,12 +3915,11 @@ def _normalize_markup_body(
         normalized,
     )
 
-    reference_tag_digests: list[dict[str, str]] = []
-    used_binding_sha256s: set[str] = set()
-
     def reference_replacement(match: re.Match[str]) -> str:
         name = match.group("name").casefold()
         if name not in _REFERENCE_MARKUP_TAGS:
+            return match.group(0)
+        if name in _PAIRED_REFERENCE_MARKUP_TAGS and not match.group("self"):
             return match.group(0)
         tag_sha256 = _sha256_bytes(match.group(0).encode("utf-8"))
         reference_tag_digests.append(
@@ -3583,9 +3943,15 @@ def _normalize_markup_body(
     remaining = list(_MARKUP_TAG_RE.finditer(normalized))
     unknown_names: set[str] = set()
     reference_names: set[str] = set()
+    remaining_paired_tag_counts = {
+        name: 0 for name in _PAIRED_REFERENCE_MARKUP_TAGS
+    }
     for match in remaining:
         name = match.group("name").casefold()
         if name in _MARKDOWN_COMPATIBLE_HTML_TAGS:
+            continue
+        if name in _PAIRED_REFERENCE_MARKUP_TAGS:
+            remaining_paired_tag_counts[name] += 1
             continue
         if name in _REFERENCE_MARKUP_TAGS:
             counts["reference_binding_required"] += 1
@@ -3597,7 +3963,18 @@ def _normalize_markup_body(
         counts["unknown_semantic_tag"] += 1
         unknown_names.add(name)
 
-    blocker_codes: list[str] = list(table_blockers)
+    for name in sorted(_PAIRED_REFERENCE_MARKUP_TAGS):
+        paired_count = paired_unbound_reference_counts[name]
+        unmatched_tag_count = max(
+            0,
+            remaining_paired_tag_counts[name] - (2 * paired_count),
+        )
+        required_count = paired_count + unmatched_tag_count
+        if required_count:
+            counts["reference_binding_required"] += required_count
+            reference_names.add(name)
+
+    blocker_codes: list[str] = [*table_blockers, *mention_date_blockers]
     if reference_names:
         blocker_codes.append("markup_reference_binding_required")
     if unknown_names:
@@ -3717,6 +4094,7 @@ def _markup_plan_core(
     max_items: int,
     max_changes: int,
     binding_manifest: Path | str | None,
+    only_ready: bool,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     root = archive_services.require_existing_archive_root(archive_root)
     archive_id = archive_services.read_archive_id(root)
@@ -3724,6 +4102,9 @@ def _markup_plan_core(
     blockers: list[str] = []
     if normalized_policy not in MARKUP_NORMALIZATION_POLICIES:
         blockers.append("markup_policy_invalid")
+    selection_mode = "ready_only" if only_ready else "strict"
+    if only_ready and normalized_policy != "normalize":
+        blockers.append("markup_only_ready_requires_normalize")
     try:
         item_limit = int(max_items)
         change_limit = int(max_changes)
@@ -3778,8 +4159,11 @@ def _markup_plan_core(
             blockers.append("markup_binding_unused")
         if len(private_items) > change_limit:
             blockers.append("markup_change_bound_exceeded")
-        for item in public_items:
-            blockers.extend(item["blocker_codes"])
+        if not only_ready:
+            for item in public_items:
+                blockers.extend(item["blocker_codes"])
+        elif not private_items:
+            blockers.append("markup_no_ready_changes")
 
     plan_items = [
         {
@@ -3803,6 +4187,7 @@ def _markup_plan_core(
         "schema": MARKUP_NORMALIZATION_PLAN_SCHEMA,
         "archive_id": archive_id,
         "policy": normalized_policy,
+        "selection_mode": selection_mode,
         "max_items": item_limit,
         "max_changes": change_limit,
         "binding_manifest_sha256": binding_manifest_sha256,
@@ -3810,17 +4195,28 @@ def _markup_plan_core(
     }
     plan_sha256 = _sha256_bytes(_canonical_json_bytes(plan_document))
     aggregate_blockers = archive_services.unique_preserve_order(blockers)
+    deferred_blocker_codes = archive_services.unique_preserve_order(
+        code
+        for item in public_items
+        if item["state"] == "blocked"
+        for code in item["blocker_codes"]
+    )
+    blocked_zettel_count = sum(
+        1 for item in public_items if item["state"] == "blocked"
+    )
     summary = {
         "policy": (
             normalized_policy
             if normalized_policy in MARKUP_NORMALIZATION_POLICIES
             else None
         ),
+        "selection_mode": selection_mode,
         "scanned_zettel_count": len(all_paths),
         "candidate_zettel_count": len(public_items),
         "ready_change_count": len(private_items),
-        "blocked_zettel_count": sum(
-            1 for item in public_items if item["state"] == "blocked"
+        "blocked_zettel_count": blocked_zettel_count,
+        "deferred_blocker_codes": (
+            deferred_blocker_codes if only_ready else []
         ),
         "preserved_zettel_count": sum(
             1 for item in public_items if item["state"] == "preserved"
@@ -3831,7 +4227,13 @@ def _markup_plan_core(
     }
     result = {
         "ok": not aggregate_blockers,
-        "state": "ready" if not aggregate_blockers else "blocked",
+        "state": (
+            "blocked"
+            if aggregate_blockers
+            else "partial_ready"
+            if only_ready and blocked_zettel_count
+            else "ready"
+        ),
         "dry_run": True,
         "lifecycle_action": "markup_normalization_plan",
         "archive_id": archive_id,
@@ -3840,11 +4242,18 @@ def _markup_plan_core(
         "style_guide": markup_style_guide(),
         "blockers": aggregate_blockers,
         "warnings": (
-            [
+            ([
                 "Preserve policy records the inventory and intentionally leaves source markup unchanged."
             ]
             if normalized_policy == "preserve"
-            else []
+            else [])
+            + (
+                [
+                    "Ready-only selection leaves blocked zets byte-identical; review deferred blocker codes separately."
+                ]
+                if only_ready and blocked_zettel_count and not aggregate_blockers
+                else []
+            )
         ),
         "would_change": (
             [item["relative"] for item in private_items]
@@ -3867,6 +4276,7 @@ def _markup_plan_core(
         "items": private_items,
         "policy": normalized_policy,
         "binding_manifest_sha256": binding_manifest_sha256,
+        "selection_mode": selection_mode,
     }
     return result, private
 
@@ -3878,6 +4288,7 @@ def markup_normalization_plan(
     max_items: int = MARKUP_NORMALIZATION_MAX_ITEMS,
     max_changes: int = MARKUP_NORMALIZATION_MAX_CHANGES,
     binding_manifest: Path | str | None = None,
+    only_ready: bool = False,
 ) -> dict[str, Any]:
     result, _private = _markup_plan_core(
         archive_root,
@@ -3885,6 +4296,7 @@ def markup_normalization_plan(
         max_items=max_items,
         max_changes=max_changes,
         binding_manifest=binding_manifest,
+        only_ready=only_ready,
     )
     return result
 
@@ -3896,6 +4308,7 @@ def markup_normalization_apply(
     max_items: int,
     max_changes: int,
     binding_manifest: Path | str | None = None,
+    only_ready: bool = False,
     expected_plan_sha256: str | None,
     reviewed_by: str | None,
 ) -> dict[str, Any]:
@@ -3905,6 +4318,7 @@ def markup_normalization_apply(
         max_items=max_items,
         max_changes=max_changes,
         binding_manifest=binding_manifest,
+        only_ready=only_ready,
     )
     blockers = list(result["blockers"])
     expected = str(expected_plan_sha256 or "").strip().lower()
@@ -3948,6 +4362,7 @@ def markup_normalization_apply(
             max_items=max_items,
             max_changes=max_changes,
             binding_manifest=binding_manifest,
+            only_ready=only_ready,
         )
         if not fresh["ok"] or fresh_private["plan_sha256"] != expected:
             return {

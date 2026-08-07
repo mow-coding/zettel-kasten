@@ -2639,7 +2639,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
     },
     {
         "name": "create_draft_zettel",
-        "description": "Create an AI draft zettel in inbox/. This does not mint to canonical memory.",
+        "description": "Create a draft zettel in inbox/. Declared AI modes require an explicit abstract and non-empty facets and block same-title inbox duplicates. This never mints canonical memory.",
         "inputSchema": {
             "type": "object",
             "properties": {

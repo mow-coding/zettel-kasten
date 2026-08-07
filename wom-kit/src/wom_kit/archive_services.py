@@ -8810,6 +8810,7 @@ def normalized_zet_title_candidate(
     *,
     matched_safety_rules: list[str] | None = None,
     warning_codes: list[str] | None = None,
+    basis: str | None = None,
 ) -> str | None:
     """Validate one private replacement title without echoing its value."""
 
@@ -8861,8 +8862,19 @@ def normalized_zet_title_candidate(
         blocker_codes.append("title_is_identifier_shaped")
         return None
     if not title_is_specific_enough_for_checklist(normalized):
-        blocker_codes.append("title_not_specific_enough_for_promotion_checklist")
-        return None
+        if (
+            basis == "source_export_property"
+            and title_is_short_exact_source_name_allowed(normalized)
+        ):
+            if warning_codes is not None:
+                warning_codes.append(
+                    "source_export_title_below_promotion_threshold"
+                )
+        else:
+            blocker_codes.append(
+                "title_not_specific_enough_for_promotion_checklist"
+            )
+            return None
     return normalized
 
 
@@ -8870,7 +8882,7 @@ def zet_title_remap_plan(
     archive_root: Path | str,
     *,
     proposal_path: str,
-    max_items: int = 500,
+    max_items: int = ZET_TITLE_REMAP_MAX_ITEMS,
     dry_run: bool = False,
     progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
 ) -> dict[str, Any]:
@@ -8937,6 +8949,7 @@ def zet_title_remap_plan(
     }
     warning_code_counts = {
         "title_contains_public_web_url": 0,
+        "source_export_title_below_promotion_threshold": 0,
     }
     if progress_callback is not None:
         progress_callback("title-remap-candidates", "start", 0, len(rows))
@@ -8990,6 +9003,7 @@ def zet_title_remap_plan(
                 row_blockers,
                 matched_safety_rules=matched_safety_rules,
                 warning_codes=row_warnings,
+                basis=basis,
             )
 
             if zettel_id is not None:
@@ -9381,7 +9395,11 @@ def materialize_zet_title_remap_candidates(
             expected_file_sha256 = row.get("expected_file_sha256")
             basis = row.get("basis")
             title_blockers: list[str] = []
-            title = normalized_zet_title_candidate(row.get("title"), title_blockers)
+            title = normalized_zet_title_candidate(
+                row.get("title"),
+                title_blockers,
+                basis=str(basis) if basis in ZET_TITLE_REMAP_BASIS_VALUES else None,
+            )
             if (
                 title_blockers
                 or not isinstance(zettel_id, str)
@@ -10153,7 +10171,7 @@ def zet_title_remap_write(
     expected_proposal_sha256: str,
     expected_plan_digest: str,
     expected_write_plan_digest: str | None = None,
-    max_items: int = 500,
+    max_items: int = ZET_TITLE_REMAP_MAX_ITEMS,
     dry_run: bool = False,
     approve: bool = False,
     reviewed_by: str | None = None,
@@ -33639,6 +33657,14 @@ def create_draft_zettel(
     if creation_mode in {"ai_assisted", "ai_generated"}:
         if not assisted:
             blockers.append("AI-assisted or AI-generated drafts must identify the assisting AI runtime.")
+        if normalized_abstract is None:
+            blockers.append(
+                "AI-assisted or AI-generated drafts require an explicit abstract before creation."
+            )
+        if not isinstance(facets, dict) or not facets:
+            blockers.append(
+                "AI-assisted or AI-generated drafts require at least one stable facet before creation."
+            )
 
     frontmatter = {
         "id": zettel_id,
@@ -33687,6 +33713,24 @@ def create_draft_zettel(
             "approved_body_sha256": expected_body_sha256.strip().lower() if expected_body_sha256 else None,
         }
 
+    existing_draft_title_check = inbox_existing_draft_title_check(
+        root,
+        title,
+    )
+    if not existing_draft_title_check["complete"]:
+        blockers.append(
+            "Existing inbox draft title check could not complete safely."
+        )
+    elif existing_draft_title_check["same_title_count"]:
+        if creation_mode in {"ai_assisted", "ai_generated"}:
+            blockers.append(
+                "An unminted inbox draft with the same normalized title already exists; revise that draft in place instead of creating another one."
+            )
+        else:
+            warnings.append(
+                "One or more unminted inbox drafts have the same normalized title; review and revise an existing draft in place when they represent the same record."
+            )
+
     inbox = archive_internal_path(root, "inbox")
     path = inbox / f"{zettel_id}.md"
     if draft_id is None and not dry_run:
@@ -33725,6 +33769,7 @@ def create_draft_zettel(
         "frontmatter_preview": json_safe(frontmatter),
         "body_sha256": body_sha256,
         "first_read_check": first_read_check,
+        "existing_draft_title_check": existing_draft_title_check,
         "blockers": unique_preserve_order(blockers),
         "warnings": unique_preserve_order(warnings),
         "would_change": [] if blockers else [f"write {proposed_path}"],
@@ -33750,6 +33795,7 @@ def create_draft_zettel(
         "frontmatter": json_safe(frontmatter),
         "body_sha256": body_sha256,
         "first_read_check": first_read_check,
+        "existing_draft_title_check": existing_draft_title_check,
         "warnings": unique_preserve_order(warnings),
         "created_paths": [archive_relative_path(path, root)],
         "approval_replay": approval_replay,
@@ -33852,6 +33898,73 @@ def _read_bounded_inbox_draft_frontmatter(
     result["frontmatter"] = json_safe(loaded)
     result["metadata_readable"] = True
     return result
+
+
+def inbox_existing_draft_title_check(
+    archive_root: Path,
+    title: str,
+    *,
+    max_drafts: int = INBOX_PIPELINE_AUDIT_MAX_DRAFTS,
+) -> dict[str, Any]:
+    """Return a content-free same-title signal without reading inbox bodies."""
+
+    inbox = archive_internal_path(archive_root, "inbox")
+    draft_paths = (
+        sorted(inbox.glob("*.md"), key=lambda item: item.name)
+        if inbox.is_dir()
+        else []
+    )
+    if len(draft_paths) > max_drafts:
+        return {
+            "complete": False,
+            "drafts_checked": 0,
+            "same_title_count": 0,
+            "unreadable_frontmatter_count": 0,
+            "body_text_read": False,
+            "paths_or_titles_echoed": False,
+            "reason": "draft_count_exceeds_max_drafts",
+        }
+
+    title_key = normalize_compare_text(title)
+    same_title_count = 0
+    unreadable_count = 0
+    body_text_read = False
+    for path in draft_paths:
+        inspection = _read_bounded_inbox_draft_frontmatter(
+            path,
+            max_frontmatter_bytes=INBOX_PIPELINE_AUDIT_MAX_FRONTMATTER_BYTES,
+        )
+        body_text_read = body_text_read or bool(inspection.get("body_text_read"))
+        if not inspection.get("metadata_readable"):
+            unreadable_count += 1
+            continue
+        frontmatter = inspection.get("frontmatter")
+        existing_title = (
+            frontmatter.get("title")
+            if isinstance(frontmatter, dict)
+            else None
+        )
+        if (
+            isinstance(existing_title, str)
+            and title_key
+            and normalize_compare_text(existing_title) == title_key
+        ):
+            same_title_count += 1
+
+    complete = unreadable_count == 0 and not body_text_read
+    return {
+        "complete": complete,
+        "drafts_checked": len(draft_paths),
+        "same_title_count": same_title_count,
+        "unreadable_frontmatter_count": unreadable_count,
+        "body_text_read": body_text_read,
+        "paths_or_titles_echoed": False,
+        "reason": (
+            None
+            if complete
+            else "one_or_more_draft_frontmatter_records_unreadable"
+        ),
+    }
 
 
 def _inbox_pipeline_shape_reason_codes(
@@ -34017,6 +34130,14 @@ def inbox_pipeline_audit(
         "possible_out_of_pipeline_draft": 0,
         "insufficient_evidence": 0,
     }
+    publication_readiness = {
+        "mint_readiness_gap_count": 0,
+        "missing_or_invalid_abstract_count": 0,
+        "missing_or_empty_facets_count": 0,
+        "created_at_unavailable_count": 0,
+        "oldest_draft_age_days": None,
+    }
+    now_utc = datetime.now(timezone.utc)
     body_text_may_have_been_read = False
     frontmatter_bytes_read = 0
     if not blockers:
@@ -34041,13 +34162,71 @@ def inbox_pipeline_audit(
                 body_text_may_have_been_read or body_text_read
             )
             if inspection.get("metadata_readable"):
+                inspected_frontmatter = inspection["frontmatter"]
+                first_read_check = explicit_abstract_publication_check(
+                    inspected_frontmatter
+                )
+                abstract_gap = not bool(
+                    first_read_check.get("ready_for_publication")
+                )
+                facets_value = inspected_frontmatter.get("facets")
+                facets_gap = not (
+                    isinstance(facets_value, dict) and bool(facets_value)
+                )
+                if abstract_gap:
+                    publication_readiness[
+                        "missing_or_invalid_abstract_count"
+                    ] += 1
+                if facets_gap:
+                    publication_readiness[
+                        "missing_or_empty_facets_count"
+                    ] += 1
+                if abstract_gap or facets_gap:
+                    publication_readiness["mint_readiness_gap_count"] += 1
+
+                created_at_value = inspected_frontmatter.get("created_at")
+                parsed_created_at: datetime | None = None
+                if isinstance(created_at_value, str):
+                    try:
+                        parsed_created_at = datetime.fromisoformat(
+                            created_at_value.strip().replace("Z", "+00:00")
+                        )
+                    except ValueError:
+                        parsed_created_at = None
+                if parsed_created_at is None:
+                    publication_readiness[
+                        "created_at_unavailable_count"
+                    ] += 1
+                else:
+                    if parsed_created_at.tzinfo is None:
+                        parsed_created_at = parsed_created_at.replace(
+                            tzinfo=timezone.utc
+                        )
+                    age_days = max(
+                        0,
+                        int(
+                            (
+                                now_utc
+                                - parsed_created_at.astimezone(timezone.utc)
+                            ).total_seconds()
+                            // 86400
+                        ),
+                    )
+                    current_oldest = publication_readiness[
+                        "oldest_draft_age_days"
+                    ]
+                    if current_oldest is None or age_days > current_oldest:
+                        publication_readiness[
+                            "oldest_draft_age_days"
+                        ] = age_days
                 classification, reason_codes, safe_metadata = (
                     _inbox_pipeline_shape_reason_codes(
                         relative_path=relative_path,
-                        frontmatter=inspection["frontmatter"],
+                        frontmatter=inspected_frontmatter,
                     )
                 )
             else:
+                publication_readiness["created_at_unavailable_count"] += 1
                 classification = "insufficient_evidence"
                 reason_codes = [
                     str(inspection.get("issue_code") or "metadata_unreadable")
@@ -34093,14 +34272,22 @@ def inbox_pipeline_audit(
 
     possible_count = counts["possible_out_of_pipeline_draft"]
     insufficient_count = counts["insufficient_evidence"]
+    readiness_gap_count = int(
+        publication_readiness["mint_readiness_gap_count"] or 0
+    )
     if blockers:
         status = "blocked"
-    elif possible_count:
+    elif possible_count or readiness_gap_count:
         status = "review_recommended"
-        warnings.append(
-            "One or more AI-declared inbox drafts have metadata inconsistent "
-            "with the current archive create-draft output shape."
-        )
+        if possible_count:
+            warnings.append(
+                "One or more AI-declared inbox drafts have metadata inconsistent "
+                "with the current archive create-draft output shape."
+            )
+        if readiness_gap_count:
+            warnings.append(
+                "One or more inbox drafts are missing publication-critical abstract or facet metadata."
+            )
     elif insufficient_count:
         status = "insufficient_evidence"
     elif draft_paths:
@@ -34115,7 +34302,7 @@ def inbox_pipeline_audit(
         "lifecycle_action": "inbox_pipeline_audit",
         "schema": INBOX_PIPELINE_AUDIT_SCHEMA,
         "status": status,
-        "review_recommended": possible_count > 0,
+        "review_recommended": possible_count > 0 or readiness_gap_count > 0,
         "classification_is_proof_of_command_execution": False,
         "summary": {
             "complete": not blockers,
@@ -34128,6 +34315,7 @@ def inbox_pipeline_audit(
             "frontmatter_bytes_read": frontmatter_bytes_read,
             "body_text_may_have_been_read": body_text_may_have_been_read,
             "intentionally_discarded_draft_receipt_count": discarded_draft_receipt_count,
+            **publication_readiness,
         },
         "findings": findings,
         "audit_digest": sha256_json_value(outcomes),
@@ -46353,11 +46541,8 @@ def find_promotion_duplicates_from_rows(
     return duplicates
 
 
-def title_is_specific_enough_for_checklist(title: str) -> bool:
+def title_is_generic_for_checklist(title: str) -> bool:
     stripped = title.strip()
-    if not stripped:
-        return False
-
     lowered = stripped.casefold()
     compact = re.sub(r"[\s._-]+", "", lowered)
     generic_titles = {
@@ -46373,21 +46558,43 @@ def title_is_specific_enough_for_checklist(title: str) -> bool:
         "노트",
         "초안",
     }
-    if lowered in generic_titles or compact in generic_titles:
-        return False
+    return lowered in generic_titles or compact in generic_titles
 
+
+def title_display_units(title: str) -> tuple[int, bool]:
     semantic_chars = [
         char
-        for char in stripped
-        if not char.isspace() and not unicodedata.category(char).startswith("P")
+        for char in title.strip()
+        if not char.isspace()
+        and not unicodedata.category(char).startswith("P")
     ]
-    if not semantic_chars:
-        return False
     has_cjk = any(title_char_is_cjk(char) for char in semantic_chars)
     display_units = sum(
-        2 if title_char_is_cjk(char) or unicodedata.east_asian_width(char) in {"F", "W"} else 1
+        2
+        if title_char_is_cjk(char)
+        or unicodedata.east_asian_width(char) in {"F", "W"}
+        else 1
         for char in semantic_chars
     )
+    return display_units, has_cjk
+
+
+def title_is_short_exact_source_name_allowed(title: str) -> bool:
+    stripped = title.strip()
+    if not stripped or title_is_generic_for_checklist(stripped):
+        return False
+    display_units, _has_cjk = title_display_units(stripped)
+    return display_units >= 4
+
+
+def title_is_specific_enough_for_checklist(title: str) -> bool:
+    stripped = title.strip()
+    if not stripped or title_is_generic_for_checklist(stripped):
+        return False
+
+    display_units, has_cjk = title_display_units(stripped)
+    if not display_units:
+        return False
     return display_units >= (4 if has_cjk else 5)
 
 
@@ -72695,6 +72902,21 @@ def authoring_conventions(
             "reported_archive_files_require_openable_references": True,
             "unminted_drafts_are_revised_in_place": True,
         },
+        "publication_completion_contract": {
+            "ai_draft_route": (
+                "archive create-draft dry-run and exact reviewed replay"
+            ),
+            "direct_inbox_markdown_write_allowed": False,
+            "ai_draft_requires_explicit_abstract": True,
+            "ai_draft_requires_nonempty_facets": True,
+            "publication_request_starts_mint_workflow": True,
+            "publication_complete_only_after": (
+                "approved mint-zet success with canonical and receipt evidence"
+            ),
+            "report_blockers_immediately": True,
+            "silent_deferral_allowed": False,
+            "revise_same_title_unminted_draft_in_place": True,
+        },
         "template": {
             "schema": AUTHORING_CONVENTIONS_SCHEMA,
             "language": "ko-KR",
@@ -98688,6 +98910,78 @@ def wom_kit_project_version_update(
         directory_guard.close()
 
 
+def ai_start_here_inbox_attention(archive_root: Path) -> dict[str, Any]:
+    """Compose the privacy-safe inbox line shown at every archive session start."""
+
+    audit = inbox_pipeline_audit(
+        archive_root,
+        dry_run=True,
+        max_findings=1,
+    )
+    summary = (
+        audit.get("summary")
+        if isinstance(audit.get("summary"), dict)
+        else {}
+    )
+    unpublished_count = int(
+        summary.get("top_level_markdown_draft_count") or 0
+    )
+    possible_count = int(
+        summary.get("possible_out_of_pipeline_draft") or 0
+    )
+    readiness_gap_count = int(
+        summary.get("mint_readiness_gap_count") or 0
+    )
+    oldest_age = summary.get("oldest_draft_age_days")
+    complete = bool(audit.get("ok")) and bool(summary.get("complete"))
+    if not complete:
+        human_summary = (
+            "Inbox draft attention could not be counted completely; run the detailed read-only audit now."
+        )
+    elif unpublished_count == 0:
+        human_summary = "Inbox has no unpublished drafts."
+    else:
+        age_phrase = (
+            f"; oldest is {oldest_age} day(s) old"
+            if isinstance(oldest_age, int)
+            else "; oldest age is unknown"
+        )
+        human_summary = (
+            f"Inbox has {unpublished_count} unpublished draft(s){age_phrase}. "
+            f"{possible_count} may have bypassed the current create-draft shape; "
+            f"{readiness_gap_count} have publication-critical metadata gaps."
+        )
+    return {
+        "status": (
+            "incomplete"
+            if not complete
+            else "attention"
+            if unpublished_count
+            else "clear"
+        ),
+        "complete": complete,
+        "unpublished_draft_count": unpublished_count,
+        "possible_out_of_pipeline_draft_count": possible_count,
+        "mint_readiness_gap_count": readiness_gap_count,
+        "oldest_draft_age_days": oldest_age
+        if isinstance(oldest_age, int)
+        else None,
+        "review_recommended": bool(
+            unpublished_count or possible_count or readiness_gap_count
+        ),
+        "human_summary": human_summary,
+        "next_command": (
+            "archive inbox-pipeline-audit <archive-root> --dry-run --format json"
+        ),
+        "audit_schema": audit.get("schema"),
+        "audit_digest": audit.get("audit_digest"),
+        "body_text_read": bool(
+            summary.get("body_text_may_have_been_read")
+        ),
+        "paths_titles_or_body_echoed": False,
+    }
+
+
 def ai_start_here(
     archive_root: Path | str,
     *,
@@ -98783,6 +99077,9 @@ def ai_start_here(
         if isinstance(context.get("action_routing"), dict)
         else runtime_context_action_routing()
     )
+    inbox_attention = ai_start_here_inbox_attention(
+        require_existing_archive_root(archive_root)
+    )
 
     next_lines: list[str] = []
     if session_start_summary and isinstance(session_start_summary.get("next"), list):
@@ -98823,6 +99120,10 @@ def ai_start_here(
                 if isinstance(context.get("doctor_summary"), dict)
                 else False
             ),
+            "unpublished_draft_count": inbox_attention[
+                "unpublished_draft_count"
+            ],
+            "inbox_attention_status": inbox_attention["status"],
         },
         "inspection": {
             "mode": mode,
@@ -98867,6 +99168,7 @@ def ai_start_here(
         "ai_runtime_order": ai_runtime_order,
         "remaining_ai_runtime_order": remaining_ai_runtime_order,
         "action_routing": action_routing,
+        "inbox_attention": inbox_attention,
         "runtime_guidance_readiness": context.get("runtime_guidance_readiness"),
         "operational_context": {
             "status": operational_context.get("status") or "unknown",
@@ -98909,6 +99211,13 @@ def ai_start_here(
                 "Read AGENTS.md when canonical_entrypoints marks it present.",
                 "Search zets and indexed records through archive search <archive-root> <query> --count-total --format json; raw grep and raw SQL are not authoritative WOM search results.",
                 "Create AI-assisted drafts only through archive create-draft dry-run and its reviewed replay; never write Markdown directly into inbox/.",
+                *(
+                    [
+                        "Review the unpublished-draft attention now with archive inbox-pipeline-audit <archive-root> --dry-run --format json; do not let a pending publication disappear into a later session."
+                    ]
+                    if inbox_attention["review_recommended"]
+                    else []
+                ),
                 "Run first-read-readiness before the exhaustive catalog pass; treat a non-ready result as an explicit abstract or unique-id repair queue, not as permission to invent or auto-write missing memory.",
                 "Run abstract-freshness after first-read-readiness; treat stale or unverified rows as a human review queue and never auto-rewrite an abstract or body.",
                 "Run zet-catalog with projection=reading and coverage_mode=strict, keep the first response_profile full, inspect item and compact response-envelope estimates, set a host-appropriate max_estimated_tokens plus an explicit response_envelope_reserve_tokens when needed, then optionally use response_profile=continuation on later pages while following every continuation token before claiming archive-wide zet coverage.",
@@ -98934,7 +99243,17 @@ def ai_start_here(
             "zettel_or_objet_body_echoed": False,
         },
         "blockers": unique_preserve_order([*context.get("blockers", []), *[f"required entrypoint missing: {item.get('path')}" for item in missing_required]]),
-        "warnings": context.get("warnings", []),
+        "warnings": unique_preserve_order(
+            [
+                *context.get("warnings", []),
+                *(
+                    [inbox_attention["human_summary"]]
+                    if inbox_attention["review_recommended"]
+                    or not inbox_attention["complete"]
+                    else []
+                ),
+            ]
+        ),
         "redaction": context.get("redaction", {"local_paths_redacted": bool(redact_local_paths)}),
     }
 
