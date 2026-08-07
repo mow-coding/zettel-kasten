@@ -1,6 +1,6 @@
 # AI Command-Path Routing
 
-Status: implemented in v0.3.278, extended through v0.3.302
+Status: implemented in v0.3.278, extended through v0.3.303
 
 ## Purpose
 
@@ -102,6 +102,14 @@ v0.3.302 advances the routing envelope to:
 wom-kit/ai-command-path-routing/v0.11
 ```
 
+v0.3.303 adds the bounded read-only local artifact lifecycle checkpoint and
+advances the routing envelope to:
+
+```text
+wom-kit/ai-command-path-routing/v0.12
+action: inspect_artifact_lifecycle
+```
+
 The additive routes cover:
 
 - provider-neutral locator plan, record, recovery, and exact revert;
@@ -171,6 +179,7 @@ packaged runtime skill, the fake archive, and live read-only command output.
 | Inspect observed source-reference coverage separately from recorded storage evidence | `python -B -m wom_kit.archive_cli source-reference-coverage-audit <archive-root> --dry-run --format json` | Covers only current canonical `source_refs` and exact Notion omission markers. It has no archive-wide denominator and performs no live byte/storage check. |
 | Inspect installed version truth | `archive version <project-or-archive-root> --format json` | Proves local runtime/source/pin and already-fetched tag state; it does not verify remote release freshness. |
 | Inspect saved-view state | `archive view-health <archive-root> --dry-run --format json` | Follow with `view-recommendation-plan`; both are read-only. |
+| Inspect declared local artifact lifecycle state | `archive artifact-lifecycle-inventory <archive-root> --dry-run --format json` | Covers only fixed archive-owned lifecycle roots and exact generated-index files. It reports incomplete coverage, grants no deletion authority, reads no ordinary artifact body or object byte, and checks no provider or sibling object store. |
 | Inspect possible historical inbox pipeline bypasses | `archive inbox-pipeline-audit <archive-root> --dry-run --format json` | Structural classes are conservative signals, not proof of command execution; no automatic repair exists. |
 | Plan one explicit event membership set | `archive activity-group-membership-plan <archive-root> --request .wom-scratch/private/activity-groups/<reviewed>.json --dry-run --progress --format json` | The private request must contain one human-selected event anchor and ordered member ids. The command infers no member and writes nothing. |
 | Plan removing one explicit event membership from selected zets | `archive activity-group-membership-removal-plan <archive-root> --request .wom-scratch/private/activity-group-removals/<reviewed>.json --dry-run --progress --format json` | The private request must contain the exact human-selected event anchor and ordered member ids. It writes nothing; continue only through the exact request/review digests and dedicated removal writer. |
@@ -205,6 +214,9 @@ Every write remains preview-first and human-reviewed.
 - v0.3.302 advances routing to
   `wom-kit/ai-command-path-routing/v0.11` and adds the separate digest-bound
   saved-view write and exact-revert routes.
+- v0.3.303 advances routing to
+  `wom-kit/ai-command-path-routing/v0.12` and adds the read-only
+  `inspect_artifact_lifecycle` route without adding a cleanup route.
 - v0.3.293 advances routing to
   `wom-kit/ai-command-path-routing/v0.7` and adds the complete
   operator-feedback sequence without changing existing action contracts.

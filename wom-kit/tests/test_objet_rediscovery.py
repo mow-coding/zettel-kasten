@@ -1458,7 +1458,7 @@ class ObjetRediscoveryPlanTests(unittest.TestCase):
             routing = packet["action_routing"]
             self.assertEqual(
                 routing["schema"],
-                "wom-kit/ai-command-path-routing/v0.11",
+                "wom-kit/ai-command-path-routing/v0.12",
             )
             route = next(
                 item

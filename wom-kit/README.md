@@ -10,12 +10,12 @@ It is not a website, SaaS app, dashboard, or visual note-taking product. The int
 
 ## Install The Command-Line Tool
 
-The exact v0.3.302 GitHub Release, when present, uses the self-contained wheel
+The exact v0.3.303 GitHub Release, when present, uses the self-contained wheel
 below. Confirm that the release exists and lists the wheel before installing
 it. The versioned URL alone is not proof that the asset is available.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.302/wom_kit-0.3.302-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.303/wom_kit-0.3.303-py3-none-any.whl"
 archive --version
 ```
 
@@ -106,6 +106,13 @@ v0.3.302 adds the missing review-gated persistent saved-view writer, exact
 revert, interruption convergence, and strict fail-closed saved-view authority.
 See [`docs/saved-view-write.md`](docs/saved-view-write.md) and
 [`docs/releases/v0.3.302.md`](docs/releases/v0.3.302.md).
+
+v0.3.303 adds a bounded read-only artifact lifecycle inventory across fixed
+archive-owned roots. It reports explicit coverage, content-free stable review
+refs, strict local object-manifest candidates, and workpack expiry review
+without reading ordinary artifact/object bodies or granting cleanup authority.
+See [`docs/artifact-lifecycle-inventory.md`](docs/artifact-lifecycle-inventory.md)
+and [`docs/releases/v0.3.303.md`](docs/releases/v0.3.303.md).
 
 v0.3.292 keeps those runtime safeguards and makes objet relationship counts
 honest across overview and catalog surfaces. See
@@ -1761,7 +1768,7 @@ Archive ownership is separate from archive operation. A family, company, or othe
 - Public release link hygiene checks are local validation only; GitHub Release editing and external URL network fetching remain outside WOM-kit v0.3.0.
 - Korean product-language terms and the hygiene checker are public explanation guardrails only; CLI commands, JSON fields, schema fields, filenames, Python identifiers, and package names remain English in WOM-kit v0.3.0.
 - Public privacy hygiene checks are local validation only; automatic rewriting, full-disk scanning, private archive inspection, provider calls, GitHub Release editing, and general-purpose secret scanning remain outside WOM-kit v0.3.0.
-- Artifact hygiene checks are report-only classification and `.gitignore` validation only; automatic cleanup, prune/gc, orphan-objet sweeping, provider upload/sync, real local objet capture, and default reads of real `-objets` stores remain outside WOM-kit v0.3.0.
+- Artifact hygiene checks and the fixed-root lifecycle inventory are report-only; the lifecycle inventory can flag content-free unmanifested local object candidates but performs no object-byte hash or orphan proof. Automatic cleanup, prune/gc, provider cleanup, automatic staged-folder deletion, sibling `-objets` reads, and unconstrained whole-archive sweeps remain outside WOM-kit v0.3.0.
 - Release readiness gate checks are local validation only; CI, GitHub Actions, branch protection, product doctors/tests, GitHub API calls, and release editing remain outside WOM-kit v0.3.0.
 - Main branch protection readiness is documentation only; GitHub Actions, branch protection, repository settings changes, and GitHub API calls remain outside WOM-kit v0.3.0.
 - ZET shared update record review/index remains preview-only. CLI `shared-update-attestation-review` can write exactly one local review record and one receipt after approval, but shared-update transport, neighbor feed update, trust/import/acceptance/anchor, real attestation/signature writes, provider sync, WordPress publishing, projection writes/receipts, and MCP write/apply tools remain outside WOM-kit v0.3.0.

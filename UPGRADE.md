@@ -24,6 +24,34 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.303 Artifact Lifecycle Inventory
+
+v0.3.303 is compatible with v0.3.302 archives and requires no migration. It
+adds a read-only checkpoint; existing files are not reclassified on disk and
+nothing is cleaned automatically.
+
+Run:
+
+```powershell
+archive artifact-lifecycle-inventory <archive-root> --dry-run --format json
+```
+
+Review `coverage.complete` before relying on counts. A limit, unreadable entry,
+link/reparse point, concurrent change, malformed object manifest, invalid local
+object layout, or invalid workpack control file blocks the relevant claim.
+Default rows hide child paths. `--show-relative-paths` is only for attended
+local review.
+
+An `unmanifested_local_object_candidate` is not a proven orphan and is never
+deletion approval. An expired workpack also remains a retention-review item.
+The command reads no ordinary artifact body or object byte, writes nothing,
+and checks no provider or sibling object store.
+
+See
+[`wom-kit/docs/artifact-lifecycle-inventory.md`](wom-kit/docs/artifact-lifecycle-inventory.md)
+and
+[`wom-kit/docs/releases/v0.3.303.md`](wom-kit/docs/releases/v0.3.303.md).
+
 ## v0.3.302 Saved-View Lifecycle
 
 v0.3.302 is compatible with valid v0.3.301 archives and requires no automatic

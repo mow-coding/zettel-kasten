@@ -366,6 +366,7 @@ from typing import Any, Callable, Iterable
 from . import (
     __version__,
     archive_services,
+    artifact_lifecycle_inventory,
     completion_workflows,
     runtime_guidance,
     runtime_skill_install,
@@ -14288,6 +14289,49 @@ def command_ai_artifact_inventory(args: argparse.Namespace) -> int:
     return 0 if result.get("ok", True) else 1
 
 
+def command_artifact_lifecycle_inventory(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print(
+            "artifact-lifecycle-inventory is read-only and requires --dry-run.",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        result = artifact_lifecycle_inventory.artifact_lifecycle_inventory(
+            Path(args.archive_root),
+            max_entries_per_root=args.max_entries_per_root,
+            max_items=args.max_items,
+            show_relative_paths=args.show_relative_paths,
+            dry_run=True,
+        )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        print(f"Artifact lifecycle inventory {result.get('inventory_state') or 'unknown'}.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        coverage = result.get("coverage") if isinstance(result.get("coverage"), dict) else {}
+        print(
+            "Coverage: "
+            f"{coverage.get('complete_scope_count', 0)}/{coverage.get('scope_count', 0)} scopes complete"
+        )
+        print(f"Review candidates: {result.get('review_candidate_count', 0)}")
+        print(f"Listed: {result.get('item_count', 0)}")
+        print(f"Inventory digest: {result.get('inventory_digest') or '-'}")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result.get("ok", True) else 1
+
+
 def command_retire_draft(args: argparse.Namespace) -> int:
     if args.dry_run and args.approve:
         print("Use either --dry-run or --approve, not both.", file=sys.stderr)
@@ -25858,6 +25902,48 @@ def build_parser() -> argparse.ArgumentParser:
     ai_artifact_inventory.add_argument("--dry-run", action="store_true", help="Required; read-only inventory.")
     ai_artifact_inventory.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     ai_artifact_inventory.set_defaults(func=command_ai_artifact_inventory)
+
+    artifact_lifecycle = subcommands.add_parser(
+        "artifact-lifecycle-inventory",
+        aliases=["artifact-inventory", "archive-lifecycle-inventory"],
+        help="Read-only bounded lifecycle inventory across fixed archive-owned roots.",
+    )
+    artifact_lifecycle.add_argument("archive_root", help="Archive root to inspect.")
+    artifact_lifecycle.add_argument(
+        "--max-entries-per-root",
+        type=int,
+        default=artifact_lifecycle_inventory.DEFAULT_MAX_ENTRIES_PER_ROOT,
+        help=(
+            "Maximum filesystem entries inspected independently under each fixed root; "
+            f"capped at {artifact_lifecycle_inventory.MAX_ENTRIES_PER_ROOT}."
+        ),
+    )
+    artifact_lifecycle.add_argument(
+        "--max-items",
+        type=int,
+        default=artifact_lifecycle_inventory.DEFAULT_MAX_ITEMS,
+        help=(
+            "Maximum content-free review rows listed; "
+            f"capped at {artifact_lifecycle_inventory.MAX_ITEMS}."
+        ),
+    )
+    artifact_lifecycle.add_argument(
+        "--show-relative-paths",
+        action="store_true",
+        help="Show archive-relative paths for explicit local review; hidden by default.",
+    )
+    artifact_lifecycle.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Required; reads bounded metadata and writes or deletes nothing.",
+    )
+    artifact_lifecycle.add_argument(
+        "--format",
+        choices=["text", "json"],
+        default="json",
+        help="Output format.",
+    )
+    artifact_lifecycle.set_defaults(func=command_artifact_lifecycle_inventory)
 
     mint_batch = subcommands.add_parser(
         "mint-zet-batch",

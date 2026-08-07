@@ -105,6 +105,19 @@ blocks by default instead of scanning. That is intentional. A path-name scan can
 still reveal private information, so even read-only inspection needs a clear
 human decision.
 
+For one archive's fixed local lifecycle surfaces, v0.3.303 also provides:
+
+```powershell
+archive artifact-lifecycle-inventory <archive-root> --dry-run --format json
+```
+
+This bounded inventory covers declared scratch, staging, draft, workpack,
+generated-index, local content-addressed object, and non-canonical in-root
+objet surfaces. It hides child paths by default, refuses incomplete coverage,
+does not enumerate a possible original-bearing `objets/` root, and never turns
+an age or classification into deletion authority. See
+[Artifact Lifecycle Inventory](artifact-lifecycle-inventory.md).
+
 ## 4. Generated Archive `.gitignore`
 
 Generated archives should protect local-only state with patterns such as:
@@ -250,6 +263,7 @@ folder is safe to remove, and WOM-kit still never deletes it for you.
 The current local cleanup flow is:
 
 ```powershell
+$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli artifact-lifecycle-inventory <archive-root> --dry-run --format json
 $env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli zet-self-contained-check <archive-root> --path inbox/example.md --dry-run --format json
 $env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli ai-scratch-gc <archive-root> --path inbox/example.md --dry-run --format json
 $env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli ai-scratch-gc <archive-root> --path inbox/example.md --approve --reviewed-by person:me --format json
@@ -280,11 +294,15 @@ records are preserved.
 These are not solved yet:
 
 - no systematic `gc` command exists,
-- no broad archive-wide AI scratch sweep exists,
-- no orphan-objet sweep exists,
+- no unconstrained whole-archive scratch sweep exists; v0.3.303 instead scans
+  fixed declared lifecycle roots with explicit incomplete-coverage evidence,
+- no byte-verifying orphan-objet sweep exists; v0.3.303 reports only
+  content-free unmanifested local object candidates against valid complete
+  manifest authority,
 - local objet capture runs on sandbox-marked archives, or on real archives after owner approval via `archive objet-capture-enable` (v0.3.158); the enablement record is a consent marker in the same write-trust domain, not a security boundary,
 - no provider upload/sync cleanup exists,
-- no automatic staged-folder deletion verifier exists,
+- no automatic staged-folder deletion executor exists; the existing
+  `staged-cleanup-check` remains a report-only preservation verifier,
 - no `npx`/`pipx` distribution switch is included here.
 
 Current work is prevention, classification, and report-only visibility.

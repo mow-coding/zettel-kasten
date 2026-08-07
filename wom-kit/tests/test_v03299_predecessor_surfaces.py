@@ -52,7 +52,10 @@ BASELINE_EXPECTATIONS = {
 }
 CLI_ADDITIONS = {
     ("archive-authoring-conventions",),
+    ("archive-lifecycle-inventory",),
     ("authoring-conventions",),
+    ("artifact-inventory",),
+    ("artifact-lifecycle-inventory",),
     ("discard-draft",),
     ("discard-draft-restore",),
     ("external-locator-plan",),
@@ -85,16 +88,17 @@ CLI_ADDITIONS = {
     ("zettel-objet-link",),
     ("zettel-objet-link-revert",),
 }
-CURRENT_CLI_COUNT = 536
+CURRENT_CLI_COUNT = 539
 CURRENT_CLI_CANONICAL_SHA256 = (
-    "aa29766a55e11f07bb042617e1155460d8a172083744bd4483e11b196e692efe"
+    "9c53b826a0bf94d9d61cd99589dc82dc4823dbc4e1ba0977181c0b234ecd3d64"
 )
 CURRENT_DATABASE_COUNT = 3
 CURRENT_DATABASE_CANONICAL_SHA256 = (
     "d9a42f08ee12a6d42e40214cfb12441e4077bf50c38c25b2692ec1344328294a"
 )
 RESOURCE_ADDITIONS = {
-    "release-notes/v0.3.302.md",
+    "release-notes/v0.3.303.md",
+    "schemas/artifact-lifecycle-inventory.schema.json",
     "schemas/authoring-conventions.schema.json",
     "schemas/draft-discard-receipt.schema.json",
     "schemas/draft-discard-restore-receipt.schema.json",
@@ -129,9 +133,9 @@ RESOURCE_ADDITIONS = {
     "schemas/zettel-objet-link-revert-receipt.schema.json",
 }
 RESOURCE_REMOVALS = {"release-notes/v0.3.297.md"}
-CURRENT_RESOURCE_COUNT = 143
+CURRENT_RESOURCE_COUNT = 144
 CURRENT_RESOURCE_CANONICAL_SHA256 = (
-    "a0c759e125de138e603fdc765a9da51277f6378a2b656c084df9e8423b27b983"
+    "e3e64ab16ccbdaa18b2d94ed690061f791886bae6e02144bf65252900bea7b8a"
 )
 
 
@@ -325,7 +329,7 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
                         f"{module.__name__} was imported outside this worktree's source checkout."
                     )
 
-    def test_cli_paths_are_v03297_plus_exact_v03298_v03302_delta(self) -> None:
+    def test_cli_paths_are_v03297_plus_exact_v03298_v03303_delta(self) -> None:
         predecessor = self.fixture["cli"]["paths"]
         predecessor_set = {tuple(path) for path in predecessor}
         self.assertFalse(CLI_ADDITIONS & predecessor_set)
@@ -376,7 +380,7 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
             BASELINE_EXPECTATIONS["mcp"]["canonical_sha256"],
         )
 
-    def test_resource_paths_are_v03297_plus_exact_v03298_v03302_delta(self) -> None:
+    def test_resource_paths_are_v03297_plus_exact_v03298_v03303_delta(self) -> None:
         predecessor_paths = set(self.fixture["package_resources"]["packaged_paths"])
         self.assertTrue(
             RESOURCE_REMOVALS <= predecessor_paths,
@@ -406,10 +410,10 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
             actual,
             expected,
             "Current package-resource paths must be the full v0.3.297 set plus "
-            "the exact cumulative v0.3.298 through v0.3.302 delta. "
+            "the exact cumulative v0.3.298 through v0.3.303 delta. "
             f"missing={compact(missing)}; extra={compact(extra)}",
         )
-        self.assertEqual(manifest["version"], "0.3.302")
+        self.assertEqual(manifest["version"], "0.3.303")
         self.assertEqual(len(actual), CURRENT_RESOURCE_COUNT)
         self.assertEqual(
             canonical_sha256(actual),
@@ -428,14 +432,14 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
         self.assertIn("does not undo", predecessor_flat)
         self.assertNotIn("C:\\Users\\", predecessor_text)
 
-    def test_v03302_release_note_is_public_and_synchronized(self) -> None:
-        current_source_release = KIT_ROOT / "docs" / "releases" / "v0.3.302.md"
+    def test_v03303_release_note_is_public_and_synchronized(self) -> None:
+        current_source_release = KIT_ROOT / "docs" / "releases" / "v0.3.303.md"
         current_packaged_release = (
             SRC_ROOT
             / "wom_kit"
             / "_resources"
             / "release-notes"
-            / "v0.3.302.md"
+            / "v0.3.303.md"
         )
         self.assertEqual(
             current_source_release.read_bytes(),
@@ -444,11 +448,11 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
         current_text = current_source_release.read_text(encoding="utf-8")
         current_flat = " ".join(current_text.split())
         for token in (
-            "saved-view-write",
-            "saved-view-revert",
+            "artifact-lifecycle-inventory",
+            "unmanifested_local_object_candidate",
             "fail-closed",
-            "duplicate",
-            "human review",
+            "cleanup authority",
+            "object bytes",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, current_flat)
