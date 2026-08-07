@@ -10,12 +10,12 @@ It is not a website, SaaS app, dashboard, or visual note-taking product. The int
 
 ## Install The Command-Line Tool
 
-The exact v0.3.301 GitHub Release, when present, uses the self-contained wheel
+The exact v0.3.302 GitHub Release, when present, uses the self-contained wheel
 below. Confirm that the release exists and lists the wheel before installing
 it. The versioned URL alone is not proof that the asset is available.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.301/wom_kit-0.3.301-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.302/wom_kit-0.3.302-py3-none-any.whl"
 archive --version
 ```
 
@@ -101,6 +101,11 @@ archive-root-consistent/idempotent/batched source intake, real date/category
 relation signals, and content-free JSON argument failures. See
 [`docs/letter112-completion.md`](docs/letter112-completion.md) and
 [`docs/releases/v0.3.301.md`](docs/releases/v0.3.301.md).
+
+v0.3.302 adds the missing review-gated persistent saved-view writer, exact
+revert, interruption convergence, and strict fail-closed saved-view authority.
+See [`docs/saved-view-write.md`](docs/saved-view-write.md) and
+[`docs/releases/v0.3.302.md`](docs/releases/v0.3.302.md).
 
 v0.3.292 keeps those runtime safeguards and makes objet relationship counts
 honest across overview and catalog surfaces. See

@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wom-kit/saved-view-revert-journal/v0.1",
+  "title": "WOM-kit saved-view revert transaction journal",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "archive_id",
+    "source_receipt_path",
+    "source_receipt_sha256",
+    "target_path",
+    "view_sha256",
+    "revert_receipt_path",
+    "created_at"
+  ],
+  "properties": {
+    "schema": {"const": "wom-kit/saved-view-revert-journal/v0.1"},
+    "archive_id": {"type": "string", "minLength": 1},
+    "source_receipt_path": {
+      "type": "string",
+      "pattern": "^receipts/views/[0-9a-f]{20}\\.[0-9a-f]{16}\\.saved-view-write\\.json$"
+    },
+    "source_receipt_sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "target_path": {
+      "type": "string",
+      "pattern": "^views/generated-[0-9a-f]{20}\\.yml$"
+    },
+    "view_sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "revert_receipt_path": {
+      "type": "string",
+      "pattern": "^receipts/views/reverts/[0-9a-f]{20}\\.[0-9a-f]{16}\\.saved-view-revert\\.json$"
+    },
+    "created_at": {"type": "string", "minLength": 1}
+  }
+}

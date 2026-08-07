@@ -38,7 +38,7 @@ For operator feedback, run `archive operator-feedback-plan <archive-root> --dry-
 - When Doctor reports a possible inbox pipeline bypass, inspect it with `archive inbox-pipeline-audit <archive-root> --dry-run --format json`; its classes are review signals, not proof, and authorize no automatic repair.
 - Create AI-generated zettel drafts only with `archive create-draft` dry-run followed by its exact human-reviewed replay. Never write Markdown directly into `inbox/`.
 - Use the official dry-run and approval routes for `mint-zet`, `zettel-edge`, source/objet intake, and operational-context updates; knowing a destination path is not write authorization.
-- Saved-view recommendations are read-only until WOM provides a dedicated writer. An AI must not directly edit persistent `views/*.yml`.
+- For a persistent saved view, prepare a reviewed private request under `.wom-scratch/private/saved-views/`, preview `archive saved-view-write`, and use only its exact approval-gated write or revert route. Never edit persistent `views/*.yml` directly.
 - Preserve each person's private archive boundary.
 - Child-related records should name the child/dependent as a subject when appropriate.
 - Do not expose private source notes from a member's personal archive unless explicitly shared.

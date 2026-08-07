@@ -369,6 +369,7 @@ from . import (
     completion_workflows,
     runtime_guidance,
     runtime_skill_install,
+    saved_view_workflows,
 )
 from .paths import (
     ArchivePathError,
@@ -2650,12 +2651,45 @@ class Doctor:
         root = self.archive_root / "views"
         if not root.is_dir():
             return
+        authority = archive_services.saved_view_authority_scan(self.archive_root)
+        for code in authority.get("issue_codes", []):
+            self.error(
+                str(code),
+                "Saved-view authority is incomplete or ambiguous; repair it before relying on views.",
+                root,
+            )
         for path in sorted(root.glob("*.yml")):
             if not self._path_stays_inside_archive(path):
                 continue
             data = self._load_yaml_file(path)
             if isinstance(data, dict):
                 self._check_schema(data, "view.schema.json", path)
+        receipt_specs = (
+            (
+                self.archive_root / "receipts" / "views",
+                "*.saved-view-write.json",
+                "saved-view-write-receipt.schema.json",
+            ),
+            (
+                self.archive_root / "receipts" / "views" / "reverts",
+                "*.saved-view-revert.json",
+                "saved-view-revert-receipt.schema.json",
+            ),
+            (
+                self.archive_root / "receipts" / "views" / "journals",
+                "*.saved-view-revert-journal.json",
+                "saved-view-revert-journal.schema.json",
+            ),
+        )
+        for receipt_root, pattern, schema_name in receipt_specs:
+            if not receipt_root.is_dir():
+                continue
+            for path in sorted(receipt_root.glob(pattern)):
+                if not self._path_stays_inside_archive(path):
+                    continue
+                data = self._load_json_file(path)
+                if isinstance(data, dict):
+                    self._check_schema(data, schema_name, path)
 
     def _check_workpacks(self) -> None:
         root = self.archive_root / "workpacks"
@@ -14828,6 +14862,74 @@ def command_view_recommendation_plan(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 1
 
 
+def command_saved_view_write(args: argparse.Namespace) -> int:
+    if bool(args.dry_run) == bool(args.approve):
+        print("Provide exactly one of --dry-run or --approve.", file=sys.stderr)
+        return 1
+    try:
+        if args.dry_run:
+            result = saved_view_workflows.saved_view_write_plan(
+                Path(args.archive_root),
+                request_path=args.request,
+            )
+        else:
+            result = saved_view_workflows.saved_view_write(
+                Path(args.archive_root),
+                request_path=args.request,
+                expected_plan_sha256=args.expected_plan_sha256,
+                reviewed_by=args.reviewed_by,
+                affirm_view_reviewed=bool(args.affirm_view_reviewed),
+            )
+    except (archive_services.ArchiveServiceError, OSError):
+        print("Saved-view write could not inspect the archive safely.", file=sys.stderr)
+        return 1
+    if args.format == "json":
+        print_json(result)
+    else:
+        summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+        print(f"Saved-view write: {result.get('state', 'blocked')}")
+        print(f"- matching zets: {summary.get('matching_zettel_count')}")
+        print(f"- target: {summary.get('target_path') or 'none'}")
+        print(f"- plan: {summary.get('plan_sha256') or 'none'}")
+        for blocker in result.get("blockers", []):
+            print(f"BLOCKED: {blocker}")
+        print("Private view name and facet values: not echoed")
+    return 0 if result.get("ok") else 1
+
+
+def command_saved_view_revert(args: argparse.Namespace) -> int:
+    if bool(args.dry_run) == bool(args.approve):
+        print("Provide exactly one of --dry-run or --approve.", file=sys.stderr)
+        return 1
+    try:
+        if args.dry_run:
+            result = saved_view_workflows.saved_view_revert_plan(
+                Path(args.archive_root),
+                receipt_path=args.receipt,
+            )
+        else:
+            result = saved_view_workflows.saved_view_revert(
+                Path(args.archive_root),
+                receipt_path=args.receipt,
+                expected_plan_sha256=args.expected_plan_sha256,
+                reviewed_by=args.reviewed_by,
+            )
+    except (archive_services.ArchiveServiceError, OSError):
+        print("Saved-view revert could not inspect the archive safely.", file=sys.stderr)
+        return 1
+    if args.format == "json":
+        print_json(result)
+    else:
+        summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+        print(f"Saved-view revert: {result.get('state', 'blocked')}")
+        print(f"- target: {summary.get('target_path') or 'none'}")
+        print(f"- plan: {summary.get('plan_sha256') or 'none'}")
+        for blocker in result.get("blockers", []):
+            print(f"BLOCKED: {blocker}")
+        print("Private view name and facet values: not echoed")
+    return 0 if result.get("ok") else 1
+
+
 def command_index_health(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print("index-health is read-only and requires --dry-run.", file=sys.stderr)
@@ -25932,6 +26034,45 @@ def build_parser() -> argparse.ArgumentParser:
     view_recommendation_parser.add_argument("--max-recommendations", type=int, default=12, help="Maximum recommendations to return.")
     view_recommendation_parser.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     view_recommendation_parser.set_defaults(func=command_view_recommendation_plan)
+
+    saved_view_write_parser = subcommands.add_parser(
+        "saved-view-write",
+        help="Preview or approve one private, review-gated navigation saved view.",
+    )
+    saved_view_write_parser.add_argument("archive_root", help="Archive root to inspect or update.")
+    saved_view_write_parser.add_argument(
+        "--request",
+        required=True,
+        help="Archive-relative .wom-scratch/private/saved-views/*.json request.",
+    )
+    saved_view_write_parser.add_argument("--dry-run", action="store_true", help="Preview only; write nothing.")
+    saved_view_write_parser.add_argument("--approve", action="store_true", help="Approve the exact fresh plan.")
+    saved_view_write_parser.add_argument("--expected-plan-sha256", help="Exact sha256 from the reviewed dry-run plan.")
+    saved_view_write_parser.add_argument("--reviewed-by", help="Stable human reviewer id for an approved write.")
+    saved_view_write_parser.add_argument(
+        "--affirm-view-reviewed",
+        action="store_true",
+        help="Affirm that the private name and every facet filter were reviewed.",
+    )
+    saved_view_write_parser.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    saved_view_write_parser.set_defaults(func=command_saved_view_write)
+
+    saved_view_revert_parser = subcommands.add_parser(
+        "saved-view-revert",
+        help="Preview or approve exact removal of an unchanged WOM-written saved view.",
+    )
+    saved_view_revert_parser.add_argument("archive_root", help="Archive root to inspect or update.")
+    saved_view_revert_parser.add_argument(
+        "--receipt",
+        required=True,
+        help="Archive-relative receipts/views/*.saved-view-write.json receipt.",
+    )
+    saved_view_revert_parser.add_argument("--dry-run", action="store_true", help="Preview only; write nothing.")
+    saved_view_revert_parser.add_argument("--approve", action="store_true", help="Approve the exact fresh revert plan.")
+    saved_view_revert_parser.add_argument("--expected-plan-sha256", help="Exact sha256 from the reviewed dry-run plan.")
+    saved_view_revert_parser.add_argument("--reviewed-by", help="Stable human reviewer id for an approved revert.")
+    saved_view_revert_parser.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    saved_view_revert_parser.set_defaults(func=command_saved_view_revert)
 
     related = subcommands.add_parser(
         "related-zets",

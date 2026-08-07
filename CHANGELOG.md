@@ -6,6 +6,15 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.302 - 2026-08-07
+
+- Added a CLI-only, exact-plan, human-reviewed saved-view writer and exact
+  revert with immutable receipts and interruption convergence.
+- Made saved-view authority fail closed on corrupt, unsafe, oversized,
+  unsupported, or duplicate definitions instead of silently skipping them.
+- Added closed Draft 2020-12 request/evidence schemas, Doctor checks, action
+  routing v0.11, new-archive AI guidance, privacy regressions, and public docs.
+
 ## v0.3.301 - 2026-08-07
 
 - Closed the real-use gaps reported in beta Letter 112 with structured

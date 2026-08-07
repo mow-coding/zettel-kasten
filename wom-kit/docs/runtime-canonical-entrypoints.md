@@ -1,6 +1,6 @@
 # Runtime Canonical Entry Points
 
-Status: v0.3.301 Letter 112 real-use completion routing checkpoint
+Status: v0.3.302 saved-view lifecycle routing checkpoint
 
 When an AI runtime enters a WOM archive, it needs a small, explicit "start
 here" map. The archive may contain zets, source bindings, provider metadata,
@@ -53,8 +53,8 @@ consumption as `not_proven`.
 
 ## Official Action Routing
 
-Introduced in v0.3.278 and extended through v0.3.301, `action_routing` uses
-`wom-kit/ai-command-path-routing/v0.10`. It tells an AI which official command
+Introduced in v0.3.278 and extended through v0.3.302, `action_routing` uses
+`wom-kit/ai-command-path-routing/v0.11`. It tells an AI which official command
 handles session entry, search, local version truth, saved-view inspection,
 inbox pipeline-shape review, explicit event-membership add/removal planning, command
 discovery, draft creation, minting, typed edges, source capture, and
@@ -70,6 +70,10 @@ week/installment of the same course or work and `sequence` for the next
 reviewed generic process step. Candidates and plans remain non-authorizing.
 Every listed mutation still requires a separate exact plan SHA-256 and
 attributed human approval.
+
+v0.3.302 adds a closed private request, preview, approval, immutable receipt,
+and exact revert route for persistent saved views. Direct AI writes to
+`views/*.yml` remain forbidden.
 
 When the question is observed current canonical source-reference coverage
 versus separately recorded storage evidence, use `python -B -m
@@ -88,7 +92,8 @@ AI drafts use
 write into `inbox/` is forbidden. `archive version` does not verify remote
 release freshness. `archive inbox-pipeline-audit --dry-run` returns
 conservative structural signals, not proof or automatic repair. Saved-view
-writing remains unavailable. Event-membership additions and removals use
+writes use only the review-gated `saved-view-write` and exact
+`saved-view-revert` routes. Event-membership additions and removals use
 separate digest-bound writers and separate recovery commands; neither path
 infers membership or exposes an MCP writer. v0.3.284 routes explicit removal
 from its read-only plan through approved write and interruption recovery.

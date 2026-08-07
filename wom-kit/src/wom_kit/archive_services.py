@@ -99481,11 +99481,16 @@ def runtime_context_write_action_routes() -> list[dict[str, Any]]:
             "action": "create_saved_view",
             "when": "the AI wants a new persistent views/*.yml entry",
             "preview_command": "archive view-recommendation-plan <archive-root> --dry-run --format json",
-            "approved_command": None,
-            "write_implemented": False,
+            "write_plan_command": "archive saved-view-write <archive-root> --request .wom-scratch/private/saved-views/<reviewed>.json --dry-run --format json",
+            "approved_command": "archive saved-view-write <archive-root> --request .wom-scratch/private/saved-views/<reviewed>.json --expected-plan-sha256 <sha256> --approve --reviewed-by <human-actor> --affirm-view-reviewed --format json",
+            "revert_command": "archive saved-view-revert <archive-root> --receipt receipts/views/<receipt>.saved-view-write.json --dry-run --format json",
+            "approved_revert_command": "archive saved-view-revert <archive-root> --receipt receipts/views/<receipt>.saved-view-write.json --expected-plan-sha256 <sha256> --approve --reviewed-by <human-actor> --format json",
+            "write_implemented": True,
+            "revert_implemented": True,
             "requires_human_approval": True,
             "direct_file_write_allowed": False,
-            "next_safe_action": "review the recommendation, then wait for a dedicated WOM saved-view writer instead of editing views/*.yml as an AI",
+            "receipt_required": True,
+            "next_safe_action": "put the reviewed private request under the fixed scratch root, preview the digest-bound plan, and use only the official approval-gated writer or exact revert route",
         },
         {
             "action": "write_activity_group_membership",
@@ -99529,7 +99534,7 @@ def runtime_context_write_action_routes() -> list[dict[str, Any]]:
 
 def runtime_context_action_routing() -> dict[str, Any]:
     return {
-        "schema": "wom-kit/ai-command-path-routing/v0.10",
+        "schema": "wom-kit/ai-command-path-routing/v0.11",
         "official_wom_command_required_for_archive_actions": True,
         "location_policy_alone_is_sufficient": False,
         "raw_filesystem_search_is_authoritative": False,
@@ -108003,25 +108008,16 @@ def view_zets(
                 continue
             wanted[key] = str(raw_value)
     else:
+        authority = saved_view_authority_scan(root)
+        if not authority["ok"]:
+            raise ArchiveServiceError("Saved view authority is blocked; run archive view-health --dry-run.")
         view_filters: dict[str, Any] | None = None
-        views_root = root / "views"
-        if views_root.is_dir():
-            for view_path in safe_archive_glob(views_root, "*.yml", root):
-                try:
-                    doc = load_yaml(view_path.read_text(encoding="utf-8"))
-                except Exception:
-                    continue
-                if not isinstance(doc, dict):
-                    continue
-                candidates = [doc] + [item for item in doc.get("saved_views") or [] if isinstance(item, dict)]
-                for candidate in candidates:
-                    if str(candidate.get("id") or "") == view_id:
-                        raw_filters = candidate.get("filters")
-                        view_filters = raw_filters if isinstance(raw_filters, dict) else {}
-                        resolved_name = str(candidate.get("name") or "") or None
-                        break
-                if view_filters is not None:
-                    break
+        for candidate in authority["views"]:
+            if str(candidate.get("id") or "") == view_id:
+                raw_filters = candidate.get("filters")
+                view_filters = raw_filters if isinstance(raw_filters, dict) else {}
+                resolved_name = str(candidate.get("name") or "") or None
+                break
         if view_filters is None:
             raise ArchiveServiceError(f"View not found: {view_id}")
         for raw_key, raw_value in view_filters.items():
@@ -108087,33 +108083,147 @@ def view_zets(
     }
 
 
-def iter_saved_view_definitions(root: Path) -> list[dict[str, Any]]:
+SAVED_VIEW_AUTHORITY_MAX_FILES = 1000
+SAVED_VIEW_AUTHORITY_MAX_FILE_BYTES = 1024 * 1024
+SAVED_VIEW_ID_RE = re.compile(r"^view\.[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+
+
+def saved_view_authority_scan(root: Path) -> dict[str, Any]:
+    """Read the complete direct saved-view authority or fail closed.
+
+    Older readers skipped malformed YAML. That made a corrupt file
+    indistinguishable from an absent view. This scan keeps compatible top-level
+    and nested view shapes, while treating unreadable bytes, unsafe entries,
+    malformed containers, unsupported filters, and duplicate ids as authority
+    blockers.
+    """
+
     views_root = root / "views"
     if not views_root.is_dir():
-        return []
+        return {
+            "ok": True,
+            "views": [],
+            "file_count": 0,
+            "authority_sha256": sha256_json_value([]),
+            "issue_codes": [],
+        }
+
     views: list[dict[str, Any]] = []
-    for view_path in safe_archive_glob(views_root, "*.yml", root):
+    issues: list[str] = []
+    authority_rows: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    try:
+        entries = sorted(
+            (entry for entry in views_root.iterdir() if entry.name.lower().endswith(".yml")),
+            key=lambda entry: entry.name,
+        )
+    except (OSError, RuntimeError, ValueError):
+        entries = []
+        issues.append("saved_view_authority_directory_unreadable")
+    if len(entries) > SAVED_VIEW_AUTHORITY_MAX_FILES:
+        issues.append("saved_view_authority_file_limit_exceeded")
+        entries = entries[:SAVED_VIEW_AUTHORITY_MAX_FILES]
+
+    for view_path in entries:
         try:
-            doc = load_yaml(view_path.read_text(encoding="utf-8"))
+            if view_path.is_symlink() or not view_path.is_file() or not is_path_within_root(view_path, root):
+                issues.append("saved_view_authority_unsafe_entry")
+                continue
+            before_stat = view_path.stat()
+            if before_stat.st_size > SAVED_VIEW_AUTHORITY_MAX_FILE_BYTES:
+                issues.append("saved_view_authority_file_too_large")
+                continue
+            raw_bytes = view_path.read_bytes()
+            after_stat = view_path.stat()
+            before_identity = (
+                before_stat.st_dev,
+                before_stat.st_ino,
+                before_stat.st_size,
+                before_stat.st_mtime_ns,
+            )
+            after_identity = (
+                after_stat.st_dev,
+                after_stat.st_ino,
+                after_stat.st_size,
+                after_stat.st_mtime_ns,
+            )
+            if (
+                view_path.is_symlink()
+                or not view_path.is_file()
+                or before_identity != after_identity
+                or len(raw_bytes) != after_stat.st_size
+            ):
+                issues.append("saved_view_authority_changed_during_scan")
+                continue
+            if len(raw_bytes) > SAVED_VIEW_AUTHORITY_MAX_FILE_BYTES:
+                issues.append("saved_view_authority_file_too_large")
+                continue
+            text = raw_bytes.decode("utf-8")
+        except UnicodeDecodeError:
+            issues.append("saved_view_authority_invalid_utf8")
+            continue
+        except (OSError, RuntimeError, ValueError):
+            issues.append("saved_view_authority_file_unreadable")
+            continue
+        relative = archive_relative_path(view_path, root)
+        authority_rows.append(
+            {
+                "path": relative,
+                "bytes": len(raw_bytes),
+                "sha256": "sha256:" + hashlib.sha256(raw_bytes).hexdigest(),
+            }
+        )
+        try:
+            doc = load_yaml(text)
         except Exception:
+            issues.append("saved_view_authority_yaml_invalid")
             continue
         if not isinstance(doc, dict):
+            issues.append("saved_view_authority_document_not_object")
             continue
-        candidates = [doc] + [item for item in doc.get("saved_views") or [] if isinstance(item, dict)]
-        for candidate in candidates:
+        nested = doc.get("saved_views", [])
+        if not isinstance(nested, list) or any(not isinstance(item, dict) for item in nested):
+            issues.append("saved_view_authority_nested_views_invalid")
+            continue
+        candidates = [(doc, False), *((item, True) for item in nested)]
+        for candidate, is_nested in candidates:
             view_id = str(candidate.get("id") or "").strip()
-            if not view_id:
+            if not SAVED_VIEW_ID_RE.fullmatch(view_id):
+                issues.append("saved_view_authority_id_invalid")
                 continue
+            if view_id in seen_ids:
+                issues.append("saved_view_authority_duplicate_id")
+                continue
+            seen_ids.add(view_id)
+            raw_filters = candidate.get("filters")
+            if not isinstance(raw_filters, dict):
+                issues.append("saved_view_authority_filters_invalid")
+                continue
+            normalized_filters, filter_blockers = normalize_view_facet_filters(raw_filters)
+            if filter_blockers:
+                issues.append("saved_view_authority_filter_unsupported")
             views.append(
                 {
                     "id": view_id,
                     "name": safe_manifest_label(candidate.get("name"), fallback=None),
-                    "filters": candidate.get("filters") if isinstance(candidate.get("filters"), dict) else {},
-                    "source_path": archive_relative_path(view_path, root),
-                    "nested": candidate is not doc,
+                    "filters": raw_filters,
+                    "normalized_filters": normalized_filters,
+                    "source_path": relative,
+                    "source_sha256": "sha256:" + hashlib.sha256(raw_bytes).hexdigest(),
+                    "nested": is_nested,
                 }
             )
-    return views
+    return {
+        "ok": not issues,
+        "views": views,
+        "file_count": len(authority_rows),
+        "authority_sha256": sha256_json_value(authority_rows),
+        "issue_codes": unique_preserve_order(issues),
+    }
+
+
+def iter_saved_view_definitions(root: Path) -> list[dict[str, Any]]:
+    return saved_view_authority_scan(root)["views"]
 
 
 def normalize_view_facet_filters(raw_filters: dict[str, Any]) -> tuple[dict[str, str], list[str]]:
@@ -108330,7 +108440,9 @@ def view_health(
     db_path = root / INDEX_RELATIVE_PATH
     if not db_path.is_file():
         blockers.append("archive_index_missing")
-    views = iter_saved_view_definitions(root)
+    authority = saved_view_authority_scan(root)
+    blockers.extend(authority["issue_codes"])
+    views = authority["views"]
     if not views:
         warnings.append("no_saved_views_found")
 
@@ -108356,7 +108468,16 @@ def view_health(
     }
     facet_roles: list[dict[str, Any]] = []
 
-    if blockers:
+    # An invalid authority must make the overall result fail closed, but the
+    # health command should still diagnose every definition that was safe to
+    # parse. Only missing index / invalid invocation prevents those read-only
+    # per-view diagnostics.
+    inspection_blockers = [
+        blocker
+        for blocker in blockers
+        if blocker not in authority["issue_codes"]
+    ]
+    if inspection_blockers:
         for view in views:
             normalized_filters, view_blockers = normalize_view_facet_filters(view.get("filters") if isinstance(view.get("filters"), dict) else {})
             used_facet_keys.update(normalized_filters)
@@ -108369,7 +108490,7 @@ def view_health(
                     "state": "blocked",
                     "count": 0,
                     "filter_diagnostics": [],
-                    "blockers": unique_preserve_order(view_blockers + blockers),
+                    "blockers": unique_preserve_order(view_blockers + inspection_blockers),
                     "warnings": [],
                 }
             )
@@ -108463,6 +108584,13 @@ def view_health(
         "archive_id": archive_id,
         "index_path": INDEX_RELATIVE_PATH,
         "summary": summary,
+        "authority": {
+            "state": "valid" if authority["ok"] else "blocked",
+            "file_count": authority["file_count"],
+            "view_count": len(views),
+            "authority_sha256": authority["authority_sha256"],
+            "issue_codes": authority["issue_codes"],
+        },
         "views": view_results,
         "facet_distribution": facet_distribution,
         "facet_role_summary": facet_role_summary,

@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wom-kit/saved-view-write-receipt/v0.1",
+  "title": "WOM-kit saved-view write receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "lifecycle_action",
+    "archive_id",
+    "action",
+    "target_path",
+    "receipt_path",
+    "request_sha256",
+    "request_canonical_sha256",
+    "view_id_sha256",
+    "view_sha256",
+    "plan_sha256",
+    "reviewed_by",
+    "created_at",
+    "privacy"
+  ],
+  "properties": {
+    "schema": {"const": "wom-kit/saved-view-write-receipt/v0.1"},
+    "lifecycle_action": {"const": "saved_view_write"},
+    "archive_id": {"type": "string", "minLength": 1},
+    "action": {"enum": ["create", "finalize_receipt"]},
+    "target_path": {
+      "type": "string",
+      "pattern": "^views/generated-[0-9a-f]{20}\\.yml$"
+    },
+    "receipt_path": {
+      "type": "string",
+      "pattern": "^receipts/views/[0-9a-f]{20}\\.[0-9a-f]{16}\\.saved-view-write\\.json$"
+    },
+    "request_sha256": {"$ref": "#/$defs/sha256"},
+    "request_canonical_sha256": {"$ref": "#/$defs/sha256"},
+    "view_id_sha256": {"$ref": "#/$defs/sha256"},
+    "view_sha256": {"$ref": "#/$defs/sha256"},
+    "plan_sha256": {"$ref": "#/$defs/sha256"},
+    "reviewed_by": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9:._-]{0,199}$"
+    },
+    "created_at": {"type": "string", "minLength": 1},
+    "privacy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["view_name_recorded", "facet_keys_recorded", "facet_values_recorded"],
+      "properties": {
+        "view_name_recorded": {"const": false},
+        "facet_keys_recorded": {"const": false},
+        "facet_values_recorded": {"const": false}
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  }
+}

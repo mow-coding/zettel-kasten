@@ -1,6 +1,6 @@
 # View Recommendation Plan
 
-Status: v0.3.97 read-only saved view recommendation checkpoint
+Status: v0.3.302 read-only recommendation plus separate reviewed writer
 Date: 2026-06-17
 
 `view-recommendation-plan` is the safe next step after `view-health`.
@@ -10,7 +10,8 @@ facet distributions. It proposes candidate saved-view filters from likely
 navigation facets such as `subject`, `institution`, `record_type`,
 `source_category`, and `domain`.
 
-It does not edit `views/*.yml`.
+It does not edit `views/*.yml`. v0.3.302 adds a separate approval-gated
+`saved-view-write` command for a human-reviewed private request.
 
 ## Commands
 
@@ -95,4 +96,7 @@ Use `view-health` to diagnose whether saved views are active, empty, or blocked.
 Use `view-recommendation-plan` when you want candidate replacement or expansion
 filters based on actual indexed navigation facets.
 
-After a human edits `views/*.yml`, run `archive index` and `view-health` again.
+After reviewing a recommendation, put the final name and filters in a private
+`saved-view-write-request/v0.1` JSON file. Preview and approve it through
+`archive saved-view-write`; an AI must not directly edit persistent view YAML.
+See [Saved-View Write And Exact Revert](saved-view-write.md).

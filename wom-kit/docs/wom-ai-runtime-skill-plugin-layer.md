@@ -160,10 +160,10 @@ MCP clients must not request `redact_local_paths: false` unless trusted local de
 
 ## AI Command-Path Routing
 
-Introduced in v0.3.278 and extended through v0.3.294, runtime-context,
+Introduced in v0.3.278 and extended through v0.3.302, runtime-context,
 ai-start-here, operational-context, and
 canonical entrypoint metadata return
-`wom-kit/ai-command-path-routing/v0.8`.
+`wom-kit/ai-command-path-routing/v0.11`.
 
 The routing object names official WOM commands for search, local version
 truth, checked-layer objet rediscovery before global absence claims,
@@ -191,9 +191,9 @@ archive ai-start-here <archive-root> --dry-run --progress --format json
 ```
 
 Existing archive AGENTS files are not rewritten. `archive version` remains
-local truth only and does not verify remote release freshness. Persistent
-saved-view creation remains recommendation-only because no dedicated writer
-exists in this release.
+local truth only and does not verify remote release freshness. v0.3.302 adds a
+CLI-only `saved-view-write` and exact `saved-view-revert` lifecycle; it keeps
+direct AI edits to persistent `views/*.yml` forbidden.
 
 See [AI Command-Path Routing](ai-command-path-routing.md).
 

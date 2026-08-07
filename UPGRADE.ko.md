@@ -2,6 +2,25 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.3.302 저장 뷰 생성·되돌리기
+
+v0.3.302는 올바른 v0.3.301 아카이브와 호환되며 자동 마이그레이션이
+필요하지 않습니다. 이제 저장 뷰 검사는 깨진 YAML/UTF-8, 위험하거나 너무
+큰 파일, 지원하지 않는 필터, 잘못된 id, 중복 id를 조용히 무시하지 않고
+전체 권한 문제로 차단합니다.
+
+업그레이드 뒤 `archive view-health <archive-root> --dry-run --format json`을
+실행하십시오. 새 영구 navigation view는 비공개
+`saved-view-write-request/v0.1`, dry-run, 정확한 plan digest, 사람 검토자,
+`--affirm-view-reviewed`를 거쳐야 합니다. AI가 `views/*.yml`을 직접 고치게
+하지 마십시오. `saved-view-revert`는 WOM writer가 만든 파일이 그대로일
+때만 제거하며, 사람이 나중에 고친 파일은 건드리지 않습니다.
+
+자세한 내용은
+[`wom-kit/docs/saved-view-write.md`](wom-kit/docs/saved-view-write.md)와
+[`wom-kit/docs/releases/v0.3.302.md`](wom-kit/docs/releases/v0.3.302.md)를
+참조하십시오.
+
 ## v0.3.301 Letter 112 실사용 보완
 
 v0.3.301은 기존 v0.3.300 아카이브와 호환되며 자동 마이그레이션이
