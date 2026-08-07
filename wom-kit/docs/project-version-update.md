@@ -79,8 +79,29 @@ Before changing the checked-out source or a pin, WOM-kit requires:
   mirror file;
 - no symbolic-link metadata directory, source mirror, pin, or receipt route;
 - a configured Git remote named `origin`;
-- an exact stable `vMAJOR.MINOR.PATCH` target that is not a downgrade;
+- an exact stable `vMAJOR.MINOR.PATCH` target that is not lower than any
+  recognized project pin or project-local source version;
 - no existing update lock.
+
+Since v0.3.304, the already loaded WOM-kit runtime is explicitly not part of
+the forward-only comparison. The transaction changes the project source mirror
+and recognized pins, not the Python code already loaded in the current
+process. Therefore an external development runtime newer than the requested
+release is reported as informational context and cannot turn an otherwise
+forward project transition into a downgrade.
+
+Structured output makes this boundary inspectable:
+
+```text
+forward_only.comparison_basis: recognized_project_pins_and_project_source_versions
+forward_only.running_runtime_used: false
+runtime.used_for_forward_only_decision: false
+```
+
+A target below any recognized project pin or source version still fails
+closed. Its next action tells the operator to choose a target at least as new
+as every recognized project version and rerun the dry-run. Do not hand-edit a
+pin to bypass that gate.
 
 Approval then uses one non-force, atomic Git fetch for only:
 

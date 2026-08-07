@@ -7651,6 +7651,37 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertTrue(any("exact stable version" in item for item in pin_result["blockers"]))
             project_pin.write_bytes(before_pin)
 
+            self.assertEqual(
+                self.git_fixture_command(fixture["mirror"], "rev-parse", "HEAD"),
+                before_head,
+            )
+            self.assertEqual(project_pin.read_bytes(), before_pin)
+
+            self.git_fixture_command(
+                fixture["mirror"],
+                "fetch",
+                "origin",
+                f"refs/tags/{fixture['target_tag']}:refs/tags/{fixture['target_tag']}",
+            )
+            self.git_fixture_command(
+                fixture["mirror"],
+                "checkout",
+                "--detach",
+                "--quiet",
+                fixture["target_tag"],
+            )
+            project_pin.write_text(fixture["target_tag"] + "\n", encoding="utf-8")
+            (fixture["mirror"] / "installed-version.txt").write_text(
+                fixture["target_tag"] + "\n",
+                encoding="utf-8",
+            )
+            before_downgrade_head = self.git_fixture_command(
+                fixture["mirror"],
+                "rev-parse",
+                "HEAD",
+            )
+            before_downgrade_pin = project_pin.read_bytes()
+
             downgrade_code, downgrade_output = self.run_cli(
                 [
                     "project-version-update",
@@ -7666,13 +7697,76 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(downgrade_code, 1, downgrade_output)
             self.assertTrue(any("forward-only" in item for item in downgrade_result["blockers"]))
 
-            self.assertEqual(self.git_fixture_command(fixture["mirror"], "rev-parse", "HEAD"), before_head)
-            self.assertEqual(project_pin.read_bytes(), before_pin)
+            self.assertEqual(
+                self.git_fixture_command(fixture["mirror"], "rev-parse", "HEAD"),
+                before_downgrade_head,
+            )
+            self.assertEqual(project_pin.read_bytes(), before_downgrade_pin)
             self.assertFalse((metadata_root / "receipts" / "version-updates").exists())
             self.assertFalse(lock_path.exists())
             combined = invalid_output + reviewer_output + lock_output + pin_output + downgrade_output
             self.assertNotIn(str(fixture["project_root"]), combined)
             self.assertNotIn(str(fixture["upstream"]), combined)
+
+    def test_project_version_update_ignores_newer_external_runtime_for_forward_only(self) -> None:
+        if shutil.which("git") is None:
+            self.skipTest("git is required for the project update fixture")
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = self.create_project_version_update_fixture(Path(tmp))
+            version_parts = [int(part) for part in fixture["target_version"].split(".")]
+            external_runtime_version = (
+                f"{version_parts[0]}.{version_parts[1]}.{version_parts[2] + 1}"
+            )
+
+            with patch.object(
+                archive_services,
+                "WOM_KIT_VERSION",
+                external_runtime_version,
+            ):
+                code, output = self.run_cli(
+                    [
+                        "project-version-update",
+                        str(fixture["project_root"]),
+                        "--target",
+                        fixture["target_tag"],
+                        "--dry-run",
+                        "--format",
+                        "json",
+                    ]
+                )
+            result = json.loads(output)
+
+            self.assertEqual(code, 0, output)
+            self.assertEqual(result["status"], "ready_to_fetch_on_approve")
+            self.assertFalse(
+                any("forward-only" in item for item in result["blockers"]),
+                output,
+            )
+            self.assertEqual(
+                result["runtime"]["running_version_before"],
+                external_runtime_version,
+            )
+            self.assertFalse(
+                result["runtime"]["import_origin_within_project_source_mirror"]
+            )
+            self.assertFalse(result["runtime"]["used_for_forward_only_decision"])
+            self.assertEqual(
+                result["forward_only"]["comparison_basis"],
+                "recognized_project_pins_and_project_source_versions",
+            )
+            self.assertTrue(
+                result["forward_only"][
+                    "target_is_at_least_every_recognized_project_version"
+                ]
+            )
+            self.assertTrue(
+                any(
+                    "outside the project source mirror" in item
+                    and "not a forward-only blocker" in item
+                    for item in result["warnings"]
+                ),
+                output,
+            )
 
     def test_project_version_update_does_not_force_overwrite_a_local_target_tag(self) -> None:
         if shutil.which("git") is None:

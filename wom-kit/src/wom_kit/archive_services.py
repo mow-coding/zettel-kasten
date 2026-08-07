@@ -97158,6 +97158,10 @@ def wom_kit_project_version_update(
     head_after: str | None = None
     original_branch: str | None = None
     current_versions: dict[str, str | None] = {"package": None, "pyproject": None, "root_shim": None}
+    runtime_import_origin_within_project_source_mirror = bool(
+        mirror_path.is_dir()
+        and is_path_within_root(Path(__file__).resolve(), mirror_path)
+    )
 
     if mirror_kind == "directory":
         inside_ok, inside_text = wom_kit_project_update_git(mirror_path, ["rev-parse", "--is-inside-work-tree"])
@@ -97368,16 +97372,43 @@ def wom_kit_project_version_update(
             "The project source mirror changed during preflight; rerun the dry-run."
         )
 
+    forward_only_blocked = False
+    forward_only_target_is_at_least_every_project_version = False
+    recognized_project_versions = [
+        *(normalize_version_label(value) for value in current_versions.values()),
+        *(normalize_version_label(spec.get("previous_version")) for spec in pin_specs),
+    ]
+    recognized_project_version_keys = [
+        key
+        for value in recognized_project_versions
+        if value
+        for key in [version_sort_key(value)]
+        if key is not None
+    ]
     if target_version:
         target_key = version_sort_key(target_version)
-        known_versions = [
-            normalize_version_label(WOM_KIT_VERSION),
-            *(normalize_version_label(value) for value in current_versions.values()),
-            *(normalize_version_label(spec.get("previous_version")) for spec in pin_specs),
-        ]
-        known_keys = [version_sort_key(value) for value in known_versions if value]
-        if target_key is not None and any(key is not None and target_key < key for key in known_keys):
+        forward_only_target_is_at_least_every_project_version = bool(
+            target_key is not None
+            and all(target_key >= key for key in recognized_project_version_keys)
+        )
+        if (
+            target_key is not None
+            and any(target_key < key for key in recognized_project_version_keys)
+        ):
+            forward_only_blocked = True
             blockers.append("project-version-update is forward-only and refuses a version downgrade.")
+        running_version = normalize_version_label(WOM_KIT_VERSION)
+        running_key = version_sort_key(running_version) if running_version else None
+        if (
+            not runtime_import_origin_within_project_source_mirror
+            and target_key is not None
+            and running_key is not None
+            and target_key < running_key
+            and forward_only_target_is_at_least_every_project_version
+        ):
+            warnings.append(
+                "The running WOM-kit is newer than the target but was loaded outside the project source mirror; it is reported for context and is not a forward-only blocker. The decision uses recognized project pins and project source versions."
+            )
 
     target_evidence = (
         wom_kit_project_update_target_evidence(mirror_path, target_tag)
@@ -97480,7 +97511,14 @@ def wom_kit_project_version_update(
         ]
         restart_required = status == "updated_restart_required"
         if status == "blocked":
-            next_actions = ["Resolve every blocker before running project-version-update again."]
+            next_actions = (
+                [
+                    "Choose a target that is at least every recognized project pin and project source version; the running WOM-kit version is informational only.",
+                    "Rerun project-version-update in --dry-run mode before approval.",
+                ]
+                if forward_only_blocked
+                else ["Resolve every blocker before running project-version-update again."]
+            )
         elif status == "preview_only_platform_unsupported":
             next_actions = [
                 "Review this preview, then run the approved project-version-update from Windows.",
@@ -97577,6 +97615,16 @@ def wom_kit_project_version_update(
                 "written_paths": final_pins_written,
                 "write_attempted_paths": list(pin_write_attempted_paths),
             },
+            "forward_only": {
+                "comparison_basis": "recognized_project_pins_and_project_source_versions",
+                "recognized_project_version_count": len(
+                    recognized_project_version_keys
+                ),
+                "running_runtime_used": False,
+                "target_is_at_least_every_recognized_project_version": (
+                    forward_only_target_is_at_least_every_project_version
+                ),
+            },
             "fetch": {
                 "remote_name": "origin",
                 "atomic_ref_update_requested": True,
@@ -97603,10 +97651,9 @@ def wom_kit_project_version_update(
             "runtime": {
                 "running_version_before": WOM_KIT_VERSION,
                 "import_origin_within_project_source_mirror": (
-                    is_path_within_root(Path(__file__).resolve(), mirror_path)
-                    if mirror_path.is_dir()
-                    else False
+                    runtime_import_origin_within_project_source_mirror
                 ),
+                "used_for_forward_only_decision": False,
                 "running_process_reloaded": False,
                 "restart_required": restart_required,
                 "post_restart_verification_command": (
