@@ -1,8 +1,8 @@
 {
   "schema": "wom-kit/package-resource-manifest/v0.1",
-  "version": "0.3.302",
+  "version": "0.3.303",
   "source_of_truth": "wom-kit source resource directories",
-  "file_count": 143,
+  "file_count": 144,
   "files": [
     {
       "source": "schemas/activity-group-membership-receipt.schema.json",
@@ -51,6 +51,12 @@
       "packaged": "schemas/archive.schema.json",
       "bytes": 1799,
       "sha256": "7457ce8b6779ff5c352301c52d5c998dacd73e509728c7034972f8e9c1ee59d2"
+    },
+    {
+      "source": "schemas/artifact-lifecycle-inventory.schema.json",
+      "packaged": "schemas/artifact-lifecycle-inventory.schema.json",
+      "bytes": 10942,
+      "sha256": "b7ed1698d3ca9f24da32a12db71373368731734bc23ac7eeb69d80b3c50543f2"
     },
     {
       "source": "schemas/attestation-receipt.schema.json",
@@ -607,8 +613,8 @@
     {
       "source": "templates/company/AGENTS.md",
       "packaged": "templates/company/AGENTS.md",
-      "bytes": 9319,
-      "sha256": "4b2862ee388f68df25a836dd461d68eceb1ea69aef106c412951b60aa3f03d94"
+      "bytes": 9540,
+      "sha256": "5a3d46cdf7271546e29ec94906e954e63252078a39d509becb4a6a49f374536d"
     },
     {
       "source": "templates/company/archive-identity.yml",
@@ -679,8 +685,8 @@
     {
       "source": "templates/family/AGENTS.md",
       "packaged": "templates/family/AGENTS.md",
-      "bytes": 9459,
-      "sha256": "b84d3591dea05c66e56b54516a6f689dccceb0d7ab08e89406316fb8cd59f504"
+      "bytes": 9680,
+      "sha256": "3ae9bd55b0e91786ab3e0040e239a2e62d620847a4c363366dc8162912104ae4"
     },
     {
       "source": "templates/family/archive-identity.yml",
@@ -751,8 +757,8 @@
     {
       "source": "templates/personal/AGENTS.md",
       "packaged": "templates/personal/AGENTS.md",
-      "bytes": 9428,
-      "sha256": "d2cc9213e7b10fc79b3086acce3764493c64bae8f6fc7a1f9a48052d3aede5c8"
+      "bytes": 9649,
+      "sha256": "5bf821f8351154aae91843560464943ffd4f0e0bea95521fc2b1e021f935f194"
     },
     {
       "source": "templates/personal/archive-identity.yml",
@@ -857,10 +863,10 @@
       "sha256": "d619dc26af3216498c8392dfe838b0fe752d4bad9da998a58ca682d668fc510c"
     },
     {
-      "source": "docs/releases/v0.3.302.md",
-      "packaged": "release-notes/v0.3.302.md",
-      "bytes": 2035,
-      "sha256": "c388dc943802a8f776ee061d36a3ac9b9752cc950d34554edc84dbb7e82287ae"
+      "source": "docs/releases/v0.3.303.md",
+      "packaged": "release-notes/v0.3.303.md",
+      "bytes": 2422,
+      "sha256": "a97ca826076a61ba6222a257c5889df6fa636fce7942c479482059b358734a87"
     }
   ]
 }

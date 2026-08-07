@@ -2,6 +2,32 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.3.303 아티팩트 수명주기 인벤토리
+
+v0.3.303은 v0.3.302 아카이브와 호환되며 마이그레이션이 필요하지
+않습니다. 읽기 전용 점검 명령만 추가하며 기존 파일을 자동으로 분류해
+기록하거나 정리하지 않습니다.
+
+```powershell
+archive artifact-lifecycle-inventory <archive-root> --dry-run --format json
+```
+
+개수를 믿기 전에 `coverage.complete`를 확인하십시오. 검사 한도,
+읽을 수 없는 항목, 링크/reparse point, 검사 중 변화, 깨진 object manifest,
+잘못된 local object 배치, 깨진 workpack 제어 파일이 있으면 해당 판단을
+차단합니다. 기본 출력은 하위 경로를 숨기며 `--show-relative-paths`는 사람이
+옆에서 검토하는 로컬 작업에만 사용하십시오.
+
+`unmanifested_local_object_candidate`는 고아 파일 증명이 아니며 삭제
+승인도 아닙니다. 만료된 workpack도 보존 정책 검토 대상입니다. 일반
+아티팩트 본문과 object 바이트를 읽지 않고, 파일을 쓰거나 provider·형제
+object 저장소를 확인하지 않습니다.
+
+자세한 내용은
+[`wom-kit/docs/artifact-lifecycle-inventory.md`](wom-kit/docs/artifact-lifecycle-inventory.md)와
+[`wom-kit/docs/releases/v0.3.303.md`](wom-kit/docs/releases/v0.3.303.md)를
+참조하십시오.
+
 ## v0.3.302 저장 뷰 생성·되돌리기
 
 v0.3.302는 올바른 v0.3.301 아카이브와 호환되며 자동 마이그레이션이

@@ -36,6 +36,7 @@ For operator feedback, run `archive operator-feedback-plan <archive-root> --dry-
 
 - Search with `archive search <archive-root> <query> --count-total --format json`; raw grep and raw SQL are not authoritative WOM search results.
 - When Doctor reports a possible inbox pipeline bypass, inspect it with `archive inbox-pipeline-audit <archive-root> --dry-run --format json`; its classes are review signals, not proof, and authorize no automatic repair.
+- Before suggesting artifact cleanup, run `archive artifact-lifecycle-inventory <archive-root> --dry-run --format json`; incomplete coverage blocks absence claims, and no inventory class or age grants deletion authority.
 - Create AI-generated zettel drafts only with `archive create-draft` dry-run followed by its exact human-reviewed replay. Never write Markdown directly into `inbox/`.
 - Use the official dry-run and approval routes for `mint-zet`, `zettel-edge`, source/objet intake, and operational-context updates; knowing a destination path is not write authorization.
 - For a persistent saved view, prepare a reviewed private request under `.wom-scratch/private/saved-views/`, preview `archive saved-view-write`, and use only its exact approval-gated write or revert route. Never edit persistent `views/*.yml` directly.

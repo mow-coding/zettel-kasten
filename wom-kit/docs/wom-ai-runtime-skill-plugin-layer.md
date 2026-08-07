@@ -160,14 +160,14 @@ MCP clients must not request `redact_local_paths: false` unless trusted local de
 
 ## AI Command-Path Routing
 
-Introduced in v0.3.278 and extended through v0.3.302, runtime-context,
+Introduced in v0.3.278 and extended through v0.3.303, runtime-context,
 ai-start-here, operational-context, and
 canonical entrypoint metadata return
-`wom-kit/ai-command-path-routing/v0.11`.
+`wom-kit/ai-command-path-routing/v0.12`.
 
 The routing object names official WOM commands for search, local version
 truth, checked-layer objet rediscovery before global absence claims,
-saved-view inspection, conservative inbox pipeline-shape review,
+saved-view inspection, bounded artifact-lifecycle inspection, conservative inbox pipeline-shape review,
 explicit event-membership planning, command discovery, draft creation,
 minting, typed edges, source/objet intake, and operational-context updates. It
 marks raw grep and raw SQL as
@@ -183,6 +183,9 @@ all ten evidence layers are visible, and an index zero never proves global
 absence. Both operations refuse retained add or removal journals before and
 under one shared lock, while their requests, journals, receipts, and recovery
 contracts stay separate. Mismatched evidence remains in forensic hold.
+v0.3.303 routes cleanup questions first through the fixed-root, content-free
+`artifact-lifecycle-inventory`; it grants no deletion authority and checks no
+provider or sibling object store.
 
 Generated AGENTS templates now start with:
 

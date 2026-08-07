@@ -6,6 +6,18 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.303 - 2026-08-07
+
+- Added CLI-only `artifact-lifecycle-inventory` over fixed archive-owned
+  scratch, staging, draft, workpack, generated-index, local object, and
+  derived-text surfaces.
+- Added independent bounded coverage, link/reparse and concurrent-change
+  blocking, content-free stable refs, descriptor-verified workpack expiry
+  review, and strict duplicate-blocking local object-manifest candidate
+  reconciliation without object-byte reads or orphan claims.
+- Added Draft 2020-12 result schema, runtime routing v0.12, Agent guidance,
+  public docs, focused privacy/authority tests, and no cleanup or UI surface.
+
 ## v0.3.302 - 2026-08-07
 
 - Added a CLI-only, exact-plan, human-reviewed saved-view writer and exact

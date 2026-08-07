@@ -99265,6 +99265,26 @@ def runtime_context_read_action_routes() -> list[dict[str, Any]]:
             "writes": False,
         },
         {
+            "action": "inspect_artifact_lifecycle",
+            "when": (
+                "the AI or archive owner needs one bounded checkpoint for "
+                "scratch, staging, drafts, workpacks, generated indexes, "
+                "and local content-addressed object candidates"
+            ),
+            "command": (
+                "archive artifact-lifecycle-inventory <archive-root> "
+                "--dry-run --format json"
+            ),
+            "authoritative_for": (
+                "content-free counts, review refs, local object-manifest "
+                "candidate reconciliation, and explicit declared-root coverage"
+            ),
+            "archive_wide_absence_claim_supported": False,
+            "provider_state_checked": False,
+            "cleanup_permission_granted": False,
+            "writes": False,
+        },
+        {
             "action": "inspect_inbox_pipeline_shape",
             "when": "the AI or archive owner needs a conservative signal for possible historical direct writes to inbox",
             "command": "archive inbox-pipeline-audit <archive-root> --dry-run --format json",
@@ -99534,7 +99554,7 @@ def runtime_context_write_action_routes() -> list[dict[str, Any]]:
 
 def runtime_context_action_routing() -> dict[str, Any]:
     return {
-        "schema": "wom-kit/ai-command-path-routing/v0.11",
+        "schema": "wom-kit/ai-command-path-routing/v0.12",
         "official_wom_command_required_for_archive_actions": True,
         "location_policy_alone_is_sufficient": False,
         "raw_filesystem_search_is_authoritative": False,

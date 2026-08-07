@@ -1,0 +1,338 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wom.local/schemas/artifact-lifecycle-inventory.schema.json",
+  "title": "WOM artifact lifecycle inventory",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "ok",
+    "dry_run",
+    "lifecycle_action",
+    "archive_id",
+    "generated_at",
+    "inventory_state",
+    "inventory_digest",
+    "scope_policy",
+    "coverage",
+    "class_counts",
+    "object_manifest",
+    "local_object_reconciliation",
+    "workpacks",
+    "review_candidate_count",
+    "item_count",
+    "items_truncated",
+    "items",
+    "external_boundaries",
+    "closed_actions",
+    "privacy_guards",
+    "next_safe_actions",
+    "would_change",
+    "blockers",
+    "warnings"
+  ],
+  "properties": {
+    "schema": {"const": "wom-kit/artifact-lifecycle-inventory/v0.1"},
+    "ok": {"type": "boolean"},
+    "dry_run": {"const": true},
+    "lifecycle_action": {"const": "artifact_lifecycle_inventory"},
+    "archive_id": {"type": "string", "minLength": 1},
+    "generated_at": {"type": "string", "format": "date-time"},
+    "inventory_state": {
+      "enum": ["clear", "attention_required", "blocked"]
+    },
+    "inventory_digest": {"$ref": "#/$defs/sha256"},
+    "scope_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fixed_archive_owned_roots_only",
+        "archive_wide_scan_performed",
+        "arbitrary_operator_roots_accepted",
+        "max_entries_per_root",
+        "root_count",
+        "unknown_archive_locations_may_exist"
+      ],
+      "properties": {
+        "fixed_archive_owned_roots_only": {"const": true},
+        "archive_wide_scan_performed": {"const": false},
+        "arbitrary_operator_roots_accepted": {"const": false},
+        "max_entries_per_root": {"type": "integer", "minimum": 1, "maximum": 100000},
+        "root_count": {"type": "integer", "minimum": 1},
+        "unknown_archive_locations_may_exist": {"const": true}
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "complete",
+        "scope_count",
+        "complete_scope_count",
+        "scopes",
+        "snapshot_consistency"
+      ],
+      "properties": {
+        "complete": {"type": "boolean"},
+        "scope_count": {"type": "integer", "minimum": 1},
+        "complete_scope_count": {"type": "integer", "minimum": 0},
+        "scopes": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/scope"}
+        },
+        "snapshot_consistency": {
+          "const": "bounded_metadata_scan_with_entry_and_directory_recheck"
+        }
+      }
+    },
+    "class_counts": {
+      "type": "object",
+      "additionalProperties": {"$ref": "#/$defs/classCount"}
+    },
+    "object_manifest": {"$ref": "#/$defs/objectManifest"},
+    "local_object_reconciliation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "complete",
+        "valid_layout_file_count",
+        "invalid_layout_file_count",
+        "unmanifested_local_object_candidate_count",
+        "object_bytes_hashed",
+        "orphan_claimed"
+      ],
+      "properties": {
+        "complete": {"type": "boolean"},
+        "valid_layout_file_count": {"type": "integer", "minimum": 0},
+        "invalid_layout_file_count": {"type": "integer", "minimum": 0},
+        "unmanifested_local_object_candidate_count": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "object_bytes_hashed": {"const": false},
+        "orphan_claimed": {"const": false}
+      }
+    },
+    "workpacks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "package_directory_count",
+        "package_metadata_count",
+        "active_count",
+        "expired_count",
+        "unknown_expiry_count",
+        "missing_package_metadata_count",
+        "invalid_package_metadata_count"
+      ],
+      "properties": {
+        "package_directory_count": {"type": "integer", "minimum": 0},
+        "package_metadata_count": {"type": "integer", "minimum": 0},
+        "active_count": {"type": "integer", "minimum": 0},
+        "expired_count": {"type": "integer", "minimum": 0},
+        "unknown_expiry_count": {"type": "integer", "minimum": 0},
+        "missing_package_metadata_count": {"type": "integer", "minimum": 0},
+        "invalid_package_metadata_count": {"type": "integer", "minimum": 0}
+      }
+    },
+    "review_candidate_count": {"type": "integer", "minimum": 0},
+    "item_count": {"type": "integer", "minimum": 0},
+    "items_truncated": {"type": "boolean"},
+    "items": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/item"}
+    },
+    "external_boundaries": {"$ref": "#/$defs/falseFlags"},
+    "closed_actions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ordinary_artifact_bodies_read",
+        "bounded_control_metadata_read",
+        "content_hashes_calculated",
+        "object_bytes_read",
+        "files_written",
+        "files_deleted",
+        "zets_written",
+        "provider_api_called"
+      ],
+      "properties": {
+        "ordinary_artifact_bodies_read": {"const": false},
+        "bounded_control_metadata_read": {"const": true},
+        "content_hashes_calculated": {"const": false},
+        "object_bytes_read": {"const": false},
+        "files_written": {"const": false},
+        "files_deleted": {"const": false},
+        "zets_written": {"const": false},
+        "provider_api_called": {"const": false}
+      }
+    },
+    "privacy_guards": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "relative_paths_echoed",
+        "absolute_paths_echoed",
+        "artifact_body_text_echoed",
+        "object_ids_echoed",
+        "workpack_ids_echoed",
+        "provider_values_echoed",
+        "secrets_read"
+      ],
+      "properties": {
+        "relative_paths_echoed": {"type": "boolean"},
+        "absolute_paths_echoed": {"const": false},
+        "artifact_body_text_echoed": {"const": false},
+        "object_ids_echoed": {"const": false},
+        "workpack_ids_echoed": {"const": false},
+        "provider_values_echoed": {"const": false},
+        "secrets_read": {"const": false}
+      }
+    },
+    "next_safe_actions": {"$ref": "#/$defs/stringArray"},
+    "would_change": {"type": "array", "maxItems": 0},
+    "blockers": {"$ref": "#/$defs/stringArray"},
+    "warnings": {"$ref": "#/$defs/stringArray"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "stringArray": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1},
+      "uniqueItems": true
+    },
+    "count": {"type": "integer", "minimum": 0},
+    "classCount": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["file_count", "directory_count", "byte_count"],
+      "properties": {
+        "file_count": {"$ref": "#/$defs/count"},
+        "directory_count": {"$ref": "#/$defs/count"},
+        "byte_count": {"$ref": "#/$defs/count"}
+      }
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "root_id",
+        "relative_root",
+        "artifact_class",
+        "scan_mode",
+        "present",
+        "coverage_complete",
+        "entries_seen",
+        "file_count",
+        "directory_count",
+        "byte_count",
+        "symlink_or_reparse_count",
+        "special_file_count",
+        "unreadable_count",
+        "changed_during_scan_count",
+        "truncated"
+      ],
+      "properties": {
+        "root_id": {"type": "string", "minLength": 1},
+        "relative_root": {"type": "string", "minLength": 1},
+        "artifact_class": {"type": "string", "minLength": 1},
+        "scan_mode": {
+          "enum": [
+            "recursive_metadata",
+            "exact_known_files",
+            "root_presence_only_never_touch"
+          ]
+        },
+        "present": {"type": "boolean"},
+        "coverage_complete": {"type": "boolean"},
+        "entries_seen": {"$ref": "#/$defs/count"},
+        "file_count": {"$ref": "#/$defs/count"},
+        "directory_count": {"$ref": "#/$defs/count"},
+        "byte_count": {"$ref": "#/$defs/count"},
+        "symlink_or_reparse_count": {"$ref": "#/$defs/count"},
+        "special_file_count": {"$ref": "#/$defs/count"},
+        "unreadable_count": {"$ref": "#/$defs/count"},
+        "changed_during_scan_count": {"$ref": "#/$defs/count"},
+        "truncated": {"type": "boolean"}
+      }
+    },
+    "objectManifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "present",
+        "valid",
+        "complete",
+        "record_count",
+        "unique_object_id_count",
+        "duplicate_object_id_count",
+        "invalid_record_count",
+        "bytes_read",
+        "changed_during_read"
+      ],
+      "properties": {
+        "present": {"type": "boolean"},
+        "valid": {"type": "boolean"},
+        "complete": {"type": "boolean"},
+        "record_count": {"$ref": "#/$defs/count"},
+        "unique_object_id_count": {"$ref": "#/$defs/count"},
+        "duplicate_object_id_count": {"$ref": "#/$defs/count"},
+        "invalid_record_count": {"$ref": "#/$defs/count"},
+        "bytes_read": {"$ref": "#/$defs/count"},
+        "changed_during_read": {"type": "boolean"}
+      }
+    },
+    "item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifact_ref",
+        "root_id",
+        "artifact_class",
+        "review_state",
+        "entry_kind",
+        "bytes",
+        "modified_at",
+        "age_bucket"
+      ],
+      "properties": {
+        "artifact_ref": {
+          "type": "string",
+          "pattern": "^artifact:[0-9a-f]{24}$"
+        },
+        "root_id": {"type": "string", "minLength": 1},
+        "artifact_class": {"type": "string", "minLength": 1},
+        "review_state": {"type": "string", "minLength": 1},
+        "entry_kind": {"enum": ["file", "directory"]},
+        "bytes": {"$ref": "#/$defs/count"},
+        "modified_at": {"type": "string", "format": "date-time"},
+        "age_bucket": {
+          "enum": [
+            "under_7_days",
+            "7_to_30_days",
+            "31_to_90_days",
+            "over_90_days"
+          ]
+        },
+        "relative_path": {"type": "string", "minLength": 1}
+      }
+    },
+    "falseFlags": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sibling_objet_stores_scanned",
+        "provider_inventory_requested",
+        "provider_api_called",
+        "remote_cleanup_state_known"
+      ],
+      "properties": {
+        "sibling_objet_stores_scanned": {"const": false},
+        "provider_inventory_requested": {"const": false},
+        "provider_api_called": {"const": false},
+        "remote_cleanup_state_known": {"const": false}
+      }
+    }
+  }
+}

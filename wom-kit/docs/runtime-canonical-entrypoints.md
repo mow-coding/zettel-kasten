@@ -1,6 +1,6 @@
 # Runtime Canonical Entry Points
 
-Status: v0.3.302 saved-view lifecycle routing checkpoint
+Status: v0.3.303 artifact lifecycle inventory routing checkpoint
 
 When an AI runtime enters a WOM archive, it needs a small, explicit "start
 here" map. The archive may contain zets, source bindings, provider metadata,
@@ -53,8 +53,8 @@ consumption as `not_proven`.
 
 ## Official Action Routing
 
-Introduced in v0.3.278 and extended through v0.3.302, `action_routing` uses
-`wom-kit/ai-command-path-routing/v0.11`. It tells an AI which official command
+Introduced in v0.3.278 and extended through v0.3.303, `action_routing` uses
+`wom-kit/ai-command-path-routing/v0.12`. It tells an AI which official command
 handles session entry, search, local version truth, saved-view inspection,
 inbox pipeline-shape review, explicit event-membership add/removal planning, command
 discovery, draft creation, minting, typed edges, source capture, and
@@ -87,7 +87,9 @@ claim that an objet or source does not exist, follow it with
 `archive objet-rediscovery-plan <archive-root> <query> --dry-run --count-total
 --format json`. That plan preserves index completeness separately and reports
 unchecked or unimplemented layers; an index-only zero is not global absence.
-AI drafts use
+The read-only `artifact-lifecycle-inventory` route gives one bounded,
+content-free checkpoint over fixed local lifecycle roots. It grants no cleanup
+authority and checks no provider or sibling object store. AI drafts use
 `archive create-draft` preview and exact reviewed replay; a direct Markdown
 write into `inbox/` is forbidden. `archive version` does not verify remote
 release freshness. `archive inbox-pipeline-audit --dry-run` returns

@@ -248,6 +248,7 @@ Onboarding and setup plans:
 - [Tiro Lossless Recovery](tiro-lossless-recovery.md)
 - [zet Markdown Style Guide](zet-markdown-style-guide.md)
 - [Artifact Hygiene](artifact-hygiene.md)
+- [Artifact Lifecycle Inventory](artifact-lifecycle-inventory.md)
 - [Zettel Edge Write](zettel-edge-write.md)
 - [Zettel Edge Batch](zettel-edge-batch.md)
 - [Object Storage Recommendations](object-storage-recommendations.md)
