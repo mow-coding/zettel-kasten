@@ -1,7 +1,7 @@
 # Source Intake Planner
 
-Status: active baseline
-Date: 2026-05-25
+Status: v0.3.301 archive-root paths, distinct local identity, and batch recording
+Date: 2026-08-07
 
 `source-intake` is the safe dry-run step between runtime context and draft creation.
 
@@ -96,6 +96,38 @@ The recorder validates the plan with the same metadata-only safety rules used
 by draft composition and blocks unredacted local paths, provider URLs, tokens,
 and secrets. It does not read file bodies, calculate content hashes, capture
 objets, create drafts, mint zets, upload, or clean.
+
+Relative `--source-intake-plan` paths resolve from the archive root. An exact
+existing plan is an idempotent success (`already_recorded`) and returns its
+documented receipt path with no new write. Missing files, unsafe relative
+paths, and occupied-but-different receipt paths use distinct fixed blocker
+codes.
+
+Local-file plans contain `local_file_identity_sha256` so two same-extension,
+same-size, same-time files do not collapse to one redacted plan. This is a
+path/stat fingerprint, explicitly not a content identity. Source intake still
+does not open the file body or calculate its content hash.
+
+## Recording Many Local Plans
+
+Use a private archive-local `wom-kit/source-intake-batch-request/v0.1` JSON
+manifest with 1-1,000 unique safe item ids:
+
+```bash
+archive source-intake-batch <archive-root> \
+  --manifest workbench/source-intake-request.json \
+  --dry-run --format json
+
+archive source-intake-batch <archive-root> \
+  --manifest workbench/source-intake-request.json \
+  --approve --expected-plan-sha256 sha256:<64-hex> \
+  --reviewed-by person:me --format json
+```
+
+Relative manifest and item paths resolve from the archive root. Approval
+writes the normal redacted per-item records plus one aggregate receipt. Replay
+is idempotent and converges per item. `all_or_nothing_claimed` stays false; the
+batch is not permission to capture, import, upload, draft, or mint.
 
 ## Draft Composition
 

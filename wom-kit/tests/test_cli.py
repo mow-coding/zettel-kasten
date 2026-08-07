@@ -4230,6 +4230,9 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertTrue(sections["operation_outcome"]["required"])
             self.assertTrue(sections["evidence_basis"]["required"])
             self.assertTrue(sections["privacy_boundary"]["required"])
+            self.assertTrue(sections["openable_archive_references"]["required"])
+            self.assertTrue(sections["human_record_integrity"]["required"])
+            self.assertIn("revise an unminted draft in place", sections["human_record_integrity"]["draft_rule"])
             self.assertFalse(sections["conversation_status_board"]["web_ui_required"])
             self.assertFalse(result["privacy_guards"]["archive_body_text_read"])
             self.assertFalse(result["privacy_guards"]["sample_values_read"])
@@ -28722,6 +28725,64 @@ state:
             self.assertEqual(no_dry_code, 1, no_dry_output)
             self.assertIn("requires --dry-run", no_dry_output)
 
+    def test_authoring_conventions_reports_missing_and_reads_declared_archive_rules(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            missing_code, missing_output = self.run_cli(
+                [
+                    "authoring-conventions",
+                    str(archive_root),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(missing_code, 0, missing_output)
+            missing = json.loads(missing_output)
+            self.assertEqual(missing["state"], "undeclared")
+            self.assertEqual(
+                missing["summary"]["path"],
+                "zettel-kasten/authoring-conventions.yml",
+            )
+            self.assertIsNone(missing["conventions"])
+
+            conventions_path = (
+                archive_root
+                / "zettel-kasten"
+                / "authoring-conventions.yml"
+            )
+            conventions_path.write_text(
+                archive_cli.dump_yaml(
+                    {
+                        "schema": "wom-kit/authoring-conventions/v0.1",
+                        "language": "ko-KR",
+                        "title_rules": ["제목은 사람에게 바로 이해되어야 한다."],
+                        "body_rules": ["본문에는 미래의 인간 독자에게 필요한 정보만 쓴다."],
+                        "required_sections": ["결론"],
+                        "forbidden_body_content": ["도구 실행 상태"],
+                        "examples": ["결론부터 쓰고 근거를 이어 쓴다."],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            declared_code, declared_output = self.run_cli(
+                [
+                    "authoring-conventions",
+                    str(archive_root),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(declared_code, 0, declared_output)
+            declared = json.loads(declared_output)
+            self.assertEqual(declared["state"], "declared")
+            self.assertTrue(declared["summary"]["declared"])
+            self.assertEqual(declared["summary"]["rule_counts"]["body_rules"], 1)
+            self.assertIn("미래의 인간 독자", declared_output)
+            self.assertTrue(declared["privacy_guards"]["rule_values_echoed"])
+
     def test_notion_objet_link_plan_matches_manifest_without_echoing_provider_locator(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
@@ -33430,6 +33491,217 @@ state:
             self.assertNotIn(str(selected), approve_output)
             self.assertNotIn("private-file-name.md", approve_output)
             self.assertNotIn("SUPER_SECRET_BODY", approve_output)
+
+            repeat_code, repeat_output = self.run_cli(
+                [
+                    "source-intake-record",
+                    str(archive_root),
+                    "--source-intake-plan",
+                    str(plan_path),
+                    "--approve",
+                    "--reviewed-by",
+                    "person:me",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(repeat_code, 0, repeat_output)
+            repeated = json.loads(repeat_output)
+            self.assertTrue(repeated["ok"])
+            self.assertEqual(repeated["state"], "already_recorded")
+            self.assertEqual(repeated["plan_path"], result["plan_path"])
+            self.assertEqual(repeated["files_written"], [])
+
+    def test_source_intake_record_resolves_relative_plan_from_archive_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            selected = Path(tmp) / "incoming" / "private-file-name.md"
+            selected.parent.mkdir(parents=True)
+            selected.write_text("PRIVATE_BODY", encoding="utf-8")
+            plan = archive_services.source_intake_plan(
+                archive_root,
+                local_path=selected,
+                redact_local_paths=True,
+            )
+            workbench = archive_root / "workbench"
+            workbench.mkdir(exist_ok=True)
+            plan_path = workbench / "source-intake-plan.json"
+            plan_path.write_text(json.dumps(plan), encoding="utf-8")
+
+            code, output = self.run_cli(
+                [
+                    "source-intake-record",
+                    str(archive_root),
+                    "--source-intake-plan",
+                    "workbench/source-intake-plan.json",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["state"], "ready_to_record")
+            self.assertNotIn(str(selected), output)
+            self.assertNotIn("private-file-name.md", output)
+
+    def test_source_intake_local_file_identity_prevents_metadata_collision(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            first = Path(tmp) / "incoming-a" / "same.md"
+            second = Path(tmp) / "incoming-b" / "same.md"
+            first.parent.mkdir(parents=True)
+            second.parent.mkdir(parents=True)
+            first.write_text("SAME_SIZE_BODY", encoding="utf-8")
+            second.write_text("SAME_SIZE_BODY", encoding="utf-8")
+            shared_timestamp = 1_800_000_000
+            os.utime(first, (shared_timestamp, shared_timestamp))
+            os.utime(second, (shared_timestamp, shared_timestamp))
+
+            first_plan = archive_services.source_intake_plan(
+                archive_root,
+                local_path=first,
+                redact_local_paths=True,
+            )
+            second_plan = archive_services.source_intake_plan(
+                archive_root,
+                local_path=second,
+                redact_local_paths=True,
+            )
+
+            first_metadata = first_plan["source_metadata"]
+            second_metadata = second_plan["source_metadata"]
+            self.assertEqual(first_metadata["size_bytes"], second_metadata["size_bytes"])
+            self.assertEqual(first_metadata["modified_at"], second_metadata["modified_at"])
+            self.assertNotEqual(
+                first_metadata["local_file_identity_sha256"],
+                second_metadata["local_file_identity_sha256"],
+            )
+            self.assertEqual(
+                first_metadata["local_file_identity_kind"],
+                "path_stat_fingerprint_not_content_identity",
+            )
+            self.assertFalse(first_plan["content_access"]["full_hash_calculated"])
+            self.assertNotIn(str(first), json.dumps(first_plan))
+            self.assertNotIn(str(second), json.dumps(second_plan))
+
+    def test_source_intake_batch_plans_records_and_replays_distinct_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            incoming = archive_root / "staging" / "batch-input"
+            incoming.mkdir(parents=True)
+            names = ["private-one.md", "private-two.md", "private-three.md"]
+            for name in names:
+                (incoming / name).write_text("SAME_PRIVATE_BODY", encoding="utf-8")
+            shared_timestamp = 1_800_000_000
+            for name in names:
+                os.utime(incoming / name, (shared_timestamp, shared_timestamp))
+
+            manifest_path = archive_root / "workbench" / "source-intake-batch.json"
+            manifest_path.parent.mkdir(exist_ok=True)
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "schema": "wom-kit/source-intake-batch-request/v0.1",
+                        "batch_id": "letter112-three-file-regression",
+                        "items": [
+                            {
+                                "item_id": f"item-{index}",
+                                "local_path": f"staging/batch-input/{name}",
+                            }
+                            for index, name in enumerate(names, start=1)
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            dry_code, dry_output = self.run_cli(
+                [
+                    "source-intake-batch",
+                    str(archive_root),
+                    "--manifest",
+                    "workbench/source-intake-batch.json",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(dry_code, 0, dry_output)
+            dry = json.loads(dry_output)
+            self.assertEqual(dry["state"], "ready_to_record")
+            self.assertEqual(dry["summary"]["item_count"], 3)
+            self.assertEqual(dry["summary"]["ready_item_count"], 3)
+            plan_hashes = {
+                item["source_intake_plan_sha256"] for item in dry["items"]
+            }
+            self.assertEqual(len(plan_hashes), 3)
+            self.assertFalse(dry["summary"]["all_or_nothing_claimed"])
+            self.assertEqual(
+                dry["summary"]["convergence_model"],
+                "bounded_per_item_with_replay",
+            )
+            self.assertFalse(dry["privacy_guards"]["file_bodies_read"])
+            self.assertFalse(dry["privacy_guards"]["content_hashes_calculated"])
+            self.assertNotIn("SAME_PRIVATE_BODY", dry_output)
+            for name in names:
+                self.assertNotIn(name, dry_output)
+
+            approve_args = [
+                "source-intake-batch",
+                str(archive_root),
+                "--manifest",
+                "workbench/source-intake-batch.json",
+                "--approve",
+                "--expected-plan-sha256",
+                dry["source_intake_batch_plan_sha256"],
+                "--reviewed-by",
+                "person:me",
+                "--format",
+                "json",
+            ]
+            approve_code, approve_output = self.run_cli(approve_args)
+            self.assertEqual(approve_code, 0, approve_output)
+            approved = json.loads(approve_output)
+            self.assertEqual(approved["state"], "recorded")
+            self.assertEqual(approved["summary"]["recorded_item_count"], 3)
+            self.assertEqual(len(approved["files_written"]), 4)
+            for relative in approved["files_written"]:
+                self.assertTrue((archive_root / relative).is_file())
+
+            replay_code, replay_output = self.run_cli(approve_args)
+            self.assertEqual(replay_code, 0, replay_output)
+            replay = json.loads(replay_output)
+            self.assertEqual(replay["state"], "already_recorded")
+            self.assertEqual(replay["files_written"], [])
+            self.assertEqual(replay["would_change"], [])
+
+    def test_json_format_parse_error_is_content_free_stdout_json(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+
+            code, stdout, stderr = self.run_cli_split(
+                [
+                    "source-intake-record",
+                    str(archive_root),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            self.assertEqual(code, 2)
+            self.assertEqual(stderr, "")
+            result = json.loads(stdout)
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["state"], "blocked")
+            self.assertEqual(result["lifecycle_action"], "cli_argument_validation")
+            self.assertEqual(result["command"], "source-intake-record")
+            self.assertEqual(result["reason_codes"], ["cli_required_arguments_missing"])
+            self.assertIn("--source-intake-plan", result["missing_arguments"])
+            self.assertFalse(result["private_values_echoed"])
 
     def test_source_intake_record_blocks_unredacted_local_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -61871,6 +62143,68 @@ archive_services.zet_abstract_backfill_recover(
             object_id_only = next(item for item in result["checklist"] if item["id"] == "object_id_only")
             self.assertEqual(object_id_only["status"], "blocked")
             self.assertNotIn("app.notion.com", serialized)
+
+    def test_mint_zet_blocks_truncated_objet_reference_and_warns_on_operator_trace(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            self.make_fake_lunch_draft_promotion_ready(archive_root)
+            draft_path = archive_root / "inbox" / "zet_20260519_draft_ai_lunch_note.md"
+            frontmatter, body = archive_services.require_readable_zettel_text(
+                draft_path.read_text(encoding="utf-8")
+            )
+            body += (
+                "\nThe source-intake --dry-run completed, then --approve wrote a receipt.\n"
+                "Incomplete evidence token: objet:sha256:deadbeef1234.\n"
+            )
+            draft_path.write_text(
+                "---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + body,
+                encoding="utf-8",
+            )
+
+            code, output = self.run_cli(
+                [
+                    "mint-zet",
+                    str(archive_root),
+                    "--path",
+                    "inbox/zet_20260519_draft_ai_lunch_note.md",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            self.assertEqual(code, 1, output)
+            result = json.loads(output)
+            object_id_only = next(
+                item for item in result["checklist"] if item["id"] == "object_id_only"
+            )
+            self.assertEqual(object_id_only["status"], "blocked")
+            self.assertIn("tool_execution_trace_review_required", result["warnings"])
+            self.assertNotIn("deadbeef1234", output)
+
+    def test_mint_zet_warns_when_body_contains_stale_status_contradiction(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            self.make_fake_lunch_draft_promotion_ready(archive_root)
+            draft_path = archive_root / "inbox" / "zet_20260519_draft_ai_lunch_note.md"
+            frontmatter, body = archive_services.require_readable_zettel_text(
+                draft_path.read_text(encoding="utf-8")
+            )
+            body += "\n이 작업은 완료되었습니다. 그러나 같은 작업은 아직 작업 중입니다.\n"
+            draft_path.write_text(
+                "---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + body,
+                encoding="utf-8",
+            )
+
+            result = archive_services.mint_zettel_dry_run(
+                archive_root,
+                relative_path="inbox/zet_20260519_draft_ai_lunch_note.md",
+            )
+
+            self.assertIn(
+                "internal_status_consistency_review_required",
+                result["warnings"],
+            )
 
     def test_mint_zet_allows_external_citation_url_in_body_and_source_refs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wom-kit/zettel-objet-link-receipt/v0.1",
+  "title": "WOM-kit reviewed zettel to Objet link receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "action", "archive_id", "zettel_id", "zettel_path", "object_id", "role", "label_sha256", "link_id", "plan_sha256", "before_zettel_sha256", "after_zettel_sha256", "before_snapshot_path", "reviewed_by", "created_at", "privacy"],
+  "properties": {
+    "schema": {"const": "wom-kit/zettel-objet-link-receipt/v0.1"},
+    "action": {"const": "add_zettel_objet_link"},
+    "archive_id": {"type": "string", "minLength": 1},
+    "zettel_id": {"type": "string", "pattern": "^zet_[A-Za-z0-9][A-Za-z0-9_-]{0,159}$"},
+    "zettel_path": {"type": "string", "pattern": "^(?:inbox|zettels)/[^/]+\\.md$"},
+    "object_id": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "role": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,79}$"},
+    "label_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+    "link_id": {"type": "string", "pattern": "^asset:sha256:[0-9a-f]{64}$"},
+    "plan_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "before_zettel_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "after_zettel_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "before_snapshot_path": {"type": "string", "pattern": "^receipts/objects/zettel-links/snapshots/[0-9a-f]{64}\\.zettel\\.md$"},
+    "reviewed_by": {"type": "string", "minLength": 1},
+    "created_at": {"type": "string", "minLength": 1},
+    "privacy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["label_included", "zettel_body_included", "object_bytes_read", "provider_called"],
+      "properties": {
+        "label_included": {"const": false},
+        "zettel_body_included": {"const": false},
+        "object_bytes_read": {"const": false},
+        "provider_called": {"const": false}
+      }
+    }
+  }
+}

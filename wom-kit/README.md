@@ -10,12 +10,12 @@ It is not a website, SaaS app, dashboard, or visual note-taking product. The int
 
 ## Install The Command-Line Tool
 
-The exact v0.3.300 GitHub Release, when present, uses the self-contained wheel
+The exact v0.3.301 GitHub Release, when present, uses the self-contained wheel
 below. Confirm that the release exists and lists the wheel before installing
 it. The versioned URL alone is not proof that the asset is available.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.300/wom_kit-0.3.300-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.301/wom_kit-0.3.301-py3-none-any.whl"
 archive --version
 ```
 
@@ -93,6 +93,14 @@ markup normalization, derived-bytecode repair, and complete deterministic CI
 sharding. See
 [`docs/letters098-111-completion.md`](docs/letters098-111-completion.md) and
 [`docs/releases/v0.3.300.md`](docs/releases/v0.3.300.md).
+
+v0.3.301 closes the real-use gaps reported in Letter 112: structured
+zet-objet linking, GFM table normalization, locator occurrence coordinates,
+archive-specific AI authoring rules, reversible never-minted draft discard,
+archive-root-consistent/idempotent/batched source intake, real date/category
+relation signals, and content-free JSON argument failures. See
+[`docs/letter112-completion.md`](docs/letter112-completion.md) and
+[`docs/releases/v0.3.301.md`](docs/releases/v0.3.301.md).
 
 v0.3.292 keeps those runtime safeguards and makes objet relationship counts
 honest across overview and catalog surfaces. See

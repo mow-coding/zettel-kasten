@@ -343,6 +343,7 @@ Commands:
 from __future__ import annotations
 
 import argparse
+import io
 import getpass
 import hashlib
 import json
@@ -356,6 +357,7 @@ import subprocess
 import sys
 import threading
 import time
+from contextlib import redirect_stderr
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path, PurePosixPath
@@ -9159,6 +9161,33 @@ def command_zet_markdown_style_guide(args: argparse.Namespace) -> int:
     return 0 if result.get("ok", True) else 1
 
 
+def command_authoring_conventions(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print(
+            "authoring-conventions is read-only and requires --dry-run.",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        result = archive_services.authoring_conventions(
+            Path(args.archive_root),
+            dry_run=True,
+        )
+    except (archive_services.ArchiveServiceError, OSError):
+        print("authoring-conventions failed safely.", file=sys.stderr)
+        return 1
+    if args.format == "json":
+        print_json(result)
+    else:
+        print(f"Authoring conventions: {result.get('state') or '-'}")
+        print(f"Path: {result.get('summary', {}).get('path') or '-'}")
+        for warning in result.get("warnings", []):
+            print(f"WARNING: {warning}")
+        for blocker in result.get("blockers", []):
+            print(f"BLOCKED: {blocker}")
+    return 0 if result.get("ok") else 1
+
+
 def command_source_intake_record(args: argparse.Namespace) -> int:
     try:
         result = archive_services.source_intake_record(
@@ -9173,6 +9202,45 @@ def command_source_intake_record(args: argparse.Namespace) -> int:
         return 1
 
     print_source_intake_record_result(result, args.format)
+    return 0 if result.get("ok", True) else 1
+
+
+def command_source_intake_batch(args: argparse.Namespace) -> int:
+    try:
+        result = archive_services.source_intake_batch(
+            Path(args.archive_root),
+            Path(args.manifest),
+            dry_run=args.dry_run,
+            approve=args.approve,
+            expected_plan_sha256=args.expected_plan_sha256,
+            reviewed_by=args.reviewed_by,
+        )
+    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        print(f"Source intake batch {result.get('state') or '-'}.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Batch: {result.get('batch_id') or '-'}")
+        print(f"Plan SHA-256: {result.get('source_intake_batch_plan_sha256') or '-'}")
+        summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+        print(
+            "Items: "
+            f"{summary.get('item_count', 0)} total, "
+            f"{summary.get('ready_item_count', 0)} ready, "
+            f"{summary.get('blocked_item_count', 0)} blocked"
+        )
+        if result.get("files_written"):
+            print(f"Files written: {len(result['files_written'])}")
+        elif result.get("would_change"):
+            print(f"Would change: {len(result['would_change'])} file(s)")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
     return 0 if result.get("ok", True) else 1
 
 
@@ -11795,6 +11863,163 @@ def _print_external_locator_result(result: dict[str, Any], output_format: str) -
         print(f"WARNING: {warning}")
 
 
+def _print_zettel_objet_link_result(
+    result: dict[str, Any],
+    output_format: str,
+) -> None:
+    if output_format == "json":
+        print_json(result)
+        return
+    summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+    print(f"Zettel-Objet link: {result.get('state') or '-'}")
+    print(f"- zettel: {summary.get('zettel_id') or '-'}")
+    print(f"- object: {summary.get('object_id') or '-'}")
+    print(f"- role: {summary.get('role') or '-'}")
+    print(f"- receipt: {summary.get('receipt_path') or summary.get('revert_receipt_path') or '-'}")
+    for blocker in result.get("blockers", []):
+        print(f"BLOCKED: {blocker}")
+    for warning in result.get("warnings", []):
+        print(f"WARNING: {warning}")
+
+
+def command_zettel_objet_link(args: argparse.Namespace) -> int:
+    if args.dry_run == args.approve:
+        print(
+            "zettel-objet-link requires exactly one of --dry-run or --approve.",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        if args.dry_run:
+            result = completion_workflows.zettel_objet_link_plan(
+                Path(args.archive_root),
+                zettel_id=args.zettel_id,
+                relative_path=args.path,
+                object_id=args.object_id,
+                role=args.role,
+                label=args.label,
+            )
+        else:
+            result = completion_workflows.zettel_objet_link_apply(
+                Path(args.archive_root),
+                zettel_id=args.zettel_id,
+                relative_path=args.path,
+                object_id=args.object_id,
+                role=args.role,
+                label=args.label,
+                expected_plan_sha256=args.expected_plan_sha256,
+                reviewed_by=args.reviewed_by,
+            )
+    except Exception:
+        print("zettel-objet-link failed safely.", file=sys.stderr)
+        return 1
+    _print_zettel_objet_link_result(result, args.format)
+    return 0 if result.get("ok") else 1
+
+
+def command_zettel_objet_link_revert(args: argparse.Namespace) -> int:
+    if args.dry_run == args.approve:
+        print(
+            "zettel-objet-link-revert requires exactly one of --dry-run or --approve.",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        if args.dry_run:
+            result = completion_workflows.zettel_objet_link_revert_plan(
+                Path(args.archive_root),
+                receipt=args.receipt,
+            )
+        else:
+            result = completion_workflows.zettel_objet_link_revert(
+                Path(args.archive_root),
+                receipt=args.receipt,
+                expected_plan_sha256=args.expected_plan_sha256,
+                reviewed_by=args.reviewed_by,
+            )
+    except Exception:
+        print("zettel-objet-link-revert failed safely.", file=sys.stderr)
+        return 1
+    _print_zettel_objet_link_result(result, args.format)
+    return 0 if result.get("ok") else 1
+
+
+def _print_draft_discard_result(
+    result: dict[str, Any],
+    output_format: str,
+) -> None:
+    if output_format == "json":
+        print_json(result)
+        return
+    summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+    print(f"Draft discard: {result.get('state') or '-'}")
+    print(f"- zettel: {summary.get('zettel_id') or '-'}")
+    print(f"- draft: {summary.get('draft_path') or summary.get('restore_path') or '-'}")
+    print(f"- receipt: {summary.get('receipt_path') or summary.get('restore_receipt_path') or '-'}")
+    for blocker in result.get("blockers", []):
+        print(f"BLOCKED: {blocker}")
+    for action in result.get("next_safe_actions", []):
+        print(f"NEXT: {action}")
+
+
+def command_discard_draft(args: argparse.Namespace) -> int:
+    if args.dry_run == args.approve:
+        print(
+            "discard-draft requires exactly one of --dry-run or --approve.",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        if args.dry_run:
+            result = completion_workflows.draft_discard_plan(
+                Path(args.archive_root),
+                zettel_id=args.zettel_id,
+                relative_path=args.path,
+                reason=args.reason,
+            )
+        else:
+            result = completion_workflows.draft_discard_apply(
+                Path(args.archive_root),
+                zettel_id=args.zettel_id,
+                relative_path=args.path,
+                reason=args.reason,
+                expected_plan_sha256=args.expected_plan_sha256,
+                reviewed_by=args.reviewed_by,
+            )
+    except Exception:
+        print("discard-draft failed safely.", file=sys.stderr)
+        return 1
+    _print_draft_discard_result(result, args.format)
+    return 0 if result.get("ok") else 1
+
+
+def command_discard_draft_restore(args: argparse.Namespace) -> int:
+    if args.dry_run == args.approve:
+        print(
+            "discard-draft-restore requires exactly one of --dry-run or --approve.",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        if args.dry_run:
+            result = completion_workflows.draft_discard_restore_plan(
+                Path(args.archive_root),
+                receipt=args.receipt,
+            )
+        else:
+            result = completion_workflows.draft_discard_restore(
+                Path(args.archive_root),
+                receipt=args.receipt,
+                expected_plan_sha256=args.expected_plan_sha256,
+                reviewed_by=args.reviewed_by,
+            )
+    except Exception:
+        print("discard-draft-restore failed safely.", file=sys.stderr)
+        return 1
+    _print_draft_discard_result(result, args.format)
+    return 0 if result.get("ok") else 1
+
+
 def command_external_locator_plan(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print(
@@ -11808,6 +12033,9 @@ def command_external_locator_plan(args: argparse.Namespace) -> int:
             zettel_id=args.zettel_id,
             locator_type=args.locator_type,
             locator_ref=args.locator_ref,
+            service_ref=args.service_ref,
+            account_ref=args.account_ref,
+            occurrence_anchor=args.occurrence_anchor,
         )
     except Exception:
         print("external-locator-plan failed safely.", file=sys.stderr)
@@ -11829,6 +12057,9 @@ def command_external_locator_record(args: argparse.Namespace) -> int:
             zettel_id=args.zettel_id,
             locator_type=args.locator_type,
             locator_ref=args.locator_ref,
+            service_ref=args.service_ref,
+            account_ref=args.account_ref,
+            occurrence_anchor=args.occurrence_anchor,
             expected_plan_sha256=args.expected_plan_sha256,
             reviewed_by=args.reviewed_by,
         )
@@ -22427,6 +22658,16 @@ def build_parser() -> argparse.ArgumentParser:
     zet_markdown_style_guide.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     zet_markdown_style_guide.set_defaults(func=command_zet_markdown_style_guide)
 
+    authoring_conventions = subcommands.add_parser(
+        "authoring-conventions",
+        aliases=["archive-authoring-conventions"],
+        help="Read the mounted archive's declared human writing rules before drafting.",
+    )
+    authoring_conventions.add_argument("archive_root")
+    authoring_conventions.add_argument("--dry-run", action="store_true")
+    authoring_conventions.add_argument("--format", choices=["text", "json"], default="json")
+    authoring_conventions.set_defaults(func=command_authoring_conventions)
+
     source_intake_record = subcommands.add_parser(
         "source-intake-record",
         help="Record a reviewed source-intake dry-run plan under receipts/sources/.",
@@ -22438,6 +22679,26 @@ def build_parser() -> argparse.ArgumentParser:
     source_intake_record.add_argument("--reviewed-by", help="Reviewer id required when --approve is used.")
     source_intake_record.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     source_intake_record.set_defaults(func=command_source_intake_record)
+
+    source_intake_batch = subcommands.add_parser(
+        "source-intake-batch",
+        help="Plan or record many metadata-only local source intakes with one review gate.",
+    )
+    source_intake_batch.add_argument("archive_root", help="Archive root to inspect or update.")
+    source_intake_batch.add_argument(
+        "--manifest",
+        required=True,
+        help="JSON batch request; relative paths resolve from the archive root.",
+    )
+    source_intake_batch.add_argument("--dry-run", action="store_true", help="Preview all item plans without writing.")
+    source_intake_batch.add_argument("--approve", action="store_true", help="Record the reviewed item plans and batch receipt.")
+    source_intake_batch.add_argument(
+        "--expected-plan-sha256",
+        help="Complete source_intake_batch_plan_sha256 from the reviewed dry-run; required with --approve.",
+    )
+    source_intake_batch.add_argument("--reviewed-by", help="Safe reviewer id required with --approve.")
+    source_intake_batch.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    source_intake_batch.set_defaults(func=command_source_intake_batch)
 
     list_zettels = subcommands.add_parser("list-zettels", help="List draft and/or canonical zettels.")
     list_zettels.add_argument("archive_root", help="Archive root to inspect.")
@@ -24176,6 +24437,83 @@ def build_parser() -> argparse.ArgumentParser:
         func=command_notion_import_locator_evidence_plan
     )
 
+    zettel_objet_link = subcommands.add_parser(
+        "zettel-objet-link",
+        aliases=["zet-objet-link"],
+        help="Preview or approve one structured frontmatter.assets link to a manifested Objet.",
+    )
+    zettel_objet_link.add_argument("archive_root", help="Archive root to update.")
+    zettel_objet_target = zettel_objet_link.add_mutually_exclusive_group(required=True)
+    zettel_objet_target.add_argument("--zettel-id", help="Target zettel id.")
+    zettel_objet_target.add_argument("--path", help="Archive-relative inbox/ or zettels/ path.")
+    zettel_objet_link.add_argument(
+        "--object-id",
+        required=True,
+        help="Manifested sha256:<64 hex> Objet identity.",
+    )
+    zettel_objet_link.add_argument(
+        "--role",
+        required=True,
+        help="Stable lowercase role such as source_document or evidence.",
+    )
+    zettel_objet_link.add_argument(
+        "--label",
+        help="Optional human label. Stored in the zettel but never echoed by this command.",
+    )
+    zettel_objet_link.add_argument("--dry-run", action="store_true")
+    zettel_objet_link.add_argument("--approve", action="store_true")
+    zettel_objet_link.add_argument("--expected-plan-sha256")
+    zettel_objet_link.add_argument("--reviewed-by")
+    zettel_objet_link.add_argument("--format", choices=["text", "json"], default="text")
+    zettel_objet_link.set_defaults(func=command_zettel_objet_link)
+
+    zettel_objet_link_revert = subcommands.add_parser(
+        "zettel-objet-link-revert",
+        aliases=["zet-objet-link-revert"],
+        help="Preview or approve exact-byte restoration from one Zettel-Objet link receipt.",
+    )
+    zettel_objet_link_revert.add_argument("archive_root")
+    zettel_objet_link_revert.add_argument("--receipt", required=True)
+    zettel_objet_link_revert.add_argument("--dry-run", action="store_true")
+    zettel_objet_link_revert.add_argument("--approve", action="store_true")
+    zettel_objet_link_revert.add_argument("--expected-plan-sha256")
+    zettel_objet_link_revert.add_argument("--reviewed-by")
+    zettel_objet_link_revert.add_argument("--format", choices=["text", "json"], default="text")
+    zettel_objet_link_revert.set_defaults(func=command_zettel_objet_link_revert)
+
+    discard_draft = subcommands.add_parser(
+        "discard-draft",
+        help="Preview or approve reversible discard of one unminted inbox draft.",
+    )
+    discard_draft.add_argument("archive_root")
+    discard_draft_target = discard_draft.add_mutually_exclusive_group(required=True)
+    discard_draft_target.add_argument("--zettel-id")
+    discard_draft_target.add_argument("--path")
+    discard_draft.add_argument(
+        "--reason",
+        required=True,
+        help="Human-reviewed reason stored only in the private receipt and never echoed.",
+    )
+    discard_draft.add_argument("--dry-run", action="store_true")
+    discard_draft.add_argument("--approve", action="store_true")
+    discard_draft.add_argument("--expected-plan-sha256")
+    discard_draft.add_argument("--reviewed-by")
+    discard_draft.add_argument("--format", choices=["text", "json"], default="text")
+    discard_draft.set_defaults(func=command_discard_draft)
+
+    discard_draft_restore = subcommands.add_parser(
+        "discard-draft-restore",
+        help="Preview or approve exact-byte restoration of a discarded inbox draft.",
+    )
+    discard_draft_restore.add_argument("archive_root")
+    discard_draft_restore.add_argument("--receipt", required=True)
+    discard_draft_restore.add_argument("--dry-run", action="store_true")
+    discard_draft_restore.add_argument("--approve", action="store_true")
+    discard_draft_restore.add_argument("--expected-plan-sha256")
+    discard_draft_restore.add_argument("--reviewed-by")
+    discard_draft_restore.add_argument("--format", choices=["text", "json"], default="text")
+    discard_draft_restore.set_defaults(func=command_discard_draft_restore)
+
     external_locator_plan = subcommands.add_parser(
         "external-locator-plan",
         help="Plan one provider-neutral locator record without echoing the locator value.",
@@ -24192,6 +24530,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--locator-ref",
         required=True,
         help="Private locator value. It is validated and stored only after approval, never echoed.",
+    )
+    external_locator_plan.add_argument(
+        "--service-ref",
+        help="Optional reviewed service label. Stored locally and never echoed.",
+    )
+    external_locator_plan.add_argument(
+        "--account-ref",
+        help="Optional reviewed account coordinate, including an email address. Stored locally and never echoed.",
+    )
+    external_locator_plan.add_argument(
+        "--occurrence-anchor",
+        help="Optional reviewed occurrence label that distinguishes repeated uses of one locator. Never echoed.",
     )
     external_locator_plan.add_argument("--dry-run", action="store_true", help="Required. Write nothing.")
     external_locator_plan.add_argument("--format", choices=["text", "json"], default="text")
@@ -24213,6 +24563,9 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="Private locator value. Never echoed.",
     )
+    external_locator_record.add_argument("--service-ref")
+    external_locator_record.add_argument("--account-ref")
+    external_locator_record.add_argument("--occurrence-anchor")
     external_locator_record.add_argument(
         "--expected-plan-sha256",
         required=True,
@@ -28773,10 +29126,50 @@ def main(argv: list[str] | None = None) -> int:
 
         return command_source_reference_coverage_audit_argv(raw_argv[1:])
     parser = build_parser()
+    json_requested = any(
+        item == "--format=json"
+        or (item == "--format" and index + 1 < len(raw_argv) and raw_argv[index + 1] == "json")
+        for index, item in enumerate(raw_argv)
+    )
     try:
-        args = parser.parse_args(raw_argv)
+        if json_requested:
+            parser_stderr = io.StringIO()
+            with redirect_stderr(parser_stderr):
+                args = parser.parse_args(raw_argv)
+        else:
+            args = parser.parse_args(raw_argv)
     except SystemExit as exc:
-        return int(exc.code or 0)
+        exit_code = int(exc.code or 0)
+        if not exit_code or not json_requested:
+            return exit_code
+        parser_error = parser_stderr.getvalue()
+        missing_arguments: list[str] = []
+        missing_match = re.search(
+            r"the following arguments are required:\s*([^\r\n]+)",
+            parser_error,
+        )
+        if missing_match:
+            for raw_name in missing_match.group(1).split(","):
+                name = raw_name.strip()
+                if re.fullmatch(r"(?:--)?[A-Za-z0-9][A-Za-z0-9_-]*", name):
+                    missing_arguments.append(name)
+        command = raw_argv[0] if raw_argv and re.fullmatch(r"[a-z0-9][a-z0-9-]*", raw_argv[0]) else None
+        print_json(
+            {
+                "ok": False,
+                "state": "blocked",
+                "lifecycle_action": "cli_argument_validation",
+                "command": command,
+                "reason_codes": [
+                    "cli_required_arguments_missing"
+                    if missing_arguments
+                    else "cli_arguments_invalid"
+                ],
+                "missing_arguments": missing_arguments,
+                "private_values_echoed": False,
+            }
+        )
+        return exit_code
     return int(args.func(args))
 
 

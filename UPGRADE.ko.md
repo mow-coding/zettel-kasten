@@ -2,6 +2,36 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.3.301 Letter 112 실사용 보완
+
+v0.3.301은 기존 v0.3.300 아카이브와 호환되며 자동 마이그레이션이
+필요하지 않습니다. 외부 locator v0.1 기록은 계속 읽을 수 있고, 새 v0.2
+기록만 선택적인 서비스·계정·발생 좌표를 가집니다.
+
+`source-intake-record --source-intake-plan`의 상대 경로는 이제 아카이브
+루트를 기준으로 합니다. 새 `source-intake-batch`는 1~1,000개 로컬 파일의
+metadata-only 계획을 한 번의 정확한 사람 검토 관문으로 기록합니다. 이후
+Objet capture 승인은 여전히 별도입니다.
+
+AI가 zet를 작성하거나 고치기 전에 `authoring-conventions --dry-run`을
+실행하십시오. 아카이브별 선언이 없어도 오류는 아니지만, AI는 기존 서식을
+마음대로 지어내지 말아야 합니다. 발행 전 초안은 제자리에서 고치고, 정말
+버릴 때만 영수증 기반 `discard-draft`와 `discard-draft-restore`를
+사용하십시오.
+
+단순 표 마크업은 GFM 표로 정규화할 수 있습니다. 알 수 없거나 모호한
+마크업이 남은 zet 전체는 계속 차단되고 원문은 바뀌지 않습니다. 실제 승인
+전에 전체 계획을 먼저 검토하십시오.
+
+zet-objet 연결은 `zettel-objet-link`와 정확한 되돌리기 명령을 사용합니다.
+Objet가 manifest에 이미 있어야 하고 64자리 전체 SHA-256이 필요합니다.
+기존 zet는 자동 변경되지 않습니다.
+
+자세한 내용은
+[`wom-kit/docs/letter112-completion.md`](wom-kit/docs/letter112-completion.md)와
+[`wom-kit/docs/releases/v0.3.301.md`](wom-kit/docs/releases/v0.3.301.md)를
+참조하십시오.
+
 ## v0.3.300 Letters 098-111 통합 완료
 
 v0.3.300은 기존 v0.3.299 아카이브와 호환되며 자동 마이그레이션이

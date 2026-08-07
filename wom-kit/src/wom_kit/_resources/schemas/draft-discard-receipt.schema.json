@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wom-kit/draft-discard-receipt/v0.1",
+  "title": "WOM-kit unminted draft discard receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "action", "archive_id", "zettel_id", "draft_path", "draft_sha256", "reason", "reason_sha256", "snapshot_path", "plan_sha256", "reviewed_by", "created_at", "result"],
+  "properties": {
+    "schema": {"const": "wom-kit/draft-discard-receipt/v0.1"},
+    "action": {"const": "discard_unminted_draft"},
+    "archive_id": {"type": "string", "minLength": 1},
+    "zettel_id": {"type": "string", "pattern": "^zet_[A-Za-z0-9][A-Za-z0-9_-]{0,159}$"},
+    "draft_path": {"type": "string", "pattern": "^inbox/.+\\.md$"},
+    "draft_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "reason": {"type": "string", "minLength": 1, "maxLength": 1000},
+    "reason_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "snapshot_path": {"type": "string", "pattern": "^receipts/discarded-drafts/snapshots/[0-9a-f]{64}\\.draft\\.md$"},
+    "plan_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "reviewed_by": {"type": "string", "minLength": 1},
+    "created_at": {"type": "string", "minLength": 1},
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["draft_removed", "snapshot_written", "exact_byte_restore_supported"],
+      "properties": {
+        "draft_removed": {"const": true},
+        "snapshot_written": {"const": true},
+        "exact_byte_restore_supported": {"const": true}
+      }
+    }
+  }
+}

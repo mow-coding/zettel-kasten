@@ -1,6 +1,7 @@
 # zet Markdown Style Guide
 
 Status: v0.3.184 zet Markdown authoring and frontmatter viewer checkpoint
+Extended: v0.3.301 human-record integrity rules
 
 WOM zets are Markdown-compatible today. That is useful for authoring and import
 compatibility, but it means AI writers must avoid punctuation that Markdown
@@ -49,6 +50,15 @@ AI runtimes drafting or reviewing zets should follow this contract:
   strikethrough.
 - If a literal tilde is part of code or a command, use a code span.
 - If spacing would be ambiguous in prose, prefer words such as "from A to B".
+- Load `authoring-conventions --dry-run` before drafting so archive-specific
+  house rules are not invented from one example.
+- Keep commands, plan hashes, receipt counts, and internal tool verification
+  statuses out of ordinary human prose unless those operations are themselves
+  the subject.
+- After revising, read the complete zet again and resolve stale contradictions.
+- Cite only files backed by openable archive-relative references.
+- Revise an unminted draft in place. A title change is not a reason to delete
+  and recreate it; intentional removal uses `discard-draft`.
 
 `archive ai-response-concept-guide --topic all --dry-run` now includes the same
 rule so the AI runtime can discover it during normal WOM concept handoff.

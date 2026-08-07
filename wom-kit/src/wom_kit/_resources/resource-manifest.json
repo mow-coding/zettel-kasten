@@ -1,8 +1,8 @@
 {
   "schema": "wom-kit/package-resource-manifest/v0.1",
-  "version": "0.3.300",
+  "version": "0.3.301",
   "source_of_truth": "wom-kit source resource directories",
-  "file_count": 132,
+  "file_count": 139,
   "files": [
     {
       "source": "schemas/activity-group-membership-receipt.schema.json",
@@ -59,6 +59,12 @@
       "sha256": "2e1e22c5220540d92c2a5b3f1d22361e07134c59494b05ca7a4b7bbb61837021"
     },
     {
+      "source": "schemas/authoring-conventions.schema.json",
+      "packaged": "schemas/authoring-conventions.schema.json",
+      "bytes": 1165,
+      "sha256": "4053d214dc681a55870f1f5635ce7259ccf2c5885b0e731e11b831372117159f"
+    },
+    {
       "source": "schemas/credential-adapter-manifest.schema.json",
       "packaged": "schemas/credential-adapter-manifest.schema.json",
       "bytes": 4806,
@@ -83,6 +89,18 @@
       "sha256": "2f5b261686c54bd38f94dcf645fa8784b861b41f24c1f9deaee7b798f8ab7e13"
     },
     {
+      "source": "schemas/draft-discard-receipt.schema.json",
+      "packaged": "schemas/draft-discard-receipt.schema.json",
+      "bytes": 1605,
+      "sha256": "3cf180f4a684e409ebbf8ac2122011fc369c90910dcd108e948b2bdd33b5a7d5"
+    },
+    {
+      "source": "schemas/draft-discard-restore-receipt.schema.json",
+      "packaged": "schemas/draft-discard-restore-receipt.schema.json",
+      "bytes": 1107,
+      "sha256": "c1d75c0479e51033440b7770a5437b77b538192c5db9bf8276e2e5582d88254c"
+    },
+    {
       "source": "schemas/external-import-receipt.schema.json",
       "packaged": "schemas/external-import-receipt.schema.json",
       "bytes": 1227,
@@ -91,14 +109,14 @@
     {
       "source": "schemas/external-locator-receipt.schema.json",
       "packaged": "schemas/external-locator-receipt.schema.json",
-      "bytes": 1761,
-      "sha256": "ed96c27a60683588087fb05b506d0793d0093de3846e8ca59c98e736731dd7b0"
+      "bytes": 2119,
+      "sha256": "fed08330885c6f3c4ff312c569b68e8386f105904795758750b828a92f20c715"
     },
     {
       "source": "schemas/external-locator-record.schema.json",
       "packaged": "schemas/external-locator-record.schema.json",
-      "bytes": 1783,
-      "sha256": "0a646738dfafd93eff4f34370888fcc80dd86a4c7878a61e2f193885e5a17e63"
+      "bytes": 2026,
+      "sha256": "4e885dfd290a31a8ce5b5aa44407665f2c10722af5ede8828184c8879fa78a2e"
     },
     {
       "source": "schemas/external-locator-revert-receipt.schema.json",
@@ -365,6 +383,18 @@
       "sha256": "ddd3200653e34ab3e136de4bb144e2f17d7ca08c3a314a81b0729d86d5847621"
     },
     {
+      "source": "schemas/source-intake-batch-receipt.schema.json",
+      "packaged": "schemas/source-intake-batch-receipt.schema.json",
+      "bytes": 1552,
+      "sha256": "b2fea18e289d6c2aaa97f73129acd56bb2baafd139f37d5361c71b824b127043"
+    },
+    {
+      "source": "schemas/source-intake-batch-request.schema.json",
+      "packaged": "schemas/source-intake-batch-request.schema.json",
+      "bytes": 1168,
+      "sha256": "7a8124dbe69ff961aaa75ed1e64689e767f1d39f42f7020032ba978728630b37"
+    },
+    {
       "source": "schemas/source-map-entry.schema.json",
       "packaged": "schemas/source-map-entry.schema.json",
       "bytes": 765,
@@ -469,8 +499,8 @@
     {
       "source": "schemas/zettel-frontmatter.schema.json",
       "packaged": "schemas/zettel-frontmatter.schema.json",
-      "bytes": 4322,
-      "sha256": "d7bcd4f3a5c47197f025c13b92b14821b966c092d4e5ee3a5b54ca4648c1f273"
+      "bytes": 4752,
+      "sha256": "acf9715ed4b0ab9e71ff112462da4a8096eca9ee47184ef2d3e627a67a60049d"
     },
     {
       "source": "schemas/zettel-kasten-actions.schema.json",
@@ -491,6 +521,18 @@
       "sha256": "acfebea307e43b186e0879dd294bcd957bd9813c1cef74b70b5c96e019b1a84b"
     },
     {
+      "source": "schemas/zettel-objet-link-receipt.schema.json",
+      "packaged": "schemas/zettel-objet-link-receipt.schema.json",
+      "bytes": 2007,
+      "sha256": "78d6fb91d1b24efccf637c6de99da97804ee97a58093d855f51644fb1c1305a9"
+    },
+    {
+      "source": "schemas/zettel-objet-link-revert-receipt.schema.json",
+      "packaged": "schemas/zettel-objet-link-revert-receipt.schema.json",
+      "bytes": 1050,
+      "sha256": "e4f2d06e5197c63d1a6963b357cb291570ee3591f63d9fbc9783c654bc2bc022"
+    },
+    {
       "source": "schemas/zettel-rules.schema.json",
       "packaged": "schemas/zettel-rules.schema.json",
       "bytes": 859,
@@ -499,14 +541,14 @@
     {
       "source": "templates/ai-runtime/wom-archive/SKILL.md",
       "packaged": "templates/ai-runtime/wom-archive/SKILL.md",
-      "bytes": 9946,
-      "sha256": "048176bdafa39745a1b0b49d9d8a57f4bce0caadc7a795bb57d9b405e18b1757"
+      "bytes": 10612,
+      "sha256": "fea0ad8f1e6b4e3efab726caf20b973283389850ebf9b7ff37202fd73bc11696"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/capture-draft-and-publication.md",
       "packaged": "templates/ai-runtime/wom-archive/references/capture-draft-and-publication.md",
-      "bytes": 3411,
-      "sha256": "84533bcc5c2e9860f9ae0c60bfa7739a6082d3cb6038df34bbdbbd6401e86941"
+      "bytes": 5611,
+      "sha256": "3beed0dd5a9632432883dcf973e053687f7305356f92a5223bd1514f98dd3a7b"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/foreign-sharing-and-trust.md",
@@ -517,8 +559,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/references/operator-contract.md",
       "packaged": "templates/ai-runtime/wom-archive/references/operator-contract.md",
-      "bytes": 60065,
-      "sha256": "f6be17296df6b9bd17916c60f725d03a866a3943ad752cf2775f1f7b09e2723f"
+      "bytes": 63017,
+      "sha256": "e0db4918ae863e26643a21125a1d684823e4bd9b78558f67791b4a4dc70bda2f"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/reading-memory-and-revision.md",
@@ -791,10 +833,10 @@
       "sha256": "d619dc26af3216498c8392dfe838b0fe752d4bad9da998a58ca682d668fc510c"
     },
     {
-      "source": "docs/releases/v0.3.300.md",
-      "packaged": "release-notes/v0.3.300.md",
-      "bytes": 3084,
-      "sha256": "8e6f9f3cca7bfe34652da5d460f8353c1f0810dcbc4678a44d4e614a16181cff"
+      "source": "docs/releases/v0.3.301.md",
+      "packaged": "release-notes/v0.3.301.md",
+      "bytes": 2452,
+      "sha256": "e0cf0509ac34c769850705d13f4d79cd39dc2df92f535bfe041925075574f750"
     }
   ]
 }
