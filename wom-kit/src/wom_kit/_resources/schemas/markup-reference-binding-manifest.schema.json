@@ -18,10 +18,10 @@
         "properties": {
           "zettel_id": {"type": "string", "pattern": "^zet_[A-Za-z0-9][A-Za-z0-9_-]{0,159}$"},
           "tag_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-          "binding_kind": {"enum": ["external_locator", "zettel_edge"]},
+          "binding_kind": {"enum": ["external_locator", "zettel_edge", "objet"]},
           "binding_id": {
             "type": "string",
-            "pattern": "^(?:locator:sha256:|edge:)[0-9a-f]{64}$"
+            "pattern": "^(?:(?:locator:sha256:|edge:)[0-9a-f]{64}|sha256:[0-9a-f]{64})$"
           }
         }
       }

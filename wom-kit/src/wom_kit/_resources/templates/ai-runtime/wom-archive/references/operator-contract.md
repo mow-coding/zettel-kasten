@@ -587,12 +587,20 @@ migration markup. `preserve` records the inventory and writes nothing.
 visible text. Simple `table`/`tr`/`td`/`th` markup becomes a GitHub Flavored
 Markdown table; `col`/`colgroup` carry alignment only when unambiguous;
 `columns`/`column` become paragraph boundaries; and paired `mention-date`
-wrappers preserve their visible text. Nested tables, spans, captions, or
+wrappers preserve their visible text. Strict self-closing ISO mention dates
+become visible date/time text. Numeric `col width` is treated as presentational;
+an explicit header row becomes the GFM header and an explicit header column is
+retained as bold first-column cells because GFM has no row-header primitive.
+Synced-block wrappers preserve their complete inner snapshot without claiming
+live provider synchronization. Nested tables, spans, captions, or
 ambiguous cell semantics block and remain unchanged. Any remaining unknown
 semantic tag blocks the whole zet: known cleanup is not partially written into
-a zet that still needs semantic review. File/media/mention/synced-ref tags
-require an archive-local binding manifest whose exact tag SHA-256 points to an
-already-existing active external locator or source-zettel edge.
+a zet that still needs semantic review in strict mode. When independent zets
+are ready, pass `--only-ready` to both plan and apply; the exact plan digest
+binds that selection and every blocked zet remains byte-identical. File, audio,
+video, media, mention, and synced-ref tags require an archive-local binding
+manifest whose exact fragment SHA-256 points to an already-existing manifested
+objet, active external locator, or source-zettel edge.
 
 Approval snapshots exact before and after bytes and writes a journal before
 the first canonical mutation. If a process stops, inspect that journal with:
@@ -608,6 +616,11 @@ affected zets by hand. Completed normalization uses the separate exact-byte
 ```bash
 archive create-draft <archive-root> --dry-run --source-intake-plan <source-intake-plan.json> --prompt-boundary-report <prompt-boundary-report.json> --expected-archive-id <id> --expected-type <type> --profile-id <profile-id> --creation-mode ai_assisted --created-by ai_runtime:codex --assisted-by ai_runtime:codex --format json
 ```
+
+For `ai_assisted` and `ai_generated`, include an explicit reviewed `--abstract`
+and at least one stable `--facet`. Missing publication-critical metadata blocks
+before a file is created. A same-normalized-title inbox draft also blocks the
+AI route; revise the existing unminted draft in place.
 
 Before composing or revising the body, load the mounted archive's rules:
 
@@ -626,6 +639,11 @@ archive-relative references.
 Do not manually copy local paths from source intake or prompt-boundary outputs into the draft. Let `create-draft --source-intake-plan` and `--prompt-boundary-report` validate and merge safe metadata.
 
 After human draft approval, replay the same `draft_id`, `created_at`, `expected_body_sha256`, expected archive id/type, and profile id. Draft approval is only for `inbox/`; minting still needs a separate `mint-zet --approve --reviewed-by` step.
+
+A human publication request starts the mint preview now. It is complete only
+after the approved mint produces canonical and receipt evidence. If the preview
+or separate approval gate blocks, report that immediately rather than leaving
+the request silent.
 
 Revise an unminted draft in place; title changes do not authorize deletion and
 recreation. To intentionally remove a never-minted draft, run `discard-draft`

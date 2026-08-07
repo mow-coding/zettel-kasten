@@ -218,6 +218,8 @@ class ArchiveCliTests(unittest.TestCase):
             archive_root,
             title=title,
             body=f"PRIVATE_BODY_{draft_id}",
+            abstract=f"PRIVATE ABSTRACT FOR {draft_id}",
+            facets={"domain": "private_fixture"},
             created_by="ai_runtime:private-fixture",
             source="private_fixture",
             creation_mode=creation_mode,
@@ -28843,6 +28845,19 @@ state:
                 "zettel-kasten/authoring-conventions.yml",
             )
             self.assertIsNone(missing["conventions"])
+            completion = missing["publication_completion_contract"]
+            self.assertEqual(
+                completion["ai_draft_route"],
+                "archive create-draft dry-run and exact reviewed replay",
+            )
+            self.assertEqual(
+                completion["publication_complete_only_after"],
+                "approved mint-zet success with canonical and receipt evidence",
+            )
+            self.assertTrue(completion["report_blockers_immediately"])
+            self.assertTrue(
+                completion["revise_same_title_unminted_draft_in_place"]
+            )
 
             conventions_path = (
                 archive_root
@@ -47866,6 +47881,80 @@ archive_services.zet_title_remap_recover(
             )
             self.assertEqual(self.snapshot_archive_files(archive_root), before)
 
+    def test_zet_title_remap_defaults_to_full_limit_and_accepts_short_exact_source_title(self) -> None:
+        parsed = archive_cli.build_parser().parse_args(
+            [
+                "zet-title-remap-plan",
+                "archive",
+                "--proposal",
+                ".wom-scratch/title-remap/reviewed.jsonl",
+                "--dry-run",
+            ]
+        )
+        self.assertEqual(parsed.max_items, archive_services.ZET_TITLE_REMAP_MAX_ITEMS)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            name = "zet_import_notion_short_exact_source"
+            self._write_title_probe_zet(
+                archive_root,
+                name,
+                f"id: {name}\ntitle: 32634f642e1b80b68144d468b836da79\n"
+                "status: canonical\nkind: note\n",
+            )
+            replacement = "3D; TV"
+            proposal = self._write_title_remap_proposal(
+                archive_root,
+                [
+                    {
+                        "schema": "wom-kit/zet-title-remap-proposal/v0.1",
+                        "zettel_id": name,
+                        "expected_file_sha256": self._canonical_sha256(
+                            archive_root, name
+                        ),
+                        "title": replacement,
+                        "basis": "source_export_property",
+                    }
+                ],
+            )
+            code, output = self.run_cli(
+                [
+                    "zet-title-remap-plan",
+                    str(archive_root),
+                    "--proposal",
+                    proposal,
+                    "--dry-run",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertEqual(result["summary"]["ready_for_review_count"], 1)
+            self.assertIn(
+                "source_export_title_below_promotion_threshold",
+                result["items"][0]["warning_codes"],
+            )
+            self.assertNotIn(replacement, output)
+
+            dry_code, dry_output = self.run_cli(
+                [
+                    "zet-title-remap-write",
+                    str(archive_root),
+                    "--proposal",
+                    proposal,
+                    "--expected-proposal-sha256",
+                    result["proposal"]["sha256"],
+                    "--expected-plan-digest",
+                    result["plan_digest"],
+                    "--dry-run",
+                ]
+            )
+            self.assertEqual(dry_code, 0, dry_output)
+            self.assertEqual(
+                json.loads(dry_output)["status"],
+                "ready_to_apply",
+            )
+            self.assertNotIn(replacement, dry_output)
+
     def test_zet_title_remap_plan_exposes_only_allowlisted_input_error_reason(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
@@ -58137,6 +58226,126 @@ archive_services.zet_abstract_backfill_recover(
             self.assertEqual(long_code, 1, long_output)
             self.assertIn(f"at most {archive_services.ZET_ABSTRACT_MAX_CHARS} characters", long_output)
 
+    def test_create_draft_ai_route_requires_mint_ready_metadata_and_blocks_same_title(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "personal-archive"
+            init_code, init_output = self.init_personal_archive(
+                archive_root,
+                "archive:personal:ai-draft-integrity",
+            )
+            self.assertEqual(init_code, 0, init_output)
+
+            incomplete_code, incomplete_output = self.run_cli(
+                [
+                    "create-draft",
+                    str(archive_root),
+                    "--title",
+                    "AI publication draft",
+                    "--body",
+                    "A reviewed body that is intended to become canonical memory.",
+                    "--creation-mode",
+                    "ai_assisted",
+                    "--assisted-by",
+                    "ai_runtime:codex",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(incomplete_code, 1, incomplete_output)
+            incomplete = json.loads(incomplete_output)
+            self.assertIn(
+                "AI-assisted or AI-generated drafts require an explicit abstract before creation.",
+                incomplete["blockers"],
+            )
+            self.assertIn(
+                "AI-assisted or AI-generated drafts require at least one stable facet before creation.",
+                incomplete["blockers"],
+            )
+
+            first_code, first_output = self.run_cli(
+                [
+                    "create-draft",
+                    str(archive_root),
+                    "--title",
+                    "AI publication draft",
+                    "--abstract",
+                    "A compact reviewed first read for the publication draft.",
+                    "--body",
+                    "A reviewed body that is intended to become canonical memory.",
+                    "--facet",
+                    "domain=operations",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(first_code, 0, first_output)
+
+            duplicate_code, duplicate_output = self.run_cli(
+                [
+                    "create-draft",
+                    str(archive_root),
+                    "--title",
+                    "  ai PUBLICATION draft  ",
+                    "--abstract",
+                    "Another compact reviewed first read.",
+                    "--body",
+                    "Another reviewed body that must not silently create a duplicate.",
+                    "--facet",
+                    "domain=operations",
+                    "--creation-mode",
+                    "ai_generated",
+                    "--assisted-by",
+                    "ai_runtime:codex",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(duplicate_code, 1, duplicate_output)
+            duplicate = json.loads(duplicate_output)
+            self.assertIn(
+                "An unminted inbox draft with the same normalized title already exists; revise that draft in place instead of creating another one.",
+                duplicate["blockers"],
+            )
+            self.assertEqual(
+                duplicate["existing_draft_title_check"]["same_title_count"],
+                1,
+            )
+            self.assertFalse(
+                duplicate["existing_draft_title_check"]["body_text_read"]
+            )
+            self.assertFalse(
+                duplicate["existing_draft_title_check"]["paths_or_titles_echoed"]
+            )
+
+            human_code, human_output = self.run_cli(
+                [
+                    "create-draft",
+                    str(archive_root),
+                    "--title",
+                    "AI publication draft",
+                    "--body",
+                    "A human-owned rough draft may proceed after a visible warning.",
+                    "--draft-id",
+                    "zet_20260807_224500_human_same_title_preview",
+                    "--created-at",
+                    "2026-08-07T22:45:00+09:00",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(human_code, 0, human_output)
+            human = json.loads(human_output)
+            self.assertEqual(
+                human["existing_draft_title_check"]["same_title_count"],
+                1,
+            )
+            self.assertTrue(
+                any("same normalized title" in item for item in human["warnings"])
+            )
+
     def test_create_draft_rejects_unsafe_body(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = Path(tmp) / "personal-archive"
@@ -58168,8 +58377,12 @@ archive_services.zet_abstract_backfill_recover(
                     str(archive_root),
                     "--title",
                     "AI assisted draft",
+                    "--abstract",
+                    "A compact reviewed first read for the assisted draft.",
                     "--body",
                     "A safe draft body.",
+                    "--facet",
+                    "domain=test",
                     "--dry-run",
                     "--expected-archive-id",
                     "archive:personal:draft-dry-run",
@@ -58236,8 +58449,12 @@ archive_services.zet_abstract_backfill_recover(
                     str(archive_root),
                     "--title",
                     "Approved AI draft",
+                    "--abstract",
+                    "A compact reviewed first read for the approved draft.",
                     "--body",
                     body,
+                    "--facet",
+                    "domain=test",
                     "--expected-archive-id",
                     "archive:personal:draft-replay",
                     "--expected-type",
@@ -58331,8 +58548,12 @@ archive_services.zet_abstract_backfill_recover(
                         str(archive_root),
                         "--title",
                         "AI identity draft",
+                        "--abstract",
+                        "A compact reviewed first read for the identity draft.",
                         "--body",
                         "Safe body.",
+                        "--facet",
+                        "domain=test",
                         "--dry-run",
                         "--creation-mode",
                         "ai_assisted",
@@ -58351,8 +58572,12 @@ archive_services.zet_abstract_backfill_recover(
                     str(archive_root),
                     "--title",
                     "AI identity pass",
+                    "--abstract",
+                    "A compact reviewed first read for the identity pass.",
                     "--body",
                     "Safe body.",
+                    "--facet",
+                    "domain=test",
                     "--dry-run",
                     "--creation-mode",
                     "ai_assisted",
@@ -58496,6 +58721,83 @@ archive_services.zet_abstract_backfill_recover(
             result = json.loads(output)
             self.assertFalse(result["ok"])
             self.assertIn("Unsafe local path or provider locator", "; ".join(result["blockers"]))
+
+    def test_ai_start_here_surfaces_unpublished_and_out_of_pipeline_draft_attention(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "personal-archive"
+            init_code, init_output = self.init_personal_archive(
+                archive_root,
+                "archive:personal:session-inbox-attention",
+            )
+            self.assertEqual(init_code, 0, init_output)
+            self.create_inbox_pipeline_audit_draft(
+                archive_root,
+                draft_id="zet_20260729_010203_ready_unpublished",
+                title="PRIVATE READY UNPUBLISHED",
+            )
+            incomplete_path = self.create_inbox_pipeline_audit_draft(
+                archive_root,
+                draft_id="zet_20260728_230000_bypassed_unpublished",
+                title="PRIVATE BYPASSED UNPUBLISHED",
+                promotion_stage="draft",
+                legacy_draft_suffix=True,
+            )
+            frontmatter, body = archive_services.require_readable_zettel_text(
+                incomplete_path.read_text(encoding="utf-8")
+            )
+            frontmatter.pop("abstract", None)
+            frontmatter["facets"] = {}
+            incomplete_path.write_text(
+                "---\n"
+                + archive_services.dump_yaml(frontmatter)
+                + "---\n\n"
+                + body.rstrip()
+                + "\n",
+                encoding="utf-8",
+            )
+            before = self.snapshot_archive_files(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "ai-start-here",
+                    str(archive_root),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            attention = result["inbox_attention"]
+            self.assertEqual(attention["unpublished_draft_count"], 2)
+            self.assertEqual(attention["possible_out_of_pipeline_draft_count"], 1)
+            self.assertEqual(attention["mint_readiness_gap_count"], 1)
+            self.assertGreaterEqual(attention["oldest_draft_age_days"], 0)
+            self.assertTrue(attention["review_recommended"])
+            self.assertIn("2 unpublished draft(s)", attention["human_summary"])
+            self.assertIn(
+                "archive inbox-pipeline-audit <archive-root> --dry-run --format json",
+                attention["next_command"],
+            )
+            self.assertFalse(attention["body_text_read"])
+            serialized = json.dumps(result, ensure_ascii=False)
+            self.assertNotIn("PRIVATE READY UNPUBLISHED", serialized)
+            self.assertNotIn("PRIVATE BYPASSED UNPUBLISHED", serialized)
+            self.assertNotIn(incomplete_path.name, serialized)
+            self.assertEqual(before, self.snapshot_archive_files(archive_root))
+
+            markdown_code, markdown_output = self.run_cli(
+                [
+                    "ai-start-here",
+                    str(archive_root),
+                    "--dry-run",
+                    "--format",
+                    "markdown",
+                ]
+            )
+            self.assertEqual(markdown_code, 0, markdown_output)
+            self.assertIn("## Unpublished Draft Attention", markdown_output)
+            self.assertIn("2 unpublished draft(s)", markdown_output)
 
     def test_inbox_pipeline_audit_empty_archive_is_read_only(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

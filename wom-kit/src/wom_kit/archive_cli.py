@@ -5231,6 +5231,11 @@ def render_ai_start_here_markdown(result: dict[str, Any]) -> str:
         if isinstance(storage_authority.get("plain_summary"), dict)
         else {}
     )
+    inbox_attention = (
+        result.get("inbox_attention")
+        if isinstance(result.get("inbox_attention"), dict)
+        else {}
+    )
 
     lines = [
         "# WOM AI Start Here",
@@ -5248,6 +5253,11 @@ def render_ai_start_here_markdown(result: dict[str, Any]) -> str:
         f"- Full Doctor run: {'yes' if inspection.get('full_doctor_run') else 'no'}",
         f"- Identity consistency: `{identity_consistency.get('status') or 'unknown'}`",
         f"- Runtime guidance readiness: `{guidance_readiness.get('status') or 'not_checked'}`",
+        "",
+        "## Unpublished Draft Attention",
+        "",
+        f"- {inbox_attention.get('human_summary') or 'Inbox draft attention was not reported.'}",
+        f"- Detailed check: `{inbox_attention.get('next_command') or 'archive inbox-pipeline-audit <archive-root> --dry-run --format json'}`",
         "",
         "## Read First",
         "",
@@ -15484,6 +15494,7 @@ def command_markup_normalization_plan(args: argparse.Namespace) -> int:
             max_items=args.max_items,
             max_changes=args.max_changes,
             binding_manifest=args.binding_manifest,
+            only_ready=args.only_ready,
         )
     except Exception:
         print("markup-normalization-plan failed safely.", file=sys.stderr)
@@ -15503,6 +15514,7 @@ def command_markup_normalization(args: argparse.Namespace) -> int:
             max_items=args.max_items,
             max_changes=args.max_changes,
             binding_manifest=args.binding_manifest,
+            only_ready=args.only_ready,
             expected_plan_sha256=args.expected_plan_sha256,
             reviewed_by=args.reviewed_by,
         )
@@ -23005,7 +23017,7 @@ def build_parser() -> argparse.ArgumentParser:
     zet_title_remap_plan.add_argument(
         "--max-items",
         type=int,
-        default=500,
+        default=archive_services.ZET_TITLE_REMAP_MAX_ITEMS,
         help="Maximum proposal rows to inspect (1-5000).",
     )
     zet_title_remap_plan.add_argument(
@@ -23057,7 +23069,7 @@ def build_parser() -> argparse.ArgumentParser:
     zet_title_remap_write.add_argument(
         "--max-items",
         type=int,
-        default=500,
+        default=archive_services.ZET_TITLE_REMAP_MAX_ITEMS,
         help="Maximum proposal rows to inspect and write (1-5000).",
     )
     mode = zet_title_remap_write.add_mutually_exclusive_group()
@@ -25283,7 +25295,7 @@ def build_parser() -> argparse.ArgumentParser:
     create_draft.add_argument("--title", help="Draft title. Required unless --list-kinds is used.")
     create_draft.add_argument(
         "--abstract",
-        help=f"Optional compact zet abstract, at most {archive_services.ZET_ABSTRACT_MAX_CHARS} characters.",
+        help=f"Compact zet abstract, at most {archive_services.ZET_ABSTRACT_MAX_CHARS} characters; required for AI-assisted/generated drafts.",
     )
     body = create_draft.add_mutually_exclusive_group(required=False)
     body.add_argument("--body", help="Draft body text.")
@@ -25295,7 +25307,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="List valid note kinds from this archive's zettel-rules and exit (read-only, writes nothing).",
     )
-    create_draft.add_argument("--facet", action="append", help="Facet in KEY=VALUE form. May be repeated.")
+    create_draft.add_argument("--facet", action="append", help="Facet in KEY=VALUE form. May be repeated; at least one is required for AI-assisted/generated drafts.")
     create_draft.add_argument("--dry-run", action="store_true", help="Preview draft creation without writing files.")
     create_draft.add_argument("--expected-archive-id", help="Expected archive id; mismatch blocks.")
     create_draft.add_argument(
@@ -26538,6 +26550,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--binding-manifest",
         help="Optional reviewed archive-local reference binding manifest.",
     )
+    markup_normalization_plan.add_argument(
+        "--only-ready",
+        action="store_true",
+        help="Plan only safe ready changes while reporting and leaving blocked zets byte-identical.",
+    )
     markup_normalization_plan.add_argument("--dry-run", action="store_true", help="Required. Write nothing.")
     markup_normalization_plan.add_argument("--format", choices=["text", "json"], default="text")
     markup_normalization_plan.set_defaults(func=command_markup_normalization_plan)
@@ -26553,6 +26570,11 @@ def build_parser() -> argparse.ArgumentParser:
     markup_normalization.add_argument(
         "--binding-manifest",
         help="Reviewed archive-local reference binding manifest used by the plan.",
+    )
+    markup_normalization.add_argument(
+        "--only-ready",
+        action="store_true",
+        help="Apply the exact ready-only selection reviewed with the same flag.",
     )
     markup_normalization.add_argument("--expected-plan-sha256", required=True)
     markup_normalization.add_argument("--approve", action="store_true")

@@ -10,12 +10,12 @@ It is not a website, SaaS app, dashboard, or visual note-taking product. The int
 
 ## Install The Command-Line Tool
 
-The exact v0.3.304 GitHub Release, when present, uses the self-contained wheel
+The exact v0.3.305 GitHub Release, when present, uses the self-contained wheel
 below. Confirm that the release exists and lists the wheel before installing
 it. The versioned URL alone is not proof that the asset is available.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.304/wom_kit-0.3.304-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.305/wom_kit-0.3.305-py3-none-any.whl"
 archive --version
 ```
 
@@ -121,6 +121,13 @@ context rather than a false downgrade blocker. Real project downgrades remain
 blocked. See
 [`docs/project-version-update.md`](docs/project-version-update.md) and
 [`docs/releases/v0.3.304.md`](docs/releases/v0.3.304.md).
+
+v0.3.305 closes the real-use gaps reported in Letter 113: ready-only markup
+selection, manifested-objet body bindings, strict date/synced-block/table
+normalization, in-place locator coordinate enrichment, and large/short exact
+source-title remap usability. See
+[`docs/letter113-completion.md`](docs/letter113-completion.md) and
+[`docs/releases/v0.3.305.md`](docs/releases/v0.3.305.md).
 
 v0.3.292 keeps those runtime safeguards and makes objet relationship counts
 honest across overview and catalog surfaces. See
@@ -363,7 +370,7 @@ runtime-context
   Print quick read-only JSON context for terminal-capable AI runtimes. It confirms archive id, archive type/scope, principal/owner summary, cross-file identity consistency, AI write policy, safe archive-relative paths, canonical entrypoint metadata, AI guide handoff order, material-link routes, safe actions, WOM-kit version, and local-sovereignty storage authority without constructing Doctor by default. Add `--full-doctor --progress` only for a complete archive health check. A completed full run retains bounded ERROR/WARN items, complete code counts, and suggested commands in `doctor_findings`; INFO remains count-only. Compact heartbeat reports current local-profile secret-safety file/content/profile counts instead of letting a preserved older edge aggregate hide the active stage. Local absolute paths are redacted by default.
 
 ai-start-here --dry-run
-  Print one compact first-read map for an entering AI operator without scanning every zet or receipt. The result marks runtime-context already included, surfaces identity consistency, routes a mismatch to the read-only identity-reconcile preview, and separates `completed_commands` from executable `next_commands` so an AI does not repeat the handoff. Add `--full-doctor` only when a complete archive health check is needed. Optional `--progress` reports de-duplicated counts, work units, stage elapsed time, rate, ETA, and count-bearing heartbeats on stderr; a long mint receipt heartbeat also uses a fixed safe phase such as `file_hash` or `edge_receipt_index`, while edge source-load progress is aggregated into content-free source/candidate/cache-hit counts. Optional `--output .wom-scratch/diagnostics/<name>.json` stores the full result as private local scratch and leaves a compact stdout summary.
+  Print one compact first-read map for an entering AI operator without scanning every canonical zet or receipt. It includes a bounded frontmatter-only `inbox_attention` summary with unpublished count, oldest age, pipeline-shape concerns, and publication-metadata gaps without echoing draft identities or bodies. The result marks runtime-context already included, surfaces identity consistency, routes a mismatch to the read-only identity-reconcile preview, and separates `completed_commands` from executable `next_commands` so an AI does not repeat the handoff. Add `--full-doctor` only when a complete archive health check is needed. Optional `--progress` reports de-duplicated counts, work units, stage elapsed time, rate, ETA, and count-bearing heartbeats on stderr; a long mint receipt heartbeat also uses a fixed safe phase such as `file_hash` or `edge_receipt_index`, while edge source-load progress is aggregated into content-free source/candidate/cache-hit counts. Optional `--output .wom-scratch/diagnostics/<name>.json` stores the full result as private local scratch and leaves a compact stdout summary.
 
 identity-reconcile --dry-run|--approve
   Compare the principal declaration in `archive.yml` with the identity and ownership core in `archive-identity.yml`. Dry-run returns only field names and current/proposed SHA-256 digests. Same-principal display metadata and a missing or template-like identity id can be repaired only through a reviewed, three-digest-bound approval; principal conflicts fail closed. Approval edits only `archive-identity.yml`, writes a value-free receipt, and restores exact prior bytes on handled receipt failure.
@@ -759,7 +766,7 @@ tools/benchmark_zet_catalog.py
   Build a temporary synthetic 1,000- or 10,000-zet archive, exhaustively page the live catalog in full/reading, page/strict, and path/seeded order modes, verify unique coverage and strict claim readiness, and report order, scan, timing, cache, and heuristic workload evidence. It reads no real archive and persists no fixture.
 
 create-draft
-  Create a draft zettel in inbox/. Optional --abstract stores a bounded compact first read. With --dry-run, preview a profile-aware inbox draft zet without writing files. It can consume a validated source-intake plan with --source-intake-plan and a validated prompt-boundary report with --prompt-boundary-report.
+  Create a draft zettel in inbox/. Optional --abstract stores a bounded compact first read for human-owned rough drafts; AI-assisted/generated routes require it plus at least one stable --facet. A bounded frontmatter-only title check blocks AI-created same-title duplicates and warns human-owned draft flows. With --dry-run, preview a profile-aware inbox draft zet without writing files. It can consume a validated source-intake plan with --source-intake-plan and a validated prompt-boundary report with --prompt-boundary-report.
 
 mint-zet --dry-run
   Check whether a draft zet can be minted and preview canonical path, mint receipt, and draft snapshot without writing.
@@ -1078,7 +1085,7 @@ For Notion page/block exports, `recordMap` or `blocks` JSON is treated as a prov
 
 `archive create-draft --source-intake-plan <json-file>` consumes a successful source-intake dry-run JSON file, validates that it is metadata-only and blocker-free, then merges safe `source_refs_for_draft` into draft `source_refs`. If the source-intake plan carries a valid `project_intake_context`, the draft `source_intake.project_intake_context` preserves that receipt evidence through mint preview/receipts without copying decision answer values. The plan file path is not stored in frontmatter, and WOM-kit does not follow local paths inside the plan.
 
-`archive create-draft --dry-run` is the safe preview step after profile resolution, runtime context, and optional source intake. It returns `lifecycle_action: create_draft`, the target archive summary, proposed `inbox/` path, frontmatter preview, body hash, blockers, warnings, and approval replay values. It writes nothing. For profile-bound AI draft writes, replay requires `--draft-approved-by` and `--expected-body-sha256`; this approval only creates an inbox draft and never mints canonical memory.
+`archive create-draft --dry-run` is the safe preview step after profile resolution, runtime context, and optional source intake. It returns `lifecycle_action: create_draft`, the target archive summary, proposed `inbox/` path, frontmatter preview, body hash, a content-free existing-draft title check, blockers, warnings, and approval replay values. It writes nothing. AI-assisted/generated routes require an explicit safe abstract and at least one stable facet, and block when an unminted same-normalized-title draft already exists. For profile-bound AI draft writes, replay requires `--draft-approved-by` and `--expected-body-sha256`; this approval only creates an inbox draft and never mints canonical memory. A publication request must continue into `mint-zet`; it is complete only after the approved mint has canonical and receipt evidence, and any blocker must be reported immediately.
 
 `archive block-header --dry-run` previews the header for one existing draft or canonical zet. The model is `block = zet + header`: the zet remains the minimum human-supervised text information unit, and the header is derived from refs, hashes, provenance, policy, source refs, objet refs, and receipts. ZET is the later sharing layer for delegate, attest, and anchor flows; it is not the block itself.
 

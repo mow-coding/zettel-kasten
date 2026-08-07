@@ -69,6 +69,12 @@ Use the validated source and prompt-boundary reports:
 archive create-draft <archive-root> --dry-run --source-intake-plan <source-intake-plan.json> --prompt-boundary-report <prompt-boundary-report.json> --expected-archive-id <id> --expected-type <type> --profile-id <profile-id> --creation-mode ai_assisted --created-by ai_runtime:codex --assisted-by ai_runtime:codex --format json
 ```
 
+An AI-assisted or AI-generated draft must also supply a reviewed `--abstract`
+and at least one stable `--facet key=value`. The command blocks before writing
+when either is absent. It performs a bounded frontmatter-only same-title check;
+an AI route cannot create a second unminted draft with the same normalized
+title. Re-open and revise the existing draft instead.
+
 Do not manually copy local paths or unsafe source excerpts into frontmatter.
 Never write Markdown directly into `inbox/`; a location policy is not a write
 route. Draft approval writes only to `inbox/` through `archive create-draft`;
@@ -103,6 +109,12 @@ complete, current, or suitable for an external audience.
 Use the dedicated revision workflow for an already minted zet. Use retirement
 only when the archive's lifecycle policy calls for it; never delete a canonical
 zet or its receipts as cleanup.
+
+When the human asks to publish, begin the `mint-zet --dry-run` workflow in that
+same task. A draft write is not publication. Do not claim completion until the
+approved mint has produced both canonical and receipt evidence. If the preview
+finds a blocker or a separate approval is still required, report that boundary
+immediately; never leave the request silently pending for a later session.
 
 ## Keep Derived Work Synchronized
 

@@ -18,9 +18,11 @@ current chat is temporary working memory.
 archive ai-start-here <archive-root> --dry-run --progress --format json
 ```
 
-4. Read the returned summary, `action_routing`, and `next_safe_steps` before
-   choosing a deeper command. The route table, not a remembered folder
-   location, selects the official WOM command for an archive action.
+4. Read the returned summary, `inbox_attention`, `action_routing`, and
+   `next_safe_steps` before choosing a deeper command. The route table, not a
+   remembered folder location, selects the official WOM command for an archive
+   action. Never let unpublished-draft attention silently roll into a later
+   session.
 5. Run the full Doctor only when the quick result requests it, the human asks
    for it, or a write workflow requires it:
 
@@ -105,31 +107,24 @@ token-budget contract.
   `activity_group` requires an already-existing reviewed event-anchor zet.
 - Before changing migration markup, run `markup-style-guide` and
   `markup-normalization-plan`. Simple tables become GFM tables; columns become
-  paragraph boundaries; paired `mention-date` preserves text. Unknown tags
-  and ambiguous tables block. Reference tags need an exact reviewed locator or
-  edge binding. Recover an interrupted journal only through
+  paragraph boundaries; paired `mention-date` preserves text and a strict
+  self-closing ISO mention-date becomes visible date text. Synced-block wrappers
+  preserve their complete inner snapshot but do not claim live provider sync.
+  Unknown tags and ambiguous tables block. File/audio/video and other reference
+  tags need an exact reviewed objet, locator, or edge binding. If unrelated zets
+  remain blocked, use `--only-ready` on both the reviewed plan and unchanged
+  apply command; never treat `--max-items` as a ready-item selector. Recover an
+  interrupted journal only through
   `markup-normalization-recovery`; never hand-edit around it.
 - Inspect possible historical direct inbox writes only with
   `archive inbox-pipeline-audit <archive-root> --dry-run --format json`.
   Treat its classes as review signals, not proof, and never repair a draft
   automatically.
-- Plan event membership only from one explicit human-selected private request
-  with `archive activity-group-membership-plan <archive-root> --request
-  <private-reviewed-request> --dry-run --format json`. Never infer members
-  from search, titles, dates, nearby files, or edges. Add reviewed memberships
-  only through the plan's exact request/review hashes and
-  `activity-group-membership-write`; never hand-edit canonical zets. If that
-  writer was interrupted, first confirm it is no longer running, then use the
-  separate add recovery plan and exact approved add recovery command. Plan an
-  explicit removal only with `activity-group-membership-removal-plan`, then
-  continue through its exact request/review hashes and the separate
-  `activity-group-membership-removal-write` preview/approval command. If that
-  writer was interrupted, use only its dedicated read-only removal recovery
-  plan and exact approved removal recovery command. Never remove a membership
-  by hand, delete a retained add or removal journal to make a writer run,
-  treat `already_absent` as a write candidate, or execute a manual forensic
-  hold. Both writers share one lock and a two-root evidence scan but keep
-  their request, journal, receipt, and recovery authority separate.
+- Event membership needs an explicit human-selected request and the dedicated
+  plan/write/recovery routes for additions and removals. Never infer members,
+  hand-edit a canonical zet, delete a retained journal, or treat
+  `already_absent` as writable. Both writers share a lock but keep separate
+  evidence and authority.
 - Before drafting or revising prose, run `archive authoring-conventions
   <archive-root> --dry-run --format json`. Follow declared rules; if absent,
   use conservative defaults and ask before inventing a format. Keep commands,
@@ -137,15 +132,22 @@ token-budget contract.
   after edits, resolve contradictions, and cite only openable archive files.
 - Create an AI-assisted draft only through `archive create-draft` dry-run and
   its exact reviewed replay. Never write Markdown directly into `inbox/`.
-  Revise unminted drafts in place, including title changes. Use
+  Supply an explicit reviewed abstract and at least one stable facet; the AI
+  route blocks before writing when either is absent. If the same normalized
+  title is already present in `inbox/`, revise that unminted draft in place,
+  including title changes, instead of creating another file. Use
   `discard-draft` and `discard-draft-restore` instead of `rm`.
 - Add a manifested objet to a zet's structured `assets` only through
   `zettel-objet-link`. Require a complete SHA-256; truncated hashes block mint.
 - Before a write, show the human what will change, where it will change, and
   what will remain unchanged. Write only through the command's explicit
   `--approve` path and record `--reviewed-by` when required.
-- Never infer approval from words such as upload, post, publish, import, or
-  continue.
+- A human request to publish starts the `mint-zet` preview workflow; it is not
+  complete merely because a draft file exists. Do not treat the word
+  "publish" as satisfying any separate exact-hash, affirmation, or reviewer
+  gate. Claim publication only after the approved mint succeeds and canonical
+  plus receipt evidence exists. If preview or approval is blocked, tell the
+  human immediately what remains instead of silently deferring it.
 - Never expose secret values, credential-store responses, private local paths,
   or source-body excerpts in ordinary output.
 - Never call a provider, run transport, mint, revise, retire, import, trust, or

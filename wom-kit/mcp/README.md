@@ -291,6 +291,7 @@ ownership_transfer_check
 - `wom_profile_list`, `wom_profile_resolve`, and `wom_profile_wallet_check` are read-only. They never register profiles, store tokens, generate keys, sign data, register wallets, scan the disk, or write files. They redact local paths unless `AI_ARCHIVE_MCP_ALLOW_LOCAL_PATHS=1` is set on the MCP server and the caller explicitly disables redaction.
 - `prompt_boundary_check` is read-only and dry-run-only. It never exposes prompt boundary apply, auto-approve, full-auto, import apply, or real mint behavior.
 - `create_draft_zettel` dry-run writes nothing. Normal mode writes only to `inbox/`.
+- `create_draft_zettel` with `creation_mode: ai_assisted|ai_generated` requires a safe explicit `abstract` and non-empty `facets`, and blocks a same-normalized-title unminted draft before writing. MCP exposes no mint write; an inbox draft is not publication evidence.
 - `create_draft_zettel` accepts a structured `prompt_boundary_report` object, not a local report file path. `low` risk is recorded as heuristic context, `medium` risk is allowed with warnings, and `high` risk blocks draft creation.
 - Profile-bound AI draft writes require `draft_approved_by` and `expected_body_sha256`. That approval scope is `inbox_draft_only`; minting remains a separate CLI approval step.
 - `archive_init` refuses non-empty target folders.

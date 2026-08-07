@@ -2,6 +2,37 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.3.305 실사용 완료 및 발행 상태 가시화
+
+v0.3.305는 v0.3.304 아카이브와 호환되며 자동 마이그레이션이 필요하지
+않습니다. Letter 113의 마크업·locator·제목 워크플로우를 완성하고 Letter
+114의 조용히 사라지는 발행 요청 문제를 막습니다.
+
+업그레이드 뒤 세션을 다음 명령으로 시작하십시오.
+
+```powershell
+archive ai-start-here <archive-root> --dry-run --format json
+```
+
+넓게 작업하기 전에 `inbox_attention`을 확인하십시오. 초안 이름이나 본문을
+내보내지 않고 미발행 개수와 발행 준비 부족 신호를 보여 줍니다. 더 자세한
+검사는 `inbox-pipeline-audit --dry-run`으로 하며, 그 결과는 자동 수정·폐기·
+발행 권한이 아닙니다.
+
+AI 보조/생성 `create-draft`는 이제 안전한 명시적 abstract와 비어 있지 않은
+facet 하나 이상이 필요합니다. 같은 제목의 미발행 초안이 있으면 두 번째 AI
+파일을 막고 기존 초안을 제자리에서 고치게 합니다. 사람이 만드는 거친 초안은
+계속 허용하되 경고합니다. 사람이 발행을 요청하면 같은 작업에서
+`mint-zet --dry-run`을 시작하고, 막힘이나 남은 승인 관문을 즉시 알리며, 승인된
+정본과 영수증 증거가 생긴 뒤에만 발행 완료라고 보고해야 합니다.
+
+서로 무관한 차단 zet가 있는 마크업은 plan과 write 양쪽에 같은
+`--only-ready`를 사용하십시오. strict 모드는 계속 기본값입니다. 자세한 내용은
+[`wom-kit/docs/letter113-completion.md`](wom-kit/docs/letter113-completion.md),
+[`wom-kit/docs/letter114-completion.md`](wom-kit/docs/letter114-completion.md),
+[`wom-kit/docs/releases/v0.3.305.md`](wom-kit/docs/releases/v0.3.305.md)를
+참조하십시오.
+
 ## v0.3.304 프로젝트 업데이트 전진 판정 수정
 
 v0.3.304는 v0.3.303 아카이브와 호환되며 마이그레이션이 필요하지

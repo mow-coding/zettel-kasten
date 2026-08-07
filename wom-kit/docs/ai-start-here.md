@@ -6,7 +6,8 @@ no-repeat runtime-context handoff added in v0.3.224; identity consistency and
 review routing added in v0.3.226; aggregate edge-receipt progress added in
 v0.3.227; official AI command-path routing added in v0.3.278; explicit
 runtime-guidance readiness and feedback routing added in v0.3.293;
-checked-layer objet rediscovery routing added in v0.3.294
+checked-layer objet rediscovery routing added in v0.3.294; privacy-safe
+unpublished-draft attention added in v0.3.305
 
 ## Purpose
 
@@ -32,6 +33,14 @@ inspection.doctor_summary.checked: false
 It does not construct Doctor, enumerate every zet or receipt, read zet bodies,
 read objet bytes, access a credential store/provider, or write archive state.
 Its result is an entry map, not an archive health claim.
+
+Quick mode does run the existing bounded frontmatter-only inbox audit. The
+result's `inbox_attention` gives the unpublished draft count, oldest safely
+parseable age, possible current-pipeline-shape bypass count, and explicit
+abstract/facet readiness-gap count. It returns no title, id, path, body, actor,
+or source value. Markdown renders the same summary under `Unpublished Draft
+Attention`. This signal must be surfaced before broad work, but grants no
+repair, discard, semantic-merge, or mint authority.
 
 The map already includes runtime-context. Since v0.3.224, the compatibility
 `first_commands` list marks that command `already_included` with
@@ -60,7 +69,7 @@ cannot prove the host actually consumed them, so
 ## Official Read And Write Paths
 
 Introduced in v0.3.278 and extended through v0.3.294, JSON output includes
-`wom-kit/ai-command-path-routing/v0.8`, and Markdown output renders
+the current `wom-kit/ai-command-path-routing/v0.12`, and Markdown output renders
 `Official Read Command Paths` and `Official Write Command Paths`.
 
 The routes require `archive search --count-total --format json` for

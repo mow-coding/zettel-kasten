@@ -8463,7 +8463,9 @@ class McpServerTests(unittest.TestCase):
                             "arguments": {
                                 "archive_root": str(archive_root),
                                 "title": "MCP dry-run draft",
+                                "abstract": "A compact reviewed first read for the MCP draft.",
                                 "body": "Safe MCP draft body.",
+                                "facets": {"domain": "test"},
                                 "dry_run": True,
                                 "expected_archive_id": "archive:personal:mcp-dry-run",
                                 "expected_type": "personal",
@@ -11029,7 +11031,9 @@ class McpServerTests(unittest.TestCase):
                             "arguments": {
                                 "archive_root": str(archive_root),
                                 "title": "MCP AI identity draft",
+                                "abstract": "A compact reviewed first read for the identity draft.",
                                 "body": "Safe MCP draft body.",
+                                "facets": {"domain": "test"},
                                 "dry_run": True,
                                 "creation_mode": "ai_assisted",
                                 "created_by": "mcp:zettel-kasten-archive-mcp",
@@ -11083,7 +11087,9 @@ class McpServerTests(unittest.TestCase):
                             "arguments": {
                                 "archive_root": str(archive_root),
                                 "title": "MCP approved draft",
+                                "abstract": "A compact reviewed first read for the approved MCP draft.",
                                 "body": body,
+                                "facets": {"domain": "test"},
                                 "expected_archive_id": "archive:personal:mcp-approved",
                                 "expected_type": "personal",
                                 "profile_context": {

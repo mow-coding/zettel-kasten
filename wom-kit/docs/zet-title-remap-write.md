@@ -5,6 +5,9 @@ Status: v0.3.276 approval-gated title-only write and recovery boundary
 Use this command only after `zet-title-remap-plan` reports every row as ready
 and a human has compared every proposed title with its source record.
 
+The default `--max-items` is 5,000 for both plan and write. Keep the same
+explicit value on both commands if you choose a smaller bound.
+
 ## Two-Step Command
 
 First obtain the exact write-plan digest without changing the archive:
