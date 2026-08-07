@@ -109,5 +109,7 @@ Use `view-zets` when you already know which saved view or facet query you want
 to execute.
 
 Use `view-health` when a saved view returns zero zets, blocks, or looks stale.
-It helps decide whether to rebuild the index, repair unsupported filters, or
-edit `views/*.yml` after review.
+It helps decide whether to rebuild the index or repair unsupported filters.
+For a new persistent view, use the separate review-gated
+[`saved-view-write`](saved-view-write.md) lifecycle instead of direct AI file
+editing.

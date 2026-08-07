@@ -122,6 +122,7 @@
 - [Notion Objet Link Convert](notion-objet-link-convert.md)
 - [Notion Objet Manifest Locator Label](notion-objet-manifest-locator-label.md)
 - [View Recommendation Plan](view-recommendation-plan.md)
+- [Saved-View Write And Exact Revert](saved-view-write.md)
 
 이 문서들이 다루는 내용:
 
@@ -289,6 +290,7 @@
 - [Main Branch Protection Readiness](main-branch-protection-readiness.md)
 - [WOM-kit Capability Matrix](capability-matrix.md)
 - [View Recommendation Plan](view-recommendation-plan.md)
+- [Saved-View Write And Exact Revert](saved-view-write.md)
 - [Version Truth Source](version-truth-source.md)
 - [프로젝트 버전 갱신](project-version-update.md)
 - [한 프로세스 zet 카탈로그 완주](zet-catalog-one-process-pass.md)

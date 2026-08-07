@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wom-kit/saved-view-revert-receipt/v0.1",
+  "title": "WOM-kit saved-view revert receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "lifecycle_action",
+    "archive_id",
+    "source_receipt_path",
+    "source_receipt_sha256",
+    "target_path",
+    "view_sha256",
+    "revert_plan_sha256",
+    "reviewed_by",
+    "created_at"
+  ],
+  "properties": {
+    "schema": {"const": "wom-kit/saved-view-revert-receipt/v0.1"},
+    "lifecycle_action": {"const": "saved_view_revert"},
+    "archive_id": {"type": "string", "minLength": 1},
+    "source_receipt_path": {
+      "type": "string",
+      "pattern": "^receipts/views/[0-9a-f]{20}\\.[0-9a-f]{16}\\.saved-view-write\\.json$"
+    },
+    "source_receipt_sha256": {"$ref": "#/$defs/sha256"},
+    "target_path": {
+      "type": "string",
+      "pattern": "^views/generated-[0-9a-f]{20}\\.yml$"
+    },
+    "view_sha256": {"$ref": "#/$defs/sha256"},
+    "revert_plan_sha256": {"$ref": "#/$defs/sha256"},
+    "reviewed_by": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9:._-]{0,199}$"
+    },
+    "created_at": {"type": "string", "minLength": 1}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  }
+}

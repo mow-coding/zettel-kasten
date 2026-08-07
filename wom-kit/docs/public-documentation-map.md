@@ -131,6 +131,7 @@ Supporting philosophy and model docs:
 - [Notion Objet Manifest Locator Label](notion-objet-manifest-locator-label.md)
 - [View Health](view-health.md)
 - [View Recommendation Plan](view-recommendation-plan.md)
+- [Saved-View Write And Exact Revert](saved-view-write.md)
 - [Index Health](index-health.md)
 
 These documents cover:
@@ -305,6 +306,7 @@ Onboarding and setup plans:
 - [Main Branch Protection Readiness](main-branch-protection-readiness.md)
 - [WOM-kit Capability Matrix](capability-matrix.md)
 - [View Recommendation Plan](view-recommendation-plan.md)
+- [Saved-View Write And Exact Revert](saved-view-write.md)
 - [Version Truth Source](version-truth-source.md)
 - [Project Version Update](project-version-update.md)
 - [zet Catalog One-Process Pass](zet-catalog-one-process-pass.md)

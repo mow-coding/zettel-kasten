@@ -9,7 +9,7 @@ from wom_kit import __version__
 
 KIT_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = KIT_ROOT.parent
-EXPECTED_CURRENT_VERSION = "0.3.301"
+EXPECTED_CURRENT_VERSION = "0.3.302"
 EXPECTED_CURRENT_TAG = f"v{EXPECTED_CURRENT_VERSION}"
 CURRENT_VERSION = f"v{__version__}"
 CURRENT_RELEASE_NOTE = f"{EXPECTED_CURRENT_TAG}.md"
@@ -20,8 +20,7 @@ CURRENT_WHEEL_URL = (
     f"wom_kit-{EXPECTED_CURRENT_VERSION}-py3-none-any.whl"
 )
 CURRENT_RUNTIME_STATUS = (
-    f"Status: {CURRENT_VERSION} Letter 112 real-use completion routing "
-    "checkpoint"
+    f"Status: {CURRENT_VERSION} saved-view lifecycle routing checkpoint"
 )
 MATRIX_PATH = KIT_ROOT / "docs" / "capability-matrix.md"
 PRODUCT_ROADMAP_PATH = KIT_ROOT / "docs" / "product-roadmap.md"
@@ -4399,7 +4398,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, view_health_text)
         for phrase in (
-            "Status: v0.3.97 read-only saved view recommendation checkpoint",
+            "Status: v0.3.302 read-only recommendation plus separate reviewed writer",
             "archive view-recommendation-plan <archive-root> --dry-run",
             "view_recommendation_plan",
             "candidate single-facet saved views",
@@ -4412,16 +4411,16 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, view_recommendation_text)
         for phrase in (
-            "Saved view health and recommendation",
+            "Saved view health, recommendation, reviewed write, and exact revert",
             "archive view-health --dry-run",
             "MCP `view_health`",
             "archive view-recommendation-plan --dry-run",
             "MCP `view_recommendation_plan`",
-            "observed facet distribution samples",
+            "navigation filters",
             "facet_role_summary",
-            "safe recommendation filters",
-            "navigation axes",
-            "internal/import metadata",
+            "closed private request",
+            "navigation",
+            "Direct AI YAML edits remain forbidden",
             "echo no zettel titles",
         ):
             with self.subTest(phrase=phrase):
@@ -4435,6 +4434,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                 self.assertIn(phrase, readme_text)
         self.assertIn("[View Health](view-health.md)", public_map_text)
         self.assertIn("[View Recommendation Plan](view-recommendation-plan.md)", public_map_text)
+        self.assertIn("[Saved-View Write And Exact Revert](saved-view-write.md)", public_map_text)
 
     def test_index_health_doc_and_matrix_explain_generated_index_drift(self) -> None:
         index_health_text = INDEX_HEALTH_PATH.read_text(encoding="utf-8")
@@ -8479,7 +8479,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "archive search <archive-root> <query> --count-total --format json",
             "Never write Markdown directly into `inbox/`",
             "Existing archives are not silently rewritten",
-            "No dedicated writer exists",
+            "archive saved-view-write",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, guide_text)
@@ -10770,7 +10770,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             guide_text,
         )
         self.assertIn(
-            "wom-kit/ai-command-path-routing/v0.10",
+            "wom-kit/ai-command-path-routing/v0.11",
             routing_text,
         )
         self.assertIn(

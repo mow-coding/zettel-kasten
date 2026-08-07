@@ -153,6 +153,15 @@ jobs:
           wom-kit/tests/test_v03296_private_metadata_win32.py
           wom-kit/tests/test_v03296_private_metadata_writer_authority.py
 
+      # The saved-view lifecycle uses pytest parametrization and monkeypatch
+      # interruption fixtures. Run it once per interpreter/platform lane,
+      # outside unittest discovery, so zero collected tests cannot look green.
+      - name: WOM-kit pytest-native saved-view lifecycle suite
+        if: matrix.shard_index_zero == 0
+        run: >-
+          python -B -m pytest -q
+          wom-kit/tests/test_saved_view_workflows.py
+
       # A test that writes into the repository would break the project's
       # artifact-hygiene contract, so fail loudly instead of silently drifting.
       - name: Assert tests left the worktree clean
