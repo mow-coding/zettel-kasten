@@ -577,6 +577,100 @@ class CompletionWorkflowTests(unittest.TestCase):
             self.assertNotIn(first_anchor, public)
             self.assertFalse(recovery["privacy_guards"]["account_ref_echoed"])
 
+    def test_external_locator_enriches_one_matching_row_without_active_duplicate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.fake_archive(Path(tmp) / "archive")
+            zettel_id = "zet_20110228_fake_school_record"
+            locator_ref = "https://provider.example/reviewed/message"
+
+            bare_plan = completion_workflows.external_locator_plan(
+                archive_root,
+                zettel_id=zettel_id,
+                locator_type="source_url",
+                locator_ref=locator_ref,
+            )
+            bare = completion_workflows.external_locator_record(
+                archive_root,
+                zettel_id=zettel_id,
+                locator_type="source_url",
+                locator_ref=locator_ref,
+                expected_plan_sha256=bare_plan["summary"]["plan_sha256"],
+                reviewed_by="person:test",
+            )
+            self.assertTrue(bare["ok"], bare)
+
+            enrich_plan = completion_workflows.external_locator_plan(
+                archive_root,
+                zettel_id=zettel_id,
+                locator_type="source_url",
+                locator_ref=locator_ref,
+                service_ref="mail-service",
+                account_ref="reviewed-account@example.test",
+            )
+            self.assertTrue(enrich_plan["ok"], enrich_plan)
+            self.assertEqual(
+                enrich_plan["summary"]["planned_action"],
+                "update_locator_coordinates",
+            )
+            self.assertEqual(
+                enrich_plan["summary"]["locator_id"],
+                bare["summary"]["locator_id"],
+            )
+            enriched = completion_workflows.external_locator_record(
+                archive_root,
+                zettel_id=zettel_id,
+                locator_type="source_url",
+                locator_ref=locator_ref,
+                service_ref="mail-service",
+                account_ref="reviewed-account@example.test",
+                expected_plan_sha256=enrich_plan["summary"]["plan_sha256"],
+                reviewed_by="person:test",
+            )
+            self.assertTrue(enriched["ok"], enriched)
+            record = json.loads(
+                (
+                    archive_root / enriched["summary"]["record_path"]
+                ).read_text(encoding="utf-8")
+            )
+            self.assertEqual(len(record["locators"]), 1)
+            self.assertEqual(
+                record["locators"][0]["locator_id"],
+                bare["summary"]["locator_id"],
+            )
+            self.assertEqual(
+                record["locators"][0]["account_ref"],
+                "reviewed-account@example.test",
+            )
+            receipt = json.loads(
+                (
+                    archive_root / enriched["summary"]["receipt_path"]
+                ).read_text(encoding="utf-8")
+            )
+            self.assertEqual(receipt["action"], "update_locator_coordinates")
+            self.assert_schema_instance(
+                "external-locator-receipt.schema.json",
+                receipt,
+            )
+
+            revert_plan = completion_workflows.external_locator_revert_plan(
+                archive_root,
+                receipt=enriched["summary"]["receipt_path"],
+            )
+            reverted = completion_workflows.external_locator_revert(
+                archive_root,
+                receipt=enriched["summary"]["receipt_path"],
+                expected_plan_sha256=revert_plan["summary"]["plan_sha256"],
+                reviewed_by="person:test",
+            )
+            self.assertTrue(reverted["ok"], reverted)
+            restored = json.loads(
+                (
+                    archive_root / enriched["summary"]["record_path"]
+                ).read_text(encoding="utf-8")
+            )
+            self.assertEqual(len(restored["locators"]), 1)
+            self.assertNotIn("account_ref", restored["locators"][0])
+
     def test_objet_capture_batch_uses_one_reviewed_plan_and_converges(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.fake_archive(Path(tmp) / "archive")
@@ -1221,6 +1315,104 @@ class CompletionWorkflowTests(unittest.TestCase):
                 1,
             )
 
+    def test_markup_normalization_only_ready_applies_safe_subset_and_leaves_blocked_exact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.fake_archive(Path(tmp) / "archive")
+            ready = self.write_markup_zettel(
+                archive_root,
+                "zet_20260807_only_ready_safe",
+                "<span>Safe visible text</span>\n",
+            )
+            blocked = self.write_markup_zettel(
+                archive_root,
+                "zet_20260807_only_ready_blocked",
+                "<custom-semantic>Keep exact blocked text</custom-semantic>\n",
+            )
+            blocked_before = blocked.read_bytes()
+
+            strict = completion_workflows.markup_normalization_plan(
+                archive_root,
+                policy="normalize",
+                max_items=1000,
+                max_changes=1000,
+            )
+            self.assertFalse(strict["ok"], strict)
+            self.assertIsNone(strict["summary"]["plan_sha256"])
+
+            selected = completion_workflows.markup_normalization_plan(
+                archive_root,
+                policy="normalize",
+                max_items=1000,
+                max_changes=1000,
+                only_ready=True,
+            )
+            self.assertTrue(selected["ok"], selected)
+            self.assertEqual(selected["state"], "partial_ready")
+            self.assertEqual(selected["summary"]["selection_mode"], "ready_only")
+            self.assertEqual(selected["summary"]["ready_change_count"], 1)
+            self.assertEqual(selected["summary"]["blocked_zettel_count"], 1)
+            self.assertIsNotNone(selected["summary"]["plan_sha256"])
+
+            applied = completion_workflows.markup_normalization_apply(
+                archive_root,
+                policy="normalize",
+                max_items=1000,
+                max_changes=1000,
+                only_ready=True,
+                expected_plan_sha256=selected["summary"]["plan_sha256"],
+                reviewed_by="person:test",
+            )
+            self.assertTrue(applied["ok"], applied)
+            self.assertNotIn("<span>", ready.read_text(encoding="utf-8"))
+            self.assertEqual(blocked.read_bytes(), blocked_before)
+
+    def test_markup_normalization_preserves_dates_synced_content_and_table_headers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.fake_archive(Path(tmp) / "archive")
+            target = self.write_markup_zettel(
+                archive_root,
+                "zet_20260807_letter113_markup_shapes",
+                '<mention-date start="2026-08-07" starttime="09:30" timezone="Asia/Seoul"/>\n'
+                '<synced_block url="private-source">Primary synced text</synced_block>\n'
+                '<synced_block_reference url="private-source">Reference snapshot</synced_block_reference>\n'
+                '<table header-row="true" header-column="true">\n'
+                '<colgroup><col width="160"><col width="320"></colgroup>\n'
+                '<tr><td>Name</td><td>Value</td></tr>\n'
+                '<tr><td>Alpha</td><td>42</td></tr>\n'
+                '</table>\n',
+            )
+
+            plan = completion_workflows.markup_normalization_plan(
+                archive_root,
+                policy="normalize",
+                max_items=1000,
+                max_changes=1000,
+            )
+            self.assertTrue(plan["ok"], plan)
+            applied = completion_workflows.markup_normalization_apply(
+                archive_root,
+                policy="normalize",
+                max_items=1000,
+                max_changes=1000,
+                expected_plan_sha256=plan["summary"]["plan_sha256"],
+                reviewed_by="person:test",
+            )
+            self.assertTrue(applied["ok"], applied)
+            after = target.read_text(encoding="utf-8")
+            self.assertIn("2026-08-07 09:30 (Asia/Seoul)", after)
+            self.assertIn("Primary synced text", after)
+            self.assertIn("Reference snapshot", after)
+            self.assertIn("| Name | Value |", after)
+            self.assertIn("| **Alpha** | 42 |", after)
+            for tag in (
+                "mention-date",
+                "synced_block",
+                "synced_block_reference",
+                "table",
+                "colgroup",
+            ):
+                self.assertNotIn(f"<{tag}", after)
+
     def test_markup_normalization_binds_reviewed_locator_and_edge_without_leaking_refs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.fake_archive(Path(tmp) / "archive")
@@ -1348,6 +1540,83 @@ class CompletionWorkflowTests(unittest.TestCase):
             self.assertNotIn(locator_ref, result_text)
             self.assertIn("wom-edge://sha256/", result_text)
             self.assertIn("wom-locator://sha256/", result_text)
+
+    def test_markup_normalization_binds_file_audio_and_video_to_manifested_objet(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.fake_archive(Path(tmp) / "archive")
+            source_id = "zet_20260807_objet_reference_bindings"
+            source_path = self.write_markup_zettel(
+                archive_root,
+                source_id,
+                '<file ref="private-file-coordinate"/>\n'
+                '<audio src="private-audio-coordinate"></audio>\n'
+                '<video src="private-video-coordinate"></video>\n',
+            )
+            object_id = (
+                "sha256:acc6e73fb84988ecb538dfc0ceb883b88694e469a05172a5aeb0cce8902ce136"
+            )
+            unbound = completion_workflows.markup_normalization_plan(
+                archive_root,
+                policy="normalize",
+                max_items=1000,
+                max_changes=1000,
+            )
+            self.assertFalse(unbound["ok"])
+            item = next(
+                row for row in unbound["items"] if row["zettel_id"] == source_id
+            )
+            tag_digests = {
+                row["tag_name"]: row["tag_sha256"]
+                for row in item["reference_tag_digests"]
+            }
+            self.assertEqual(set(tag_digests), {"file", "audio", "video"})
+            manifest = {
+                "schema": completion_workflows.MARKUP_REFERENCE_BINDING_MANIFEST_SCHEMA,
+                "archive_id": completion_workflows.archive_services.read_archive_id(
+                    archive_root
+                ),
+                "bindings": [
+                    {
+                        "zettel_id": source_id,
+                        "tag_sha256": tag_digests[tag_name],
+                        "binding_kind": "objet",
+                        "binding_id": object_id,
+                    }
+                    for tag_name in ("file", "audio", "video")
+                ],
+            }
+            self.assert_schema_instance(
+                "markup-reference-binding-manifest.schema.json",
+                manifest,
+            )
+            manifest_relative = "ops/markup-reference-bindings.json"
+            manifest_path = archive_root / manifest_relative
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+            plan = completion_workflows.markup_normalization_plan(
+                archive_root,
+                policy="normalize",
+                max_items=1000,
+                max_changes=1000,
+                binding_manifest=manifest_relative,
+            )
+            self.assertTrue(plan["ok"], plan)
+            applied = completion_workflows.markup_normalization_apply(
+                archive_root,
+                policy="normalize",
+                max_items=1000,
+                max_changes=1000,
+                binding_manifest=manifest_relative,
+                expected_plan_sha256=plan["summary"]["plan_sha256"],
+                reviewed_by="person:test",
+            )
+            self.assertTrue(applied["ok"], applied)
+            after = source_path.read_text(encoding="utf-8")
+            self.assertEqual(after.count("wom-objet:sha256:"), 3)
+            self.assertNotIn("private-file-coordinate", after)
+            self.assertNotIn("private-audio-coordinate", after)
+            self.assertNotIn("private-video-coordinate", after)
 
     def test_markup_normalization_scales_to_synthetic_3514_documents(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

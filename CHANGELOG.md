@@ -6,6 +6,19 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.305 - 2026-08-07
+
+- Added ready-only markup plans/writes, manifested objet bindings for
+  file/audio/video references, and strict date/synced-block/table migration
+  normalization while keeping unsupported or unresolved semantics blocked.
+- Added in-place reviewed locator coordinate enrichment, 5,000-row title-remap
+  defaults, and a source-provenance-only short exact-title route.
+- Added AI draft abstract/facet creation guards, bounded same-title inbox
+  protection, session-start unpublished-draft attention, and publication
+  completion rules requiring approved canonical plus receipt evidence.
+- Preserved strict defaults, exact-byte recovery, human-owned rough drafts,
+  privacy-safe output, and the no-automatic-repair/no-UI boundaries.
+
 ## v0.3.304 - 2026-08-07
 
 - Fixed `project-version-update` forward-only evaluation to compare the target

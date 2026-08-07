@@ -38,6 +38,17 @@ blocker codes. The plan command never writes a zet. v0.3.269 provides the
 separate approval-gated `zet-title-remap-write` command only after this plan
 and its proposal remain unchanged.
 
+The default `--max-items` is the implemented 5,000-row ceiling. A smaller value
+is an explicit operator bound, not a batching recommendation.
+
+A non-generic exact source-export name that is just below the ordinary title
+promotion threshold, such as a compact product or media name, is accepted only
+with `basis: source_export_property` and reports
+`source_export_title_below_promotion_threshold`. This is not available to
+`human_written`: a human-created replacement must still satisfy the ordinary
+specificity rule. Identifier-shaped, secret-like, generic, stale, or
+re-flagged replacement titles remain blocked.
+
 ## Title Length
 
 The replacement may contain 1 through 2,000 Unicode characters. The command

@@ -24,6 +24,37 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.305 Real-use Completion And Publication Visibility
+
+v0.3.305 is compatible with v0.3.304 archives and requires no automatic
+migration. It completes the remaining Letter 113 migration, locator, and title
+workflows and closes the Letter 114 silent-publication gap.
+
+After upgrading, start a session with:
+
+```powershell
+archive ai-start-here <archive-root> --dry-run --format json
+```
+
+Review `inbox_attention` before broad work. It reports unpublished counts and
+publication-readiness signals without returning draft identities or bodies.
+For more detail, run `inbox-pipeline-audit --dry-run`; the result authorizes no
+automatic repair, discard, or mint.
+
+AI-assisted/generated `create-draft` calls now require an explicit safe
+abstract and at least one non-empty facet. A same-normalized-title inbox draft
+blocks a second AI file so the existing draft can be revised in place. A human
+rough-draft flow remains available and receives a warning. When a human asks to
+publish, enter `mint-zet --dry-run` in the same task, report blockers or a
+remaining approval gate immediately, and claim completion only after the
+approved mint has canonical and receipt evidence.
+
+For markup with unrelated blocked zets, use matching `--only-ready` plan and
+write commands. Strict mode remains the default. See
+[`wom-kit/docs/letter113-completion.md`](wom-kit/docs/letter113-completion.md),
+[`wom-kit/docs/letter114-completion.md`](wom-kit/docs/letter114-completion.md),
+and [`wom-kit/docs/releases/v0.3.305.md`](wom-kit/docs/releases/v0.3.305.md).
+
 ## v0.3.304 Project Update Forward-Only Fix
 
 v0.3.304 is compatible with v0.3.303 archives and requires no migration. It

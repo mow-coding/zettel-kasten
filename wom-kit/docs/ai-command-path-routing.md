@@ -1,6 +1,6 @@
 # AI Command-Path Routing
 
-Status: implemented in v0.3.278, extended through v0.3.304
+Status: implemented in v0.3.278, extended through v0.3.305
 
 ## Purpose
 
@@ -172,7 +172,7 @@ packaged runtime skill, the fake archive, and live read-only command output.
 
 | Goal | Official command | Boundary |
 | --- | --- | --- |
-| Enter or resume an archive | `archive ai-start-here <archive-root> --dry-run --progress --format json` | Quick mode is not a full archive health claim. |
+| Enter or resume an archive | `archive ai-start-here <archive-root> --dry-run --progress --format json` | Quick mode is not a full archive health claim; it now includes a bounded privacy-safe `inbox_attention` summary that must be surfaced. |
 | Search archive records | `archive search <archive-root> <query> --count-total --format json` | Inspect complete/truncated metadata. Raw grep and raw SQL are not authoritative WOM search results. |
 | Find an objet by a reviewed private-name alias | `archive find-objet <archive-root> --audience private_archive --query-profile literal_unicode --query-stdin --format json` | Exact generated-index equality only. `not_found_in_index` means no match in the complete current private index, not global absence. |
 | Plan checked-layer rediscovery before a global absence claim | `archive objet-rediscovery-plan <archive-root> <query> --dry-run --count-total --format json` | Preserves index completeness as snapshot-only evidence, lists all ten fixed layers, echoes no private query/results, and supports no global absence claim while any applicable or unknown layer is incomplete. |
@@ -191,8 +191,8 @@ Every write remains preview-first and human-reviewed.
 
 | Goal | Preview | Approved route or boundary |
 | --- | --- | --- |
-| Create an AI-assisted draft | `archive create-draft <archive-root> --title <title> --body-file <private-body-file> --creation-mode ai_assisted --created-by <ai-actor> --dry-run --format json` | Replay the preview's `draft_id`, `created_at`, and `expected_body_sha256` with `--draft-approved-by <human-actor>`. Never write Markdown directly into `inbox/`. |
-| Mint a reviewed draft | `archive mint-zet <archive-root> --zettel-id <draft-id> --dry-run --format json` | Use the separate `--approve --reviewed-by <human-actor>` path. Draft approval is not mint approval. |
+| Create an AI-assisted draft | `archive create-draft <archive-root> --title <title> --abstract <reviewed-first-read> --body-file <private-body-file> --facet <key=value> --creation-mode ai_assisted --created-by <ai-actor> --dry-run --format json` | Missing abstract/facets or a same-normalized-title unminted draft blocks the AI route. Replay the preview's `draft_id`, `created_at`, and `expected_body_sha256` with `--draft-approved-by <human-actor>`. Never write Markdown directly into `inbox/`. |
+| Mint a reviewed draft | `archive mint-zet <archive-root> --zettel-id <draft-id> --dry-run --format json` | A human publication request starts this preview now. Use the separate `--approve --reviewed-by <human-actor>` path; claim completion only after canonical and receipt evidence exists, and report any blocker immediately. |
 | Add a typed edge | `archive zettel-edge <archive-root> --from-zettel <id> --target <ref> --edge-type <type> --dry-run --format json` | Use the separate `--approve --reviewed-by <human-actor>` path and retain its receipt. |
 | Capture source material | `archive source-intake <archive-root> --dry-run --local-path <file> --format json` | Continue through `source-intake-record`, `objet-capture-selection`, and `objet-capture`; a source-intake preview alone grants no copy/upload authority. |
 | Update operating context | `archive operational-context <archive-root> --record workbench/operational-context.next.yml --dry-run --format json` | Use the separate `--approve --reviewed-by <human-actor>` path and retain its receipt. |

@@ -385,6 +385,12 @@ python -m wom_kit.archive_cli create-draft .\tmp-my-archive `
   --body "Draft body"
 ```
 
+For `--creation-mode ai_assisted|ai_generated`, also provide a reviewed
+`--abstract` and at least one `--facet key=value`. WOM blocks before writing
+when either is absent or when an unminted same-normalized-title draft already
+exists. Human-owned rough drafts remain allowed and receive a same-title
+warning. Never write Markdown directly into `inbox/`.
+
 Compose a draft preview from a prompt-boundary report:
 
 ```powershell
@@ -405,6 +411,11 @@ python -m wom_kit.archive_cli mint-zet wom-kit\examples\fake-life-archive `
   --path inbox\zet_20260519_draft_ai_lunch_note.md `
   --dry-run
 ```
+
+A human request to publish begins this mint preview now. A draft write is not
+publication; report blockers or a remaining approval gate immediately and
+claim completion only after the approved mint produces canonical and receipt
+evidence.
 
 Minting dry-run checks:
 

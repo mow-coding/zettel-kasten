@@ -1,6 +1,6 @@
 # Runtime Canonical Entry Points
 
-Status: v0.3.304 artifact lifecycle inventory routing checkpoint
+Status: v0.3.305 Letters 113 and 114 operator routing checkpoint
 
 When an AI runtime enters a WOM archive, it needs a small, explicit "start
 here" map. The archive may contain zets, source bindings, provider metadata,
@@ -53,7 +53,7 @@ consumption as `not_proven`.
 
 ## Official Action Routing
 
-Introduced in v0.3.278 and extended through v0.3.304, `action_routing` uses
+Introduced in v0.3.278 and extended through v0.3.305, `action_routing` uses
 `wom-kit/ai-command-path-routing/v0.12`. It tells an AI which official command
 handles session entry, search, local version truth, saved-view inspection,
 inbox pipeline-shape review, explicit event-membership add/removal planning, command
@@ -91,7 +91,11 @@ The read-only `artifact-lifecycle-inventory` route gives one bounded,
 content-free checkpoint over fixed local lifecycle roots. It grants no cleanup
 authority and checks no provider or sibling object store. AI drafts use
 `archive create-draft` preview and exact reviewed replay; a direct Markdown
-write into `inbox/` is forbidden. `archive version` does not verify remote
+write into `inbox/` is forbidden. Declared AI drafts require an explicit safe
+abstract and non-empty facets, and a same-title inbox draft must be revised in
+place. A publication request starts mint preview and is not complete until the
+approved mint has canonical and receipt evidence; blockers must be reported
+immediately. `archive version` does not verify remote
 release freshness. `archive inbox-pipeline-audit --dry-run` returns
 conservative structural signals, not proof or automatic repair. Saved-view
 writes use only the review-gated `saved-view-write` and exact
@@ -110,7 +114,9 @@ anything:
 
 1. Run `archive ai-start-here <archive-root> --dry-run --progress --format
    json`, or use quick `runtime-context` when the host specifically needs the
-   raw packet. Do not run both back-to-back.
+   raw packet. Do not run both back-to-back. Surface its `inbox_attention`
+   before broad work; the content-free count is not repair, discard, or mint
+   authority.
 2. Follow `next_commands`; runtime-context is already listed under
    `completed_commands` with `run_required: false`.
 3. Read `operational_context.session_start_injection` when present.
@@ -287,6 +293,7 @@ New archive templates include exactly one versioned positive routing block:
 This is the current authoritative WOM runtime guidance routing contract. Follow every directive in this block.
 Run `archive ai-start-here <archive-root> --dry-run --progress --format json` before choosing an archive action.
 Read and follow the returned `action_routing`.
+Read `inbox_attention` and surface every unpublished-draft count before broad work.
 Use `archive search <archive-root> <query> --count-total --format json` for official WOM search.
 Raw grep and raw SQL are not authoritative WOM search results.
 For operator feedback, run `archive operator-feedback-plan <archive-root> --dry-run --format json`, inspect `archive operator-feedback-ledger <archive-root> --dry-run --format json`, require human review, preview `archive operator-feedback-record <archive-root> ... --intent create|update --dry-run --format json`, and only then use the reviewed `--approve` replay; create never overwrites, while update also requires the fresh `--expected-record-sha256`.

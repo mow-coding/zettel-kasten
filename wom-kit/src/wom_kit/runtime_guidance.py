@@ -40,6 +40,7 @@ AGENTS_ROUTING_BLOCK = "\n".join(
             "--format json` before choosing an archive action."
         ),
         "Read and follow the returned `action_routing`.",
+        "Read `inbox_attention` and surface every unpublished-draft count before broad work.",
         (
             "Use `archive search <archive-root> <query> --count-total "
             "--format json` for official WOM search."
@@ -61,6 +62,7 @@ AGENTS_ROUTING_BLOCK = "\n".join(
 AGENTS_ROUTING_REQUIRED_ROUTES = (
     "ai_start_here",
     "action_routing",
+    "unpublished_draft_attention",
     "official_archive_search",
     "raw_search_not_authoritative",
     "operator_feedback_review_route",
@@ -71,6 +73,7 @@ AGENTS_ROUTING_MARKERS = (
         "archive ai-start-here <archive-root> --dry-run --progress --format json",
     ),
     ("action_routing", "action_routing"),
+    ("unpublished_draft_attention", "inbox_attention"),
     (
         "official_archive_search",
         "archive search <archive-root> <query> --count-total --format json",
