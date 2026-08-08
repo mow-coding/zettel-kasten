@@ -24,6 +24,68 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.307 Exact-Root Legacy Coordination Cleanup
+
+v0.3.307 is compatible with v0.3.306 archives and requires no archive
+migration. It adds one explicit CLI command for an owner who already knows the
+absolute root of a workspace containing retired `.mow-harness/` state. It does
+not restore the retired external integration, search for installations, or run
+from Doctor, archive discovery, restore, installation, project update, or
+upgrade.
+
+Preview one exact workspace without writing:
+
+```powershell
+$workspaceRoot = 'C:\path\to\one-workspace'
+archive legacy-coordination-cleanup $workspaceRoot --dry-run --format json
+```
+
+Review only aggregate counts, blockers, and `plan_sha256`. Output contains no
+filename, content, or local absolute path. This content-free dry-run is available
+on every supported platform. `collab/` is never traversed or changed. Unknown or
+case-drifted targets, unsafe Git environment, content found in any ancestor Git
+index, a nested `.git` entry (blocked without traversal), links, junctions,
+Windows reparse points or named streams, Linux `mnt_id`/other cross-mount
+evidence, special or unreadable entries, an existing lock or old cleanup
+tombstone, limit exhaustion, and scan drift all block. Inspect the local tree
+itself before approval; privacy-safe aggregate output is not a substitute for
+deciding that every byte is disposable.
+
+Approved mutation is Windows-only in v0.3.307. A POSIX preview reports
+`approval_platform_supported: false` and `safe_to_cleanup: false`; POSIX
+`--approve` stops before lock acquisition and before mutation. Standard POSIX
+does not provide a portable atomic operation that deletes a name only if it
+still refers to the exact inode reviewed earlier, so WOM does not pretend that a
+retained file descriptor solves that race.
+
+On Windows, after the workspace owner authorizes irreversible cleanup, pause
+every editor, sync/backup client, indexer, terminal, and other writer. Approve
+only the exact unchanged plan:
+
+```powershell
+$planSha256 = '<64-lowercase-hex-from-plan-sha256>'
+archive legacy-coordination-cleanup $workspaceRoot --approve --reviewed-by 'person:workspace-owner' --expected-plan-sha256 $planSha256 --affirm-workspace-owner-authorized --affirm-external-writers-quiescent --affirm-retired-state-disposable --format json
+```
+
+If `summary.backups_or_receipts_present` is `true`, also pass
+`--affirm-backups-and-receipts-disposable`. If custom `--max-files` or
+`--max-bytes` values were used during preview, repeat the same values during
+approval.
+
+During Windows approval, WOM retains handles to every workspace ancestor and
+the workspace root for the complete operation, and uses retained verified
+handles to dispose exact approved files and empty directories. It creates no
+backup, cleanup receipt, or new tombstone rename. An old tombstone still blocks.
+After the first mutation, any partial or uncertain result is
+`partial_cleanup_pending`, not success; WOM does not automatically retry,
+resume, or roll back. Removing filesystem entries is not secure media erasure
+and does not remove storage remnants or other backup/sync copies.
+
+See
+[`wom-kit/docs/legacy-coordination-cleanup.md`](wom-kit/docs/legacy-coordination-cleanup.md),
+[`wom-kit/docs/releases/v0.3.307.md`](wom-kit/docs/releases/v0.3.307.md), and
+[`wom-kit/docs/archive-infra-decision-log-2026-08-08-v03307-legacy-coordination-cleanup.md`](wom-kit/docs/archive-infra-decision-log-2026-08-08-v03307-legacy-coordination-cleanup.md).
+
 ## v0.3.306 Retired Integration Cleanup
 
 v0.3.306 is compatible with v0.3.305 archives and requires no archive

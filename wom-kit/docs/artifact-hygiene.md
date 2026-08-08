@@ -183,6 +183,25 @@ file-capture or staged-folder commands retain their own narrowly reviewed path
 authority and must not be pointed at these quarantine roots. These ignore
 rules do not advertise an integration.
 
+v0.3.307 adds one separate, destructive opt-in exception for a workspace owner
+who already knows an exact absolute workspace root:
+
+```powershell
+archive legacy-coordination-cleanup <absolute-workspace-root> --dry-run --format json
+```
+
+This is not part of Doctor, archive discovery, restore, installation, project
+update, upgrade, or this repository checker. It considers only the exact direct
+child `.mow-harness/`; `collab/` is never traversed or changed. Approval requires the
+unchanged `plan_sha256`, reviewer, workspace-owner authority, external-writer
+quiescence, and explicit retired-state disposal. A true
+`summary.backups_or_receipts_present` requires a separate affirmation. Unknown,
+case-drifted, tracked, linked/reparse, special,
+unreadable, over-limit, or changed state blocks. The command emits only counts
+and hashes, creates no backup or receipt, and reports partial removal as
+`partial_cleanup_pending`, not success. See
+[Legacy Coordination Cleanup](legacy-coordination-cleanup.md).
+
 `/objets/` (v0.3.160) is anchored on purpose: it excludes only a raw IN-ROOT
 `objets/` folder, not nested folders such as `staging/incoming/<date>/objets/`
 that appear when a client tree is copied into staging. Two honest caveats:

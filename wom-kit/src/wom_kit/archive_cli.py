@@ -16,6 +16,10 @@ Commands:
           Preview or approve a manifest-bound Codex/custom Agent Skill install or update.
   runtime-skill-uninstall
           Preview or approve removal of an unchanged WOM-kit-managed Agent Skill.
+  legacy-coordination-cleanup
+          Preview or explicitly approve destructive cleanup of retired local
+          coordination state; approval is Windows-only, and collab/ is never
+          traversed or changed.
   project-version-update
           Preview or approve one verified project source-mirror and version-pin update.
   zet-catalog-pass
@@ -368,6 +372,7 @@ from . import (
     archive_services,
     artifact_lifecycle_inventory,
     completion_workflows,
+    legacy_coordination_cleanup as legacy_cleanup,
     runtime_guidance,
     runtime_skill_install,
     saved_view_workflows,
@@ -4314,6 +4319,106 @@ def command_runtime_skill_uninstall(args: argparse.Namespace) -> int:
         print_json(result)
     else:
         print_runtime_skill_result_text(result)
+    return 0 if result.get("ok") else 1
+
+
+def _legacy_coordination_cleanup_limit_kwargs(
+    args: argparse.Namespace,
+) -> dict[str, int]:
+    limits: dict[str, int] = {}
+    if args.max_files is not None:
+        limits["max_files"] = args.max_files
+    if args.max_bytes is not None:
+        limits["max_bytes"] = args.max_bytes
+    return limits
+
+
+def print_legacy_coordination_cleanup_result_text(
+    result: dict[str, Any],
+) -> None:
+    summary = (
+        result.get("summary")
+        if isinstance(result.get("summary"), dict)
+        else {}
+    )
+    state = result.get("state") or result.get("status") or "unknown"
+    file_count = summary.get("file_count", result.get("file_count", 0))
+    directory_count = summary.get(
+        "directory_count",
+        result.get("directory_count", 0),
+    )
+    total_bytes = summary.get("total_bytes", result.get("total_bytes", 0))
+    plan_sha256 = (
+        summary.get("plan_sha256")
+        or result.get("plan_sha256")
+        or result.get("operation_plan_sha256")
+        or "-"
+    )
+    print(f"Legacy coordination cleanup: {state}")
+    print(f"- files: {file_count}")
+    print(f"- directories: {directory_count}")
+    print(f"- bytes: {total_bytes}")
+    print(f"- plan sha256: {plan_sha256}")
+    if "approval_platform_supported" in result:
+        print(
+            "- approval platform supported: "
+            + str(bool(result.get("approval_platform_supported"))).lower()
+        )
+    for blocker in result.get("blockers", []):
+        print(f"BLOCKED: {blocker}")
+
+
+def command_legacy_coordination_cleanup(args: argparse.Namespace) -> int:
+    try:
+        if args.dry_run:
+            result = legacy_cleanup.legacy_coordination_cleanup(
+                Path(args.workspace_root),
+                dry_run=True,
+                approve=False,
+                expected_plan_sha256=args.expected_plan_sha256,
+                reviewed_by=args.reviewed_by,
+                affirm_workspace_owner_authorized=bool(
+                    args.affirm_workspace_owner_authorized
+                ),
+                affirm_external_writers_quiescent=bool(
+                    args.affirm_external_writers_quiescent
+                ),
+                affirm_retired_state_disposable=bool(
+                    args.affirm_retired_state_disposable
+                ),
+                affirm_backups_and_receipts_disposable=bool(
+                    args.affirm_backups_and_receipts_disposable
+                ),
+                **_legacy_coordination_cleanup_limit_kwargs(args),
+            )
+        else:
+            result = legacy_cleanup.legacy_coordination_cleanup(
+                Path(args.workspace_root),
+                dry_run=False,
+                approve=bool(args.approve),
+                expected_plan_sha256=args.expected_plan_sha256,
+                reviewed_by=args.reviewed_by,
+                affirm_workspace_owner_authorized=bool(
+                    args.affirm_workspace_owner_authorized
+                ),
+                affirm_external_writers_quiescent=bool(
+                    args.affirm_external_writers_quiescent
+                ),
+                affirm_retired_state_disposable=bool(
+                    args.affirm_retired_state_disposable
+                ),
+                affirm_backups_and_receipts_disposable=bool(
+                    args.affirm_backups_and_receipts_disposable
+                ),
+                **_legacy_coordination_cleanup_limit_kwargs(args),
+            )
+    except Exception:
+        print("legacy-coordination-cleanup failed safely.", file=sys.stderr)
+        return 1
+    if args.format == "json":
+        print_json(result)
+    else:
+        print_legacy_coordination_cleanup_result_text(result)
     return 0 if result.get("ok") else 1
 
 
@@ -20684,6 +20789,88 @@ def build_parser() -> argparse.ArgumentParser:
         help="Exact operation_plan_sha256 from the reviewed dry-run; required with --approve.",
     )
     runtime_skill_uninstall_parser.set_defaults(func=command_runtime_skill_uninstall)
+
+    legacy_coordination_cleanup_parser = subcommands.add_parser(
+        "legacy-coordination-cleanup",
+        help=(
+            "Destructive opt-in cleanup of only retired .mow-harness local "
+            "state after digest-bound review; collab/ is never traversed or changed."
+        ),
+    )
+    legacy_coordination_cleanup_parser.add_argument(
+        "workspace_root",
+        help=(
+            "Exact workspace root whose direct retired local-state child is "
+            "being reviewed; broad path selection is not supported."
+        ),
+    )
+    legacy_coordination_cleanup_mode = (
+        legacy_coordination_cleanup_parser.add_mutually_exclusive_group(
+            required=True
+        )
+    )
+    legacy_coordination_cleanup_mode.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Return a content-bound cleanup plan without deleting or writing files.",
+    )
+    legacy_coordination_cleanup_mode.add_argument(
+        "--approve",
+        action="store_true",
+        help=(
+            "On Windows only, destructively apply the unchanged reviewed "
+            "cleanup plan; POSIX platforms support dry-run preview only."
+        ),
+    )
+    legacy_coordination_cleanup_parser.add_argument(
+        "--reviewed-by",
+        help="Safe non-secret reviewer actor id; required by approved cleanup.",
+    )
+    legacy_coordination_cleanup_parser.add_argument(
+        "--expected-plan-sha256",
+        help="Exact plan_sha256 from the reviewed dry-run; required by approved cleanup.",
+    )
+    legacy_coordination_cleanup_parser.add_argument(
+        "--affirm-workspace-owner-authorized",
+        action="store_true",
+        help="Affirm that the workspace owner explicitly authorized this destructive cleanup.",
+    )
+    legacy_coordination_cleanup_parser.add_argument(
+        "--affirm-external-writers-quiescent",
+        action="store_true",
+        help="Affirm that editors, sync clients, and other writers are paused.",
+    )
+    legacy_coordination_cleanup_parser.add_argument(
+        "--affirm-retired-state-disposable",
+        action="store_true",
+        help="Affirm that the reviewed retired local state is disposable.",
+    )
+    legacy_coordination_cleanup_parser.add_argument(
+        "--affirm-backups-and-receipts-disposable",
+        action="store_true",
+        help="Affirm that any retired backup or receipt bytes in scope are disposable.",
+    )
+    legacy_coordination_cleanup_parser.add_argument(
+        "--max-files",
+        type=int,
+        default=legacy_cleanup.DEFAULT_LEGACY_COORDINATION_CLEANUP_MAX_FILES,
+        help="Optional bounded maximum scanned-entry count, included in the reviewed plan.",
+    )
+    legacy_coordination_cleanup_parser.add_argument(
+        "--max-bytes",
+        type=int,
+        default=legacy_cleanup.DEFAULT_LEGACY_COORDINATION_CLEANUP_MAX_BYTES,
+        help="Optional bounded maximum total bytes, included in the reviewed plan.",
+    )
+    legacy_coordination_cleanup_parser.add_argument(
+        "--format",
+        choices=["text", "json"],
+        default="text",
+        help="Output format.",
+    )
+    legacy_coordination_cleanup_parser.set_defaults(
+        func=command_legacy_coordination_cleanup
+    )
 
     project_version_update = subcommands.add_parser(
         "project-version-update",

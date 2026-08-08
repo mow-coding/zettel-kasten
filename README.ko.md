@@ -32,10 +32,10 @@ wom-kit/docs/releases/에만 쌓고, baseline 사다리와 tag 목록을 여기�
 현재 공개 기준:
 
 ```text
-v0.3.306 pre-release
+v0.3.307 pre-release
 ```
 
-이전 공개 기준: v0.3.305 pre-release.
+이전 공개 기준: v0.3.306 pre-release.
 
 전체 릴리스 이력은 [CHANGELOG.md](CHANGELOG.md)와 [wom-kit/docs/releases/](wom-kit/docs/releases/)를 보세요.
 
@@ -54,7 +54,7 @@ Roadmap 요약: `v0.1.x`는 아이디어/프로토콜 언어 라인, `v0.2.x`는
 파일이 실제 공개되었다는 증거가 되지는 않습니다.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.306/wom_kit-0.3.306-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.307/wom_kit-0.3.307-py3-none-any.whl"
 archive --version
 ```
 
@@ -140,7 +140,7 @@ archive runtime-skill-install --dry-run --format json
 
 ### AI operator 계약과 runtime handoff
 
-- 외부 조율 제품을 설치·호출·추천하지 않으면서 `collab/`과 레거시 `/.mow-harness/` 상태를 WOM의 기본 아카이브 탐색과 공개 Git 표면에서 제외하는 방어적 로컬 조율 격리 규칙.
+- 외부 조율 제품을 설치·호출·추천하지 않으면서 `collab/`과 레거시 `/.mow-harness/` 상태를 WOM의 기본 아카이브 탐색과 공개 Git 표면에서 제외하는 방어적 로컬 조율 격리 규칙. 여기에 작업공간 소유자가 정확한 절대 루트 하나를 직접 지정하는 CLI 전용 `archive legacy-coordination-cleanup <absolute-workspace-root> --dry-run|--approve`를 제공합니다. 내용과 경로를 노출하지 않는 dry-run은 모든 지원 운영체제에서 가능하지만, v0.3.307의 승인 정리는 Windows에서만 가능합니다. Windows 승인은 작업공간의 모든 상위 폴더와 루트 및 삭제할 정확한 항목의 handle을 유지하고, 모든 상위 Git index를 검사하며, 대상 안의 `.git`은 내부를 읽지 않고 차단하고, reparse point·ADS·다른 mount를 차단합니다. POSIX는 `approval_platform_supported: false`, `safe_to_cleanup: false`를 보고하고 표준 POSIX에 검토한 정확한 inode만 조건부로 지우는 원자적 연산이 없기 때문에 lock이나 변경 전에 승인을 차단합니다. 자동 검색은 없고 `collab/` 내부를 순회하거나 변경하지 않으며, 파일명·내용·절대경로를 출력하거나 새 backup·receipt·tombstone을 만들지 않고 예전 tombstone이 있으면 차단합니다. 첫 변경 뒤 일부만 처리됐거나 결과를 확실히 증명할 수 없으면 성공이 아니라 미완료이며 자동 재시도·rollback도 하지 않습니다. [레거시 조율 상태 정리](wom-kit/docs/legacy-coordination-cleanup.md)를 보세요.
 - CLI 전용 로컬 Agent Skill 호스트 수명주기. 읽기 전용 `runtime-skill-status`, 계획 해시로 묶인 `runtime-skill-install --dry-run|--approve`, 설치 목록으로 검증하는 `runtime-skill-uninstall --dry-run|--approve`가 현재 Codex 사용자·저장소 `.agents/skills` 위치 또는 직접 지정한 다른 스킬 폴더 한 곳을 다룹니다. 경로는 기본으로 가리고, 승인 후 쓰기에는 검토자와 미리보기의 정확한 해시를 요구하며, 소유권을 모르는 폴더나 사람이 고친 스킬은 덮어쓰거나 지우지 않습니다. Python 설치 자체는 호스트 설정을 쓰지 않고 MCP 쓰기 표면도 추가하지 않습니다.
 - 표준 형식과 호환되는 `wom-archive` Agent Skill 묶음. 처음 읽는 `SKILL.md`는 104줄이고, 자주 쓰는 일을 여섯 개의 집중 참고문서로 나누며, 정확한 고급 명령이 필요할 때만 기존 전체 운영 계약을 읽습니다. 릴리스 검사는 메타데이터, 링크와 경로 안전, 모든 참고문서의 발견 가능성, 문맥 길이, 승인·비밀정보 경계, 아티팩트 우선 원칙과 조용한 동일성 병합 금지를 함께 지킵니다. AI는 정본을 객관적 진실이 아니라 사람이 검토한 현재 상태로 다루고 인간의 변화를 보존하며, 스스로를 조용히 설치하지 않습니다.
 - read-only `archive version`으로 현재 실행 버전·프로젝트 핀·소스 미러를 확인하고, 승인형 `archive project-version-update`로 설정된 원격의 `main`과 정확한 릴리스 태그를 받아 검증한 뒤 필요하면 전체 tracked target commit tree를 `git checkout` 없이 정확한 blob으로 직접 만들고 알려진 버전 핀을 함께 갱신합니다. target source·index·flag·동기화 리소스와 pin이 모두 검증된 경우에만 `no_change`이고, 성공 뒤에는 새 프로세스에서 `archive version`을 다시 확인해야 합니다. v0.3.291부터 프로젝트 미러와 핀은 일치하지만 실행 import만 다르면 이를 별도로 보고합니다. 로컬 경로 공개를 명시하고 real-path·project-local Git·원본 byte/index/flag·닫힌 import tree·정확한 annotated tag·태그 안 버전·`origin/main` 계보·동기화 리소스 110개 검사를 거쳐 `runtime_alignment.integrity.verified`가 true일 때만 Python `-I -S`로 한 번 실행할 정확한 project-scoped bridge argv를 제공합니다. bridge는 예상 commit·tag·wrapper blob·리소스 blob을 묶고 검증된 wrapper를 메모리에서 실행합니다. `wom-kit/src`를 `sys.path`에 넣지 않고 project alias를 지운 뒤 exact-object-ID finder로 `wom_kit`만 불러오므로, 검증 뒤 생긴 최상위 `yaml`·`sqlite3` shadow는 실행되지 않습니다. `-S`는 `site` 초기화, 실행 가능한 `.pth`, `sitecustomize`를 막고, 검증 뒤에는 stdlib `sysconfig`의 `purelib`·`platlib`만 `site.py` 처리 없이 추가합니다. updater 폴더 scan은 entry 상한을 둔 streaming 방식이며 ignore된 비충돌 `wom-kit/src` shadow도 쓰기 전에 차단합니다. 승인 쓰기는 Windows에서만 가능하고 directory handle을 `FILE_SHARE_DELETE` 없이 유지합니다. POSIX dry-run은 `preview_only_platform_unsupported`와 `approval_platform_supported: false`를 돌려주며 승인은 차단됩니다. 모든 Windows 승인은 dry-run 뒤 editor·동기화·backup·다른 Git writer를 전체 transaction 동안 멈춘 상태에서 reviewer와 정확한 `--affirm-external-writers-quiescent`를 요구합니다. 결과에는 `external_writer_quiescence_required: true`, `external_writer_quiescence_affirmed: true`, `atomic_file_compare_and_swap: false`, `checkpointed_change_detection: true`가 나오고, v0.2 영수증에는 `external_writer_quiescence: {affirmed: true, scope: complete_project_version_update_transaction}`가 남습니다. 즉 directory 안정성과 checkpoint drift 감지는 제공하지만 파일 단위 원자적 CAS나 일반적인 never-clobber는 보장하지 않습니다. 설정 digest는 effective Git config와 정확히 `GIT_ASKPASS`, `GIT_PROXY_COMMAND`, `GIT_SSH`, `GIT_SSH_COMMAND`만 환경 변수로 묶습니다. 선택된 Git 실행 파일, `PATH`, `HTTP_PROXY`, `HTTPS_PROXY`, `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `SSH_AUTH_SOCK`, `HOME`, 그 밖의 비-Git toolchain·transport 환경은 묶지 않는 신뢰·안정 운영 전제조건입니다. rollback 직전 묶인 설정 digest가 달라지면 복원을 건너뛰고 소유한 lock을 보존하며 incomplete rollback을 보고합니다. 이 bridge와 updater는 전역 Python 도구나 runtime Agent Skill을 갱신하지 않습니다. 이 명령이 처음 들어가는 v0.3.215 이전 설치는 이번 한 번만 기존 안전 절차로 v0.3.215까지 올라와야 합니다.
@@ -406,7 +406,7 @@ WOM, `zettel-kasten`, `zet`, `ZET`는 버전이 있는 protocol family로 관리
 Release tag는 compatibility checkpoint입니다.
 
 ```text
-v0.3.306 (현재 checkpoint)
+v0.3.307 (현재 checkpoint)
 ```
 
 `v0.2.5` 이후의 공개 릴리스에는 compatibility checkpoint tag가 붙습니다. 전체

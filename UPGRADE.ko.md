@@ -2,6 +2,66 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.3.307 정확한 루트의 레거시 조율 상태 정리
+
+v0.3.307은 v0.3.306 아카이브와 호환되며 아카이브 마이그레이션이 필요하지
+않습니다. 이미 레거시 `.mow-harness/` 상태가 있는 작업공간의 정확한 절대
+루트를 아는 소유자를 위해 CLI 명령 하나를 추가합니다. 종료된 외부 연동을
+되살리거나 설치본을 검색하지 않으며, Doctor·아카이브 탐색·복원·설치·프로젝트
+업데이트·업그레이드 중 자동으로 실행되지 않습니다.
+
+먼저 정확한 작업공간 하나를 쓰기 없이 미리 봅니다.
+
+```powershell
+$workspaceRoot = 'C:\path\to\one-workspace'
+archive legacy-coordination-cleanup $workspaceRoot --dry-run --format json
+```
+
+파일명·내용·로컬 절대경로는 출력하지 않습니다. 이 내용 비공개 dry-run은 모든
+지원 운영체제에서 가능합니다. 집계 개수, 차단 사유, `plan_sha256`만 검토하세요.
+`collab/` 내부는 순회하거나 변경하지 않습니다. 알 수 없거나 대소문자가 달라진
+대상, 안전하지 않은 Git 환경, 작업공간의 어떤 상위 Git index에서든 tracked된
+내용, 대상 안의 `.git` 항목(그 내부는 읽지 않고 차단), 링크·junction·Windows
+reparse point·이름 있는 숨은 stream(ADS), Linux `mnt_id` 불일치나 다른 mount
+증거, 특수·읽을 수 없는 항목, 이미 존재하는 lock·예전 cleanup tombstone, 검사
+한도 초과, 검사 중 변경은 모두 차단됩니다. 승인 전에는 로컬 트리 자체도 직접
+확인하세요. 개인정보를 숨긴 집계 출력만으로 모든 byte를 버려도 된다고
+판단해서는 안 됩니다.
+
+v0.3.307에서 승인 변경은 Windows에서만 가능합니다. POSIX 미리보기는
+`approval_platform_supported: false`, `safe_to_cleanup: false`를 보고하고,
+POSIX `--approve`는 lock을 만들거나 파일을 바꾸기 전에 멈춥니다. 표준 POSIX에는
+"이 이름이 아까 검토한 정확한 inode를 여전히 가리킬 때만 삭제"하는 이식 가능한
+원자적 연산이 없기 때문입니다. 열린 file descriptor 하나만 유지하는 것으로는
+이 경쟁 조건을 해결했다고 볼 수 없습니다.
+
+Windows에서 작업공간 소유자가 되돌릴 수 없는 정리를 승인한 뒤 editor,
+sync/backup client, indexer, terminal, 그 밖의 writer를 모두 멈춥니다. 변하지
+않은 정확한 계획만 승인합니다.
+
+```powershell
+$planSha256 = '<plan-sha256의-소문자-64자리-hex>'
+archive legacy-coordination-cleanup $workspaceRoot --approve --reviewed-by 'person:workspace-owner' --expected-plan-sha256 $planSha256 --affirm-workspace-owner-authorized --affirm-external-writers-quiescent --affirm-retired-state-disposable --format json
+```
+
+`summary.backups_or_receipts_present`가 `true`이면
+`--affirm-backups-and-receipts-disposable`도 추가해야 합니다. 미리보기에서
+`--max-files`나 `--max-bytes`를 지정했다면 승인할 때 같은 값을 반복합니다.
+
+Windows 승인 중에는 작업공간의 모든 상위 폴더와 루트 handle을 전체 작업 동안
+유지하고, 검증한 정확한 파일과 빈 폴더도 retained handle로 제거합니다. 이
+명령은 새 backup·정리 receipt·tombstone rename을 만들지 않습니다. 예전
+tombstone은 계속 차단 사유입니다. 첫 변경 뒤 결과가 일부만 처리됐거나 확실히
+증명되지 않으면 `partial_cleanup_pending`이며 성공이 아닙니다. WOM은 자동
+재시도·재개·rollback을 하지 않습니다. 파일시스템 entry 제거는 저장장치 보안
+삭제가 아니며 저장 흔적이나 다른 backup/sync 복사본을 지웠다는 뜻도 아닙니다.
+
+자세한 내용은
+[`wom-kit/docs/legacy-coordination-cleanup.md`](wom-kit/docs/legacy-coordination-cleanup.md),
+[`wom-kit/docs/releases/v0.3.307.md`](wom-kit/docs/releases/v0.3.307.md),
+[`wom-kit/docs/archive-infra-decision-log-2026-08-08-v03307-legacy-coordination-cleanup.md`](wom-kit/docs/archive-infra-decision-log-2026-08-08-v03307-legacy-coordination-cleanup.md)를
+보세요.
+
 ## v0.3.306 종료된 연동 정리
 
 v0.3.306은 v0.3.305 아카이브와 호환되며 아카이브 마이그레이션이 필요하지

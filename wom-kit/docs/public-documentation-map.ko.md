@@ -236,6 +236,7 @@
 - [Tiro Lossless Recovery](tiro-lossless-recovery.md)
 - [zet Markdown Style Guide](zet-markdown-style-guide.md)
 - [Artifact Hygiene](artifact-hygiene.md)
+- [레거시 조율 상태 정리](legacy-coordination-cleanup.md)
 - [Artifact Lifecycle Inventory](artifact-lifecycle-inventory.md)
 - [Zettel Edge Write](zettel-edge-write.md)
 - [Zettel Edge Batch](zettel-edge-batch.md)
