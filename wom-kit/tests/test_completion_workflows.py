@@ -11,6 +11,7 @@ import tempfile
 import unittest
 from contextlib import closing, redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest import mock
 
 from jsonschema import Draft202012Validator
 
@@ -149,6 +150,102 @@ class CompletionWorkflowTests(unittest.TestCase):
             encoding="utf-8",
         )
         return path
+
+    @staticmethod
+    def locator_fixture_id(marker: str) -> str:
+        return f"locator:sha256:{marker * 64}"
+
+    def locator_fixture_row(
+        self,
+        marker: str,
+        *,
+        locator_ref: str = "message-id:synthetic-duplicate",
+        locator_type: str = "export_coordinate",
+        status: str = "active",
+        service_ref: str | None = "mail-service",
+        account_ref: str | None = None,
+        occurrence_anchor: str | None = "body:paragraph-2",
+    ) -> dict[str, object]:
+        row: dict[str, object] = {
+            "locator_id": self.locator_fixture_id(marker),
+            "locator_type": locator_type,
+            "locator_ref": locator_ref,
+            "status": status,
+            "recorded_at": "2026-08-08T00:00:00Z",
+            "reviewed_by": "person:original-reviewer",
+            "provenance": {
+                "source": "human_reviewed_cli",
+                "automatic_recovery_claimed": False,
+            },
+        }
+        for name, value in (
+            ("service_ref", service_ref),
+            ("account_ref", account_ref),
+            ("occurrence_anchor", occurrence_anchor),
+        ):
+            if value is not None:
+                row[name] = value
+        return row
+
+    def write_locator_record_fixture(
+        self,
+        archive_root: Path,
+        zettel_id: str,
+        rows: list[dict[str, object]],
+        *,
+        schema: str = "wom-kit/external-locator-record/v0.2",
+    ) -> Path:
+        record = {
+            "schema": schema,
+            "archive_id": completion_workflows.archive_services.read_archive_id(
+                archive_root
+            ),
+            "zettel_id": zettel_id,
+            "created_at": "2026-08-08T00:00:00Z",
+            "updated_at": "2026-08-08T00:00:00Z",
+            "locators": rows,
+        }
+        path = (
+            archive_root
+            / "ops"
+            / "external-locators"
+            / f"{zettel_id}.json"
+        )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(record, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        return path
+
+    def write_markup_objet_binding_manifest(
+        self,
+        archive_root: Path,
+        relative: str,
+        bindings: list[tuple[str, str]],
+    ) -> str:
+        object_id = (
+            "sha256:acc6e73fb84988ecb538dfc0ceb883b88694e469a05172a5aeb0cce8902ce136"
+        )
+        manifest = {
+            "schema": completion_workflows.MARKUP_REFERENCE_BINDING_MANIFEST_SCHEMA,
+            "archive_id": completion_workflows.archive_services.read_archive_id(
+                archive_root
+            ),
+            "bindings": [
+                {
+                    "zettel_id": zettel_id,
+                    "tag_sha256": tag_sha256,
+                    "binding_kind": "objet",
+                    "binding_id": object_id,
+                }
+                for zettel_id, tag_sha256 in bindings
+            ],
+        }
+        path = archive_root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(manifest), encoding="utf-8")
+        return relative
 
     def write_relation_zettel(
         self,
@@ -556,7 +653,7 @@ class CompletionWorkflowTests(unittest.TestCase):
 
             record_path = archive_root / second["summary"]["record_path"]
             stored = json.loads(record_path.read_text(encoding="utf-8"))
-            self.assertEqual(stored["schema"], "wom-kit/external-locator-record/v0.2")
+            self.assertEqual(stored["schema"], "wom-kit/external-locator-record/v0.3")
             self.assertEqual(len(stored["locators"]), 2)
             self.assertEqual(stored["locators"][0]["account_ref"], account_ref)
             self.assertEqual(stored["locators"][1]["occurrence_anchor"], second_anchor)
@@ -670,6 +767,1143 @@ class CompletionWorkflowTests(unittest.TestCase):
             )
             self.assertEqual(len(restored["locators"]), 1)
             self.assertNotIn("account_ref", restored["locators"][0])
+
+    def test_external_locator_deactivate_duplicate_is_reversible_and_preserves_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.fake_archive(Path(tmp) / "archive")
+            zettel_id = "zet_20110228_fake_school_record"
+            locator_ref = "message-id:synthetic-private-duplicate"
+            target = self.locator_fixture_row(
+                "a",
+                locator_ref=locator_ref,
+            )
+            keeper = self.locator_fixture_row(
+                "b",
+                locator_ref=locator_ref,
+                account_ref="reviewed-account@example.test",
+            )
+            record_path = self.write_locator_record_fixture(
+                archive_root,
+                zettel_id,
+                [target, keeper],
+            )
+            before_bytes = record_path.read_bytes()
+
+            plan = completion_workflows.external_locator_deactivate_plan(
+                archive_root,
+                zettel_id=zettel_id,
+                locator_id=str(target["locator_id"]),
+                keep_locator_id=str(keeper["locator_id"]),
+            )
+            self.assertTrue(plan["ok"], plan)
+            self.assertEqual(plan["state"], "ready")
+            self.assertEqual(
+                plan["summary"]["planned_action"],
+                "deactivate_duplicate_locator",
+            )
+            self.assertEqual(plan["files_written"], [])
+            public_plan = json.dumps(plan, ensure_ascii=False)
+            for private_value in (
+                locator_ref,
+                "mail-service",
+                "reviewed-account@example.test",
+                "body:paragraph-2",
+                str(archive_root.resolve()),
+            ):
+                self.assertNotIn(private_value, public_plan)
+
+            applied = completion_workflows.external_locator_deactivate(
+                archive_root,
+                zettel_id=zettel_id,
+                locator_id=str(target["locator_id"]),
+                keep_locator_id=str(keeper["locator_id"]),
+                expected_plan_sha256=plan["summary"]["plan_sha256"],
+                reviewed_by="person:test",
+            )
+            self.assertTrue(applied["ok"], applied)
+            self.assertEqual(applied["state"], "written")
+            stored = json.loads(record_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                stored["schema"],
+                "wom-kit/external-locator-record/v0.3",
+            )
+            self.assertEqual(
+                stored["locators"],
+                [{**target, "status": "inactive"}, keeper],
+            )
+            self.assert_schema_instance(
+                "external-locator-record.schema.json",
+                stored,
+            )
+            receipt_path = archive_root / applied["summary"]["receipt_path"]
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                receipt["schema"],
+                "wom-kit/external-locator-receipt/v0.4",
+            )
+            self.assertEqual(
+                receipt["action"],
+                "deactivate_duplicate_locator",
+            )
+            self.assertEqual(receipt["locator_id"], target["locator_id"])
+            self.assertEqual(receipt["kept_locator_id"], keeper["locator_id"])
+            self.assertEqual(receipt["previous_status"], "active")
+            self.assertEqual(receipt["new_status"], "inactive")
+            self.assert_schema_instance(
+                "external-locator-receipt.schema.json",
+                receipt,
+            )
+            self.assertFalse(
+                completion_workflows._verified_locator_binding(
+                    archive_root,
+                    zettel_id=zettel_id,
+                    locator_id=str(target["locator_id"]),
+                )
+            )
+            self.assertTrue(
+                completion_workflows._verified_locator_binding(
+                    archive_root,
+                    zettel_id=zettel_id,
+                    locator_id=str(keeper["locator_id"]),
+                )
+            )
+
+            recovery = completion_workflows.external_locator_recovery_plan(
+                archive_root,
+                zettel_id=zettel_id,
+            )
+            self.assertEqual(recovery["summary"]["locator_count"], 2)
+            self.assertEqual(recovery["summary"]["active_locator_count"], 1)
+            self.assertEqual(recovery["summary"]["inactive_locator_count"], 1)
+            duplicate_add = completion_workflows.external_locator_plan(
+                archive_root,
+                zettel_id=zettel_id,
+                locator_type=str(target["locator_type"]),
+                locator_ref=locator_ref,
+                service_ref=str(target["service_ref"]),
+                occurrence_anchor=str(target["occurrence_anchor"]),
+            )
+            self.assertFalse(duplicate_add["ok"], duplicate_add)
+            self.assertIn(
+                "external_locator_already_recorded",
+                duplicate_add["blockers"],
+            )
+
+            revert_plan = completion_workflows.external_locator_revert_plan(
+                archive_root,
+                receipt=applied["summary"]["receipt_path"],
+            )
+            self.assertTrue(revert_plan["ok"], revert_plan)
+            reverted = completion_workflows.external_locator_revert(
+                archive_root,
+                receipt=applied["summary"]["receipt_path"],
+                expected_plan_sha256=revert_plan["summary"]["plan_sha256"],
+                reviewed_by="person:test",
+            )
+            self.assertTrue(reverted["ok"], reverted)
+            self.assertEqual(record_path.read_bytes(), before_bytes)
+
+    def test_external_locator_deactivate_duplicate_safety_matrix_fails_closed(self) -> None:
+        cases = {
+            "target_invalid": "external_locator_deactivate_locator_id_invalid",
+            "keeper_invalid": "external_locator_deactivate_keep_locator_id_invalid",
+            "same": "external_locator_deactivate_ids_must_differ",
+            "target_missing": "external_locator_deactivate_target_missing",
+            "keeper_missing": "external_locator_deactivate_keeper_missing",
+            "target_duplicate": "external_locator_deactivate_target_ambiguous",
+            "keeper_duplicate": "external_locator_deactivate_keeper_ambiguous",
+            "target_duplicate_mixed": "external_locator_deactivate_target_ambiguous",
+            "keeper_duplicate_mixed": "external_locator_deactivate_keeper_ambiguous",
+            "target_inactive": "external_locator_deactivate_target_inactive",
+            "keeper_inactive": "external_locator_deactivate_keeper_inactive",
+            "ref_mismatch": "external_locator_deactivate_ref_type_mismatch",
+            "type_mismatch": "external_locator_deactivate_ref_type_mismatch",
+            "occurrence_mismatch": "external_locator_deactivate_occurrence_mismatch",
+            "coordinate_conflict": "external_locator_deactivate_coordinate_conflict",
+            "coordinate_missing": "external_locator_deactivate_coordinate_conflict",
+            "record_shape_invalid": "external_locator_record_invalid",
+            "body_reference": "external_locator_deactivate_target_referenced",
+        }
+        for case_name, expected_blocker in cases.items():
+            with self.subTest(case_name=case_name), tempfile.TemporaryDirectory() as tmp:
+                archive_root = self.fake_archive(Path(tmp) / "archive")
+                zettel_id = "zet_20110228_fake_school_record"
+                target = self.locator_fixture_row("a")
+                keeper = self.locator_fixture_row(
+                    "b",
+                    account_ref="reviewed-account@example.test",
+                )
+                target_id = str(target["locator_id"])
+                keeper_id = str(keeper["locator_id"])
+                rows = [target, keeper]
+                if case_name == "target_invalid":
+                    target_id = "not-a-locator-id"
+                elif case_name == "keeper_invalid":
+                    keeper_id = "not-a-locator-id"
+                elif case_name == "same":
+                    keeper_id = target_id
+                elif case_name == "target_missing":
+                    target_id = self.locator_fixture_id("c")
+                elif case_name == "keeper_missing":
+                    keeper_id = self.locator_fixture_id("c")
+                elif case_name == "target_duplicate":
+                    rows = [target, dict(target), keeper]
+                elif case_name == "keeper_duplicate":
+                    rows = [target, keeper, dict(keeper)]
+                elif case_name == "target_duplicate_mixed":
+                    inactive_target = dict(target)
+                    inactive_target["status"] = "inactive"
+                    rows = [target, inactive_target, keeper]
+                elif case_name == "keeper_duplicate_mixed":
+                    inactive_keeper = dict(keeper)
+                    inactive_keeper["status"] = "inactive"
+                    rows = [target, keeper, inactive_keeper]
+                elif case_name == "target_inactive":
+                    target["status"] = "inactive"
+                elif case_name == "keeper_inactive":
+                    keeper["status"] = "inactive"
+                elif case_name == "ref_mismatch":
+                    keeper["locator_ref"] = "message-id:different"
+                elif case_name == "type_mismatch":
+                    keeper["locator_type"] = "provider_page_id"
+                elif case_name == "occurrence_mismatch":
+                    keeper["occurrence_anchor"] = "body:paragraph-9"
+                elif case_name == "coordinate_conflict":
+                    keeper["service_ref"] = "different-service"
+                elif case_name == "coordinate_missing":
+                    keeper.pop("service_ref")
+                elif case_name == "record_shape_invalid":
+                    keeper["recorded_at"] = ""
+
+                record_path = self.write_locator_record_fixture(
+                    archive_root,
+                    zettel_id,
+                    rows,
+                    schema="wom-kit/external-locator-record/v0.3",
+                )
+                zettel_path = (
+                    completion_workflows.archive_services.resolve_zettel_path(
+                        archive_root,
+                        zettel_id=zettel_id,
+                        relative_path=None,
+                    )
+                )
+                if case_name == "body_reference":
+                    target_digest = target_id.removeprefix("locator:sha256:")
+                    with zettel_path.open("a", encoding="utf-8") as handle:
+                        handle.write(
+                            "\n[External](WOM-LOCATOR://SHA256/"
+                            f"{target_digest.upper()})\n"
+                        )
+                before_record = record_path.read_bytes()
+                before_zettel = zettel_path.read_bytes()
+                plan = completion_workflows.external_locator_deactivate_plan(
+                    archive_root,
+                    zettel_id=zettel_id,
+                    locator_id=target_id,
+                    keep_locator_id=keeper_id,
+                )
+                self.assertFalse(plan["ok"], plan)
+                self.assertIn(expected_blocker, plan["blockers"])
+                self.assertEqual(plan["files_written"], [])
+                blocked = completion_workflows.external_locator_deactivate(
+                    archive_root,
+                    zettel_id=zettel_id,
+                    locator_id=target_id,
+                    keep_locator_id=keeper_id,
+                    expected_plan_sha256="0" * 64,
+                    reviewed_by="person:test",
+                )
+                self.assertFalse(blocked["ok"], blocked)
+                self.assertEqual(blocked["files_written"], [])
+                self.assertEqual(record_path.read_bytes(), before_record)
+                self.assertEqual(zettel_path.read_bytes(), before_zettel)
+                public = json.dumps(blocked, ensure_ascii=False)
+                for private_value in (
+                    str(target["locator_ref"]),
+                    "mail-service",
+                    "reviewed-account@example.test",
+                    "body:paragraph-2",
+                    str(archive_root.resolve()),
+                    "wom-locator://sha256/",
+                ):
+                    self.assertNotIn(private_value, public)
+
+    def test_external_locator_deactivate_unreadable_stale_and_bad_approval_are_byte_exact(self) -> None:
+        cases = (
+            "record_unreadable",
+            "zettel_unreadable",
+            "stale_plan",
+            "bad_hash",
+            "bad_reviewer",
+        )
+        for case_name in cases:
+            with self.subTest(case_name=case_name), tempfile.TemporaryDirectory() as tmp:
+                archive_root = self.fake_archive(Path(tmp) / "archive")
+                zettel_id = "zet_20110228_fake_school_record"
+                target = self.locator_fixture_row("a")
+                keeper = self.locator_fixture_row(
+                    "b",
+                    account_ref="reviewed-account@example.test",
+                )
+                record_path = self.write_locator_record_fixture(
+                    archive_root,
+                    zettel_id,
+                    [target, keeper],
+                )
+                zettel_path = (
+                    completion_workflows.archive_services.resolve_zettel_path(
+                        archive_root,
+                        zettel_id=zettel_id,
+                        relative_path=None,
+                    )
+                )
+                initial_plan = (
+                    completion_workflows.external_locator_deactivate_plan(
+                        archive_root,
+                        zettel_id=zettel_id,
+                        locator_id=str(target["locator_id"]),
+                        keep_locator_id=str(keeper["locator_id"]),
+                    )
+                )
+                self.assertTrue(initial_plan["ok"], initial_plan)
+                expected = initial_plan["summary"]["plan_sha256"]
+                reviewer = "person:test"
+                if case_name == "record_unreadable":
+                    record_path.write_bytes(b"\xff\xfe")
+                elif case_name == "zettel_unreadable":
+                    zettel_path.write_bytes(b"\xff\xfe")
+                elif case_name == "stale_plan":
+                    record_path.write_bytes(record_path.read_bytes() + b" \n")
+                elif case_name == "bad_hash":
+                    expected = "not-a-sha256"
+                elif case_name == "bad_reviewer":
+                    reviewer = "bad reviewer with spaces"
+                before_record = record_path.read_bytes()
+                before_zettel = zettel_path.read_bytes()
+                blocked = completion_workflows.external_locator_deactivate(
+                    archive_root,
+                    zettel_id=zettel_id,
+                    locator_id=str(target["locator_id"]),
+                    keep_locator_id=str(keeper["locator_id"]),
+                    expected_plan_sha256=expected,
+                    reviewed_by=reviewer,
+                )
+                self.assertFalse(blocked["ok"], blocked)
+                self.assertEqual(blocked["files_written"], [])
+                self.assertEqual(record_path.read_bytes(), before_record)
+                self.assertEqual(zettel_path.read_bytes(), before_zettel)
+                self.assertNotIn(
+                    str(archive_root.resolve()),
+                    json.dumps(blocked, ensure_ascii=False),
+                )
+
+    def test_external_locator_deactivate_cli_gates_and_privacy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.fake_archive(Path(tmp) / "archive")
+            zettel_id = "zet_20110228_fake_school_record"
+            target = self.locator_fixture_row("a")
+            keeper = self.locator_fixture_row(
+                "b",
+                account_ref="reviewed-account@example.test",
+            )
+            record_path = self.write_locator_record_fixture(
+                archive_root,
+                zettel_id,
+                [target, keeper],
+            )
+            before = record_path.read_bytes()
+            common = [
+                str(archive_root),
+                "--zettel-id",
+                zettel_id,
+                "--locator-id",
+                str(target["locator_id"]),
+                "--keep-locator-id",
+                str(keeper["locator_id"]),
+            ]
+            code, output = self.run_cli(
+                ["external-locator-deactivate-plan", *common]
+            )
+            self.assertEqual(code, 1, output)
+            self.assertEqual(record_path.read_bytes(), before)
+            code, output = self.run_cli(
+                [
+                    "external-locator-deactivate-plan",
+                    *common,
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            plan = json.loads(output)
+            expected = plan["summary"]["plan_sha256"]
+            code, output = self.run_cli(
+                [
+                    "external-locator-deactivate",
+                    *common,
+                    "--expected-plan-sha256",
+                    expected,
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 1, output)
+            self.assertEqual(record_path.read_bytes(), before)
+            code, output = self.run_cli(
+                [
+                    "external-locator-deactivate",
+                    *common,
+                    "--expected-plan-sha256",
+                    expected,
+                    "--reviewed-by",
+                    "person:test",
+                    "--approve",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            for private_value in (
+                str(target["locator_ref"]),
+                "mail-service",
+                "reviewed-account@example.test",
+                "body:paragraph-2",
+                str(archive_root.resolve()),
+            ):
+                self.assertNotIn(private_value, output)
+
+    def test_external_locator_recovery_reports_all_inactive_and_legacy_receipts_read(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.fake_archive(Path(tmp) / "archive")
+            zettel_id = "zet_20110228_fake_school_record"
+            first = self.locator_fixture_row("a", status="inactive")
+            second = self.locator_fixture_row(
+                "b",
+                status="inactive",
+                account_ref="reviewed-account@example.test",
+            )
+            self.write_locator_record_fixture(
+                archive_root,
+                zettel_id,
+                [first, second],
+                schema="wom-kit/external-locator-record/v0.3",
+            )
+            recovery = completion_workflows.external_locator_recovery_plan(
+                archive_root,
+                zettel_id=zettel_id,
+            )
+            self.assertTrue(recovery["ok"], recovery)
+            self.assertEqual(recovery["state"], "all_candidates_inactive")
+            self.assertEqual(recovery["summary"]["active_locator_count"], 0)
+            self.assertEqual(recovery["summary"]["inactive_locator_count"], 2)
+            self.assertTrue(recovery["summary"]["all_inactive"])
+            self.assertTrue(recovery["warnings"])
+            self.assertFalse(
+                completion_workflows._verified_locator_binding(
+                    archive_root,
+                    zettel_id=zettel_id,
+                    locator_id=str(first["locator_id"]),
+                )
+            )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.fake_archive(Path(tmp) / "archive")
+            zettel_id = "zet_20110228_fake_school_record"
+            target = self.locator_fixture_row(
+                "a",
+                service_ref=None,
+                occurrence_anchor=None,
+            )
+            keeper = self.locator_fixture_row(
+                "b",
+                service_ref=None,
+                occurrence_anchor=None,
+            )
+            self.write_locator_record_fixture(
+                archive_root,
+                zettel_id,
+                [target, keeper],
+                schema="wom-kit/external-locator-record/v0.1",
+            )
+            legacy_record_plan = (
+                completion_workflows.external_locator_deactivate_plan(
+                    archive_root,
+                    zettel_id=zettel_id,
+                    locator_id=str(target["locator_id"]),
+                    keep_locator_id=str(keeper["locator_id"]),
+                )
+            )
+            self.assertTrue(legacy_record_plan["ok"], legacy_record_plan)
+
+        for legacy_schema in (
+            "wom-kit/external-locator-receipt/v0.1",
+            "wom-kit/external-locator-receipt/v0.2",
+            "wom-kit/external-locator-receipt/v0.3",
+        ):
+            with self.subTest(legacy_schema=legacy_schema), tempfile.TemporaryDirectory() as tmp:
+                archive_root = self.fake_archive(Path(tmp) / "archive")
+                zettel_id = "zet_20240504_fake_lunch_thought"
+                plan = completion_workflows.external_locator_plan(
+                    archive_root,
+                    zettel_id=zettel_id,
+                    locator_type="export_coordinate",
+                    locator_ref="synthetic:legacy-receipt",
+                )
+                written = completion_workflows.external_locator_record(
+                    archive_root,
+                    zettel_id=zettel_id,
+                    locator_type="export_coordinate",
+                    locator_ref="synthetic:legacy-receipt",
+                    expected_plan_sha256=plan["summary"]["plan_sha256"],
+                    reviewed_by="person:test",
+                )
+                receipt_path = archive_root / written["summary"]["receipt_path"]
+                receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+                receipt["schema"] = legacy_schema
+                if legacy_schema.endswith("/v0.1"):
+                    receipt.pop("coordinate_presence", None)
+                legacy_path = receipt_path.with_name(
+                    f"legacy-{legacy_schema.rsplit('/', 1)[-1]}.json"
+                )
+                legacy_path.write_text(
+                    json.dumps(receipt),
+                    encoding="utf-8",
+                )
+                revert_plan = (
+                    completion_workflows.external_locator_revert_plan(
+                        archive_root,
+                        receipt=legacy_path,
+                    )
+                )
+                self.assertTrue(revert_plan["ok"], revert_plan)
+
+    def test_external_locator_revert_rejects_forged_paths_and_invalid_records(self) -> None:
+        def receipt_document(
+            archive_root: Path,
+            zettel_id: str,
+            *,
+            action: str,
+            record_relative: str,
+            after_bytes: bytes,
+            before_bytes: bytes | None,
+        ) -> dict[str, object]:
+            before_sha256 = (
+                hashlib.sha256(before_bytes).hexdigest()
+                if before_bytes is not None
+                else None
+            )
+            return {
+                "schema": completion_workflows.EXTERNAL_LOCATOR_RECEIPT_SCHEMA,
+                "action": action,
+                "archive_id": completion_workflows.archive_services.read_archive_id(
+                    archive_root
+                ),
+                "zettel_id": zettel_id,
+                "locator_id": self.locator_fixture_id("a"),
+                "locator_type": "export_coordinate",
+                "coordinate_presence": {
+                    "service_ref": True,
+                    "account_ref": False,
+                    "occurrence_anchor": True,
+                },
+                "plan_sha256": "1" * 64,
+                "before_record_sha256": before_sha256,
+                "after_record_sha256": hashlib.sha256(after_bytes).hexdigest(),
+                "before_snapshot_path": (
+                    f"{completion_workflows.EXTERNAL_LOCATOR_SNAPSHOT_DIR}/"
+                    f"{before_sha256}.json"
+                    if before_sha256 is not None
+                    else None
+                ),
+                "record_path": record_relative,
+                "reviewed_by": "person:test",
+                "created_at": "2026-08-09T00:00:00Z",
+                "privacy": {
+                    "locator_ref_included": False,
+                    "provider_called": False,
+                    "network_checked": False,
+                },
+            }
+
+        for forged_relative in (
+            "zettels/zet_20110228_fake_school_record.md",
+            "ops/unrelated-state.json",
+        ):
+            with self.subTest(forged_relative=forged_relative), tempfile.TemporaryDirectory() as tmp:
+                archive_root = self.fake_archive(Path(tmp) / "archive")
+                zettel_id = "zet_20110228_fake_school_record"
+                before_record_path = self.write_locator_record_fixture(
+                    archive_root,
+                    zettel_id,
+                    [self.locator_fixture_row("a")],
+                )
+                before_bytes = before_record_path.read_bytes()
+                before_sha256 = hashlib.sha256(before_bytes).hexdigest()
+                snapshot_path = (
+                    archive_root
+                    / completion_workflows.EXTERNAL_LOCATOR_SNAPSHOT_DIR
+                    / f"{before_sha256}.json"
+                )
+                snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+                snapshot_path.write_bytes(before_bytes)
+                target_path = archive_root / forged_relative
+                target_path.parent.mkdir(parents=True, exist_ok=True)
+                if not target_path.exists():
+                    target_path.write_bytes(b'{"private":"must-stay-exact"}\n')
+                target_before = target_path.read_bytes()
+                receipt = receipt_document(
+                    archive_root,
+                    zettel_id,
+                    action="update_locator_coordinates",
+                    record_relative=forged_relative,
+                    after_bytes=target_before,
+                    before_bytes=before_bytes,
+                )
+                receipt_path = (
+                    archive_root
+                    / completion_workflows.EXTERNAL_LOCATOR_RECEIPTS_DIR
+                    / "forged-path.json"
+                )
+                receipt_path.parent.mkdir(parents=True, exist_ok=True)
+                receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+
+                plan = completion_workflows.external_locator_revert_plan(
+                    archive_root,
+                    receipt=receipt_path,
+                )
+                self.assertFalse(plan["ok"], plan)
+                self.assertIn("external_locator_receipt_invalid", plan["blockers"])
+                blocked = completion_workflows.external_locator_revert(
+                    archive_root,
+                    receipt=receipt_path,
+                    expected_plan_sha256="0" * 64,
+                    reviewed_by="person:test",
+                )
+                self.assertFalse(blocked["ok"], blocked)
+                self.assertEqual(target_path.read_bytes(), target_before)
+
+        for invalid_source in ("current_record", "snapshot_record"):
+            with self.subTest(invalid_source=invalid_source), tempfile.TemporaryDirectory() as tmp:
+                archive_root = self.fake_archive(Path(tmp) / "archive")
+                zettel_id = "zet_20110228_fake_school_record"
+                record_path = self.write_locator_record_fixture(
+                    archive_root,
+                    zettel_id,
+                    [self.locator_fixture_row("a")],
+                )
+                valid_record_bytes = record_path.read_bytes()
+                invalid_record = json.loads(valid_record_bytes.decode("utf-8"))
+                invalid_record["archive_id"] = "archive:forged:other"
+                invalid_bytes = json.dumps(invalid_record).encode("utf-8")
+                if invalid_source == "current_record":
+                    record_path.write_bytes(invalid_bytes)
+                    before_bytes = None
+                    action = "add_locator"
+                else:
+                    before_bytes = invalid_bytes
+                    action = "update_locator_coordinates"
+                    before_sha256 = hashlib.sha256(before_bytes).hexdigest()
+                    snapshot_path = (
+                        archive_root
+                        / completion_workflows.EXTERNAL_LOCATOR_SNAPSHOT_DIR
+                        / f"{before_sha256}.json"
+                    )
+                    snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+                    snapshot_path.write_bytes(before_bytes)
+                record_before = record_path.read_bytes()
+                receipt = receipt_document(
+                    archive_root,
+                    zettel_id,
+                    action=action,
+                    record_relative=(
+                        f"{completion_workflows.EXTERNAL_LOCATOR_DIR}/{zettel_id}.json"
+                    ),
+                    after_bytes=record_before,
+                    before_bytes=before_bytes,
+                )
+                receipt_path = (
+                    archive_root
+                    / completion_workflows.EXTERNAL_LOCATOR_RECEIPTS_DIR
+                    / "invalid-record.json"
+                )
+                receipt_path.parent.mkdir(parents=True, exist_ok=True)
+                receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+
+                plan = completion_workflows.external_locator_revert_plan(
+                    archive_root,
+                    receipt=receipt_path,
+                )
+                self.assertFalse(plan["ok"], plan)
+                self.assertIn(
+                    (
+                        "external_locator_record_invalid"
+                        if invalid_source == "current_record"
+                        else "external_locator_snapshot_invalid"
+                    ),
+                    plan["blockers"],
+                )
+                self.assertEqual(record_path.read_bytes(), record_before)
+
+    def test_external_locator_revert_validates_schema_action_and_first_add_compatibility(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.fake_archive(Path(tmp) / "archive")
+            zettel_id = "zet_20240504_fake_lunch_thought"
+            plan = completion_workflows.external_locator_plan(
+                archive_root,
+                zettel_id=zettel_id,
+                locator_type="export_coordinate",
+                locator_ref="synthetic:first-add-revert",
+            )
+            written = completion_workflows.external_locator_record(
+                archive_root,
+                zettel_id=zettel_id,
+                locator_type="export_coordinate",
+                locator_ref="synthetic:first-add-revert",
+                expected_plan_sha256=plan["summary"]["plan_sha256"],
+                reviewed_by="person:test",
+            )
+            self.assertTrue(written["ok"], written)
+            record_path = archive_root / written["summary"]["record_path"]
+            receipt_path = archive_root / written["summary"]["receipt_path"]
+            forged = json.loads(receipt_path.read_text(encoding="utf-8"))
+            forged["schema"] = "wom-kit/external-locator-receipt/v0.3"
+            forged["action"] = "deactivate_duplicate_locator"
+            forged_path = receipt_path.with_name("forged-schema-action.json")
+            forged_path.write_text(json.dumps(forged), encoding="utf-8")
+            rejected = completion_workflows.external_locator_revert_plan(
+                archive_root,
+                receipt=forged_path,
+            )
+            self.assertFalse(rejected["ok"], rejected)
+            self.assertIn("external_locator_receipt_invalid", rejected["blockers"])
+
+            record_before = record_path.read_bytes()
+            outside_receipt = archive_root / "ops" / "forged-add-receipt.json"
+            outside_receipt.write_bytes(receipt_path.read_bytes())
+            outside_rejected = completion_workflows.external_locator_revert_plan(
+                archive_root,
+                receipt=outside_receipt,
+            )
+            self.assertFalse(outside_rejected["ok"], outside_rejected)
+            self.assertIn(
+                "external_locator_receipt_path_invalid",
+                outside_rejected["blockers"],
+            )
+            outside_apply = completion_workflows.external_locator_revert(
+                archive_root,
+                receipt=outside_receipt,
+                expected_plan_sha256="0" * 64,
+                reviewed_by="person:test",
+            )
+            self.assertFalse(outside_apply["ok"], outside_apply)
+            self.assertEqual(record_path.read_bytes(), record_before)
+
+            revert_plan = completion_workflows.external_locator_revert_plan(
+                archive_root,
+                receipt=receipt_path,
+            )
+            self.assertTrue(revert_plan["ok"], revert_plan)
+            reverted = completion_workflows.external_locator_revert(
+                archive_root,
+                receipt=receipt_path,
+                expected_plan_sha256=revert_plan["summary"]["plan_sha256"],
+                reviewed_by="person:test",
+            )
+            self.assertTrue(reverted["ok"], reverted)
+            self.assertFalse(record_path.exists())
+
+    def test_external_locator_corrupt_content_addressed_snapshots_block_before_write(self) -> None:
+        for action in ("add", "update", "deactivate"):
+            with self.subTest(action=action), tempfile.TemporaryDirectory() as tmp:
+                archive_root = self.fake_archive(Path(tmp) / "archive")
+                zettel_id = "zet_20110228_fake_school_record"
+                target = self.locator_fixture_row(
+                    "a",
+                    service_ref=None if action == "update" else "mail-service",
+                    occurrence_anchor=None if action == "update" else "body:paragraph-2",
+                )
+                rows = [target]
+                if action == "deactivate":
+                    rows.append(
+                        self.locator_fixture_row(
+                            "b",
+                            account_ref="reviewed-account@example.test",
+                        )
+                    )
+                record_path = self.write_locator_record_fixture(
+                    archive_root,
+                    zettel_id,
+                    rows,
+                )
+                record_before = record_path.read_bytes()
+                before_sha256 = hashlib.sha256(record_before).hexdigest()
+                snapshot_path = (
+                    archive_root
+                    / completion_workflows.EXTERNAL_LOCATOR_SNAPSHOT_DIR
+                    / f"{before_sha256}.json"
+                )
+                snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+                corrupt_bytes = b'{"corrupt":true}\n'
+                snapshot_path.write_bytes(corrupt_bytes)
+                receipts_root = archive_root / completion_workflows.EXTERNAL_LOCATOR_RECEIPTS_DIR
+                receipts_before = {
+                    path.relative_to(archive_root).as_posix()
+                    for path in receipts_root.rglob("*.json")
+                } if receipts_root.exists() else set()
+
+                if action == "deactivate":
+                    change_plan = completion_workflows.external_locator_deactivate_plan(
+                        archive_root,
+                        zettel_id=zettel_id,
+                        locator_id=str(target["locator_id"]),
+                        keep_locator_id=str(rows[1]["locator_id"]),
+                    )
+                    blocked = completion_workflows.external_locator_deactivate(
+                        archive_root,
+                        zettel_id=zettel_id,
+                        locator_id=str(target["locator_id"]),
+                        keep_locator_id=str(rows[1]["locator_id"]),
+                        expected_plan_sha256="0" * 64,
+                        reviewed_by="person:test",
+                    )
+                else:
+                    locator_ref = (
+                        "message-id:new-distinct-locator"
+                        if action == "add"
+                        else str(target["locator_ref"])
+                    )
+                    change_plan = completion_workflows.external_locator_plan(
+                        archive_root,
+                        zettel_id=zettel_id,
+                        locator_type="export_coordinate",
+                        locator_ref=locator_ref,
+                        service_ref=("mail-service" if action == "update" else None),
+                    )
+                    blocked = completion_workflows.external_locator_record(
+                        archive_root,
+                        zettel_id=zettel_id,
+                        locator_type="export_coordinate",
+                        locator_ref=locator_ref,
+                        service_ref=("mail-service" if action == "update" else None),
+                        expected_plan_sha256="0" * 64,
+                        reviewed_by="person:test",
+                    )
+                self.assertFalse(change_plan["ok"], change_plan)
+                self.assertIn(
+                    "external_locator_snapshot_mismatch",
+                    change_plan["blockers"],
+                )
+                self.assertFalse(blocked["ok"], blocked)
+                self.assertEqual(record_path.read_bytes(), record_before)
+                self.assertEqual(snapshot_path.read_bytes(), corrupt_bytes)
+                receipts_after = {
+                    path.relative_to(archive_root).as_posix()
+                    for path in receipts_root.rglob("*.json")
+                } if receipts_root.exists() else set()
+                self.assertEqual(receipts_after, receipts_before)
+
+    def test_external_locator_forward_writes_roll_back_record_and_receipts(self) -> None:
+        for action in ("record", "deactivate"):
+            with self.subTest(action=action), tempfile.TemporaryDirectory() as tmp:
+                archive_root = self.fake_archive(Path(tmp) / "archive")
+                zettel_id = "zet_20110228_fake_school_record"
+                target = self.locator_fixture_row("a")
+                rows = [target]
+                if action == "deactivate":
+                    rows.append(
+                        self.locator_fixture_row(
+                            "b",
+                            account_ref="reviewed-account@example.test",
+                        )
+                    )
+                record_path = self.write_locator_record_fixture(
+                    archive_root,
+                    zettel_id,
+                    rows,
+                )
+                record_before = record_path.read_bytes()
+                receipts_root = (
+                    archive_root
+                    / completion_workflows.EXTERNAL_LOCATOR_RECEIPTS_DIR
+                )
+                snapshots_root = (
+                    archive_root
+                    / completion_workflows.EXTERNAL_LOCATOR_SNAPSHOT_DIR
+                )
+                receipts_before = {
+                    path.relative_to(archive_root).as_posix()
+                    for path in receipts_root.rglob("*.json")
+                } if receipts_root.exists() else set()
+                snapshots_before = {
+                    path.relative_to(archive_root).as_posix()
+                    for path in snapshots_root.rglob("*.json")
+                } if snapshots_root.exists() else set()
+
+                if action == "record":
+                    plan = completion_workflows.external_locator_plan(
+                        archive_root,
+                        zettel_id=zettel_id,
+                        locator_type="export_coordinate",
+                        locator_ref="message-id:forward-rollback",
+                    )
+                else:
+                    plan = completion_workflows.external_locator_deactivate_plan(
+                        archive_root,
+                        zettel_id=zettel_id,
+                        locator_id=str(target["locator_id"]),
+                        keep_locator_id=str(rows[1]["locator_id"]),
+                    )
+                self.assertTrue(plan["ok"], plan)
+
+                original_write = (
+                    completion_workflows.archive_services.write_bytes_atomic
+                )
+                failed_after_replace = False
+
+                def fail_once_after_record_replace(path: Path, value: bytes) -> None:
+                    nonlocal failed_after_replace
+                    original_write(path, value)
+                    if (
+                        path.resolve() == record_path.resolve()
+                        and not failed_after_replace
+                    ):
+                        failed_after_replace = True
+                        raise OSError("synthetic post-replace fsync failure")
+
+                with mock.patch.object(
+                    completion_workflows.archive_services,
+                    "write_bytes_atomic",
+                    side_effect=fail_once_after_record_replace,
+                ):
+                    if action == "record":
+                        blocked = completion_workflows.external_locator_record(
+                            archive_root,
+                            zettel_id=zettel_id,
+                            locator_type="export_coordinate",
+                            locator_ref="message-id:forward-rollback",
+                            expected_plan_sha256=plan["summary"]["plan_sha256"],
+                            reviewed_by="person:test",
+                        )
+                    else:
+                        blocked = completion_workflows.external_locator_deactivate(
+                            archive_root,
+                            zettel_id=zettel_id,
+                            locator_id=str(target["locator_id"]),
+                            keep_locator_id=str(rows[1]["locator_id"]),
+                            expected_plan_sha256=plan["summary"]["plan_sha256"],
+                            reviewed_by="person:test",
+                        )
+                self.assertTrue(failed_after_replace)
+                self.assertFalse(blocked["ok"], blocked)
+                self.assertNotIn(
+                    (
+                        "external_locator_rollback_failed"
+                        if action == "record"
+                        else "external_locator_deactivate_rollback_failed"
+                    ),
+                    blocked["blockers"],
+                )
+                self.assertEqual(record_path.read_bytes(), record_before)
+                receipts_after = {
+                    path.relative_to(archive_root).as_posix()
+                    for path in receipts_root.rglob("*.json")
+                } if receipts_root.exists() else set()
+                snapshots_after = {
+                    path.relative_to(archive_root).as_posix()
+                    for path in snapshots_root.rglob("*.json")
+                } if snapshots_root.exists() else set()
+                self.assertEqual(receipts_after, receipts_before)
+                self.assertEqual(snapshots_after, snapshots_before)
+
+    def test_external_locator_deactivate_uses_one_body_hash_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.fake_archive(Path(tmp) / "archive")
+            zettel_id = "zet_20110228_fake_school_record"
+            target = self.locator_fixture_row("a")
+            keeper = self.locator_fixture_row("b")
+            self.write_locator_record_fixture(
+                archive_root,
+                zettel_id,
+                [target, keeper],
+            )
+            with mock.patch.object(
+                completion_workflows.archive_services,
+                "require_readable_zettel_content",
+                wraps=completion_workflows.archive_services.require_readable_zettel_content,
+            ) as legacy_double_read:
+                plan = completion_workflows.external_locator_deactivate_plan(
+                    archive_root,
+                    zettel_id=zettel_id,
+                    locator_id=str(target["locator_id"]),
+                    keep_locator_id=str(keeper["locator_id"]),
+                )
+            self.assertTrue(plan["ok"], plan)
+            self.assertEqual(legacy_double_read.call_count, 0)
+
+    def test_external_locator_revert_rolls_back_if_receipt_publish_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.fake_archive(Path(tmp) / "archive")
+            zettel_id = "zet_20110228_fake_school_record"
+            first_plan = completion_workflows.external_locator_plan(
+                archive_root,
+                zettel_id=zettel_id,
+                locator_type="export_coordinate",
+                locator_ref="synthetic:rollback-first",
+            )
+            first = completion_workflows.external_locator_record(
+                archive_root,
+                zettel_id=zettel_id,
+                locator_type="export_coordinate",
+                locator_ref="synthetic:rollback-first",
+                expected_plan_sha256=first_plan["summary"]["plan_sha256"],
+                reviewed_by="person:test",
+            )
+            second_plan = completion_workflows.external_locator_plan(
+                archive_root,
+                zettel_id=zettel_id,
+                locator_type="export_coordinate",
+                locator_ref="synthetic:rollback-second",
+            )
+            second = completion_workflows.external_locator_record(
+                archive_root,
+                zettel_id=zettel_id,
+                locator_type="export_coordinate",
+                locator_ref="synthetic:rollback-second",
+                expected_plan_sha256=second_plan["summary"]["plan_sha256"],
+                reviewed_by="person:test",
+            )
+            record_path = archive_root / second["summary"]["record_path"]
+            record_before = record_path.read_bytes()
+            receipts_root = archive_root / completion_workflows.EXTERNAL_LOCATOR_RECEIPTS_DIR
+            receipt_paths_before = {
+                path.relative_to(archive_root).as_posix()
+                for path in receipts_root.rglob("*.json")
+            }
+            revert_plan = completion_workflows.external_locator_revert_plan(
+                archive_root,
+                receipt=second["summary"]["receipt_path"],
+            )
+
+            def fail_after_receipt_publish(path: Path, value: bytes) -> None:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(value)
+                raise OSError("synthetic receipt fsync failure")
+
+            with mock.patch.object(
+                completion_workflows.archive_services,
+                "_write_bytes_create_if_absent",
+                side_effect=fail_after_receipt_publish,
+            ):
+                blocked = completion_workflows.external_locator_revert(
+                    archive_root,
+                    receipt=second["summary"]["receipt_path"],
+                    expected_plan_sha256=revert_plan["summary"]["plan_sha256"],
+                    reviewed_by="person:test",
+                )
+            self.assertFalse(blocked["ok"], blocked)
+            self.assertIn("external_locator_revert_write_failed", blocked["blockers"])
+            self.assertEqual(record_path.read_bytes(), record_before)
+            receipt_paths_after = {
+                path.relative_to(archive_root).as_posix()
+                for path in receipts_root.rglob("*.json")
+            }
+            self.assertEqual(receipt_paths_after, receipt_paths_before)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.fake_archive(Path(tmp) / "archive")
+            zettel_id = "zet_20240504_fake_lunch_thought"
+            plan = completion_workflows.external_locator_plan(
+                archive_root,
+                zettel_id=zettel_id,
+                locator_type="export_coordinate",
+                locator_ref="synthetic:first-add-receipt-failure",
+            )
+            written = completion_workflows.external_locator_record(
+                archive_root,
+                zettel_id=zettel_id,
+                locator_type="export_coordinate",
+                locator_ref="synthetic:first-add-receipt-failure",
+                expected_plan_sha256=plan["summary"]["plan_sha256"],
+                reviewed_by="person:test",
+            )
+            record_path = archive_root / written["summary"]["record_path"]
+            record_before = record_path.read_bytes()
+            revert_plan = completion_workflows.external_locator_revert_plan(
+                archive_root,
+                receipt=written["summary"]["receipt_path"],
+            )
+
+            def fail_first_add_receipt(path: Path, value: bytes) -> None:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(value)
+                raise OSError("synthetic first-add receipt fsync failure")
+
+            with mock.patch.object(
+                completion_workflows.archive_services,
+                "_write_bytes_create_if_absent",
+                side_effect=fail_first_add_receipt,
+            ):
+                blocked = completion_workflows.external_locator_revert(
+                    archive_root,
+                    receipt=written["summary"]["receipt_path"],
+                    expected_plan_sha256=revert_plan["summary"]["plan_sha256"],
+                    reviewed_by="person:test",
+                )
+            self.assertFalse(blocked["ok"], blocked)
+            self.assertNotIn(
+                "external_locator_revert_rollback_failed",
+                blocked["blockers"],
+            )
+            self.assertEqual(record_path.read_bytes(), record_before)
+
+    def test_external_locator_lexical_reparse_guard_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.fake_archive(Path(tmp) / "archive")
+            zettel_id = "zet_20110228_fake_school_record"
+            self.write_locator_record_fixture(
+                archive_root,
+                zettel_id,
+                [self.locator_fixture_row("a")],
+            )
+            with mock.patch.object(
+                completion_workflows.archive_services,
+                "zet_revision_path_has_symlink_component",
+                return_value=True,
+            ):
+                plan = completion_workflows.external_locator_plan(
+                    archive_root,
+                    zettel_id=zettel_id,
+                    locator_type="export_coordinate",
+                    locator_ref="synthetic:reparse-guard",
+                )
+            self.assertFalse(plan["ok"], plan)
+            self.assertIn("external_locator_record_unsafe", plan["blockers"])
+
+            def receipts_only(_root: Path, path: Path) -> bool:
+                return "receipts" in {
+                    part.casefold() for part in path.parts
+                }
+
+            with mock.patch.object(
+                completion_workflows.archive_services,
+                "zet_revision_path_has_symlink_component",
+                side_effect=receipts_only,
+            ):
+                receipt_plan = completion_workflows.external_locator_plan(
+                    archive_root,
+                    zettel_id=zettel_id,
+                    locator_type="export_coordinate",
+                    locator_ref="synthetic:receipt-reparse-guard",
+                )
+            self.assertFalse(receipt_plan["ok"], receipt_plan)
+            self.assertIn(
+                "external_locator_receipt_path_unsafe",
+                receipt_plan["blockers"],
+            )
 
     def test_objet_capture_batch_uses_one_reviewed_plan_and_converges(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1277,6 +2511,385 @@ class CompletionWorkflowTests(unittest.TestCase):
                 by_id["zet_20260807_nested_table_blocked"]["blocker_codes"],
             )
 
+    def test_markup_normalization_table_cells_preserve_span_inline_content_and_dates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.fake_archive(Path(tmp) / "archive")
+            target = self.write_markup_zettel(
+                archive_root,
+                "zet_20260809_table_cell_safe_inline",
+                '<table header-row="true">\n'
+                '<tr><td>Kind</td><td>Value</td></tr>\n'
+                '<tr><td>span</td><td><span color="red" underline="true" '
+                'discussion-urls="https://example.test/discussion/1">'
+                '<strong>Alpha | Beta</strong></span></td></tr>\n'
+                '<tr><td>start</td><td><mention-date start="2026-08-09"/></td></tr>\n'
+                '<tr><td>range</td><td><mention-date start="2026-08-09" '
+                'end="2026-08-10"/></td></tr>\n'
+                '<tr><td>entity</td><td>&lt;b&gt;Literal&lt;/b&gt;</td></tr>\n'
+                '<tr><td>timed</td><td><mention-date start="2026-08-09" '
+                'startTime="09:30" timeZone="Asia/Seoul"/></td></tr>\n'
+                '<tr><td>full</td><td><mention-date start="2026-08-09" '
+                'end="2026-08-10" startTime="09:30" endTime="10:45" '
+                'timeZone="Asia/Seoul"/></td></tr>\n'
+                '</table>\n',
+            )
+
+            plan = completion_workflows.markup_normalization_plan(
+                archive_root,
+                policy="normalize",
+                max_items=1000,
+                max_changes=1000,
+            )
+            self.assertTrue(plan["ok"], plan)
+            item = next(
+                row
+                for row in plan["items"]
+                if row["zettel_id"] == "zet_20260809_table_cell_safe_inline"
+            )
+            self.assertEqual(item["state"], "ready")
+            self.assertEqual(item["counts"]["table"], 1)
+            self.assertEqual(item["counts"]["table_blocked"], 0)
+
+            applied = completion_workflows.markup_normalization_apply(
+                archive_root,
+                policy="normalize",
+                max_items=1000,
+                max_changes=1000,
+                expected_plan_sha256=plan["summary"]["plan_sha256"],
+                reviewed_by="person:test",
+            )
+            self.assertTrue(applied["ok"], applied)
+            after = target.read_text(encoding="utf-8")
+            self.assertIn(
+                r"| span | <strong>Alpha \| Beta</strong> |",
+                after,
+            )
+            self.assertIn("| start | 2026-08-09 |", after)
+            self.assertIn("| range | 2026-08-09 – 2026-08-10 |", after)
+            self.assertIn(
+                "| entity | &lt;b&gt;Literal&lt;/b&gt; |",
+                after,
+            )
+            self.assertNotIn("| entity | <b>Literal</b> |", after)
+            self.assertIn(
+                "| timed | 2026-08-09 09:30 (Asia/Seoul) |",
+                after,
+            )
+            self.assertIn(
+                "| full | 2026-08-09 09:30 – 2026-08-10 10:45 "
+                "(Asia/Seoul) |",
+                after,
+            )
+            self.assertNotIn("<span", after)
+            self.assertNotIn("<mention-date", after)
+
+    def test_markup_normalization_tables_require_standalone_blocks(self) -> None:
+        table = "<table><tr><td>Visible</td></tr></table>"
+        blocked_bodies = {
+            "blockquote": f"> {table}\n",
+            "list_item": f"- {table}\n",
+            "unordered_list_continuation": f"- Item\n  {table}\n",
+            "ordered_list_continuation": f"1. Item\n   {table}\n",
+            "inline_prefix": f"Before {table}\n",
+            "inline_suffix": f"{table} After\n",
+            "indented_code": f"    {table}\n",
+        }
+
+        for label, body in blocked_bodies.items():
+            with self.subTest(label=label):
+                normalized, count, blockers = (
+                    completion_workflows._normalize_gfm_tables(body)
+                )
+                self.assertEqual(normalized, body)
+                self.assertEqual(count, 0)
+                self.assertIn(
+                    "markup_table_block_context_unsupported",
+                    blockers,
+                )
+
+        ordinary_indented_raw_html = f"  {table}\n"
+        normalized, count, blockers = (
+            completion_workflows._normalize_gfm_tables(
+                ordinary_indented_raw_html
+            )
+        )
+        self.assertEqual(blockers, [])
+        self.assertEqual(count, 1)
+        self.assertIn("| Visible |", normalized)
+
+        standalone_tab_table = (
+            '\t<table class="notion-table">\n'
+            "\t\t<tr><td>Visible</td></tr>\n"
+            "\t</table>\n"
+        )
+        normalized, count, blockers = (
+            completion_workflows._normalize_gfm_tables(standalone_tab_table)
+        )
+        self.assertEqual(normalized, standalone_tab_table)
+        self.assertEqual(count, 0)
+        self.assertIn("markup_table_block_context_unsupported", blockers)
+
+        notion_raw_html = (
+            "<columns>\n"
+            '\t<table class="notion-table">\n'
+            "\t\t<tr><td>Visible</td></tr>\n"
+            "\t</table>\n"
+            "</columns>\n"
+        )
+        normalized, count, blockers = (
+            completion_workflows._normalize_gfm_tables(notion_raw_html)
+        )
+        self.assertEqual(blockers, [])
+        self.assertEqual(count, 1)
+        self.assertIn("| Visible |", normalized)
+
+    def test_markup_normalization_tables_fail_closed_on_malformed_structure(self) -> None:
+        blocked_bodies = {
+            "trailing_orphan_table_close": (
+                "<table><tr><td>A</td></tr></table></table>\n"
+            ),
+            "orphan_unknown_close_inside": (
+                "<table><tr><td>A</td></tr></section></table>\n"
+            ),
+            "self_closing_row": (
+                "<table><tr/><tr><td>A</td></tr></table>\n"
+            ),
+            "self_closing_section": (
+                "<table><tbody/><tr><td>A</td></tr></table>\n"
+            ),
+            "empty_row": (
+                "<table><tr></tr><tr><td>A</td></tr></table>\n"
+            ),
+            "malformed_table_close": (
+                "<table><tr><td>A</td></tr></table extra>\n"
+            ),
+            "malformed_cell_close": (
+                "<table><tr><td>A</td extra></tr></table>\n"
+            ),
+            "malformed_row_close": (
+                "<table><tr><td>A</td></tr extra></table>\n"
+            ),
+            "self_closing_table": "<table/>\n",
+        }
+
+        for label, body in blocked_bodies.items():
+            with self.subTest(label=label):
+                normalized, count, blockers = (
+                    completion_workflows._normalize_gfm_tables(body)
+                )
+                self.assertEqual(normalized, body)
+                self.assertEqual(count, 0)
+                self.assertIn("markup_table_structure_invalid", blockers)
+
+    def test_markup_normalization_table_cells_preserve_unicode_space_attributes_and_breaks(self) -> None:
+        body = (
+            "<table><tr><td>\u00a0A\u2003B\u3000</td>"
+            '<td><abbr title="Two  spaces">Label</abbr></td>'
+            "<td>First<br><br/>Third</td>"
+            "<td>Research &Development</td></tr></table>\n"
+        )
+
+        normalized, count, blockers = (
+            completion_workflows._normalize_gfm_tables(body)
+        )
+
+        self.assertEqual(blockers, [])
+        self.assertEqual(count, 1)
+        self.assertIn("| \u00a0A\u2003B\u3000 |", normalized)
+        self.assertIn('<abbr title="Two  spaces">Label</abbr>', normalized)
+        self.assertIn("First<br><br>Third", normalized)
+        self.assertIn("Research &amp;Development", normalized)
+
+    def test_markup_normalization_table_cells_fail_closed_on_unterminated_entities(self) -> None:
+        body = "<table><tr><td>A &amp B</td></tr></table>\n"
+
+        normalized, count, blockers = (
+            completion_workflows._normalize_gfm_tables(body)
+        )
+
+        self.assertEqual(normalized, body)
+        self.assertEqual(count, 0)
+        self.assertIn("markup_table_entity_unterminated", blockers)
+
+    def test_markup_normalization_table_cells_fail_closed_on_invalid_pairs_and_dates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.fake_archive(Path(tmp) / "archive")
+            fixtures = {
+                "zet_20260809_table_span_unclosed": (
+                    "<table><tr><td><span>Visible</td></tr></table>\n",
+                    "markup_table_cell_markup_unbalanced",
+                ),
+                "zet_20260809_table_span_orphan": (
+                    "<table><tr><td>Visible</span></td></tr></table>\n",
+                    "markup_table_cell_markup_unbalanced",
+                ),
+                "zet_20260809_table_span_mismatch": (
+                    "<table><tr><td><span><strong>Visible</span></strong>"
+                    "</td></tr></table>\n",
+                    "markup_table_cell_markup_unbalanced",
+                ),
+                "zet_20260809_table_mention_date_paired": (
+                    '<table><tr><td><mention-date start="2026-08-09">'
+                    "Visible</mention-date></td></tr></table>\n",
+                    "markup_table_cell_markup_unsupported",
+                ),
+                "zet_20260809_table_mention_date_invalid": (
+                    '<table><tr><td><mention-date start="2026-99-99"/>'
+                    "</td></tr></table>\n",
+                    "markup_mention_date_attributes_unsupported",
+                ),
+                "zet_20260809_table_duplicate_table_attribute": (
+                    '<table header-row="true" header-row="false">'
+                    "<tr><td>Visible</td></tr></table>\n",
+                    "markup_table_attributes_duplicate",
+                ),
+                "zet_20260809_table_duplicate_cell_attribute": (
+                    '<table><tr><td rowspan="2" rowspan="1">Visible</td>'
+                    "</tr></table>\n",
+                    "markup_table_attributes_duplicate",
+                ),
+                "zet_20260809_table_visible_text_outside_cell": (
+                    "<table>VISIBLE<tr><td>A</td></tr>TAIL</table>\n",
+                    "markup_table_structure_invalid",
+                ),
+                "zet_20260809_table_visible_text_in_section": (
+                    "<table><thead>VISIBLE<tr><td>A</td></tr></thead>"
+                    "</table>\n",
+                    "markup_table_structure_invalid",
+                ),
+                "zet_20260809_table_section_attribute": (
+                    '<table><tbody data-role="important"><tr><td>A</td>'
+                    "</tr></tbody></table>\n",
+                    "markup_table_structure_attributes_unsupported",
+                ),
+                "zet_20260809_table_row_attribute": (
+                    '<table><tr data-role="important"><td>A</td></tr>'
+                    "</table>\n",
+                    "markup_table_structure_attributes_unsupported",
+                ),
+                "zet_20260809_table_col_inside_cell": (
+                    '<table><tr><td>A<col width="5"></td></tr></table>\n',
+                    "markup_table_structure_invalid",
+                ),
+                "zet_20260809_table_section_mismatch": (
+                    "<table><thead><tr><td>A</td></tr></tfoot></table>\n",
+                    "markup_table_structure_invalid",
+                ),
+                "zet_20260809_table_alignment_conflict": (
+                    '<table><tr><td align="right" '
+                    'style="text-align:left">A</td></tr></table>\n',
+                    "markup_table_alignment_conflict",
+                ),
+            }
+            before_by_id: dict[str, bytes] = {}
+            path_by_id: dict[str, Path] = {}
+            for zettel_id, (body, _blocker) in fixtures.items():
+                path = self.write_markup_zettel(archive_root, zettel_id, body)
+                path_by_id[zettel_id] = path
+                before_by_id[zettel_id] = path.read_bytes()
+
+            plan = completion_workflows.markup_normalization_plan(
+                archive_root,
+                policy="normalize",
+                max_items=1000,
+                max_changes=1000,
+            )
+            self.assertFalse(plan["ok"], plan)
+            by_id = {item["zettel_id"]: item for item in plan["items"]}
+            for zettel_id, (_body, blocker) in fixtures.items():
+                with self.subTest(zettel_id=zettel_id):
+                    self.assertEqual(by_id[zettel_id]["state"], "blocked")
+                    self.assertIn(blocker, by_id[zettel_id]["blocker_codes"])
+                    self.assertEqual(path_by_id[zettel_id].read_bytes(), before_by_id[zettel_id])
+
+    def test_markup_normalization_table_cells_only_ready_keeps_unsafe_markup_exact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.fake_archive(Path(tmp) / "archive")
+            ready = self.write_markup_zettel(
+                archive_root,
+                "zet_20260809_table_cell_ready_span",
+                '<table><tr><td><span color="blue">Safe | text</span>'
+                "</td></tr></table>\n",
+            )
+            blocked_bodies = {
+                "zet_20260809_table_cell_input": (
+                    '<table><tr><td><input type="text"></td></tr></table>\n'
+                ),
+                "zet_20260809_table_cell_script": (
+                    "<table><tr><td><script>alert(1)</script></td></tr></table>\n"
+                ),
+                "zet_20260809_table_cell_mention_page": (
+                    '<table><tr><td><mention-page ref="private"/>'
+                    "</td></tr></table>\n"
+                ),
+                "zet_20260809_table_cell_blockquote": (
+                    "<table><tr><td><blockquote>Block</blockquote>"
+                    "</td></tr></table>\n"
+                ),
+                "zet_20260809_table_cell_unsafe_url": (
+                    '<table><tr><td><a href="javascript:alert(1)" '
+                    'onclick="alert(1)">Unsafe</a></td></tr></table>\n'
+                ),
+                "zet_20260809_table_cell_unsafe_span_attribute": (
+                    '<table><tr><td><span onclick="alert(1)">Unsafe</span>'
+                    "</td></tr></table>\n"
+                ),
+                "zet_20260809_table_cell_unsafe_discussion_url": (
+                    '<table><tr><td><span discussion-urls="javascript:'
+                    'alert(1)">Unsafe</span></td></tr></table>\n'
+                ),
+                "zet_20260809_table_cell_comment": (
+                    "<table><tr><td>Before<!-- hidden -->After</td></tr></table>\n"
+                ),
+                "zet_20260809_table_cell_orphan_inline": (
+                    "<table><tr><td>Before</strong>After</td></tr></table>\n"
+                ),
+            }
+            blocked_paths: dict[str, Path] = {}
+            blocked_before: dict[str, bytes] = {}
+            for zettel_id, body in blocked_bodies.items():
+                path = self.write_markup_zettel(archive_root, zettel_id, body)
+                blocked_paths[zettel_id] = path
+                blocked_before[zettel_id] = path.read_bytes()
+
+            plan = completion_workflows.markup_normalization_plan(
+                archive_root,
+                policy="normalize",
+                max_items=1000,
+                max_changes=1000,
+                only_ready=True,
+            )
+            self.assertTrue(plan["ok"], plan)
+            self.assertEqual(plan["state"], "partial_ready")
+            by_id = {item["zettel_id"]: item for item in plan["items"]}
+            self.assertEqual(
+                by_id["zet_20260809_table_cell_ready_span"]["state"],
+                "ready",
+            )
+            for zettel_id in blocked_bodies:
+                with self.subTest(zettel_id=zettel_id):
+                    self.assertEqual(by_id[zettel_id]["state"], "blocked")
+                    self.assertTrue(by_id[zettel_id]["blocker_codes"])
+
+            applied = completion_workflows.markup_normalization_apply(
+                archive_root,
+                policy="normalize",
+                max_items=1000,
+                max_changes=1000,
+                only_ready=True,
+                expected_plan_sha256=plan["summary"]["plan_sha256"],
+                reviewed_by="person:test",
+            )
+            self.assertTrue(applied["ok"], applied)
+            self.assertIn(r"Safe \| text", ready.read_text(encoding="utf-8"))
+            self.assertNotIn("<span", ready.read_text(encoding="utf-8"))
+            for zettel_id in blocked_bodies:
+                with self.subTest(zettel_id=zettel_id):
+                    self.assertEqual(
+                        blocked_paths[zettel_id].read_bytes(),
+                        blocked_before[zettel_id],
+                    )
+
     def test_markup_normalization_blocks_unknown_and_binding_tags_but_preserve_is_explicit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.fake_archive(Path(tmp) / "archive")
@@ -1617,6 +3230,999 @@ class CompletionWorkflowTests(unittest.TestCase):
             self.assertNotIn("private-file-coordinate", after)
             self.assertNotIn("private-audio-coordinate", after)
             self.assertNotIn("private-video-coordinate", after)
+
+    def test_markup_normalization_binds_paired_file_as_one_manifested_objet(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.fake_archive(Path(tmp) / "archive")
+            source_id = "zet_20260809_paired_file_binding"
+            source_path = self.write_markup_zettel(
+                archive_root,
+                source_id,
+                '<file src="private-file-coordinate"></file>\n',
+            )
+            object_id = (
+                "sha256:acc6e73fb84988ecb538dfc0ceb883b88694e469a05172a5aeb0cce8902ce136"
+            )
+
+            unbound = completion_workflows.markup_normalization_plan(
+                archive_root,
+                policy="normalize",
+                max_items=1000,
+                max_changes=1000,
+            )
+            self.assertFalse(unbound["ok"])
+            item = next(
+                row for row in unbound["items"] if row["zettel_id"] == source_id
+            )
+            self.assertEqual(
+                [row["tag_name"] for row in item["reference_tag_digests"]],
+                ["file"],
+            )
+            tag_sha256 = item["reference_tag_digests"][0]["tag_sha256"]
+            manifest = {
+                "schema": completion_workflows.MARKUP_REFERENCE_BINDING_MANIFEST_SCHEMA,
+                "archive_id": completion_workflows.archive_services.read_archive_id(
+                    archive_root
+                ),
+                "bindings": [
+                    {
+                        "zettel_id": source_id,
+                        "tag_sha256": tag_sha256,
+                        "binding_kind": "objet",
+                        "binding_id": object_id,
+                    }
+                ],
+            }
+            manifest_relative = "ops/paired-file-bindings.json"
+            manifest_path = archive_root / manifest_relative
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+            plan = completion_workflows.markup_normalization_plan(
+                archive_root,
+                policy="normalize",
+                max_items=1000,
+                max_changes=1000,
+                binding_manifest=manifest_relative,
+            )
+            self.assertTrue(plan["ok"], plan)
+            self.assertEqual(plan["summary"]["reference_binding_count"], 1)
+            applied = completion_workflows.markup_normalization_apply(
+                archive_root,
+                policy="normalize",
+                max_items=1000,
+                max_changes=1000,
+                binding_manifest=manifest_relative,
+                expected_plan_sha256=plan["summary"]["plan_sha256"],
+                reviewed_by="person:test",
+            )
+            self.assertTrue(applied["ok"], applied)
+            after = source_path.read_text(encoding="utf-8")
+            self.assertEqual(after.count("wom-objet:sha256:"), 1)
+            self.assertNotIn("private-file-coordinate", after)
+            self.assertNotIn("<file", after)
+            self.assertNotIn("</file>", after)
+
+    def test_markup_normalization_binds_self_closing_mention_page_and_unknown_audio(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.fake_archive(Path(tmp) / "archive")
+            source_id = "zet_20260809_new_reference_tags"
+            target_id = "zet_20260809_mentioned_page"
+            source_path = self.write_markup_zettel(
+                archive_root,
+                source_id,
+                '<mention-page url="private-page-coordinate"/>\n'
+                '<unknown:audio/>\n',
+            )
+            self.write_markup_zettel(
+                archive_root,
+                target_id,
+                "Reviewed page target.\n",
+            )
+            edge = completion_workflows.archive_services.zettel_edge_write(
+                archive_root,
+                from_zettel=source_id,
+                target_ref=target_id,
+                edge_type="continues",
+                visibility="private",
+                approve=True,
+                reviewed_by="person:test",
+            )
+            self.assertTrue(edge["ok"], edge)
+            object_id = (
+                "sha256:acc6e73fb84988ecb538dfc0ceb883b88694e469a05172a5aeb0cce8902ce136"
+            )
+
+            unbound = completion_workflows.markup_normalization_plan(
+                archive_root,
+                policy="normalize",
+                max_items=1000,
+                max_changes=1000,
+            )
+            self.assertFalse(unbound["ok"])
+            item = next(
+                row for row in unbound["items"] if row["zettel_id"] == source_id
+            )
+            tag_digests = {
+                row["tag_name"]: row["tag_sha256"]
+                for row in item["reference_tag_digests"]
+            }
+            self.assertEqual(
+                set(tag_digests),
+                {"mention-page", "unknown:audio"},
+            )
+            manifest = {
+                "schema": completion_workflows.MARKUP_REFERENCE_BINDING_MANIFEST_SCHEMA,
+                "archive_id": completion_workflows.archive_services.read_archive_id(
+                    archive_root
+                ),
+                "bindings": [
+                    {
+                        "zettel_id": source_id,
+                        "tag_sha256": tag_digests["mention-page"],
+                        "binding_kind": "zettel_edge",
+                        "binding_id": edge["edge_id"],
+                    },
+                    {
+                        "zettel_id": source_id,
+                        "tag_sha256": tag_digests["unknown:audio"],
+                        "binding_kind": "objet",
+                        "binding_id": object_id,
+                    },
+                ],
+            }
+            manifest_relative = "ops/new-reference-tag-bindings.json"
+            manifest_path = archive_root / manifest_relative
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+            plan = completion_workflows.markup_normalization_plan(
+                archive_root,
+                policy="normalize",
+                max_items=1000,
+                max_changes=1000,
+                binding_manifest=manifest_relative,
+            )
+            self.assertTrue(plan["ok"], plan)
+            self.assertEqual(plan["summary"]["reference_binding_count"], 2)
+            applied = completion_workflows.markup_normalization_apply(
+                archive_root,
+                policy="normalize",
+                max_items=1000,
+                max_changes=1000,
+                binding_manifest=manifest_relative,
+                expected_plan_sha256=plan["summary"]["plan_sha256"],
+                reviewed_by="person:test",
+            )
+            self.assertTrue(applied["ok"], applied)
+            after = source_path.read_text(encoding="utf-8")
+            self.assertIn("wom-edge://sha256/", after)
+            self.assertIn("wom-objet:sha256:", after)
+            self.assertNotIn("private-page-coordinate", after)
+            self.assertNotIn("<unknown:audio", after)
+
+    def test_markup_normalization_keeps_paired_mention_page_with_inner_text_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.fake_archive(Path(tmp) / "archive")
+            source_id = "zet_20260809_paired_mention_page"
+            target_id = "zet_20260809_paired_mention_target"
+            source_path = self.write_markup_zettel(
+                archive_root,
+                source_id,
+                '<mention-page url="private-page-coordinate">'
+                "Visible page label"
+                "</mention-page>\n",
+            )
+            self.write_markup_zettel(
+                archive_root,
+                target_id,
+                "Reviewed page target.\n",
+            )
+            edge = completion_workflows.archive_services.zettel_edge_write(
+                archive_root,
+                from_zettel=source_id,
+                target_ref=target_id,
+                edge_type="continues",
+                visibility="private",
+                approve=True,
+                reviewed_by="person:test",
+            )
+            self.assertTrue(edge["ok"], edge)
+            before = source_path.read_bytes()
+
+            unbound = completion_workflows.markup_normalization_plan(
+                archive_root,
+                policy="normalize",
+                max_items=1000,
+                max_changes=1000,
+            )
+            self.assertFalse(unbound["ok"])
+            item = next(
+                row for row in unbound["items"] if row["zettel_id"] == source_id
+            )
+            self.assertEqual(item["reference_tag_names"], ["mention-page"])
+            self.assertEqual(item["unknown_tag_names"], [])
+            self.assertIn(
+                "markup_reference_binding_required",
+                item["blocker_codes"],
+            )
+            self.assertEqual(len(item["reference_tag_digests"]), 2)
+            manifest = {
+                "schema": completion_workflows.MARKUP_REFERENCE_BINDING_MANIFEST_SCHEMA,
+                "archive_id": completion_workflows.archive_services.read_archive_id(
+                    archive_root
+                ),
+                "bindings": [
+                    {
+                        "zettel_id": source_id,
+                        "tag_sha256": row["tag_sha256"],
+                        "binding_kind": "zettel_edge",
+                        "binding_id": edge["edge_id"],
+                    }
+                    for row in item["reference_tag_digests"]
+                ],
+            }
+            manifest_relative = "ops/paired-mention-page-bindings.json"
+            manifest_path = archive_root / manifest_relative
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+            bound = completion_workflows.markup_normalization_plan(
+                archive_root,
+                policy="normalize",
+                max_items=1000,
+                max_changes=1000,
+                binding_manifest=manifest_relative,
+            )
+            self.assertFalse(bound["ok"])
+            self.assertIn("markup_binding_unused", bound["blockers"])
+            self.assertIn(
+                "markup_reference_binding_required",
+                bound["blockers"],
+            )
+            bound_item = next(
+                row for row in bound["items"] if row["zettel_id"] == source_id
+            )
+            self.assertEqual(bound_item["state"], "blocked")
+            self.assertEqual(
+                bound_item["before_sha256"],
+                bound_item["after_sha256"],
+            )
+            self.assertEqual(
+                bound_item["counts"]["reference_binding_applied"],
+                0,
+            )
+            self.assertEqual(source_path.read_bytes(), before)
+
+    def test_markup_normalization_rejects_nonempty_paired_file_binding(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.fake_archive(Path(tmp) / "archive")
+            source_id = "zet_20260809_nonempty_paired_file"
+            fragment = (
+                '<file src="private-file-coordinate">'
+                "Visible file label"
+                "</file>"
+            )
+            source_path = self.write_markup_zettel(
+                archive_root,
+                source_id,
+                fragment + "\n",
+            )
+            before = source_path.read_bytes()
+            full_fragment_sha256 = hashlib.sha256(
+                fragment.encode("utf-8")
+            ).hexdigest()
+            manifest_relative = self.write_markup_objet_binding_manifest(
+                archive_root,
+                "ops/nonempty-paired-file-bindings.json",
+                [(source_id, full_fragment_sha256)],
+            )
+
+            plan = completion_workflows.markup_normalization_plan(
+                archive_root,
+                policy="normalize",
+                max_items=1000,
+                max_changes=1000,
+                binding_manifest=manifest_relative,
+            )
+
+            self.assertFalse(plan["ok"], plan)
+            self.assertIn("markup_binding_unused", plan["blockers"])
+            item = next(
+                row for row in plan["items"] if row["zettel_id"] == source_id
+            )
+            self.assertEqual(item["state"], "blocked")
+            self.assertIn(
+                "markup_file_inner_content_unsupported",
+                item["blocker_codes"],
+            )
+            self.assertEqual(item["before_sha256"], item["after_sha256"])
+            self.assertEqual(
+                item["counts"]["reference_binding_applied"],
+                0,
+            )
+            self.assertEqual(source_path.read_bytes(), before)
+
+    def test_markup_normalization_rejects_malformed_paired_file_attributes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.fake_archive(Path(tmp) / "archive")
+            fragments = {
+                "zet_20260809_file_bad_attribute_token": "<file ???></file>",
+                "zet_20260809_file_unquoted_attribute": (
+                    "<file src=opaque></file>"
+                ),
+                "zet_20260809_file_duplicate_attribute": (
+                    '<file src="a" src="b"></file>'
+                ),
+            }
+            before_by_id: dict[str, bytes] = {}
+            paths: dict[str, Path] = {}
+            bindings: list[tuple[str, str]] = []
+            for zettel_id, fragment in fragments.items():
+                path = self.write_markup_zettel(
+                    archive_root,
+                    zettel_id,
+                    fragment + "\n",
+                )
+                paths[zettel_id] = path
+                before_by_id[zettel_id] = path.read_bytes()
+                bindings.append(
+                    (
+                        zettel_id,
+                        hashlib.sha256(fragment.encode("utf-8")).hexdigest(),
+                    )
+                )
+            manifest_relative = self.write_markup_objet_binding_manifest(
+                archive_root,
+                "ops/malformed-paired-file-bindings.json",
+                bindings,
+            )
+
+            plan = completion_workflows.markup_normalization_plan(
+                archive_root,
+                policy="normalize",
+                max_items=1000,
+                max_changes=1000,
+                binding_manifest=manifest_relative,
+            )
+
+            self.assertFalse(plan["ok"], plan)
+            self.assertIn("markup_binding_unused", plan["blockers"])
+            by_id = {item["zettel_id"]: item for item in plan["items"]}
+            for zettel_id in fragments:
+                with self.subTest(zettel_id=zettel_id):
+                    item = by_id[zettel_id]
+                    self.assertEqual(item["state"], "blocked")
+                    self.assertIn(
+                        "markup_file_attributes_unsupported",
+                        item["blocker_codes"],
+                    )
+                    self.assertEqual(
+                        item["counts"]["reference_binding_applied"],
+                        0,
+                    )
+                    self.assertEqual(
+                        item["before_sha256"],
+                        item["after_sha256"],
+                    )
+                    self.assertEqual(
+                        paths[zettel_id].read_bytes(),
+                        before_by_id[zettel_id],
+                    )
+
+    def test_markup_normalization_rejects_self_closing_file_as_paired_fragment(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.fake_archive(Path(tmp) / "archive")
+            fragments = {
+                "zet_20260809_file_self_close_attrs": (
+                    '<file src="a"/>VISIBLE</file>'
+                ),
+                "zet_20260809_file_self_close_space": (
+                    "<file />VISIBLE</file>"
+                ),
+            }
+            paths: dict[str, Path] = {}
+            before_by_id: dict[str, bytes] = {}
+            bindings: list[tuple[str, str]] = []
+            full_fragment_sha256s: dict[str, str] = {}
+            for zettel_id, fragment in fragments.items():
+                path = self.write_markup_zettel(
+                    archive_root,
+                    zettel_id,
+                    fragment + "\n",
+                )
+                paths[zettel_id] = path
+                before_by_id[zettel_id] = path.read_bytes()
+                digest = hashlib.sha256(fragment.encode("utf-8")).hexdigest()
+                full_fragment_sha256s[zettel_id] = digest
+                bindings.append((zettel_id, digest))
+            manifest_relative = self.write_markup_objet_binding_manifest(
+                archive_root,
+                "ops/self-closing-file-pair-bindings.json",
+                bindings,
+            )
+
+            plan = completion_workflows.markup_normalization_plan(
+                archive_root,
+                policy="normalize",
+                max_items=1000,
+                max_changes=1000,
+                binding_manifest=manifest_relative,
+            )
+
+            self.assertFalse(plan["ok"], plan)
+            self.assertIn("markup_binding_unused", plan["blockers"])
+            by_id = {item["zettel_id"]: item for item in plan["items"]}
+            for zettel_id in fragments:
+                with self.subTest(zettel_id=zettel_id):
+                    item = by_id[zettel_id]
+                    self.assertEqual(item["state"], "blocked")
+                    self.assertIn(
+                        "markup_paired_reference_self_closing_opener",
+                        item["blocker_codes"],
+                    )
+                    self.assertNotIn(
+                        full_fragment_sha256s[zettel_id],
+                        {
+                            row["tag_sha256"]
+                            for row in item["reference_tag_digests"]
+                        },
+                    )
+                    self.assertEqual(
+                        item["before_sha256"],
+                        item["after_sha256"],
+                    )
+                    self.assertEqual(
+                        item["counts"]["reference_binding_applied"],
+                        0,
+                    )
+                    self.assertEqual(
+                        paths[zettel_id].read_bytes(),
+                        before_by_id[zettel_id],
+                    )
+
+    def test_markup_normalization_rejects_ambiguous_unknown_audio_binding(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.fake_archive(Path(tmp) / "archive")
+            source_id = "zet_20260809_ambiguous_unknown_audio"
+            tag = "<unknown:audio/>"
+            source_path = self.write_markup_zettel(
+                archive_root,
+                source_id,
+                tag + "\n" + tag + "\n",
+            )
+            before = source_path.read_bytes()
+            tag_sha256 = hashlib.sha256(tag.encode("utf-8")).hexdigest()
+            manifest_relative = self.write_markup_objet_binding_manifest(
+                archive_root,
+                "ops/ambiguous-unknown-audio-bindings.json",
+                [(source_id, tag_sha256)],
+            )
+
+            plan = completion_workflows.markup_normalization_plan(
+                archive_root,
+                policy="normalize",
+                max_items=1000,
+                max_changes=1000,
+                binding_manifest=manifest_relative,
+            )
+
+            self.assertFalse(plan["ok"], plan)
+            self.assertIn("markup_binding_unused", plan["blockers"])
+            item = next(
+                row for row in plan["items"] if row["zettel_id"] == source_id
+            )
+            self.assertEqual(item["state"], "blocked")
+            self.assertIn(
+                "markup_unknown_audio_binding_ambiguous",
+                item["blocker_codes"],
+            )
+            self.assertEqual(item["before_sha256"], item["after_sha256"])
+            self.assertEqual(
+                item["counts"]["reference_binding_applied"],
+                0,
+            )
+            self.assertEqual(source_path.read_bytes(), before)
+
+    def test_markup_normalization_blocks_duplicate_manifest_binding_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.fake_archive(Path(tmp) / "archive")
+            source_id = "zet_20260809_duplicate_binding_rows"
+            tag = "<unknown:audio/>"
+            source_path = self.write_markup_zettel(
+                archive_root,
+                source_id,
+                tag + "\n",
+            )
+            before = source_path.read_bytes()
+            tag_sha256 = hashlib.sha256(tag.encode("utf-8")).hexdigest()
+            manifest_relative = self.write_markup_objet_binding_manifest(
+                archive_root,
+                "ops/duplicate-binding-rows.json",
+                [
+                    (source_id, tag_sha256),
+                    (source_id, tag_sha256),
+                ],
+            )
+
+            plan = completion_workflows.markup_normalization_plan(
+                archive_root,
+                policy="normalize",
+                max_items=1000,
+                max_changes=1000,
+                binding_manifest=manifest_relative,
+            )
+
+            self.assertFalse(plan["ok"], plan)
+            self.assertIn("markup_binding_duplicate", plan["blockers"])
+            self.assertEqual(source_path.read_bytes(), before)
+
+    def test_markup_normalization_rejects_attributed_unknown_audio_binding(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.fake_archive(Path(tmp) / "archive")
+            source_id = "zet_20260809_attributed_unknown_audio"
+            tag = '<unknown:audio title="Visible audio label"/>'
+            source_path = self.write_markup_zettel(
+                archive_root,
+                source_id,
+                tag + "\n",
+            )
+            before = source_path.read_bytes()
+            tag_sha256 = hashlib.sha256(tag.encode("utf-8")).hexdigest()
+            manifest_relative = self.write_markup_objet_binding_manifest(
+                archive_root,
+                "ops/attributed-unknown-audio-bindings.json",
+                [(source_id, tag_sha256)],
+            )
+
+            plan = completion_workflows.markup_normalization_plan(
+                archive_root,
+                policy="normalize",
+                max_items=1000,
+                max_changes=1000,
+                binding_manifest=manifest_relative,
+            )
+
+            self.assertFalse(plan["ok"], plan)
+            self.assertIn("markup_binding_unused", plan["blockers"])
+            item = next(
+                row for row in plan["items"] if row["zettel_id"] == source_id
+            )
+            self.assertEqual(item["state"], "blocked")
+            self.assertIn(
+                "markup_unknown_audio_attributes_unsupported",
+                item["blocker_codes"],
+            )
+            self.assertEqual(item["before_sha256"], item["after_sha256"])
+            self.assertEqual(
+                item["counts"]["reference_binding_applied"],
+                0,
+            )
+            self.assertEqual(source_path.read_bytes(), before)
+            serialized = json.dumps(plan, ensure_ascii=False)
+            self.assertNotIn("Visible audio label", serialized)
+
+    def test_markup_normalization_requires_new_tag_specific_binding_kinds(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.fake_archive(Path(tmp) / "archive")
+            source_id = "zet_20260809_reference_binding_kind_mismatch"
+            target_id = "zet_20260809_reference_binding_kind_target"
+            file_fragment = '<file src="private-file"></file>'
+            mention_page = '<mention-page url="private-page"/>'
+            unknown_audio = "<unknown:audio/>"
+            source_path = self.write_markup_zettel(
+                archive_root,
+                source_id,
+                file_fragment + "\n" + mention_page + "\n" + unknown_audio + "\n",
+            )
+            self.write_markup_zettel(
+                archive_root,
+                target_id,
+                "Reviewed edge target.\n",
+            )
+            edge = completion_workflows.archive_services.zettel_edge_write(
+                archive_root,
+                from_zettel=source_id,
+                target_ref=target_id,
+                edge_type="continues",
+                visibility="private",
+                approve=True,
+                reviewed_by="person:test",
+            )
+            self.assertTrue(edge["ok"], edge)
+            before = source_path.read_bytes()
+            object_id = (
+                "sha256:acc6e73fb84988ecb538dfc0ceb883b88694e469a05172a5aeb0cce8902ce136"
+            )
+            manifest = {
+                "schema": completion_workflows.MARKUP_REFERENCE_BINDING_MANIFEST_SCHEMA,
+                "archive_id": completion_workflows.archive_services.read_archive_id(
+                    archive_root
+                ),
+                "bindings": [
+                    {
+                        "zettel_id": source_id,
+                        "tag_sha256": hashlib.sha256(
+                            file_fragment.encode("utf-8")
+                        ).hexdigest(),
+                        "binding_kind": "zettel_edge",
+                        "binding_id": edge["edge_id"],
+                    },
+                    {
+                        "zettel_id": source_id,
+                        "tag_sha256": hashlib.sha256(
+                            mention_page.encode("utf-8")
+                        ).hexdigest(),
+                        "binding_kind": "objet",
+                        "binding_id": object_id,
+                    },
+                    {
+                        "zettel_id": source_id,
+                        "tag_sha256": hashlib.sha256(
+                            unknown_audio.encode("utf-8")
+                        ).hexdigest(),
+                        "binding_kind": "zettel_edge",
+                        "binding_id": edge["edge_id"],
+                    },
+                ],
+            }
+            manifest_relative = "ops/reference-binding-kind-mismatch.json"
+            manifest_path = archive_root / manifest_relative
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+            plan = completion_workflows.markup_normalization_plan(
+                archive_root,
+                policy="normalize",
+                max_items=1000,
+                max_changes=1000,
+                binding_manifest=manifest_relative,
+            )
+
+            self.assertFalse(plan["ok"], plan)
+            self.assertIn("markup_binding_unused", plan["blockers"])
+            item = next(
+                row for row in plan["items"] if row["zettel_id"] == source_id
+            )
+            self.assertEqual(item["state"], "blocked")
+            self.assertIn(
+                "markup_reference_binding_kind_mismatch",
+                item["blocker_codes"],
+            )
+            self.assertEqual(
+                item["counts"]["reference_binding_applied"],
+                0,
+            )
+            self.assertEqual(item["before_sha256"], item["after_sha256"])
+            self.assertEqual(source_path.read_bytes(), before)
+
+    def test_markup_normalization_protects_literal_markup_contexts(self) -> None:
+        def digest(fragment: str) -> str:
+            return hashlib.sha256(fragment.encode("utf-8")).hexdigest()
+
+        def binding(kind: str) -> dict[str, str]:
+            return {
+                "binding_kind": kind,
+                "binding_id": (
+                    "edge:" + ("a" * 64)
+                    if kind == "zettel_edge"
+                    else "sha256:" + ("a" * 64)
+                ),
+                "replacement": "[BOUND]",
+            }
+
+        cases = [
+            (
+                '`<file src="inline"></file>`',
+                '<file src="inline"></file>',
+                "objet",
+            ),
+            (
+                "```html\n<mention-page url=\"fenced\"/>\n```",
+                '<mention-page url="fenced"/>',
+                "zettel_edge",
+            ),
+            (
+                '- ```html\n  <file src="list-fenced"></file>\n  ```',
+                '<file src="list-fenced"></file>',
+                "objet",
+            ),
+            (
+                '1. ~~~html\n   <file src="ordered-fenced"></file>\n   ~~~',
+                '<file src="ordered-fenced"></file>',
+                "objet",
+            ),
+            (
+                '10. item\n    ~~~html\n    <span color="red">ordered continuation</span>\n    ~~~',
+                "",
+                "objet",
+            ),
+            (
+                '-    item\n     ~~~html\n     <span color="red">bullet continuation</span>\n     ~~~',
+                "",
+                "objet",
+            ),
+            (
+                "<!-- <unknown:audio/> -->",
+                "<unknown:audio/>",
+                "objet",
+            ),
+            (
+                '<pre><file src="pre"></file></pre>',
+                '<file src="pre"></file>',
+                "objet",
+            ),
+            (
+                '>     <span color="red">blockquote code</span>',
+                "",
+                "objet",
+            ),
+            (
+                '<?target instruction <span color="red">pi</span> ?>',
+                "",
+                "objet",
+            ),
+            (
+                '<![CDATA[<span color="red">cdata</span>]]>',
+                "",
+                "objet",
+            ),
+            (
+                '<script><span color="red">script literal</span></script>',
+                "",
+                "objet",
+            ),
+            (
+                '\\<file src="escaped"></file>',
+                '<file src="escaped"></file>',
+                "objet",
+            ),
+            (
+                '`<table><tr><td>Literal</td></tr></table>`',
+                "",
+                "objet",
+            ),
+            (
+                '`a\n<span color="red">multiline literal</span>\nb`',
+                "",
+                "objet",
+            ),
+            (
+                '```text\n- ```\n<span color="red">fake close</span>\n```',
+                "",
+                "objet",
+            ),
+            (
+                '~~~text\n> ~~~\n<span color="red">fake quote close</span>\n~~~',
+                "",
+                "objet",
+            ),
+            (
+                ('> ' * 16) + '```html\n' + ('> ' * 16)
+                + '<span color="red">deep fence</span>\n',
+                "",
+                "objet",
+            ),
+            (
+                '<!DOCTYPE demo [ <!ENTITY x "<span>literal</span>"> ]>',
+                "",
+                "objet",
+            ),
+            (
+                '[x](https://example.test/<span>path</span>)',
+                "",
+                "objet",
+            ),
+            (
+                '[x](https://example.test/path "<span>title</span>")',
+                "",
+                "objet",
+            ),
+            (
+                '[x](https://example.test/path "before ) <span color=red>literal</span>")',
+                "",
+                "objet",
+            ),
+            (
+                '[x](foo(bar)<span>literal</span>)',
+                "",
+                "objet",
+            ),
+            (
+                '![x](https://example.test/path "before ) <span>image title</span>")',
+                "",
+                "objet",
+            ),
+            (
+                '[x](https://example.test/path\n  "<span>multiline title</span>")',
+                "",
+                "objet",
+            ),
+            (
+                '![x](https://example.test/<span>image</span>)',
+                "",
+                "objet",
+            ),
+            (
+                '[ref]: https://example.test/<span>reference</span>',
+                "",
+                "objet",
+            ),
+            (
+                '[ref]: https://example.test/path\n  "<span>reference title</span>"',
+                "",
+                "objet",
+            ),
+            (
+                '[ref]: /url "title\n  more\n  <span color=red>continued reference title</span>"\n\n[x][ref]',
+                "",
+                "objet",
+            ),
+            (
+                '    <span color="red">root code</span>',
+                "",
+                "objet",
+            ),
+            (
+                '    first code line\n    <span color="red">continued code</span>',
+                "",
+                "objet",
+            ),
+            (
+                '-     <span color="red">list code</span>',
+                "",
+                "objet",
+            ),
+            (
+                '1.     <span color="red">ordered code</span>',
+                "",
+                "objet",
+            ),
+            (
+                '- item\n\n      <span color="red">nested list code</span>',
+                "",
+                "objet",
+            ),
+            (
+                ('> ' * 16) + '    <span color="red">deep quote code</span>',
+                "",
+                "objet",
+            ),
+        ]
+        for body, fragment, kind in cases:
+            with self.subTest(body=body):
+                bindings = (
+                    {digest(fragment): binding(kind)} if fragment else None
+                )
+                result = completion_workflows._normalize_markup_body(
+                    body,
+                    bindings=bindings,
+                )
+                self.assertEqual(result["normalized_body"], body)
+                self.assertFalse(result["changed"])
+                self.assertIn(
+                    "markup_protected_context_unsupported",
+                    result["blocker_codes"],
+                )
+                self.assertEqual(
+                    result["counts"]["reference_binding_applied"],
+                    0,
+                )
+
+        ordinary = 'Use `literal` here.\n\n<file src="actual"></file>'
+        actual_fragment = '<file src="actual"></file>'
+        ordinary_result = completion_workflows._normalize_markup_body(
+            ordinary,
+            bindings={digest(actual_fragment): binding("objet")},
+        )
+        self.assertNotIn(
+            "markup_protected_context_unsupported",
+            ordinary_result["blocker_codes"],
+        )
+        self.assertIn("Use `literal` here.", ordinary_result["normalized_body"])
+        self.assertIn("[BOUND]", ordinary_result["normalized_body"])
+
+        raw_html_container = (
+            '<details>\n\t<span color="red">Actual</span>\n</details>'
+        )
+        raw_html_result = completion_workflows._normalize_markup_body(
+            raw_html_container,
+            bindings=None,
+        )
+        self.assertNotIn(
+            "markup_protected_context_unsupported",
+            raw_html_result["blocker_codes"],
+        )
+        self.assertTrue(raw_html_result["changed"])
+        self.assertIn("Actual", raw_html_result["normalized_body"])
+
+    def test_markup_normalization_rejects_paired_media_fallback_content(self) -> None:
+        def digest(fragment: str) -> str:
+            return hashlib.sha256(fragment.encode("utf-8")).hexdigest()
+
+        binding = {
+            "binding_kind": "objet",
+            "binding_id": "sha256:" + ("a" * 64),
+            "replacement": "[BOUND]",
+        }
+        for name in ("audio", "video"):
+            fragment = f'<{name} src="opaque">Visible fallback</{name}>'
+            with self.subTest(name=name):
+                result = completion_workflows._normalize_markup_body(
+                    fragment,
+                    bindings={digest(fragment): binding},
+                )
+                self.assertEqual(result["normalized_body"], fragment)
+                self.assertIn(
+                    f"markup_{name}_inner_content_unsupported",
+                    result["blocker_codes"],
+                )
+                self.assertEqual(
+                    result["counts"]["reference_binding_applied"],
+                    0,
+                )
+
+    def test_markup_normalization_file_reference_regex_edge_cases(self) -> None:
+        def digest(fragment: str) -> str:
+            return hashlib.sha256(fragment.encode("utf-8")).hexdigest()
+
+        def binding(replacement: str) -> dict[str, str]:
+            return {
+                "binding_kind": "objet",
+                "binding_id": "sha256:" + ("a" * 64),
+                "replacement": replacement,
+            }
+
+        first = '<file src="a"></file>'
+        second = '<file src="b"></file>'
+        adjacent = completion_workflows._normalize_markup_body(
+            first + second,
+            bindings={
+                digest(first): binding("[A]"),
+                digest(second): binding("[B]"),
+            },
+        )
+        self.assertEqual(adjacent["normalized_body"], "[A][B]")
+        self.assertEqual(adjacent["counts"]["reference_binding_applied"], 2)
+        self.assertEqual(adjacent["blocker_codes"], [])
+
+        self_closing = '<file src="self"/>'
+        standalone = completion_workflows._normalize_markup_body(
+            self_closing,
+            bindings={digest(self_closing): binding("[SELF]")},
+        )
+        self.assertEqual(standalone["normalized_body"], "[SELF]")
+        self.assertEqual(standalone["counts"]["reference_binding_applied"], 1)
+        self.assertEqual(standalone["blocker_codes"], [])
+
+        varied = '<FiLe   src="a"  > \n </fIlE   >'
+        case_and_whitespace = completion_workflows._normalize_markup_body(
+            varied,
+            bindings={digest(varied): binding("[VARIED]")},
+        )
+        self.assertEqual(case_and_whitespace["normalized_body"], "[VARIED]")
+        self.assertEqual(
+            case_and_whitespace["counts"]["reference_binding_applied"],
+            1,
+        )
+        self.assertEqual(case_and_whitespace["blocker_codes"], [])
+
+        for malformed in (
+            '<file src="a">VISIBLE',
+            'VISIBLE</file>',
+            '<file src="a">VISIBLE</audio>',
+        ):
+            with self.subTest(malformed=malformed):
+                result = completion_workflows._normalize_markup_body(malformed)
+                self.assertEqual(result["normalized_body"], malformed)
+                self.assertEqual(
+                    result["counts"]["reference_binding_applied"],
+                    0,
+                )
+                self.assertIn(
+                    "markup_reference_binding_required",
+                    result["blocker_codes"],
+                )
 
     def test_markup_normalization_scales_to_synthetic_3514_documents(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

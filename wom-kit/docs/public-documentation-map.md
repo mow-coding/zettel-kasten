@@ -248,6 +248,7 @@ Onboarding and setup plans:
 - [zet Markdown Style Guide](zet-markdown-style-guide.md)
 - [Artifact Hygiene](artifact-hygiene.md)
 - [Legacy Coordination Cleanup](legacy-coordination-cleanup.md)
+- [Letter 115 Completion](letter115-completion.md)
 - [Artifact Lifecycle Inventory](artifact-lifecycle-inventory.md)
 - [Zettel Edge Write](zettel-edge-write.md)
 - [Zettel Edge Batch](zettel-edge-batch.md)
@@ -411,6 +412,7 @@ These documents record public-safe work already performed.
 - [v0.2.11 Delegate Capability Contract Work Log](../plans/work-log-2026-05-23-delegate-capability-contract.md)
 - [Changelog](../../CHANGELOG.md)
 - [Release Notes](releases/)
+- [v0.3.308 Release Note](releases/v0.3.308.md)
 
 Work logs are not the same as product specs.
 

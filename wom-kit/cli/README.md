@@ -6,6 +6,17 @@ The filesystem folder is `wom-kit/`, the Python import package is `wom_kit`, and
 
 See `wom-kit/docs/concepts/naming-and-terminology.md` for the naming baseline.
 
+v0.3.308 completes the Letter 115 CLI boundary: migration-markup normalization
+supports one reviewed full paired-file digest, reviewed self-closing
+page/audio bindings, and a strict safe table-cell subset; unsupported or
+ambiguous markup remains unchanged and blocked. The CLI-only
+`external-locator-deactivate-plan` and `external-locator-deactivate` commands
+require the operator to name both the weaker active target and compatible
+active keeper, change only the target status to `inactive`, and retain the
+existing exact-byte locator revert path. See
+`wom-kit/docs/letter115-completion.md` and
+`wom-kit/docs/releases/v0.3.308.md`.
+
 v0.3.291 adds a bounded `runtime_alignment` decision to the read-only version
 report. A self-consistent project source mirror that differs from the running
 import can expose an exact project-scoped bridge argv only under explicit

@@ -1,6 +1,6 @@
 {
   "schema": "wom-kit/package-resource-manifest/v0.1",
-  "version": "0.3.307",
+  "version": "0.3.308",
   "source_of_truth": "wom-kit source resource directories",
   "file_count": 144,
   "files": [
@@ -115,14 +115,14 @@
     {
       "source": "schemas/external-locator-receipt.schema.json",
       "packaged": "schemas/external-locator-receipt.schema.json",
-      "bytes": 2171,
-      "sha256": "7b589dda313869a791c8bf49ea0924aee3a2449b91a80cc1399bc9e83fb3446a"
+      "bytes": 2629,
+      "sha256": "01e16008cc19c7e696f637271d734e53c2accdd617ce8b3936dda6b7c8c39953"
     },
     {
       "source": "schemas/external-locator-record.schema.json",
       "packaged": "schemas/external-locator-record.schema.json",
-      "bytes": 2026,
-      "sha256": "4e885dfd290a31a8ce5b5aa44407665f2c10722af5ede8828184c8879fa78a2e"
+      "bytes": 2039,
+      "sha256": "38cf2536fe5fc01c6ad6e0de62ed9e34530721398ce2c6f146d5d9275ff26bce"
     },
     {
       "source": "schemas/external-locator-revert-receipt.schema.json",
@@ -863,10 +863,10 @@
       "sha256": "d619dc26af3216498c8392dfe838b0fe752d4bad9da998a58ca682d668fc510c"
     },
     {
-      "source": "docs/releases/v0.3.307.md",
-      "packaged": "release-notes/v0.3.307.md",
-      "bytes": 3402,
-      "sha256": "770764555e51d70fa065e6501c7e43e82761b1f0680a3761f69fac095140aa42"
+      "source": "docs/releases/v0.3.308.md",
+      "packaged": "release-notes/v0.3.308.md",
+      "bytes": 2702,
+      "sha256": "d11f6e97eb6e197cfb176cd751b4d0e0179d902ec883d31ac8ac9e998169e700"
     }
   ]
 }

@@ -1,6 +1,6 @@
 # Runtime Canonical Entry Points
 
-Status: v0.3.307 approval-gated legacy coordination cleanup checkpoint
+Status: v0.3.308 Letter 115 reference, locator, and table completion checkpoint
 
 When an AI runtime enters a WOM archive, it needs a small, explicit "start
 here" map. The archive may contain zets, source bindings, provider metadata,
@@ -53,7 +53,7 @@ consumption as `not_proven`.
 
 ## Official Action Routing
 
-Introduced in v0.3.278 and extended through v0.3.305, `action_routing` uses
+Introduced in v0.3.278 and extended through v0.3.308, `action_routing` uses
 `wom-kit/ai-command-path-routing/v0.12`. It tells an AI which official command
 handles session entry, search, local version truth, saved-view inspection,
 inbox pipeline-shape review, explicit event-membership add/removal planning, command
@@ -74,6 +74,22 @@ attributed human approval.
 v0.3.302 adds a closed private request, preview, approval, immutable receipt,
 and exact revert route for persistent saved views. Direct AI writes to
 `views/*.yml` remain forbidden.
+
+v0.3.308 extends the locator route with read-only
+`external-locator-deactivate-plan` and approval-gated
+`external-locator-deactivate`. A runtime must never choose a duplicate by
+itself: the human names both the weaker active target and the compatible active
+keeper. Approval re-plans under the existing lock, changes only the target to
+`inactive`, preserves a prior snapshot and receipt, and keeps the ordinary
+exact-byte locator revert route. Different occurrence anchors, missing keeper
+coordinates, canonical body references, ambiguity, and stale bytes block.
+
+The same checkpoint extends reviewed migration-markup routing for one complete
+paired-file digest, self-closing page/audio bindings, and a strict safe table
+cell subset. Unsupported, content-bearing, repeated identity-free, unsafe, or
+unbalanced shapes remain byte-identical and blocked; the runtime must not infer
+an edge, objet identity, or table semantics. See
+[Letter 115 Completion](letter115-completion.md).
 
 When the question is observed current canonical source-reference coverage
 versus separately recorded storage evidence, use `python -B -m
