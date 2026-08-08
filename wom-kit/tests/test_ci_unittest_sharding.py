@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+import ast
+from collections import Counter
 import importlib.util
 import json
+import re
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+
+import yaml
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -178,6 +183,91 @@ class CiUnittestShardingTests(unittest.TestCase):
                 expected_timeout,
                 row,
             )
+
+    def test_ci_explicitly_runs_every_top_level_pytest_module(self):
+        tests_root = ROOT / "wom-kit" / "tests"
+        pytest_native_modules = set()
+        for path in sorted(tests_root.glob("test_*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            has_top_level_test = any(
+                isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name.startswith("test_")
+                for node in tree.body
+            )
+            has_plain_pytest_class = any(
+                isinstance(node, ast.ClassDef)
+                and node.name.startswith("Test")
+                and not any(
+                    (
+                        isinstance(base, ast.Name)
+                        and base.id == "TestCase"
+                    )
+                    or (
+                        isinstance(base, ast.Attribute)
+                        and base.attr == "TestCase"
+                    )
+                    for base in node.bases
+                )
+                and any(
+                    isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    and member.name.startswith("test_")
+                    for member in node.body
+                )
+                for node in tree.body
+            )
+            if has_top_level_test or has_plain_pytest_class:
+                pytest_native_modules.add(path.name)
+
+        workflow = yaml.safe_load(
+            (ROOT / ".github" / "workflows" / "ci.yml").read_text(
+                encoding="utf-8"
+            )
+        )
+        pytest_run_blocks = [
+            str(step["run"])
+            for job in workflow["jobs"].values()
+            for step in job.get("steps", [])
+            if isinstance(step, dict)
+            and isinstance(step.get("run"), str)
+            and re.search(r"(?:^|\s)-m\s+pytest\b", step["run"])
+        ]
+        explicit_pytest_modules = Counter(
+            re.findall(
+                r"wom-kit/tests/(test_[A-Za-z0-9_]+\.py)",
+                "\n".join(pytest_run_blocks),
+            )
+        )
+        self.assertEqual(
+            set(explicit_pytest_modules),
+            pytest_native_modules,
+            "Every pytest-native module must appear in an actual workflow pytest run block.",
+        )
+        self.assertEqual(
+            explicit_pytest_modules,
+            Counter({name: 1 for name in pytest_native_modules}),
+            "Every pytest-native module must appear exactly once across actual pytest commands.",
+        )
+
+    def test_current_branch_protection_docs_match_required_ci_state(self):
+        readiness = (
+            ROOT / "wom-kit" / "docs" / "main-branch-protection-readiness.md"
+        ).read_text(encoding="utf-8")
+        matrix = (
+            ROOT / "wom-kit" / "docs" / "capability-matrix.md"
+        ).read_text(encoding="utf-8")
+
+        for phrase in (
+            "main-required-ci",
+            "enforcement is active",
+            "Required CI",
+            "branch deletion",
+            "non-fast-forward",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, readiness)
+        self.assertIn("| Continuous integration workflow | `implemented required CI` |", matrix)
+        self.assertIn("| Main branch protection | `implemented remote ruleset` |", matrix)
+        self.assertNotIn("| Continuous integration workflow | `implemented non-required CI` |", matrix)
 
 
 if __name__ == "__main__":

@@ -75,7 +75,16 @@ def _connection_factory(
         remaining_close_failures = close_failures
 
         def commit(self) -> None:
-            events.append("commit_call")
+            # CPython 3.10 may route SQLite's pre-transaction WAL setup
+            # through the overridable commit() method.  That no-op call is
+            # not the rebuild transaction commit this fixture is proving.
+            # Record the two cases separately so the transaction-order
+            # contract is stable across every supported interpreter.
+            events.append(
+                "commit_call"
+                if self.in_transaction
+                else "idle_commit_call"
+            )
             return super().commit()
 
         def rollback(self) -> None:

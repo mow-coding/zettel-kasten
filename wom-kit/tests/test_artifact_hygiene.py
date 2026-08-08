@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 
 KIT_ROOT = Path(__file__).resolve().parents[1]
@@ -51,12 +52,79 @@ class ArtifactHygieneTests(unittest.TestCase):
             ".next/cache/build.bin": check_artifact_hygiene.REBUILDABLE_GENERATED,
             ".vercel/project.json": check_artifact_hygiene.LOCAL_ONLY_SECRET_CONFIG,
             "profiles/local/source-roots.local.yml": check_artifact_hygiene.LOCAL_ONLY_SECRET_CONFIG,
-            ".mow-harness/installed-version.txt": check_artifact_hygiene.LOCAL_ONLY_COLLAB_HARNESS,
-            "collab/STATE.md": check_artifact_hygiene.LOCAL_ONLY_COLLAB_HARNESS,
+            ".mow-harness/installed-version.txt": check_artifact_hygiene.LOCAL_ONLY_COORDINATION_STATE,
+            "collab/STATE.md": check_artifact_hygiene.LOCAL_ONLY_COORDINATION_STATE,
         }
         for path, expected in examples.items():
             with self.subTest(path=path):
                 self.assertEqual(check_artifact_hygiene.classify_artifact(path).category, expected)
+
+    def test_coordination_category_preserves_legacy_machine_compatibility(self) -> None:
+        self.assertEqual(
+            check_artifact_hygiene.LOCAL_ONLY_COLLAB_HARNESS,
+            "LOCAL_ONLY_COLLAB_HARNESS",
+        )
+        self.assertEqual(
+            check_artifact_hygiene.LOCAL_ONLY_COORDINATION_STATE,
+            check_artifact_hygiene.LOCAL_ONLY_COLLAB_HARNESS,
+        )
+        self.assertEqual(
+            check_artifact_hygiene.classify_artifact("collab/STATE.md").category,
+            "LOCAL_ONLY_COLLAB_HARNESS",
+        )
+
+    def test_coordination_roots_are_observed_but_never_recursed_case_insensitively(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "archive"
+            root.mkdir()
+            quarantined_files = (
+                root / "Collab" / "private-state.txt",
+                root / ".MOW-HARNESS" / "private-state.txt",
+            )
+            for path in quarantined_files:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("private sentinel", encoding="utf-8")
+
+            observed, truncated = check_artifact_hygiene.iter_observable_paths(
+                root,
+                max_paths=100,
+            )
+
+        self.assertFalse(truncated)
+        relative_paths = {path.relative_to(root).as_posix() for path in observed}
+        self.assertEqual(relative_paths, {"Collab", ".MOW-HARNESS"})
+
+    def test_direct_coordination_root_target_is_not_scanned(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "Collab"
+            private_path = root / "nested" / "private-state.txt"
+            private_path.parent.mkdir(parents=True)
+            private_path.write_text("private sentinel", encoding="utf-8")
+
+            report = check_artifact_hygiene.check_artifact_hygiene(root)
+
+        self.assertFalse(report.passed)
+        self.assertEqual(report.observations, ())
+        formatted = "\n".join(problem.format() for problem in report.problems)
+        self.assertIn("local coordination quarantine root", formatted)
+
+    def test_lexical_coordination_target_is_blocked_before_resolution(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            lexical_target = Path(tmp) / ".MOW-HARNESS"
+
+            with patch.object(
+                Path,
+                "resolve",
+                side_effect=AssertionError("quarantine target must not resolve"),
+            ):
+                report = check_artifact_hygiene.check_artifact_hygiene(
+                    lexical_target
+                )
+
+        self.assertFalse(report.passed)
+        self.assertEqual(report.observations, ())
+        formatted = "\n".join(problem.format() for problem in report.problems)
+        self.assertIn("local coordination quarantine root", formatted)
 
     def test_missing_archive_gitignore_patterns_are_reported(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -104,7 +172,17 @@ class ArtifactHygieneTests(unittest.TestCase):
         self.assertTrue(report.passed, "\n".join(problem.format() for problem in report.problems))
         categories = report.category_counts()
         self.assertGreater(categories[check_artifact_hygiene.DURABLE_ARCHIVE_RECORD], 0)
-        self.assertEqual(categories[check_artifact_hygiene.LOCAL_ONLY_COLLAB_HARNESS], 0)
+        self.assertEqual(categories[check_artifact_hygiene.LOCAL_ONLY_COORDINATION_STATE], 0)
+
+    def test_objet_capture_selection_guidance_uses_archive_root_authority(self) -> None:
+        guide = (KIT_ROOT / "docs" / "artifact-hygiene.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            "resolved from the archive root, never the process current directory",
+            guide,
+        )
+        self.assertNotIn("resolved from your CURRENT directory", guide)
 
     def test_external_live_objets_store_is_not_scanned_by_default(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

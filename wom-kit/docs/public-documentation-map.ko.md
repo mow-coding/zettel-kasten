@@ -196,7 +196,6 @@
 - [영문 Agent Skill 호스트 설치 안내](runtime-skill-install.md)
 - [AI-Assisted Onboarding And Provider Setup](ai-assisted-onboarding-and-provider-setup.md)
 - [Project Intake Session](project-intake-session.md)
-- [선택적 MOW Harness 호환 경계](mow-harness-compatibility.md)
 - [Project Intake Cookbook](project-intake-cookbook.md)
 - [Credential Store Contract](credential-store-contract.md)
 - [Credential Ref Inventory And Onboarding](credential-ref-inventory-and-onboarding.md)

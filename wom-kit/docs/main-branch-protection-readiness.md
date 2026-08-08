@@ -1,77 +1,92 @@
 # Main Branch Protection Readiness
 
-Status: public operations baseline
-Version: v0.2.54
+Status: active `main-required-ci` ruleset with historical staged-rollout record
+Current checkpoint: v0.3.306
+Original baseline: v0.2.54
 
-GitHub may warn that the `main` branch is not protected. That warning is a safety recommendation, not proof that the repository is broken.
+GitHub may warn when a default branch is not protected. That warning is a
+safety recommendation, not proof that the repository is broken.
 
 In plain language: branch protection is a GitHub setting that can prevent risky changes to important branches. It can stop force pushes, prevent branch deletion, and later require checks or reviews before a change is merged into `main`.
 
-v0.2.54 does not enable branch protection yet. It documents a staged path toward it.
+v0.2.54 did not enable branch protection. It documented the staged path that
+the repository later completed through the active v0.3.302 remote ruleset.
 
 ## Current State
 
-v0.2.53 introduced a local release-readiness gate:
+The local release-readiness gate runs:
 
 ```powershell
 python wom-kit\tools\check_release_readiness.py
 ```
 
-That gate currently runs:
-
 - public link hygiene,
 - Korean product-language hygiene,
-- public privacy hygiene.
+- public privacy hygiene,
+- runtime Skill package validation.
 
-This is local verification only. It is not CI yet. It is not branch protection yet. It does not change GitHub repository settings.
+The same gate and the complete supported-platform test matrix run in GitHub
+Actions. Pull requests are aggregated by one stable `Required CI` status check.
 
-## Recommended Staged Path
+The remote ruleset is named `main-required-ci`; its enforcement is active for
+the default branch. It requires a pull request and `Required CI`, blocks branch
+deletion, and blocks non-fast-forward updates. The ruleset is a GitHub
+repository setting, not product behavior inside WOM-kit.
 
-The safer path is gradual:
+## Staged Path And Current Result
 
-1. Stage 0: keep the current local release-readiness gate.
-2. Stage 1: protect `main` from force pushes.
-3. Stage 2: protect `main` from branch deletion.
-4. Stage 3: add GitHub Actions that run the release-readiness gate.
-5. Stage 4: require that status check before merging into `main`.
-6. Stage 5: optionally require PR review or release-supervisor review before merge.
+The rollout used this gradual path:
 
-### Stage 3 Status
+1. Stage 0: establish the local release-readiness gate. Complete.
+2. Stage 1: protect `main` from non-fast-forward updates. Complete.
+3. Stage 2: protect `main` from branch deletion. Complete.
+4. Stage 3: run release readiness and tests in GitHub Actions. Complete.
+5. Stage 4: require the stable status check before merging. Complete through
+   `Required CI` and the active `main-required-ci` ruleset.
+6. Stage 5: optionally require a second human approval. Not enabled in the
+   single-owner workflow; pull-request use is still required.
+
+### CI And Enforcement Status
 
 Stage 3 shipped in v0.3.260 as `.github/workflows/ci.yml`. It runs the
 release-readiness gate, packaged resource synchronization, and the complete
 WOM-kit suite on `ubuntu-latest` (3.12 and the supported 3.10 floor) and
 `windows-latest` (3.12).
 
-It is intentionally still an observed, non-required workflow. Stages 1, 2, 4,
-and 5 change GitHub repository settings rather than repository contents, so
-they remain separate decisions that a human makes deliberately.
+After the workflow produced stable evidence, v0.3.302 completed the remote
+enforcement step. The `main-required-ci` ruleset now requires `Required CI`
+for pull requests and blocks branch deletion and non-fast-forward updates.
+Remote enforcement must still be verified from GitHub before a current-state
+claim; a Markdown file cannot prove that a repository setting remains active.
 
 Its first runs justified the staging order: they surfaced two cross-platform
 defects that the Windows-only development machine could not observe, and
 because the check was not yet required, fixing them did not block the release
 flow.
 
-This lets the project tighten safety without suddenly blocking the existing release flow.
+That staged observation allowed the repository to make CI required only after
+the cross-platform workflow had demonstrated a stable check name and behavior.
 
-## Why Not Enable Everything Immediately
+## Why The Rollout Was Gradual
 
-The current release-supervisor workflow still depends on local verification and direct release authority.
-
-Strong branch protection can be helpful, but turning it on too early can also interrupt a working release process. Required status checks should exist before GitHub requires them. GitHub Actions should be introduced and tested in a separate future batch before they become mandatory.
+Required status checks needed to exist and run successfully before GitHub could
+safely require them. The first optional CI runs found cross-platform defects
+that the Windows-only development machine could not expose. Those defects were
+fixed before enforcement became active.
 
 The practical order is:
 
 ```text
 local release gate
--> optional CI workflow
--> required status check
--> stricter branch protection
+-> observed CI workflow
+-> stable Required CI check
+-> active main-required-ci enforcement
 ```
 
 ## Safety Boundary
 
-v0.2.54 is documentation and version bookkeeping only.
+The original v0.2.54 change was documentation and version bookkeeping only.
+This current-state update also changes no GitHub setting by itself.
 
 This release does not:
 
@@ -85,12 +100,11 @@ This release does not:
 
 It also does not add ZET transport, provider sync, trust/import/apply behavior, attestation/signature writes, projection writes, recommendation behavior, workers, payments, consensus, blockchain behavior, or full-auto behavior.
 
-## Future Bridge
+## Current Operational Rule
 
-The local release-readiness gate can later become:
-
-- a GitHub Actions workflow,
-- a required status check,
-- part of a stricter branch-protection policy.
-
-Those steps should be separate, explicit releases so the project can verify each layer before making it mandatory.
+Treat a pull request as merge-ready only after the stable `Required CI` check
+passes. Before claiming that `main` is currently protected, verify that the
+remote `main-required-ci` ruleset still has active enforcement for pull
+requests, branch deletion, non-fast-forward updates, and the required status
+check. Documentation and cached local refs are not proof of current GitHub
+settings.

@@ -33,7 +33,7 @@ raw-data/
 /archive-infra-decision-log-*.md
 /*-zettel-kasten-mapping-*.md
 
-# Local-only Codex<->Claude collaboration workspace.
+# Local-only coordination workspace and retired-tool quarantine.
 /collab/
 /.mow-harness/
 

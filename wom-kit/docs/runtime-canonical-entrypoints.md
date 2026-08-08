@@ -1,6 +1,6 @@
 # Runtime Canonical Entry Points
 
-Status: v0.3.305 Letters 113 and 114 operator routing checkpoint
+Status: v0.3.306 retired external coordination integration checkpoint
 
 When an AI runtime enters a WOM archive, it needs a small, explicit "start
 here" map. The archive may contain zets, source bindings, provider metadata,

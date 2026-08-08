@@ -15,7 +15,11 @@ DISPOSABLE_AFTER_REVIEW = "DISPOSABLE_AFTER_REVIEW"
 LOCAL_ONLY_SECRET_CONFIG = "LOCAL_ONLY_SECRET_CONFIG"
 EXTERNAL_LIVE_NEVER_TOUCH = "EXTERNAL_LIVE_NEVER_TOUCH"
 EXTERNAL_MANUAL_OR_DEFERRED = "EXTERNAL_MANUAL_OR_DEFERRED"
+# Keep the exact historical value and import name because local automation may
+# parse the report or import this standalone checker.  New code can use the
+# generic alias without changing the machine-visible category.
 LOCAL_ONLY_COLLAB_HARNESS = "LOCAL_ONLY_COLLAB_HARNESS"
+LOCAL_ONLY_COORDINATION_STATE = LOCAL_ONLY_COLLAB_HARNESS
 UNCLASSIFIED_REVIEW = "UNCLASSIFIED_REVIEW"
 
 REQUIRED_ARCHIVE_GITIGNORE_PATTERNS: tuple[str, ...] = (
@@ -61,7 +65,7 @@ SKIP_DIR_NAMES = {
     "node_modules",
 }
 
-COLLAB_HARNESS_DIRS = {"collab", ".mow-harness"}
+LOCAL_COORDINATION_DIRS = {"collab", ".mow-harness"}
 
 
 @dataclass(frozen=True)
@@ -131,7 +135,11 @@ def classify_artifact(relative_path: str) -> ArtifactObservation:
         return ArtifactObservation(path, LOCAL_ONLY_SECRET_CONFIG, "ignored local profile/keyring override")
 
     if lower == "collab" or lower.startswith("collab/") or lower == ".mow-harness" or lower.startswith(".mow-harness/"):
-        return ArtifactObservation(path, LOCAL_ONLY_COLLAB_HARNESS, "local-only collaboration or harness state")
+        return ArtifactObservation(
+            path,
+            LOCAL_ONLY_COORDINATION_STATE,
+            "local-only coordination state or retired-tool residue; quarantine from archive records",
+        )
 
     if lower in {
         "db/archive-index.sqlite",
@@ -200,6 +208,10 @@ def target_looks_like_archive(target: Path) -> bool:
     return (target / "archive.yml").exists() or (target / "archive-identity.yml").exists()
 
 
+def target_is_coordination_quarantine_root(target: Path) -> bool:
+    return target.name.casefold() in LOCAL_COORDINATION_DIRS
+
+
 def read_gitignore_patterns(target: Path) -> set[str]:
     gitignore = target / ".gitignore"
     if not gitignore.exists():
@@ -251,10 +263,11 @@ def iter_observable_paths(target: Path, max_paths: int) -> tuple[list[Path], boo
             if len(observed) >= max_paths:
                 truncated = True
                 return observed, truncated
-            if child.name in SKIP_DIR_NAMES:
+            child_name = child.name.casefold()
+            if child_name in SKIP_DIR_NAMES:
                 continue
             observed.append(child)
-            if child.is_dir() and child.name not in COLLAB_HARNESS_DIRS:
+            if child.is_dir() and child_name not in LOCAL_COORDINATION_DIRS:
                 pending.append(child)
 
     return observed, truncated
@@ -266,12 +279,38 @@ def check_artifact_hygiene(
     allow_external_live_read: bool = False,
     max_paths: int = 1000,
 ) -> HygieneReport:
+    if target_is_coordination_quarantine_root(target):
+        return HygieneReport(
+            target=str(target),
+            observations=(),
+            problems=(
+                HygieneProblem(
+                    str(target),
+                    "Target is a local coordination quarantine root and was not scanned.",
+                    severity="blocker",
+                ),
+            ),
+        )
+
     resolved = target.resolve()
     if not resolved.exists():
         return HygieneReport(
             target=str(resolved),
             observations=(),
             problems=(HygieneProblem(str(resolved), "Target path does not exist."),),
+        )
+
+    if target_is_coordination_quarantine_root(resolved):
+        return HygieneReport(
+            target=str(resolved),
+            observations=(),
+            problems=(
+                HygieneProblem(
+                    str(resolved),
+                    "Target is a local coordination quarantine root and was not scanned.",
+                    severity="blocker",
+                ),
+            ),
         )
 
     if target_looks_external_live_never_touch(resolved) and not allow_external_live_read:
