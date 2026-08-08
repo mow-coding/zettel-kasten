@@ -207,7 +207,6 @@ Onboarding and setup plans:
 - [Korean Agent Skill Host Install Guide](runtime-skill-install.ko.md)
 - [AI-Assisted Onboarding And Provider Setup](ai-assisted-onboarding-and-provider-setup.md)
 - [Project Intake Session](project-intake-session.md)
-- [Optional MOW Harness Compatibility](mow-harness-compatibility.md)
 - [Project Intake Cookbook](project-intake-cookbook.md)
 - [Credential Store Contract](credential-store-contract.md)
 - [Credential Ref Inventory And Onboarding](credential-ref-inventory-and-onboarding.md)

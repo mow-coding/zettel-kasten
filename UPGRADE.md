@@ -24,6 +24,36 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.306 Retired Integration Cleanup
+
+v0.3.306 is compatible with v0.3.305 archives and requires no archive
+migration. WOM never bundled or invoked MOW Harness, and this release removes
+the former external recommendation, unavailable repository link, dedicated
+compatibility guide, and install/update/activation advice.
+
+The repository-only artifact hygiene checker now offers the generic source
+alias `LOCAL_ONLY_COORDINATION_STATE`, while preserving the exact historical
+`LOCAL_ONLY_COLLAB_HARNESS` machine-output and import compatibility label.
+Existing parsers and imports do not need to change. No WOM CLI command, MCP
+tool, schema, zet, objet, receipt, manifest, index, or provider contract
+changes.
+
+Do not remove `collab/` or `.mow-harness/` merely because their names exist.
+They can hold user-authored plans, prompts, mailboxes, installer metadata, or
+secrets. Default archive-root Doctor checks, archive-root source discovery,
+restore drills, and repository artifact-hygiene scans exclude both roots; the
+artifact checker also refuses either root as its direct target. This quarantine
+does not make an explicit human-selected path safe: do not point a separate
+file-capture or staged-folder command at either root.
+After backing up and reviewing an exact non-archive installation path, an
+operator may remove obsolete external-tool bytes separately; WOM grants no
+automatic cleanup authority and never changes a personal archive for this
+retirement.
+
+See
+[`wom-kit/docs/releases/v0.3.306.md`](wom-kit/docs/releases/v0.3.306.md) and
+[`wom-kit/docs/archive-infra-decision-log-2026-08-08-v03306-mow-harness-sunset.md`](wom-kit/docs/archive-infra-decision-log-2026-08-08-v03306-mow-harness-sunset.md).
+
 ## v0.3.305 Real-use Completion And Publication Visibility
 
 v0.3.305 is compatible with v0.3.304 archives and requires no automatic
@@ -1794,22 +1824,12 @@ receipt, historical release note, or existing archive identifier is renamed.
 
 ## v0.3.253 Optional MOW Harness Compatibility Boundary
 
-No archive migration is required. This release adds public interoperability
-guidance and focused regression checks only. Existing WOM commands, schemas,
-zets, objets, receipts, manifests, indexes, and write authority are unchanged.
-
-WOM remains usable without MOW Harness. If you use the separate Harness, read
-[Optional MOW Harness Compatibility](wom-kit/docs/mow-harness-compatibility.md)
-before changing it. WOM already keeps `collab/` and `.mow-harness/` local-only,
-but it does not install, update, activate, remove, or invoke the external tool.
-
-Treat external `status`, `doctor`, and `--dry-run` as inspection. `--yes` is a
-separate Harness write approval, and successful file installation or update is
-not activation. Keep an existing `OFF` room off until the human explicitly
-requests activation and the Harness records its own evidence.
-
-The stable file-based Harness remains `v0.1.23`; the external CLI is still a
-source alpha and is not an npm dependency of WOM at this checkpoint.
+This section records a historical v0.3.253 documentation-only boundary. Its
+external installation, update, and activation guidance was retired in v0.3.306
+and must not be treated as current product advice. No archive migration was or
+is required. `collab/` and legacy `.mow-harness/` paths remain ignored only as
+defensive local-state quarantine so old prompts, installer metadata, or secrets
+cannot enter archive records or public Git surfaces.
 
 ## v0.3.252 Philosophy Implementation Traceability
 

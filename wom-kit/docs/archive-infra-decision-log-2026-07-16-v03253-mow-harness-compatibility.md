@@ -1,7 +1,12 @@
 # Decision Log: Optional MOW Harness Compatibility Boundary
 
 Date: 2026-07-16
-Status: accepted for v0.3.253
+Status: superseded by v0.3.306
+
+This historical decision was superseded by
+`archive-infra-decision-log-2026-08-08-v03306-mow-harness-sunset.md`. The old
+external integration guidance is no longer active; only the generic local-state
+quarantine remains.
 
 ## Decision
 

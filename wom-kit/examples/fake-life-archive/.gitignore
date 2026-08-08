@@ -26,7 +26,7 @@ node_modules/
 .next/
 .vercel/
 
-# Local-only collaboration and harness state
+# Local-only coordination state and retired-tool quarantine
 /collab/
 /.mow-harness/
 

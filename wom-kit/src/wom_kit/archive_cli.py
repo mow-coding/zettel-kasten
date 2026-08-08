@@ -545,6 +545,7 @@ SECRET_SAFETY_IGNORED_DIRS = {
     ".venv",
     "venv",
 }
+SECRET_SAFETY_QUARANTINED_ROOT_DIRS = {"collab", ".mow-harness"}
 SECRET_SAFETY_PROGRESS_EVERY_FILES = 250
 SECRET_SAFETY_PROGRESS_SECONDS = 30.0
 SECRET_SAFETY_READ_CHUNK_SIZE = 1024 * 1024
@@ -3770,13 +3771,21 @@ class Doctor:
         secret_content_files = 0
         local_profile_files = 0
         last_progress = time.monotonic()
+        at_archive_root = True
         for dirpath, dirnames, filenames in os.walk(self.archive_root):
             dir_path = Path(dirpath)
             if not is_path_within_root(dir_path, self.archive_root):
                 dirnames[:] = []
                 continue
             before_dirs = len(dirnames)
-            dirnames[:] = [name for name in dirnames if name not in SECRET_SAFETY_IGNORED_DIRS]
+            ignored_dirs = SECRET_SAFETY_IGNORED_DIRS
+            if at_archive_root:
+                ignored_dirs = ignored_dirs | SECRET_SAFETY_QUARANTINED_ROOT_DIRS
+                at_archive_root = False
+            ignored_dir_names = {name.casefold() for name in ignored_dirs}
+            dirnames[:] = [
+                name for name in dirnames if name.casefold() not in ignored_dir_names
+            ]
             skipped_dirs += before_dirs - len(dirnames)
             for filename in filenames:
                 path = dir_path / filename
@@ -3932,13 +3941,38 @@ class Doctor:
             self.error("local_profile_secret_value", "Local profile appears to contain a secret value.", path)
 
     def _check_symlink_boundaries(self) -> None:
-        for path in sorted(self.archive_root.rglob("*")):
-            if path.is_symlink() and not is_path_within_root(path, self.archive_root):
-                self.error(
-                    "archive_symlink_escapes_root",
-                    "Archive symlink resolves outside the archive root.",
+        quarantine_names = {
+            name.casefold() for name in SECRET_SAFETY_QUARANTINED_ROOT_DIRS
+        }
+        at_archive_root = True
+        for dirpath, dirnames, filenames in os.walk(
+            self.archive_root,
+            topdown=True,
+            followlinks=False,
+        ):
+            dir_path = Path(dirpath)
+            if not is_path_within_root(dir_path, self.archive_root):
+                dirnames[:] = []
+                continue
+            if at_archive_root:
+                dirnames[:] = [
+                    name
+                    for name in dirnames
+                    if name.casefold() not in quarantine_names
+                ]
+                at_archive_root = False
+            dirnames.sort(key=str.casefold)
+            for name in sorted([*dirnames, *filenames], key=str.casefold):
+                path = dir_path / name
+                if path.is_symlink() and not is_path_within_root(
                     path,
-                )
+                    self.archive_root,
+                ):
+                    self.error(
+                        "archive_symlink_escapes_root",
+                        "Archive symlink resolves outside the archive root.",
+                        path,
+                    )
 
     def _path_stays_inside_archive(self, path: Path) -> bool:
         if is_path_within_root(path, self.archive_root):
@@ -18899,7 +18933,7 @@ def write_safe_gitignore(target: Path) -> None:
                 ".next/",
                 ".vercel/",
                 "",
-                "# Local-only collaboration and harness state",
+                "# Local-only coordination state and retired-tool quarantine",
                 "/collab/",
                 "/.mow-harness/",
                 "",
