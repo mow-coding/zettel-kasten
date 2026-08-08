@@ -24,6 +24,59 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.308 Letter 115 Reference, Locator, And Table Completion
+
+v0.3.308 is compatible with v0.3.307 archives and requires no automatic
+archive migration. Existing locator records and historical receipts remain
+readable. A locator record moves to the new schema only when an operator
+approves a locator write.
+
+Migration-markup normalization now treats one complete paired
+`<file ...></file>` fragment as one reviewed binding candidate. Self-closing
+`mention-page` can bind only through an existing reviewed `zettel_edge`, and
+one self-closing `unknown:audio` can bind only to a verified manifested objet.
+Nonempty or malformed file pairs, labeled page mentions, duplicate binding
+rows, and repeated identity-free unknown-audio placeholders remain unchanged
+and block rather than losing visible content or guessing identity.
+
+Imported tables gain a strict lossless cell subset: self-closing Notion dates
+become visible text, reviewed span wrappers are removed while preserving their
+inline content, and literal pipes remain GFM-escaped. Scripts, inputs, block
+markup, unsafe attributes or URLs, references, comments, and unbalanced markup
+remain byte-identical and block. Fenced/inline code, declarations, raw code
+elements, Markdown link targets/titles, and non-standalone or malformed tables
+are protected rather than interpreted as migration markup.
+
+For an older record with two reviewed duplicate active locators, first inspect
+the content-free recovery projection, then name both the weaker target and the
+active compatible row to keep:
+
+```powershell
+archive external-locator-deactivate-plan <archive-root> `
+  --zettel-id <zet-id> --locator-id <target-locator-id> `
+  --keep-locator-id <retained-locator-id> --dry-run --format json
+
+archive external-locator-deactivate <archive-root> `
+  --zettel-id <zet-id> --locator-id <target-locator-id> `
+  --keep-locator-id <retained-locator-id> `
+  --expected-plan-sha256 <digest> `
+  --approve --reviewed-by person:<reviewer> --format json
+```
+
+The apply command changes only the selected target status to `inactive`, keeps
+row order and locator values, snapshots the exact prior record, and emits a
+receipt accepted by the existing exact-byte locator revert. It refuses a
+target referenced from canonical body content, a different occurrence anchor,
+dropped reviewed coordinates, ambiguity, stale bytes, or a changed plan.
+Inactive locators cannot satisfy new markup bindings.
+Revert accepts only validated regular locator receipts, derives canonical
+record/snapshot paths, rejects corrupt content-addressed snapshots, and rolls
+the record back when a handled publication failure occurs.
+
+See the [Letter 115 operator guide](wom-kit/docs/letter115-completion.md),
+the [v0.3.308 release note](wom-kit/docs/releases/v0.3.308.md), and the
+[decision log](wom-kit/docs/archive-infra-decision-log-2026-08-09-v03308-letter115-completion.md).
+
 ## v0.3.307 Exact-Root Legacy Coordination Cleanup
 
 v0.3.307 is compatible with v0.3.306 archives and requires no archive

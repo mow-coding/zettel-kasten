@@ -60,6 +60,8 @@ CLI_ADDITIONS = {
     ("discard-draft-restore",),
     ("external-locator-plan",),
     ("external-locator-record",),
+    ("external-locator-deactivate-plan",),
+    ("external-locator-deactivate",),
     ("external-locator-recovery-plan",),
     ("external-locator-revert",),
     ("find-objet",),
@@ -89,16 +91,16 @@ CLI_ADDITIONS = {
     ("zettel-objet-link",),
     ("zettel-objet-link-revert",),
 }
-CURRENT_CLI_COUNT = 540
+CURRENT_CLI_COUNT = 542
 CURRENT_CLI_CANONICAL_SHA256 = (
-    "82f2cd5df855a5a9ff8afd23c377d864ee720f2eeda84cb9ccd7f001abe962f0"
+    "56330513633386995318f3b0dc43086095638d202815de4d23c3530e2855fd71"
 )
 CURRENT_DATABASE_COUNT = 3
 CURRENT_DATABASE_CANONICAL_SHA256 = (
     "d9a42f08ee12a6d42e40214cfb12441e4077bf50c38c25b2692ec1344328294a"
 )
 RESOURCE_ADDITIONS = {
-    "release-notes/v0.3.307.md",
+    "release-notes/v0.3.308.md",
     "schemas/artifact-lifecycle-inventory.schema.json",
     "schemas/authoring-conventions.schema.json",
     "schemas/draft-discard-receipt.schema.json",
@@ -136,7 +138,7 @@ RESOURCE_ADDITIONS = {
 RESOURCE_REMOVALS = {"release-notes/v0.3.297.md"}
 CURRENT_RESOURCE_COUNT = 144
 CURRENT_RESOURCE_CANONICAL_SHA256 = (
-    "85fb8947be2b6a156d4d74dd80c4202c3e64d025827b826ed401e518c55ab06b"
+    "8a3ed2a46c75fe6493cc96b29c8e719dff9b01cc0240feb03982e99362bce448"
 )
 
 
@@ -381,7 +383,7 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
             BASELINE_EXPECTATIONS["mcp"]["canonical_sha256"],
         )
 
-    def test_resource_paths_are_v03297_plus_exact_v03298_v03307_delta(self) -> None:
+    def test_resource_paths_are_v03297_plus_exact_v03298_v03308_delta(self) -> None:
         predecessor_paths = set(self.fixture["package_resources"]["packaged_paths"])
         self.assertTrue(
             RESOURCE_REMOVALS <= predecessor_paths,
@@ -411,10 +413,10 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
             actual,
             expected,
             "Current package-resource paths must be the full v0.3.297 set plus "
-            "the exact cumulative v0.3.298 through v0.3.307 delta. "
+            "the exact cumulative v0.3.298 through v0.3.308 delta. "
             f"missing={compact(missing)}; extra={compact(extra)}",
         )
-        self.assertEqual(manifest["version"], "0.3.307")
+        self.assertEqual(manifest["version"], "0.3.308")
         self.assertEqual(len(actual), CURRENT_RESOURCE_COUNT)
         self.assertEqual(
             canonical_sha256(actual),
@@ -433,14 +435,14 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
         self.assertIn("does not undo", predecessor_flat)
         self.assertNotIn("C:\\Users\\", predecessor_text)
 
-    def test_v03307_release_note_is_public_and_synchronized(self) -> None:
-        current_source_release = KIT_ROOT / "docs" / "releases" / "v0.3.307.md"
+    def test_v03308_release_note_is_public_and_synchronized(self) -> None:
+        current_source_release = KIT_ROOT / "docs" / "releases" / "v0.3.308.md"
         current_packaged_release = (
             SRC_ROOT
             / "wom_kit"
             / "_resources"
             / "release-notes"
-            / "v0.3.307.md"
+            / "v0.3.308.md"
         )
         self.assertEqual(
             current_source_release.read_bytes(),
@@ -449,11 +451,11 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
         current_text = current_source_release.read_text(encoding="utf-8")
         current_flat = " ".join(current_text.split())
         for token in (
-            "legacy-coordination-cleanup",
-            "plan_sha256",
-            "workspace-owner authority",
-            "collab/` is never traversed or changed",
-            "partial_cleanup_pending",
+            "full-fragment digest",
+            "external-locator-deactivate-plan",
+            "inactive locators cannot satisfy",
+            "table-cell references remain unchanged and blocked",
+            "no provider/network call",
             "no migration",
         ):
             with self.subTest(token=token):

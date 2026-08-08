@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "wom-kit/external-locator-record/v0.2",
+  "$id": "wom-kit/external-locator-record/v0.3",
   "title": "WOM-kit provider-neutral external locator record",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema", "archive_id", "zettel_id", "created_at", "updated_at", "locators"],
   "properties": {
-    "schema": {"const": "wom-kit/external-locator-record/v0.2"},
+    "schema": {"const": "wom-kit/external-locator-record/v0.3"},
     "archive_id": {"type": "string", "minLength": 1},
     "zettel_id": {"type": "string", "pattern": "^zet_[A-Za-z0-9][A-Za-z0-9_-]{0,159}$"},
     "created_at": {"type": "string", "minLength": 1},
@@ -25,7 +25,7 @@
           "service_ref": {"type": "string", "minLength": 1, "maxLength": 120},
           "account_ref": {"type": "string", "minLength": 1, "maxLength": 320},
           "occurrence_anchor": {"type": "string", "minLength": 1, "maxLength": 240},
-          "status": {"const": "active"},
+          "status": {"enum": ["active", "inactive"]},
           "recorded_at": {"type": "string", "minLength": 1},
           "reviewed_by": {"type": "string", "minLength": 1},
           "provenance": {
