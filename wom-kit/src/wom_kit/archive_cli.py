@@ -115,7 +115,7 @@ Commands:
           Search the private generated alias index without reflecting the query.
   source-reference-coverage-audit
           Compare observed canonical source-reference coverage with separate recorded storage evidence.
-  external-locator-plan / external-locator-record / external-locator-revert
+  external-locator-plan / external-locator-record / external-locator-deactivate-plan / external-locator-deactivate / external-locator-revert
           Review, record, recover, and exactly revert provider-neutral external locators.
   objet-capture-batch
           Preflight and execute one bounded reviewed multi-item Objet capture request.
@@ -12249,6 +12249,56 @@ def command_external_locator_record(args: argparse.Namespace) -> int:
         )
     except Exception:
         print("external-locator-record failed safely.", file=sys.stderr)
+        return 1
+    _print_external_locator_result(result, args.format)
+    return 0 if result.get("ok") else 1
+
+
+def command_external_locator_deactivate_plan(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print(
+            "external-locator-deactivate-plan is read-only and requires --dry-run.",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        result = completion_workflows.external_locator_deactivate_plan(
+            Path(args.archive_root),
+            zettel_id=args.zettel_id,
+            locator_id=args.locator_id,
+            keep_locator_id=args.keep_locator_id,
+        )
+    except Exception:
+        print(
+            "external-locator-deactivate-plan failed safely.",
+            file=sys.stderr,
+        )
+        return 1
+    _print_external_locator_result(result, args.format)
+    return 0 if result.get("ok") else 1
+
+
+def command_external_locator_deactivate(args: argparse.Namespace) -> int:
+    if not args.approve:
+        print(
+            "external-locator-deactivate requires --approve.",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        result = completion_workflows.external_locator_deactivate(
+            Path(args.archive_root),
+            zettel_id=args.zettel_id,
+            locator_id=args.locator_id,
+            keep_locator_id=args.keep_locator_id,
+            expected_plan_sha256=args.expected_plan_sha256,
+            reviewed_by=args.reviewed_by,
+        )
+    except Exception:
+        print(
+            "external-locator-deactivate failed safely.",
+            file=sys.stderr,
+        )
         return 1
     _print_external_locator_result(result, args.format)
     return 0 if result.get("ok") else 1
@@ -24954,6 +25004,90 @@ def build_parser() -> argparse.ArgumentParser:
     external_locator_record.add_argument("--reviewed-by", required=True, help="Safe reviewer id.")
     external_locator_record.add_argument("--format", choices=["text", "json"], default="text")
     external_locator_record.set_defaults(func=command_external_locator_record)
+
+    external_locator_deactivate_plan = subcommands.add_parser(
+        "external-locator-deactivate-plan",
+        help="Plan deactivation of one reviewed duplicate locator without echoing private coordinates.",
+    )
+    external_locator_deactivate_plan.add_argument(
+        "archive_root",
+        help="Archive root to inspect.",
+    )
+    external_locator_deactivate_plan.add_argument(
+        "--zettel-id",
+        required=True,
+        help="Target zettel id.",
+    )
+    external_locator_deactivate_plan.add_argument(
+        "--locator-id",
+        required=True,
+        help="Duplicate locator id to deactivate.",
+    )
+    external_locator_deactivate_plan.add_argument(
+        "--keep-locator-id",
+        required=True,
+        help="Active duplicate locator id to keep.",
+    )
+    external_locator_deactivate_plan.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Required. Write nothing.",
+    )
+    external_locator_deactivate_plan.add_argument(
+        "--format",
+        choices=["text", "json"],
+        default="text",
+    )
+    external_locator_deactivate_plan.set_defaults(
+        func=command_external_locator_deactivate_plan
+    )
+
+    external_locator_deactivate = subcommands.add_parser(
+        "external-locator-deactivate",
+        help="Approve reversible deactivation of one reviewed duplicate locator.",
+    )
+    external_locator_deactivate.add_argument(
+        "archive_root",
+        help="Archive root to update.",
+    )
+    external_locator_deactivate.add_argument(
+        "--zettel-id",
+        required=True,
+        help="Target zettel id.",
+    )
+    external_locator_deactivate.add_argument(
+        "--locator-id",
+        required=True,
+        help="Duplicate locator id to deactivate.",
+    )
+    external_locator_deactivate.add_argument(
+        "--keep-locator-id",
+        required=True,
+        help="Active duplicate locator id to keep.",
+    )
+    external_locator_deactivate.add_argument(
+        "--expected-plan-sha256",
+        required=True,
+        help="Exact plan SHA-256 from a fresh external-locator-deactivate-plan.",
+    )
+    external_locator_deactivate.add_argument(
+        "--approve",
+        action="store_true",
+        help="Required approval gate.",
+    )
+    external_locator_deactivate.add_argument(
+        "--reviewed-by",
+        required=True,
+        help="Safe reviewer id.",
+    )
+    external_locator_deactivate.add_argument(
+        "--format",
+        choices=["text", "json"],
+        default="text",
+    )
+    external_locator_deactivate.set_defaults(
+        func=command_external_locator_deactivate
+    )
 
     external_locator_recovery_plan = subcommands.add_parser(
         "external-locator-recovery-plan",

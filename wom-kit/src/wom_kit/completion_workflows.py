@@ -23,15 +23,19 @@ from typing import Any
 from . import archive_services
 
 
-EXTERNAL_LOCATOR_SCHEMA = "wom-kit/external-locator-record/v0.2"
+EXTERNAL_LOCATOR_SCHEMA = "wom-kit/external-locator-record/v0.3"
 EXTERNAL_LOCATOR_LEGACY_SCHEMAS = frozenset(
-    {"wom-kit/external-locator-record/v0.1"}
+    {
+        "wom-kit/external-locator-record/v0.1",
+        "wom-kit/external-locator-record/v0.2",
+    }
 )
-EXTERNAL_LOCATOR_RECEIPT_SCHEMA = "wom-kit/external-locator-receipt/v0.3"
+EXTERNAL_LOCATOR_RECEIPT_SCHEMA = "wom-kit/external-locator-receipt/v0.4"
 EXTERNAL_LOCATOR_LEGACY_RECEIPT_SCHEMAS = frozenset(
     {
         "wom-kit/external-locator-receipt/v0.1",
         "wom-kit/external-locator-receipt/v0.2",
+        "wom-kit/external-locator-receipt/v0.3",
     }
 )
 EXTERNAL_LOCATOR_REVERT_RECEIPT_SCHEMA = (
@@ -129,6 +133,30 @@ _MARKDOWN_COMPATIBLE_HTML_TAGS = frozenset(
         "sup",
     }
 )
+_TABLE_CELL_PAIRED_INLINE_TAGS = frozenset(
+    {
+        "a",
+        "abbr",
+        "b",
+        "code",
+        "del",
+        "em",
+        "i",
+        "kbd",
+        "mark",
+        "s",
+        "small",
+        "strong",
+        "sub",
+        "sup",
+    }
+)
+_TABLE_CELL_SPAN_ATTRIBUTES = frozenset(
+    {"color", "underline", "discussion-urls"}
+)
+_TABLE_CELL_UNSAFE_URL_SCHEME_RE = re.compile(
+    r"(?i)(?:data|file|javascript|vbscript)\s*:"
+)
 _STRUCTURAL_MARKUP_TAGS = frozenset(
     {"article", "column", "columns", "div", "p", "section"}
 )
@@ -138,12 +166,37 @@ _REFERENCE_MARKUP_TAGS = frozenset(
         "file",
         "media",
         "mention",
+        "mention-page",
         "synced-ref",
         "synced_ref",
+        "unknown:audio",
         "video",
     }
 )
-_PAIRED_REFERENCE_MARKUP_TAGS = frozenset({"audio", "video"})
+_PAIRED_REFERENCE_MARKUP_TAGS = frozenset({"audio", "file", "video"})
+_PROTECTED_CONTEXT_MARKUP_TAGS = frozenset(
+    {
+        "empty-block",
+        "mention-date",
+        "span",
+        "synced_block",
+        "synced_block_reference",
+        "table",
+        *_STRUCTURAL_MARKUP_TAGS,
+        *_REFERENCE_MARKUP_TAGS,
+    }
+)
+_PROTECTED_CONTEXT_MARKUP_RE = re.compile(
+    r"(?is)<\s*/?\s*(?:"
+    + "|".join(
+        re.escape(name)
+        for name in sorted(
+            _PROTECTED_CONTEXT_MARKUP_TAGS,
+            key=lambda value: (-len(value), value),
+        )
+    )
+    + r")\b"
+)
 MARKUP_REFERENCE_BINDING_KINDS = (
     "external_locator",
     "zettel_edge",
@@ -271,6 +324,220 @@ def _record_relative(zettel_id: str) -> str:
     return f"{EXTERNAL_LOCATOR_DIR}/{zettel_id}.json"
 
 
+_EXTERNAL_LOCATOR_ID_RE = re.compile(r"^locator:sha256:[0-9a-f]{64}$")
+_EXTERNAL_LOCATOR_RECORD_FIELDS = {
+    "schema",
+    "archive_id",
+    "zettel_id",
+    "created_at",
+    "updated_at",
+    "locators",
+}
+_EXTERNAL_LOCATOR_ROW_BASE_FIELDS = {
+    "locator_id",
+    "locator_type",
+    "locator_ref",
+    "status",
+    "recorded_at",
+    "reviewed_by",
+    "provenance",
+}
+_EXTERNAL_LOCATOR_ROW_COORDINATE_LIMITS = {
+    "service_ref": 120,
+    "account_ref": 320,
+    "occurrence_anchor": 240,
+}
+
+
+def _locator_internal_path(root: Path, relative_path: str) -> Path:
+    """Resolve one locator-owned path without following a lexical reparse hop."""
+    try:
+        normalized = archive_services.normalize_archive_relative_path(relative_path)
+    except Exception as exc:
+        raise archive_services.ArchiveServiceError(
+            "External locator path is unsafe."
+        ) from exc
+    lexical_path = root.joinpath(*normalized.split("/"))
+    if archive_services.zet_revision_path_has_symlink_component(
+        root,
+        lexical_path,
+    ):
+        raise archive_services.ArchiveServiceError(
+            "External locator path contains a symlink or reparse point."
+        )
+    lexical_parent = root
+    for part in normalized.split("/")[:-1]:
+        lexical_parent = lexical_parent / part
+        try:
+            parent_stat = os.lstat(lexical_parent)
+        except FileNotFoundError:
+            break
+        except OSError as exc:
+            raise archive_services.ArchiveServiceError(
+                "External locator path parent is unreadable."
+            ) from exc
+        if not stat.S_ISDIR(parent_stat.st_mode):
+            raise archive_services.ArchiveServiceError(
+                "External locator path parent is not a directory."
+            )
+    return archive_services.archive_internal_path(root, normalized)
+
+
+def _locator_row_is_valid(item: Any, *, schema: str) -> bool:
+    if not isinstance(item, dict):
+        return False
+    allowed_fields = set(_EXTERNAL_LOCATOR_ROW_BASE_FIELDS)
+    if schema != "wom-kit/external-locator-record/v0.1":
+        allowed_fields.update(_EXTERNAL_LOCATOR_ROW_COORDINATE_LIMITS)
+    if set(item) - allowed_fields or not _EXTERNAL_LOCATOR_ROW_BASE_FIELDS <= set(item):
+        return False
+    provenance = item.get("provenance")
+    allowed_statuses = (
+        {"active", "inactive"}
+        if schema == EXTERNAL_LOCATOR_SCHEMA
+        else {"active"}
+    )
+    if (
+        not isinstance(item.get("locator_id"), str)
+        or _EXTERNAL_LOCATOR_ID_RE.fullmatch(item["locator_id"]) is None
+        or item.get("locator_type") not in EXTERNAL_LOCATOR_TYPES
+        or not isinstance(item.get("locator_ref"), str)
+        or not 1 <= len(item["locator_ref"]) <= 4096
+        or item.get("status") not in allowed_statuses
+        or not isinstance(item.get("recorded_at"), str)
+        or not item["recorded_at"]
+        or not isinstance(item.get("reviewed_by"), str)
+        or not item["reviewed_by"]
+        or not isinstance(provenance, dict)
+        or set(provenance) != {"source", "automatic_recovery_claimed"}
+        or provenance.get("source") != "human_reviewed_cli"
+        or provenance.get("automatic_recovery_claimed") is not False
+    ):
+        return False
+    return all(
+        field_name not in item
+        or (
+            isinstance(item[field_name], str)
+            and 1 <= len(item[field_name]) <= max_length
+        )
+        for field_name, max_length in _EXTERNAL_LOCATOR_ROW_COORDINATE_LIMITS.items()
+    )
+
+
+def _locator_record_is_valid(
+    value: Any,
+    *,
+    archive_id: str,
+    zettel_id: str,
+) -> bool:
+    if not isinstance(value, dict) or set(value) != _EXTERNAL_LOCATOR_RECORD_FIELDS:
+        return False
+    schema = value.get("schema")
+    locators = value.get("locators")
+    return bool(
+        schema in {EXTERNAL_LOCATOR_SCHEMA, *EXTERNAL_LOCATOR_LEGACY_SCHEMAS}
+        and value.get("archive_id") == archive_id
+        and value.get("zettel_id") == zettel_id
+        and isinstance(value.get("created_at"), str)
+        and value["created_at"]
+        and isinstance(value.get("updated_at"), str)
+        and value["updated_at"]
+        and isinstance(locators, list)
+        and locators
+        and all(_locator_row_is_valid(item, schema=schema) for item in locators)
+    )
+
+
+def _locator_record_bytes_are_valid(
+    raw: bytes,
+    *,
+    archive_id: str,
+    zettel_id: str,
+) -> bool:
+    try:
+        loaded = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return False
+    return _locator_record_is_valid(
+        loaded,
+        archive_id=archive_id,
+        zettel_id=zettel_id,
+    )
+
+
+def _locator_snapshot_state(
+    root: Path,
+    current_bytes: bytes | None,
+) -> tuple[Path | None, str | None, bool]:
+    """Validate an existing content-addressed snapshot before any lifecycle write."""
+    if current_bytes is None:
+        return None, None, False
+    digest = _sha256_bytes(current_bytes)
+    relative = f"{EXTERNAL_LOCATOR_SNAPSHOT_DIR}/{digest}.json"
+    try:
+        path = _locator_internal_path(root, relative)
+    except archive_services.ArchiveServiceError:
+        return None, "external_locator_snapshot_unsafe", False
+    if not path.exists():
+        return path, None, False
+    if not path.is_file() or path.is_symlink():
+        return path, "external_locator_snapshot_unsafe", True
+    try:
+        snapshot_bytes = path.read_bytes()
+    except OSError:
+        return path, "external_locator_snapshot_unreadable", True
+    if snapshot_bytes != current_bytes:
+        return path, "external_locator_snapshot_mismatch", True
+    return path, None, True
+
+
+def _remove_locator_artifact_if_created(
+    path: Path | None,
+    *,
+    expected_bytes: bytes | None,
+    existed_before: bool,
+) -> bool:
+    if path is None or existed_before:
+        return True
+    if not path.exists() and not path.is_symlink():
+        return True
+    if path.is_symlink() or not path.is_file() or expected_bytes is None:
+        return False
+    try:
+        if path.read_bytes() != expected_bytes:
+            return False
+        path.unlink()
+        archive_services.fsync_directory(path.parent)
+    except OSError:
+        return False
+    return not path.exists()
+
+
+def _rollback_locator_record_write(
+    record_path: Path,
+    *,
+    before_bytes: bytes | None,
+    attempted_after_bytes: bytes,
+) -> bool:
+    try:
+        if before_bytes is None:
+            if not record_path.exists() and not record_path.is_symlink():
+                return True
+            if (
+                record_path.is_symlink()
+                or not record_path.is_file()
+                or record_path.read_bytes() != attempted_after_bytes
+            ):
+                return False
+            record_path.unlink()
+            archive_services.fsync_directory(record_path.parent)
+            return not record_path.exists()
+        archive_services.write_bytes_atomic(record_path, before_bytes)
+        return record_path.read_bytes() == before_bytes
+    except OSError:
+        return False
+
+
 def _receipt_relative(
     action: str,
     zettel_id: str,
@@ -286,7 +553,7 @@ def _receipt_relative(
 
 class _LocatorLock:
     def __init__(self, root: Path, zettel_id: str) -> None:
-        lock_dir = archive_services.archive_internal_path(
+        lock_dir = _locator_internal_path(
             root,
             f"{EXTERNAL_LOCATOR_RECEIPTS_DIR}/.locks",
         )
@@ -346,7 +613,10 @@ def _read_locator_record(
     root: Path,
     zettel_id: str,
 ) -> tuple[dict[str, Any] | None, bytes | None, str | None]:
-    path = archive_services.archive_internal_path(root, _record_relative(zettel_id))
+    try:
+        path = _locator_internal_path(root, _record_relative(zettel_id))
+    except archive_services.ArchiveServiceError:
+        return None, None, "external_locator_record_unsafe"
     if not path.exists():
         return None, None, None
     if not path.is_file() or path.is_symlink():
@@ -356,12 +626,10 @@ def _read_locator_record(
         loaded = json.loads(raw.decode("utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return None, None, "external_locator_record_unreadable"
-    if (
-        not isinstance(loaded, dict)
-        or loaded.get("schema")
-        not in {EXTERNAL_LOCATOR_SCHEMA, *EXTERNAL_LOCATOR_LEGACY_SCHEMAS}
-        or loaded.get("zettel_id") != zettel_id
-        or not isinstance(loaded.get("locators"), list)
+    if not _locator_record_is_valid(
+        loaded,
+        archive_id=archive_services.read_archive_id(root),
+        zettel_id=zettel_id,
     ):
         return None, None, "external_locator_record_invalid"
     return loaded, raw, None
@@ -447,6 +715,19 @@ def _locator_plan_core(
         )
     if record_error is not None:
         blockers.append(record_error)
+    try:
+        _locator_internal_path(
+            root,
+            f"{EXTERNAL_LOCATOR_RECEIPTS_DIR}/.locks/.path-check",
+        )
+    except archive_services.ArchiveServiceError:
+        blockers.append("external_locator_receipt_path_unsafe")
+    _snapshot_path, snapshot_error, _snapshot_exists = _locator_snapshot_state(
+        root,
+        current_bytes,
+    )
+    if snapshot_error is not None:
+        blockers.append(snapshot_error)
     current_locators = (
         current_record.get("locators", [])
         if isinstance(current_record, dict)
@@ -821,7 +1102,7 @@ def external_locator_record(
             snapshot_relative = (
                 f"{EXTERNAL_LOCATOR_SNAPSHOT_DIR}/{before_sha256}.json"
             )
-            snapshot_path = archive_services.archive_internal_path(
+            snapshot_path = _locator_internal_path(
                 root,
                 snapshot_relative,
             )
@@ -831,11 +1112,11 @@ def external_locator_record(
             timestamp,
             after_sha256,
         )
-        receipt_path = archive_services.archive_internal_path(
+        receipt_path = _locator_internal_path(
             root,
             receipt_relative,
         )
-        record_path = archive_services.archive_internal_path(
+        record_path = _locator_internal_path(
             root,
             fresh_private["record_relative"],
         )
@@ -860,7 +1141,12 @@ def external_locator_record(
                 "network_checked": False,
             },
         }
-        created: list[Path] = []
+        receipt_bytes = _canonical_json_bytes(receipt)
+        snapshot_preexisting = bool(
+            snapshot_path is not None and snapshot_path.exists()
+        )
+        receipt_preexisting = receipt_path.exists() or receipt_path.is_symlink()
+        record_write_attempted = False
         try:
             if (
                 snapshot_path is not None
@@ -871,17 +1157,39 @@ def external_locator_record(
                     snapshot_path,
                     fresh_private["current_bytes"],
                 )
-                created.append(snapshot_path)
             archive_services._write_bytes_create_if_absent(
                 receipt_path,
-                _canonical_json_bytes(receipt),
+                receipt_bytes,
             )
-            created.append(receipt_path)
+            record_write_attempted = True
             archive_services.write_bytes_atomic(record_path, record_bytes)
             archive_services.fsync_directory(record_path.parent)
         except OSError:
-            for path in reversed(created):
-                path.unlink(missing_ok=True)
+            rollback_ok = _remove_locator_artifact_if_created(
+                receipt_path,
+                expected_bytes=receipt_bytes,
+                existed_before=receipt_preexisting,
+            )
+            rollback_ok = (
+                _remove_locator_artifact_if_created(
+                    snapshot_path,
+                    expected_bytes=fresh_private["current_bytes"],
+                    existed_before=snapshot_preexisting,
+                )
+                and rollback_ok
+            )
+            if record_write_attempted:
+                rollback_ok = (
+                    _rollback_locator_record_write(
+                        record_path,
+                        before_bytes=fresh_private["current_bytes"],
+                        attempted_after_bytes=record_bytes,
+                    )
+                    and rollback_ok
+                )
+            write_blockers = ["external_locator_write_failed"]
+            if not rollback_ok:
+                write_blockers.append("external_locator_rollback_failed")
             return {
                 **fresh,
                 "ok": False,
@@ -889,7 +1197,7 @@ def external_locator_record(
                 "dry_run": False,
                 "approved": False,
                 "lifecycle_action": "external_locator_record",
-                "blockers": ["external_locator_write_failed"],
+                "blockers": write_blockers,
                 "would_change": [],
                 "files_written": [],
             }
@@ -904,6 +1212,603 @@ def external_locator_record(
         "summary": {
             **fresh["summary"],
             "current_locator_count": len(locators),
+            "current_record_sha256": after_sha256,
+            "receipt_path": receipt_relative,
+        },
+        "blockers": [],
+        "would_change": [],
+        "files_written": [
+            fresh_private["record_relative"],
+            receipt_relative,
+        ],
+        "privacy_guards": {
+            **fresh["privacy_guards"],
+            "writes": True,
+        },
+    }
+
+
+def _external_locator_deactivate_plan_core(
+    archive_root: Path | str,
+    *,
+    zettel_id: str | None,
+    locator_id: str | None,
+    keep_locator_id: str | None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    root = archive_services.require_existing_archive_root(archive_root)
+    archive_id = archive_services.read_archive_id(root)
+    blockers: list[str] = []
+    safe_id = _safe_zettel_id(zettel_id)
+    if safe_id is None:
+        blockers.append("external_locator_zettel_id_invalid")
+    locator_id_pattern = r"locator:sha256:[0-9a-f]{64}"
+    raw_locator_id = str(locator_id or "").strip().lower()
+    raw_keep_locator_id = str(keep_locator_id or "").strip().lower()
+    safe_locator_id = (
+        raw_locator_id
+        if re.fullmatch(locator_id_pattern, raw_locator_id)
+        else None
+    )
+    safe_keep_locator_id = (
+        raw_keep_locator_id
+        if re.fullmatch(locator_id_pattern, raw_keep_locator_id)
+        else None
+    )
+    if safe_locator_id is None:
+        blockers.append("external_locator_deactivate_locator_id_invalid")
+    if safe_keep_locator_id is None:
+        blockers.append("external_locator_deactivate_keep_locator_id_invalid")
+    if (
+        safe_locator_id is not None
+        and safe_keep_locator_id is not None
+        and safe_locator_id == safe_keep_locator_id
+    ):
+        blockers.append("external_locator_deactivate_ids_must_differ")
+
+    zettel_bytes: bytes | None = None
+    zettel_body: str | None = None
+    if safe_id is not None:
+        try:
+            zettel_path = archive_services.resolve_zettel_path(
+                root,
+                zettel_id=safe_id,
+                relative_path=None,
+            )
+            zettel_bytes = zettel_path.read_bytes()
+            zettel_text = archive_services.decode_utf8_with_universal_newlines(
+                zettel_bytes
+            )
+            frontmatter, zettel_body = (
+                archive_services.require_readable_zettel_text(zettel_text)
+            )
+            if (
+                frontmatter.get("status")
+                not in archive_services.ZETTEL_QUERYABLE_STATUSES
+            ):
+                blockers.append("external_locator_zettel_unavailable")
+        except (archive_services.ArchiveServiceError, OSError, UnicodeError):
+            blockers.append("external_locator_zettel_unavailable")
+
+    current_record: dict[str, Any] | None = None
+    current_bytes: bytes | None = None
+    if safe_id is not None:
+        current_record, current_bytes, record_error = _read_locator_record(
+            root,
+            safe_id,
+        )
+        if record_error is not None:
+            blockers.append(record_error)
+    try:
+        _locator_internal_path(
+            root,
+            f"{EXTERNAL_LOCATOR_RECEIPTS_DIR}/.locks/.path-check",
+        )
+    except archive_services.ArchiveServiceError:
+        blockers.append("external_locator_receipt_path_unsafe")
+    _snapshot_path, snapshot_error, _snapshot_exists = _locator_snapshot_state(
+        root,
+        current_bytes,
+    )
+    if snapshot_error is not None:
+        blockers.append(snapshot_error)
+    current_locators = (
+        current_record.get("locators", [])
+        if isinstance(current_record, dict)
+        else []
+    )
+    locator_row_fields = {
+        "locator_id",
+        "locator_type",
+        "locator_ref",
+        "service_ref",
+        "account_ref",
+        "occurrence_anchor",
+        "status",
+        "recorded_at",
+        "reviewed_by",
+        "provenance",
+    }
+
+    def locator_row_is_valid(item: Any) -> bool:
+        if not isinstance(item, dict) or set(item) - locator_row_fields:
+            return False
+        provenance = item.get("provenance")
+        if (
+            re.fullmatch(locator_id_pattern, str(item.get("locator_id") or ""))
+            is None
+            or item.get("locator_type") not in EXTERNAL_LOCATOR_TYPES
+            or not isinstance(item.get("locator_ref"), str)
+            or not 1 <= len(item["locator_ref"]) <= 4096
+            or item.get("status") not in {"active", "inactive"}
+            or not isinstance(item.get("recorded_at"), str)
+            or not item["recorded_at"]
+            or not isinstance(item.get("reviewed_by"), str)
+            or not item["reviewed_by"]
+            or not isinstance(provenance, dict)
+            or set(provenance) != {
+                "source",
+                "automatic_recovery_claimed",
+            }
+            or provenance.get("source") != "human_reviewed_cli"
+            or provenance.get("automatic_recovery_claimed") is not False
+        ):
+            return False
+        return all(
+            field_name not in item
+            or (
+                isinstance(item[field_name], str)
+                and 1 <= len(item[field_name]) <= max_length
+            )
+            for field_name, max_length in (
+                ("service_ref", 120),
+                ("account_ref", 320),
+                ("occurrence_anchor", 240),
+            )
+        )
+
+    record_fields = {
+        "schema",
+        "archive_id",
+        "zettel_id",
+        "created_at",
+        "updated_at",
+        "locators",
+    }
+    if isinstance(current_record, dict) and (
+        set(current_record) != record_fields
+        or current_record.get("archive_id") != archive_id
+        or not isinstance(current_record.get("created_at"), str)
+        or not current_record.get("created_at")
+        or not isinstance(current_record.get("updated_at"), str)
+        or not current_record.get("updated_at")
+    ):
+        blockers.append("external_locator_record_invalid")
+    if any(not locator_row_is_valid(item) for item in current_locators):
+        blockers.append("external_locator_record_invalid")
+
+    def rows_for_id(candidate_id: str | None) -> list[tuple[int, dict[str, Any]]]:
+        if candidate_id is None:
+            return []
+        return [
+            (index, item)
+            for index, item in enumerate(current_locators)
+            if isinstance(item, dict) and item.get("locator_id") == candidate_id
+        ]
+
+    target_rows = rows_for_id(safe_locator_id)
+    keeper_rows = rows_for_id(safe_keep_locator_id)
+    active_target_rows = [
+        row for row in target_rows if row[1].get("status") == "active"
+    ]
+    active_keeper_rows = [
+        row for row in keeper_rows if row[1].get("status") == "active"
+    ]
+    if safe_locator_id is not None:
+        if not target_rows:
+            blockers.append("external_locator_deactivate_target_missing")
+        elif len(target_rows) != 1:
+            blockers.append("external_locator_deactivate_target_ambiguous")
+        elif not active_target_rows:
+            blockers.append("external_locator_deactivate_target_inactive")
+    if safe_keep_locator_id is not None:
+        if not keeper_rows:
+            blockers.append("external_locator_deactivate_keeper_missing")
+        elif len(keeper_rows) != 1:
+            blockers.append("external_locator_deactivate_keeper_ambiguous")
+        elif not active_keeper_rows:
+            blockers.append("external_locator_deactivate_keeper_inactive")
+
+    target_index: int | None = None
+    target_row: dict[str, Any] = {}
+    keeper_row: dict[str, Any] = {}
+    if len(active_target_rows) == 1:
+        target_index, target_row = active_target_rows[0]
+    if len(active_keeper_rows) == 1:
+        _keeper_index, keeper_row = active_keeper_rows[0]
+    if target_row and keeper_row:
+        if (
+            target_row.get("locator_type") != keeper_row.get("locator_type")
+            or target_row.get("locator_ref") != keeper_row.get("locator_ref")
+        ):
+            blockers.append("external_locator_deactivate_ref_type_mismatch")
+        if target_row.get("occurrence_anchor") != keeper_row.get(
+            "occurrence_anchor"
+        ):
+            blockers.append("external_locator_deactivate_occurrence_mismatch")
+        if any(
+            target_row.get(field_name) is not None
+            and keeper_row.get(field_name) != target_row.get(field_name)
+            for field_name in ("service_ref", "account_ref")
+        ):
+            blockers.append("external_locator_deactivate_coordinate_conflict")
+    if safe_locator_id is not None and isinstance(zettel_body, str):
+        target_digest = safe_locator_id.removeprefix("locator:sha256:")
+        if (
+            f"wom-locator://sha256/{target_digest}".casefold()
+            in zettel_body.casefold()
+        ):
+            blockers.append("external_locator_deactivate_target_referenced")
+
+    current_sha256 = (
+        _sha256_bytes(current_bytes) if current_bytes is not None else None
+    )
+    zettel_sha256 = (
+        _sha256_bytes(zettel_bytes) if zettel_bytes is not None else None
+    )
+    plan_binding = {
+        "schema": "wom-kit/external-locator-deactivate-plan-binding/v0.1",
+        "archive_id": archive_id,
+        "zettel_id": safe_id,
+        "locator_id": safe_locator_id,
+        "keep_locator_id": safe_keep_locator_id,
+        "current_record_sha256": current_sha256,
+        "canonical_zettel_sha256": zettel_sha256,
+        "action": "deactivate_duplicate_locator",
+    }
+    plan_sha256 = _sha256_bytes(_canonical_json_bytes(plan_binding))
+    aggregate = archive_services.unique_preserve_order(blockers)
+    record_relative = _record_relative(safe_id or "invalid-zettel")
+
+    def coordinate_presence(row: dict[str, Any]) -> dict[str, bool]:
+        return {
+            field_name: isinstance(row.get(field_name), str)
+            for field_name in (
+                "service_ref",
+                "account_ref",
+                "occurrence_anchor",
+            )
+        }
+
+    result = {
+        "ok": not aggregate,
+        "state": "ready" if not aggregate else "blocked",
+        "dry_run": True,
+        "lifecycle_action": "external_locator_deactivate_plan",
+        "archive_id": archive_id,
+        "summary": {
+            "zettel_id": safe_id,
+            "locator_id": safe_locator_id,
+            "kept_locator_id": safe_keep_locator_id,
+            "locator_type": (
+                target_row.get("locator_type") if target_row else None
+            ),
+            "planned_action": "deactivate_duplicate_locator",
+            "coordinate_presence": coordinate_presence(target_row),
+            "kept_coordinate_presence": coordinate_presence(keeper_row),
+            "record_path": record_relative if safe_id else None,
+            "current_locator_count": len(current_locators),
+            "active_locator_count": sum(
+                1
+                for item in current_locators
+                if isinstance(item, dict) and item.get("status") == "active"
+            ),
+            "inactive_locator_count": sum(
+                1
+                for item in current_locators
+                if isinstance(item, dict) and item.get("status") == "inactive"
+            ),
+            "current_record_sha256": current_sha256,
+            "plan_sha256": plan_sha256 if not aggregate else None,
+        },
+        "data": {
+            "record_schema": EXTERNAL_LOCATOR_SCHEMA,
+            "receipt_schema": EXTERNAL_LOCATOR_RECEIPT_SCHEMA,
+            "dedupe_only": True,
+            "rows_deleted": False,
+            "provider_called": False,
+        },
+        "blockers": aggregate,
+        "warnings": [],
+        "would_change": [record_relative] if not aggregate else [],
+        "files_written": [],
+        "privacy_guards": {
+            "locator_ref_echoed": False,
+            "service_ref_echoed": False,
+            "account_ref_echoed": False,
+            "occurrence_anchor_echoed": False,
+            "provider_url_echoed": False,
+            "local_absolute_path_echoed": False,
+            "zettel_body_echoed": False,
+            "exception_echoed": False,
+            "network_checked": False,
+            "provider_called": False,
+            "writes": False,
+        },
+    }
+    private = {
+        "root": root,
+        "safe_id": safe_id,
+        "safe_locator_id": safe_locator_id,
+        "safe_keep_locator_id": safe_keep_locator_id,
+        "target_index": target_index,
+        "target_row": target_row,
+        "keeper_row": keeper_row,
+        "current_record": current_record,
+        "current_bytes": current_bytes,
+        "current_sha256": current_sha256,
+        "record_relative": record_relative,
+        "plan_sha256": plan_sha256,
+    }
+    return result, private
+
+
+def external_locator_deactivate_plan(
+    archive_root: Path | str,
+    *,
+    zettel_id: str | None,
+    locator_id: str | None,
+    keep_locator_id: str | None,
+) -> dict[str, Any]:
+    result, _private = _external_locator_deactivate_plan_core(
+        archive_root,
+        zettel_id=zettel_id,
+        locator_id=locator_id,
+        keep_locator_id=keep_locator_id,
+    )
+    return result
+
+
+def external_locator_deactivate(
+    archive_root: Path | str,
+    *,
+    zettel_id: str | None,
+    locator_id: str | None,
+    keep_locator_id: str | None,
+    expected_plan_sha256: str | None,
+    reviewed_by: str | None,
+) -> dict[str, Any]:
+    result, private = _external_locator_deactivate_plan_core(
+        archive_root,
+        zettel_id=zettel_id,
+        locator_id=locator_id,
+        keep_locator_id=keep_locator_id,
+    )
+    blockers = list(result["blockers"])
+    expected = str(expected_plan_sha256 or "").strip().lower()
+    reviewer = archive_services.safe_project_intake_actor_id(reviewed_by)
+    if not re.fullmatch(r"[0-9a-f]{64}", expected):
+        blockers.append(
+            "external_locator_deactivate_expected_plan_sha256_invalid"
+        )
+    elif expected != private["plan_sha256"]:
+        blockers.append("external_locator_deactivate_plan_changed")
+    if reviewer is None:
+        blockers.append("external_locator_deactivate_reviewer_invalid")
+    if blockers or private["safe_id"] is None:
+        return {
+            **result,
+            "ok": False,
+            "state": "blocked",
+            "dry_run": False,
+            "approved": False,
+            "lifecycle_action": "external_locator_deactivate",
+            "blockers": archive_services.unique_preserve_order(blockers),
+            "would_change": [],
+            "files_written": [],
+        }
+
+    root: Path = private["root"]
+    safe_id: str = private["safe_id"]
+    with _LocatorLock(root, safe_id):
+        fresh, fresh_private = _external_locator_deactivate_plan_core(
+            root,
+            zettel_id=safe_id,
+            locator_id=locator_id,
+            keep_locator_id=keep_locator_id,
+        )
+        if not fresh["ok"] or fresh_private["plan_sha256"] != expected:
+            return {
+                **fresh,
+                "ok": False,
+                "state": "blocked",
+                "dry_run": False,
+                "approved": False,
+                "lifecycle_action": "external_locator_deactivate",
+                "blockers": archive_services.unique_preserve_order(
+                    [
+                        *fresh["blockers"],
+                        "external_locator_deactivate_plan_changed",
+                    ]
+                ),
+                "would_change": [],
+                "files_written": [],
+            }
+
+        current_record = fresh_private["current_record"]
+        target_index = fresh_private["target_index"]
+        if (
+            not isinstance(current_record, dict)
+            or not isinstance(target_index, int)
+        ):
+            return {
+                **fresh,
+                "ok": False,
+                "state": "blocked",
+                "dry_run": False,
+                "approved": False,
+                "lifecycle_action": "external_locator_deactivate",
+                "blockers": ["external_locator_deactivate_plan_changed"],
+                "would_change": [],
+                "files_written": [],
+            }
+        locators = [
+            dict(item) for item in current_record.get("locators", [])
+        ]
+        if (
+            not 0 <= target_index < len(locators)
+            or locators[target_index].get("status") != "active"
+        ):
+            return {
+                **fresh,
+                "ok": False,
+                "state": "blocked",
+                "dry_run": False,
+                "approved": False,
+                "lifecycle_action": "external_locator_deactivate",
+                "blockers": ["external_locator_deactivate_plan_changed"],
+                "would_change": [],
+                "files_written": [],
+            }
+
+        timestamp = _now()
+        target_row = dict(locators[target_index])
+        target_row["status"] = "inactive"
+        locators[target_index] = target_row
+        record = dict(current_record)
+        record["schema"] = EXTERNAL_LOCATOR_SCHEMA
+        record["updated_at"] = timestamp
+        record["locators"] = locators
+        record_bytes = _canonical_json_bytes(record)
+        after_sha256 = _sha256_bytes(record_bytes)
+        before_sha256 = fresh_private["current_sha256"]
+        snapshot_relative = (
+            f"{EXTERNAL_LOCATOR_SNAPSHOT_DIR}/{before_sha256}.json"
+        )
+        snapshot_path = _locator_internal_path(
+            root,
+            snapshot_relative,
+        )
+        receipt_relative = _receipt_relative(
+            "deactivate",
+            safe_id,
+            timestamp,
+            after_sha256,
+        )
+        receipt_path = _locator_internal_path(
+            root,
+            receipt_relative,
+        )
+        record_path = _locator_internal_path(
+            root,
+            fresh_private["record_relative"],
+        )
+        coordinate_presence = {
+            field_name: isinstance(
+                fresh_private["target_row"].get(field_name),
+                str,
+            )
+            for field_name in (
+                "service_ref",
+                "account_ref",
+                "occurrence_anchor",
+            )
+        }
+        receipt = {
+            "schema": EXTERNAL_LOCATOR_RECEIPT_SCHEMA,
+            "action": "deactivate_duplicate_locator",
+            "archive_id": archive_services.read_archive_id(root),
+            "zettel_id": safe_id,
+            "locator_id": fresh_private["safe_locator_id"],
+            "kept_locator_id": fresh_private["safe_keep_locator_id"],
+            "locator_type": fresh_private["target_row"].get("locator_type"),
+            "coordinate_presence": coordinate_presence,
+            "previous_status": "active",
+            "new_status": "inactive",
+            "plan_sha256": expected,
+            "before_record_sha256": before_sha256,
+            "after_record_sha256": after_sha256,
+            "before_snapshot_path": snapshot_relative,
+            "record_path": fresh_private["record_relative"],
+            "reviewed_by": reviewer,
+            "created_at": timestamp,
+            "privacy": {
+                "locator_ref_included": False,
+                "provider_called": False,
+                "network_checked": False,
+            },
+        }
+        receipt_bytes = _canonical_json_bytes(receipt)
+        snapshot_preexisting = snapshot_path.exists()
+        receipt_preexisting = receipt_path.exists() or receipt_path.is_symlink()
+        record_write_attempted = False
+        try:
+            if not snapshot_path.exists():
+                archive_services._write_bytes_create_if_absent(
+                    snapshot_path,
+                    fresh_private["current_bytes"],
+                )
+            archive_services._write_bytes_create_if_absent(
+                receipt_path,
+                receipt_bytes,
+            )
+            record_write_attempted = True
+            archive_services.write_bytes_atomic(record_path, record_bytes)
+            archive_services.fsync_directory(record_path.parent)
+        except OSError:
+            rollback_ok = _remove_locator_artifact_if_created(
+                receipt_path,
+                expected_bytes=receipt_bytes,
+                existed_before=receipt_preexisting,
+            )
+            rollback_ok = (
+                _remove_locator_artifact_if_created(
+                    snapshot_path,
+                    expected_bytes=fresh_private["current_bytes"],
+                    existed_before=snapshot_preexisting,
+                )
+                and rollback_ok
+            )
+            if record_write_attempted:
+                rollback_ok = (
+                    _rollback_locator_record_write(
+                        record_path,
+                        before_bytes=fresh_private["current_bytes"],
+                        attempted_after_bytes=record_bytes,
+                    )
+                    and rollback_ok
+                )
+            write_blockers = ["external_locator_deactivate_write_failed"]
+            if not rollback_ok:
+                write_blockers.append(
+                    "external_locator_deactivate_rollback_failed"
+                )
+            return {
+                **fresh,
+                "ok": False,
+                "state": "blocked",
+                "dry_run": False,
+                "approved": False,
+                "lifecycle_action": "external_locator_deactivate",
+                "blockers": write_blockers,
+                "would_change": [],
+                "files_written": [],
+            }
+
+    return {
+        **fresh,
+        "ok": True,
+        "state": "written",
+        "dry_run": False,
+        "approved": True,
+        "lifecycle_action": "external_locator_deactivate",
+        "summary": {
+            **fresh["summary"],
+            "active_locator_count": sum(
+                1 for item in locators if item.get("status") == "active"
+            ),
+            "inactive_locator_count": sum(
+                1 for item in locators if item.get("status") == "inactive"
+            ),
             "current_record_sha256": after_sha256,
             "receipt_path": receipt_relative,
         },
@@ -956,11 +1861,20 @@ def external_locator_recovery_plan(
         for item in locators
         if isinstance(item, dict)
     ]
+    active_locator_count = sum(
+        1 for item in projections if item["status"] == "active"
+    )
+    inactive_locator_count = sum(
+        1 for item in projections if item["status"] == "inactive"
+    )
+    all_inactive = bool(projections) and active_locator_count == 0
     state = (
         "blocked"
         if blockers
         else "unresolved"
         if not projections
+        else "all_candidates_inactive"
+        if all_inactive
         else "candidates_available"
     )
     return {
@@ -978,9 +1892,9 @@ def external_locator_recovery_plan(
                 else None
             ),
             "locator_count": len(projections),
-            "active_locator_count": sum(
-                1 for item in projections if item["status"] == "active"
-            ),
+            "active_locator_count": active_locator_count,
+            "inactive_locator_count": inactive_locator_count,
+            "all_inactive": all_inactive,
             "multiple_locators": len(projections) > 1,
         },
         "locators": projections,
@@ -995,6 +1909,8 @@ def external_locator_recovery_plan(
         "warnings": (
             ["No recorded locator candidates are available."]
             if not blockers and not projections
+            else ["All recorded locator candidates are inactive."]
+            if not blockers and all_inactive
             else []
         ),
         "would_change": [],
@@ -1011,6 +1927,186 @@ def external_locator_recovery_plan(
     }
 
 
+_EXTERNAL_LOCATOR_RECEIPT_COMMON_FIELDS = {
+    "schema",
+    "action",
+    "archive_id",
+    "zettel_id",
+    "locator_id",
+    "locator_type",
+    "plan_sha256",
+    "before_record_sha256",
+    "after_record_sha256",
+    "before_snapshot_path",
+    "record_path",
+    "reviewed_by",
+    "created_at",
+    "privacy",
+}
+_EXTERNAL_LOCATOR_RECEIPT_ACTIONS = {
+    "wom-kit/external-locator-receipt/v0.1": {"add_locator"},
+    "wom-kit/external-locator-receipt/v0.2": {"add_locator"},
+    "wom-kit/external-locator-receipt/v0.3": {
+        "add_locator",
+        "update_locator_coordinates",
+    },
+    EXTERNAL_LOCATOR_RECEIPT_SCHEMA: {
+        "add_locator",
+        "update_locator_coordinates",
+        "deactivate_duplicate_locator",
+    },
+}
+_EXTERNAL_LOCATOR_DEACTIVATE_RECEIPT_FIELDS = {
+    "kept_locator_id",
+    "previous_status",
+    "new_status",
+}
+
+
+def _external_locator_receipt_is_valid(
+    value: Any,
+    *,
+    archive_id: str,
+) -> bool:
+    if not isinstance(value, dict):
+        return False
+    schema = value.get("schema")
+    action = value.get("action")
+    allowed_actions = _EXTERNAL_LOCATOR_RECEIPT_ACTIONS.get(schema)
+    zettel_id = _safe_zettel_id(value.get("zettel_id"))
+    if allowed_actions is None or action not in allowed_actions or zettel_id is None:
+        return False
+    required_fields = set(_EXTERNAL_LOCATOR_RECEIPT_COMMON_FIELDS)
+    allowed_fields = set(required_fields)
+    if schema != "wom-kit/external-locator-receipt/v0.1":
+        required_fields.add("coordinate_presence")
+        allowed_fields.add("coordinate_presence")
+    if schema == EXTERNAL_LOCATOR_RECEIPT_SCHEMA:
+        allowed_fields.update(_EXTERNAL_LOCATOR_DEACTIVATE_RECEIPT_FIELDS)
+    if not required_fields <= set(value) or set(value) - allowed_fields:
+        return False
+    if action == "deactivate_duplicate_locator":
+        if not _EXTERNAL_LOCATOR_DEACTIVATE_RECEIPT_FIELDS <= set(value):
+            return False
+        if (
+            not isinstance(value.get("kept_locator_id"), str)
+            or _EXTERNAL_LOCATOR_ID_RE.fullmatch(value["kept_locator_id"]) is None
+            or value.get("previous_status") != "active"
+            or value.get("new_status") != "inactive"
+        ):
+            return False
+    elif set(value) & _EXTERNAL_LOCATOR_DEACTIVATE_RECEIPT_FIELDS:
+        return False
+
+    coordinate_presence = value.get("coordinate_presence")
+    if schema == "wom-kit/external-locator-receipt/v0.1":
+        if coordinate_presence is not None:
+            return False
+    elif (
+        not isinstance(coordinate_presence, dict)
+        or set(coordinate_presence)
+        != {"service_ref", "account_ref", "occurrence_anchor"}
+        or any(type(item) is not bool for item in coordinate_presence.values())
+    ):
+        return False
+
+    before_sha256 = value.get("before_record_sha256")
+    after_sha256 = value.get("after_record_sha256")
+    plan_sha256 = value.get("plan_sha256")
+    if before_sha256 is not None and (
+        not isinstance(before_sha256, str)
+        or re.fullmatch(r"[0-9a-f]{64}", before_sha256) is None
+    ):
+        return False
+    if (
+        not isinstance(after_sha256, str)
+        or re.fullmatch(r"[0-9a-f]{64}", after_sha256) is None
+        or not isinstance(plan_sha256, str)
+        or re.fullmatch(r"[0-9a-f]{64}", plan_sha256) is None
+    ):
+        return False
+    expected_snapshot = (
+        f"{EXTERNAL_LOCATOR_SNAPSHOT_DIR}/{before_sha256}.json"
+        if before_sha256 is not None
+        else None
+    )
+    if value.get("before_snapshot_path") != expected_snapshot:
+        return False
+    if before_sha256 is None and action != "add_locator":
+        return False
+    if value.get("record_path") != _record_relative(zettel_id):
+        return False
+
+    privacy = value.get("privacy")
+    return bool(
+        value.get("archive_id") == archive_id
+        and isinstance(value.get("locator_id"), str)
+        and _EXTERNAL_LOCATOR_ID_RE.fullmatch(value["locator_id"]) is not None
+        and value.get("locator_type") in EXTERNAL_LOCATOR_TYPES
+        and isinstance(value.get("reviewed_by"), str)
+        and value["reviewed_by"]
+        and isinstance(value.get("created_at"), str)
+        and value["created_at"]
+        and isinstance(privacy, dict)
+        and set(privacy)
+        == {"locator_ref_included", "provider_called", "network_checked"}
+        and privacy.get("locator_ref_included") is False
+        and privacy.get("provider_called") is False
+        and privacy.get("network_checked") is False
+    )
+
+
+def _resolve_locator_receipt_input(
+    root: Path,
+    value: Path | str,
+) -> tuple[Path | None, str | None]:
+    raw = os.fspath(value).strip()
+    if not raw:
+        return None, "input_path_invalid"
+    candidate = Path(raw).expanduser()
+    try:
+        receipt_root = _locator_internal_path(
+            root,
+            EXTERNAL_LOCATOR_RECEIPTS_DIR,
+        )
+        lexical_receipt_root = root.joinpath(
+            *EXTERNAL_LOCATOR_RECEIPTS_DIR.split("/")
+        )
+        if candidate.is_absolute():
+            lexical_path = candidate
+            lexical_root = Path(candidate.anchor).resolve()
+        else:
+            normalized = archive_services.normalize_archive_relative_path(raw)
+            lexical_path = root.joinpath(*normalized.split("/"))
+            lexical_root = root
+            lexical_path.relative_to(lexical_receipt_root)
+        if archive_services.zet_revision_path_has_symlink_component(
+            lexical_root,
+            lexical_path,
+        ):
+            return None, "input_path_unsafe"
+    except Exception:
+        return None, "input_path_invalid"
+    path, path_error = _resolve_json_input(root, value)
+    if path_error is not None or path is None:
+        return path, path_error
+    try:
+        path.relative_to(receipt_root)
+        path_stat = os.lstat(path)
+    except (OSError, ValueError):
+        return None, "input_path_invalid"
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    if (
+        not stat.S_ISREG(path_stat.st_mode)
+        or (
+            reparse_flag
+            and getattr(path_stat, "st_file_attributes", 0) & reparse_flag
+        )
+    ):
+        return None, "input_path_unsafe"
+    return path, None
+
+
 def _external_locator_revert_plan_core(
     archive_root: Path | str,
     *,
@@ -1018,7 +2114,7 @@ def _external_locator_revert_plan_core(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     root = archive_services.require_existing_archive_root(archive_root)
     archive_id = archive_services.read_archive_id(root)
-    receipt_path, path_error = _resolve_json_input(root, receipt)
+    receipt_path, path_error = _resolve_locator_receipt_input(root, receipt)
     blockers: list[str] = []
     receipt_doc: dict[str, Any] | None = None
     receipt_bytes: bytes | None = None
@@ -1030,14 +2126,9 @@ def _external_locator_revert_plan_core(
             loaded = json.loads(receipt_bytes.decode("utf-8"))
         except (OSError, UnicodeDecodeError, json.JSONDecodeError):
             loaded = None
-        if (
-            not isinstance(loaded, dict)
-            or loaded.get("schema")
-            not in {
-                EXTERNAL_LOCATOR_RECEIPT_SCHEMA,
-                *EXTERNAL_LOCATOR_LEGACY_RECEIPT_SCHEMAS,
-            }
-            or loaded.get("archive_id") != archive_id
+        if not _external_locator_receipt_is_valid(
+            loaded,
+            archive_id=archive_id,
         ):
             blockers.append("external_locator_receipt_invalid")
         else:
@@ -1045,6 +2136,7 @@ def _external_locator_revert_plan_core(
 
     record_path: Path | None = None
     before_bytes: bytes | None = None
+    current_bytes: bytes | None = None
     current_sha256: str | None = None
     before_sha256: str | None = None
     after_sha256: str | None = None
@@ -1052,51 +2144,55 @@ def _external_locator_revert_plan_core(
     if receipt_doc is not None:
         zettel_id = _safe_zettel_id(receipt_doc.get("zettel_id"))
         before_sha256 = receipt_doc.get("before_record_sha256")
-        after_sha256 = str(receipt_doc.get("after_record_sha256") or "")
-        if (
-            zettel_id is None
-            or (
-                before_sha256 is not None
-                and not re.fullmatch(r"[0-9a-f]{64}", str(before_sha256))
-            )
-            or not re.fullmatch(r"[0-9a-f]{64}", after_sha256)
-        ):
-            blockers.append("external_locator_receipt_invalid")
+        after_sha256 = receipt_doc.get("after_record_sha256")
         try:
-            record_path = archive_services.archive_internal_path(
+            record_path = _locator_internal_path(
                 root,
-                str(receipt_doc.get("record_path") or ""),
+                _record_relative(zettel_id or "invalid-zettel"),
             )
         except archive_services.ArchiveServiceError:
-            blockers.append("external_locator_receipt_invalid")
-        if record_path is not None:
-            try:
-                current_bytes = record_path.read_bytes()
+            blockers.append("external_locator_record_unsafe")
+        if record_path is not None and zettel_id is not None:
+            _current_record, current_bytes, record_error = _read_locator_record(
+                root,
+                zettel_id,
+            )
+            if record_error is not None:
+                blockers.append(record_error)
+            if current_bytes is not None:
                 current_sha256 = _sha256_bytes(current_bytes)
-            except OSError:
-                current_sha256 = None
             if current_sha256 != after_sha256:
                 blockers.append("external_locator_record_changed")
-        snapshot_value = receipt_doc.get("before_snapshot_path")
-        if before_sha256 is None:
-            if snapshot_value is not None:
-                blockers.append("external_locator_receipt_invalid")
-        elif isinstance(snapshot_value, str):
+        if before_sha256 is not None and zettel_id is not None:
+            snapshot_relative = (
+                f"{EXTERNAL_LOCATOR_SNAPSHOT_DIR}/{before_sha256}.json"
+            )
             try:
-                snapshot_path = archive_services.archive_internal_path(
+                snapshot_path = _locator_internal_path(
                     root,
-                    snapshot_value,
+                    snapshot_relative,
                 )
-                before_bytes = snapshot_path.read_bytes()
-            except (archive_services.ArchiveServiceError, OSError):
+            except archive_services.ArchiveServiceError:
+                snapshot_path = None
+                blockers.append("external_locator_snapshot_unsafe")
+            if snapshot_path is None:
+                pass
+            elif not snapshot_path.is_file() or snapshot_path.is_symlink():
                 blockers.append("external_locator_snapshot_missing")
-            if (
-                before_bytes is not None
-                and _sha256_bytes(before_bytes) != before_sha256
-            ):
-                blockers.append("external_locator_snapshot_mismatch")
-        else:
-            blockers.append("external_locator_snapshot_missing")
+            else:
+                try:
+                    before_bytes = snapshot_path.read_bytes()
+                except OSError:
+                    blockers.append("external_locator_snapshot_missing")
+                if before_bytes is not None:
+                    if _sha256_bytes(before_bytes) != before_sha256:
+                        blockers.append("external_locator_snapshot_mismatch")
+                    elif not _locator_record_bytes_are_valid(
+                        before_bytes,
+                        archive_id=archive_id,
+                        zettel_id=zettel_id,
+                    ):
+                        blockers.append("external_locator_snapshot_invalid")
 
     binding = {
         "schema": "wom-kit/external-locator-revert-plan-binding/v0.1",
@@ -1132,8 +2228,8 @@ def _external_locator_revert_plan_core(
         "blockers": aggregate,
         "warnings": [],
         "would_change": (
-            [str(receipt_doc.get("record_path"))]
-            if not aggregate and receipt_doc is not None
+            [_record_relative(zettel_id)]
+            if not aggregate and zettel_id is not None
             else []
         ),
         "privacy_guards": {
@@ -1149,6 +2245,7 @@ def _external_locator_revert_plan_core(
         "receipt_doc": receipt_doc,
         "receipt_bytes": receipt_bytes,
         "record_path": record_path,
+        "current_bytes": current_bytes,
         "before_bytes": before_bytes,
         "before_sha256": before_sha256,
         "after_sha256": after_sha256,
@@ -1225,15 +2322,11 @@ def external_locator_revert(
                 "would_change": [],
                 "files_written": [],
             }
-        if fresh_private["before_bytes"] is None:
-            fresh_private["record_path"].unlink()
-            restore_action = "removed_new_record"
-        else:
-            archive_services.write_bytes_atomic(
-                fresh_private["record_path"],
-                fresh_private["before_bytes"],
-            )
-            restore_action = "restored_previous_record"
+        restore_action = (
+            "removed_new_record"
+            if fresh_private["before_bytes"] is None
+            else "restored_previous_record"
+        )
         timestamp = _now()
         source_receipt_sha256 = _sha256_bytes(
             fresh_private["receipt_bytes"] or b""
@@ -1244,10 +2337,35 @@ def external_locator_revert(
             timestamp,
             source_receipt_sha256,
         )
-        revert_receipt_path = archive_services.archive_internal_path(
-            root,
-            revert_receipt_relative,
-        )
+        try:
+            revert_receipt_path = _locator_internal_path(
+                root,
+                revert_receipt_relative,
+            )
+        except archive_services.ArchiveServiceError:
+            return {
+                **fresh,
+                "ok": False,
+                "state": "blocked",
+                "dry_run": False,
+                "approved": False,
+                "lifecycle_action": "external_locator_revert",
+                "blockers": ["external_locator_revert_receipt_unsafe"],
+                "would_change": [],
+                "files_written": [],
+            }
+        if revert_receipt_path.exists() or revert_receipt_path.is_symlink():
+            return {
+                **fresh,
+                "ok": False,
+                "state": "blocked",
+                "dry_run": False,
+                "approved": False,
+                "lifecycle_action": "external_locator_revert",
+                "blockers": ["external_locator_revert_receipt_exists"],
+                "would_change": [],
+                "files_written": [],
+            }
         revert_receipt = {
             "schema": EXTERNAL_LOCATOR_REVERT_RECEIPT_SCHEMA,
             "archive_id": archive_services.read_archive_id(root),
@@ -1259,10 +2377,57 @@ def external_locator_revert(
             "reviewed_by": reviewer,
             "created_at": timestamp,
         }
-        archive_services._write_bytes_create_if_absent(
-            revert_receipt_path,
-            _canonical_json_bytes(revert_receipt),
-        )
+        try:
+            if fresh_private["before_bytes"] is None:
+                fresh_private["record_path"].unlink()
+                archive_services.fsync_directory(
+                    fresh_private["record_path"].parent
+                )
+            else:
+                archive_services.write_bytes_atomic(
+                    fresh_private["record_path"],
+                    fresh_private["before_bytes"],
+                )
+            archive_services._write_bytes_create_if_absent(
+                revert_receipt_path,
+                _canonical_json_bytes(revert_receipt),
+            )
+        except OSError:
+            if (
+                revert_receipt_path.exists()
+                and revert_receipt_path.is_file()
+                and not revert_receipt_path.is_symlink()
+            ):
+                try:
+                    revert_receipt_path.unlink()
+                    archive_services.fsync_directory(
+                        revert_receipt_path.parent
+                    )
+                except OSError:
+                    pass
+            rollback_blockers = ["external_locator_revert_write_failed"]
+            try:
+                if fresh_private["current_bytes"] is None:
+                    raise OSError("missing current locator bytes for rollback")
+                archive_services.write_bytes_atomic(
+                    fresh_private["record_path"],
+                    fresh_private["current_bytes"],
+                )
+            except OSError:
+                rollback_blockers.append(
+                    "external_locator_revert_rollback_failed"
+                )
+            return {
+                **fresh,
+                "ok": False,
+                "state": "blocked",
+                "dry_run": False,
+                "approved": False,
+                "lifecycle_action": "external_locator_revert",
+                "blockers": rollback_blockers,
+                "would_change": [],
+                "files_written": [],
+            }
     return {
         **fresh,
         "ok": True,
@@ -1278,7 +2443,7 @@ def external_locator_revert(
         "blockers": [],
         "would_change": [],
         "files_written": [
-            str(fresh_private["receipt_doc"]["record_path"]),
+            _record_relative(fresh_private["zettel_id"]),
             revert_receipt_relative,
         ],
         "privacy_guards": {
@@ -3449,11 +4614,13 @@ class _GfmTableParser(HTMLParser):
     """Parse one reviewed table fragment without interpreting the whole zet."""
 
     def __init__(self) -> None:
-        super().__init__(convert_charrefs=True)
+        super().__init__(convert_charrefs=False)
         self.table_depth = 0
         self.rows: list[list[dict[str, Any]]] = []
         self.current_row: list[dict[str, Any]] | None = None
         self.current_cell: dict[str, Any] | None = None
+        self.section_stack: list[str] = []
+        self.colgroup_depth = 0
         self.blockers: list[str] = []
         self.header_row_hint: bool | None = None
         self.header_column_hint: bool | None = None
@@ -3463,12 +4630,145 @@ class _GfmTableParser(HTMLParser):
         if code not in self.blockers:
             self.blockers.append(code)
 
+    @staticmethod
+    def _attribute_names_are_unique(
+        attrs: list[tuple[str, str | None]],
+    ) -> bool:
+        names = [name.casefold() for name, _value in attrs]
+        return len(names) == len(set(names))
+
+    @staticmethod
+    def _safe_inline_url(value: str) -> bool:
+        if (
+            not value
+            or len(value) > 2048
+            or "|" in value
+            or any(ord(character) < 0x20 for character in value)
+            or _TABLE_CELL_UNSAFE_URL_SCHEME_RE.search(value)
+        ):
+            return False
+        parsed = urllib.parse.urlsplit(value)
+        if parsed.scheme.casefold() in {"http", "https"}:
+            return bool(parsed.netloc)
+        if parsed.scheme.casefold() == "mailto":
+            return bool(parsed.path)
+        return not parsed.scheme and value.startswith(("#", "/", "./", "../"))
+
+    def _render_inline_start(
+        self,
+        name: str,
+        attrs: list[tuple[str, str | None]],
+    ) -> str | None:
+        if not self._attribute_names_are_unique(attrs):
+            self.add_blocker("markup_table_cell_attributes_unsupported")
+            return None
+        attributes = {key.casefold(): value for key, value in attrs}
+        if name == "a":
+            if set(attributes) - {"href", "title"}:
+                self.add_blocker("markup_table_cell_attributes_unsupported")
+                return None
+            href = str(attributes.get("href") or "").strip()
+            if not self._safe_inline_url(href):
+                self.add_blocker("markup_table_cell_url_unsafe")
+                return None
+            title = attributes.get("title")
+            if title is not None and (
+                len(title) > 1000
+                or "|" in title
+                or any(ord(character) < 0x20 for character in title)
+            ):
+                self.add_blocker("markup_table_cell_attributes_unsupported")
+                return None
+            rendered = f'<a href="{html.escape(href, quote=True)}"'
+            if title is not None:
+                rendered += f' title="{html.escape(title, quote=True)}"'
+            return rendered + ">"
+        if name == "abbr":
+            if set(attributes) - {"title"}:
+                self.add_blocker("markup_table_cell_attributes_unsupported")
+                return None
+            title = attributes.get("title")
+            if title is None:
+                return "<abbr>"
+            if (
+                len(title) > 1000
+                or "|" in title
+                or any(ord(character) < 0x20 for character in title)
+            ):
+                self.add_blocker("markup_table_cell_attributes_unsupported")
+                return None
+            return f'<abbr title="{html.escape(title, quote=True)}">'
+        if attributes:
+            self.add_blocker("markup_table_cell_attributes_unsupported")
+            return None
+        return f"<{name}>"
+
+    def _span_attributes_are_safe(
+        self,
+        attrs: list[tuple[str, str | None]],
+    ) -> bool:
+        if not self._attribute_names_are_unique(attrs):
+            return False
+        attributes = {key.casefold(): value for key, value in attrs}
+        if set(attributes) - _TABLE_CELL_SPAN_ATTRIBUTES:
+            return False
+        if "color" in attributes and re.fullmatch(
+            r"[A-Za-z][A-Za-z0-9_-]{0,63}",
+            str(attributes["color"] or "").strip(),
+        ) is None:
+            return False
+        if "underline" in attributes and str(
+            attributes["underline"] or ""
+        ).strip().casefold() not in {"", "true", "false"}:
+            return False
+        discussion_urls = attributes.get("discussion-urls")
+        return discussion_urls is None or (
+            len(discussion_urls) <= 4096
+            and not any(ord(character) < 0x20 for character in discussion_urls)
+            and "<" not in discussion_urls
+            and ">" not in discussion_urls
+            and _TABLE_CELL_UNSAFE_URL_SCHEME_RE.search(discussion_urls) is None
+        )
+
+    def _handle_cell_start(
+        self,
+        name: str,
+        attrs: list[tuple[str, str | None]],
+    ) -> None:
+        if self.current_cell is None:
+            return
+        if name == "br":
+            if attrs:
+                self.add_blocker("markup_table_cell_attributes_unsupported")
+            else:
+                self.current_cell["parts"].append(("markup", "<br>"))
+            return
+        if name == "span":
+            if not self._span_attributes_are_safe(attrs):
+                self.add_blocker("markup_table_cell_attributes_unsupported")
+                return
+            self.current_cell["inline_stack"].append(name)
+            return
+        if name in _TABLE_CELL_PAIRED_INLINE_TAGS:
+            rendered = self._render_inline_start(name, attrs)
+            if rendered is None:
+                return
+            self.current_cell["parts"].append(("markup", rendered))
+            self.current_cell["inline_stack"].append(name)
+            return
+        self.add_blocker("markup_table_cell_markup_unsupported")
+
     def handle_starttag(
         self,
         tag: str,
         attrs: list[tuple[str, str | None]],
     ) -> None:
         name = tag.casefold()
+        if (
+            (name == "table" or self.table_depth == 1)
+            and not self._attribute_names_are_unique(attrs)
+        ):
+            self.add_blocker("markup_table_attributes_duplicate")
         attributes = {key.casefold(): value for key, value in attrs}
         if name == "table":
             self.table_depth += 1
@@ -3492,12 +4792,38 @@ class _GfmTableParser(HTMLParser):
         if self.table_depth != 1:
             return
         if name in {"thead", "tbody", "tfoot"}:
+            if attrs:
+                self.add_blocker(
+                    "markup_table_structure_attributes_unsupported"
+                )
+            if (
+                self.current_row is not None
+                or self.current_cell is not None
+                or self.section_stack
+                or self.colgroup_depth
+            ):
+                self.add_blocker("markup_table_structure_invalid")
+            else:
+                self.section_stack.append(name)
             return
         if name == "colgroup":
-            if attributes:
-                self.add_blocker("markup_table_column_semantics_unsupported")
+            if attrs:
+                self.add_blocker(
+                    "markup_table_structure_attributes_unsupported"
+                )
+            if (
+                self.current_row is not None
+                or self.current_cell is not None
+                or self.section_stack
+                or self.colgroup_depth
+            ):
+                self.add_blocker("markup_table_structure_invalid")
+            else:
+                self.colgroup_depth = 1
             return
         if name == "col":
+            if self.current_row is not None or self.current_cell is not None:
+                self.add_blocker("markup_table_structure_invalid")
             unsupported = set(attributes) - {"width"}
             width = str(attributes.get("width") or "").strip()
             if unsupported or (
@@ -3509,7 +4835,13 @@ class _GfmTableParser(HTMLParser):
                 self.presentational_col_width_count += 1
             return
         if name == "tr":
+            if attrs:
+                self.add_blocker(
+                    "markup_table_structure_attributes_unsupported"
+                )
             if self.current_row is not None or self.current_cell is not None:
+                self.add_blocker("markup_table_structure_invalid")
+            if self.colgroup_depth:
                 self.add_blocker("markup_table_structure_invalid")
             self.current_row = []
             return
@@ -3532,6 +4864,8 @@ class _GfmTableParser(HTMLParser):
                 )
                 if match is None:
                     self.add_blocker("markup_table_cell_semantics_unsupported")
+                elif alignment and alignment != match.group(1):
+                    self.add_blocker("markup_table_alignment_conflict")
                 elif not alignment:
                     alignment = match.group(1)
             unsupported_attributes = set(attributes) - {
@@ -3546,6 +4880,7 @@ class _GfmTableParser(HTMLParser):
                 "kind": name,
                 "parts": [],
                 "alignment": alignment or None,
+                "inline_stack": [],
             }
             return
         if self.current_cell is None:
@@ -3554,32 +4889,91 @@ class _GfmTableParser(HTMLParser):
             else:
                 self.add_blocker("markup_table_caption_unsupported")
             return
-        if name == "br":
-            self.current_cell["parts"].append("<br>")
-        elif name in {"article", "div", "p", "section"}:
-            self.current_cell["parts"].append("<br>")
-        elif name in _MARKDOWN_COMPATIBLE_HTML_TAGS:
-            self.current_cell["parts"].append(self.get_starttag_text())
-        else:
-            self.add_blocker("markup_table_cell_markup_unsupported")
+        self._handle_cell_start(name, attrs)
 
     def handle_startendtag(
         self,
         tag: str,
         attrs: list[tuple[str, str | None]],
     ) -> None:
+        name = tag.casefold()
+        if name in {
+            "table",
+            "thead",
+            "tbody",
+            "tfoot",
+            "tr",
+            "td",
+            "th",
+            "colgroup",
+            "col",
+        }:
+            self.add_blocker("markup_table_structure_invalid")
+            return
+        if self.table_depth == 1 and self.current_cell is not None:
+            if name == "mention-date":
+                raw = self.get_starttag_text() or ""
+                match = _MARKUP_TAG_RE.fullmatch(raw)
+                rendered = (
+                    _render_self_closing_mention_date(
+                        match.group("attrs") or ""
+                    )
+                    if match is not None
+                    and match.group("name").casefold() == "mention-date"
+                    and match.group("self") is not None
+                    else None
+                )
+                if rendered is None:
+                    self.add_blocker(
+                        "markup_mention_date_attributes_unsupported"
+                    )
+                else:
+                    self.current_cell["parts"].append(("text", rendered))
+                return
+            if name == "br":
+                self._handle_cell_start(name, attrs)
+                return
+            self.add_blocker("markup_table_cell_markup_unsupported")
+            return
         self.handle_starttag(tag, attrs)
 
     def handle_endtag(self, tag: str) -> None:
         name = tag.casefold()
         if name == "table":
             if self.table_depth == 1 and (
-                self.current_row is not None or self.current_cell is not None
+                self.current_row is not None
+                or self.current_cell is not None
+                or self.section_stack
+                or self.colgroup_depth
             ):
                 self.add_blocker("markup_table_structure_invalid")
             self.table_depth = max(0, self.table_depth - 1)
             return
         if self.table_depth != 1:
+            return
+        if name in {"thead", "tbody", "tfoot"}:
+            if (
+                self.current_row is not None
+                or self.current_cell is not None
+                or not self.section_stack
+                or self.section_stack[-1] != name
+            ):
+                self.add_blocker("markup_table_structure_invalid")
+            else:
+                self.section_stack.pop()
+            return
+        if name == "colgroup":
+            if (
+                self.current_row is not None
+                or self.current_cell is not None
+                or self.colgroup_depth != 1
+            ):
+                self.add_blocker("markup_table_structure_invalid")
+            else:
+                self.colgroup_depth = 0
+            return
+        if name == "col":
+            self.add_blocker("markup_table_structure_invalid")
             return
         if name in {"td", "th"}:
             if self.current_cell is None or self.current_row is None:
@@ -3587,6 +4981,8 @@ class _GfmTableParser(HTMLParser):
                 return
             if self.current_cell["kind"] != name:
                 self.add_blocker("markup_table_structure_invalid")
+            if self.current_cell["inline_stack"]:
+                self.add_blocker("markup_table_cell_markup_unbalanced")
             self.current_row.append(self.current_cell)
             self.current_cell = None
             return
@@ -3596,24 +4992,77 @@ class _GfmTableParser(HTMLParser):
                 return
             if self.current_row:
                 self.rows.append(self.current_row)
+            else:
+                self.add_blocker("markup_table_structure_invalid")
             self.current_row = None
             return
         if self.current_cell is not None:
-            if name in {"article", "div", "p", "section"}:
-                self.current_cell["parts"].append("<br>")
-            elif name in _MARKDOWN_COMPATIBLE_HTML_TAGS and name != "br":
-                self.current_cell["parts"].append(f"</{name}>")
+            stack = self.current_cell["inline_stack"]
+            if name not in {"span", *_TABLE_CELL_PAIRED_INLINE_TAGS}:
+                self.add_blocker("markup_table_cell_markup_unsupported")
+            elif not stack or stack[-1] != name:
+                self.add_blocker("markup_table_cell_markup_unbalanced")
+            else:
+                stack.pop()
+                if name != "span":
+                    self.current_cell["parts"].append(
+                        ("markup", f"</{name}>")
+                    )
+            return
+        self.add_blocker("markup_table_structure_invalid")
+
+    def handle_comment(self, data: str) -> None:
+        if self.table_depth == 1:
+            self.add_blocker("markup_table_cell_markup_unsupported")
+
+    def handle_decl(self, decl: str) -> None:
+        if self.table_depth == 1:
+            self.add_blocker("markup_table_cell_markup_unsupported")
+
+    def handle_pi(self, data: str) -> None:
+        if self.table_depth == 1:
+            self.add_blocker("markup_table_cell_markup_unsupported")
+
+    def unknown_decl(self, data: str) -> None:
+        if self.table_depth == 1:
+            self.add_blocker("markup_table_cell_markup_unsupported")
 
     def handle_data(self, data: str) -> None:
-        if self.table_depth == 1 and self.current_cell is not None:
-            self.current_cell["parts"].append(data)
+        if self.table_depth != 1:
+            return
+        if self.current_cell is not None:
+            self.current_cell["parts"].append(("text", data))
+        elif data.strip():
+            self.add_blocker("markup_table_structure_invalid")
+
+    def handle_entityref(self, name: str) -> None:
+        if self.table_depth != 1:
+            return
+        if self.current_cell is not None:
+            self.current_cell["parts"].append(("entity", f"&{name};"))
+        else:
+            self.add_blocker("markup_table_structure_invalid")
+
+    def handle_charref(self, name: str) -> None:
+        if self.table_depth != 1:
+            return
+        if self.current_cell is not None:
+            self.current_cell["parts"].append(("entity", f"&#{name};"))
+        else:
+            self.add_blocker("markup_table_structure_invalid")
 
     def close_and_render(self) -> tuple[str | None, list[str]]:
         try:
             self.close()
         except Exception:
             self.add_blocker("markup_table_parse_failed")
-        if self.table_depth or self.current_row is not None or self.current_cell is not None:
+        if (
+            self.table_depth
+            or self.current_row is not None
+            or self.current_cell is not None
+            or self.section_stack
+            or self.colgroup_depth
+        ):
             self.add_blocker("markup_table_structure_invalid")
         if not self.rows:
             self.add_blocker("markup_table_empty_unsupported")
@@ -3651,11 +5100,14 @@ class _GfmTableParser(HTMLParser):
         def cell_text(cell: dict[str, Any] | None) -> str:
             if cell is None:
                 return ""
-            value = "".join(str(part) for part in cell["parts"])
-            value = re.sub(r"[ \t\r\f\v]+", " ", value)
-            value = re.sub(r"\n+", "<br>", value)
-            value = re.sub(r"(?:<br>\s*){2,}", "<br>", value)
-            return value.strip().replace("|", r"\|")
+            rendered_parts: list[str] = []
+            for part_kind, part_value in cell["parts"]:
+                value = str(part_value)
+                if part_kind == "text":
+                    value = re.sub(r"[ \t\r\n\f\v]+", " ", value)
+                rendered_parts.append(value)
+            value = "".join(rendered_parts)
+            return value.strip(" \t\r\n\f\v").replace("|", r"\|")
 
         def row_text(
             row: list[dict[str, Any]],
@@ -3690,9 +5142,271 @@ class _GfmTableParser(HTMLParser):
 _TABLE_FRAGMENT_RE = re.compile(
     r"(?is)<\s*table(?:\s+[^<>]*?)?\s*>.*?<\s*/\s*table\s*>"
 )
+_TABLE_CANDIDATE_RE = re.compile(r"(?is)<\s*/?\s*table\b")
+_TABLE_STRUCTURE_TAG_RE = re.compile(
+    r"(?is)<\s*/?\s*(?:table|thead|tbody|tfoot|tr|td|th|colgroup|col)"
+    r"\b[^<>]*>"
+)
+_TABLE_OPEN_TAG_RE = re.compile(r"(?is)<\s*table\b[^<>]*>")
+_TABLE_CLOSING_TAG_RE = re.compile(
+    r"(?is)<(?P<before_slash>\s*)/(?P<after_slash>\s*)"
+    r"(?P<name>[A-Za-z][A-Za-z0-9:-]*)(?P<tail>[^<>]*)>"
+)
+_TABLE_UNTERMINATED_ENTITY_RE = re.compile(
+    r"&(?:#[xX][0-9A-Fa-f]+|#[0-9]+|[A-Za-z][A-Za-z0-9]*)"
+    r"(?![A-Za-z0-9]*;)"
+)
+_TABLE_RAW_HTML_BLOCK_TAGS = frozenset(
+    {
+        "address",
+        "article",
+        "aside",
+        "base",
+        "basefont",
+        "blockquote",
+        "body",
+        "caption",
+        "center",
+        "col",
+        "colgroup",
+        "dd",
+        "details",
+        "dialog",
+        "dir",
+        "div",
+        "dl",
+        "dt",
+        "fieldset",
+        "figcaption",
+        "figure",
+        "footer",
+        "form",
+        "frame",
+        "frameset",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "head",
+        "header",
+        "hr",
+        "html",
+        "iframe",
+        "legend",
+        "li",
+        "link",
+        "main",
+        "menu",
+        "menuitem",
+        "nav",
+        "noframes",
+        "ol",
+        "optgroup",
+        "option",
+        "p",
+        "param",
+        "search",
+        "section",
+        "summary",
+        "table",
+        "tbody",
+        "td",
+        "tfoot",
+        "th",
+        "thead",
+        "title",
+        "tr",
+        "track",
+        "ul",
+    }
+)
+_TABLE_RAW_HTML_BLOCK_START_RE = re.compile(
+    r"^ {0,3}<\s*/?\s*(?P<name>[A-Za-z][A-Za-z0-9:-]*)"
+    r"(?:[ \t]+|/?>)"
+)
+_TABLE_RAW_HTML_COMPLETE_TAG_LINE_RE = re.compile(
+    r'''(?x)^[ ]{0,3}(?:
+        </[A-Za-z][A-Za-z0-9:-]*\s*>
+        |
+        <[A-Za-z][A-Za-z0-9:-]*
+        (?:\s+[A-Za-z_:][A-Za-z0-9_.:-]*
+            (?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))?
+        )*\s*/?>
+    )[ \t]*$'''
+)
+_TABLE_ATX_HEADING_LINE_RE = re.compile(
+    r"^ {0,3}#{1,6}(?:[ \t]+|$)"
+)
+_TABLE_MARKDOWN_LIST_MARKER_RE = re.compile(
+    r"^(?P<indent> {0,3})(?P<marker>[*+-]|[0-9]{1,9}[.)])"
+    r"(?P<spacing>[ \t]+)"
+)
+
+
+def _table_unterminated_entity_is_ambiguous(
+    match: re.Match[str],
+) -> bool:
+    token = match.group(0)[1:]
+    if token.startswith("#"):
+        return True
+    return token in html.entities.html5 or f"{token};" in html.entities.html5
+
+
+def _escape_unknown_table_entity_candidates(fragment: str) -> str:
+    return _TABLE_UNTERMINATED_ENTITY_RE.sub(
+        lambda match: "&amp;" + match.group(0)[1:],
+        fragment,
+    )
+
+
+def _table_is_markdown_list_continuation(
+    body: str,
+    opening_line_start: int,
+    opening_prefix: str,
+) -> bool:
+    opening_width = len(opening_prefix.expandtabs(4))
+    if opening_width < 2:
+        return False
+    for line in reversed(body[:opening_line_start].splitlines()):
+        if not line.strip():
+            continue
+        marker = _TABLE_MARKDOWN_LIST_MARKER_RE.match(line)
+        if marker is not None:
+            content_prefix = (
+                marker.group("indent")
+                + marker.group("marker")
+                + marker.group("spacing")
+            )
+            return opening_width >= len(content_prefix.expandtabs(4))
+        leading = re.match(r"[ \t]*", line)
+        leading_width = len((leading.group(0) if leading else "").expandtabs(4))
+        if leading_width < opening_width:
+            return False
+    return False
+
+
+def _table_has_reviewed_raw_html_context(
+    body: str,
+    opening_line_start: int,
+) -> bool:
+    active_block_lines: list[str] = []
+    for line in reversed(body[:opening_line_start].splitlines()):
+        if not line.strip():
+            break
+        active_block_lines.append(line)
+        match = _TABLE_RAW_HTML_BLOCK_START_RE.match(line)
+        if (
+            match is not None
+            and match.group("name").casefold()
+            in _TABLE_RAW_HTML_BLOCK_TAGS
+        ):
+            return True
+    active_block_lines.reverse()
+    for index, line in enumerate(active_block_lines):
+        if _TABLE_RAW_HTML_COMPLETE_TAG_LINE_RE.fullmatch(line) is None:
+            continue
+        if index == 0 or _TABLE_ATX_HEADING_LINE_RE.match(
+            active_block_lines[index - 1]
+        ):
+            return True
+    return False
+
+
+def _table_fragment_is_standalone(
+    body: str,
+    match: re.Match[str],
+) -> bool:
+    opening_line_start = body.rfind("\n", 0, match.start()) + 1
+    opening_prefix = body[opening_line_start : match.start()]
+    if opening_prefix.strip(" \t"):
+        return False
+    if _table_is_markdown_list_continuation(
+        body,
+        opening_line_start,
+        opening_prefix,
+    ):
+        return False
+    if (
+        "\t" in opening_prefix or len(opening_prefix) > 3
+    ) and not _table_has_reviewed_raw_html_context(
+        body,
+        opening_line_start,
+    ):
+        return False
+
+    closing_line_end = body.find("\n", match.end())
+    if closing_line_end < 0:
+        closing_line_end = len(body)
+    closing_suffix = body[match.end() : closing_line_end]
+    return not closing_suffix.strip(" \t\r")
+
+
+def _table_fragment_has_nested_table(fragment: str) -> bool:
+    opening_count = 0
+    for match in _TABLE_OPEN_TAG_RE.finditer(fragment):
+        if not re.search(r"/\s*>\Z", match.group(0)):
+            opening_count += 1
+    return opening_count > 1
+
+
+def _table_fragment_has_malformed_closing_tag(fragment: str) -> bool:
+    return any(
+        bool(match.group("before_slash"))
+        or bool(match.group("after_slash"))
+        or bool(match.group("tail").strip())
+        for match in _TABLE_CLOSING_TAG_RE.finditer(fragment)
+    )
 
 
 def _normalize_gfm_tables(body: str) -> tuple[str, int, list[str]]:
+    fragment_matches = list(_TABLE_FRAGMENT_RE.finditer(body))
+    if not fragment_matches:
+        if _TABLE_CANDIDATE_RE.search(body):
+            return body, 0, ["markup_table_structure_invalid"]
+        return body, 0, []
+
+    fragment_spans = [
+        (match.start(), match.end()) for match in fragment_matches
+    ]
+    structural_tag_outside_fragment = any(
+        not any(
+            start <= tag_match.start() and tag_match.end() <= end
+            for start, end in fragment_spans
+        )
+        for tag_match in _TABLE_STRUCTURE_TAG_RE.finditer(body)
+    )
+    if structural_tag_outside_fragment and not any(
+        _table_fragment_has_nested_table(match.group(0))
+        for match in fragment_matches
+    ):
+        return body, 0, ["markup_table_structure_invalid"]
+
+    if any(
+        not _table_fragment_has_nested_table(match.group(0))
+        and not _table_fragment_is_standalone(body, match)
+        for match in fragment_matches
+    ):
+        return body, 0, ["markup_table_block_context_unsupported"]
+
+    if any(
+        _table_fragment_has_malformed_closing_tag(match.group(0))
+        for match in fragment_matches
+    ):
+        return body, 0, ["markup_table_structure_invalid"]
+
+    if any(
+        any(
+            _table_unterminated_entity_is_ambiguous(entity_match)
+            for entity_match in _TABLE_UNTERMINATED_ENTITY_RE.finditer(
+                match.group(0)
+            )
+        )
+        for match in fragment_matches
+    ):
+        return body, 0, ["markup_table_entity_unterminated"]
+
     converted_count = 0
     blockers: list[str] = []
 
@@ -3700,7 +5414,9 @@ def _normalize_gfm_tables(body: str) -> tuple[str, int, list[str]]:
         nonlocal converted_count
         parser = _GfmTableParser()
         try:
-            parser.feed(match.group(0))
+            parser.feed(
+                _escape_unknown_table_entity_candidates(match.group(0))
+            )
             rendered, fragment_blockers = parser.close_and_render()
         except Exception:
             rendered = None
@@ -3783,6 +5499,211 @@ def _render_self_closing_mention_date(raw_attributes: str) -> str | None:
     return rendered
 
 
+def _contains_normalizable_markup(value: str) -> bool:
+    return _PROTECTED_CONTEXT_MARKUP_RE.search(value) is not None
+
+
+def _fenced_code_spans(body: str) -> list[tuple[int, int]]:
+    """Conservatively protect a document containing any fence-looking line.
+
+    Correctly matching CommonMark fences inside arbitrarily nested list and
+    blockquote containers requires retaining the complete container state.
+    Letter 115 does not need to edit code examples, so a fence marker anywhere
+    makes the whole document a protected span.  This deliberately prefers a
+    false-positive blocker over treating a literal tag as live markup.
+    """
+
+    def container_payload(line: str) -> str:
+        payload = line
+        while True:
+            container = re.match(
+                r" {0,3}(?:>[ \t]?|(?:[-+*]|[0-9]{1,9}[.)])[ \t]+)",
+                payload,
+            )
+            if container is None:
+                break
+            payload = payload[container.end() :]
+        return payload
+
+    for line in body.splitlines(keepends=True):
+        content = line.rstrip("\r\n")
+        payload = container_payload(content)
+        # Once a line has been reduced to its obvious container payload, keep
+        # the guard deliberately broader than CommonMark's root-level
+        # three-space rule.  A list continuation can legitimately indent its
+        # fence by the list content offset (for example four or five spaces).
+        # Treating any whitespace-prefixed fence-looking payload as protected
+        # avoids rewriting literal markup when we do not retain full list
+        # container state.
+        if re.match(r"[ \t]*(?:`{3,}|~{3,})", payload) is not None:
+            return [(0, len(body))]
+    return []
+
+
+def _protected_markup_context_present(body: str) -> bool:
+    fenced_spans = _fenced_code_spans(body)
+    if any(
+        _contains_normalizable_markup(body[start:end])
+        for start, end in fenced_spans
+    ):
+        return True
+
+    protected_patterns = (
+        re.compile(r"(?is)<!--.*?(?:-->|\Z)"),
+        re.compile(r"(?is)<\?.*?(?:\?>|\Z)"),
+        re.compile(r"(?is)<!\[CDATA\[.*?(?:\]\]>|\Z)"),
+        re.compile(r"(?is)<![A-Z].*?(?:>|\Z)"),
+        re.compile(
+            r"(?is)<\s*(?P<name>code|pre|script|style|textarea|xmp)"
+            r"(?:\s+[^<>]*?)?\s*>"
+            r".*?(?:<\s*/\s*(?P=name)\s*>|\Z)"
+        ),
+    )
+    for pattern in protected_patterns:
+        if any(
+            _contains_normalizable_markup(match.group(0))
+            for match in pattern.finditer(body)
+        ):
+            return True
+
+    raw_container_spans = [
+        (match.start(), match.end())
+        for name in ("columns", "details")
+        for match in re.finditer(
+            rf"(?is)<\s*{name}\b[^<>]*>.*?<\s*/\s*{name}\s*>",
+            body,
+        )
+    ]
+
+    def blockquote_payload(value: str) -> str:
+        payload = value
+        while True:
+            marker = re.match(r" {0,3}>[ \t]?", payload)
+            if marker is None:
+                break
+            payload = payload[marker.end() :]
+        return payload
+
+    line_offset = 0
+    previous_line_blank = True
+    in_root_indented_code = False
+    for line in body.splitlines(keepends=True):
+        content = line.rstrip("\r\n")
+        payload = blockquote_payload(content)
+        has_blockquote_container = payload != content
+        is_indented = re.match(r"(?: {4,}|\t)", payload) is not None
+        protected_indented_context = is_indented and (
+            has_blockquote_container
+            or in_root_indented_code
+            or previous_line_blank
+        )
+        if protected_indented_context:
+            for candidate in _PROTECTED_CONTEXT_MARKUP_RE.finditer(payload):
+                candidate_offset = (
+                    line_offset + len(content) - len(payload) + candidate.start()
+                )
+                if not any(
+                    start <= candidate_offset < end
+                    for start, end in raw_container_spans
+                ):
+                    return True
+        if not has_blockquote_container:
+            if is_indented and (
+                in_root_indented_code or previous_line_blank
+            ):
+                in_root_indented_code = True
+            elif content.strip():
+                in_root_indented_code = False
+        list_code = re.match(
+            r" {0,3}(?:[-+*]|[0-9]{1,9}[.)])[ \t]{4,}(?P<code>.*)",
+            payload,
+        )
+        if (
+            list_code is not None
+            and _contains_normalizable_markup(list_code.group("code"))
+        ):
+            return True
+        previous_line_blank = not content.strip()
+        line_offset += len(line)
+
+    outside_fences: list[str] = []
+    cursor = 0
+    for start, end in fenced_spans:
+        if cursor < start:
+            outside_fences.append(body[cursor:start])
+        outside_fences.append(" " * (end - start))
+        cursor = end
+    outside_fences.append(body[cursor:])
+    unfenced = "".join(outside_fences)
+    inline_code_re = re.compile(
+        r"(?s)(?<!`)(?P<ticks>`+)(?!`).*?(?<!`)(?P=ticks)(?!`)"
+    )
+    if any(
+        _contains_normalizable_markup(match.group(0))
+        for match in inline_code_re.finditer(unfenced)
+    ):
+        return True
+
+    # Scan inline-link destinations with balanced parentheses and quoted
+    # titles instead of stopping at the first ``)``.  The latter can be part
+    # of a nested destination or a quoted title, and normalizing tag-looking
+    # text there would silently change the link itself.  A literal ``](``
+    # that is not ultimately a valid link may cause a conservative blocker;
+    # preserving bytes is preferable to guessing at Markdown grammar here.
+    for opener in re.finditer(r"\]\(", body):
+        target_start = opener.end()
+        depth = 1
+        quote: str | None = None
+        in_angle_destination = False
+        index = target_start
+        while index < len(body):
+            character = body[index]
+            if character == "\\":
+                index += 2
+                continue
+            if quote is not None:
+                if character == quote:
+                    quote = None
+                index += 1
+                continue
+            if in_angle_destination:
+                if character == ">":
+                    in_angle_destination = False
+                index += 1
+                continue
+            if character in {'"', "'"}:
+                quote = character
+            elif character == "<":
+                in_angle_destination = True
+            elif character == "(":
+                depth += 1
+            elif character == ")":
+                depth -= 1
+                if depth == 0:
+                    break
+            index += 1
+        target = body[target_start:index]
+        if _contains_normalizable_markup(target):
+            return True
+    for reference_definition in re.finditer(
+        r"(?im)^ {0,3}\[[^\]\r\n]+\]:[^\r\n]*"
+        r"(?:\r?\n[ \t]+[^\r\n]*)*",
+        body,
+    ):
+        if _contains_normalizable_markup(reference_definition.group(0)):
+            return True
+
+    for match in _PROTECTED_CONTEXT_MARKUP_RE.finditer(body):
+        backslash_count = 0
+        index = match.start() - 1
+        while index >= 0 and body[index] == "\\":
+            backslash_count += 1
+            index -= 1
+        if backslash_count % 2 == 1:
+            return True
+    return False
+
+
 def _normalize_markup_body(
     body: str,
     *,
@@ -3802,6 +5723,17 @@ def _normalize_markup_body(
         "reference_binding_required": 0,
         "unknown_semantic_tag": 0,
     }
+    if _protected_markup_context_present(body):
+        return {
+            "normalized_body": body,
+            "changed": False,
+            "counts": counts,
+            "reference_tag_names": [],
+            "reference_tag_digests": [],
+            "used_binding_sha256s": [],
+            "unknown_tag_names": [],
+            "blocker_codes": ["markup_protected_context_unsupported"],
+        }
     normalized, table_count, table_blockers = _normalize_gfm_tables(body)
     counts["table"] = table_count
     counts["table_blocked"] = len(table_blockers)
@@ -3837,24 +5769,58 @@ def _normalize_markup_body(
 
     reference_tag_digests: list[dict[str, str]] = []
     used_binding_sha256s: set[str] = set()
+    reference_blockers: list[str] = []
     paired_unbound_reference_counts = {
         name: 0 for name in _PAIRED_REFERENCE_MARKUP_TAGS
     }
 
+    def add_reference_blocker(code: str) -> None:
+        if code not in reference_blockers:
+            reference_blockers.append(code)
+
+    paired_reference_names = "|".join(
+        re.escape(name) for name in sorted(_PAIRED_REFERENCE_MARKUP_TAGS)
+    )
     paired_reference_re = re.compile(
-        r"(?is)<\s*(?P<name>audio|video)(?:\s+[^<>]*?)?\s*>"
+        rf"(?is)(?P<opening><\s*(?P<name>{paired_reference_names})"
+        r"(?:\s+[^<>]*?)?\s*>)"
         r"(?P<inner>.*?)<\s*/\s*(?P=name)\s*>"
     )
 
     def paired_reference_replacement(match: re.Match[str]) -> str:
         name = match.group("name").casefold()
         fragment = match.group(0)
+        opening = _MARKUP_TAG_RE.fullmatch(match.group("opening"))
+        if opening is None or opening.group("self"):
+            add_reference_blocker(
+                "markup_paired_reference_self_closing_opener"
+            )
+            paired_unbound_reference_counts[name] += 1
+            return fragment
+        if name == "file" and _strict_markup_attributes(
+            opening.group("attrs") or ""
+        ) is None:
+            add_reference_blocker("markup_file_attributes_unsupported")
+            paired_unbound_reference_counts[name] += 1
+            return fragment
+        if match.group("inner").strip():
+            add_reference_blocker(
+                f"markup_{name}_inner_content_unsupported"
+            )
+            paired_unbound_reference_counts[name] += 1
+            return fragment
         tag_sha256 = _sha256_bytes(fragment.encode("utf-8"))
         reference_tag_digests.append(
             {"tag_name": name, "tag_sha256": tag_sha256}
         )
         binding = active_bindings.get(tag_sha256)
         if binding is None:
+            paired_unbound_reference_counts[name] += 1
+            return fragment
+        if name == "file" and binding.get("binding_kind") != "objet":
+            add_reference_blocker(
+                "markup_reference_binding_kind_mismatch"
+            )
             paired_unbound_reference_counts[name] += 1
             return fragment
         used_binding_sha256s.add(tag_sha256)
@@ -3915,6 +5881,18 @@ def _normalize_markup_body(
         normalized,
     )
 
+    identity_free_unknown_audio_count = sum(
+        1
+        for match in _MARKUP_TAG_RE.finditer(normalized)
+        if match.group("name").casefold() == "unknown:audio"
+        and not match.group("closing")
+        and bool(match.group("self"))
+        and not (match.group("attrs") or "").strip()
+    )
+    unknown_audio_binding_ambiguous = identity_free_unknown_audio_count > 1
+    if unknown_audio_binding_ambiguous:
+        add_reference_blocker("markup_unknown_audio_binding_ambiguous")
+
     def reference_replacement(match: re.Match[str]) -> str:
         name = match.group("name").casefold()
         if name not in _REFERENCE_MARKUP_TAGS:
@@ -3928,12 +5906,45 @@ def _normalize_markup_body(
                 "tag_sha256": tag_sha256,
             }
         )
+        if (
+            unknown_audio_binding_ambiguous
+            and name == "unknown:audio"
+            and not match.group("closing")
+            and bool(match.group("self"))
+            and not (match.group("attrs") or "").strip()
+        ):
+            return match.group(0)
+        if (
+            name == "unknown:audio"
+            and not match.group("closing")
+            and bool(match.group("self"))
+            and (match.group("attrs") or "").strip()
+        ):
+            add_reference_blocker(
+                "markup_unknown_audio_attributes_unsupported"
+            )
+            return match.group(0)
         binding = active_bindings.get(tag_sha256)
         if (
             binding is None
             or match.group("closing")
             or not match.group("self")
         ):
+            return match.group(0)
+        required_binding_kind = (
+            "zettel_edge"
+            if name == "mention-page"
+            else "objet"
+            if name == "unknown:audio"
+            else None
+        )
+        if (
+            required_binding_kind is not None
+            and binding.get("binding_kind") != required_binding_kind
+        ):
+            add_reference_blocker(
+                "markup_reference_binding_kind_mismatch"
+            )
             return match.group(0)
         used_binding_sha256s.add(tag_sha256)
         counts["reference_binding_applied"] += 1
@@ -3974,7 +5985,11 @@ def _normalize_markup_body(
             counts["reference_binding_required"] += required_count
             reference_names.add(name)
 
-    blocker_codes: list[str] = [*table_blockers, *mention_date_blockers]
+    blocker_codes: list[str] = [
+        *table_blockers,
+        *mention_date_blockers,
+        *reference_blockers,
+    ]
     if reference_names:
         blocker_codes.append("markup_reference_binding_required")
     if unknown_names:

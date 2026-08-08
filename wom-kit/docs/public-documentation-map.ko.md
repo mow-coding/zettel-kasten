@@ -237,6 +237,7 @@
 - [zet Markdown Style Guide](zet-markdown-style-guide.md)
 - [Artifact Hygiene](artifact-hygiene.md)
 - [레거시 조율 상태 정리](legacy-coordination-cleanup.md)
+- [Letter 115 완료 가이드](letter115-completion.md)
 - [Artifact Lifecycle Inventory](artifact-lifecycle-inventory.md)
 - [Zettel Edge Write](zettel-edge-write.md)
 - [Zettel Edge Batch](zettel-edge-batch.md)
@@ -397,6 +398,7 @@ local archive
 - [v0.2.11 Delegate Capability Contract Work Log](../plans/work-log-2026-05-23-delegate-capability-contract.md)
 - [Changelog](../../CHANGELOG.md)
 - [Release Notes](releases/)
+- [v0.3.308 릴리스 노트](releases/v0.3.308.md)
 
 작업일지는 제품 명세가 아닙니다.
 

@@ -6,6 +6,30 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.308 - 2026-08-09
+
+- Added one full-fragment digest for paired `<file ...></file>` references,
+  reviewed `zettel_edge` binding for self-closing `mention-page`, and verified
+  manifested-objet binding for a single self-closing `unknown:audio`.
+- Added dedupe-only `external-locator-deactivate-plan` and
+  `external-locator-deactivate`: the operator names both the weaker active
+  target and compatible active keeper, while approval changes only the target
+  to `inactive`, snapshots the exact prior record, and remains compatible with
+  the existing exact-byte locator revert.
+- Added strict lossless table-cell handling for self-closing Notion dates and
+  safe balanced span/inline content, with GFM pipe escaping.
+- Kept nonempty or malformed file pairs, labeled page mentions, repeated
+  identity-free unknown-audio placeholders, duplicate binding rows, unsafe or
+  unbalanced/non-standalone table markup, protected Markdown contexts,
+  table-cell references, ambiguous locator state, stale plans, and canonical
+  body-linked locator targets fail closed.
+- Hardened locator writes and revert against forged receipt/record/snapshot
+  paths, invalid record identity, corrupt content-addressed snapshots, and
+  handled post-replace or receipt-publication failure with exact rollback.
+- Preserved existing locator record and receipt readability, with schema
+  upgrades only on an approved locator write. No provider call, automatic
+  archive migration, MCP writer, canonical beta write, or UI change was added.
+
 ## v0.3.307 - 2026-08-08
 
 - Added CLI-only `archive legacy-coordination-cleanup

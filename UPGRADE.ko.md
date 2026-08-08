@@ -2,6 +2,58 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.3.308 Letter 115 참조·locator·표 완성
+
+v0.3.308은 v0.3.307 아카이브와 호환되며 자동 아카이브 마이그레이션이
+필요하지 않습니다. 기존 locator record와 과거 receipt도 계속 읽을 수 있습니다.
+locator record는 운영자가 locator 쓰기를 승인한 경우에만 새 schema로
+올라갑니다.
+
+마크업 정규화는 이제 하나의 완전한 `<file ...></file>` 쌍을 검토된 binding
+후보 하나로 다룹니다. self-closing `mention-page`는 기존의 검토된
+`zettel_edge`로만, self-closing `unknown:audio` 한 개는 검증된 manifest objet로만
+연결할 수 있습니다. 내용이 있거나 잘못 짝지어진 file, 표시 문구가 있는 page
+mention, 중복 binding row, 한 zet 안의 여러 identity-free unknown-audio는 눈에
+보이는 내용을 잃거나 신원을 추측하지 않고 그대로 차단됩니다.
+
+가져온 표에는 손실 없는 엄격한 cell 부분집합을 추가합니다. self-closing Notion
+날짜는 보이는 텍스트가 되고, 검토된 span wrapper는 내부 inline 내용을 보존한
+채 제거되며, literal pipe는 GFM 방식으로 escape됩니다. script·input·block
+markup·안전하지 않은 속성이나 URL·참조·주석·짝이 맞지 않는 markup은 바이트를
+바꾸지 않고 차단됩니다. fenced/inline code, declaration, raw code element,
+Markdown link의 대상·제목, 독립 block이 아니거나 잘못된 표는 migration
+markup으로 해석하지 않고 보호합니다.
+
+과거 record에 검토된 중복 active locator 두 개가 있다면, 먼저 내용이 없는 복구
+projection을 확인한 뒤 약한 대상과 유지할 호환 active row를 모두 직접
+지정합니다.
+
+```powershell
+archive external-locator-deactivate-plan <archive-root> `
+  --zettel-id <zet-id> --locator-id <target-locator-id> `
+  --keep-locator-id <retained-locator-id> --dry-run --format json
+
+archive external-locator-deactivate <archive-root> `
+  --zettel-id <zet-id> --locator-id <target-locator-id> `
+  --keep-locator-id <retained-locator-id> `
+  --expected-plan-sha256 <digest> `
+  --approve --reviewed-by person:<reviewer> --format json
+```
+
+승인 명령은 선택한 target의 status만 `inactive`로 바꾸고 row 순서와 locator
+값을 보존하며, 정확한 이전 record snapshot과 기존 exact-byte locator revert가
+받아들일 receipt를 남깁니다. 정본 본문에서 참조되는 target, 다른 occurrence
+anchor, 검토 좌표 손실, 모호함, 오래된 바이트나 달라진 계획은 모두 차단합니다.
+inactive locator는 새 마크업 binding에 사용할 수 없습니다.
+revert는 검증된 일반 locator receipt만 받고 정본 record/snapshot 경로를 직접
+계산합니다. 손상된 content-addressed snapshot을 거부하며, 처리 가능한 게시
+실패가 발생하면 record를 이전 바이트로 되돌립니다.
+
+자세한 내용은 [Letter 115 운영 가이드](wom-kit/docs/letter115-completion.md),
+[v0.3.308 릴리스 노트](wom-kit/docs/releases/v0.3.308.md),
+[결정 기록](wom-kit/docs/archive-infra-decision-log-2026-08-09-v03308-letter115-completion.md)을
+보세요.
+
 ## v0.3.307 정확한 루트의 레거시 조율 상태 정리
 
 v0.3.307은 v0.3.306 아카이브와 호환되며 아카이브 마이그레이션이 필요하지
