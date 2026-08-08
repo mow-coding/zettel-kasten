@@ -1,7 +1,7 @@
 # Main Branch Protection Readiness
 
 Status: active `main-required-ci` ruleset with historical staged-rollout record
-Current checkpoint: v0.3.306
+Current checkpoint: v0.3.307
 Original baseline: v0.2.54
 
 GitHub may warn when a default branch is not protected. That warning is a

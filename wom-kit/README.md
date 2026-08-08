@@ -10,12 +10,12 @@ It is not a website, SaaS app, dashboard, or visual note-taking product. The int
 
 ## Install The Command-Line Tool
 
-The exact v0.3.306 GitHub Release, when present, uses the self-contained wheel
+The exact v0.3.307 GitHub Release, when present, uses the self-contained wheel
 below. Confirm that the release exists and lists the wheel before installing
 it. The versioned URL alone is not proof that the asset is available.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.306/wom_kit-0.3.306-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.307/wom_kit-0.3.307-py3-none-any.whl"
 archive --version
 ```
 
@@ -139,6 +139,23 @@ dependency on that project. `collab/` and legacy `/.mow-harness/` remain
 fail-closed local-state quarantine paths excluded from default archive-root
 discovery, restore copying, and public Git surfaces. See
 [`docs/releases/v0.3.306.md`](docs/releases/v0.3.306.md).
+
+v0.3.307 adds the separate CLI-only `archive legacy-coordination-cleanup`
+boundary for one exact absolute workspace root. Its content-free dry-run is
+cross-platform. Approved mutation is Windows-only: it retains every workspace
+ancestor/root handle and uses exact file/empty-directory handles for in-place
+disposal, checks every
+ancestor Git index, rejects nested `.git` without traversal, and blocks Windows
+reparse points/ADS plus Linux `mnt_id` cross-mount evidence. POSIX reports
+`approval_platform_supported: false` and `safe_to_cleanup: false`, then blocks
+approval before lock or mutation because standard POSIX lacks atomic
+expected-inode delete. Windows approval requires the unchanged plan, reviewer,
+owner authority, quiescent external writers, and explicit retired-state
+disposal. `collab/` remains entirely out of scope. The command creates no new
+tombstone; old tombstones block, while any partial or uncertain first mutation
+is incomplete with no automatic retry or rollback. See
+[`docs/legacy-coordination-cleanup.md`](docs/legacy-coordination-cleanup.md) and
+[`docs/releases/v0.3.307.md`](docs/releases/v0.3.307.md).
 
 Use a dedicated virtual environment when installing with plain `pip`. WOM-kit
 is not published to PyPI yet, so `pip install wom-kit` is not an official

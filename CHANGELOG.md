@@ -6,6 +6,24 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.307 - 2026-08-08
+
+- Added CLI-only `archive legacy-coordination-cleanup
+  <absolute-workspace-root> --dry-run|--approve` for one exact direct-child
+  `.mow-harness/` tree, without automatic discovery or archive migration.
+- Bound approval to the reviewed `plan_sha256`, safe reviewer, workspace-owner
+  authority, external-writer quiescence, and explicit retired-state disposal;
+  backup or receipt bytes require a separate affirmation.
+- Kept `collab/` completely out of scope and made unknown/case-drifted,
+  Git-tracked, linked/reparse, special, unreadable, over-limit, or changed state
+  fail closed without filenames, contents, or absolute paths in output.
+- Added honest partial-failure handling: `partial_cleanup_pending` is incomplete,
+  never automatically retried, and never reported as success. Cleanup creates no
+  backup or receipt and is filesystem-entry removal, not secure media erasure.
+- Preserved the v0.3.306 retirement boundary: no external-tool dependency,
+  recommendation, install/update/activation path, MCP writer, receipt parser, UI,
+  provider call, or automatic Doctor/update/upgrade deletion was introduced.
+
 ## v0.3.306 - 2026-08-08
 
 - Retired the former optional MOW Harness recommendation, unavailable external

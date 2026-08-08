@@ -1,6 +1,6 @@
 # Install WOM-kit As A Python Tool
 
-Status: v0.3.306 GitHub wheel and retired-integration cleanup
+Status: v0.3.307 GitHub wheel and approval-gated legacy cleanup
 
 WOM-kit is a command-line tool. It should live in its own Python environment
 instead of being mixed into an application project's dependencies.
@@ -12,7 +12,7 @@ verified wheel. The versioned URL alone is not proof that the asset is
 available:
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.306/wom_kit-0.3.306-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.307/wom_kit-0.3.307-py3-none-any.whl"
 archive --version
 ```
 
@@ -30,7 +30,7 @@ Plain `pip` works when it is placed inside a dedicated virtual environment:
 
 ```powershell
 py -m venv "$HOME\.wom-tools\wom-kit"
-& "$HOME\.wom-tools\wom-kit\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.306/wom_kit-0.3.306-py3-none-any.whl"
+& "$HOME\.wom-tools\wom-kit\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.307/wom_kit-0.3.307-py3-none-any.whl"
 & "$HOME\.wom-tools\wom-kit\Scripts\archive.exe" --version
 ```
 
