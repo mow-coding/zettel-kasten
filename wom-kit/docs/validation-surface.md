@@ -83,8 +83,12 @@ missing `.gitignore` safety patterns only; it does not delete, clean, inspect
 source bodies, upload, or sync. Frontmatter rewriting is exclusively `archive
 migrate --approve` after its dry-run.
 
-`repair-gitignore` includes local collaboration/runtime guardrails such as
-`/collab/` and `/.mow-harness/` because those folders can contain prompts,
-mailbox state, coordination logs, or local-only secrets when an archive is
-operated from a larger AI workspace. The patterns are harmless when the folders
-do not exist.
+`repair-gitignore` includes local coordination quarantine patterns such as
+`/collab/` and the retired-tool path `/.mow-harness/`. Existing workspaces may
+still contain prompts, mailbox state, coordination logs, installer metadata, or
+local-only secrets there. WOM does not identify or operate the retired tool.
+Default archive-root Doctor checks, archive-root source discovery, restore
+drills, and repository artifact-hygiene scans exclude those roots; the artifact
+checker also refuses either root as its direct target. Explicit file-capture or
+staged-folder commands retain their own reviewed path authority and must not be
+pointed there. The patterns are harmless when the folders do not exist.

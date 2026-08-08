@@ -74,7 +74,7 @@ For installation today:
 | `LOCAL_ONLY_SECRET_CONFIG` | `.env`, `.env.*`, keys, tokens, `.vercel/`, `profiles/local/`, `keyrings/local/`, `.archive-local/`, `rclone.conf`, credentials | Must stay local and ignored by git. Never publish. |
 | `EXTERNAL_LIVE_NEVER_TOUCH` | private dogfood archives, any real user archive, any real local `-objets` store | Never read or mutate by default. Require explicit operator approval. |
 | `EXTERNAL_MANUAL_OR_DEFERRED` | GitHub repositories, R2/B2/S3 buckets, Neon/Postgres, provider permissions, remote object storage state | Manual or future provider flow. No automatic provider changes. |
-| `LOCAL_ONLY_COLLAB_HARNESS` | `collab/`, `.mow-harness/` | Useful operation state, but not WOM archive records. Keep local-only. |
+| `LOCAL_ONLY_COLLAB_HARNESS` (generic source alias: `LOCAL_ONLY_COORDINATION_STATE`) | `collab/`, legacy `.mow-harness/` | Local coordination or retired-tool state, not WOM archive records. The historical machine label remains compatible; keep these paths quarantined and local-only. |
 
 ## 3. Report-Only Checker
 
@@ -171,10 +171,17 @@ $env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli repair-gitignore <a
 `repair-gitignore` does not delete existing `.gitignore` lines, inspect source
 file bodies, clean files, upload, sync, or call provider APIs.
 
-Some safe defaults, such as `/collab/` and `/.mow-harness/`, are defensive
-workspace-root guardrails. They keep local collaboration mailboxes, prompts,
-runtime state, and possible secret-bearing coordination files out of version
-control even when an archive is operated from a larger workspace.
+Some safe defaults, such as `/collab/` and the retired-tool path
+`/.mow-harness/`, are defensive workspace-root quarantine rules. They keep
+local collaboration mailboxes, prompts, runtime state, installer residue, and
+possible secret-bearing coordination files out of version control even when an
+archive is operated from a larger workspace. WOM does not install, invoke, or
+update the retired tool. Default archive-root Doctor checks, archive-root
+source discovery, restore drills, and this repository checker exclude those
+roots; this checker also refuses either root as its direct target. Explicit
+file-capture or staged-folder commands retain their own narrowly reviewed path
+authority and must not be pointed at these quarantine roots. These ignore
+rules do not advertise an integration.
 
 `/objets/` (v0.3.160) is anchored on purpose: it excludes only a raw IN-ROOT
 `objets/` folder, not nested folders such as `staging/incoming/<date>/objets/`
@@ -242,11 +249,11 @@ archive source-intake-record <archive-root> --source-intake-plan <plan.json> --a
 # 2. Prepare ONE reviewed selection per file (archive-relative staged path):
 archive objet-capture-selection <archive-root> --staged-path objets/<file> --source-intake-receipt <receipt> --approve --reviewed-by person:me --format json
 
-# 3. Capture through the enablement-gated write path (--selection is a normal
-#    file path resolved from your CURRENT directory, not archive-relative —
-#    from outside the archive root, pass the full path to the manifest):
-archive objet-capture <archive-root> --selection <selection.json> --dry-run --format json
-archive objet-capture <archive-root> --selection <selection.json> --approve --reviewed-by person:me --format json
+# 3. Capture through the enablement-gated write path. A relative --selection is
+#    resolved from the archive root, never the process current directory.
+#    Absolute selection paths remain compatible.
+archive objet-capture <archive-root> --selection <archive-relative-selection.json> --dry-run --format json
+archive objet-capture <archive-root> --selection <archive-relative-selection.json> --approve --reviewed-by person:me --format json
 
 # 4. Verify preservation evidence BEFORE any manual deletion:
 archive staged-cleanup-check <archive-root> --staged objets --dry-run --format json

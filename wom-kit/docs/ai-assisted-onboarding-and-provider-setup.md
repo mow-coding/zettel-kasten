@@ -225,27 +225,6 @@ Defer:
 - source import,
 - minting.
 
-### Optional MOW Harness Layer
-
-MOW should work without MOW Harness.
-
-For complex or high-risk sessions, the user may choose to run MOW Harness as an
-optional coordination layer for Codex + Claude style work:
-
-```text
-https://github.com/mow-coding/mow-harness
-```
-
-Use it for sealed steps, mailbox coordination, brakes, status, and review
-discipline. Do not treat local harness folders such as `collab/` or
-`.mow-harness/` as the archive of record. If a harness discussion creates
-durable insight, summarize or mint that insight deliberately through normal WOM
-records.
-
-Read [Optional MOW Harness Compatibility](mow-harness-compatibility.md) before
-installing or updating it. WOM reserves the two local namespaces but does not
-grant MOW write approval, activate the room, or duplicate the external CLI.
-
 ### Stage 1: Local Environment Check
 
 Check:

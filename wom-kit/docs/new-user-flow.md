@@ -238,7 +238,7 @@ provider-bindings.yml
 ```
 
 The `.gitignore` protects local-only profiles, secrets, generated search indexes,
-harness state, and content-addressed byte stores. If `doctor --strict` reports a
+legacy local tool state, and content-addressed byte stores. If `doctor --strict` reports a
 missing safe pattern, use `archive repair-gitignore --dry-run` first and approve
 only after reviewing the proposed append. `provider-bindings.yml` stores
 references such as env var names and KeePassXC entry names. `source-bindings.yml`

@@ -36,7 +36,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
-from typing import Any, Callable, Iterable, Protocol
+from typing import Any, Callable, Iterable, Iterator, Protocol
 
 from . import __version__ as WOM_KIT_VERSION
 from .paths import (
@@ -1669,6 +1669,8 @@ PROMPT_BOUNDARY_PATTERNS = [
 SOURCE_ROOTS_LOCAL_PROFILE = "profiles/local/source-roots.local.yml"
 RESTORE_DRILL_EXCLUDED_PATHS = [
     ".git/",
+    "collab/",
+    ".mow-harness/",
     ".env",
     ".env.*",
     "db/archive-index.sqlite",
@@ -1680,6 +1682,7 @@ RESTORE_DRILL_EXCLUDED_PATHS = [
     ".mypy_cache/",
     ".ruff_cache/",
 ]
+LOCAL_COORDINATION_QUARANTINE_ROOT_DIRS = {"collab", ".mow-harness"}
 PROVIDER_TYPES = {
     "github",
     "object_storage",
@@ -90046,11 +90049,31 @@ def validate_restore_drill_target(archive_root: Path, target: Path, blockers: li
         blockers.append(f"Restore target must not be inside a system directory: {target} ({system_reason}).")
 
 
+def iter_restore_drill_files(archive_root: Path) -> Iterator[Path]:
+    at_archive_root = True
+    for dirpath, dirnames, filenames in os.walk(
+        archive_root,
+        topdown=True,
+        followlinks=False,
+    ):
+        dir_path = Path(dirpath)
+        if at_archive_root:
+            dirnames[:] = [
+                name
+                for name in dirnames
+                if name.casefold() not in LOCAL_COORDINATION_QUARANTINE_ROOT_DIRS
+            ]
+            at_archive_root = False
+        dirnames.sort()
+        for filename in sorted(filenames):
+            yield dir_path / filename
+
+
 def restore_drill_copy_plan(archive_root: Path) -> dict[str, Any]:
     included_files = 0
     included_bytes = 0
     excluded_files = 0
-    for path in sorted(archive_root.rglob("*")):
+    for path in sorted(iter_restore_drill_files(archive_root)):
         if not path.is_file() or not is_path_within_root(path, archive_root):
             continue
         relative = archive_relative_path(path, archive_root)
@@ -90089,7 +90112,7 @@ def restore_drill_should_exclude(relative_path: str) -> bool:
 def copy_restore_drill_tree(archive_root: Path, target: Path) -> list[str]:
     changed_paths: list[str] = []
     target.mkdir(parents=True, exist_ok=True)
-    for path in sorted(archive_root.rglob("*")):
+    for path in sorted(iter_restore_drill_files(archive_root)):
         if not path.is_file() or not is_path_within_root(path, archive_root):
             continue
         relative = archive_relative_path(path, archive_root)
@@ -107185,7 +107208,37 @@ def filesystem_source_map_items(
     exclude_patterns = scope_patterns(scope_policy.get("exclude"), [".git/**", "__pycache__/**"])
     entries: list[dict[str, Any]] = []
     skipped = 0
-    for path in sorted(root.rglob("*")):
+    candidate_paths: list[Path] = []
+    archive_root_scan = (root / "archive.yml").is_file() or (
+        root / "archive-identity.yml"
+    ).is_file()
+    pruned_coordination_root = False
+    at_scan_root = True
+    for dirpath, dirnames, filenames in os.walk(
+        root,
+        topdown=True,
+        followlinks=False,
+    ):
+        if at_scan_root:
+            if archive_root_scan:
+                kept_dirnames: list[str] = []
+                for name in dirnames:
+                    if (
+                        name.casefold()
+                        in LOCAL_COORDINATION_QUARANTINE_ROOT_DIRS
+                    ):
+                        pruned_coordination_root = True
+                        continue
+                    kept_dirnames.append(name)
+                dirnames[:] = kept_dirnames
+            at_scan_root = False
+        candidate_paths.extend(Path(dirpath) / filename for filename in filenames)
+    if pruned_coordination_root:
+        warnings.append(
+            "Archive-root source scan excluded local coordination quarantine roots."
+        )
+
+    for path in sorted(candidate_paths):
         if len(entries) >= limit:
             skipped += 1
             continue
