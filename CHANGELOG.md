@@ -6,6 +6,28 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.306 - 2026-08-08
+
+- Retired the former optional MOW Harness recommendation, unavailable external
+  repository link, compatibility guide, and install/update/activation advice.
+- Confirmed that WOM carries no MOW Harness package dependency, import,
+  subprocess invocation, MCP surface, schema, receipt parser, or UI.
+- Added the generic source alias `LOCAL_ONLY_COORDINATION_STATE` while
+  preserving the exact `LOCAL_ONLY_COLLAB_HARNESS` machine-output and import
+  compatibility label. `collab/` and legacy `/.mow-harness/` remain
+  fail-closed privacy quarantine paths excluded from default archive-root
+  diagnostics, source discovery, restore copying, and repository hygiene
+  recursion.
+- Preserved existing archive bytes, schemas, zets, objets, receipts, indexes,
+  and write authority; WOM performs no automatic legacy-folder deletion or
+  personal-archive migration.
+- Closed a CI false-green gap by explicitly running all six pytest-native
+  modules and adding a regression that discovers any future top-level pytest
+  function module omitted from the workflow.
+- Corrected operator documentation so relative `objet-capture --selection`
+  paths are archive-root-authoritative and the branch-protection guide reflects
+  the active `main-required-ci` ruleset and `Required CI` check.
+
 ## v0.3.305 - 2026-08-07
 
 - Added ready-only markup plans/writes, manifested objet bindings for

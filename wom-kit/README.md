@@ -10,12 +10,12 @@ It is not a website, SaaS app, dashboard, or visual note-taking product. The int
 
 ## Install The Command-Line Tool
 
-The exact v0.3.305 GitHub Release, when present, uses the self-contained wheel
+The exact v0.3.306 GitHub Release, when present, uses the self-contained wheel
 below. Confirm that the release exists and lists the wheel before installing
 it. The versioned URL alone is not proof that the asset is available.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.305/wom_kit-0.3.305-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.306/wom_kit-0.3.306-py3-none-any.whl"
 archive --version
 ```
 
@@ -46,6 +46,10 @@ remains: caller values do not enter error `message` or `data`.
 A valid JSON-RPC request id still crosses the stdio boundary unchanged in the
 top-level `id` field. See
 [`docs/releases/v0.3.291.md`](docs/releases/v0.3.291.md).
+
+v0.3.292 keeps those runtime safeguards and makes objet relationship counts
+honest across overview and catalog surfaces. See
+[`docs/releases/v0.3.292.md`](docs/releases/v0.3.292.md).
 
 v0.3.293 adds an explicit read-only Codex/repository runtime-guidance
 readiness check and a complete operator-feedback route without claiming host
@@ -129,9 +133,12 @@ source-title remap usability. See
 [`docs/letter113-completion.md`](docs/letter113-completion.md) and
 [`docs/releases/v0.3.305.md`](docs/releases/v0.3.305.md).
 
-v0.3.292 keeps those runtime safeguards and makes objet relationship counts
-honest across overview and catalog surfaces. See
-[`docs/releases/v0.3.292.md`](docs/releases/v0.3.292.md).
+v0.3.306 retires the former optional MOW Harness recommendation, unavailable
+repository link, and interoperability guide. WOM had no runtime or package
+dependency on that project. `collab/` and legacy `/.mow-harness/` remain
+fail-closed local-state quarantine paths excluded from default archive-root
+discovery, restore copying, and public Git surfaces. See
+[`docs/releases/v0.3.306.md`](docs/releases/v0.3.306.md).
 
 Use a dedicated virtual environment when installing with plain `pip`. WOM-kit
 is not published to PyPI yet, so `pip install wom-kit` is not an official

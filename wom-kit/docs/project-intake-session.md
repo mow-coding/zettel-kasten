@@ -237,39 +237,7 @@ Which items should be ignored?
 
 The system should create durable memory gradually, not all at once.
 
-## 7. Optional MOW Harness Layer
-
-MOW should work without MOW Harness.
-
-MOW Harness is an optional operating layer for users who want structured
-multi-agent work. It can be useful when a project intake session benefits from:
-
-- Codex + Claude division of labor,
-- sealed step files,
-- mailbox coordination,
-- brakes and status banners,
-- review gates,
-- local collaboration records.
-
-The public MOW Harness project lives at:
-
-```text
-https://github.com/mow-coding/mow-harness
-```
-
-WOM-kit does not install or bundle MOW Harness. A user who wants it should
-follow the separate MOW Harness project and the local
-[compatibility boundary](mow-harness-compatibility.md). The integration remains
-opt-in; WOM reserves its local namespaces but does not duplicate its installer,
-grant write approval, or activate it.
-
-Use it as an operating room, not as the archive itself.
-
-Local harness folders such as `collab/` and `.mow-harness/` should stay
-local-only unless a user deliberately summarizes or mints selected outcomes into
-zets.
-
-## 8. Batch Roadmap
+## 7. Batch Roadmap
 
 The agreed safe spine is:
 
@@ -284,7 +252,3 @@ The agreed safe spine is:
    mint-zet, and final staged-folder cleanup verification.
 
 The parked onboarding guidance cleanup can resume after this spine is stable.
-
-The optional MOW Harness compatibility boundary improves discovery without
-making WOM depend on MOW Harness. Any future helper must continue to delegate
-installation and activation authority to the separate MOW project.
