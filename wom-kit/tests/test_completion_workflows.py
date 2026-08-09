@@ -8,6 +8,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from contextlib import closing, redirect_stderr, redirect_stdout
 from pathlib import Path
@@ -5280,6 +5281,545 @@ class CompletionWorkflowTests(unittest.TestCase):
             self.assertEqual(item["before_sha256"], item["after_sha256"])
             self.assertEqual(source_path.read_bytes(), before)
 
+    def test_markup_normalization_letter117_reference_matrix_preserves_whitespace(self) -> None:
+        cases = (
+            ("unknown:synced_block", "zettel_reference", ""),
+            ("unknown:synced_block", "objet", "  "),
+            ("unknown:transclusion_reference", "zettel_reference", "    "),
+            ("unknown:transclusion_reference", "objet", ""),
+            ("unknown:transclusion_container", "zettel_reference", "  "),
+            ("unknown:transclusion_container", "objet", "    "),
+        )
+        for tag_name, binding_kind, indentation in cases:
+            with self.subTest(tag_name=tag_name, binding_kind=binding_kind):
+                fragment = f"<{tag_name}/>"
+                tag_sha256 = hashlib.sha256(fragment.encode("utf-8")).hexdigest()
+                body = f"Context\r\n{indentation}{fragment}\r\nAfter\r\n"
+                result = completion_workflows._normalize_markup_body(
+                    body,
+                    bindings={
+                        tag_sha256: {
+                            "binding_kind": binding_kind,
+                            "binding_id": (
+                                "zet_20260809_reviewed_target"
+                                if binding_kind == "zettel_reference"
+                                else "sha256:" + ("a" * 64)
+                            ),
+                            "replacement": "[BOUND]",
+                        }
+                    },
+                )
+                self.assertTrue(result["changed"], result)
+                self.assertEqual(result["blocker_codes"], [])
+                self.assertEqual(
+                    result["normalized_body"],
+                    f"Context\r\n{indentation}[BOUND]\r\nAfter\r\n",
+                )
+                self.assertEqual(
+                    result["reference_tag_digests"],
+                    [
+                        {
+                            "tag_name": tag_name,
+                            "tag_sha256": tag_sha256,
+                            "occurrence_index": 1,
+                        }
+                    ],
+                )
+
+        protected_fragment = "<unknown:synced_block/>"
+        protected_body = f"`{protected_fragment}`\r\n"
+        protected = completion_workflows._normalize_markup_body(
+            protected_body,
+            bindings={
+                hashlib.sha256(protected_fragment.encode("utf-8")).hexdigest(): {
+                    "binding_kind": "zettel_reference",
+                    "binding_id": "zet_20260809_reviewed_target",
+                    "replacement": "[BOUND]",
+                }
+            },
+        )
+        self.assertEqual(protected["normalized_body"], protected_body)
+        self.assertFalse(protected["changed"])
+        self.assertEqual(protected["reference_tag_digests"], [])
+        self.assertEqual(
+            protected["blocker_codes"],
+            ["markup_protected_context_unsupported"],
+        )
+
+    def test_markup_normalization_binds_reviewed_unknown_content_references(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.fake_archive(Path(tmp) / "archive")
+            source_id = "zet_20260809_letter117_unknown_reference_source"
+            target_ids = (
+                "zet_20260809_letter117_unknown_reference_a",
+                "zet_20260809_letter117_unknown_reference_b",
+                "zet_20260809_letter117_transclusion_target",
+            )
+            synced = "<unknown:synced_block/>"
+            transclusion_reference = "<unknown:transclusion_reference/>"
+            transclusion_container = "<unknown:transclusion_container/>"
+            source_path = self.write_schema_valid_markup_zettel(
+                archive_root,
+                source_id,
+                "\n".join(
+                    (
+                        synced,
+                        synced,
+                        transclusion_reference,
+                        transclusion_container,
+                        "",
+                    )
+                ),
+            )
+            source_before = source_path.read_bytes()
+            target_paths = [
+                self.write_schema_valid_markup_zettel(
+                    archive_root,
+                    target_id,
+                    f"Reviewed static target {index}.\n",
+                )
+                for index, target_id in enumerate(target_ids, start=1)
+            ]
+            target_bytes = [path.read_bytes() for path in target_paths]
+            object_id = (
+                "sha256:acc6e73fb84988ecb538dfc0ceb883b88694e469a05172a5aeb0cce8902ce136"
+            )
+            manifest = {
+                "schema": completion_workflows.MARKUP_REFERENCE_BINDING_MANIFEST_SCHEMA,
+                "archive_id": completion_workflows.archive_services.read_archive_id(
+                    archive_root
+                ),
+                "bindings": [
+                    *[
+                        {
+                            "zettel_id": source_id,
+                            "tag_sha256": hashlib.sha256(
+                                synced.encode("utf-8")
+                            ).hexdigest(),
+                            "occurrence_index": occurrence_index,
+                            "binding_kind": "zettel_reference",
+                            "binding_id": target_id,
+                        }
+                        for occurrence_index, target_id in enumerate(
+                            target_ids[:2], start=1
+                        )
+                    ],
+                    {
+                        "zettel_id": source_id,
+                        "tag_sha256": hashlib.sha256(
+                            transclusion_reference.encode("utf-8")
+                        ).hexdigest(),
+                        "occurrence_index": 1,
+                        "binding_kind": "zettel_reference",
+                        "binding_id": target_ids[2],
+                    },
+                    {
+                        "zettel_id": source_id,
+                        "tag_sha256": hashlib.sha256(
+                            transclusion_container.encode("utf-8")
+                        ).hexdigest(),
+                        "occurrence_index": 1,
+                        "binding_kind": "objet",
+                        "binding_id": object_id,
+                    },
+                ],
+            }
+            self.assert_schema_instance(
+                "markup-reference-binding-manifest.schema.json",
+                manifest,
+            )
+            manifest_relative = "ops/letter117-unknown-content-bindings.json"
+            manifest_path = archive_root / manifest_relative
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+            plan = completion_workflows.markup_normalization_plan(
+                archive_root,
+                policy="normalize",
+                max_items=1000,
+                max_changes=1000,
+                binding_manifest=manifest_relative,
+            )
+            self.assertTrue(plan["ok"], plan)
+            self.assertEqual(plan["summary"]["reference_binding_count"], 4)
+            item = next(
+                row for row in plan["items"] if row["zettel_id"] == source_id
+            )
+            self.assertEqual(item["state"], "ready")
+            self.assertEqual(
+                sorted(
+                    {row["tag_name"] for row in item["reference_tag_digests"]}
+                ),
+                [
+                    "unknown:synced_block",
+                    "unknown:transclusion_container",
+                    "unknown:transclusion_reference",
+                ],
+            )
+            self.assertEqual(
+                [
+                    row["occurrence_index"]
+                    for row in item["reference_tag_digests"]
+                    if row["tag_name"] == "unknown:synced_block"
+                ],
+                [1, 2],
+            )
+            serialized_plan = json.dumps(plan, ensure_ascii=False)
+            for private_value in (*target_ids, object_id):
+                self.assertNotIn(private_value, serialized_plan)
+
+            applied = completion_workflows.markup_normalization_apply(
+                archive_root,
+                policy="normalize",
+                max_items=1000,
+                max_changes=1000,
+                binding_manifest=manifest_relative,
+                expected_plan_sha256=plan["summary"]["plan_sha256"],
+                reviewed_by="person:test",
+            )
+            self.assertTrue(applied["ok"], applied)
+            after = source_path.read_text(encoding="utf-8")
+            self.assertNotIn("<unknown:", after)
+            self.assertLess(
+                after.index(f"wom-zettel:{target_ids[0]}"),
+                after.index(f"wom-zettel:{target_ids[1]}"),
+            )
+            self.assertIn(f"wom-zettel:{target_ids[2]}", after)
+            self.assertIn(f"wom-objet:{object_id}", after)
+            self.assertNotIn("wom-edge:", after)
+            self.assertEqual(
+                [path.read_bytes() for path in target_paths],
+                target_bytes,
+            )
+
+            revert_plan = completion_workflows.markup_normalization_revert_plan(
+                archive_root,
+                receipt=applied["summary"]["receipt_path"],
+            )
+            reverted = completion_workflows.markup_normalization_revert(
+                archive_root,
+                receipt=applied["summary"]["receipt_path"],
+                expected_plan_sha256=revert_plan["summary"]["plan_sha256"],
+                reviewed_by="person:test",
+            )
+            self.assertTrue(reverted["ok"], reverted)
+            self.assertEqual(source_path.read_bytes(), source_before)
+
+    def test_markup_normalization_binds_empty_database_to_reviewed_zettel(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.fake_archive(Path(tmp) / "archive")
+            source_id = "zet_20260809_letter117_database_source"
+            target_id = "zet_20260809_letter117_database_target"
+            fragment = (
+                '<database data-source-url="private-data-source" '
+                'inline="false" url="private-database"></database>'
+            )
+            source_path = self.write_schema_valid_markup_zettel(
+                archive_root,
+                source_id,
+                fragment + "\n",
+            )
+            source_before = source_path.read_bytes()
+            target_path = self.write_schema_valid_markup_zettel(
+                archive_root,
+                target_id,
+                "Reviewed database target.\n",
+            )
+            target_before = target_path.read_bytes()
+            manifest = {
+                "schema": completion_workflows.MARKUP_REFERENCE_BINDING_MANIFEST_SCHEMA,
+                "archive_id": completion_workflows.archive_services.read_archive_id(
+                    archive_root
+                ),
+                "bindings": [
+                    {
+                        "zettel_id": source_id,
+                        "tag_sha256": hashlib.sha256(
+                            fragment.encode("utf-8")
+                        ).hexdigest(),
+                        "occurrence_index": 1,
+                        "binding_kind": "zettel_reference",
+                        "binding_id": target_id,
+                    }
+                ],
+            }
+            manifest_relative = "ops/letter117-database-binding.json"
+            manifest_path = archive_root / manifest_relative
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+            plan = completion_workflows.markup_normalization_plan(
+                archive_root,
+                policy="normalize",
+                max_items=1000,
+                max_changes=1000,
+                binding_manifest=manifest_relative,
+            )
+            self.assertTrue(plan["ok"], plan)
+            item = next(
+                row for row in plan["items"] if row["zettel_id"] == source_id
+            )
+            self.assertEqual(item["state"], "ready")
+            self.assertEqual(
+                {row["tag_name"] for row in item["reference_tag_digests"]},
+                {"database"},
+            )
+            serialized_plan = json.dumps(plan, ensure_ascii=False)
+            self.assertNotIn("private-data-source", serialized_plan)
+            self.assertNotIn("private-database", serialized_plan)
+            self.assertNotIn(target_id, serialized_plan)
+
+            applied = completion_workflows.markup_normalization_apply(
+                archive_root,
+                policy="normalize",
+                max_items=1000,
+                max_changes=1000,
+                binding_manifest=manifest_relative,
+                expected_plan_sha256=plan["summary"]["plan_sha256"],
+                reviewed_by="person:test",
+            )
+            self.assertTrue(applied["ok"], applied)
+            after = source_path.read_text(encoding="utf-8")
+            self.assertNotIn("<database", after)
+            self.assertIn(f"wom-zettel:{target_id}", after)
+            self.assertNotIn("wom-edge:", after)
+            self.assertEqual(target_path.read_bytes(), target_before)
+
+            revert_plan = completion_workflows.markup_normalization_revert_plan(
+                archive_root,
+                receipt=applied["summary"]["receipt_path"],
+            )
+            reverted = completion_workflows.markup_normalization_revert(
+                archive_root,
+                receipt=applied["summary"]["receipt_path"],
+                expected_plan_sha256=revert_plan["summary"]["plan_sha256"],
+                reviewed_by="person:test",
+            )
+            self.assertTrue(reverted["ok"], reverted)
+            self.assertEqual(source_path.read_bytes(), source_before)
+
+    def test_markup_normalization_rejects_unsafe_letter117_reference_shapes_and_kinds(self) -> None:
+        def digest(fragment: str) -> str:
+            return hashlib.sha256(fragment.encode("utf-8")).hexdigest()
+
+        def binding(kind: str) -> dict[str, str]:
+            return {
+                "binding_kind": kind,
+                "binding_id": (
+                    "zet_20260809_reviewed_target"
+                    if kind == "zettel_reference"
+                    else "sha256:" + ("a" * 64)
+                    if kind == "objet"
+                    else "edge:" + ("b" * 64)
+                    if kind == "zettel_edge"
+                    else "locator:sha256:" + ("c" * 64)
+                ),
+                "replacement": "[BOUND]",
+            }
+
+        cases = (
+            (
+                '<unknown:synced_block source="opaque"/>',
+                "zettel_reference",
+                "markup_unknown_content_reference_shape_unsupported",
+            ),
+            (
+                "<unknown:synced_block />",
+                "zettel_reference",
+                "markup_unknown_content_reference_shape_unsupported",
+            ),
+            (
+                "<UNKNOWN:SYNCED_BLOCK/>",
+                "zettel_reference",
+                "markup_unknown_content_reference_shape_unsupported",
+            ),
+            (
+                "<unknown:transclusion_reference></unknown:transclusion_reference>",
+                "zettel_reference",
+                "markup_unknown_content_reference_shape_unsupported",
+            ),
+            (
+                "<unknown:transclusion_container/>",
+                "zettel_edge",
+                "markup_reference_binding_kind_mismatch",
+            ),
+            (
+                "<unknown:transclusion_container/>",
+                "external_locator",
+                "markup_reference_binding_kind_mismatch",
+            ),
+            (
+                '<database inline="false" url="opaque">Visible title</database>',
+                "zettel_reference",
+                "markup_database_inner_content_unsupported",
+            ),
+            (
+                '<database icon="star" inline="false" url="opaque"></database>',
+                "zettel_reference",
+                "markup_database_attributes_unsupported",
+            ),
+            (
+                '<database inline="maybe" url="opaque"></database>',
+                "zettel_reference",
+                "markup_database_attributes_unsupported",
+            ),
+            (
+                '<database inline="false" url="opaque"></database>',
+                "objet",
+                "markup_reference_binding_kind_mismatch",
+            ),
+            (
+                '<database inline="false" url="opaque"/>',
+                "zettel_reference",
+                "markup_database_shape_unsupported",
+            ),
+        )
+        for fragment, kind, expected_blocker in cases:
+            with self.subTest(fragment=fragment, kind=kind):
+                result = completion_workflows._normalize_markup_body(
+                    fragment,
+                    bindings={digest(fragment): binding(kind)},
+                )
+                self.assertEqual(result["normalized_body"], fragment)
+                self.assertFalse(result["changed"])
+                self.assertIn(expected_blocker, result["blocker_codes"])
+                self.assertEqual(
+                    result["counts"]["reference_binding_applied"],
+                    0,
+                )
+
+        repeated = "<unknown:synced_block/>\n<unknown:synced_block/>\n"
+        repeated_digest = digest("<unknown:synced_block/>")
+        incomplete = completion_workflows._normalize_markup_body(
+            repeated,
+            bindings={
+                repeated_digest: {1: binding("zettel_reference")}
+            },
+        )
+        self.assertEqual(incomplete["normalized_body"], repeated)
+        self.assertFalse(incomplete["changed"])
+        self.assertIn(
+            "markup_reference_binding_occurrence_incomplete",
+            incomplete["blocker_codes"],
+        )
+        self.assertEqual(
+            incomplete["reference_tag_names"],
+            ["unknown:synced_block"],
+        )
+        self.assertEqual(
+            {
+                row["tag_name"]
+                for row in incomplete["reference_tag_digests"]
+            },
+            {"unknown:synced_block"},
+        )
+
+    def test_markup_normalization_restores_bound_letter117_reference_when_coblocked(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.fake_archive(Path(tmp) / "archive")
+            source_id = "zet_20260809_letter117_coblocked_source"
+            target_id = "zet_20260809_letter117_coblocked_target"
+            fragment = "<unknown:synced_block/>"
+            source_path = self.write_schema_valid_markup_zettel(
+                archive_root,
+                source_id,
+                fragment + "\n<unknown:unsupported/>\n",
+            )
+            before = source_path.read_bytes()
+            self.write_schema_valid_markup_zettel(
+                archive_root,
+                target_id,
+                "Reviewed target.\n",
+            )
+            manifest = {
+                "schema": completion_workflows.MARKUP_REFERENCE_BINDING_MANIFEST_SCHEMA,
+                "archive_id": completion_workflows.archive_services.read_archive_id(
+                    archive_root
+                ),
+                "bindings": [
+                    {
+                        "zettel_id": source_id,
+                        "tag_sha256": hashlib.sha256(
+                            fragment.encode("utf-8")
+                        ).hexdigest(),
+                        "occurrence_index": 1,
+                        "binding_kind": "zettel_reference",
+                        "binding_id": target_id,
+                    }
+                ],
+            }
+            manifest_relative = "ops/letter117-coblocked-binding.json"
+            manifest_path = archive_root / manifest_relative
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+            plan = completion_workflows.markup_normalization_plan(
+                archive_root,
+                policy="normalize",
+                max_items=1000,
+                max_changes=1000,
+                binding_manifest=manifest_relative,
+                only_ready=True,
+            )
+            self.assertFalse(plan["ok"], plan)
+            item = next(
+                row for row in plan["items"] if row["zettel_id"] == source_id
+            )
+            self.assertEqual(item["state"], "blocked")
+            self.assertEqual(item["before_sha256"], item["after_sha256"])
+            self.assertIn("unknown_semantic_markup", item["blocker_codes"])
+            self.assertEqual(plan["would_change"], [])
+            self.assertEqual(source_path.read_bytes(), before)
+
+    def test_markup_normalization_keeps_letter117_display_and_structure_gaps_fail_closed(self) -> None:
+        cases = {
+            "callout": (
+                '<callout icon="star" color="yellow_background">\n'
+                "\tVisible content\n"
+                "</callout>\n"
+            ),
+            "unknown_columns": (
+                "<unknown:column_list/>\n"
+                "<unknown:column/>\n"
+                "    Visible child content\n"
+            ),
+            "unknown_unsupported": "<unknown:unsupported/>\n",
+        }
+        for name, body in cases.items():
+            with self.subTest(name=name):
+                result = completion_workflows._normalize_markup_body(body)
+                self.assertEqual(result["normalized_body"], body)
+                self.assertFalse(result["changed"])
+                self.assertIn(
+                    "unknown_semantic_markup",
+                    result["blocker_codes"],
+                )
+
+        database = '<database inline="false" url="opaque"></database>\n'
+        unbound_database = completion_workflows._normalize_markup_body(database)
+        self.assertEqual(unbound_database["normalized_body"], database)
+        self.assertFalse(unbound_database["changed"])
+        self.assertIn(
+            "markup_reference_binding_required",
+            unbound_database["blocker_codes"],
+        )
+
+        guide = completion_workflows.markup_style_guide()
+        rules = {row["markup"]: row for row in guide["rules"]}
+        self.assertEqual(
+            rules["unknown_synced_and_transclusion_placeholders"]["action"],
+            "require_reviewed_static_zettel_or_objet_binding",
+        )
+        self.assertEqual(
+            rules["database"]["action"],
+            "require_reviewed_zettel_reference_for_empty_strict_pair",
+        )
+        self.assertFalse(
+            guide["truth_boundaries"][
+                "protected_context_is_actionable_migration_debt"
+            ]
+        )
+
     def test_markup_normalization_protects_literal_markup_contexts(self) -> None:
         def digest(fragment: str) -> str:
             return hashlib.sha256(fragment.encode("utf-8")).hexdigest()
@@ -5290,6 +5830,8 @@ class CompletionWorkflowTests(unittest.TestCase):
                 "binding_id": (
                     "edge:" + ("a" * 64)
                     if kind == "zettel_edge"
+                    else "zet_20260809_reviewed_target"
+                    if kind == "zettel_reference"
                     else "sha256:" + ("a" * 64)
                 ),
                 "replacement": "[BOUND]",
@@ -5353,6 +5895,76 @@ class CompletionWorkflowTests(unittest.TestCase):
             ),
             (
                 '<script><span color="red">script literal</span></script>',
+                "",
+                "objet",
+            ),
+            (
+                '<a title=\'before <span color="red">attribute literal</span> after\'>Link</a>',
+                "",
+                "objet",
+            ),
+            (
+                '<pre data-note=\'before <span color="red">pre attribute literal</span> after\'>\nplain\n</pre>',
+                "",
+                "objet",
+            ),
+            (
+                '<blockquote>\n<span color="red">raw block literal</span>\n</blockquote>',
+                "",
+                "objet",
+            ),
+            (
+                '<a>\n<span color="red">type seven raw block literal</span>\n</a>\n',
+                "",
+                "objet",
+            ),
+            (
+                '<a>\n<unknown:synced_block/>\n</a>\n',
+                "<unknown:synced_block/>",
+                "zettel_reference",
+            ),
+            (
+                '</blockquote>\n<span color="red">closing raw block literal</span>\n',
+                "",
+                "objet",
+            ),
+            (
+                '> <a>\n> <span color="red">quoted type seven raw block</span>\n> </a>\n>',
+                "",
+                "objet",
+            ),
+            (
+                '> <blockquote>\n> <span color="red">nested type six raw block</span>\n> </blockquote>\n>',
+                "",
+                "objet",
+            ),
+            (
+                '- <a>\n  <span color="red">list type seven raw block</span>\n  </a>\n',
+                "",
+                "objet",
+            ),
+            (
+                '1. <a>\n   <span color="red">ordered type seven raw block</span>\n   </a>\n',
+                "",
+                "objet",
+            ),
+            (
+                '[\nfoo\n]: /url "<span color=red>multiline label literal</span>"\n\n[foo]',
+                "",
+                "objet",
+            ),
+            (
+                '[foo]: /url\n"<span color=red>next line title literal</span>"\n\n[foo]',
+                "",
+                "objet",
+            ),
+            (
+                '> [foo]: /url "<span color=red>quoted reference title</span>"\n>\n> [foo]',
+                "",
+                "objet",
+            ),
+            (
+                '- [foo]: /url "<span color=red>list reference title</span>"',
                 "",
                 "objet",
             ),
@@ -5492,6 +6104,7 @@ class CompletionWorkflowTests(unittest.TestCase):
                     result["counts"]["reference_binding_applied"],
                     0,
                 )
+                self.assertEqual(result["reference_tag_digests"], [])
 
         ordinary = 'Use `literal` here.\n\n<file src="actual"></file>'
         actual_fragment = '<file src="actual"></file>'
@@ -5519,6 +6132,55 @@ class CompletionWorkflowTests(unittest.TestCase):
         )
         self.assertTrue(raw_html_result["changed"])
         self.assertIn("Actual", raw_html_result["normalized_body"])
+
+        adversarial_label = "[" + ("\\" * 32) + "x\n<span>Live</span>"
+        started = time.perf_counter()
+        self.assertFalse(
+            completion_workflows._reference_definition_contains_normalizable_markup(
+                adversarial_label
+            )
+        )
+        self.assertLess(time.perf_counter() - started, 1.0)
+
+    def test_markup_protected_container_prefix_scan_is_linear(self) -> None:
+        nested = ("> " * 200_000) + "<span>Literal</span>"
+        started = time.perf_counter()
+        payload = completion_workflows._markdown_container_payload(nested)
+        elapsed = time.perf_counter() - started
+        self.assertEqual(payload, "<span>Literal</span>")
+        self.assertLess(elapsed, 0.75)
+
+        definitions = "[a]: /x\n" * 10_000
+        started = time.perf_counter()
+        self.assertFalse(
+            completion_workflows._reference_definition_contains_normalizable_markup(
+                definitions
+            )
+        )
+        self.assertLess(time.perf_counter() - started, 1.0)
+
+        unmatched_links = ("](" * 10_000) + "plain\n"
+        started = time.perf_counter()
+        self.assertFalse(
+            completion_workflows._protected_markup_context_present(
+                unmatched_links
+            )
+        )
+        self.assertLess(time.perf_counter() - started, 1.0)
+
+        for adversarial_links in (
+            "<span>Live</span>\n" + ("](" * 10_000) + "plain\n",
+            ("](" * 10_000)
+            + (")" * 10_000)
+            + "<span>Live</span>",
+        ):
+            started = time.perf_counter()
+            self.assertFalse(
+                completion_workflows._protected_markup_context_present(
+                    adversarial_links
+                )
+            )
+            self.assertLess(time.perf_counter() - started, 1.0)
 
     def test_markup_normalization_rejects_paired_media_fallback_content(self) -> None:
         def digest(fragment: str) -> str:

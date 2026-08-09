@@ -9,7 +9,7 @@ from wom_kit import __version__
 
 KIT_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = KIT_ROOT.parent
-EXPECTED_CURRENT_VERSION = "0.3.309"
+EXPECTED_CURRENT_VERSION = "0.3.310"
 EXPECTED_CURRENT_TAG = f"v{EXPECTED_CURRENT_VERSION}"
 CURRENT_VERSION = f"v{__version__}"
 CURRENT_RELEASE_NOTE = f"{EXPECTED_CURRENT_TAG}.md"
@@ -20,7 +20,7 @@ CURRENT_WHEEL_URL = (
     f"wom_kit-{EXPECTED_CURRENT_VERSION}-py3-none-any.whl"
 )
 CURRENT_RUNTIME_STATUS = (
-    f"Status: {CURRENT_VERSION} Letter 116 occurrence, navigation, and generated-TOC checkpoint"
+    f"Status: {CURRENT_VERSION} Letter 117 reviewed imported-reference checkpoint"
 )
 CURRENT_MATRIX_VERSION = f"Version: {CURRENT_VERSION} implementation and release scope"
 MATRIX_PATH = KIT_ROOT / "docs" / "capability-matrix.md"
@@ -10810,6 +10810,62 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                     CURRENT_WHEEL_URL,
                     path.read_text(encoding="utf-8"),
                 )
+
+    def test_v03310_letter117_source_contract_is_public_and_fail_closed(self) -> None:
+        guide_path = KIT_ROOT / "docs" / "letter117-completion.md"
+        release_path = KIT_ROOT / "docs" / "releases" / "v0.3.310.md"
+        decision_path = (
+            KIT_ROOT
+            / "docs"
+            / "archive-infra-decision-log-2026-08-09-v03310-letter117-completion.md"
+        )
+        runtime_path = KIT_ROOT / "docs" / "runtime-canonical-entrypoints.md"
+        public_map_path = KIT_ROOT / "docs" / "public-documentation-map.md"
+        public_map_ko_path = KIT_ROOT / "docs" / "public-documentation-map.ko.md"
+
+        guide_text = guide_path.read_text(encoding="utf-8")
+        guide_flat = " ".join(guide_text.split())
+        release_text = release_path.read_text(encoding="utf-8")
+        decision_text = decision_path.read_text(encoding="utf-8")
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        runtime_text = runtime_path.read_text(encoding="utf-8")
+
+        for text in (guide_text, release_text, decision_text, matrix_text):
+            normalized = " ".join(text.split())
+            with self.subTest(document="letter117-source-contract"):
+                self.assertIn("unknown:synced_block", normalized)
+                self.assertIn("unknown:transclusion_reference", normalized)
+                self.assertIn("unknown:transclusion_container", normalized)
+                self.assertIn("database", normalized)
+                self.assertIn("zettel_reference", normalized)
+                self.assertIn("objet", normalized)
+                self.assertIn("419", normalized)
+                self.assertIn("165", normalized)
+                self.assertIn("410", normalized)
+                self.assertIn("156", normalized)
+                self.assertNotIn("release candidate", normalized.lower())
+                self.assertNotIn("C:\\Users\\", text)
+
+        for phrase in (
+            "complete proposed normalized body",
+            "does not reconstruct missing children or claim live sync",
+            "raw-HTML type 6 or type 7",
+            "linear-time regression coverage",
+            "Protected-context items are not a count of migration debt",
+            "source-span-aware parser",
+        ):
+            with self.subTest(guide_phrase=phrase):
+                self.assertIn(phrase.casefold(), guide_flat.casefold())
+
+        self.assertIn(CURRENT_RUNTIME_STATUS, matrix_text)
+        self.assertIn(CURRENT_RUNTIME_STATUS, runtime_text)
+        public_map_text = public_map_path.read_text(encoding="utf-8")
+        public_map_ko_text = public_map_ko_path.read_text(encoding="utf-8")
+        self.assertIn("letter117-completion.md", public_map_text)
+        self.assertIn("releases/v0.3.310.md", public_map_text)
+        self.assertIn("letter117-completion.md", public_map_ko_text)
+        self.assertIn("releases/v0.3.310.md", public_map_ko_text)
+        self.assertTrue((KIT_ROOT / "docs" / "releases" / "v0.3.309.md").is_file())
 
     def test_active_source_docs_use_module_launcher_not_direct_wrapper(self) -> None:
         active_paths = (

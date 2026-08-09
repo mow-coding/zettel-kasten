@@ -32,10 +32,10 @@ wom-kit/docs/releases/에만 쌓고, baseline 사다리와 tag 목록을 여기�
 현재 공개 기준:
 
 ```text
-v0.3.309 pre-release
+v0.3.310 pre-release
 ```
 
-이전 공개 기준: v0.3.308 pre-release.
+이전 공개 기준: v0.3.309 pre-release.
 
 전체 릴리스 이력은 [CHANGELOG.md](CHANGELOG.md)와 [wom-kit/docs/releases/](wom-kit/docs/releases/)를 보세요.
 
@@ -54,7 +54,7 @@ Roadmap 요약: `v0.1.x`는 아이디어/프로토콜 언어 라인, `v0.2.x`는
 파일이 실제 공개되었다는 증거가 되지는 않습니다.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.309/wom_kit-0.3.309-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.310/wom_kit-0.3.310-py3-none-any.whl"
 archive --version
 ```
 
@@ -82,7 +82,7 @@ archive runtime-skill-install --dry-run --format json
 ### Archive 핵심과 lifecycle
 
 - WOM / zet / ZET 설계 기준, specs, schemas, fake archive, release notes, work logs,
-- Letter 116까지의 통합 실사용 피드백 기능. archive-root 경로, source-intake/Objet capture 배치, 구조화된 zet-objet 연결, 반복 참조 마크업을 위한 1부터 시작하는 검토 occurrence selector, graph edge를 추론하지 않는 탐색 전용 zettel reference, 원문 본문의 첫 번째 비어 있지 않은 줄에 있는 엄격한 목차 placeholder 제거, paired file과 검토된 page/audio 연결을 포함한 ready-only 손실 없는 마크업 정규화, 지원하지 않는 마크업을 그대로 차단하는 엄격한 안전 표 셀 부분집합, locator 제자리 보강과 되돌릴 수 있는 중복 전용 비활성화, 미발행 초안 폐기·복원, AI 초안 필수정보·같은 제목 중복 방지, 세션 시작 미발행 현황, 발행 완료 증거, archive별 AI 작성 규칙을 제공합니다. [Letter 116 완료 가이드](wom-kit/docs/letter116-completion.md)를 보세요.
+- Letter 117까지의 통합 실사용 피드백 기능. archive-root 경로, source-intake/Objet capture 배치, 구조화된 zet-objet 연결, 빠짐없는 1-based occurrence 검토 권한, 정확한 synced/transclusion placeholder를 위한 검토된 정적 zettel/objet 연결, 엄격한 빈 database 쌍을 위한 검토된 zettel 탐색 연결, 보호된 literal 강화, graph edge를 추론하지 않는 탐색 전용 zettel reference, 정확한 generated-TOC placeholder 제거, paired file과 검토된 page/audio 연결을 포함한 ready-only 손실 없는 마크업 정규화, callout·unknown column·unsupported 구조를 그대로 차단하는 안전 경계를 제공합니다. transcluded child를 재구성하거나 live provider 동작을 보존한다고 주장하지 않습니다. [Letter 117 완료 가이드](wom-kit/docs/letter117-completion.md)를 보세요.
 - 고정된 archive 소유 scratch, staging, draft, workpack, generated-index, local content-addressed object 표면을 위한 제한된 읽기 전용 artifact lifecycle inventory. root별 독립 coverage, 내용 없는 안정 review ref, 엄격한 manifest 후보 대조, 삭제를 추론하지 않는 만료 검토, 비정본 in-root 원본 저장소의 존재만 확인하는 보호 경계를 제공합니다.
 - 사람이 선택한 이벤트 anchor와 member 집합을 먼저 검증한 뒤, 정확한 해시에 묶인 `facets.activity_group` 추가와 제거를 서로 분리된 사람 승인·잠금·이전 상태 보존·journal·영수증 기반 CLI writer로 적용하고 각각 별도 승인 복구까지 제공하는 workflow. 추가와 제거는 하나의 전역 writer 잠금과 제한된 두 root 증거 검사를 공유하지만 요청·journal·영수증·복구 계약은 분리되며, 제거의 `already_absent` 항목은 변경 아티팩트에서 제외됩니다. 멤버십을 추론하거나 MCP writer를 제공하지 않습니다.
 - 새 Notion JSON/YAML manifest 항목의 기본 제목이 식별자 모양일 때만, 같은 항목의 정확한 소문자 top-level `index` 문자열을 기존 제목·비공개 정보 안전 검사를 통과한 경우 새 inbox 초안의 제목으로 사용하는 외부 import 보완. 사람이 쓴 일반 제목은 항상 우선하며 기존 zet는 바꾸지 않습니다.
@@ -406,7 +406,7 @@ WOM, `zettel-kasten`, `zet`, `ZET`는 버전이 있는 protocol family로 관리
 Release tag는 compatibility checkpoint입니다.
 
 ```text
-v0.3.309 (현재 checkpoint)
+v0.3.310 (현재 checkpoint)
 ```
 
 `v0.2.5` 이후의 공개 릴리스에는 compatibility checkpoint tag가 붙습니다. 전체

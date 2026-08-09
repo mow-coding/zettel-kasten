@@ -2,6 +2,51 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.3.310 Letter 117 검토된 import 참조 완성
+
+v0.3.310은 v0.3.309 아카이브와 호환되며 자동 아카이브 migration이나 manifest
+schema 업그레이드가 필요하지 않습니다. 기존의 검토된 binding-manifest v0.2와
+같은 plan/apply/recovery/revert lifecycle을 확장합니다.
+
+정확한 세 가지 import placeholder, 즉 `<unknown:synced_block/>`,
+`<unknown:transclusion_reference/>`, `<unknown:transclusion_container/>`는 이제
+검토된 정적 권한을 사용할 수 있습니다. 각 occurrence는 소문자·무속성·self-closing
+형태가 정확히 일치해야 하며 같은 아카이브의 canonical `zettel_reference` 또는
+완전히 manifest된 `objet`에만 연결할 수 있습니다. 같은 digest가 반복되면 여전히
+빠짐없는 1-based `occurrence_index`가 필요합니다. 속성, 다른 대소문자나 공백,
+paired 형태, 불완전한 selector, `zettel_edge`, `external_locator` 권한은 원문을
+바꾸지 않고 차단됩니다. 결과는 정적 탐색 또는 objet link일 뿐이며 provider를
+조회하거나 transcluded child를 재구성하거나 edge를 추론하거나 live sync를
+보존한다고 주장하지 않습니다.
+
+빈 paired `database` fragment는 opening tag에 필수 `inline`·`url` 속성과 선택적인
+`data-source-url`만 있고 `inline`이 `true` 또는 `false`일 때 검토된
+`zettel_reference`에 연결할 수 있습니다. digest는 opening과 closing을 포함한 전체
+fragment를 대상으로 합니다. self-closing database, 보이는 내부 내용, 빠지거나
+추가된 속성, 잘못된 `inline`, objet/edge/locator binding은 바이트 그대로
+차단됩니다. WOM은 정적 zettel link만 만들며 database view를 materialize하지
+않습니다.
+
+보호된 Markdown과 raw HTML literal은 자동으로 고쳐야 할 migration debt가 아니라
+그대로 보존하는 최종 내용입니다. v0.3.310은 따옴표로 감싼 HTML 속성, 검토되지
+않은 raw HTML block, 여러 줄 label link reference definition, 다음 줄에 title이
+오는 reference definition 안의 정규화처럼 보이는 tag가 잘못 바뀌던 경계를
+막습니다. 보호 문맥이나 다른 blocker가 하나라도 있으면 제안된 zettel 본문 전체를
+버리고 원래 바이트를 유지합니다. 보호 literal 밖의 안전한 source span만 골라
+정규화하는 기능은 미래 작업입니다.
+
+callout의 icon/color/들여쓰기 의미, unknown column 경계,
+`unknown:unsupported` 내용은 아직 손실 없이 제거할 수 없으므로 fail-closed로
+남습니다. 계속 `markup-normalization-plan --only-ready --dry-run`으로 먼저
+미리보고, 내용 없는 selector와 정확한 plan digest를 검토한 뒤 변하지 않은
+계획만 승인하세요. 업그레이드 자체는 provider를 조회하거나 개인 아카이브를
+수정하지 않습니다.
+
+자세한 내용은 [Letter 117 운영 가이드](wom-kit/docs/letter117-completion.md),
+[v0.3.310 릴리스 노트](wom-kit/docs/releases/v0.3.310.md),
+[결정 기록](wom-kit/docs/archive-infra-decision-log-2026-08-09-v03310-letter117-completion.md)을
+보세요.
+
 ## v0.3.309 Letter 116 occurrence와 검토된 탐색 참조 완성
 
 v0.3.309는 v0.3.308 아카이브와 호환되며 자동 아카이브 마이그레이션이
