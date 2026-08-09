@@ -10,12 +10,12 @@ It is not a website, SaaS app, dashboard, or visual note-taking product. The int
 
 ## Install The Command-Line Tool
 
-The exact v0.3.308 GitHub Release, when present, uses the self-contained wheel
+The exact v0.3.309 GitHub Release, when present, uses the self-contained wheel
 below. Confirm that the release exists and lists the wheel before installing
 it. The versioned URL alone is not proof that the asset is available.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.308/wom_kit-0.3.308-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.309/wom_kit-0.3.309-py3-none-any.whl"
 archive --version
 ```
 
@@ -166,6 +166,22 @@ plan/apply pair requires both the target and keeper, changes only the target to
 `inactive`, and remains exactly revertible. See
 [`docs/letter115-completion.md`](docs/letter115-completion.md) and
 [`docs/releases/v0.3.308.md`](docs/releases/v0.3.308.md).
+
+v0.3.309 documents the Letter 116 occurrence,
+navigation, and generated-TOC boundary. Repeated same-digest references can use
+complete per-zettel 1-based `occurrence_index` selectors; a reviewed
+`zettel_reference` for one self-closing page mention creates a navigation-only
+link without creating an edge; and one exact generated
+`<unknown:table_of_contents/>` placeholder at the original first nonempty body
+line can be removed without materializing navigation. Bare `callout` and
+`database`, plus unsupported `unknown:` synced/transclusion/column/link-preview
+placeholders, remain deferred and fail closed because their identity or child
+semantics are unverified. Existing `<synced_block>`/`<synced_block_reference>`
+inner preservation and `<column>/<columns>` structural normalization are
+unchanged. The source checkpoint and external CI, exact-tag,
+GitHub Release, and wheel evidence remain distinct verification layers. See
+[`docs/letter116-completion.md`](docs/letter116-completion.md) and
+[`docs/releases/v0.3.309.md`](docs/releases/v0.3.309.md).
 
 Use a dedicated virtual environment when installing with plain `pip`. WOM-kit
 is not published to PyPI yet, so `pip install wom-kit` is not an official

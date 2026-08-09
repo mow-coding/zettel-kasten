@@ -2,6 +2,44 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.3.309 Letter 116 occurrence와 검토된 탐색 참조 완성
+
+v0.3.309는 v0.3.308 아카이브와 호환되며 자동 아카이브 마이그레이션이
+필요하지 않습니다. 기존 v0.1 마크업 binding manifest는 같은 참조 digest가 한
+번만 나올 때 계속 읽을 수 있습니다. 바이트가 같은 태그가 반복되면 v0.2의
+검토된 manifest에 `1`부터 실제 occurrence 개수까지 빠짐없이 지정한 1-based
+`occurrence_index`가 필요합니다. 누락·혼용·중복·범위 밖·오래된 selector는 원문
+바이트를 바꾸지 않고 차단됩니다.
+
+v0.2 manifest는 self-closing `mention-page` occurrence 하나를 검토된
+`zettel_reference` 하나에 연결할 수 있습니다. 이것은 탐색 링크이지 의미 graph
+edge가 아닙니다. WOM은 `edges[]` row를 만들거나 바꾸지 않으며 관계를 추론하지
+않습니다. 검토된 source id와 path는 계속 모호하지 않아야 합니다. target은
+source와 다르고 같은 아카이브 안에서 정확히 하나의 일반 schema-valid canonical
+zettel로 확인되어야 하며, 승인 계획을 writer lock 안에서 다시 계산할 때도
+canonical이어야 합니다. 모호한 신원, lifecycle 변경, 잘못된 target, 참조 태그와
+맞지 않는 binding kind는 쓰기 없이 차단됩니다.
+
+정규화기는 속성 없는 정확한 self-closing
+`<unknown:table_of_contents/>` placeholder가 원문 본문의 첫 번째 비어 있지 않은
+줄에 정확히 한 번 있을 때만 제거할 수 있습니다. 목차나 다른 탐색 텍스트를
+새로 만들지는 않습니다. 들여쓰기·속성·반복·중간 위치·보호된 문맥·다른 blocker와
+함께 있는 형태는 바이트 그대로 유지됩니다. bare `callout`·`database` tag와
+지원하지 않는 `unknown:` synced·transclusion·column·link-preview placeholder는
+보이는 내용이나 신원을 추측 없이 복구할 수 있을 때까지 계속 fail-closed입니다.
+기존에 지원하던 synced 및 column wrapper 정규화는 그대로 유지됩니다.
+
+계속해서 `markup-normalization-plan --only-ready --dry-run`을 먼저 실행하고,
+내용을 노출하지 않는 selector와 plan digest를 검토한 뒤 변하지 않은 정확한
+계획만 승인하세요. apply·recovery·revert는 기존의 정확한 snapshot, journal,
+receipt, byte 보존 계약을 유지합니다. 업그레이드 과정에서 provider를 조회하거나
+개인 아카이브를 자동 수정하는 명령은 없습니다.
+
+자세한 내용은 [Letter 116 운영 가이드](wom-kit/docs/letter116-completion.md),
+[v0.3.309 릴리스 노트](wom-kit/docs/releases/v0.3.309.md),
+[결정 기록](wom-kit/docs/archive-infra-decision-log-2026-08-09-v03309-letter116-completion.md)을
+보세요.
+
 ## v0.3.308 Letter 115 참조·locator·표 완성
 
 v0.3.308은 v0.3.307 아카이브와 호환되며 자동 아카이브 마이그레이션이

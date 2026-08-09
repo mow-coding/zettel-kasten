@@ -9,7 +9,7 @@ from wom_kit import __version__
 
 KIT_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = KIT_ROOT.parent
-EXPECTED_CURRENT_VERSION = "0.3.308"
+EXPECTED_CURRENT_VERSION = "0.3.309"
 EXPECTED_CURRENT_TAG = f"v{EXPECTED_CURRENT_VERSION}"
 CURRENT_VERSION = f"v{__version__}"
 CURRENT_RELEASE_NOTE = f"{EXPECTED_CURRENT_TAG}.md"
@@ -20,8 +20,9 @@ CURRENT_WHEEL_URL = (
     f"wom_kit-{EXPECTED_CURRENT_VERSION}-py3-none-any.whl"
 )
 CURRENT_RUNTIME_STATUS = (
-    f"Status: {CURRENT_VERSION} Letter 115 reference, locator, and table completion checkpoint"
+    f"Status: {CURRENT_VERSION} Letter 116 occurrence, navigation, and generated-TOC checkpoint"
 )
+CURRENT_MATRIX_VERSION = f"Version: {CURRENT_VERSION} implementation and release scope"
 MATRIX_PATH = KIT_ROOT / "docs" / "capability-matrix.md"
 PRODUCT_ROADMAP_PATH = KIT_ROOT / "docs" / "product-roadmap.md"
 BASE_TYPES_PATH = KIT_ROOT / "zettel-kasten" / "types.yml"
@@ -272,7 +273,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         )
         for phrase in (
             "Status: v0.3.227 aggregate full-Doctor edge progress checkpoint",
-            f"Version: {CURRENT_VERSION}, release candidate",
+            CURRENT_MATRIX_VERSION,
             "cumulative source/candidate/cache-hit counts",
             "does not perform another broad pass",
         ):
@@ -318,7 +319,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         for phrase in (
             "Status: v0.3.228 actionable full-Doctor result and current-stage progress checkpoint",
-            f"Version: {CURRENT_VERSION}, release candidate",
+            CURRENT_MATRIX_VERSION,
             "doctor_findings",
             "up to 100 detailed items",
             "up to 20 deduplicated suggested commands",
@@ -370,7 +371,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
 
         for phrase in (
             "Status: v0.3.229 executable BOM reconcile guidance checkpoint",
-            f"Version: {CURRENT_VERSION}, release candidate",
+            CURRENT_MATRIX_VERSION,
             "actual validated canonical frontmatter id",
             "omits the command when the id is absent or unsafe",
         ):
@@ -407,7 +408,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
 
         for phrase in (
             "Status: v0.3.230 digest-bound content-change review checkpoint",
-            f"Version: {CURRENT_VERSION}, release candidate",
+            CURRENT_MATRIX_VERSION,
             "Previous checkpoint: Status: v0.3.229",
             "--reviewed-plan-sha256 <sha256>",
         ):
@@ -445,7 +446,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         )
         for phrase in (
             "Status: v0.3.231 first-read readiness checkpoint",
-            f"Version: {CURRENT_VERSION}, release candidate",
+            CURRENT_MATRIX_VERSION,
             "First-read readiness gate",
             "explicit abstract",
             "uniquely resolvable safe id",
@@ -480,7 +481,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         )
         for phrase in (
             "Status: v0.3.232 explicit abstract publication checkpoint",
-            f"Version: {CURRENT_VERSION}, release candidate",
+            CURRENT_MATRIX_VERSION,
             "Explicit abstract publication invariant",
             "compatibility fields",
             "full draft SHA-256 and abstract SHA-256",
@@ -536,7 +537,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
 
         for phrase in (
             "Previous checkpoint: Status: v0.3.233 abstract freshness evidence checkpoint",
-            f"Version: {CURRENT_VERSION}, release candidate",
+            CURRENT_MATRIX_VERSION,
             "Abstract freshness evidence",
             "O(canonical_zets + evidence_candidate_receipts + receipt_items)",
             "semantic truth",
@@ -616,7 +617,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
 
         for phrase in (
-            f"Version: {CURRENT_VERSION}, release candidate",
+            CURRENT_MATRIX_VERSION,
             "result schema v0.2",
             "evidence_candidate_receipts",
             "no whole receipt-tree enumeration",
@@ -679,7 +680,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
 
         for phrase in (
             "Status: v0.3.234 canonical zet revision plan checkpoint",
-            f"Version: {CURRENT_VERSION}, release candidate",
+            CURRENT_MATRIX_VERSION,
             "Canonical zet revision plan",
             ".wom-scratch/revisions/",
             "plan_digest",
@@ -744,7 +745,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
 
         for phrase in (
             "Status: v0.3.235 canonical zet revision write checkpoint",
-            f"Version: {CURRENT_VERSION}, release candidate",
+            CURRENT_MATRIX_VERSION,
             "Canonical zet revision write",
             "approval-gated local CLI write",
             "MCP exposes no writer",
@@ -817,7 +818,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
 
         for phrase in (
             "Status: v0.3.236 canonical zet revision receipt and lock audit checkpoint",
-            f"Version: {CURRENT_VERSION}, release candidate",
+            CURRENT_MATRIX_VERSION,
             "Canonical zet revision receipt audit",
             "implemented local read-only CLI",
             "O(manifest_records + receipt_files log receipt_files + revision_chains + lock_files + unique_before_snapshot_bytes)",
@@ -879,7 +880,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
 
         for phrase in (
             "Status: v0.3.248 canonical revision before-snapshot checkpoint",
-            f"Version: {CURRENT_VERSION}, release candidate",
+            CURRENT_MATRIX_VERSION,
             "wom-kit/zet-revision-receipt/v0.2",
             "objects/sha256/",
             "before_snapshot",
@@ -940,7 +941,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
 
         for phrase in (
             "Status: v0.3.237 canonical zet revision restore plan checkpoint",
-            f"Version: {CURRENT_VERSION}, release candidate",
+            CURRENT_MATRIX_VERSION,
             "Canonical zet revision restore plan",
             "separately recovered full-zet bytes",
             "before a separate reviewed writer; no MCP duplicate",
@@ -1029,7 +1030,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
 
         for phrase in (
             "Status: v0.3.249 before-snapshot restore-proposal bridge checkpoint",
-            f"Version: {CURRENT_VERSION}, release candidate",
+            CURRENT_MATRIX_VERSION,
             "zet-revision-restore-proposal-from-snapshot",
             "independent",
             "never a hard link",
@@ -1074,7 +1075,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         )
         for phrase in (
             "Status: v0.3.250 receipt-backed session handoff checkpoint",
-            f"Version: {CURRENT_VERSION}, release candidate",
+            CURRENT_MATRIX_VERSION,
             "session-handoff-checkpoint",
             "--confirm-chat-reviewed",
             "--expected-state-digest",
@@ -1128,7 +1129,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         )
         for phrase in (
             "Status: v0.3.251 local backup evidence status checkpoint",
-            f"Version: {CURRENT_VERSION}, release candidate",
+            CURRENT_MATRIX_VERSION,
             "backup-evidence",
             "declared_uploaded",
             "receipt_verified_full_coverage_at_recorded_time",
@@ -1188,7 +1189,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
 
         for phrase in (
             "Status: v0.3.239 approved exact-byte canonical restore checkpoint",
-            f"Version: {CURRENT_VERSION}, release candidate",
+            CURRENT_MATRIX_VERSION,
             "Canonical zet exact-byte restore write",
             "implemented approval-gated local CLI",
             "writes the recovered proposal bytes exactly",
@@ -1252,7 +1253,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
 
         for phrase in (
             "Status: v0.3.238 chronological revision event-chain checkpoint",
-            f"Version: {CURRENT_VERSION}, release candidate",
+            CURRENT_MATRIX_VERSION,
             "orders each identity's events by unique normalized timestamp",
             "A -> B -> A",
             "O(manifest_records + receipt_files log receipt_files + revision_chains + lock_files + unique_before_snapshot_bytes)",
@@ -2023,7 +2024,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                 self.assertIn(phrase, guide_text)
         for phrase in (
             "Status: v0.3.221 archive-wide abstract receipt and lock audit checkpoint",
-            f"Version: {CURRENT_VERSION}, release candidate",
+            CURRENT_MATRIX_VERSION,
             "zet abstract receipt lifecycle audit",
             "Up to 5,000 receipts and 5,000 locks",
             "Green proves bounded local consistency",
