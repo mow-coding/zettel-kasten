@@ -6,6 +6,25 @@ The filesystem folder is `wom-kit/`, the Python import package is `wom_kit`, and
 
 See `wom-kit/docs/concepts/naming-and-terminology.md` for the naming baseline.
 
+v0.3.309 narrows the existing markup-normalization CLI
+without adding a command. Binding-manifest v0.2 can select repeated same-digest
+references with complete, per-zettel 1-based `occurrence_index` values;
+`zettel_reference` creates reviewed navigation for one self-closing page
+mention but does not write an edge; and one exact generated
+`<unknown:table_of_contents/>` at the original first nonempty body line may be
+removed without building navigation. The v0.1 manifest remains unique-only.
+Bare `callout` and `database`, plus the unsupported `unknown:synced_block`,
+`unknown:transclusion_reference`, `unknown:transclusion_container`,
+`unknown:column_list`, `unknown:column`, `unknown:link_preview`, and
+`unknown:unsupported` placeholders remain deferred and fail closed because
+their identity or child semantics are unverified. Existing
+`<synced_block>`/`<synced_block_reference>` and `<column>/<columns>` support is
+unchanged. See
+`wom-kit/docs/letter116-completion.md` and
+`wom-kit/docs/releases/v0.3.309.md`. Source documentation and external CI,
+exact-tag, GitHub Release, and wheel evidence remain distinct verification
+layers.
+
 v0.3.308 completes the Letter 115 CLI boundary: migration-markup normalization
 supports one reviewed full paired-file digest, reviewed self-closing
 page/audio bindings, and a strict safe table-cell subset; unsupported or

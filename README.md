@@ -34,10 +34,10 @@ not re-grow baseline ladders or tag lists here.
 Current public baseline:
 
 ```text
-v0.3.308 pre-release
+v0.3.309 pre-release
 ```
 
-Previous public baseline: v0.3.307 pre-release.
+Previous public baseline: v0.3.308 pre-release.
 
 Full release history: see [CHANGELOG.md](CHANGELOG.md) and [wom-kit/docs/releases/](wom-kit/docs/releases/).
 
@@ -57,7 +57,7 @@ matching GitHub Release exists and lists this wheel. The versioned URL alone is
 not proof that the asset is available.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.308/wom_kit-0.3.308-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.309/wom_kit-0.3.309-py3-none-any.whl"
 archive --version
 ```
 
@@ -92,7 +92,7 @@ approval-gated write, or docs-only), see the
 - a public version-line roadmap that explains how the pre-1.0 minor lines map to idea, implementation, WOM feedback, UI/control-layer, and ZET feedback phases,
 - a machine-readable local-sovereignty contract: local reviewed WOM state is canonical, GitHub backs up metadata/version history, object storage backs up objet bytes, and external databases hold regenerable map backups or replicas; runtime/start-here/recovery surfaces share the same offline, conflict, recovery, and receipt boundaries, while read-only `backup-evidence` reports only locally verifiable lane evidence and never turns local commits, declared labels, generated indexes, or receipt-time coverage into a false current-remote or whole-backup claim,
 - a read-only observed source-reference audit that keeps current canonical `source_refs` and exact Notion omission-marker coverage separate from local recorded storage evidence, refuses archive access without explicit Python `-B`, and never turns a complete observed scan, a manifest identity, or a historical provider receipt into an archive-wide source or live-byte claim,
-- one integrated real-use feedback surface through Letter 115 with collision-safe records, archive-root path authority, bounded source-intake and Objet-capture batches, structured zet-objet links, ready-only lossless markup normalization for paired files and reviewed page/audio bindings, a strict safe table-cell subset with fail-closed unsupported markup, in-place locator enrichment plus reversible dedupe-only deactivation, reversible never-minted draft discard, AI draft completeness and same-title guards, session-start unpublished-draft attention, publication completion evidence, archive-specific AI writing rules, project bytecode repair, and complete deterministic CI shards; see [Letter 115 Completion](wom-kit/docs/letter115-completion.md),
+- one integrated real-use feedback surface through Letter 116 with collision-safe records, archive-root path authority, bounded source-intake and Objet-capture batches, structured zet-objet links, one-based reviewed occurrence selectors for repeated reference markup, navigation-only reviewed zettel references that never infer graph edges, strict original-body-first-nonempty-line table-of-contents placeholder removal, ready-only lossless normalization for paired files and reviewed page/audio bindings, a strict safe table-cell subset with fail-closed unsupported markup, in-place locator enrichment plus reversible dedupe-only deactivation, reversible never-minted draft discard, AI draft completeness and same-title guards, session-start unpublished-draft attention, publication completion evidence, archive-specific AI writing rules, project bytecode repair, and complete deterministic CI shards; see [Letter 116 Completion](wom-kit/docs/letter116-completion.md),
 - a bounded read-only artifact lifecycle inventory over fixed archive-owned scratch, staging, draft, workpack, generated-index, and local content-addressed object surfaces, with independent per-root coverage, content-free stable review refs, strict manifest candidate reconciliation, expiry review without deletion inference, and presence-only protection for non-canonical in-root original storage,
 - WOM-kit local CLI and MCP tooling under `wom-kit/`, importing as `wom_kit`,
 - an exact installed-wheel resource integrity gate: release checking rejects
@@ -513,7 +513,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
-v0.3.308 (current checkpoint)
+v0.3.309 (current checkpoint)
 ```
 
 Public releases from `v0.2.5` onward are tagged as compatibility checkpoints.
