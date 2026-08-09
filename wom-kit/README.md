@@ -10,12 +10,12 @@ It is not a website, SaaS app, dashboard, or visual note-taking product. The int
 
 ## Install The Command-Line Tool
 
-The exact v0.3.309 GitHub Release, when present, uses the self-contained wheel
+The exact v0.3.310 GitHub Release, when present, uses the self-contained wheel
 below. Confirm that the release exists and lists the wheel before installing
 it. The versioned URL alone is not proof that the asset is available.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.309/wom_kit-0.3.309-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.310/wom_kit-0.3.310-py3-none-any.whl"
 archive --version
 ```
 
@@ -182,6 +182,22 @@ unchanged. The source checkpoint and external CI, exact-tag,
 GitHub Release, and wheel evidence remain distinct verification layers. See
 [`docs/letter116-completion.md`](docs/letter116-completion.md) and
 [`docs/releases/v0.3.309.md`](docs/releases/v0.3.309.md).
+
+v0.3.310 documents the Letter 117 reviewed imported-reference boundary. Exact
+lowercase, attribute-free, self-closing synced/transclusion placeholders can
+use complete occurrence-bound v0.2 authority for a static canonical zettel or
+manifested objet link. A strict empty paired `database` fragment can use a
+reviewed zettel link. Neither path creates an edge, reconstructs transcluded
+children, looks up a provider, materializes a database view, or claims live
+sync. Normalizable-looking tags inside quoted HTML attributes, unreviewed raw
+HTML blocks, and multiline or next-line-title link reference definitions are
+now protected as whole-zettel terminal literals. Callout display semantics,
+unknown column structures, and unsupported unknown content remain byte-identical
+and fail closed; partial outside-span normalization remains future work. See
+[`docs/letter117-completion.md`](docs/letter117-completion.md) and
+[`docs/releases/v0.3.310.md`](docs/releases/v0.3.310.md). Source documentation
+and external CI, exact-tag, GitHub Release, and wheel evidence remain distinct
+verification layers.
 
 Use a dedicated virtual environment when installing with plain `pip`. WOM-kit
 is not published to PyPI yet, so `pip install wom-kit` is not an official

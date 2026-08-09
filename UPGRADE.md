@@ -24,6 +24,53 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.310 Letter 117 Reviewed Imported-Reference Completion
+
+v0.3.310 is compatible with v0.3.309 archives and requires no automatic
+archive migration or manifest-schema upgrade. It extends the existing reviewed
+binding-manifest v0.2 and the same plan/apply/recovery/revert lifecycle.
+
+Three exact imported placeholder shapes can now use reviewed static authority:
+`<unknown:synced_block/>`, `<unknown:transclusion_reference/>`, and
+`<unknown:transclusion_container/>`. Each occurrence must keep the exact
+lowercase, attribute-free, self-closing spelling and may bind only to a
+canonical same-archive `zettel_reference` or a fully manifested `objet`.
+Repeated same-digest placeholders still require complete 1-based
+`occurrence_index` coverage. Attributes, alternate case or spacing, paired
+forms, incomplete selectors, `zettel_edge`, and `external_locator` authority
+remain unchanged and block. The result is a static navigation or objet link;
+it does not fetch a provider, reconstruct transcluded children, infer an edge,
+or claim live synchronization.
+
+An empty paired `database` fragment may bind to a reviewed
+`zettel_reference` when its opening tag contains exactly required `inline` and
+`url` attributes plus optional `data-source-url`; `inline` must be `true` or
+`false`. The digest covers the full opening-and-closing fragment. A
+self-closing database, visible inner content, missing or extra attributes,
+invalid `inline`, or an objet/edge/locator binding remains byte-identical and
+blocked. WOM creates only a static zettel link and does not materialize a
+database view.
+
+Protected Markdown and raw-HTML literals are terminal preserved content, not
+automatically repairable migration debt. v0.3.310 closes fail-open gaps for
+normalizable-looking tags inside quoted HTML attributes, unreviewed raw-HTML
+blocks, multiline-label link reference definitions, and reference-definition
+titles on the following line. If a protected context or any other blocker is
+present, the complete proposed zettel body is discarded and its original
+bytes remain unchanged. Normalizing only safe source spans outside a protected
+literal remains future work.
+
+Callout icon/color/indentation semantics, unknown column boundaries, and
+`unknown:unsupported` content still cannot be removed losslessly and remain
+fail closed. Continue to preview with
+`markup-normalization-plan --only-ready --dry-run`, review the content-free
+selectors and exact plan digest, and approve only the unchanged plan. Upgrade
+itself performs no provider lookup or private-archive write.
+
+See the [Letter 117 operator guide](wom-kit/docs/letter117-completion.md),
+the [v0.3.310 release note](wom-kit/docs/releases/v0.3.310.md), and the
+[decision log](wom-kit/docs/archive-infra-decision-log-2026-08-09-v03310-letter117-completion.md).
+
 ## v0.3.309 Letter 116 Occurrence And Reviewed Navigation Completion
 
 v0.3.309 is compatible with v0.3.308 archives and requires no automatic
