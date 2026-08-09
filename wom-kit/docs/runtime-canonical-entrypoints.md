@@ -1,6 +1,6 @@
 # Runtime Canonical Entry Points
 
-Status: v0.3.308 Letter 115 reference, locator, and table completion checkpoint
+Status: v0.3.309 Letter 116 occurrence, navigation, and generated-TOC checkpoint
 
 When an AI runtime enters a WOM archive, it needs a small, explicit "start
 here" map. The archive may contain zets, source bindings, provider metadata,
@@ -90,6 +90,25 @@ cell subset. Unsupported, content-bearing, repeated identity-free, unsafe, or
 unbalanced shapes remain byte-identical and blocked; the runtime must not infer
 an edge, objet identity, or table semantics. See
 [Letter 115 Completion](letter115-completion.md).
+
+v0.3.309 adds no command and does not change the action-routing
+schema. It narrows the existing markup plan/apply route: v0.2 manifests can
+select a complete 1-based same-digest occurrence sequence within one zettel;
+legacy v0.1 bindings remain unique-only. A reviewed `zettel_reference` may turn
+one self-closing page mention into navigation to a unique current canonical
+target, but it does not create an edge or infer a relation. One exact generated
+`<unknown:table_of_contents/>` at the immutable original body's first nonempty
+line may be removed; no heading scan or generated navigation is materialized.
+Bare `callout` and `database`, plus `unknown:synced_block`,
+`unknown:transclusion_reference`, `unknown:transclusion_container`,
+`unknown:column_list`, `unknown:column`, `unknown:link_preview`, and
+`unknown:unsupported`, remain deferred and fail closed because identity or
+required child semantics are unverified. This does not remove existing
+`<synced_block>`/`<synced_block_reference>` inner-preserving or
+`<column>/<columns>` structural normalization. See
+[Letter 116 Completion](letter116-completion.md). Source documentation and
+external CI, exact-tag, GitHub Release, and wheel evidence remain distinct
+verification layers.
 
 When the question is observed current canonical source-reference coverage
 versus separately recorded storage evidence, use `python -B -m

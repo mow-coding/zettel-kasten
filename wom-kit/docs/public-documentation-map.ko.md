@@ -238,6 +238,7 @@
 - [Artifact Hygiene](artifact-hygiene.md)
 - [레거시 조율 상태 정리](legacy-coordination-cleanup.md)
 - [Letter 115 완료 가이드](letter115-completion.md)
+- [Letter 116 완료 가이드](letter116-completion.md)
 - [Artifact Lifecycle Inventory](artifact-lifecycle-inventory.md)
 - [Zettel Edge Write](zettel-edge-write.md)
 - [Zettel Edge Batch](zettel-edge-batch.md)
@@ -399,6 +400,7 @@ local archive
 - [Changelog](../../CHANGELOG.md)
 - [Release Notes](releases/)
 - [v0.3.308 릴리스 노트](releases/v0.3.308.md)
+- [v0.3.309 릴리스 노트](releases/v0.3.309.md)
 
 작업일지는 제품 명세가 아닙니다.
 

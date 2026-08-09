@@ -24,6 +24,46 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.309 Letter 116 Occurrence And Reviewed Navigation Completion
+
+v0.3.309 is compatible with v0.3.308 archives and requires no automatic
+archive migration. Existing v0.1 markup-binding manifests remain readable for
+a reference digest that occurs exactly once. Repeated byte-identical tags now
+require a v0.2 reviewed manifest with a complete, one-based
+`occurrence_index` set from `1` through the exact occurrence count. Missing,
+mixed, duplicate, out-of-range, or stale selectors leave the source bytes
+unchanged and block.
+
+A v0.2 manifest may bind a self-closing `mention-page` occurrence to one
+reviewed `zettel_reference`. This is a navigation link, not a semantic graph
+edge: WOM creates or changes no `edges[]` row and infers no relationship. The
+reviewed source id and path must remain unambiguous. The target must be
+distinct from the source and resolve to exactly one regular, schema-valid,
+canonical zettel in the same archive, and it must remain canonical when the
+approved plan is reapplied under the writer lock. Ambiguous identity,
+lifecycle drift, an invalid target, or a binding kind that does not match the
+reference tag blocks without a write.
+
+The normalizer may also remove one exact, attribute-free, self-closing
+`<unknown:table_of_contents/>` placeholder when it occurs exactly once and is
+the immutable original body's first non-empty line. It does not generate a
+table of contents or other navigation text. Indented, attributed, repeated,
+non-first-line, protected-context, or co-blocked forms remain byte-identical.
+Bare `callout` and `database` tags plus the unsupported `unknown:` synced,
+transclusion, column, and link-preview placeholder shapes remain fail closed
+until their visible content or identity can be recovered without guessing.
+Existing supported synced and column wrapper normalization is unchanged.
+
+Continue to run `markup-normalization-plan --only-ready --dry-run`, review its
+content-free selector and plan digests, and approve only the unchanged plan.
+Apply, recovery, and revert keep the existing exact-snapshot, journal,
+receipt, and byte-preservation contracts. No command scans a provider or
+automatically edits a private archive during upgrade.
+
+See the [Letter 116 operator guide](wom-kit/docs/letter116-completion.md),
+the [v0.3.309 release note](wom-kit/docs/releases/v0.3.309.md), and the
+[decision log](wom-kit/docs/archive-infra-decision-log-2026-08-09-v03309-letter116-completion.md).
+
 ## v0.3.308 Letter 115 Reference, Locator, And Table Completion
 
 v0.3.308 is compatible with v0.3.307 archives and requires no automatic

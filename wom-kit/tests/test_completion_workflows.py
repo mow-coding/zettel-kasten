@@ -151,6 +151,47 @@ class CompletionWorkflowTests(unittest.TestCase):
         )
         return path
 
+    def write_schema_valid_markup_zettel(
+        self,
+        archive_root: Path,
+        zettel_id: str,
+        body: str,
+        *,
+        status: str = "canonical",
+        folder: str = "zettels",
+    ) -> Path:
+        path = archive_root / folder / f"{zettel_id}.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        archive_id = completion_workflows.archive_services.read_archive_id(
+            archive_root
+        )
+        path.write_text(
+            "---\n"
+            f"id: {zettel_id}\n"
+            f"title: Synthetic {zettel_id}\n"
+            "created_at: '2026-08-09T00:00:00Z'\n"
+            "updated_at: '2026-08-09T00:00:00Z'\n"
+            f"archive_id: {archive_id}\n"
+            f"status: {status}\n"
+            "kind: note\n"
+            "facets: {}\n"
+            "assets: []\n"
+            "edges: []\n"
+            "provenance:\n"
+            "  created_by: person:test\n"
+            "  created_in: synthetic-test\n"
+            "  source: synthetic-test\n"
+            "  derived_from: []\n"
+            "visibility:\n"
+            "  scope: private\n"
+            "  allowed_archives: []\n"
+            "  source_visibility: private\n"
+            "---\n"
+            + body,
+            encoding="utf-8",
+        )
+        return path
+
     @staticmethod
     def locator_fixture_id(marker: str) -> str:
         return f"locator:sha256:{marker * 64}"
@@ -2414,6 +2455,171 @@ class CompletionWorkflowTests(unittest.TestCase):
             )
             self.assertEqual(target.read_bytes(), before_bytes)
 
+    def test_markup_normalization_removes_exact_generated_toc_marker_and_reverts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.fake_archive(Path(tmp) / "archive")
+            paths: list[Path] = []
+            before_by_path: dict[Path, bytes] = {}
+            expected_after_by_path: dict[Path, bytes] = {}
+            for label, newline in (("lf", "\n"), ("crlf", "\r\n")):
+                zettel_id = f"zet_20260809_generated_toc_{label}"
+                path = archive_root / "zettels" / f"{zettel_id}.md"
+                raw = (
+                    "---"
+                    + newline
+                    + f"id: {zettel_id}"
+                    + newline
+                    + f"title: Generated TOC {label}"
+                    + newline
+                    + "status: canonical"
+                    + newline
+                    + "kind: note"
+                    + newline
+                    + "---"
+                    + newline
+                    + "<unknown:table_of_contents/>"
+                    + newline
+                    + "Authored body remains."
+                    + newline
+                ).encode("utf-8")
+                path.write_bytes(raw)
+                paths.append(path)
+                before_by_path[path] = raw
+                expected_after_by_path[path] = raw.replace(
+                    ("<unknown:table_of_contents/>" + newline).encode(
+                        "utf-8"
+                    ),
+                    b"",
+                    1,
+                )
+
+            plan = completion_workflows.markup_normalization_plan(
+                archive_root,
+                policy="normalize",
+                max_items=1000,
+                max_changes=1000,
+            )
+            self.assertTrue(plan["ok"], plan)
+            by_id = {item["zettel_id"]: item for item in plan["items"]}
+            for label in ("lf", "crlf"):
+                item = by_id[f"zet_20260809_generated_toc_{label}"]
+                self.assertEqual(item["state"], "ready")
+                self.assertEqual(item["counts"]["table_of_contents"], 1)
+
+            applied = completion_workflows.markup_normalization_apply(
+                archive_root,
+                policy="normalize",
+                max_items=1000,
+                max_changes=1000,
+                expected_plan_sha256=plan["summary"]["plan_sha256"],
+                reviewed_by="person:test",
+            )
+            self.assertTrue(applied["ok"], applied)
+            for path in paths:
+                after = path.read_bytes()
+                self.assertEqual(after, expected_after_by_path[path])
+
+            revert_plan = completion_workflows.markup_normalization_revert_plan(
+                archive_root,
+                receipt=applied["summary"]["receipt_path"],
+            )
+            reverted = completion_workflows.markup_normalization_revert(
+                archive_root,
+                receipt=applied["summary"]["receipt_path"],
+                expected_plan_sha256=revert_plan["summary"]["plan_sha256"],
+                reviewed_by="person:test",
+            )
+            self.assertTrue(reverted["ok"], reverted)
+            for path in paths:
+                self.assertEqual(path.read_bytes(), before_by_path[path])
+
+    def test_markup_normalization_generated_toc_rule_is_narrow_and_context_safe(self) -> None:
+        cases = {
+            "attribute": '<unknown:table_of_contents color="blue"/>\n',
+            "paired": "<unknown:table_of_contents></unknown:table_of_contents>\n",
+            "inline": "Before <unknown:table_of_contents/> after\n",
+            "repeated": (
+                "<unknown:table_of_contents/>\n"
+                "<unknown:table_of_contents/>\n"
+            ),
+            "mid_body": "Authored first.\n<unknown:table_of_contents/>\n",
+            "empty_block_precedes": (
+                "<empty-block/>\n<unknown:table_of_contents/>\nBody\n"
+            ),
+            "two_empty_blocks_precede": (
+                "<empty-block/>\n<empty-block/>\n"
+                "<unknown:table_of_contents/>\nBody\n"
+            ),
+            "indented": "\t<unknown:table_of_contents/>\n",
+            "fenced": (
+                "```html\n<unknown:table_of_contents/>\n```\n"
+            ),
+            "inline_code": "`<unknown:table_of_contents/>`\n",
+            "comment": "<!-- <unknown:table_of_contents/> -->\n",
+            "link_destination": (
+                "[literal](https://example.test/<unknown:table_of_contents/>)\n"
+            ),
+        }
+        for label, body in cases.items():
+            with self.subTest(label=label):
+                result = completion_workflows._normalize_markup_body(body)
+                self.assertEqual(result["normalized_body"], body)
+                self.assertFalse(result["changed"])
+                self.assertTrue(result["blocker_codes"], result)
+                self.assertEqual(result["counts"]["table_of_contents"], 0)
+
+    def test_markup_normalization_only_ready_keeps_toc_with_other_unknown_exact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.fake_archive(Path(tmp) / "archive")
+            safe_path = self.write_markup_zettel(
+                archive_root,
+                "zet_20260809_generated_toc_only_ready_safe",
+                "<unknown:table_of_contents/>\nSafe body.\n",
+            )
+            blocked_path = self.write_markup_zettel(
+                archive_root,
+                "zet_20260809_generated_toc_only_ready_blocked",
+                "<unknown:table_of_contents/>\n<unknown:synced_block/>\n",
+            )
+            safe_before = safe_path.read_bytes()
+            blocked_before = blocked_path.read_bytes()
+
+            plan = completion_workflows.markup_normalization_plan(
+                archive_root,
+                policy="normalize",
+                max_items=1000,
+                max_changes=1000,
+                only_ready=True,
+            )
+            self.assertTrue(plan["ok"], plan)
+            self.assertEqual(plan["state"], "partial_ready")
+            by_id = {item["zettel_id"]: item for item in plan["items"]}
+            blocked_item = by_id[
+                "zet_20260809_generated_toc_only_ready_blocked"
+            ]
+            self.assertEqual(blocked_item["state"], "blocked")
+            self.assertEqual(
+                blocked_item["before_sha256"],
+                blocked_item["after_sha256"],
+            )
+
+            applied = completion_workflows.markup_normalization_apply(
+                archive_root,
+                policy="normalize",
+                max_items=1000,
+                max_changes=1000,
+                only_ready=True,
+                expected_plan_sha256=plan["summary"]["plan_sha256"],
+                reviewed_by="person:test",
+            )
+            self.assertTrue(applied["ok"], applied)
+            self.assertNotEqual(safe_path.read_bytes(), safe_before)
+            self.assertNotIn(
+                b"<unknown:table_of_contents/>",
+                safe_path.read_bytes(),
+            )
+            self.assertEqual(blocked_path.read_bytes(), blocked_before)
+
     def test_markup_normalization_converts_reviewed_table_to_gfm_without_visible_text_loss(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.fake_archive(Path(tmp) / "archive")
@@ -3400,6 +3606,1184 @@ class CompletionWorkflowTests(unittest.TestCase):
             self.assertIn("wom-objet:sha256:", after)
             self.assertNotIn("private-page-coordinate", after)
             self.assertNotIn("<unknown:audio", after)
+
+    def test_markup_normalization_binds_repeated_digest_by_one_based_occurrence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.fake_archive(Path(tmp) / "archive")
+            source_id = "zet_20260809_repeated_file_occurrences"
+            fragment = '<file src="same-private-coordinate"></file>'
+            source_path = self.write_markup_zettel(
+                archive_root,
+                source_id,
+                fragment + "\n" + fragment + "\n",
+            )
+            before = source_path.read_bytes()
+            first_object = (
+                "sha256:acc6e73fb84988ecb538dfc0ceb883b88694e469a05172a5aeb0cce8902ce136"
+            )
+            second_object = (
+                "sha256:9dabf9b965a3f789b1b36100f3f70515ce8dfd81b411b1503e1e2c3304303647"
+            )
+
+            unbound = completion_workflows.markup_normalization_plan(
+                archive_root,
+                policy="normalize",
+                max_items=1000,
+                max_changes=1000,
+            )
+            self.assertFalse(unbound["ok"])
+            item = next(
+                row for row in unbound["items"] if row["zettel_id"] == source_id
+            )
+            self.assertEqual(
+                item["reference_tag_digests"],
+                [
+                    {
+                        "tag_name": "file",
+                        "tag_sha256": hashlib.sha256(
+                            fragment.encode("utf-8")
+                        ).hexdigest(),
+                        "occurrence_index": 1,
+                    },
+                    {
+                        "tag_name": "file",
+                        "tag_sha256": hashlib.sha256(
+                            fragment.encode("utf-8")
+                        ).hexdigest(),
+                        "occurrence_index": 2,
+                    },
+                ],
+            )
+            manifest = {
+                "schema": completion_workflows.MARKUP_REFERENCE_BINDING_MANIFEST_SCHEMA,
+                "archive_id": completion_workflows.archive_services.read_archive_id(
+                    archive_root
+                ),
+                "bindings": [
+                    {
+                        "zettel_id": source_id,
+                        "tag_sha256": item["reference_tag_digests"][0][
+                            "tag_sha256"
+                        ],
+                        "occurrence_index": occurrence_index,
+                        "binding_kind": "objet",
+                        "binding_id": object_id,
+                    }
+                    for occurrence_index, object_id in (
+                        (2, second_object),
+                        (1, first_object),
+                    )
+                ],
+            }
+            self.assert_schema_instance(
+                "markup-reference-binding-manifest.schema.json",
+                manifest,
+            )
+            manifest_relative = "ops/repeated-file-bindings.json"
+            manifest_path = archive_root / manifest_relative
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+            plan = completion_workflows.markup_normalization_plan(
+                archive_root,
+                policy="normalize",
+                max_items=1000,
+                max_changes=1000,
+                binding_manifest=manifest_relative,
+            )
+            self.assertTrue(plan["ok"], plan)
+            self.assertEqual(plan["summary"]["reference_binding_count"], 2)
+            applied = completion_workflows.markup_normalization_apply(
+                archive_root,
+                policy="normalize",
+                max_items=1000,
+                max_changes=1000,
+                binding_manifest=manifest_relative,
+                expected_plan_sha256=plan["summary"]["plan_sha256"],
+                reviewed_by="person:test",
+            )
+            self.assertTrue(applied["ok"], applied)
+            after = source_path.read_text(encoding="utf-8")
+            first_link = (
+                "[Attached objet](wom-objet:sha256:"
+                + first_object.removeprefix("sha256:")
+                + ")"
+            )
+            second_link = (
+                "[Attached objet](wom-objet:sha256:"
+                + second_object.removeprefix("sha256:")
+                + ")"
+            )
+            self.assertLess(after.index(first_link), after.index(second_link))
+            self.assertNotIn("same-private-coordinate", after)
+
+            revert_plan = completion_workflows.markup_normalization_revert_plan(
+                archive_root,
+                receipt=applied["summary"]["receipt_path"],
+            )
+            reverted = completion_workflows.markup_normalization_revert(
+                archive_root,
+                receipt=applied["summary"]["receipt_path"],
+                expected_plan_sha256=revert_plan["summary"]["plan_sha256"],
+                reviewed_by="person:test",
+            )
+            self.assertTrue(reverted["ok"], reverted)
+            self.assertEqual(source_path.read_bytes(), before)
+
+    def test_markup_normalization_blocks_unindexed_repeated_digest_fanout(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.fake_archive(Path(tmp) / "archive")
+            source_id = "zet_20260809_unindexed_repeated_file"
+            fragment = '<file src="same-private-coordinate"></file>'
+            source_path = self.write_markup_zettel(
+                archive_root,
+                source_id,
+                fragment + "\n" + fragment + "\n",
+            )
+            before = source_path.read_bytes()
+            digest = hashlib.sha256(fragment.encode("utf-8")).hexdigest()
+            manifest = {
+                "schema": "wom-kit/markup-reference-binding-manifest/v0.1",
+                "archive_id": completion_workflows.archive_services.read_archive_id(
+                    archive_root
+                ),
+                "bindings": [
+                    {
+                        "zettel_id": source_id,
+                        "tag_sha256": digest,
+                        "binding_kind": "objet",
+                        "binding_id": (
+                            "sha256:acc6e73fb84988ecb538dfc0ceb883b88694e469a05172a5aeb0cce8902ce136"
+                        ),
+                    }
+                ],
+            }
+            manifest_relative = "ops/legacy-unindexed-repeated-file.json"
+            manifest_path = archive_root / manifest_relative
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+            plan = completion_workflows.markup_normalization_plan(
+                archive_root,
+                policy="normalize",
+                max_items=1000,
+                max_changes=1000,
+                binding_manifest=manifest_relative,
+            )
+            self.assertFalse(plan["ok"])
+            self.assertIn(
+                "markup_reference_binding_occurrence_required",
+                plan["blockers"],
+            )
+            item = next(
+                row for row in plan["items"] if row["zettel_id"] == source_id
+            )
+            self.assertEqual(item["state"], "blocked")
+            self.assertEqual(item["before_sha256"], item["after_sha256"])
+            self.assertEqual(
+                item["counts"]["reference_binding_applied"],
+                0,
+            )
+            self.assertEqual(source_path.read_bytes(), before)
+
+    def test_markup_binding_manifest_validates_occurrence_selectors_at_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.fake_archive(Path(tmp) / "archive")
+            source_id = "zet_20260809_occurrence_manifest_validation"
+            fragment = '<file src="private-coordinate"></file>'
+            source_path = self.write_markup_zettel(
+                archive_root,
+                source_id,
+                fragment + "\n",
+            )
+            before = source_path.read_bytes()
+            digest = hashlib.sha256(fragment.encode("utf-8")).hexdigest()
+            object_id = (
+                "sha256:acc6e73fb84988ecb538dfc0ceb883b88694e469a05172a5aeb0cce8902ce136"
+            )
+            base_row = {
+                "zettel_id": source_id,
+                "tag_sha256": digest,
+                "binding_kind": "objet",
+                "binding_id": object_id,
+            }
+            archive_id = completion_workflows.archive_services.read_archive_id(
+                archive_root
+            )
+            invalid_rows = {
+                "zero": {**base_row, "occurrence_index": 0},
+                "negative": {**base_row, "occurrence_index": -1},
+                "boolean": {**base_row, "occurrence_index": True},
+                "string": {**base_row, "occurrence_index": "1"},
+                "float": {**base_row, "occurrence_index": 1.0},
+                "typo": {**base_row, "occurrence_indx": 1},
+                "zettel_whitespace": {
+                    **base_row,
+                    "zettel_id": f" {source_id} ",
+                },
+                "uppercase_digest": {
+                    **base_row,
+                    "tag_sha256": digest.upper(),
+                },
+                "binding_kind_whitespace": {
+                    **base_row,
+                    "binding_kind": " OBJET ",
+                },
+                "binding_id_whitespace": {
+                    **base_row,
+                    "binding_id": f" {object_id} ",
+                },
+            }
+            for label, row in invalid_rows.items():
+                with self.subTest(label=label):
+                    relative = f"ops/invalid-occurrence-{label}.json"
+                    path = archive_root / relative
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text(
+                        json.dumps(
+                            {
+                                "schema": completion_workflows.MARKUP_REFERENCE_BINDING_MANIFEST_SCHEMA,
+                                "archive_id": archive_id,
+                                "bindings": [row],
+                            }
+                        ),
+                        encoding="utf-8",
+                    )
+                    plan = completion_workflows.markup_normalization_plan(
+                        archive_root,
+                        policy="normalize",
+                        max_items=1000,
+                        max_changes=1000,
+                        binding_manifest=relative,
+                    )
+                    self.assertFalse(plan["ok"], plan)
+                    self.assertIn(
+                        "markup_binding_manifest_invalid",
+                        plan["blockers"],
+                    )
+                    self.assertEqual(source_path.read_bytes(), before)
+
+            duplicate_member_relative = "ops/duplicate-json-member.json"
+            (archive_root / duplicate_member_relative).write_text(
+                '{"schema":"wom-kit/markup-reference-binding-manifest/v0.2",'
+                f'"archive_id":"{archive_id}","bindings":[{{'
+                f'"zettel_id":"{source_id}","tag_sha256":"{digest}",'
+                '"occurrence_index":1,"occurrence_index":2,'
+                f'"binding_kind":"objet","binding_id":"{object_id}"}}]}}',
+                encoding="utf-8",
+            )
+            duplicate_member = completion_workflows.markup_normalization_plan(
+                archive_root,
+                policy="normalize",
+                max_items=1000,
+                max_changes=1000,
+                binding_manifest=duplicate_member_relative,
+            )
+            self.assertIn(
+                "markup_binding_manifest_invalid",
+                duplicate_member["blockers"],
+            )
+
+            for label, legacy_row in (
+                (
+                    "legacy_occurrence",
+                    {**base_row, "occurrence_index": 1},
+                ),
+                (
+                    "legacy_zettel_reference",
+                    {
+                        **base_row,
+                        "binding_kind": "zettel_reference",
+                        "binding_id": source_id,
+                    },
+                ),
+            ):
+                with self.subTest(label=label):
+                    relative = f"ops/{label}.json"
+                    (archive_root / relative).write_text(
+                        json.dumps(
+                            {
+                                "schema": "wom-kit/markup-reference-binding-manifest/v0.1",
+                                "archive_id": archive_id,
+                                "bindings": [legacy_row],
+                            }
+                        ),
+                        encoding="utf-8",
+                    )
+                    legacy_invalid = (
+                        completion_workflows.markup_normalization_plan(
+                            archive_root,
+                            policy="normalize",
+                            max_items=1000,
+                            max_changes=1000,
+                            binding_manifest=relative,
+                        )
+                    )
+                    self.assertIn(
+                        "markup_binding_manifest_invalid",
+                        legacy_invalid["blockers"],
+                    )
+
+            unhashable_schema_relative = "ops/unhashable-schema-value.json"
+            (archive_root / unhashable_schema_relative).write_text(
+                json.dumps(
+                    {
+                        "schema": [],
+                        "archive_id": archive_id,
+                        "bindings": [base_row],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            unhashable_schema = (
+                completion_workflows.markup_normalization_plan(
+                    archive_root,
+                    policy="normalize",
+                    max_items=1000,
+                    max_changes=1000,
+                    binding_manifest=unhashable_schema_relative,
+                )
+            )
+            self.assertIn(
+                "markup_binding_manifest_invalid",
+                unhashable_schema["blockers"],
+            )
+
+            for label, rows, expected in (
+                (
+                    "mixed",
+                    [base_row, {**base_row, "occurrence_index": 1}],
+                    "markup_binding_occurrence_mixed",
+                ),
+                (
+                    "duplicate",
+                    [
+                        {**base_row, "occurrence_index": 1},
+                        {**base_row, "occurrence_index": 1},
+                    ],
+                    "markup_binding_duplicate",
+                ),
+            ):
+                with self.subTest(label=label):
+                    relative = f"ops/occurrence-{label}.json"
+                    (archive_root / relative).write_text(
+                        json.dumps(
+                            {
+                                "schema": completion_workflows.MARKUP_REFERENCE_BINDING_MANIFEST_SCHEMA,
+                                "archive_id": archive_id,
+                                "bindings": rows,
+                            }
+                        ),
+                        encoding="utf-8",
+                    )
+                    plan = completion_workflows.markup_normalization_plan(
+                        archive_root,
+                        policy="normalize",
+                        max_items=1000,
+                        max_changes=1000,
+                        binding_manifest=relative,
+                    )
+                    self.assertFalse(plan["ok"], plan)
+                    self.assertIn(expected, plan["blockers"])
+                    self.assertEqual(source_path.read_bytes(), before)
+
+            legacy_relative = "ops/legacy-single-occurrence.json"
+            (archive_root / legacy_relative).write_text(
+                json.dumps(
+                    {
+                        "schema": "wom-kit/markup-reference-binding-manifest/v0.1",
+                        "archive_id": archive_id,
+                        "bindings": [base_row],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            legacy = completion_workflows.markup_normalization_plan(
+                archive_root,
+                policy="normalize",
+                max_items=1000,
+                max_changes=1000,
+                binding_manifest=legacy_relative,
+            )
+            self.assertTrue(legacy["ok"], legacy)
+            self.assertEqual(legacy["summary"]["reference_binding_count"], 1)
+            serialized = json.dumps(legacy, ensure_ascii=False)
+            self.assertNotIn("private-coordinate", serialized)
+            self.assertNotIn(object_id, serialized)
+
+    def test_markup_normalization_blocks_incomplete_or_out_of_range_occurrences(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.fake_archive(Path(tmp) / "archive")
+            source_id = "zet_20260809_occurrence_bounds"
+            fragment = '<file src="same-private-coordinate"></file>'
+            source_path = self.write_markup_zettel(
+                archive_root,
+                source_id,
+                fragment + "\n" + fragment + "\n",
+            )
+            before = source_path.read_bytes()
+            digest = hashlib.sha256(fragment.encode("utf-8")).hexdigest()
+            object_id = (
+                "sha256:acc6e73fb84988ecb538dfc0ceb883b88694e469a05172a5aeb0cce8902ce136"
+            )
+            archive_id = completion_workflows.archive_services.read_archive_id(
+                archive_root
+            )
+            for label, index, expected in (
+                (
+                    "incomplete",
+                    1,
+                    "markup_reference_binding_occurrence_incomplete",
+                ),
+                (
+                    "out-of-range",
+                    3,
+                    "markup_reference_binding_occurrence_out_of_range",
+                ),
+            ):
+                with self.subTest(label=label):
+                    relative = f"ops/occurrence-{label}.json"
+                    (archive_root / relative).write_text(
+                        json.dumps(
+                            {
+                                "schema": completion_workflows.MARKUP_REFERENCE_BINDING_MANIFEST_SCHEMA,
+                                "archive_id": archive_id,
+                                "bindings": [
+                                    {
+                                        "zettel_id": source_id,
+                                        "tag_sha256": digest,
+                                        "occurrence_index": index,
+                                        "binding_kind": "objet",
+                                        "binding_id": object_id,
+                                    }
+                                ],
+                            }
+                        ),
+                        encoding="utf-8",
+                    )
+                    plan = completion_workflows.markup_normalization_plan(
+                        archive_root,
+                        policy="normalize",
+                        max_items=1000,
+                        max_changes=1000,
+                        binding_manifest=relative,
+                    )
+                    self.assertFalse(plan["ok"], plan)
+                    self.assertIn(expected, plan["blockers"])
+                    item = next(
+                        row
+                        for row in plan["items"]
+                        if row["zettel_id"] == source_id
+                    )
+                    self.assertEqual(item["before_sha256"], item["after_sha256"])
+                    self.assertEqual(
+                        item["counts"]["reference_binding_applied"],
+                        0,
+                    )
+                    self.assertEqual(source_path.read_bytes(), before)
+
+    def test_markup_normalization_binds_reviewed_zettel_without_creating_edge(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.fake_archive(Path(tmp) / "archive")
+            source_id = "zet_20260809_direct_mention_source"
+            target_id = "zet_20260809_direct_mention_target"
+            fragment = '<mention-page url="private-page-coordinate"/>'
+            source_path = self.write_markup_zettel(
+                archive_root,
+                source_id,
+                fragment + "\n",
+            )
+            target_path = self.write_schema_valid_markup_zettel(
+                archive_root,
+                target_id,
+                "Reviewed canonical target.\n",
+            )
+            before = source_path.read_bytes()
+            target_before = target_path.read_bytes()
+
+            unbound = completion_workflows.markup_normalization_plan(
+                archive_root,
+                policy="normalize",
+                max_items=1000,
+                max_changes=1000,
+            )
+            item = next(
+                row for row in unbound["items"] if row["zettel_id"] == source_id
+            )
+            digest = item["reference_tag_digests"][0]["tag_sha256"]
+            manifest = {
+                "schema": completion_workflows.MARKUP_REFERENCE_BINDING_MANIFEST_SCHEMA,
+                "archive_id": completion_workflows.archive_services.read_archive_id(
+                    archive_root
+                ),
+                "bindings": [
+                    {
+                        "zettel_id": source_id,
+                        "tag_sha256": digest,
+                        "occurrence_index": 1,
+                        "binding_kind": "zettel_reference",
+                        "binding_id": target_id,
+                    }
+                ],
+            }
+            self.assert_schema_instance(
+                "markup-reference-binding-manifest.schema.json",
+                manifest,
+            )
+            manifest_relative = "ops/direct-zettel-reference.json"
+            manifest_path = archive_root / manifest_relative
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+            plan = completion_workflows.markup_normalization_plan(
+                archive_root,
+                policy="normalize",
+                max_items=1000,
+                max_changes=1000,
+                binding_manifest=manifest_relative,
+            )
+            self.assertTrue(plan["ok"], plan)
+            applied = completion_workflows.markup_normalization_apply(
+                archive_root,
+                policy="normalize",
+                max_items=1000,
+                max_changes=1000,
+                binding_manifest=manifest_relative,
+                expected_plan_sha256=plan["summary"]["plan_sha256"],
+                reviewed_by="person:test",
+            )
+            self.assertTrue(applied["ok"], applied)
+            after = source_path.read_text(encoding="utf-8")
+            self.assertIn(
+                f"[Referenced zettel](wom-zettel:{target_id})",
+                after,
+            )
+            self.assertNotIn("private-page-coordinate", after)
+            self.assertNotIn("\nedges:", after)
+            self.assertEqual(target_path.read_bytes(), target_before)
+
+            revert_plan = completion_workflows.markup_normalization_revert_plan(
+                archive_root,
+                receipt=applied["summary"]["receipt_path"],
+            )
+            reverted = completion_workflows.markup_normalization_revert(
+                archive_root,
+                receipt=applied["summary"]["receipt_path"],
+                expected_plan_sha256=revert_plan["summary"]["plan_sha256"],
+                reviewed_by="person:test",
+            )
+            self.assertTrue(reverted["ok"], reverted)
+            self.assertEqual(source_path.read_bytes(), before)
+
+    def test_markup_normalization_binds_repeated_mentions_to_distinct_reviewed_zettels(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.fake_archive(Path(tmp) / "archive")
+            source_id = "zet_20260809_repeated_direct_mentions"
+            target_ids = (
+                "zet_20260809_repeated_direct_target_a",
+                "zet_20260809_repeated_direct_target_b",
+            )
+            fragment = '<mention-page url="private-page-coordinate"/>'
+            source_path = self.write_markup_zettel(
+                archive_root,
+                source_id,
+                fragment + "\n" + fragment + "\n",
+            )
+            source_before = source_path.read_bytes()
+            target_paths = [
+                self.write_schema_valid_markup_zettel(
+                    archive_root,
+                    target_id,
+                    f"Reviewed target {index}.\n",
+                )
+                for index, target_id in enumerate(target_ids, start=1)
+            ]
+            target_bytes = [path.read_bytes() for path in target_paths]
+            digest = hashlib.sha256(fragment.encode("utf-8")).hexdigest()
+            manifest = {
+                "schema": completion_workflows.MARKUP_REFERENCE_BINDING_MANIFEST_SCHEMA,
+                "archive_id": completion_workflows.archive_services.read_archive_id(
+                    archive_root
+                ),
+                "bindings": [
+                    {
+                        "zettel_id": source_id,
+                        "tag_sha256": digest,
+                        "occurrence_index": occurrence_index,
+                        "binding_kind": "zettel_reference",
+                        "binding_id": target_id,
+                    }
+                    for occurrence_index, target_id in (
+                        (2, target_ids[1]),
+                        (1, target_ids[0]),
+                    )
+                ],
+            }
+            manifest_relative = "ops/repeated-direct-zettel-references.json"
+            manifest_path = archive_root / manifest_relative
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+            plan = completion_workflows.markup_normalization_plan(
+                archive_root,
+                policy="normalize",
+                max_items=1000,
+                max_changes=1000,
+                binding_manifest=manifest_relative,
+            )
+            self.assertTrue(plan["ok"], plan)
+            self.assertEqual(plan["summary"]["reference_binding_count"], 2)
+            item = next(
+                row for row in plan["items"] if row["zettel_id"] == source_id
+            )
+            self.assertEqual(
+                [row["occurrence_index"] for row in item["reference_tag_digests"]],
+                [1, 2],
+            )
+            serialized_plan = json.dumps(plan, ensure_ascii=False)
+            self.assertNotIn("private-page-coordinate", serialized_plan)
+            for target_id in target_ids:
+                self.assertNotIn(target_id, serialized_plan)
+
+            applied = completion_workflows.markup_normalization_apply(
+                archive_root,
+                policy="normalize",
+                max_items=1000,
+                max_changes=1000,
+                binding_manifest=manifest_relative,
+                expected_plan_sha256=plan["summary"]["plan_sha256"],
+                reviewed_by="person:test",
+            )
+            self.assertTrue(applied["ok"], applied)
+            after = source_path.read_text(encoding="utf-8")
+            first_link = (
+                f"[Referenced zettel](wom-zettel:{target_ids[0]})"
+            )
+            second_link = (
+                f"[Referenced zettel](wom-zettel:{target_ids[1]})"
+            )
+            self.assertLess(after.index(first_link), after.index(second_link))
+            self.assertNotIn("private-page-coordinate", after)
+            self.assertNotIn("\nedges:", after)
+            self.assertEqual(
+                [path.read_bytes() for path in target_paths],
+                target_bytes,
+            )
+
+            revert_plan = completion_workflows.markup_normalization_revert_plan(
+                archive_root,
+                receipt=applied["summary"]["receipt_path"],
+            )
+            reverted = completion_workflows.markup_normalization_revert(
+                archive_root,
+                receipt=applied["summary"]["receipt_path"],
+                expected_plan_sha256=revert_plan["summary"]["plan_sha256"],
+                reviewed_by="person:test",
+            )
+            self.assertTrue(reverted["ok"], reverted)
+            self.assertEqual(source_path.read_bytes(), source_before)
+
+    def test_markup_zettel_reference_target_validation_fails_closed(self) -> None:
+        cases = (
+            "missing",
+            "draft",
+            "archived",
+            "redacted",
+            "wrong_archive",
+            "malformed",
+            "invalid_utf8",
+            "duplicate",
+            "self_reference",
+        )
+        for case in cases:
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as tmp:
+                archive_root = self.fake_archive(Path(tmp) / "archive")
+                source_id = f"zet_20260809_target_validation_source_{case}"
+                target_id = (
+                    source_id
+                    if case == "self_reference"
+                    else f"zet_20260809_target_validation_target_{case}"
+                )
+                fragment = '<mention-page url="private-target-coordinate"/>'
+                source_path = self.write_markup_zettel(
+                    archive_root,
+                    source_id,
+                    fragment + "\n",
+                )
+                before = source_path.read_bytes()
+                if case == "draft":
+                    self.write_schema_valid_markup_zettel(
+                        archive_root,
+                        target_id,
+                        "Draft target.\n",
+                        status="draft",
+                        folder="inbox",
+                    )
+                elif case in {"archived", "redacted"}:
+                    self.write_schema_valid_markup_zettel(
+                        archive_root,
+                        target_id,
+                        "Unavailable target.\n",
+                        status=case,
+                    )
+                elif case == "wrong_archive":
+                    target_path = self.write_schema_valid_markup_zettel(
+                        archive_root,
+                        target_id,
+                        "Wrong archive target.\n",
+                    )
+                    target_path.write_text(
+                        target_path.read_text(encoding="utf-8").replace(
+                            "archive_id: archive:personal:fake-life",
+                            "archive_id: archive:personal:other-life",
+                        ),
+                        encoding="utf-8",
+                    )
+                elif case == "malformed":
+                    self.write_markup_zettel(
+                        archive_root,
+                        target_id,
+                        "Schema-incomplete target.\n",
+                    )
+                elif case == "invalid_utf8":
+                    target_path = self.write_schema_valid_markup_zettel(
+                        archive_root,
+                        target_id,
+                        "Initially valid target.\n",
+                    )
+                    target_path.write_bytes(
+                        target_path.read_bytes() + b"\xff\n"
+                    )
+                elif case == "duplicate":
+                    self.write_schema_valid_markup_zettel(
+                        archive_root,
+                        target_id,
+                        "First target.\n",
+                    )
+                    self.write_schema_valid_markup_zettel(
+                        archive_root,
+                        target_id,
+                        "Second target.\n",
+                        folder="inbox",
+                    )
+
+                digest = hashlib.sha256(fragment.encode("utf-8")).hexdigest()
+                manifest_relative = f"ops/invalid-target-{case}.json"
+                manifest_path = archive_root / manifest_relative
+                manifest_path.parent.mkdir(parents=True, exist_ok=True)
+                manifest_path.write_text(
+                    json.dumps(
+                        {
+                            "schema": completion_workflows.MARKUP_REFERENCE_BINDING_MANIFEST_SCHEMA,
+                            "archive_id": completion_workflows.archive_services.read_archive_id(
+                                archive_root
+                            ),
+                            "bindings": [
+                                {
+                                    "zettel_id": source_id,
+                                    "tag_sha256": digest,
+                                    "occurrence_index": 1,
+                                    "binding_kind": "zettel_reference",
+                                    "binding_id": target_id,
+                                }
+                            ],
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                plan = completion_workflows.markup_normalization_plan(
+                    archive_root,
+                    policy="normalize",
+                    max_items=1000,
+                    max_changes=1000,
+                    binding_manifest=manifest_relative,
+                )
+                self.assertFalse(plan["ok"], plan)
+                self.assertIn(
+                    "markup_zettel_reference_binding_unverified",
+                    plan["blockers"],
+                )
+                self.assertEqual(source_path.read_bytes(), before)
+                serialized = json.dumps(plan, ensure_ascii=False)
+                self.assertNotIn("private-target-coordinate", serialized)
+                if case != "self_reference":
+                    self.assertNotIn(target_id, serialized)
+
+    def test_markup_zettel_reference_rechecks_target_lifecycle_before_apply(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.fake_archive(Path(tmp) / "archive")
+            source_id = "zet_20260809_stale_target_source"
+            target_id = "zet_20260809_stale_target_target"
+            fragment = '<mention-page url="private-target-coordinate"/>'
+            source_path = self.write_markup_zettel(
+                archive_root,
+                source_id,
+                fragment + "\n",
+            )
+            source_before = source_path.read_bytes()
+            target_path = self.write_schema_valid_markup_zettel(
+                archive_root,
+                target_id,
+                "Initially canonical.\n",
+            )
+            digest = hashlib.sha256(fragment.encode("utf-8")).hexdigest()
+            manifest_relative = "ops/stale-target-reference.json"
+            manifest_path = archive_root / manifest_relative
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "schema": completion_workflows.MARKUP_REFERENCE_BINDING_MANIFEST_SCHEMA,
+                        "archive_id": completion_workflows.archive_services.read_archive_id(
+                            archive_root
+                        ),
+                        "bindings": [
+                            {
+                                "zettel_id": source_id,
+                                "tag_sha256": digest,
+                                "occurrence_index": 1,
+                                "binding_kind": "zettel_reference",
+                                "binding_id": target_id,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            plan = completion_workflows.markup_normalization_plan(
+                archive_root,
+                policy="normalize",
+                max_items=1000,
+                max_changes=1000,
+                binding_manifest=manifest_relative,
+            )
+            self.assertTrue(plan["ok"], plan)
+            target_path.write_text(
+                target_path.read_text(encoding="utf-8").replace(
+                    "status: canonical",
+                    "status: archived",
+                ),
+                encoding="utf-8",
+            )
+
+            blocked = completion_workflows.markup_normalization_apply(
+                archive_root,
+                policy="normalize",
+                max_items=1000,
+                max_changes=1000,
+                binding_manifest=manifest_relative,
+                expected_plan_sha256=plan["summary"]["plan_sha256"],
+                reviewed_by="person:test",
+            )
+            self.assertFalse(blocked["ok"], blocked)
+            self.assertIn(
+                "markup_zettel_reference_binding_unverified",
+                blocked["blockers"],
+            )
+            self.assertEqual(blocked["files_written"], [])
+            self.assertEqual(source_path.read_bytes(), source_before)
+
+    def test_markup_binding_rejects_duplicate_source_zettel_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.fake_archive(Path(tmp) / "archive")
+            source_id = "zet_20260809_duplicate_binding_source"
+            target_id = "zet_20260809_duplicate_binding_target"
+            fragment = '<mention-page url="private-source-coordinate"/>'
+            first_source = self.write_markup_zettel(
+                archive_root,
+                source_id,
+                fragment + "\n",
+            )
+            second_source = self.write_schema_valid_markup_zettel(
+                archive_root,
+                source_id,
+                fragment + "\n",
+                folder="inbox",
+            )
+            self.write_schema_valid_markup_zettel(
+                archive_root,
+                target_id,
+                "Unique reviewed target.\n",
+            )
+            before = (first_source.read_bytes(), second_source.read_bytes())
+            digest = hashlib.sha256(fragment.encode("utf-8")).hexdigest()
+            manifest_relative = "ops/duplicate-binding-source.json"
+            manifest_path = archive_root / manifest_relative
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "schema": completion_workflows.MARKUP_REFERENCE_BINDING_MANIFEST_SCHEMA,
+                        "archive_id": completion_workflows.archive_services.read_archive_id(
+                            archive_root
+                        ),
+                        "bindings": [
+                            {
+                                "zettel_id": source_id,
+                                "tag_sha256": digest,
+                                "occurrence_index": 1,
+                                "binding_kind": "zettel_reference",
+                                "binding_id": target_id,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            plan = completion_workflows.markup_normalization_plan(
+                archive_root,
+                policy="normalize",
+                max_items=1000,
+                max_changes=1000,
+                binding_manifest=manifest_relative,
+            )
+            self.assertFalse(plan["ok"], plan)
+            self.assertIn(
+                "markup_binding_source_unverified",
+                plan["blockers"],
+            )
+            self.assertEqual(plan["summary"]["ready_change_count"], 0)
+            self.assertEqual(
+                (first_source.read_bytes(), second_source.read_bytes()),
+                before,
+            )
+            serialized = json.dumps(plan, ensure_ascii=False)
+            self.assertNotIn("private-source-coordinate", serialized)
+
+    def test_markup_binding_source_path_authority_blocks_duplicate_race(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.fake_archive(Path(tmp) / "archive")
+            source_id = "zet_20260809_binding_source_race"
+            target_id = "zet_20260809_binding_source_race_target"
+            fragment = '<mention-page url="private-race-coordinate"/>'
+            source_path = self.write_markup_zettel(
+                archive_root,
+                source_id,
+                fragment + "\n",
+            )
+            self.write_schema_valid_markup_zettel(
+                archive_root,
+                target_id,
+                "Stable reviewed target.\n",
+            )
+            digest = hashlib.sha256(fragment.encode("utf-8")).hexdigest()
+            manifest_relative = "ops/binding-source-race.json"
+            manifest_path = archive_root / manifest_relative
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "schema": completion_workflows.MARKUP_REFERENCE_BINDING_MANIFEST_SCHEMA,
+                        "archive_id": completion_workflows.archive_services.read_archive_id(
+                            archive_root
+                        ),
+                        "bindings": [
+                            {
+                                "zettel_id": source_id,
+                                "tag_sha256": digest,
+                                "occurrence_index": 1,
+                                "binding_kind": "zettel_reference",
+                                "binding_id": target_id,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            duplicate_path = archive_root / "inbox" / f"{source_id}.md"
+            duplicate_path.parent.mkdir(parents=True, exist_ok=True)
+            strict_snapshots = (
+                completion_workflows.archive_services.strict_local_zettel_snapshots
+            )
+
+            def inject_duplicate_after_snapshot(root: Path) -> list[object]:
+                snapshots = strict_snapshots(root)
+                duplicate_path.write_bytes(source_path.read_bytes())
+                return snapshots
+
+            with mock.patch.object(
+                completion_workflows.archive_services,
+                "strict_local_zettel_snapshots",
+                side_effect=inject_duplicate_after_snapshot,
+            ):
+                plan = completion_workflows.markup_normalization_plan(
+                    archive_root,
+                    policy="normalize",
+                    max_items=1000,
+                    max_changes=1000,
+                    binding_manifest=manifest_relative,
+                )
+
+            self.assertFalse(plan["ok"], plan)
+            self.assertIn(
+                "markup_binding_source_unverified",
+                plan["blockers"],
+            )
+            matching_items = [
+                item for item in plan["items"] if item["zettel_id"] == source_id
+            ]
+            self.assertEqual(len(matching_items), 2)
+            self.assertEqual(
+                sorted(
+                    item["counts"]["reference_binding_applied"]
+                    for item in matching_items
+                ),
+                [0, 1],
+            )
+            self.assertEqual(source_path.read_bytes(), duplicate_path.read_bytes())
+            self.assertNotIn(
+                "private-race-coordinate",
+                json.dumps(plan, ensure_ascii=False),
+            )
+
+    def test_markup_zettel_reference_is_restricted_to_mention_page(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.fake_archive(Path(tmp) / "archive")
+            source_id = "zet_20260809_direct_reference_kind_boundary"
+            target_id = "zet_20260809_direct_reference_kind_target"
+            fragments = [
+                f'<{name} private="coordinate"/>'
+                for name in (
+                    "file",
+                    "audio",
+                    "video",
+                    "media",
+                    "mention",
+                    "synced-ref",
+                    "synced_ref",
+                )
+            ] + ["<unknown:audio/>"]
+            source_path = self.write_markup_zettel(
+                archive_root,
+                source_id,
+                "\n".join(fragments) + "\n",
+            )
+            before = source_path.read_bytes()
+            self.write_schema_valid_markup_zettel(
+                archive_root,
+                target_id,
+                "Valid target must not change tag semantics.\n",
+            )
+            manifest_relative = "ops/direct-reference-kind-boundary.json"
+            manifest_path = archive_root / manifest_relative
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "schema": completion_workflows.MARKUP_REFERENCE_BINDING_MANIFEST_SCHEMA,
+                        "archive_id": completion_workflows.archive_services.read_archive_id(
+                            archive_root
+                        ),
+                        "bindings": [
+                            {
+                                "zettel_id": source_id,
+                                "tag_sha256": hashlib.sha256(
+                                    fragment.encode("utf-8")
+                                ).hexdigest(),
+                                "occurrence_index": 1,
+                                "binding_kind": "zettel_reference",
+                                "binding_id": target_id,
+                            }
+                            for fragment in fragments
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            plan = completion_workflows.markup_normalization_plan(
+                archive_root,
+                policy="normalize",
+                max_items=1000,
+                max_changes=1000,
+                binding_manifest=manifest_relative,
+            )
+            self.assertFalse(plan["ok"], plan)
+            self.assertIn("markup_binding_unused", plan["blockers"])
+            item = next(
+                row for row in plan["items"] if row["zettel_id"] == source_id
+            )
+            self.assertIn(
+                "markup_reference_binding_kind_mismatch",
+                item["blocker_codes"],
+            )
+            self.assertEqual(
+                item["counts"]["reference_binding_applied"],
+                0,
+            )
+            self.assertEqual(source_path.read_bytes(), before)
+
+    def test_markup_occurrences_support_identity_free_audio_lexical_variants(self) -> None:
+        for label, tag in (
+            ("space", "<unknown:audio />"),
+            ("case", "<UNKNOWN:AUDIO/>"),
+        ):
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as tmp:
+                archive_root = self.fake_archive(Path(tmp) / "archive")
+                source_id = f"zet_20260809_audio_occurrence_{label}"
+                source_path = self.write_markup_zettel(
+                    archive_root,
+                    source_id,
+                    tag + "\n" + tag + "\n",
+                )
+                digest = hashlib.sha256(tag.encode("utf-8")).hexdigest()
+                object_ids = (
+                    "sha256:acc6e73fb84988ecb538dfc0ceb883b88694e469a05172a5aeb0cce8902ce136",
+                    "sha256:9dabf9b965a3f789b1b36100f3f70515ce8dfd81b411b1503e1e2c3304303647",
+                )
+                manifest_relative = f"ops/audio-occurrence-{label}.json"
+                manifest_path = archive_root / manifest_relative
+                manifest_path.parent.mkdir(parents=True, exist_ok=True)
+                manifest_path.write_text(
+                    json.dumps(
+                        {
+                            "schema": completion_workflows.MARKUP_REFERENCE_BINDING_MANIFEST_SCHEMA,
+                            "archive_id": completion_workflows.archive_services.read_archive_id(
+                                archive_root
+                            ),
+                            "bindings": [
+                                {
+                                    "zettel_id": source_id,
+                                    "tag_sha256": digest,
+                                    "occurrence_index": index,
+                                    "binding_kind": "objet",
+                                    "binding_id": object_id,
+                                }
+                                for index, object_id in enumerate(
+                                    object_ids,
+                                    start=1,
+                                )
+                            ],
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                plan = completion_workflows.markup_normalization_plan(
+                    archive_root,
+                    policy="normalize",
+                    max_items=1000,
+                    max_changes=1000,
+                    binding_manifest=manifest_relative,
+                )
+                self.assertTrue(plan["ok"], plan)
+                self.assertEqual(
+                    plan["summary"]["reference_binding_count"],
+                    2,
+                )
+                applied = completion_workflows.markup_normalization_apply(
+                    archive_root,
+                    policy="normalize",
+                    max_items=1000,
+                    max_changes=1000,
+                    binding_manifest=manifest_relative,
+                    expected_plan_sha256=plan["summary"]["plan_sha256"],
+                    reviewed_by="person:test",
+                )
+                self.assertTrue(applied["ok"], applied)
+                after = source_path.read_text(encoding="utf-8")
+                self.assertEqual(after.count("wom-objet:sha256:"), 2)
+                self.assertNotIn("unknown:audio", after.casefold())
 
     def test_markup_normalization_keeps_paired_mention_page_with_inner_text_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

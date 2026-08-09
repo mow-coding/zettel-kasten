@@ -96,7 +96,10 @@ MARKUP_NORMALIZATION_JOURNAL_SCHEMA = (
     "wom-kit/markup-normalization-journal/v0.1"
 )
 MARKUP_REFERENCE_BINDING_MANIFEST_SCHEMA = (
-    "wom-kit/markup-reference-binding-manifest/v0.1"
+    "wom-kit/markup-reference-binding-manifest/v0.2"
+)
+MARKUP_REFERENCE_BINDING_MANIFEST_LEGACY_SCHEMAS = frozenset(
+    {"wom-kit/markup-reference-binding-manifest/v0.1"}
 )
 MARKUP_NORMALIZATION_RECEIPTS_DIR = "receipts/markup-normalization"
 MARKUP_NORMALIZATION_SCRATCH_DIR = ".wom-scratch/markup-normalization"
@@ -182,6 +185,7 @@ _PROTECTED_CONTEXT_MARKUP_TAGS = frozenset(
         "synced_block",
         "synced_block_reference",
         "table",
+        "unknown:table_of_contents",
         *_STRUCTURAL_MARKUP_TAGS,
         *_REFERENCE_MARKUP_TAGS,
     }
@@ -200,6 +204,7 @@ _PROTECTED_CONTEXT_MARKUP_RE = re.compile(
 MARKUP_REFERENCE_BINDING_KINDS = (
     "external_locator",
     "zettel_edge",
+    "zettel_reference",
     "objet",
 )
 RELATION_CANDIDATE_PLAN_SCHEMA = (
@@ -4383,6 +4388,12 @@ def markup_style_guide() -> dict[str, Any]:
                 "visible_text_preserved": True,
             },
             {
+                "markup": "unknown:table_of_contents",
+                "action": "remove_exact_generated_navigation_placeholder",
+                "authored_body_text_preserved": True,
+                "generated_navigation_materialized": False,
+            },
+            {
                 "markup": "synced_block_and_synced_block_reference",
                 "action": "remove_migration_wrapper_preserve_complete_inner_snapshot",
                 "visible_text_preserved": True,
@@ -4469,12 +4480,77 @@ def _verified_objet_binding(
     )
 
 
+def _verified_zettel_reference_binding(
+    root: Path,
+    *,
+    source_zettel_id: str,
+    target_zettel_id: str,
+    snapshots_by_id: dict[str, list[Any]],
+) -> bool:
+    """Verify one reviewed navigational target without inferring an edge."""
+
+    if (
+        _safe_zettel_id(target_zettel_id) is None
+        or target_zettel_id == source_zettel_id
+    ):
+        return False
+    matches = snapshots_by_id.get(target_zettel_id, [])
+    if len(matches) != 1:
+        return False
+    snapshot = matches[0]
+    inspection = snapshot.inspection
+    frontmatter = inspection.get("frontmatter")
+    if not (
+        snapshot.relative_path.startswith("zettels/")
+        and isinstance(frontmatter, dict)
+        and bool(inspection.get("metadata_readable"))
+        and frontmatter.get("id") == target_zettel_id
+        and frontmatter.get("archive_id")
+        == archive_services.read_archive_id(root)
+        and frontmatter.get("status") == "canonical"
+        and not archive_services.validate_schema(
+            frontmatter,
+            "zettel-frontmatter.schema.json",
+        )
+    ):
+        return False
+    try:
+        validated = archive_services.validated_zet_revision_snapshot(
+            snapshot.path,
+            expected_zettel_id=target_zettel_id,
+            expected_archive_id=archive_services.read_archive_id(root),
+        )
+    except (
+        archive_services.ArchiveServiceError,
+        OSError,
+        RuntimeError,
+        UnicodeError,
+        ValueError,
+    ):
+        return False
+    return validated.get("ok") is True
+
+
+def _reject_duplicate_json_members(
+    pairs: list[tuple[str, Any]],
+) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate_json_member")
+        result[key] = value
+    return result
+
+
 def _markup_reference_bindings(
     root: Path,
     *,
     binding_manifest: Path | str | None,
 ) -> tuple[
-    dict[str, dict[str, dict[str, str]]],
+    dict[
+        str,
+        dict[str, dict[int | None, dict[str, str | int | None]]],
+    ],
     str | None,
     list[str],
 ]:
@@ -4486,7 +4562,10 @@ def _markup_reference_bindings(
     try:
         path.resolve().relative_to(root.resolve())
         raw = path.read_bytes()
-        loaded = json.loads(raw.decode("utf-8"))
+        loaded = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=_reject_duplicate_json_members,
+        )
     except (
         OSError,
         UnicodeDecodeError,
@@ -4495,10 +4574,16 @@ def _markup_reference_bindings(
     ):
         return {}, None, ["markup_binding_manifest_invalid"]
     archive_id = archive_services.read_archive_id(root)
+    manifest_schema = loaded.get("schema") if isinstance(loaded, dict) else None
+    supported_manifest_schemas = {
+        MARKUP_REFERENCE_BINDING_MANIFEST_SCHEMA,
+        *MARKUP_REFERENCE_BINDING_MANIFEST_LEGACY_SCHEMAS,
+    }
     if (
         not isinstance(loaded, dict)
-        or loaded.get("schema")
-        != MARKUP_REFERENCE_BINDING_MANIFEST_SCHEMA
+        or set(loaded) != {"schema", "archive_id", "bindings"}
+        or not isinstance(manifest_schema, str)
+        or manifest_schema not in supported_manifest_schemas
         or loaded.get("archive_id") != archive_id
         or not isinstance(loaded.get("bindings"), list)
         or len(loaded["bindings"]) > MARKUP_NORMALIZATION_MAX_CHANGES
@@ -4506,23 +4591,125 @@ def _markup_reference_bindings(
         return {}, None, ["markup_binding_manifest_invalid"]
 
     blockers: list[str] = []
-    bindings: dict[str, dict[str, dict[str, str]]] = {}
+    bindings: dict[
+        str,
+        dict[str, dict[int | None, dict[str, str | int | None]]],
+    ] = {}
     objet_manifest_index: dict[str, dict[str, Any]] | None = None
+    zettel_snapshots_by_id: dict[str, list[Any]] = {}
+    zettel_snapshot_boundary_valid = True
+    try:
+        snapshots = archive_services.strict_local_zettel_snapshots(root)
+    except (
+        archive_services.ArchiveServiceError,
+        OSError,
+        RuntimeError,
+        UnicodeError,
+        ValueError,
+    ):
+        snapshots = []
+        zettel_snapshot_boundary_valid = False
+    for snapshot in snapshots:
+        frontmatter = snapshot.inspection.get("frontmatter")
+        candidate_id = (
+            frontmatter.get("id")
+            if isinstance(frontmatter, dict)
+            else None
+        )
+        if isinstance(candidate_id, str) and candidate_id:
+            zettel_snapshots_by_id.setdefault(candidate_id, []).append(
+                snapshot
+            )
     for item in loaded["bindings"]:
         if not isinstance(item, dict):
             blockers.append("markup_binding_manifest_invalid")
             continue
-        zettel_id = _safe_zettel_id(item.get("zettel_id"))
-        tag_sha256 = str(item.get("tag_sha256") or "").strip().lower()
-        binding_kind = str(item.get("binding_kind") or "").strip().lower()
-        binding_id = str(item.get("binding_id") or "").strip()
+        allowed_keys = {
+            "zettel_id",
+            "tag_sha256",
+            "binding_kind",
+            "binding_id",
+        }
+        if manifest_schema == MARKUP_REFERENCE_BINDING_MANIFEST_SCHEMA:
+            allowed_keys.add("occurrence_index")
+        if (
+            not {
+                "zettel_id",
+                "tag_sha256",
+                "binding_kind",
+                "binding_id",
+            }.issubset(item)
+            or set(item) - allowed_keys
+        ):
+            blockers.append("markup_binding_manifest_invalid")
+            continue
+        raw_zettel_id = item.get("zettel_id")
+        raw_tag_sha256 = item.get("tag_sha256")
+        raw_binding_kind = item.get("binding_kind")
+        raw_binding_id = item.get("binding_id")
+        zettel_id = (
+            raw_zettel_id
+            if isinstance(raw_zettel_id, str)
+            and _safe_zettel_id(raw_zettel_id) == raw_zettel_id
+            else None
+        )
+        tag_sha256 = (
+            raw_tag_sha256
+            if isinstance(raw_tag_sha256, str)
+            and raw_tag_sha256 == raw_tag_sha256.strip().lower()
+            else ""
+        )
+        binding_kind = (
+            raw_binding_kind
+            if isinstance(raw_binding_kind, str)
+            and raw_binding_kind == raw_binding_kind.strip().lower()
+            else ""
+        )
+        binding_id = (
+            raw_binding_id
+            if isinstance(raw_binding_id, str)
+            and raw_binding_id == raw_binding_id.strip()
+            else ""
+        )
+        occurrence_index: int | None = None
+        if "occurrence_index" in item:
+            raw_occurrence_index = item["occurrence_index"]
+            if (
+                type(raw_occurrence_index) is not int
+                or not 1
+                <= raw_occurrence_index
+                <= MARKUP_NORMALIZATION_MAX_CHANGES
+            ):
+                blockers.append("markup_binding_manifest_invalid")
+                continue
+            occurrence_index = raw_occurrence_index
         if (
             zettel_id is None
             or not re.fullmatch(r"[0-9a-f]{64}", tag_sha256)
             or binding_kind not in MARKUP_REFERENCE_BINDING_KINDS
+            or not isinstance(raw_binding_id, str)
+            or raw_binding_id != raw_binding_id.strip()
+            or (
+                manifest_schema
+                in MARKUP_REFERENCE_BINDING_MANIFEST_LEGACY_SCHEMAS
+                and binding_kind == "zettel_reference"
+            )
         ):
             blockers.append("markup_binding_manifest_invalid")
             continue
+        if not zettel_snapshot_boundary_valid:
+            blockers.append("markup_binding_source_unverified")
+            if binding_kind == "zettel_reference":
+                blockers.append(
+                    "markup_zettel_reference_binding_unverified"
+                )
+            continue
+        if len(zettel_snapshots_by_id.get(zettel_id, [])) != 1:
+            blockers.append("markup_binding_source_unverified")
+            continue
+        source_relative_path = zettel_snapshots_by_id[zettel_id][
+            0
+        ].relative_path
         replacement: str | None = None
         if binding_kind == "external_locator":
             match = re.fullmatch(
@@ -4562,6 +4749,21 @@ def _markup_reference_bindings(
                     "[Related zettel]"
                     f"(wom-edge://sha256/{match.group('digest')})"
                 )
+        elif binding_kind == "zettel_reference":
+            if not _verified_zettel_reference_binding(
+                root,
+                source_zettel_id=zettel_id,
+                target_zettel_id=binding_id,
+                snapshots_by_id=zettel_snapshots_by_id,
+            ):
+                blockers.append(
+                    "markup_zettel_reference_binding_unverified"
+                )
+            else:
+                replacement = (
+                    "[Referenced zettel]"
+                    f"(wom-zettel:{binding_id})"
+                )
         else:
             match = re.fullmatch(
                 r"sha256:(?P<digest>[0-9a-f]{64})",
@@ -4595,13 +4797,21 @@ def _markup_reference_bindings(
         if replacement is None:
             continue
         zettel_bindings = bindings.setdefault(zettel_id, {})
-        if tag_sha256 in zettel_bindings:
+        digest_bindings = zettel_bindings.setdefault(tag_sha256, {})
+        if occurrence_index in digest_bindings:
             blockers.append("markup_binding_duplicate")
             continue
-        zettel_bindings[tag_sha256] = {
+        if digest_bindings and (
+            occurrence_index is None or None in digest_bindings
+        ):
+            blockers.append("markup_binding_occurrence_mixed")
+            continue
+        digest_bindings[occurrence_index] = {
             "binding_kind": binding_kind,
             "binding_id": binding_id,
             "replacement": replacement,
+            "occurrence_index": occurrence_index,
+            "source_relative_path": source_relative_path,
         }
     return (
         bindings,
@@ -5707,13 +5917,14 @@ def _protected_markup_context_present(body: str) -> bool:
 def _normalize_markup_body(
     body: str,
     *,
-    bindings: dict[str, dict[str, str]] | None = None,
+    bindings: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     active_bindings = bindings or {}
     counts = {
         "empty_block": 0,
         "span": 0,
         "mention_date": 0,
+        "table_of_contents": 0,
         "synced_block": 0,
         "synced_block_reference": 0,
         "table": 0,
@@ -5730,11 +5941,28 @@ def _normalize_markup_body(
             "counts": counts,
             "reference_tag_names": [],
             "reference_tag_digests": [],
-            "used_binding_sha256s": [],
+            "used_binding_selectors": [],
             "unknown_tag_names": [],
             "blocker_codes": ["markup_protected_context_unsupported"],
         }
-    normalized, table_count, table_blockers = _normalize_gfm_tables(body)
+    table_of_contents_line = re.compile(
+        r"\A(?P<leading>(?:[ \t]*(?:\r\n|\n))*)"
+        r"<unknown:table_of_contents/>"
+        r"(?P<ending>\r\n|\n|\Z)"
+    )
+    normalized = body
+    if body.count("<unknown:table_of_contents/>") == 1:
+        table_of_contents_match = table_of_contents_line.match(body)
+        if table_of_contents_match is not None:
+            normalized = (
+                table_of_contents_match.group("leading")
+                + body[table_of_contents_match.end() :]
+            )
+            counts["table_of_contents"] = 1
+
+    normalized, table_count, table_blockers = _normalize_gfm_tables(
+        normalized
+    )
     counts["table"] = table_count
     counts["table_blocked"] = len(table_blockers)
 
@@ -5767,9 +5995,10 @@ def _normalize_markup_body(
         normalized,
     )
 
-    reference_tag_digests: list[dict[str, str]] = []
-    used_binding_sha256s: set[str] = set()
+    reference_tag_digests: list[dict[str, str | int]] = []
+    used_binding_selectors: set[tuple[str, int | None]] = set()
     reference_blockers: list[str] = []
+    reference_occurrence_seen: dict[str, int] = {}
     paired_unbound_reference_counts = {
         name: 0 for name in _PAIRED_REFERENCE_MARKUP_TAGS
     }
@@ -5786,6 +6015,100 @@ def _normalize_markup_body(
         r"(?:\s+[^<>]*?)?\s*>)"
         r"(?P<inner>.*?)<\s*/\s*(?P=name)\s*>"
     )
+
+    def selector_bindings(
+        tag_sha256: str,
+    ) -> dict[int | None, dict[str, Any]]:
+        raw = active_bindings.get(tag_sha256)
+        if not isinstance(raw, dict):
+            return {}
+        # Keep the small direct-test/internal-call compatibility surface. The
+        # manifest loader always returns the selector-keyed representation.
+        if "replacement" in raw:
+            return {None: raw}
+        return {
+            selector: binding
+            for selector, binding in raw.items()
+            if (selector is None or type(selector) is int)
+            and isinstance(binding, dict)
+        }
+
+    reference_occurrence_totals: dict[str, int] = {}
+
+    def count_reference_occurrence(tag_sha256: str) -> None:
+        reference_occurrence_totals[tag_sha256] = (
+            reference_occurrence_totals.get(tag_sha256, 0) + 1
+        )
+
+    for candidate in paired_reference_re.finditer(normalized):
+        opening = _MARKUP_TAG_RE.fullmatch(candidate.group("opening"))
+        name = candidate.group("name").casefold()
+        if opening is None or opening.group("self"):
+            continue
+        if name == "file" and _strict_markup_attributes(
+            opening.group("attrs") or ""
+        ) is None:
+            continue
+        if candidate.group("inner").strip():
+            continue
+        count_reference_occurrence(
+            _sha256_bytes(candidate.group(0).encode("utf-8"))
+        )
+    for candidate in _MARKUP_TAG_RE.finditer(normalized):
+        if (
+            candidate.group("name").casefold() in _REFERENCE_MARKUP_TAGS
+            and not candidate.group("closing")
+            and bool(candidate.group("self"))
+        ):
+            count_reference_occurrence(
+                _sha256_bytes(candidate.group(0).encode("utf-8"))
+            )
+
+    blocked_reference_digests: set[str] = set()
+    for tag_sha256, total in reference_occurrence_totals.items():
+        selectors = selector_bindings(tag_sha256)
+        if not selectors:
+            continue
+        if None in selectors:
+            if total > 1:
+                add_reference_blocker(
+                    "markup_reference_binding_occurrence_required"
+                )
+                blocked_reference_digests.add(tag_sha256)
+            continue
+        explicit_indexes = {
+            selector
+            for selector in selectors
+            if type(selector) is int
+        }
+        if any(index > total for index in explicit_indexes):
+            add_reference_blocker(
+                "markup_reference_binding_occurrence_out_of_range"
+            )
+            blocked_reference_digests.add(tag_sha256)
+        elif total > 1 and explicit_indexes != set(range(1, total + 1)):
+            add_reference_blocker(
+                "markup_reference_binding_occurrence_incomplete"
+            )
+            blocked_reference_digests.add(tag_sha256)
+
+    def next_reference_occurrence(tag_sha256: str) -> int:
+        occurrence_index = reference_occurrence_seen.get(tag_sha256, 0) + 1
+        reference_occurrence_seen[tag_sha256] = occurrence_index
+        return occurrence_index
+
+    def selected_binding(
+        tag_sha256: str,
+        occurrence_index: int,
+    ) -> dict[str, Any] | None:
+        if tag_sha256 in blocked_reference_digests:
+            return None
+        selectors = selector_bindings(tag_sha256)
+        if not selectors:
+            return None
+        if None in selectors:
+            return selectors[None]
+        return selectors.get(occurrence_index)
 
     def paired_reference_replacement(match: re.Match[str]) -> str:
         name = match.group("name").casefold()
@@ -5810,20 +6133,27 @@ def _normalize_markup_body(
             paired_unbound_reference_counts[name] += 1
             return fragment
         tag_sha256 = _sha256_bytes(fragment.encode("utf-8"))
+        occurrence_index = next_reference_occurrence(tag_sha256)
         reference_tag_digests.append(
-            {"tag_name": name, "tag_sha256": tag_sha256}
+            {
+                "tag_name": name,
+                "tag_sha256": tag_sha256,
+                "occurrence_index": occurrence_index,
+            }
         )
-        binding = active_bindings.get(tag_sha256)
+        binding = selected_binding(tag_sha256, occurrence_index)
         if binding is None:
             paired_unbound_reference_counts[name] += 1
             return fragment
-        if name == "file" and binding.get("binding_kind") != "objet":
+        if binding.get("binding_kind") != "objet":
             add_reference_blocker(
                 "markup_reference_binding_kind_mismatch"
             )
             paired_unbound_reference_counts[name] += 1
             return fragment
-        used_binding_sha256s.add(tag_sha256)
+        used_binding_selectors.add(
+            (tag_sha256, binding.get("occurrence_index"))
+        )
         counts["reference_binding_applied"] += 1
         return binding["replacement"]
 
@@ -5881,16 +6211,26 @@ def _normalize_markup_body(
         normalized,
     )
 
-    identity_free_unknown_audio_count = sum(
-        1
-        for match in _MARKUP_TAG_RE.finditer(normalized)
-        if match.group("name").casefold() == "unknown:audio"
-        and not match.group("closing")
-        and bool(match.group("self"))
-        and not (match.group("attrs") or "").strip()
-    )
-    unknown_audio_binding_ambiguous = identity_free_unknown_audio_count > 1
-    if unknown_audio_binding_ambiguous:
+    unknown_audio_ambiguous_digests: set[str] = set()
+    for candidate in _MARKUP_TAG_RE.finditer(normalized):
+        if (
+            candidate.group("name").casefold() != "unknown:audio"
+            or candidate.group("closing")
+            or not candidate.group("self")
+            or (candidate.group("attrs") or "").strip()
+        ):
+            continue
+        tag_sha256 = _sha256_bytes(candidate.group(0).encode("utf-8"))
+        if reference_occurrence_totals.get(tag_sha256, 0) <= 1:
+            continue
+        selectors = selector_bindings(tag_sha256)
+        if (
+            not selectors
+            or None in selectors
+            or tag_sha256 in blocked_reference_digests
+        ):
+            unknown_audio_ambiguous_digests.add(tag_sha256)
+    if unknown_audio_ambiguous_digests:
         add_reference_blocker("markup_unknown_audio_binding_ambiguous")
 
     def reference_replacement(match: re.Match[str]) -> str:
@@ -5900,15 +6240,17 @@ def _normalize_markup_body(
         if name in _PAIRED_REFERENCE_MARKUP_TAGS and not match.group("self"):
             return match.group(0)
         tag_sha256 = _sha256_bytes(match.group(0).encode("utf-8"))
+        occurrence_index = next_reference_occurrence(tag_sha256)
         reference_tag_digests.append(
             {
                 "tag_name": name.replace("_", "-"),
                 "tag_sha256": tag_sha256,
+                "occurrence_index": occurrence_index,
             }
         )
         if (
-            unknown_audio_binding_ambiguous
-            and name == "unknown:audio"
+            name == "unknown:audio"
+            and tag_sha256 in unknown_audio_ambiguous_digests
             and not match.group("closing")
             and bool(match.group("self"))
             and not (match.group("attrs") or "").strip()
@@ -5924,29 +6266,31 @@ def _normalize_markup_body(
                 "markup_unknown_audio_attributes_unsupported"
             )
             return match.group(0)
-        binding = active_bindings.get(tag_sha256)
+        binding = selected_binding(tag_sha256, occurrence_index)
         if (
             binding is None
             or match.group("closing")
             or not match.group("self")
         ):
             return match.group(0)
-        required_binding_kind = (
-            "zettel_edge"
+        allowed_binding_kinds = (
+            {"zettel_edge", "zettel_reference"}
             if name == "mention-page"
-            else "objet"
+            else {"objet"}
             if name == "unknown:audio"
-            else None
+            else {"external_locator", "zettel_edge", "objet"}
         )
         if (
-            required_binding_kind is not None
-            and binding.get("binding_kind") != required_binding_kind
+            allowed_binding_kinds is not None
+            and binding.get("binding_kind") not in allowed_binding_kinds
         ):
             add_reference_blocker(
                 "markup_reference_binding_kind_mismatch"
             )
             return match.group(0)
-        used_binding_sha256s.add(tag_sha256)
+        used_binding_selectors.add(
+            (tag_sha256, binding.get("occurrence_index"))
+        )
         counts["reference_binding_applied"] += 1
         return binding["replacement"]
 
@@ -5994,16 +6338,43 @@ def _normalize_markup_body(
         blocker_codes.append("markup_reference_binding_required")
     if unknown_names:
         blocker_codes.append("unknown_semantic_markup")
+    blocker_codes = archive_services.unique_preserve_order(blocker_codes)
+    restore_blocked_table_of_contents = bool(
+        "<unknown:table_of_contents/>" in body and blocker_codes
+    )
+    restore_occurrence_blocked = any(
+        code.startswith("markup_reference_binding_occurrence_")
+        for code in reference_blockers
+    )
     return {
-        "normalized_body": normalized,
-        "changed": normalized != body,
+        "normalized_body": (
+            body
+            if restore_blocked_table_of_contents
+            or restore_occurrence_blocked
+            else normalized
+        ),
+        "changed": (
+            normalized != body
+            and not restore_blocked_table_of_contents
+            and not restore_occurrence_blocked
+        ),
         "counts": counts,
         "reference_tag_names": sorted(reference_names),
         "reference_tag_digests": sorted(
             reference_tag_digests,
-            key=lambda item: (item["tag_name"], item["tag_sha256"]),
+            key=lambda item: (
+                item["tag_name"],
+                item["tag_sha256"],
+                item["occurrence_index"],
+            ),
         ),
-        "used_binding_sha256s": sorted(used_binding_sha256s),
+        "used_binding_selectors": sorted(
+            used_binding_selectors,
+            key=lambda item: (
+                item[0],
+                0 if item[1] is None else item[1],
+            ),
+        ),
         "unknown_tag_names": sorted(unknown_names),
         "blocker_codes": blocker_codes,
     }
@@ -6015,7 +6386,11 @@ def _markup_zettel_analysis(
     *,
     policy: str,
     bindings_by_zettel: (
-        dict[str, dict[str, dict[str, str]]] | None
+        dict[
+            str,
+            dict[str, dict[int | None, dict[str, str | int | None]]],
+        ]
+        | None
     ) = None,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     try:
@@ -6052,9 +6427,24 @@ def _markup_zettel_analysis(
         else None
     )
     body = text[boundary.end() :]
+    relative_path = archive_services.archive_relative_path(path, root)
+    zettel_bindings = (bindings_by_zettel or {}).get(str(zettel_id), {})
+    path_bound_bindings = {
+        tag_sha256: {
+            occurrence_index: binding
+            for occurrence_index, binding in selector_bindings.items()
+            if binding.get("source_relative_path") == relative_path
+        }
+        for tag_sha256, selector_bindings in zettel_bindings.items()
+    }
+    path_bound_bindings = {
+        tag_sha256: selector_bindings
+        for tag_sha256, selector_bindings in path_bound_bindings.items()
+        if selector_bindings
+    }
     normalized = _normalize_markup_body(
         body,
-        bindings=(bindings_by_zettel or {}).get(str(zettel_id), {}),
+        bindings=path_bound_bindings,
     )
     candidate_count = sum(
         int(value) for value in normalized["counts"].values()
@@ -6078,7 +6468,7 @@ def _markup_zettel_analysis(
     after_sha256 = _sha256_bytes(after_bytes)
     public = {
         "zettel_id": zettel_id,
-        "path": archive_services.archive_relative_path(path, root),
+        "path": relative_path,
         "state": state,
         "before_sha256": before_sha256,
         "after_sha256": after_sha256,
@@ -6097,7 +6487,7 @@ def _markup_zettel_analysis(
         "relative": public["path"],
         "zettel_id": zettel_id,
         "state": state,
-        "used_binding_sha256s": normalized["used_binding_sha256s"],
+        "used_binding_selectors": normalized["used_binding_selectors"],
     }
     return public, private
 
@@ -6144,7 +6534,8 @@ def _markup_plan_core(
         blockers.append("markup_item_bound_exceeded")
     public_items: list[dict[str, Any]] = []
     private_items: list[dict[str, Any]] = []
-    used_binding_keys: set[tuple[str, str]] = set()
+    used_binding_keys: set[tuple[str, str, int | None]] = set()
+    analyzed_zettel_id_counts: dict[str, int] = {}
     if not blockers:
         for path in all_paths:
             public, private = _markup_zettel_analysis(
@@ -6153,6 +6544,12 @@ def _markup_plan_core(
                 policy=normalized_policy,
                 bindings_by_zettel=bindings,
             )
+            analyzed_zettel_id = public.get("zettel_id")
+            if isinstance(analyzed_zettel_id, str):
+                analyzed_zettel_id_counts[analyzed_zettel_id] = (
+                    analyzed_zettel_id_counts.get(analyzed_zettel_id, 0)
+                    + 1
+                )
             if (
                 sum(int(value) for value in public.get("counts", {}).values())
                 or public["blocker_codes"]
@@ -6160,16 +6557,28 @@ def _markup_plan_core(
                 public_items.append(public)
             if private is not None:
                 used_binding_keys.update(
-                    (str(private["zettel_id"]), tag_sha256)
-                    for tag_sha256 in private["used_binding_sha256s"]
+                    (
+                        str(private["zettel_id"]),
+                        tag_sha256,
+                        occurrence_index,
+                    )
+                    for tag_sha256, occurrence_index in private[
+                        "used_binding_selectors"
+                    ]
                 )
             if private is not None and private["state"] == "ready":
                 private_items.append(private)
         configured_binding_keys = {
-            (zettel_id, tag_sha256)
+            (zettel_id, tag_sha256, occurrence_index)
             for zettel_id, zettel_bindings in bindings.items()
-            for tag_sha256 in zettel_bindings
+            for tag_sha256, selector_bindings in zettel_bindings.items()
+            for occurrence_index in selector_bindings
         }
+        if any(
+            analyzed_zettel_id_counts.get(zettel_id, 0) != 1
+            for zettel_id in bindings
+        ):
+            blockers.append("markup_binding_source_unverified")
         if configured_binding_keys - used_binding_keys:
             blockers.append("markup_binding_unused")
         if len(private_items) > change_limit:

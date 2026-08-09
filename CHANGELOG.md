@@ -6,6 +6,26 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.309 - 2026-08-09
+
+- Added optional, one-based `occurrence_index` selectors to reviewed markup
+  bindings so repeated byte-identical reference tags can be resolved one at a
+  time without one manifest row changing every occurrence.
+- Added reviewed `zettel_reference` navigation for self-closing
+  `mention-page` tags. Targets must be unique, canonical, schema-valid zettels
+  in the same archive; the workflow never creates or infers semantic edges.
+- Added strict removal of an exact, attribute-free
+  `<unknown:table_of_contents/>` placeholder only when it is the original
+  body's first non-empty line and occurs exactly once.
+- Kept incomplete, mixed, duplicate, invalid, or stale occurrence authority;
+  ambiguous source or target identity; protected markup contexts; and every
+  other unsupported unknown tag byte-identical and fail closed.
+- Preserved v0.1 manifest readability for unique reference occurrences,
+  existing plan/apply/recovery/revert authority, and archive bytes unless an
+  exact reviewed plan is approved. No automatic edge inference, archive
+  migration, provider call, canonical beta write, MCP writer, or UI change was
+  added.
+
 ## v0.3.308 - 2026-08-09
 
 - Added one full-fragment digest for paired `<file ...></file>` references,

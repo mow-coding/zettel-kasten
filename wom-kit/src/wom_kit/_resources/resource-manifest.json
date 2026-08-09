@@ -1,6 +1,6 @@
 {
   "schema": "wom-kit/package-resource-manifest/v0.1",
-  "version": "0.3.308",
+  "version": "0.3.309",
   "source_of_truth": "wom-kit source resource directories",
   "file_count": 144,
   "files": [
@@ -169,8 +169,8 @@
     {
       "source": "schemas/markup-reference-binding-manifest.schema.json",
       "packaged": "schemas/markup-reference-binding-manifest.schema.json",
-      "bytes": 1126,
-      "sha256": "fcbcaa2a7eceed3a28c9057e00e946b22e9960732396eb482f327c60ab24cd8b"
+      "bytes": 1937,
+      "sha256": "c0344bdde70461579581258b7e2c7e40c94ab45b660e9ac03b20e26e3c9e3c46"
     },
     {
       "source": "schemas/mint-receipt.schema.json",
@@ -863,10 +863,10 @@
       "sha256": "d619dc26af3216498c8392dfe838b0fe752d4bad9da998a58ca682d668fc510c"
     },
     {
-      "source": "docs/releases/v0.3.308.md",
-      "packaged": "release-notes/v0.3.308.md",
-      "bytes": 2702,
-      "sha256": "d11f6e97eb6e197cfb176cd751b4d0e0179d902ec883d31ac8ac9e998169e700"
+      "source": "docs/releases/v0.3.309.md",
+      "packaged": "release-notes/v0.3.309.md",
+      "bytes": 3422,
+      "sha256": "e1ba76ff19800c77b2aa21f99953f5fb2c23cd4a5ca0260248c8f99824337059"
     }
   ]
 }

@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "wom-kit/markup-reference-binding-manifest/v0.1",
+  "$id": "wom-kit/markup-reference-binding-manifest/v0.2",
   "title": "WOM-kit reviewed markup reference binding manifest",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema", "archive_id", "bindings"],
   "properties": {
-    "schema": {"const": "wom-kit/markup-reference-binding-manifest/v0.1"},
+    "schema": {"const": "wom-kit/markup-reference-binding-manifest/v0.2"},
     "archive_id": {"type": "string", "minLength": 1},
     "bindings": {
       "type": "array",
@@ -18,12 +18,28 @@
         "properties": {
           "zettel_id": {"type": "string", "pattern": "^zet_[A-Za-z0-9][A-Za-z0-9_-]{0,159}$"},
           "tag_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-          "binding_kind": {"enum": ["external_locator", "zettel_edge", "objet"]},
-          "binding_id": {
-            "type": "string",
-            "pattern": "^(?:(?:locator:sha256:|edge:)[0-9a-f]{64}|sha256:[0-9a-f]{64})$"
+          "occurrence_index": {"type": "integer", "minimum": 1, "maximum": 5000},
+          "binding_kind": {"enum": ["external_locator", "zettel_edge", "zettel_reference", "objet"]},
+          "binding_id": {"type": "string"}
+        },
+        "allOf": [
+          {
+            "if": {"properties": {"binding_kind": {"const": "external_locator"}}},
+            "then": {"properties": {"binding_id": {"pattern": "^locator:sha256:[0-9a-f]{64}$"}}}
+          },
+          {
+            "if": {"properties": {"binding_kind": {"const": "zettel_edge"}}},
+            "then": {"properties": {"binding_id": {"pattern": "^edge:[0-9a-f]{64}$"}}}
+          },
+          {
+            "if": {"properties": {"binding_kind": {"const": "zettel_reference"}}},
+            "then": {"properties": {"binding_id": {"pattern": "^zet_[A-Za-z0-9][A-Za-z0-9_-]{0,159}$"}}}
+          },
+          {
+            "if": {"properties": {"binding_kind": {"const": "objet"}}},
+            "then": {"properties": {"binding_id": {"pattern": "^sha256:[0-9a-f]{64}$"}}}
           }
-        }
+        ]
       }
     }
   }
