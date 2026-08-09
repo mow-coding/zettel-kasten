@@ -250,6 +250,7 @@ Onboarding and setup plans:
 - [Legacy Coordination Cleanup](legacy-coordination-cleanup.md)
 - [Letter 115 Completion](letter115-completion.md)
 - [Letter 116 Completion](letter116-completion.md)
+- [Letter 117 Completion](letter117-completion.md)
 - [Artifact Lifecycle Inventory](artifact-lifecycle-inventory.md)
 - [Zettel Edge Write](zettel-edge-write.md)
 - [Zettel Edge Batch](zettel-edge-batch.md)
@@ -415,6 +416,7 @@ These documents record public-safe work already performed.
 - [Release Notes](releases/)
 - [v0.3.308 Release Note](releases/v0.3.308.md)
 - [v0.3.309 Release Note](releases/v0.3.309.md)
+- [v0.3.310 Release Note](releases/v0.3.310.md)
 
 Work logs are not the same as product specs.
 

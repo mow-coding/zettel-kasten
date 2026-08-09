@@ -100,7 +100,7 @@ CURRENT_DATABASE_CANONICAL_SHA256 = (
     "d9a42f08ee12a6d42e40214cfb12441e4077bf50c38c25b2692ec1344328294a"
 )
 RESOURCE_ADDITIONS = {
-    "release-notes/v0.3.309.md",
+    "release-notes/v0.3.310.md",
     "schemas/artifact-lifecycle-inventory.schema.json",
     "schemas/authoring-conventions.schema.json",
     "schemas/draft-discard-receipt.schema.json",
@@ -138,7 +138,7 @@ RESOURCE_ADDITIONS = {
 RESOURCE_REMOVALS = {"release-notes/v0.3.297.md"}
 CURRENT_RESOURCE_COUNT = 144
 CURRENT_RESOURCE_CANONICAL_SHA256 = (
-    "02da506cdcde2b764e75a60a9285811cfb95b5d6c94527b1c60ae50afe4fb3c5"
+    "31f88220c93fc3c0b8ff4aa70d133895bb7c65feaa37518068c8d258ab41cd4b"
 )
 
 
@@ -383,7 +383,7 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
             BASELINE_EXPECTATIONS["mcp"]["canonical_sha256"],
         )
 
-    def test_resource_paths_are_v03297_plus_exact_v03298_v03309_delta(self) -> None:
+    def test_resource_paths_are_v03297_plus_exact_v03298_v03310_delta(self) -> None:
         predecessor_paths = set(self.fixture["package_resources"]["packaged_paths"])
         self.assertTrue(
             RESOURCE_REMOVALS <= predecessor_paths,
@@ -413,10 +413,10 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
             actual,
             expected,
             "Current package-resource paths must be the full v0.3.297 set plus "
-            "the exact cumulative v0.3.298 through v0.3.309 delta. "
+            "the exact cumulative v0.3.298 through v0.3.310 delta. "
             f"missing={compact(missing)}; extra={compact(extra)}",
         )
-        self.assertEqual(manifest["version"], "0.3.309")
+        self.assertEqual(manifest["version"], "0.3.310")
         self.assertEqual(len(actual), CURRENT_RESOURCE_COUNT)
         self.assertEqual(
             canonical_sha256(actual),
@@ -435,14 +435,14 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
         self.assertIn("does not undo", predecessor_flat)
         self.assertNotIn("C:\\Users\\", predecessor_text)
 
-    def test_v03309_release_note_is_public_and_synchronized(self) -> None:
-        current_source_release = KIT_ROOT / "docs" / "releases" / "v0.3.309.md"
+    def test_v03310_release_note_is_public_and_synchronized(self) -> None:
+        current_source_release = KIT_ROOT / "docs" / "releases" / "v0.3.310.md"
         current_packaged_release = (
             SRC_ROOT
             / "wom_kit"
             / "_resources"
             / "release-notes"
-            / "v0.3.309.md"
+            / "v0.3.310.md"
         )
         self.assertEqual(
             current_source_release.read_bytes(),
@@ -451,18 +451,18 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
         current_text = current_source_release.read_text(encoding="utf-8")
         current_flat = " ".join(current_text.split())
         for token in (
+            "unknown:synced_block",
+            "unknown:transclusion_reference",
+            "unknown:transclusion_container",
             "occurrence_index",
-            "same-digest",
-            "v0.1",
-            "unique-only",
             "zettel_reference",
-            "navigation-only",
-            "does not create an edge",
-            "<unknown:table_of_contents/>",
-            "generated navigation is not materialized",
-            "remain fail-closed",
+            "manifested `objet`",
+            "empty paired `database`",
+            "raw-HTML type 6/type 7",
+            "partial safe outside-span normalization is not implemented",
+            "remain fail closed",
             "no provider/network call",
-            "no archive migration",
+            "no manifest-schema revision",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, current_flat)

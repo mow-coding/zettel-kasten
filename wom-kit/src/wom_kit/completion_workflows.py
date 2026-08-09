@@ -166,6 +166,7 @@ _STRUCTURAL_MARKUP_TAGS = frozenset(
 _REFERENCE_MARKUP_TAGS = frozenset(
     {
         "audio",
+        "database",
         "file",
         "media",
         "mention",
@@ -173,10 +174,22 @@ _REFERENCE_MARKUP_TAGS = frozenset(
         "synced-ref",
         "synced_ref",
         "unknown:audio",
+        "unknown:synced_block",
+        "unknown:transclusion_container",
+        "unknown:transclusion_reference",
         "video",
     }
 )
-_PAIRED_REFERENCE_MARKUP_TAGS = frozenset({"audio", "file", "video"})
+_PAIRED_REFERENCE_MARKUP_TAGS = frozenset(
+    {"audio", "database", "file", "video"}
+)
+_UNKNOWN_CONTENT_REFERENCE_MARKUP_TAGS = frozenset(
+    {
+        "unknown:synced_block",
+        "unknown:transclusion_container",
+        "unknown:transclusion_reference",
+    }
+)
 _PROTECTED_CONTEXT_MARKUP_TAGS = frozenset(
     {
         "empty-block",
@@ -201,6 +214,13 @@ _PROTECTED_CONTEXT_MARKUP_RE = re.compile(
     )
     + r")\b"
 )
+
+
+def _public_markup_tag_name(name: str) -> str:
+    """Return the stable public spelling for a parsed markup tag name."""
+    return "synced-ref" if name == "synced_ref" else name
+
+
 MARKUP_REFERENCE_BINDING_KINDS = (
     "external_locator",
     "zettel_edge",
@@ -4394,10 +4414,34 @@ def markup_style_guide() -> dict[str, Any]:
                 "generated_navigation_materialized": False,
             },
             {
+                "markup": "unknown_synced_and_transclusion_placeholders",
+                "action": "require_reviewed_static_zettel_or_objet_binding",
+                "accepted_shape": "exact_lowercase_attribute_free_self_closing",
+                "live_sync_or_transclusion_claimed": False,
+                "silent_deletion_allowed": False,
+            },
+            {
+                "markup": "database",
+                "action": "require_reviewed_zettel_reference_for_empty_strict_pair",
+                "database_view_materialized": False,
+                "silent_deletion_allowed": False,
+            },
+            {
                 "markup": "synced_block_and_synced_block_reference",
                 "action": "remove_migration_wrapper_preserve_complete_inner_snapshot",
                 "visible_text_preserved": True,
                 "live_sync_claimed": False,
+            },
+            {
+                "markup": "callout_unknown_column_and_unsupported",
+                "action": "block_pending_lossless_structure_or_source_recovery",
+                "silent_deletion_allowed": False,
+            },
+            {
+                "markup": "protected_context",
+                "action": "preserve_entire_zettel_as_expected_terminal_literal",
+                "source_bytes_preserved": True,
+                "partial_outside_span_normalization_implemented": False,
             },
             {
                 "markup": "unknown_semantic_tag",
@@ -4415,6 +4459,8 @@ def markup_style_guide() -> dict[str, Any]:
             "normalization_infers_relations": False,
             "normalization_deletes_unknown_semantics": False,
             "normalization_preserves_live_provider_sync": False,
+            "normalization_reconstructs_transcluded_children": False,
+            "protected_context_is_actionable_migration_debt": False,
             "source_bytes_snapshotted_before_write": True,
             "revert_is_exact_byte_restore": True,
         },
@@ -5668,6 +5714,27 @@ def _strict_markup_attributes(raw: str) -> dict[str, str] | None:
     return attributes
 
 
+def _database_reference_attributes_supported(raw: str) -> bool:
+    attributes = _strict_markup_attributes(raw)
+    if attributes is None:
+        return False
+    required = {"inline", "url"}
+    allowed = {"data-source-url", *required}
+    if not required.issubset(attributes) or set(attributes) - allowed:
+        return False
+    if attributes["inline"] not in {"false", "true"}:
+        return False
+    for name in ("url", "data-source-url"):
+        value = attributes.get(name)
+        if value is not None and (
+            not value
+            or len(value) > 4096
+            or any(ord(character) < 0x20 for character in value)
+        ):
+            return False
+    return True
+
+
 def _render_self_closing_mention_date(raw_attributes: str) -> str | None:
     attributes = _strict_markup_attributes(raw_attributes)
     allowed = {"start", "end", "starttime", "endtime", "timezone"}
@@ -5713,6 +5780,145 @@ def _contains_normalizable_markup(value: str) -> bool:
     return _PROTECTED_CONTEXT_MARKUP_RE.search(value) is not None
 
 
+_MARKDOWN_CONTAINER_PREFIX_RE = re.compile(
+    r" {0,3}(?:>[ \t]?|(?:[-+*]|[0-9]{1,9}[.)])[ \t]+)"
+)
+
+
+def _markdown_container_payload(line: str) -> str:
+    offset = 0
+    while True:
+        container = _MARKDOWN_CONTAINER_PREFIX_RE.match(line, offset)
+        if container is None:
+            return line[offset:]
+        offset = container.end()
+
+
+def _quoted_html_attribute_contains_normalizable_markup(body: str) -> bool:
+    index = 0
+    while index < len(body):
+        opening = body.find("<", index)
+        if opening < 0:
+            break
+        cursor = opening + 1
+        while cursor < len(body) and body[cursor] in " \t\r\n":
+            cursor += 1
+        name = re.match(r"[A-Za-z][A-Za-z0-9:-]*", body[cursor:])
+        if name is None:
+            index = opening + 1
+            continue
+        cursor += name.end()
+        quote: str | None = None
+        quoted_start = 0
+        while cursor < len(body):
+            character = body[cursor]
+            if quote is not None:
+                if character == quote:
+                    if _contains_normalizable_markup(
+                        body[quoted_start:cursor]
+                    ):
+                        return True
+                    quote = None
+                cursor += 1
+                continue
+            if character in {'"', "'"}:
+                quote = character
+                quoted_start = cursor + 1
+            elif character == ">":
+                cursor += 1
+                break
+            elif character == "<":
+                break
+            cursor += 1
+        if quote is not None and _contains_normalizable_markup(
+            body[quoted_start:cursor]
+        ):
+            return True
+        index = max(opening + 1, cursor)
+    return False
+
+
+_REVIEWED_MIGRATION_RAW_HTML_BLOCK_TAGS = frozenset(
+    {
+        "article",
+        "column",
+        "columns",
+        "details",
+        "div",
+        "p",
+        "section",
+        "table",
+    }
+)
+_RAW_HTML_BLOCK_START_RE = re.compile(
+    r"^ {0,3}<\s*(?P<closing>/)?\s*(?P<name>[A-Za-z][A-Za-z0-9:-]*)"
+    r"(?:[ \t]+|/?>)"
+)
+
+
+def _unreviewed_raw_html_block_contains_normalizable_markup(
+    body: str,
+) -> bool:
+    lines = []
+    for source_line in body.splitlines(keepends=True):
+        content = source_line.rstrip("\r\n")
+        newline = source_line[len(content) :]
+        lines.append(_markdown_container_payload(content) + newline)
+    index = 0
+    while index < len(lines):
+        line = lines[index].rstrip("\r\n")
+        opening = _RAW_HTML_BLOCK_START_RE.match(line)
+        if opening is None:
+            index += 1
+            continue
+        name = opening.group("name").casefold()
+        is_type_6 = name in _TABLE_RAW_HTML_BLOCK_TAGS
+        is_type_7 = (
+            _TABLE_RAW_HTML_COMPLETE_TAG_LINE_RE.fullmatch(line) is not None
+        )
+        if not is_type_6 and not is_type_7:
+            index += 1
+            continue
+        end = index + 1
+        while end < len(lines) and lines[end].strip():
+            end += 1
+        if not opening.group("closing") and (
+            name in _REVIEWED_MIGRATION_RAW_HTML_BLOCK_TAGS
+            or name in _PROTECTED_CONTEXT_MARKUP_TAGS
+        ):
+            index = max(index + 1, end)
+            continue
+        block = "".join(lines[index:end])
+        first_tag_end = block.find(">")
+        payload = block[first_tag_end + 1 :] if first_tag_end >= 0 else block
+        if _contains_normalizable_markup(payload):
+            return True
+        index = max(index + 1, end)
+    return False
+
+
+_REFERENCE_DEFINITION_START_RE = re.compile(
+    r"(?ms)^ {0,3}\[(?:\\.|[^\\\[\]]){1,999}\][ \t]*:"
+)
+
+
+def _reference_definition_contains_normalizable_markup(body: str) -> bool:
+    logical_lines: list[str] = []
+    for line in body.splitlines(keepends=True):
+        content = line.rstrip("\r\n")
+        newline = line[len(content) :]
+        logical_lines.append(_markdown_container_payload(content) + newline)
+    logical_body = "".join(logical_lines)
+
+    for block in re.split(r"\r?\n[ \t]*\r?\n", logical_body):
+        if (
+            _REFERENCE_DEFINITION_START_RE.search(block) is not None
+            and _contains_normalizable_markup(block)
+        ):
+            return True
+    return False
+
+
 def _fenced_code_spans(body: str) -> list[tuple[int, int]]:
     """Conservatively protect a document containing any fence-looking line.
 
@@ -5723,21 +5929,9 @@ def _fenced_code_spans(body: str) -> list[tuple[int, int]]:
     false-positive blocker over treating a literal tag as live markup.
     """
 
-    def container_payload(line: str) -> str:
-        payload = line
-        while True:
-            container = re.match(
-                r" {0,3}(?:>[ \t]?|(?:[-+*]|[0-9]{1,9}[.)])[ \t]+)",
-                payload,
-            )
-            if container is None:
-                break
-            payload = payload[container.end() :]
-        return payload
-
     for line in body.splitlines(keepends=True):
         content = line.rstrip("\r\n")
-        payload = container_payload(content)
+        payload = _markdown_container_payload(content)
         # Once a line has been reduced to its obvious container payload, keep
         # the guard deliberately broader than CommonMark's root-level
         # three-space rule.  A list continuation can legitimately indent its
@@ -5751,6 +5945,12 @@ def _fenced_code_spans(body: str) -> list[tuple[int, int]]:
 
 
 def _protected_markup_context_present(body: str) -> bool:
+    if (
+        _quoted_html_attribute_contains_normalizable_markup(body)
+        or _unreviewed_raw_html_block_contains_normalizable_markup(body)
+        or _reference_definition_contains_normalizable_markup(body)
+    ):
+        return True
     fenced_spans = _fenced_code_spans(body)
     if any(
         _contains_normalizable_markup(body[start:end])
@@ -5860,8 +6060,21 @@ def _protected_markup_context_present(body: str) -> bool:
     # text there would silently change the link itself.  A literal ``](``
     # that is not ultimately a valid link may cause a conservative blocker;
     # preserving bytes is preferable to guessing at Markdown grammar here.
-    for opener in re.finditer(r"\]\(", body):
-        target_start = opener.end()
+    link_candidates = list(_PROTECTED_CONTEXT_MARKUP_RE.finditer(body))
+    link_search_start = 0
+    link_candidate_index = 0
+    while link_candidate_index < len(link_candidates):
+        opener_start = body.find("](", link_search_start)
+        if opener_start < 0:
+            break
+        target_start = opener_start + 2
+        while (
+            link_candidate_index < len(link_candidates)
+            and link_candidates[link_candidate_index].start() < target_start
+        ):
+            link_candidate_index += 1
+        if link_candidate_index >= len(link_candidates):
+            break
         depth = 1
         quote: str | None = None
         in_angle_destination = False
@@ -5892,9 +6105,11 @@ def _protected_markup_context_present(body: str) -> bool:
                 if depth == 0:
                     break
             index += 1
-        target = body[target_start:index]
-        if _contains_normalizable_markup(target):
+        if link_candidates[link_candidate_index].start() < index:
             return True
+        if index >= len(body):
+            break
+        link_search_start = index + 1
     for reference_definition in re.finditer(
         r"(?im)^ {0,3}\[[^\]\r\n]+\]:[^\r\n]*"
         r"(?:\r?\n[ \t]+[^\r\n]*)*",
@@ -6049,16 +6264,25 @@ def _normalize_markup_body(
             opening.group("attrs") or ""
         ) is None:
             continue
+        if name == "database" and not _database_reference_attributes_supported(
+            opening.group("attrs") or ""
+        ):
+            continue
         if candidate.group("inner").strip():
             continue
         count_reference_occurrence(
             _sha256_bytes(candidate.group(0).encode("utf-8"))
         )
     for candidate in _MARKUP_TAG_RE.finditer(normalized):
+        candidate_name = candidate.group("name").casefold()
         if (
-            candidate.group("name").casefold() in _REFERENCE_MARKUP_TAGS
+            candidate_name in _REFERENCE_MARKUP_TAGS
             and not candidate.group("closing")
             and bool(candidate.group("self"))
+            and (
+                candidate_name not in _UNKNOWN_CONTENT_REFERENCE_MARKUP_TAGS
+                or not (candidate.group("attrs") or "").strip()
+            )
         ):
             count_reference_occurrence(
                 _sha256_bytes(candidate.group(0).encode("utf-8"))
@@ -6126,6 +6350,12 @@ def _normalize_markup_body(
             add_reference_blocker("markup_file_attributes_unsupported")
             paired_unbound_reference_counts[name] += 1
             return fragment
+        if name == "database" and not _database_reference_attributes_supported(
+            opening.group("attrs") or ""
+        ):
+            add_reference_blocker("markup_database_attributes_unsupported")
+            paired_unbound_reference_counts[name] += 1
+            return fragment
         if match.group("inner").strip():
             add_reference_blocker(
                 f"markup_{name}_inner_content_unsupported"
@@ -6145,7 +6375,10 @@ def _normalize_markup_body(
         if binding is None:
             paired_unbound_reference_counts[name] += 1
             return fragment
-        if binding.get("binding_kind") != "objet":
+        allowed_binding_kinds = (
+            {"zettel_reference"} if name == "database" else {"objet"}
+        )
+        if binding.get("binding_kind") not in allowed_binding_kinds:
             add_reference_blocker(
                 "markup_reference_binding_kind_mismatch"
             )
@@ -6239,11 +6472,21 @@ def _normalize_markup_body(
             return match.group(0)
         if name in _PAIRED_REFERENCE_MARKUP_TAGS and not match.group("self"):
             return match.group(0)
+        if name == "database":
+            add_reference_blocker("markup_database_shape_unsupported")
+            return match.group(0)
+        if name in _UNKNOWN_CONTENT_REFERENCE_MARKUP_TAGS and match.group(
+            0
+        ) != f"<{name}/>":
+            add_reference_blocker(
+                "markup_unknown_content_reference_shape_unsupported"
+            )
+            return match.group(0)
         tag_sha256 = _sha256_bytes(match.group(0).encode("utf-8"))
         occurrence_index = next_reference_occurrence(tag_sha256)
         reference_tag_digests.append(
             {
-                "tag_name": name.replace("_", "-"),
+                "tag_name": _public_markup_tag_name(name),
                 "tag_sha256": tag_sha256,
                 "occurrence_index": occurrence_index,
             }
@@ -6276,6 +6519,8 @@ def _normalize_markup_body(
         allowed_binding_kinds = (
             {"zettel_edge", "zettel_reference"}
             if name == "mention-page"
+            else {"objet", "zettel_reference"}
+            if name in _UNKNOWN_CONTENT_REFERENCE_MARKUP_TAGS
             else {"objet"}
             if name == "unknown:audio"
             else {"external_locator", "zettel_edge", "objet"}
@@ -6310,7 +6555,7 @@ def _normalize_markup_body(
             continue
         if name in _REFERENCE_MARKUP_TAGS:
             counts["reference_binding_required"] += 1
-            reference_names.add(name.replace("_", "-"))
+            reference_names.add(_public_markup_tag_name(name))
             continue
         if name == "empty-block" or name == "span" or name in _STRUCTURAL_MARKUP_TAGS:
             unknown_names.add(name)
@@ -6339,24 +6584,13 @@ def _normalize_markup_body(
     if unknown_names:
         blocker_codes.append("unknown_semantic_markup")
     blocker_codes = archive_services.unique_preserve_order(blocker_codes)
-    restore_blocked_table_of_contents = bool(
-        "<unknown:table_of_contents/>" in body and blocker_codes
-    )
-    restore_occurrence_blocked = any(
-        code.startswith("markup_reference_binding_occurrence_")
-        for code in reference_blockers
-    )
+    restore_blocked_body = bool(blocker_codes)
     return {
         "normalized_body": (
-            body
-            if restore_blocked_table_of_contents
-            or restore_occurrence_blocked
-            else normalized
+            body if restore_blocked_body else normalized
         ),
         "changed": (
-            normalized != body
-            and not restore_blocked_table_of_contents
-            and not restore_occurrence_blocked
+            normalized != body and not restore_blocked_body
         ),
         "counts": counts,
         "reference_tag_names": sorted(reference_names),

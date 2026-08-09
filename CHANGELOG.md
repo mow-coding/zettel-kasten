@@ -6,6 +6,30 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.310 - 2026-08-09
+
+- Added reviewed static-reference bindings for exact, lowercase,
+  attribute-free, self-closing `unknown:synced_block`,
+  `unknown:transclusion_reference`, and `unknown:transclusion_container`
+  placeholders. Binding-manifest v0.2 may select either a canonical
+  `zettel_reference` or a manifested `objet`; WOM does not infer an edge,
+  reconstruct transcluded children, or claim live synchronization.
+- Added a reviewed `zettel_reference` path for an empty paired `database`
+  fragment with strict `inline` and `url` attributes and an optional
+  `data-source-url`. Content-bearing, self-closing, malformed, extra-attribute,
+  or non-zettel binding forms remain unchanged and blocked.
+- Hardened protected-literal detection for normalizable-looking markup inside
+  quoted raw-HTML attributes, unreviewed raw-HTML block containers, and
+  CommonMark multiline or next-line-title link reference definitions. A
+  protected literal preserves the complete zettel bytes; partial outside-span
+  normalization remains future work rather than actionable migration debt.
+- Kept callout display semantics, unknown column structures, unsupported
+  unknown placeholders, incomplete occurrence authority, and every co-blocked
+  zettel byte-identical and fail closed.
+- Preserved the existing v0.2 reviewed plan/apply/recovery/revert lifecycle.
+  No new command, schema revision, provider lookup, edge inference, archive
+  migration, MCP writer, UI change, or canonical beta write was added.
+
 ## v0.3.309 - 2026-08-09
 
 - Added optional, one-based `occurrence_index` selectors to reviewed markup

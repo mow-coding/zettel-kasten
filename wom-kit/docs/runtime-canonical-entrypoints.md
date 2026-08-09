@@ -1,6 +1,6 @@
 # Runtime Canonical Entry Points
 
-Status: v0.3.309 Letter 116 occurrence, navigation, and generated-TOC checkpoint
+Status: v0.3.310 Letter 117 reviewed imported-reference checkpoint
 
 When an AI runtime enters a WOM archive, it needs a small, explicit "start
 here" map. The archive may contain zets, source bindings, provider metadata,
@@ -107,6 +107,29 @@ required child semantics are unverified. This does not remove existing
 `<synced_block>`/`<synced_block_reference>` inner-preserving or
 `<column>/<columns>` structural normalization. See
 [Letter 116 Completion](letter116-completion.md). Source documentation and
+external CI, exact-tag, GitHub Release, and wheel evidence remain distinct
+verification layers.
+
+v0.3.310 also adds no command and does not change action routing. It narrows
+the same markup plan/apply route for four imported reference shapes. Exact
+lowercase, attribute-free, self-closing `unknown:synced_block`,
+`unknown:transclusion_reference`, and `unknown:transclusion_container`
+occurrences may use complete v0.2 occurrence authority for one static
+canonical zettel or manifested objet destination. One empty paired `database`
+with required `inline` and `url`, optional `data-source-url`, exact boolean
+`inline`, and no extra attributes may use a reviewed zettel destination. The
+runtime must not describe these static links as an edge, live sync,
+transcluded-child reconstruction, database view, or provider lookup.
+
+Markup-like bytes inside quoted HTML attributes, unreviewed raw-HTML blocks,
+multiline-label reference definitions, and next-line reference titles are
+terminal literal content: the complete zettel remains unchanged. A runtime
+must not present protected-context counts as actionable migration debt.
+Callout display semantics, unknown column structure, unsupported content,
+malformed or content-bearing reference shapes, incomplete selectors, and any
+co-blocked zettel remain fail closed. Normalizing safe source spans outside a
+protected literal is not implemented. See
+[Letter 117 Completion](letter117-completion.md). Source documentation and
 external CI, exact-tag, GitHub Release, and wheel evidence remain distinct
 verification layers.
 

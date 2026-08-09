@@ -6,6 +6,23 @@ The filesystem folder is `wom-kit/`, the Python import package is `wom_kit`, and
 
 See `wom-kit/docs/concepts/naming-and-terminology.md` for the naming baseline.
 
+v0.3.310 narrows the existing markup-normalization CLI without adding a
+command or schema. Binding-manifest v0.2 can bind exact lowercase,
+attribute-free, self-closing `unknown:synced_block`,
+`unknown:transclusion_reference`, and `unknown:transclusion_container`
+occurrences to a reviewed static zettel or manifested objet. It can also bind
+an empty paired `database` with strict `inline`/`url` and optional
+`data-source-url` attributes to a reviewed zettel. These are static links: no
+edge, live sync, transcluded-child reconstruction, database-view
+materialization, or provider lookup is implied. Protected quoted-HTML,
+unreviewed raw-HTML-block, and CommonMark reference-definition literals now
+keep the complete zettel unchanged. Callout display semantics, unknown column
+structure, unsupported content, malformed shapes, and co-blocked zettels remain
+fail closed. See `wom-kit/docs/letter117-completion.md` and
+`wom-kit/docs/releases/v0.3.310.md`. Source documentation and external CI,
+exact-tag, GitHub Release, and wheel evidence remain distinct verification
+layers.
+
 v0.3.309 narrows the existing markup-normalization CLI
 without adding a command. Binding-manifest v0.2 can select repeated same-digest
 references with complete, per-zettel 1-based `occurrence_index` values;
