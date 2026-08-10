@@ -213,6 +213,8 @@
 - [Credential Adapter Readiness Plan](credential-adapter-readiness-plan.md)
 - [Credential Adapter Manifest Plan](credential-adapter-manifest-plan.md)
 - [Credential Adapter Audit Plan](credential-adapter-audit-plan.md)
+- [편지 118·119 자격 증명 연속성과 검토된 Notion 페이지 회수](letter118-119-credential-continuity-and-notion-page-recovery.md)
+- [편지 118·119 자격 증명 수명주기 결정](archive-infra-decision-log-2026-08-10-v03311-letter118-119-credential-lifecycle.md)
 - [Human Artifact Store Contract](human-artifact-store-contract.md)
 - [External Export Plan](external-export-plan.md)
 - [Connection Import Plan](connection-import-plan.md)
@@ -403,6 +405,7 @@ local archive
 - [v0.3.308 릴리스 노트](releases/v0.3.308.md)
 - [v0.3.309 릴리스 노트](releases/v0.3.309.md)
 - [v0.3.310 릴리스 노트](releases/v0.3.310.md)
+- [v0.3.311 릴리스 노트](releases/v0.3.311.md)
 
 작업일지는 제품 명세가 아닙니다.
 

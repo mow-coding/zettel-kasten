@@ -2,6 +2,36 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.3.311 Letter 118·119 자격증명 연속성과 검토된 복구
+
+v0.3.311은 v0.3.310 아카이브와 호환되며 자격증명 migration, provider 호출,
+canonical zet 수정을 자동으로 수행하지 않습니다. 기존 자격증명 참조 행은 저장소
+존재 여부를 확인하지 않은 metadata일 뿐입니다.
+
+Windows에서는 먼저 `credential-adopt --dry-run`으로 요청을 검토하고 정확한
+요청 digest만 승인하세요. 승인하면 별도 자식 프로세스 안에서 Windows 기본
+마스킹 창이 열립니다. PAT를 명령 인자, 환경 변수, 일반 stdin, 파일, 채팅,
+clipboard에 붙여 넣지 마세요. 인증된 목록을 확인한 다음 별도
+`credential-lifecycle` 미리보기와 승인을 통해 정확한 workspace에 쓸 현재
+자격증명 하나를 사람이 선택합니다. WOM은 다른 유효 자격증명을 자동 삭제하거나
+폐기하지 않습니다.
+
+검토된 Notion 복구 요청은 무시되는 local profile 아래에 두고 Letter 118의 전체
+목록, 즉 `zet_notion_db3` 577건과 `zet_notion_db1` 43건을 모두 포함해야 합니다.
+작은 `--max-items` 범위로 `notion-page-recovery-plan --dry-run`을 실행하여 고정된
+권한 범위와 plan digest를 검토한 뒤, 바뀌지 않은 범위만
+`notion-page-recovery`로 승인하세요. 로컬 replay 증거가 온전하면 실제 호출을
+생략할 수 있지만, 승인은 선택 항목의 자격증명 읽기, 읽기 전용 provider GET,
+아카이브 증거 쓰기를 항상 포함합니다. 회수한 바이트는 objet와 항목별 증거로
+보존되며 canonical zet은 바뀌지 않습니다.
+
+이 릴리스가 실제 PAT 수령이나 620건 복구 완료를 뜻하지는 않습니다. 그것은 별도
+운영 실행과 사람의 확인 단계입니다. 자세한 내용은
+[Letter 118·119 가이드](wom-kit/docs/letter118-119-credential-continuity-and-notion-page-recovery.md),
+[v0.3.311 릴리스 노트](wom-kit/docs/releases/v0.3.311.md),
+[결정 기록](wom-kit/docs/archive-infra-decision-log-2026-08-10-v03311-letter118-119-credential-lifecycle.md)을
+보세요.
+
 ## v0.3.310 Letter 117 검토된 import 참조 완성
 
 v0.3.310은 v0.3.309 아카이브와 호환되며 자동 아카이브 migration이나 manifest

@@ -151,6 +151,10 @@ Commands:
           Run the approval-gated local Notion ancestor structure fetch adapter.
   notion-recover
           Run the beginner-friendly one-command Notion missing-location recovery wrapper.
+  notion-page-recovery-plan
+          Validate and digest-plan an exact ignored-local reviewed page request without secret, provider, or writes.
+  notion-page-recovery
+          Execute only an unchanged, human-reviewed Notion page recovery plan through an authenticated local credential.
   notion-media-fetch-adapter-execution-contract
           Preview the read-only execution contract for a future Notion media byte fetch adapter.
   notion-media-result-verification-plan
@@ -169,6 +173,12 @@ Commands:
           Plan a read-only IMAP mailbox source without connecting or storing secrets.
   credential-ref-plan
           Plan a local credential reference without reading or storing secret values.
+  credential-adopt
+          Plan or explicitly approve Windows masked Notion credential intake; PAT values are never accepted on the command line.
+  credential-secure-list
+          List local receipt metadata, or explicitly verify it with the exact archive authentication key.
+  credential-lifecycle
+          Plan or approve one authenticated human default/legacy decision without deleting or revoking credentials.
   credential-ref-inventory
           List known credential refs without echoing ref values or secrets.
   credential-store-recommendation
@@ -363,9 +373,11 @@ import threading
 import time
 from contextlib import redirect_stderr
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timezone
+from fnmatch import fnmatchcase
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterable
+from uuid import UUID
 
 from . import (
     __version__,
@@ -7841,6 +7853,789 @@ def command_credential_ref_plan(args: argparse.Namespace) -> int:
             for warning in result["warnings"]:
                 print(f"- {warning}")
     return 0 if result.get("ok", True) else 1
+
+
+CREDENTIAL_ADOPTION_REQUEST_SCHEMA = "wom-kit/credential-adoption-request/v0.1"
+_SHA256_IDENTIFIER_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+_SAFE_CREDENTIAL_REVIEWER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._@:+-]{0,127}$")
+_SAFE_RECOVERY_REVIEWER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:+-]{0,127}$")
+_CREDENTIAL_ARGUMENT_SECRET_SHAPE_RE = re.compile(
+    r"(?i)(?:^bearer\s+\S+|^(?:ntn_|secret_|github_pat_|sk-)[A-Za-z0-9_./+=-]{16,}$)"
+)
+
+
+def _credential_cli_blocked(action: str, reason_code: str) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "dry_run": True,
+        "lifecycle_action": action,
+        "reason_code": reason_code,
+        "secret_value_present": False,
+        "reviewed_anchor_present_in_result": False,
+        "backend_target_present": False,
+        "delete_performed": False,
+        "revoke_performed": False,
+        "operations": {
+            "secret_inputs": 0,
+            "store_reads": 0,
+            "store_writes": 0,
+            "provider_calls": 0,
+            "receipt_writes": 0,
+        },
+    }
+
+
+def _canonical_credential_adoption_request(
+    archive_root: Path,
+    *,
+    account_label: str,
+    workspace_label: str,
+    purpose: str,
+    reviewed_anchor_page_id: str,
+    capabilities: list[str],
+    ttl_seconds: int,
+    interactive: bool,
+) -> tuple[dict[str, Any], str]:
+    """Validate and canonically hash only stable human-reviewed intake input.
+
+    The secure-intake workflow deliberately uses a fresh random request id and
+    current creation time.  Those short-lived worker details are not a useful
+    cross-command approval contract.  This CLI layer instead binds approval to
+    the complete stable request and creates the one-use worker plan only after
+    that request hash is approved.
+    """
+
+    from . import credential_workflows
+
+    root = archive_services.require_existing_archive_root(archive_root)
+    if any(
+        _CREDENTIAL_ARGUMENT_SECRET_SHAPE_RE.search(str(value or "").strip())
+        for value in (
+            account_label,
+            workspace_label,
+            purpose,
+            *capabilities,
+        )
+    ):
+        raise ValueError("credential_adoption_request_invalid")
+    archive_id = archive_services.read_archive_id(root)
+    validation = credential_workflows.plan_secure_credential_adoption(
+        expected_archive_id=archive_id,
+        account_label=account_label,
+        workspace_label=workspace_label,
+        purpose=purpose,
+        reviewed_anchor_uuid=reviewed_anchor_page_id,
+        requested_capabilities=capabilities,
+        ttl_seconds=ttl_seconds,
+        now=datetime(2000, 1, 1, tzinfo=timezone.utc),
+        request_id_factory=lambda: "intake_cli_validation_0000000000000000",
+    )
+    if validation.get("ok") is not True:
+        raise ValueError("credential_adoption_request_invalid")
+    public_plan = validation.get("intake_plan")
+    if not isinstance(public_plan, dict):
+        raise ValueError("credential_adoption_request_invalid")
+    try:
+        normalized_anchor = str(UUID(str(reviewed_anchor_page_id).strip()))
+    except (AttributeError, TypeError, ValueError):
+        raise ValueError("credential_adoption_request_invalid") from None
+    canonical_request = {
+        "schema": CREDENTIAL_ADOPTION_REQUEST_SCHEMA,
+        "archive_id": archive_id,
+        "provider": public_plan["provider"],
+        "account_label": public_plan["account_label"],
+        "workspace_label": public_plan["workspace_label"],
+        "purpose": public_plan["purpose"],
+        "reviewed_anchor_page_id": normalized_anchor,
+        "requested_capabilities": list(public_plan["requested_capabilities"]),
+        "ttl_seconds": public_plan["ttl_seconds"],
+        "interactive": interactive is True,
+    }
+    canonical_bytes = json.dumps(
+        canonical_request,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return canonical_request, "sha256:" + hashlib.sha256(canonical_bytes).hexdigest()
+
+
+def _print_credential_command_result(result: dict[str, Any], output_format: str) -> None:
+    if output_format == "json":
+        print_json(result)
+        return
+    state = "succeeded" if result.get("ok") else "blocked"
+    print(f"Credential operation {state}.")
+    print(f"Action: {result.get('lifecycle_action') or '-'}")
+    print(f"Reason: {result.get('reason_code') or result.get('status') or '-'}")
+    if result.get("request_sha256"):
+        print(f"Reviewed request: {result['request_sha256']}")
+    if result.get("plan_sha256"):
+        print(f"Reviewed plan: {result['plan_sha256']}")
+    print("Secret value shown: no")
+    print("Automatic delete or revoke: no")
+
+
+def command_credential_adopt(args: argparse.Namespace) -> int:
+    action = (
+        "secure_credential_adoption_execute"
+        if args.approve
+        else "secure_credential_adoption_plan"
+    )
+    if not args.interactive:
+        result = _credential_cli_blocked(
+            action, "credential_adoption_interactive_mode_required"
+        )
+    elif args.dry_run == args.approve:
+        result = _credential_cli_blocked(
+            action, "credential_adoption_choose_dry_run_or_approve"
+        )
+    else:
+        try:
+            root = archive_services.require_existing_archive_root(Path(args.archive_root))
+            canonical_request, request_sha256 = _canonical_credential_adoption_request(
+                root,
+                account_label=args.account_label,
+                workspace_label=args.workspace_label,
+                purpose=args.purpose,
+                reviewed_anchor_page_id=args.reviewed_anchor_page_id,
+                capabilities=list(args.capability or []),
+                ttl_seconds=args.ttl_seconds,
+                interactive=True,
+            )
+            if args.dry_run:
+                if args.expected_request_sha256 is not None:
+                    raise ValueError("credential_adoption_expected_request_only_for_approval")
+                result = {
+                    "schema_version": "wom-credential-cli-result/v0.1",
+                    "ok": True,
+                    "dry_run": True,
+                    "lifecycle_action": action,
+                    "reason_code": "credential_adoption_request_ready",
+                    "request_sha256": request_sha256,
+                    "provider": canonical_request["provider"],
+                    "purpose": canonical_request["purpose"],
+                    "requested_capability_count": len(
+                        canonical_request["requested_capabilities"]
+                    ),
+                    "ttl_seconds": canonical_request["ttl_seconds"],
+                    "interactive_secret_prompt": True,
+                    "human_approval_required": True,
+                    "approval_command_requires_expected_request_sha256": True,
+                    "secret_value_present": False,
+                    "reviewed_anchor_present_in_result": False,
+                    "account_label_present_in_result": False,
+                    "workspace_label_present_in_result": False,
+                    "backend_target_present": False,
+                    "operations": {
+                        "secret_inputs": 0,
+                        "store_reads": 0,
+                        "store_writes": 0,
+                        "provider_calls": 0,
+                        "receipt_writes": 0,
+                    },
+                }
+            elif not (
+                isinstance(args.expected_request_sha256, str)
+                and _SHA256_IDENTIFIER_RE.fullmatch(args.expected_request_sha256)
+                and secrets.compare_digest(
+                    args.expected_request_sha256, request_sha256
+                )
+            ):
+                result = _credential_cli_blocked(
+                    "secure_credential_adoption_execute",
+                    "credential_adoption_request_sha256_mismatch",
+                )
+                result["request_sha256"] = request_sha256
+                result["dry_run"] = False
+            else:
+                from . import credential_workflows
+
+                approval_plan = credential_workflows.plan_secure_credential_adoption(
+                    expected_archive_id=canonical_request["archive_id"],
+                    account_label=canonical_request["account_label"],
+                    workspace_label=canonical_request["workspace_label"],
+                    purpose=canonical_request["purpose"],
+                    reviewed_anchor_uuid=canonical_request[
+                        "reviewed_anchor_page_id"
+                    ],
+                    requested_capabilities=canonical_request[
+                        "requested_capabilities"
+                    ],
+                    ttl_seconds=canonical_request["ttl_seconds"],
+                )
+                if approval_plan.get("ok") is not True:
+                    result = _credential_cli_blocked(
+                        "secure_credential_adoption_execute",
+                        "credential_adoption_plan_creation_failed",
+                    )
+                else:
+                    raw_result = credential_workflows.execute_windows_notion_credential_adoption(
+                        root,
+                        approval_plan,
+                        expected_plan_digest=approval_plan["plan_digest"],
+                        expected_archive_id=canonical_request["archive_id"],
+                        reviewed_anchor_uuid=canonical_request[
+                            "reviewed_anchor_page_id"
+                        ],
+                        requested_capabilities=canonical_request[
+                            "requested_capabilities"
+                        ],
+                        approved=True,
+                    )
+                    if not isinstance(raw_result, dict):
+                        raise ValueError("credential_adoption_result_invalid")
+                    result = dict(raw_result)
+                result["dry_run"] = False
+                result["request_sha256"] = request_sha256
+                # Worker-only drift gates must never become public approval
+                # material or reveal the hidden reviewed anchor.
+                result.pop("plan_digest", None)
+                result.pop("intake_plan", None)
+                result.pop("approval_plan", None)
+                result.pop("reviewed_anchor_uuid", None)
+        except (archive_services.ArchiveServiceError, OSError, ValueError):
+            result = _credential_cli_blocked(action, "credential_adoption_request_invalid")
+        except Exception:
+            result = _credential_cli_blocked(action, "credential_adoption_failed")
+
+    result["dry_run"] = bool(args.dry_run)
+    _print_credential_command_result(result, args.format)
+    return 0 if result.get("ok") else 1
+
+
+def command_credential_secure_list(args: argparse.Namespace) -> int:
+    action = "secure_credential_list"
+    try:
+        root = archive_services.require_existing_archive_root(Path(args.archive_root))
+        if args.verify:
+            from . import credential_workflows
+            from .credential_secure_intake_windows import CtypesWindowsNativeFacade
+
+            native = CtypesWindowsNativeFacade(cli_live_approved=True)
+            result = credential_workflows.list_authenticated_secure_credentials(
+                root,
+                native=native,
+            )
+        else:
+            from .credential_secure_registry import list_secure_credentials
+
+            result = list_secure_credentials(root)
+            result = dict(result)
+            result["lifecycle_action"] = "unauthenticated_secure_credential_list"
+            result["reason_code"] = "secure_credential_receipt_metadata_listed_unverified"
+            result["receipt_authentication_requested"] = False
+        if not isinstance(result, dict):
+            raise ValueError("credential_secure_list_result_invalid")
+    except (archive_services.ArchiveServiceError, OSError, ValueError):
+        result = _credential_cli_blocked(action, "credential_secure_list_unavailable")
+    except Exception:
+        result = _credential_cli_blocked(action, "credential_secure_list_failed")
+    result["dry_run"] = True
+    _print_credential_command_result(result, args.format)
+    return 0 if result.get("ok") else 1
+
+
+def command_credential_lifecycle(args: argparse.Namespace) -> int:
+    action = "authenticated_credential_lifecycle_decision"
+    if args.dry_run == args.approve:
+        result = _credential_cli_blocked(
+            action, "credential_lifecycle_choose_dry_run_or_approve"
+        )
+    elif args.approve and not (
+        isinstance(args.expected_plan_sha256, str)
+        and _SHA256_IDENTIFIER_RE.fullmatch(args.expected_plan_sha256)
+        and isinstance(args.reviewed_by, str)
+        and _SAFE_CREDENTIAL_REVIEWER_RE.fullmatch(args.reviewed_by)
+    ):
+        result = _credential_cli_blocked(
+            action, "credential_lifecycle_approval_evidence_invalid"
+        )
+    elif args.dry_run and (
+        args.expected_plan_sha256 is not None or args.reviewed_by is not None
+    ):
+        result = _credential_cli_blocked(
+            action, "credential_lifecycle_approval_evidence_only_for_approval"
+        )
+    else:
+        try:
+            root = archive_services.require_existing_archive_root(Path(args.archive_root))
+            from . import credential_workflows
+            from .credential_secure_intake_windows import CtypesWindowsNativeFacade
+
+            native = CtypesWindowsNativeFacade(cli_live_approved=True)
+            common = {
+                "provider": args.provider,
+                "workspace_fingerprint": args.workspace_fingerprint,
+                "selected_default_credential_id": args.default_credential_id,
+                "revocation_pending_credential_ids": tuple(
+                    args.revocation_pending_credential_id or []
+                ),
+                "native": native,
+            }
+            if args.dry_run:
+                result = credential_workflows.plan_authenticated_credential_lifecycle(
+                    root, **common
+                )
+            else:
+                result = credential_workflows.approve_authenticated_credential_lifecycle(
+                    root,
+                    expected_plan_sha256=args.expected_plan_sha256,
+                    reviewed_by=args.reviewed_by,
+                    **common,
+                )
+            if not isinstance(result, dict):
+                raise ValueError("credential_lifecycle_result_invalid")
+            result = dict(result)
+            result["dry_run"] = bool(args.dry_run)
+            result["delete_performed"] = False
+            result["revoke_performed"] = False
+        except (archive_services.ArchiveServiceError, OSError, ValueError):
+            result = _credential_cli_blocked(action, "credential_lifecycle_unavailable")
+        except Exception:
+            result = _credential_cli_blocked(action, "credential_lifecycle_failed")
+    result["dry_run"] = bool(args.dry_run)
+    _print_credential_command_result(result, args.format)
+    return 0 if result.get("ok") else 1
+
+
+NOTION_PAGE_RECOVERY_REQUEST_PREFIX = "profiles/local/notion-page-recovery/"
+NOTION_PAGE_RECOVERY_REQUEST_MAX_BYTES = 4 * 1024 * 1024
+NOTION_PAGE_RECOVERY_GITIGNORE_MAX_BYTES = 1024 * 1024
+LETTER118_NOTION_GROUP_COUNTS = {
+    "zet_notion_db3": 577,
+    "zet_notion_db1": 43,
+}
+LETTER118_NOTION_EXPECTED_ITEM_COUNT = sum(LETTER118_NOTION_GROUP_COUNTS.values())
+
+
+def _notion_page_recovery_request_blocked(code: str) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "dry_run": True,
+        "lifecycle_action": "notion_page_recovery_plan",
+        "reason_code": code,
+        "request_sha256": None,
+        "plan_sha256": None,
+        "counts": {
+            "group_count": 0,
+            "input_item_count": 0,
+            "selected_item_count": 0,
+            "unselected_item_count": 0,
+            "recovered_verified_count": 0,
+            "provider_pending_count": 0,
+        },
+        "provider_calls": 0,
+        "credential_reads": 0,
+        "writes": 0,
+        "privacy_guards": {
+            "credential_value_included": False,
+            "page_id_values_included": False,
+            "provider_payload_included": False,
+            "page_body_included": False,
+            "page_title_included": False,
+            "email_included": False,
+            "provider_url_included": False,
+            "cursor_included": False,
+            "request_path_included": False,
+        },
+        "blockers": [code],
+    }
+
+
+def _require_letter118_reviewed_batch_contract(request: dict[str, Any]) -> None:
+    """Require the full reviewed 577+43 request; pilots slice this full set."""
+
+    groups = request.get("groups")
+    items = request.get("items")
+    if (
+        request.get("expected_item_count") != LETTER118_NOTION_EXPECTED_ITEM_COUNT
+        or not isinstance(groups, list)
+        or not isinstance(items, list)
+        or len(groups) != len(LETTER118_NOTION_GROUP_COUNTS)
+        or len(items) != LETTER118_NOTION_EXPECTED_ITEM_COUNT
+    ):
+        raise ValueError("notion_page_recovery_reviewed_batch_contract_mismatch")
+    group_by_id: dict[str, dict[str, Any]] = {}
+    for group in groups:
+        if not isinstance(group, dict) or not isinstance(group.get("group_id"), str):
+            raise ValueError("notion_page_recovery_reviewed_batch_contract_mismatch")
+        group_id = group["group_id"]
+        if group_id in group_by_id:
+            raise ValueError("notion_page_recovery_reviewed_batch_contract_mismatch")
+        group_by_id[group_id] = group
+    if set(group_by_id) != set(LETTER118_NOTION_GROUP_COUNTS):
+        raise ValueError("notion_page_recovery_reviewed_batch_contract_mismatch")
+    actual_counts = {group_id: 0 for group_id in LETTER118_NOTION_GROUP_COUNTS}
+    credential_ids: set[str] = set()
+    workspace_fingerprints: set[str] = set()
+    for group_id, expected_count in LETTER118_NOTION_GROUP_COUNTS.items():
+        group = group_by_id[group_id]
+        scope = group.get("scope_binding")
+        if group.get("expected_count") != expected_count or not isinstance(scope, dict):
+            raise ValueError("notion_page_recovery_reviewed_batch_contract_mismatch")
+        credential_id = scope.get("credential_id")
+        workspace_fingerprint = scope.get("workspace_fingerprint")
+        if not isinstance(credential_id, str) or not isinstance(workspace_fingerprint, str):
+            raise ValueError("notion_page_recovery_reviewed_batch_contract_mismatch")
+        credential_ids.add(credential_id)
+        workspace_fingerprints.add(workspace_fingerprint)
+    for item in items:
+        if not isinstance(item, dict) or item.get("group_id") not in actual_counts:
+            raise ValueError("notion_page_recovery_reviewed_batch_contract_mismatch")
+        actual_counts[item["group_id"]] += 1
+    if (
+        actual_counts != LETTER118_NOTION_GROUP_COUNTS
+        or len(credential_ids) != len(LETTER118_NOTION_GROUP_COUNTS)
+        or len(workspace_fingerprints) != len(LETTER118_NOTION_GROUP_COUNTS)
+    ):
+        raise ValueError("notion_page_recovery_reviewed_batch_contract_mismatch")
+
+
+def _load_notion_page_recovery_request(
+    archive_root: Path,
+    request_relative: str,
+) -> dict[str, Any]:
+    """Load one ignored local request without reflecting its path or content."""
+
+    normalized = str(request_relative or "").strip().replace("\\", "/")
+    if (
+        not normalized.startswith(NOTION_PAGE_RECOVERY_REQUEST_PREFIX)
+        or not normalized.endswith(".json")
+        or normalized.startswith("/")
+        or ":" in normalized
+        or ".." in PurePosixPath(normalized).parts
+    ):
+        raise ValueError("notion_page_recovery_request_path_invalid")
+    try:
+        target = resolve_archive_relative_path(archive_root, normalized)
+    except ArchivePathError:
+        raise ValueError("notion_page_recovery_request_path_invalid") from None
+    if not is_path_within_root(target, archive_root):
+        raise ValueError("notion_page_recovery_request_path_invalid")
+
+    _require_notion_page_recovery_request_ignored(archive_root, normalized)
+
+    current = archive_root
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    for part in PurePosixPath(normalized).parts:
+        current = current / part
+        try:
+            info = os.lstat(current)
+        except OSError:
+            raise ValueError("notion_page_recovery_request_unavailable") from None
+        if stat.S_ISLNK(info.st_mode) or (
+            reparse_flag and getattr(info, "st_file_attributes", 0) & reparse_flag
+        ):
+            raise ValueError("notion_page_recovery_request_path_unsafe")
+    descriptor: int | None = None
+    try:
+        before = os.lstat(target)
+        if not stat.S_ISREG(before.st_mode):
+            raise ValueError("notion_page_recovery_request_unavailable")
+        if before.st_size < 2 or before.st_size > NOTION_PAGE_RECOVERY_REQUEST_MAX_BYTES:
+            raise ValueError("notion_page_recovery_request_size_invalid")
+        flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(target, flags)
+        opened = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or opened.st_size != before.st_size
+            or (before.st_ino and opened.st_ino and before.st_ino != opened.st_ino)
+            or (before.st_dev and opened.st_dev and before.st_dev != opened.st_dev)
+        ):
+            raise ValueError("notion_page_recovery_request_changed")
+        chunks: list[bytes] = []
+        remaining = opened.st_size
+        while remaining:
+            chunk = os.read(descriptor, min(remaining, 65536))
+            if not chunk:
+                raise ValueError("notion_page_recovery_request_changed")
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        if os.read(descriptor, 1):
+            raise ValueError("notion_page_recovery_request_changed")
+        raw = b"".join(chunks)
+    except ValueError:
+        raise
+    except OSError:
+        raise ValueError("notion_page_recovery_request_invalid") from None
+    finally:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+    try:
+        text = raw.decode("utf-8")
+
+        def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+            result: dict[str, Any] = {}
+            for key, value in pairs:
+                if key in result:
+                    raise ValueError("notion_page_recovery_request_invalid")
+                result[key] = value
+            return result
+
+        document = json.loads(text, object_pairs_hook=reject_duplicate_keys)
+    except (UnicodeError, json.JSONDecodeError, ValueError):
+        raise ValueError("notion_page_recovery_request_invalid") from None
+    if not isinstance(document, dict):
+        raise ValueError("notion_page_recovery_request_invalid")
+    return document
+
+
+def _require_notion_page_recovery_request_ignored(
+    archive_root: Path,
+    request_relative: str,
+) -> None:
+    """Fail closed when profiles/local is missing or later re-included.
+
+    Git applies ignore rules in order.  Merely finding ``profiles/local/`` is
+    insufficient because a later ``!`` rule can make private request material
+    trackable again.  WOM rejects every later negation that can match the local
+    profile root, the reviewed request, or any descendant of profiles/local.
+    """
+
+    gitignore = archive_root / ".gitignore"
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    descriptor: int | None = None
+    try:
+        before = os.lstat(gitignore)
+        if stat.S_ISLNK(before.st_mode) or (
+            reparse_flag and getattr(before, "st_file_attributes", 0) & reparse_flag
+        ):
+            raise ValueError("notion_page_recovery_request_not_ignored")
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_size < 1
+            or before.st_size > NOTION_PAGE_RECOVERY_GITIGNORE_MAX_BYTES
+        ):
+            raise ValueError("notion_page_recovery_request_not_ignored")
+        flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(gitignore, flags)
+        opened = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or opened.st_size != before.st_size
+            or (before.st_ino and opened.st_ino and before.st_ino != opened.st_ino)
+            or (before.st_dev and opened.st_dev and before.st_dev != opened.st_dev)
+            or (
+                reparse_flag
+                and getattr(opened, "st_file_attributes", 0) & reparse_flag
+            )
+        ):
+            raise ValueError("notion_page_recovery_request_not_ignored")
+        chunks: list[bytes] = []
+        remaining = opened.st_size
+        while remaining:
+            chunk = os.read(descriptor, min(remaining, 65536))
+            if not chunk:
+                raise ValueError("notion_page_recovery_request_not_ignored")
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        if os.read(descriptor, 1):
+            raise ValueError("notion_page_recovery_request_not_ignored")
+        after = os.lstat(gitignore)
+        if (
+            not stat.S_ISREG(after.st_mode)
+            or stat.S_ISLNK(after.st_mode)
+            or (reparse_flag and getattr(after, "st_file_attributes", 0) & reparse_flag)
+            or after.st_size != opened.st_size
+            or (after.st_ino and opened.st_ino and after.st_ino != opened.st_ino)
+            or (after.st_dev and opened.st_dev and after.st_dev != opened.st_dev)
+        ):
+            raise ValueError("notion_page_recovery_request_not_ignored")
+        lines = b"".join(chunks).decode("utf-8-sig").splitlines()
+    except ValueError:
+        raise
+    except (OSError, UnicodeError):
+        raise ValueError("notion_page_recovery_request_not_ignored") from None
+    finally:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+
+    local_ignore_seen = False
+    local_reincluded = False
+    for raw_line in lines:
+        line = raw_line.strip().replace("\\", "/")
+        if not line or line.startswith("#"):
+            continue
+        if line in {
+            "profiles/local/",
+            "/profiles/local/",
+            "profiles/local",
+            "/profiles/local",
+        }:
+            local_ignore_seen = True
+            local_reincluded = False
+            continue
+        if not local_ignore_seen or not line.startswith("!"):
+            continue
+        negation = line[1:].lstrip("/").rstrip("/")
+        if not negation:
+            raise ValueError("notion_page_recovery_request_not_ignored")
+        local_root = "profiles/local"
+        if (
+            negation == local_root
+            or negation.startswith(local_root + "/")
+            or fnmatchcase(local_root, negation)
+            or fnmatchcase(request_relative, negation)
+        ):
+            local_reincluded = True
+    if not local_ignore_seen or local_reincluded:
+        raise ValueError("notion_page_recovery_request_not_ignored")
+
+
+def command_notion_page_recovery_plan(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        result = _notion_page_recovery_request_blocked(
+            "notion_page_recovery_plan_requires_dry_run"
+        )
+    else:
+        try:
+            root = archive_services.require_existing_archive_root(Path(args.archive_root))
+            request = _load_notion_page_recovery_request(root, args.request)
+            _require_letter118_reviewed_batch_contract(request)
+            if request.get("archive_id") != archive_services.read_archive_id(root):
+                result = _notion_page_recovery_request_blocked(
+                    "notion_page_recovery_archive_identity_mismatch"
+                )
+            else:
+                from .notion_page_recovery import plan_recovery
+
+                result = plan_recovery(
+                    root,
+                    request,
+                    max_items=args.max_items,
+                    offset=args.offset,
+                )
+                result.setdefault("privacy_guards", {})["request_path_included"] = False
+        except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
+            code = str(exc)
+            if not re.fullmatch(r"[a-z0-9_]+", code):
+                code = "notion_page_recovery_request_invalid"
+            result = _notion_page_recovery_request_blocked(code)
+        except Exception:
+            result = _notion_page_recovery_request_blocked(
+                "notion_page_recovery_plan_failed"
+            )
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        counts = result.get("counts") if isinstance(result.get("counts"), dict) else {}
+        print("Notion page recovery plan " + ("ready." if result.get("ok") else "blocked."))
+        print(f"Request digest: {result.get('request_sha256') or '-'}")
+        print(f"Plan digest: {result.get('plan_sha256') or '-'}")
+        print(f"Items: {counts.get('selected_item_count', 0)} selected / {counts.get('input_item_count', 0)} reviewed")
+        print("Secret reads: 0; provider calls: 0; writes: 0")
+        capabilities = result.get("approved_execution_capabilities")
+        if isinstance(capabilities, dict) and all(
+            capabilities.get(key) is True
+            for key in (
+                "credential_reads_may_occur",
+                "provider_get_requests_may_occur",
+                "archive_writes_may_occur",
+                "verified_replay_is_optimization_only",
+            )
+        ):
+            print(
+                "Approval scope: credential reads, read-only provider GETs, "
+                "and archive evidence writes may occur; verified replay is an optimization."
+            )
+        for blocker in result.get("blockers") or []:
+            print(f"- {blocker}")
+    return 0 if result.get("ok") else 1
+
+
+def _notion_page_recovery_execute_blocked(code: str) -> dict[str, Any]:
+    result = _notion_page_recovery_request_blocked(code)
+    result["dry_run"] = False
+    result["lifecycle_action"] = "authenticated_notion_page_recovery_execute"
+    return result
+
+
+def command_notion_page_recovery(args: argparse.Namespace) -> int:
+    if args.dry_run and args.approve:
+        result = _notion_page_recovery_execute_blocked(
+            "notion_page_recovery_choose_dry_run_or_approve"
+        )
+    elif args.dry_run and (
+        args.expected_plan_sha256 is not None or args.reviewed_by is not None
+    ):
+        result = _notion_page_recovery_request_blocked(
+            "notion_page_recovery_approval_evidence_only_for_approval"
+        )
+    elif args.dry_run:
+        return command_notion_page_recovery_plan(args)
+    elif not args.approve:
+        result = _notion_page_recovery_execute_blocked(
+            "notion_page_recovery_requires_dry_run_or_approval"
+        )
+    elif not (
+        isinstance(args.expected_plan_sha256, str)
+        and _SHA256_IDENTIFIER_RE.fullmatch(args.expected_plan_sha256)
+        and isinstance(args.reviewed_by, str)
+        and _SAFE_RECOVERY_REVIEWER_RE.fullmatch(args.reviewed_by)
+    ):
+        result = _notion_page_recovery_execute_blocked(
+            "notion_page_recovery_approval_evidence_invalid"
+        )
+    else:
+        try:
+            root = archive_services.require_existing_archive_root(Path(args.archive_root))
+            request = _load_notion_page_recovery_request(root, args.request)
+            _require_letter118_reviewed_batch_contract(request)
+            if request.get("archive_id") != archive_services.read_archive_id(root):
+                result = _notion_page_recovery_execute_blocked(
+                    "notion_page_recovery_archive_identity_mismatch"
+                )
+            else:
+                from . import credential_workflows
+
+                raw_result = credential_workflows.execute_spawned_authenticated_notion_page_recovery(
+                    root,
+                    request,
+                    expected_plan_sha256=args.expected_plan_sha256,
+                    reviewed_by=args.reviewed_by,
+                    max_items=args.max_items,
+                    approved=True,
+                    offset=args.offset,
+                )
+                if not isinstance(raw_result, dict):
+                    raise ValueError("notion_page_recovery_result_invalid")
+                result = dict(raw_result)
+                result.setdefault("privacy_guards", {})[
+                    "request_path_included"
+                ] = False
+        except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
+            code = str(exc)
+            if not re.fullmatch(r"[a-z0-9_]+", code):
+                code = "notion_page_recovery_request_invalid"
+            result = _notion_page_recovery_execute_blocked(code)
+        except Exception:
+            result = _notion_page_recovery_execute_blocked(
+                "notion_page_recovery_execution_failed"
+            )
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        counts = result.get("counts") if isinstance(result.get("counts"), dict) else {}
+        print(
+            "Notion page recovery "
+            + ("succeeded." if result.get("ok") else "blocked.")
+        )
+        print(f"Plan digest: {result.get('plan_sha256') or '-'}")
+        print(f"Processed items: {counts.get('processed_item_count', 0)}")
+        print("Request path, page ids, page bodies, provider payloads, and tokens shown: no")
+        for blocker in result.get("blockers") or []:
+            print(f"- {blocker}")
+    return 0 if result.get("ok") else 1
 
 
 def command_credential_ref_inventory(args: argparse.Namespace) -> int:
@@ -22273,6 +23068,103 @@ def build_parser() -> argparse.ArgumentParser:
     credential_ref_plan.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     credential_ref_plan.set_defaults(func=command_credential_ref_plan)
 
+    credential_adopt = subcommands.add_parser(
+        "credential-adopt",
+        help="Plan or explicitly approve Windows-native masked Notion credential intake without accepting a PAT on argv, stdin, or environment.",
+    )
+    credential_adopt.add_argument("archive_root", help="Archive root that will own the authenticated local receipt.")
+    credential_adopt.add_argument(
+        "--account-label",
+        required=True,
+        help="Short public-safe account label. Do not enter an email address, path, URL, token, or secret.",
+    )
+    credential_adopt.add_argument(
+        "--workspace-label",
+        required=True,
+        help="Short public-safe workspace label. Do not enter an id, URL, token, or secret.",
+    )
+    credential_adopt.add_argument(
+        "--purpose",
+        default="notion_page_recovery",
+        help="Safe machine-readable purpose label.",
+    )
+    credential_adopt.add_argument(
+        "--reviewed-anchor-page-id",
+        required=True,
+        help="Exact human-reviewed Notion anchor UUID. It is hashed into approval and never echoed.",
+    )
+    credential_adopt.add_argument(
+        "--capability",
+        action="append",
+        help="Safe requested capability label. Repeat for more than one capability.",
+    )
+    credential_adopt.add_argument(
+        "--ttl-seconds",
+        type=int,
+        default=300,
+        help="Fresh one-use intake-plan lifetime, 30-3600 seconds.",
+    )
+    credential_adopt.add_argument(
+        "--interactive",
+        action="store_true",
+        help="Required. Approval opens only the native masked Windows credential dialog in a spawned worker.",
+    )
+    credential_adopt.add_argument(
+        "--expected-request-sha256",
+        help="Required with --approve. Must match the stable canonical request SHA-256 returned by dry-run.",
+    )
+    credential_adopt.add_argument("--dry-run", action="store_true", help="Validate and hash the stable request only; performs no live operation.")
+    credential_adopt.add_argument("--approve", action="store_true", help="After exact request-hash approval, create one fresh worker plan and open the native masked dialog.")
+    credential_adopt.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    credential_adopt.set_defaults(func=command_credential_adopt)
+
+    credential_secure_list = subcommands.add_parser(
+        "credential-secure-list",
+        help="List local receipt metadata without authentication, or verify it with the exact archive authentication key.",
+    )
+    credential_secure_list.add_argument("archive_root", help="Archive root to inspect without native credential enumeration.")
+    credential_secure_list.add_argument(
+        "--verify",
+        action="store_true",
+        help="Read only the exact archive authentication-key target and verify receipt/lifecycle MACs. Does not read a provider credential.",
+    )
+    credential_secure_list.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    credential_secure_list.set_defaults(func=command_credential_secure_list)
+
+    credential_lifecycle = subcommands.add_parser(
+        "credential-lifecycle",
+        help="Plan or approve one authenticated default/legacy decision without deleting or revoking credentials.",
+    )
+    credential_lifecycle.add_argument("archive_root", help="Archive root containing authenticated credential receipts.")
+    credential_lifecycle.add_argument("--provider", default="notion", help="Safe provider label. Defaults to notion.")
+    credential_lifecycle.add_argument(
+        "--workspace-fingerprint",
+        required=True,
+        help="Exact sha256 workspace fingerprint from an authenticated receipt; never a raw workspace id.",
+    )
+    credential_lifecycle.add_argument(
+        "--default-credential-id",
+        required=True,
+        help="Human-selected opaque credential id to mark active/current/default.",
+    )
+    credential_lifecycle.add_argument(
+        "--revocation-pending-credential-id",
+        action="append",
+        help="Optional opaque id to mark review-pending. Repeatable; no credential is revoked or deleted.",
+    )
+    credential_lifecycle.add_argument(
+        "--expected-plan-sha256",
+        help="Required with --approve. Exact digest returned by the authenticated dry-run.",
+    )
+    credential_lifecycle.add_argument(
+        "--reviewed-by",
+        help="Required with --approve. Safe human reviewer label.",
+    )
+    credential_lifecycle.add_argument("--dry-run", action="store_true", help="Authenticate receipts and return the complete decision plan without writing it.")
+    credential_lifecycle.add_argument("--approve", action="store_true", help="Record only the unchanged human-reviewed lifecycle decision; never delete or revoke.")
+    credential_lifecycle.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    credential_lifecycle.set_defaults(func=command_credential_lifecycle)
+
     credential_ref_inventory = subcommands.add_parser(
         "credential-ref-inventory",
         aliases=["credentials", "credential-status"],
@@ -27570,6 +28462,97 @@ def build_parser() -> argparse.ArgumentParser:
     notion_ancestor_fetch_run.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     notion_ancestor_fetch_run.set_defaults(func=command_notion_ancestor_fetch_adapter_run)
 
+    notion_page_recovery_plan = subcommands.add_parser(
+        "notion-page-recovery-plan",
+        aliases=["notion-reviewed-page-recovery-plan"],
+        help="Validate and digest-plan one exact ignored-local reviewed Notion page request without secret, provider, or writes.",
+    )
+    notion_page_recovery_plan.add_argument(
+        "archive_root",
+        help="Archive root to inspect without modification.",
+    )
+    notion_page_recovery_plan.add_argument(
+        "--request",
+        required=True,
+        help="Archive-relative JSON under profiles/local/notion-page-recovery/. Its path and page ids are never echoed.",
+    )
+    notion_page_recovery_plan.add_argument(
+        "--max-items",
+        type=int,
+        default=5,
+        help="Bounded reviewed slice size, 1-1000. Defaults to a five-item pilot.",
+    )
+    notion_page_recovery_plan.add_argument(
+        "--offset",
+        type=int,
+        default=0,
+        help="Zero-based reviewed item offset bound into the plan digest.",
+    )
+    notion_page_recovery_plan.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Required. Reads only the ignored-local request and existing recovery evidence; never resolves a credential or calls Notion.",
+    )
+    notion_page_recovery_plan.add_argument(
+        "--format",
+        choices=["text", "json"],
+        default="json",
+        help="Output format.",
+    )
+    notion_page_recovery_plan.set_defaults(func=command_notion_page_recovery_plan)
+
+    notion_page_recovery = subcommands.add_parser(
+        "notion-page-recovery",
+        aliases=["notion-reviewed-page-recovery"],
+        help="Plan or approve one exact ignored-local reviewed Notion page-body recovery request.",
+    )
+    notion_page_recovery.add_argument(
+        "archive_root",
+        help="Archive root to inspect or update.",
+    )
+    notion_page_recovery.add_argument(
+        "--request",
+        required=True,
+        help="Archive-relative JSON under profiles/local/notion-page-recovery/. Its path and page ids are never echoed.",
+    )
+    notion_page_recovery.add_argument(
+        "--max-items",
+        type=int,
+        default=5,
+        help="Bounded reviewed slice size, 1-1000. Defaults to a five-item pilot.",
+    )
+    notion_page_recovery.add_argument(
+        "--offset",
+        type=int,
+        default=0,
+        help="Zero-based reviewed item offset bound into the plan digest.",
+    )
+    notion_page_recovery.add_argument(
+        "--expected-plan-sha256",
+        help="Required with --approve. Must exactly match the unchanged dry-run plan digest.",
+    )
+    notion_page_recovery.add_argument(
+        "--reviewed-by",
+        help="Required with --approve. Safe human reviewer label; page ids and bodies are never accepted here.",
+    )
+    notion_page_recovery.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Validate and digest-plan only; reads no credential and calls no provider.",
+    )
+    notion_page_recovery.add_argument(
+        "--approve",
+        action="store_true",
+        help="Execute only the unchanged plan through the exact authenticated Windows credential broker and read-only Notion adapter.",
+    )
+    notion_page_recovery.add_argument(
+        "--format",
+        choices=["text", "json"],
+        default="json",
+        help="Output format.",
+    )
+    notion_page_recovery.set_defaults(func=command_notion_page_recovery)
+
     notion_recover = subcommands.add_parser(
         "notion-recover",
         aliases=["notion-location-recover", "notion-recovery"],
@@ -29735,16 +30718,63 @@ def main(argv: list[str] | None = None) -> int:
         or (item == "--format" and index + 1 < len(raw_argv) and raw_argv[index + 1] == "json")
         for index, item in enumerate(raw_argv)
     )
-    try:
+    privacy_sensitive_command = bool(
+        raw_argv
+        and raw_argv[0]
+        in {
+            "credential-adopt",
+            "credential-secure-list",
+            "credential-lifecycle",
+            "notion-page-recovery-plan",
+            "notion-reviewed-page-recovery-plan",
+            "notion-page-recovery",
+            "notion-reviewed-page-recovery",
+        }
+    )
+    if raw_argv[:1] == ["credential-adopt"] and any(
+        isinstance(item, str)
+        and re.match(
+            r"^--(?:pat(?:-value)?|token|notion-token|access-token|secret|password|api-key|credential-value|credential-ref)(?:=|$)",
+            item,
+            flags=re.IGNORECASE,
+        )
+        for item in raw_argv[1:]
+    ):
         if json_requested:
-            parser_stderr = io.StringIO()
+            print_json(
+                {
+                    "ok": False,
+                    "state": "blocked",
+                    "lifecycle_action": "cli_argument_validation",
+                    "command": "credential-adopt",
+                    "reason_codes": ["credential_secret_input_option_forbidden"],
+                    "private_values_echoed": False,
+                }
+            )
+        else:
+            print(
+                "credential-adopt accepts secrets only through the native masked Windows dialog; private argument values were not echoed.",
+                file=sys.stderr,
+            )
+        return 2
+    parser_stderr = io.StringIO()
+    try:
+        if json_requested or privacy_sensitive_command:
             with redirect_stderr(parser_stderr):
                 args = parser.parse_args(raw_argv)
         else:
             args = parser.parse_args(raw_argv)
     except SystemExit as exc:
         exit_code = int(exc.code or 0)
-        if not exit_code or not json_requested:
+        if not exit_code:
+            return exit_code
+        if privacy_sensitive_command and not json_requested:
+            print(
+                "Command arguments are invalid; private argument values were not echoed.",
+                file=sys.stderr,
+            )
+            return exit_code
+        if not json_requested:
             return exit_code
         parser_error = parser_stderr.getvalue()
         missing_arguments: list[str] = []

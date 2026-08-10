@@ -6,6 +6,20 @@ The filesystem folder is `wom-kit/`, the Python import package is `wom_kit`, and
 
 See `wom-kit/docs/concepts/naming-and-terminology.md` for the naming baseline.
 
+v0.3.311 adds release-facing `credential-adopt`, `credential-secure-list`,
+`credential-lifecycle`, `notion-page-recovery-plan`, and
+`notion-page-recovery` commands. Credential intake accepts a PAT only through
+the native masked Windows dialog in a spawned child. Listing separates
+unauthenticated metadata from authenticated receipt/lifecycle evidence, and
+lifecycle approval never deletes or revokes another credential. The recovery
+commands require the complete reviewed 577+43 request while allowing bounded
+pilot slices; dry-run performs no credential read, provider call, or write,
+and approval uses an unchanged digest plus the authenticated read-only Notion
+adapter. See
+`wom-kit/docs/letter118-119-credential-continuity-and-notion-page-recovery.md`
+and `wom-kit/docs/releases/v0.3.311.md`. Source and injected-test completion is
+not evidence of live credential adoption or a completed 620-page recovery.
+
 v0.3.310 narrows the existing markup-normalization CLI without adding a
 command or schema. Binding-manifest v0.2 can bind exact lowercase,
 attribute-free, self-closing `unknown:synced_block`,
