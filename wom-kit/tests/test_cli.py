@@ -17,6 +17,7 @@ import threading
 import time
 import unittest
 import unicodedata
+import uuid
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -3217,6 +3218,95 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertIn(feedback_ref, record_text)
             self.assertIn(title_marker, record_text)
 
+    def test_operator_feedback_title_allows_security_terms_but_rejects_secret_shapes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            safe_title = "  Credential   continuity and token recovery  "
+            safe_code, safe_output = self.run_cli(
+                [
+                    "operator-feedback-record",
+                    str(archive_root),
+                    "--feedback-id",
+                    "credential_continuity_feedback_20260810",
+                    "--feedback-ref",
+                    "feedback:continuity-safe-title",
+                    "--status",
+                    "draft",
+                    "--title",
+                    safe_title,
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+            safe_result = json.loads(safe_output)
+            self.assertEqual(safe_code, 0, safe_output)
+            self.assertTrue(safe_result["data"]["title_policy"]["descriptive_security_words_allowed"])
+            self.assertTrue(safe_result["data"]["title_normalized"])
+            safe_record = archive_cli.load_yaml(
+                (
+                    archive_root
+                    / "ops"
+                    / "feedback"
+                    / "credential_continuity_feedback_20260810.yml"
+                ).read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                safe_record["title"],
+                "Credential continuity and token recovery",
+            )
+            self.assertNotIn(safe_title, safe_output)
+
+            secret_shape = "credential=abcdefghijklmnop"
+            blocked_code, blocked_output = self.run_cli(
+                [
+                    "operator-feedback-record",
+                    str(archive_root),
+                    "--feedback-id",
+                    "secret_shape_feedback_20260810",
+                    "--feedback-ref",
+                    "feedback:secret-shape",
+                    "--status",
+                    "draft",
+                    "--title",
+                    secret_shape,
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            blocked_result = json.loads(blocked_output)
+            self.assertEqual(blocked_code, 1, blocked_output)
+            self.assertIn(
+                "feedback_title_secret_value_shape",
+                blocked_result["blocker_codes"],
+            )
+            self.assertNotIn(secret_shape, blocked_output)
+
+            multiline_code, multiline_output = self.run_cli(
+                [
+                    "operator-feedback-record",
+                    str(archive_root),
+                    "--feedback-id",
+                    "multiline_feedback_20260810",
+                    "--feedback-ref",
+                    "feedback:multiline",
+                    "--status",
+                    "draft",
+                    "--title",
+                    "line one\nline two",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            multiline_result = json.loads(multiline_output)
+            self.assertEqual(multiline_code, 1, multiline_output)
+            self.assertIn("feedback_title_multiline", multiline_result["blocker_codes"])
+            self.assertNotIn("line one", multiline_output)
+
     def test_operator_feedback_record_create_and_update_are_digest_bound(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
@@ -3586,9 +3676,9 @@ class ArchiveCliTests(unittest.TestCase):
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
 
             secret_ref = "feedback:SECRET_REF_should_not_echo"
-            secret_title = "SECRET_TITLE_should_not_echo"
+            hidden_title = "Unpublished ledger title alpha"
             self._seed_operator_feedback_record(
-                archive_root, "ledger_draft_a", status="draft", feedback_ref=secret_ref, title=secret_title
+                archive_root, "ledger_draft_a", status="draft", feedback_ref=secret_ref, title=hidden_title
             )
             self._seed_operator_feedback_record(
                 archive_root, "ledger_draft_b", status="draft", feedback_ref="feedback:b", title="Title B"
@@ -3625,7 +3715,7 @@ class ArchiveCliTests(unittest.TestCase):
             # The record on disk holds feedback_ref + title; the ledger must
             # project only status + id + safe timestamps, never those values.
             self.assertNotIn(secret_ref, serialized)
-            self.assertNotIn(secret_title, serialized)
+            self.assertNotIn(hidden_title, serialized)
             self.assertNotIn("SECRET_REF_should_not_echo", serialized)
             self.assertNotIn("SECRET_TITLE_should_not_echo", serialized)
             self.assertFalse(ledger["privacy_guards"]["feedback_ref_value_echoed"])
@@ -5108,7 +5198,10 @@ class ArchiveCliTests(unittest.TestCase):
                 check=False,
                 capture_output=True,
                 text=True,
-                timeout=30,
+                # The restored path performs a complete verified runtime
+                # inspection. Keep it bounded while allowing slower Windows
+                # filesystem and antivirus lanes enough headroom.
+                timeout=60,
             )
             self.assertEqual(
                 restored.returncode,
@@ -15394,6 +15487,796 @@ state:
             self.assertNotIn("notion.example", approve_output)
             self.assertNotIn(str(archive_root), approve_output)
 
+    def test_notion_page_recovery_plan_reads_only_ignored_local_reviewed_request(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            request_relative = (
+                "profiles/local/notion-page-recovery/letter118-reviewed.json"
+            )
+            request_path = archive_root.joinpath(*request_relative.split("/"))
+            request_path.parent.mkdir(parents=True, exist_ok=True)
+            private_page_ids = [str(uuid.UUID(int=index)) for index in range(1, 621)]
+            request_path.write_text(
+                json.dumps(
+                    {
+                        "schema": "wom-kit/notion-page-recovery-request/v0.1",
+                        "batch_id": "letter118-reviewed-pilot",
+                        "archive_id": "archive:personal:fake-life",
+                        "expected_item_count": 620,
+                        "groups": [
+                            {
+                                "group_id": "zet_notion_db3",
+                                "expected_count": 577,
+                                "scope_binding": {
+                                    "credential_id": "cred_notion_db3_00000001",
+                                    "workspace_fingerprint": "sha256:" + "1" * 64,
+                                    "scope_receipt_sha256": "sha256:" + "2" * 64,
+                                    "revision": "scope-r1",
+                                    "persisted": True,
+                                    "workspace_evidence_verified": True,
+                                },
+                            },
+                            {
+                                "group_id": "zet_notion_db1",
+                                "expected_count": 43,
+                                "scope_binding": {
+                                    "credential_id": "cred_notion_db1_00000001",
+                                    "workspace_fingerprint": "sha256:" + "3" * 64,
+                                    "scope_receipt_sha256": "sha256:" + "4" * 64,
+                                    "revision": "scope-r2",
+                                    "persisted": True,
+                                    "workspace_evidence_verified": True,
+                                },
+                            },
+                        ],
+                        "items": [
+                            {
+                                "item_id": f"reviewed-{index + 1:04d}",
+                                "group_id": (
+                                    "zet_notion_db3" if index < 577 else "zet_notion_db1"
+                                ),
+                                "page_id": page_id,
+                            }
+                            for index, page_id in enumerate(private_page_ids)
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            before = self.snapshot_archive_files(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "notion-page-recovery-plan",
+                    str(archive_root),
+                    "--request",
+                    request_relative,
+                    "--max-items",
+                    "1",
+                    "--offset",
+                    "1",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["reason_code"], "notion_page_recovery_plan_ready")
+            self.assertEqual(result["counts"]["input_item_count"], 620)
+            self.assertEqual(result["counts"]["selected_item_count"], 1)
+            self.assertEqual(result["provider_calls"], 0)
+            self.assertEqual(result["credential_reads"], 0)
+            self.assertEqual(result["writes"], 0)
+            self.assertFalse(result["privacy_guards"]["request_path_included"])
+            self.assertEqual(before, self.snapshot_archive_files(archive_root))
+            self.assertNotIn(request_relative, output)
+            for page_id in private_page_ids:
+                self.assertNotIn(page_id, output)
+
+            text_code, text_output = self.run_cli(
+                [
+                    "notion-page-recovery-plan",
+                    str(archive_root),
+                    "--request",
+                    request_relative,
+                    "--max-items",
+                    "1",
+                    "--offset",
+                    "1",
+                    "--dry-run",
+                    "--format",
+                    "text",
+                ]
+            )
+            self.assertEqual(text_code, 0, text_output)
+            self.assertIn(
+                "credential reads, read-only provider GETs, and archive evidence writes may occur",
+                text_output,
+            )
+            self.assertIn("verified replay is an optimization", text_output)
+            self.assertEqual(before, self.snapshot_archive_files(archive_root))
+            self.assertNotIn(request_relative, text_output)
+            for page_id in private_page_ids:
+                self.assertNotIn(page_id, text_output)
+
+            blocked_code, blocked_output = self.run_cli(
+                [
+                    "notion-page-recovery-plan",
+                    str(archive_root),
+                    "--request",
+                    str(request_path),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            blocked = json.loads(blocked_output)
+            self.assertEqual(blocked_code, 1, blocked_output)
+            self.assertEqual(
+                blocked["reason_code"],
+                "notion_page_recovery_request_path_invalid",
+            )
+            self.assertNotIn(str(request_path), blocked_output)
+
+            gitignore = archive_root / ".gitignore"
+            gitignore.write_text(
+                gitignore.read_text(encoding="utf-8")
+                + f"\n!{request_relative}\n",
+                encoding="utf-8",
+            )
+            reinclude_code, reinclude_output = self.run_cli(
+                [
+                    "notion-page-recovery-plan",
+                    str(archive_root),
+                    "--request",
+                    request_relative,
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            reinclude = json.loads(reinclude_output)
+            self.assertEqual(reinclude_code, 1, reinclude_output)
+            self.assertEqual(
+                reinclude["reason_code"],
+                "notion_page_recovery_request_not_ignored",
+            )
+            self.assertNotIn(request_relative, reinclude_output)
+            self.assertNotIn(str(request_path), reinclude_output)
+            for page_id in private_page_ids:
+                self.assertNotIn(page_id, reinclude_output)
+
+    def test_notion_page_recovery_gitignore_swap_is_blocked(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            request_relative = (
+                "profiles/local/notion-page-recovery/private-reviewed.json"
+            )
+            gitignore = archive_root / ".gitignore"
+            original = gitignore.read_bytes()
+            replacement = archive_root / ".gitignore.replacement"
+            replacement.write_bytes(b"#" * (len(original) - 1) + b"\n")
+            real_open = os.open
+            swapped = False
+
+            def swap_before_open(path: object, flags: int, *args: object) -> int:
+                nonlocal swapped
+                if not swapped and Path(path) == gitignore:
+                    swapped = True
+                    os.replace(replacement, gitignore)
+                return real_open(path, flags, *args)
+
+            with patch.object(archive_cli.os, "open", side_effect=swap_before_open):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "^notion_page_recovery_request_not_ignored$",
+                ):
+                    archive_cli._require_notion_page_recovery_request_ignored(
+                        archive_root,
+                        request_relative,
+                    )
+
+            self.assertTrue(swapped)
+
+    def test_notion_page_recovery_plan_parser_error_never_echoes_private_request(self) -> None:
+        private_request = (
+            "profiles/local/notion-page-recovery/PRIVATE-reviewed-request.json"
+        )
+        private_bad_value = "PRIVATE-not-an-integer"
+
+        for command in (
+            "notion-page-recovery-plan",
+            "notion-reviewed-page-recovery-plan",
+        ):
+            with self.subTest(command=command):
+                code, output = self.run_cli(
+                    [
+                        command,
+                        "C:\\PRIVATE\\archive",
+                        "--request",
+                        private_request,
+                        "--max-items",
+                        private_bad_value,
+                    ]
+                )
+
+                self.assertEqual(code, 2)
+                self.assertIn("private argument values were not echoed", output)
+                self.assertNotIn(private_request, output)
+                self.assertNotIn(private_bad_value, output)
+                self.assertNotIn("C:\\PRIVATE\\archive", output)
+
+    def test_notion_page_recovery_request_rejects_duplicate_json_keys_without_echo(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            request_relative = (
+                "profiles/local/notion-page-recovery/private-duplicate.json"
+            )
+            request_path = archive_root.joinpath(*request_relative.split("/"))
+            request_path.parent.mkdir(parents=True, exist_ok=True)
+            private_duplicate = "PRIVATE_DUPLICATE_ARCHIVE_ID"
+            request_path.write_text(
+                "{"
+                '"schema":"wom-kit/notion-page-recovery-request/v0.1",'
+                '"batch_id":"letter118-duplicate",'
+                '"archive_id":"archive:personal:fake-life",'
+                f'"archive_id":"{private_duplicate}",'
+                '"expected_item_count":620,"groups":[],"items":[]'
+                "}",
+                encoding="utf-8",
+            )
+
+            code, output = self.run_cli(
+                [
+                    "notion-page-recovery-plan",
+                    str(archive_root),
+                    "--request",
+                    request_relative,
+                    "--max-items",
+                    "1",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+
+            self.assertEqual(code, 1)
+            self.assertEqual(
+                result["reason_code"], "notion_page_recovery_request_invalid"
+            )
+            self.assertNotIn(private_duplicate, output)
+            self.assertNotIn(request_relative, output)
+
+    def test_notion_page_recovery_cli_requires_full_577_plus_43_reviewed_batch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            request_relative = "profiles/local/notion-page-recovery/incomplete.json"
+            request_path = archive_root.joinpath(*request_relative.split("/"))
+            request_path.parent.mkdir(parents=True, exist_ok=True)
+            private_page_id = str(uuid.UUID(int=991))
+            request_path.write_text(
+                json.dumps(
+                    {
+                        "schema": "wom-kit/notion-page-recovery-request/v0.1",
+                        "batch_id": "letter118-incomplete",
+                        "archive_id": "archive:personal:fake-life",
+                        "expected_item_count": 1,
+                        "groups": [
+                            {
+                                "group_id": "zet_notion_db3",
+                                "expected_count": 1,
+                                "scope_binding": {
+                                    "credential_id": "cred_notion_db3_00000001",
+                                    "workspace_fingerprint": "sha256:" + "1" * 64,
+                                    "scope_receipt_sha256": "sha256:" + "2" * 64,
+                                    "revision": "scope-r1",
+                                    "persisted": True,
+                                    "workspace_evidence_verified": True,
+                                },
+                            }
+                        ],
+                        "items": [
+                            {
+                                "item_id": "reviewed-0001",
+                                "group_id": "zet_notion_db3",
+                                "page_id": private_page_id,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            code, output = self.run_cli(
+                [
+                    "notion-page-recovery-plan",
+                    str(archive_root),
+                    "--request",
+                    request_relative,
+                    "--max-items",
+                    "1",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+
+            self.assertEqual(code, 1)
+            self.assertEqual(
+                result["reason_code"],
+                "notion_page_recovery_reviewed_batch_contract_mismatch",
+            )
+            self.assertNotIn(private_page_id, output)
+            self.assertNotIn(request_relative, output)
+
+    def test_credential_adopt_binds_stable_request_and_never_accepts_or_echoes_pat(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            anchor = "00000000-0000-0000-0000-000000000071"
+            account_label = "private account label"
+            workspace_label = "private workspace label"
+            token = "secret-token-value-that-must-never-echo"
+            base = [
+                "credential-adopt",
+                str(archive_root),
+                "--account-label",
+                account_label,
+                "--workspace-label",
+                workspace_label,
+                "--purpose",
+                "notion-page-recovery",
+                "--reviewed-anchor-page-id",
+                anchor,
+                "--capability",
+                "read-page-content",
+                "--interactive",
+                "--format",
+                "json",
+            ]
+            before = self.snapshot_archive_files(archive_root)
+
+            first_code, first_output = self.run_cli([*base, "--dry-run"])
+            second_code, second_output = self.run_cli([*base, "--dry-run"])
+            first = json.loads(first_output)
+            second = json.loads(second_output)
+            self.assertEqual(first_code, 0, first_output)
+            self.assertEqual(second_code, 0, second_output)
+            self.assertEqual(first["request_sha256"], second["request_sha256"])
+            self.assertRegex(first["request_sha256"], r"^sha256:[0-9a-f]{64}$")
+            canonical_request = {
+                "schema": "wom-kit/credential-adoption-request/v0.1",
+                "archive_id": "archive:personal:fake-life",
+                "provider": "notion",
+                "account_label": account_label,
+                "workspace_label": workspace_label,
+                "purpose": "notion_page_recovery",
+                "reviewed_anchor_page_id": anchor,
+                "requested_capabilities": ["read_page_content"],
+                "ttl_seconds": 300,
+                "interactive": True,
+            }
+            expected_request_sha256 = "sha256:" + hashlib.sha256(
+                json.dumps(
+                    canonical_request,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()
+            self.assertEqual(first["request_sha256"], expected_request_sha256)
+            self.assertNotIn("plan_digest", first)
+            self.assertNotIn("intake_plan", first)
+            for private_value in (anchor, account_label, workspace_label):
+                self.assertNotIn(private_value, first_output)
+            self.assertEqual(before, self.snapshot_archive_files(archive_root))
+
+            with patch(
+                "wom_kit.credential_workflows.execute_windows_notion_credential_adoption"
+            ) as execute:
+                mismatch_code, mismatch_output = self.run_cli(
+                    [
+                        *base,
+                        "--approve",
+                        "--expected-request-sha256",
+                        "sha256:" + "f" * 64,
+                    ]
+                )
+            self.assertEqual(mismatch_code, 1, mismatch_output)
+            self.assertFalse(execute.called)
+            self.assertEqual(
+                json.loads(mismatch_output)["reason_code"],
+                "credential_adoption_request_sha256_mismatch",
+            )
+
+            safe_worker_result = {
+                "schema_version": "wom-credential-workflow-result/v0.1",
+                "ok": True,
+                "lifecycle_action": "secure_credential_adoption_execute",
+                "accepted": True,
+                "persisted": True,
+                "reason_code": "credential_adoption_persisted_and_rediscoverable",
+                "credential_id": "cred_1234567890abcdef",
+                "authenticated_rediscovery_verified": True,
+                "human_default_decision_required": True,
+                "secret_value_present": False,
+                "reviewed_anchor_present_in_result": False,
+                "backend_target_present": False,
+                "crash_or_power_loss_rollback_guaranteed": False,
+            }
+            with patch(
+                "wom_kit.credential_workflows.execute_windows_notion_credential_adoption",
+                return_value=safe_worker_result,
+            ) as execute:
+                approve_code, approve_output = self.run_cli(
+                    [
+                        *base,
+                        "--approve",
+                        "--expected-request-sha256",
+                        first["request_sha256"],
+                    ]
+                )
+            approved = json.loads(approve_output)
+            self.assertEqual(approve_code, 0, approve_output)
+            self.assertTrue(approved["persisted"])
+            self.assertEqual(approved["request_sha256"], first["request_sha256"])
+            self.assertNotIn("plan_digest", approved)
+            self.assertTrue(execute.call_args.kwargs["approved"])
+            self.assertEqual(
+                execute.call_args.kwargs["expected_plan_digest"],
+                execute.call_args.args[1]["plan_digest"],
+            )
+            self.assertEqual(
+                execute.call_args.kwargs["reviewed_anchor_uuid"], anchor
+            )
+            for private_value in (anchor, account_label, workspace_label):
+                self.assertNotIn(private_value, approve_output)
+            self.assertEqual(before, self.snapshot_archive_files(archive_root))
+
+            forbidden_code, forbidden_output = self.run_cli(
+                [*base, "--approve", "--token", token]
+            )
+            self.assertEqual(forbidden_code, 2, forbidden_output)
+            self.assertEqual(
+                json.loads(forbidden_output)["reason_codes"],
+                ["credential_secret_input_option_forbidden"],
+            )
+            self.assertNotIn(token, forbidden_output)
+
+            token_shaped_label = "ntn_" + "A" * 32
+            label_code, label_output = self.run_cli(
+                [
+                    "credential-adopt",
+                    str(archive_root),
+                    "--account-label",
+                    token_shaped_label,
+                    "--workspace-label",
+                    workspace_label,
+                    "--reviewed-anchor-page-id",
+                    anchor,
+                    "--interactive",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(label_code, 1, label_output)
+            self.assertEqual(
+                json.loads(label_output)["reason_code"],
+                "credential_adoption_request_invalid",
+            )
+            self.assertNotIn(token_shaped_label, label_output)
+
+    def test_credential_secure_list_is_unauthenticated_by_default_and_exact_key_only_on_verify(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            unauthenticated = {
+                "schema_version": "wom-credential-secure-registry-result/v0.1",
+                "ok": True,
+                "archive_id": "archive:personal:fake-life",
+                "credential_count": 1,
+                "credentials": [
+                    {
+                        "credential_id": "cred_1234567890abcdef",
+                        "receipt_authentication_status": "not_checked",
+                    }
+                ],
+                "secret_value_present": False,
+                "backend_id_present": False,
+                "native_enumeration_performed": False,
+                "provider_call_performed": False,
+                "write_performed": False,
+            }
+            with patch(
+                "wom_kit.credential_secure_registry.list_secure_credentials",
+                return_value=unauthenticated,
+            ) as registry_list, patch(
+                "wom_kit.credential_secure_intake_windows.CtypesWindowsNativeFacade"
+            ) as native_factory:
+                code, output = self.run_cli(
+                    [
+                        "credential-secure-list",
+                        str(archive_root),
+                        "--format",
+                        "json",
+                    ]
+                )
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertEqual(
+                result["reason_code"],
+                "secure_credential_receipt_metadata_listed_unverified",
+            )
+            registry_list.assert_called_once()
+            self.assertTrue(
+                os.path.samefile(registry_list.call_args.args[0], archive_root)
+            )
+            native_factory.assert_not_called()
+
+            authenticated = dict(unauthenticated)
+            authenticated["credentials"] = [
+                {
+                    "credential_id": "cred_1234567890abcdef",
+                    "receipt_authentication_status": "valid",
+                }
+            ]
+            authenticated["lifecycle_action"] = "authenticated_secure_credential_list"
+            authenticated["reason_code"] = "authenticated_secure_credentials_listed"
+            native = object()
+            with patch(
+                "wom_kit.credential_secure_intake_windows.CtypesWindowsNativeFacade",
+                return_value=native,
+            ) as native_factory, patch(
+                "wom_kit.credential_workflows.list_authenticated_secure_credentials",
+                return_value=authenticated,
+            ) as verified_list:
+                verify_code, verify_output = self.run_cli(
+                    [
+                        "credential-secure-list",
+                        str(archive_root),
+                        "--verify",
+                        "--format",
+                        "json",
+                    ]
+                )
+            verified = json.loads(verify_output)
+            self.assertEqual(verify_code, 0, verify_output)
+            self.assertEqual(
+                verified["credentials"][0]["receipt_authentication_status"],
+                "valid",
+            )
+            native_factory.assert_called_once_with(cli_live_approved=True)
+            verified_list.assert_called_once()
+            self.assertTrue(
+                os.path.samefile(verified_list.call_args.args[0], archive_root)
+            )
+            self.assertIs(verified_list.call_args.kwargs["native"], native)
+
+    def test_credential_lifecycle_plans_and_approves_without_delete_or_revoke(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            workspace_fingerprint = "sha256:" + "1" * 64
+            credential_id = "cred_1234567890abcdef"
+            pending_id = "cred_fedcba0987654321"
+            plan_sha256 = "sha256:" + "2" * 64
+            native = object()
+            plan_result = {
+                "ok": True,
+                "status": "human_decision_required",
+                "persisted": False,
+                "plan_sha256": plan_sha256,
+                "delete_performed": False,
+                "revoke_performed": False,
+            }
+            base = [
+                "credential-lifecycle",
+                str(archive_root),
+                "--provider",
+                "notion",
+                "--workspace-fingerprint",
+                workspace_fingerprint,
+                "--default-credential-id",
+                credential_id,
+                "--revocation-pending-credential-id",
+                pending_id,
+                "--format",
+                "json",
+            ]
+            with patch(
+                "wom_kit.credential_secure_intake_windows.CtypesWindowsNativeFacade",
+                return_value=native,
+            ), patch(
+                "wom_kit.credential_workflows.plan_authenticated_credential_lifecycle",
+                return_value=plan_result,
+            ) as planner:
+                plan_code, plan_output = self.run_cli([*base, "--dry-run"])
+            planned = json.loads(plan_output)
+            self.assertEqual(plan_code, 0, plan_output)
+            self.assertEqual(planned["plan_sha256"], plan_sha256)
+            self.assertFalse(planned["delete_performed"])
+            self.assertFalse(planned["revoke_performed"])
+            self.assertEqual(
+                planner.call_args.kwargs["revocation_pending_credential_ids"],
+                (pending_id,),
+            )
+
+            approve_result = {
+                "ok": True,
+                "status": "decision_recorded",
+                "persisted": True,
+                "plan_sha256": plan_sha256,
+                "reviewed_by": "human:operator",
+                "delete_performed": False,
+                "revoke_performed": False,
+            }
+            with patch(
+                "wom_kit.credential_secure_intake_windows.CtypesWindowsNativeFacade",
+                return_value=native,
+            ), patch(
+                "wom_kit.credential_workflows.approve_authenticated_credential_lifecycle",
+                return_value=approve_result,
+            ) as approver:
+                approve_code, approve_output = self.run_cli(
+                    [
+                        *base,
+                        "--approve",
+                        "--expected-plan-sha256",
+                        plan_sha256,
+                        "--reviewed-by",
+                        "human:operator",
+                    ]
+                )
+            approved = json.loads(approve_output)
+            self.assertEqual(approve_code, 0, approve_output)
+            self.assertTrue(approved["persisted"])
+            self.assertFalse(approved["delete_performed"])
+            self.assertFalse(approved["revoke_performed"])
+            self.assertEqual(
+                approver.call_args.kwargs["expected_plan_sha256"], plan_sha256
+            )
+            self.assertEqual(approver.call_args.kwargs["reviewed_by"], "human:operator")
+
+    def test_notion_page_recovery_approval_uses_injected_exact_boundaries_without_echo(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            request_relative = "profiles/local/notion-page-recovery/private-reviewed.json"
+            request_path = archive_root.joinpath(*request_relative.split("/"))
+            request_path.parent.mkdir(parents=True, exist_ok=True)
+            page_id = "00000000-0000-0000-0000-000000000091"
+            page_ids = [page_id] + [
+                str(uuid.UUID(int=1000 + index)) for index in range(1, 620)
+            ]
+            private_body = "PRIVATE_NOTION_BODY_MUST_NOT_ECHO"
+            request = {
+                "schema": "wom-kit/notion-page-recovery-request/v0.1",
+                "batch_id": "letter118-reviewed-cli-pilot",
+                "archive_id": "archive:personal:fake-life",
+                "expected_item_count": 620,
+                "groups": [
+                    {
+                        "group_id": "zet_notion_db3",
+                        "expected_count": 577,
+                        "scope_binding": {
+                            "credential_id": "cred_notion_db3_00000001",
+                            "workspace_fingerprint": "sha256:" + "3" * 64,
+                            "scope_receipt_sha256": "sha256:" + "4" * 64,
+                            "revision": "scope-r1",
+                            "persisted": True,
+                            "workspace_evidence_verified": True,
+                        },
+                    },
+                    {
+                        "group_id": "zet_notion_db1",
+                        "expected_count": 43,
+                        "scope_binding": {
+                            "credential_id": "cred_notion_db1_00000001",
+                            "workspace_fingerprint": "sha256:" + "5" * 64,
+                            "scope_receipt_sha256": "sha256:" + "6" * 64,
+                            "revision": "scope-r2",
+                            "persisted": True,
+                            "workspace_evidence_verified": True,
+                        },
+                    },
+                ],
+                "items": [
+                    {
+                        "item_id": f"reviewed-{index + 1:04d}",
+                        "group_id": (
+                            "zet_notion_db3" if index < 577 else "zet_notion_db1"
+                        ),
+                        "page_id": current_page_id,
+                    }
+                    for index, current_page_id in enumerate(page_ids)
+                ],
+            }
+            request_path.write_text(json.dumps(request), encoding="utf-8")
+            base = [
+                "notion-page-recovery",
+                str(archive_root),
+                "--request",
+                request_relative,
+                "--max-items",
+                "1",
+                "--offset",
+                "0",
+                "--format",
+                "json",
+            ]
+            plan_code, plan_output = self.run_cli([*base, "--dry-run"])
+            plan = json.loads(plan_output)
+            self.assertEqual(plan_code, 0, plan_output)
+            expected_plan = plan["plan_sha256"]
+            self.assertNotIn(request_relative, plan_output)
+            self.assertNotIn(page_id, plan_output)
+
+            execute_result = {
+                "ok": True,
+                "lifecycle_action": "notion_page_recovery_execute",
+                "reason_code": "notion_page_recovery_completed",
+                "plan_sha256": expected_plan,
+                "counts": {"processed_item_count": 1},
+                "privacy_guards": {
+                    "page_id_values_included": False,
+                    "page_body_included": False,
+                    "credential_value_included": False,
+                },
+            }
+            with patch(
+                "wom_kit.credential_workflows.execute_spawned_authenticated_notion_page_recovery",
+                return_value=execute_result,
+            ) as execute:
+                code, output = self.run_cli(
+                    [
+                        *base,
+                        "--approve",
+                        "--expected-plan-sha256",
+                        expected_plan,
+                        "--reviewed-by",
+                        "human:operator",
+                    ]
+                )
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertFalse(result["privacy_guards"]["request_path_included"])
+            self.assertEqual(
+                execute.call_args.kwargs["expected_plan_sha256"], expected_plan
+            )
+            self.assertTrue(execute.call_args.kwargs["approved"])
+            self.assertEqual(execute.call_args.args[1]["items"][0]["page_id"], page_id)
+            for private_value in (
+                request_relative,
+                str(request_path),
+                page_id,
+                private_body,
+            ):
+                self.assertNotIn(private_value, output)
+
+            with patch(
+                "wom_kit.credential_workflows.execute_spawned_authenticated_notion_page_recovery",
+                return_value=execute_result,
+            ):
+                text_code, text_output = self.run_cli(
+                    [
+                        *base[:-2],
+                        "--format",
+                        "text",
+                        "--approve",
+                        "--expected-plan-sha256",
+                        expected_plan,
+                        "--reviewed-by",
+                        "human:operator",
+                    ]
+                )
+            self.assertEqual(text_code, 0, text_output)
+            self.assertIn("Processed items: 1", text_output)
+            self.assertNotIn(request_relative, text_output)
+            self.assertNotIn(page_id, text_output)
+
     def test_notion_recover_classifies_permission_failure_without_echoing_raw_provider_error(self) -> None:
         root_id = "a" * 32
         missing_parent_id = "b" * 32
@@ -20649,6 +21532,44 @@ state:
             self.assertNotIn("keyring:naver-app-password", output)
             self.assertNotIn("GITHUB_TOKEN", output)
             self.assertEqual(self.snapshot_archive_files(archive_root), before)
+
+            legacy_unicode_ref = "secret:개인 노션 읽기 전용 항목"
+            local_inventory.write_text(
+                archive_cli.dump_yaml(
+                    {
+                        "credentials": [
+                            {
+                                "credential_id": "credential:notion-token-continuity",
+                                "credential_kind": "provider_api_key",
+                                "provider": "notion",
+                                "credential_ref": legacy_unicode_ref,
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            legacy_code, legacy_output = self.run_cli(
+                [
+                    "credential-ref-inventory",
+                    str(archive_root),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            legacy_result = json.loads(legacy_output)
+            self.assertEqual(legacy_code, 0, legacy_output)
+            legacy_entry = next(
+                item
+                for item in legacy_result["credentials"]
+                if item["source"]["document"]
+                == "profiles/local/credential-refs.local.yml"
+            )
+            self.assertEqual(legacy_entry["ref_store"], "secret")
+            self.assertEqual(legacy_entry["ref_format"], "legacy_unicode_locator")
+            self.assertEqual(legacy_entry["store_presence"], "not_checked")
+            self.assertNotIn(legacy_unicode_ref, legacy_output)
 
             raw_secret = "sk" + "-proj-" + "abcdefghijklmnopqrstuvwxyz1234567890"
             local_inventory.write_text(

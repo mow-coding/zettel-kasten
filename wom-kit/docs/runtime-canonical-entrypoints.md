@@ -1,6 +1,6 @@
 # Runtime Canonical Entry Points
 
-Status: v0.3.310 Letter 117 reviewed imported-reference checkpoint
+Status: v0.3.311 Letters 118-119 credential continuity and reviewed Notion recovery checkpoint
 
 When an AI runtime enters a WOM archive, it needs a small, explicit "start
 here" map. The archive may contain zets, source bindings, provider metadata,
@@ -132,6 +132,47 @@ protected literal is not implemented. See
 [Letter 117 Completion](letter117-completion.md). Source documentation and
 external CI, exact-tag, GitHub Release, and wheel evidence remain distinct
 verification layers.
+
+## Letters 118-119 Credential And Reviewed Recovery Entry Points
+
+v0.3.311 adds five CLI-only commands without adding any corresponding MCP
+secret reader, provider caller, or archive writer:
+
+| Command | Canonical role |
+| --- | --- |
+| `credential-adopt` | Dry-run hashes one stable public intake request. Exact `request_sha256` approval opens only a native masked Windows dialog in a fresh spawned child; no PAT/token/secret command option exists. |
+| `credential-secure-list` | Lists unauthenticated content-free receipt metadata by default. `--verify` reads only the exact archive authentication-key target and verifies receipt/lifecycle MACs; it neither enumerates the native vault nor resolves a provider credential. |
+| `credential-lifecycle` | Authenticates and digest-plans one human-selected active/current/default credential for an exact provider/workspace scope, then records only that unchanged approved decision. It never deletes or revokes another credential. |
+| `notion-page-recovery-plan` | Validates the exact ignored-local two-group request of 577 plus 43 unique page UUIDs, exactly 620, and digest-plans a bounded slice with zero credential reads, provider calls, or writes. |
+| `notion-page-recovery` | Repeats the same plan in dry-run or, with the exact reviewed plan SHA and reviewer, invokes spawned authenticated read-only Notion recovery and writes only content-addressed objets plus private recovery evidence. |
+
+The safe command shapes are:
+
+```powershell
+archive credential-adopt <archive-root> --account-label <safe-label> --workspace-label <safe-label> --reviewed-anchor-page-id <uuid> --interactive --dry-run --format json
+archive credential-adopt <archive-root> --account-label <safe-label> --workspace-label <safe-label> --reviewed-anchor-page-id <uuid> --interactive --expected-request-sha256 <sha256> --approve --format json
+archive credential-secure-list <archive-root> --format json
+archive credential-secure-list <archive-root> --verify --format json
+archive credential-lifecycle <archive-root> --provider notion --workspace-fingerprint <sha256> --default-credential-id <opaque-id> --dry-run --format json
+archive credential-lifecycle <archive-root> --provider notion --workspace-fingerprint <sha256> --default-credential-id <opaque-id> --expected-plan-sha256 <sha256> --reviewed-by <actor> --approve --format json
+archive notion-page-recovery-plan <archive-root> --request profiles/local/notion-page-recovery/<private>.json --max-items 5 --offset 0 --dry-run --format json
+archive notion-page-recovery <archive-root> --request profiles/local/notion-page-recovery/<private>.json --max-items 5 --offset 0 --expected-plan-sha256 <sha256> --reviewed-by <actor> --approve --format json
+```
+
+The request path, reviewed anchor UUID, page UUIDs, page bodies, native
+credential target, PAT, Authorization header, token, and derived key must never
+be echoed. Recovery approval already permits credential reads, read-only
+provider GETs, and archive evidence writes for the selected slice; locally
+verified replay is only an optimization and not a separate approval authority.
+The recovery lane never searches a workspace broadly, writes to Notion,
+downloads media, rewrites canonical zets, infers edges, or mints pages.
+
+This is an implementation and regression-test checkpoint only. No real PAT,
+Windows vault, Notion provider, 620-item recovery, external source-archive operation,
+PR/CI, exact tag, GitHub Release, wheel, fresh install, or human acceptance is
+proved here. See
+[Letters 118 and 119: credential continuity and reviewed Notion page recovery](letter118-119-credential-continuity-and-notion-page-recovery.md)
+and [v0.3.311 release notes](releases/v0.3.311.md).
 
 When the question is observed current canonical source-reference coverage
 versus separately recorded storage evidence, use `python -B -m

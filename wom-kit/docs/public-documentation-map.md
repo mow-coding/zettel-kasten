@@ -224,6 +224,8 @@ Onboarding and setup plans:
 - [Credential Adapter Readiness Plan](credential-adapter-readiness-plan.md)
 - [Credential Adapter Manifest Plan](credential-adapter-manifest-plan.md)
 - [Credential Adapter Audit Plan](credential-adapter-audit-plan.md)
+- [Letters 118 And 119 Credential Continuity And Reviewed Notion Page Recovery](letter118-119-credential-continuity-and-notion-page-recovery.md)
+- [Letters 118 And 119 Credential Lifecycle Decision](archive-infra-decision-log-2026-08-10-v03311-letter118-119-credential-lifecycle.md)
 - [Human Artifact Store Contract](human-artifact-store-contract.md)
 - [External Export Plan](external-export-plan.md)
 - [Connection Import Plan](connection-import-plan.md)
@@ -417,6 +419,7 @@ These documents record public-safe work already performed.
 - [v0.3.308 Release Note](releases/v0.3.308.md)
 - [v0.3.309 Release Note](releases/v0.3.309.md)
 - [v0.3.310 Release Note](releases/v0.3.310.md)
+- [v0.3.311 Release Note](releases/v0.3.311.md)
 
 Work logs are not the same as product specs.
 

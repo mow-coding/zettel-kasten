@@ -9,7 +9,7 @@ from wom_kit import __version__
 
 KIT_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = KIT_ROOT.parent
-EXPECTED_CURRENT_VERSION = "0.3.310"
+EXPECTED_CURRENT_VERSION = "0.3.311"
 EXPECTED_CURRENT_TAG = f"v{EXPECTED_CURRENT_VERSION}"
 CURRENT_VERSION = f"v{__version__}"
 CURRENT_RELEASE_NOTE = f"{EXPECTED_CURRENT_TAG}.md"
@@ -20,7 +20,7 @@ CURRENT_WHEEL_URL = (
     f"wom_kit-{EXPECTED_CURRENT_VERSION}-py3-none-any.whl"
 )
 CURRENT_RUNTIME_STATUS = (
-    f"Status: {CURRENT_VERSION} Letter 117 reviewed imported-reference checkpoint"
+    f"Status: {CURRENT_VERSION} Letters 118-119 credential continuity and reviewed Notion recovery checkpoint"
 )
 CURRENT_MATRIX_VERSION = f"Version: {CURRENT_VERSION} implementation and release scope"
 MATRIX_PATH = KIT_ROOT / "docs" / "capability-matrix.md"
@@ -163,6 +163,9 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "Projection plan",
             "Credential ref plan",
             "Credential ref inventory",
+            "Native credential secure intake",
+            "Authenticated credential registry",
+            "Credential default lifecycle",
             "Credential store recommendation",
             "Credential vault onboarding plan",
             "Beginner setup manual",
@@ -199,6 +202,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "Runtime canonical entrypoints",
             "Derived text completeness signal",
             "Notion page snapshot model",
+            "Exact 620-page reviewed Notion recovery",
             "Objet ref resolver",
             "Connection edge intelligence plan",
             "Presigned URL plan",
@@ -10866,6 +10870,125 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         self.assertIn("letter117-completion.md", public_map_ko_text)
         self.assertIn("releases/v0.3.310.md", public_map_ko_text)
         self.assertTrue((KIT_ROOT / "docs" / "releases" / "v0.3.309.md").is_file())
+
+    def test_v03311_letters118_119_cli_contract_is_current_public_and_unproven_live(
+        self,
+    ) -> None:
+        release_path = KIT_ROOT / "docs" / "releases" / "v0.3.311.md"
+        guide_path = (
+            KIT_ROOT
+            / "docs"
+            / "letter118-119-credential-continuity-and-notion-page-recovery.md"
+        )
+        decision_path = (
+            KIT_ROOT
+            / "docs"
+            / "archive-infra-decision-log-2026-08-10-v03311-letter118-119-credential-lifecycle.md"
+        )
+        runtime_path = KIT_ROOT / "docs" / "runtime-canonical-entrypoints.md"
+        public_map_path = KIT_ROOT / "docs" / "public-documentation-map.md"
+        public_map_ko_path = KIT_ROOT / "docs" / "public-documentation-map.ko.md"
+
+        release_text = release_path.read_text(encoding="utf-8")
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        matrix_flat = " ".join(matrix_text.split())
+        runtime_text = runtime_path.read_text(encoding="utf-8")
+        runtime_flat = " ".join(runtime_text.split())
+        guide_text = guide_path.read_text(encoding="utf-8")
+        decision_text = decision_path.read_text(encoding="utf-8")
+        public_map_text = public_map_path.read_text(encoding="utf-8")
+        public_map_ko_text = public_map_ko_path.read_text(encoding="utf-8")
+
+        self.assertEqual(__version__, EXPECTED_CURRENT_VERSION)
+        self.assertEqual(CURRENT_VERSION, EXPECTED_CURRENT_TAG)
+        self.assertTrue(release_path.is_file())
+        self.assertTrue(guide_path.is_file())
+        self.assertTrue(decision_path.is_file())
+        self.assertIn(CURRENT_MATRIX_VERSION, matrix_text)
+        self.assertIn(CURRENT_RUNTIME_STATUS, matrix_text)
+        self.assertIn(CURRENT_RUNTIME_STATUS, runtime_text)
+
+        commands = (
+            "credential-adopt",
+            "credential-secure-list",
+            "credential-lifecycle",
+            "notion-page-recovery-plan",
+            "notion-page-recovery",
+        )
+        for command in commands:
+            for document_name, text in (
+                ("release", release_text),
+                ("matrix", matrix_text),
+                ("runtime", runtime_text),
+            ):
+                with self.subTest(command=command, document=document_name):
+                    self.assertIn(command, text)
+
+        for command_shape in (
+            "archive credential-adopt <archive-root> --account-label <safe-label> --workspace-label <safe-label> --reviewed-anchor-page-id <uuid> --interactive --dry-run --format json",
+            "--expected-request-sha256 <sha256> --approve --format json",
+            "archive credential-secure-list <archive-root> --verify --format json",
+            "archive credential-lifecycle <archive-root> --provider notion --workspace-fingerprint <sha256> --default-credential-id <opaque-id> --dry-run --format json",
+            "--expected-plan-sha256 <sha256> --reviewed-by <actor> --approve --format json",
+            "archive notion-page-recovery-plan <archive-root> --request profiles/local/notion-page-recovery/<private>.json --max-items 5 --offset 0 --dry-run --format json",
+            "archive notion-page-recovery <archive-root> --request profiles/local/notion-page-recovery/<private>.json --max-items 5 --offset 0 --expected-plan-sha256 <sha256> --reviewed-by <actor> --approve --format json",
+        ):
+            with self.subTest(command_shape=command_shape):
+                self.assertIn(command_shape, runtime_flat)
+
+        for phrase in (
+            "Native credential secure intake",
+            "Authenticated credential registry",
+            "Credential default lifecycle",
+            "Exact 620-page reviewed Notion recovery",
+            "stable canonical `request_sha256`",
+            "577 and 43 unique page UUIDs, totaling exactly 620",
+            "zero credential reads, provider calls, or writes",
+            "Verified replay is an optimization",
+            "No real PAT",
+        ):
+            with self.subTest(matrix_phrase=phrase):
+                self.assertIn(phrase, matrix_flat)
+
+        for phrase in (
+            "presence: not_checked",
+            "Windows-native masked Notion credential intake",
+            "authenticated",
+            "577",
+            "43",
+            "620",
+            "real PAT",
+            "Windows vault entry",
+            "Notion workspace",
+            "external source-archive state",
+        ):
+            with self.subTest(release_boundary=phrase):
+                self.assertTrue(
+                    phrase in release_text
+                    or phrase in guide_text
+                    or phrase in decision_text,
+                    phrase,
+                )
+
+        public_paths = (
+            "letter118-119-credential-continuity-and-notion-page-recovery.md",
+            "archive-infra-decision-log-2026-08-10-v03311-letter118-119-credential-lifecycle.md",
+            "releases/v0.3.311.md",
+        )
+        for public_path in public_paths:
+            for document_name, text in (
+                ("public-map", public_map_text),
+                ("public-map-ko", public_map_ko_text),
+            ):
+                with self.subTest(path=public_path, document=document_name):
+                    self.assertIn(public_path, text)
+
+        for text in (matrix_text, runtime_text, public_map_text, public_map_ko_text):
+            with self.subTest(document="historical-v03310-preserved"):
+                self.assertIn("v0.3.310", text)
+                self.assertNotIn("C:\\Users\\", text)
+        self.assertIn("releases/v0.3.310.md", public_map_text)
+        self.assertIn("releases/v0.3.310.md", public_map_ko_text)
 
     def test_active_source_docs_use_module_launcher_not_direct_wrapper(self) -> None:
         active_paths = (

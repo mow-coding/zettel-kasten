@@ -4482,6 +4482,53 @@ def safe_operator_feedback_scalar(value: str | None, *, max_length: int = 240) -
     return text
 
 
+OPERATOR_FEEDBACK_TITLE_LINE_BREAKS = ("\r", "\n", "\x85", "\u2028", "\u2029")
+OPERATOR_FEEDBACK_TITLE_TOKEN_RE = re.compile(
+    r"(?i)(?:\bgithub_pat_[A-Za-z0-9_]{20,}\b|\bsk-[A-Za-z0-9_-]{8,}\b"
+    r"|\b(?:secret|ntn)_[A-Za-z0-9_-]{12,}\b)"
+)
+
+
+def normalize_operator_feedback_title(
+    value: str | None,
+    *,
+    max_length: int = 240,
+) -> tuple[str | None, str | None, bool]:
+    """Return a safe title, a value-free rejection reason, and normalization state.
+
+    Feedback titles are descriptive prose, so words such as ``credential`` and
+    ``token`` are not secrets by themselves.  The shared source-intake scalar
+    guard intentionally rejects those words and is therefore too broad for this
+    field.  This field-specific boundary rejects actual assignment/token shapes,
+    provider locators, email-like values, local paths, NULs, and line breaks.
+    It never returns the rejected value or a matched substring.
+    """
+
+    if not isinstance(value, str):
+        return None, "not_string", False
+    if "\x00" in value:
+        return None, "nul", False
+    if any(marker in value for marker in OPERATOR_FEEDBACK_TITLE_LINE_BREAKS):
+        return None, "multiline", False
+
+    # Normalize only horizontal presentation whitespace.  This keeps the title
+    # readable and deterministic without changing its words or punctuation.
+    normalized = re.sub(r"[\t\f\v ]+", " ", value).strip()
+    if not normalized:
+        return None, "empty", normalized != value
+    if len(normalized) > max_length:
+        return None, "too_long", normalized != value
+    if "@" in normalized:
+        return None, "email_or_at_sign", normalized != value
+    if source_intake_has_provider_url(normalized):
+        return None, "provider_url", normalized != value
+    if contains_forbidden_location_reference(normalized):
+        return None, "local_path", normalized != value
+    if DRAFT_SECRET_VALUE_RE.search(normalized) or OPERATOR_FEEDBACK_TITLE_TOKEN_RE.search(normalized):
+        return None, "secret_value_shape", normalized != value
+    return normalized, None, normalized != value
+
+
 def operator_feedback_record_relative_path(feedback_id: str) -> str:
     return f"{OPERATOR_FEEDBACK_DIR}/{feedback_id}.yml"
 
@@ -4786,9 +4833,18 @@ def operator_feedback_record(
             "update approval requires --expected-record-sha256 from a fresh dry-run.",
         )
 
-    safe_title = safe_operator_feedback_scalar(title, max_length=240) if title else None
-    if title and safe_title is None:
-        block("feedback_title_invalid", "title must be a safe non-secret single-line label.")
+    safe_title: str | None = None
+    title_normalized = False
+    if title is not None:
+        safe_title, title_rejection, title_normalized = normalize_operator_feedback_title(
+            title,
+            max_length=240,
+        )
+        if title_rejection is not None:
+            block(
+                f"feedback_title_{title_rejection}",
+                "title must be one line of descriptive text without a secret value, provider URL, email-like value, or local path.",
+            )
 
     releases: list[str] = []
     for item in related_release or []:
@@ -5014,6 +5070,17 @@ def operator_feedback_record(
             "record_intents": list(OPERATOR_FEEDBACK_RECORD_INTENTS),
             "update_requires_expected_record_sha256": True,
             "feedback_ref_rebinding_allowed": False,
+            "title_policy": {
+                "max_length": 240,
+                "descriptive_security_words_allowed": True,
+                "horizontal_whitespace_normalized": True,
+                "secret_value_shapes_allowed": False,
+                "provider_urls_allowed": False,
+                "email_like_values_allowed": False,
+                "local_paths_allowed": False,
+                "line_breaks_allowed": False,
+            },
+            "title_normalized": title_normalized,
             "body_managed_by_this_command": False,
             "external_submission_performed": False,
         },
@@ -70981,8 +71048,11 @@ def connected_accounts_overview(
         "accounts": accounts,
         "credential_catalog": {
             "ok": not inventory_blockers,
-            "status": "ready" if not inventory_blockers else "needs_review",
+            "status": "metadata_only_unverified" if not inventory_blockers else "needs_review",
             "credential_count": len(credential_catalog),
+            "metadata_reference_count": len(credential_catalog),
+            "persisted_credential_count": 0,
+            "store_presence": "not_checked",
             "credentials": credential_catalog,
             "store_summary": catalog_store_summary,
             "blockers": unique_preserve_order(inventory_blockers),
@@ -71222,11 +71292,15 @@ def connected_account_safe_credential_summary(entry: dict[str, Any]) -> dict[str
     source = entry.get("source") if isinstance(entry.get("source"), dict) else {}
     return {
         "credential_id": entry.get("credential_id"),
+        "credential_id_status": entry.get("credential_id_status") or "metadata_label_only",
+        "credential_id_authoritative": entry.get("credential_id_authoritative") is True,
         "credential_kind": entry.get("credential_kind"),
         "purpose": entry.get("purpose"),
         "provider": entry.get("provider"),
         "ref_store": entry.get("ref_store"),
         "ref_prefix": entry.get("ref_prefix"),
+        "ref_format": entry.get("ref_format"),
+        "store_presence": entry.get("store_presence") or "not_checked",
         "source": {
             "document": source.get("document"),
             "scope": source.get("scope"),
@@ -71236,7 +71310,7 @@ def connected_account_safe_credential_summary(entry: dict[str, Any]) -> dict[str
             "source_id": source.get("source_id"),
             "source_type": source.get("source_type"),
         },
-        "secret_value_present": False,
+        "secret_value_present_in_metadata": False,
     }
 
 
@@ -76325,9 +76399,13 @@ def local_credential_inventory_entries(doc: dict[str, Any], blockers: list[str])
             blockers.append(f"{CREDENTIAL_REF_LOCAL_INVENTORY_RELATIVE}.credentials[{index}] must be an object.")
             continue
         credential_id = str(item.get("credential_id") or item.get("id") or f"local-credential-{index:04d}").strip()
-        if not safe_source_intake_plan_scalar(credential_id):
-            blockers.append(f"{CREDENTIAL_REF_LOCAL_INVENTORY_RELATIVE}.credentials[{index}].credential_id must be safe and non-secret.")
+        credential_id_status = "metadata_label_only"
+        if not safe_credential_metadata_id(credential_id):
+            # A legacy local label may be private or Unicode. Hide it instead
+            # of echoing it or failing the entire catalog. The row index is a
+            # discovery handle only, never an adopted credential authority.
             credential_id = f"local-credential-{index:04d}"
+            credential_id_status = "legacy_label_hidden_not_adopted"
         credential_kind = str(item.get("credential_kind") or item.get("kind") or "generic_secret").strip().lower().replace("-", "_")
         if credential_kind not in CREDENTIAL_REF_ALLOWED_KINDS:
             blockers.append(f"{CREDENTIAL_REF_LOCAL_INVENTORY_RELATIVE}.credentials[{index}].credential_kind is unsupported.")
@@ -76341,17 +76419,27 @@ def local_credential_inventory_entries(doc: dict[str, Any], blockers: list[str])
             blockers.append(f"{CREDENTIAL_REF_LOCAL_INVENTORY_RELATIVE}.credentials[{index}].provider is unsupported.")
             provider = "generic_provider"
         credential_ref = str(item.get("credential_ref") or item.get("ref") or "").strip()
-        store = credential_ref_store(credential_ref) if safe_credential_ref(credential_ref) else None
+        canonical_ref = safe_credential_ref(credential_ref)
+        legacy_unicode_ref = safe_legacy_local_secret_ref(credential_ref)
+        store = credential_ref_store(credential_ref) if canonical_ref or legacy_unicode_ref else None
         if store is None:
             blockers.append(f"{CREDENTIAL_REF_LOCAL_INVENTORY_RELATIVE}.credentials[{index}].credential_ref must be a safe ref, not a raw secret.")
         entries.append(
             {
                 "credential_id": credential_id,
+                "credential_id_status": credential_id_status,
+                "credential_id_authoritative": False,
                 "credential_kind": credential_kind,
                 "purpose": purpose,
                 "provider": provider,
                 "ref_store": store,
                 "ref_prefix": f"{store}:" if store else None,
+                "ref_format": (
+                    "canonical"
+                    if canonical_ref
+                    else ("legacy_unicode_locator" if legacy_unicode_ref else "invalid")
+                ),
+                "store_presence": "not_checked",
                 "source": {
                     "document": CREDENTIAL_REF_LOCAL_INVENTORY_RELATIVE,
                     "scope": "local_ignored",
@@ -76507,6 +76595,57 @@ def credential_ref_store(credential_ref: str) -> str | None:
         if text.startswith(prefix):
             return prefix[:-1]
     return None
+
+
+def safe_credential_metadata_id(value: str) -> bool:
+    """Validate an opaque credential label without rejecting its domain words."""
+
+    text = value.strip()
+    if not text or len(text) > 128 or not text.isascii():
+        return False
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:+-]{0,127}", text):
+        return False
+    if "@" in text or "://" in text or contains_forbidden_location_reference(text):
+        return False
+    # ``credential`` and ``token`` are legitimate label nouns. Only a concrete
+    # known token shape is disallowed in this metadata-only identifier field.
+    if OPERATOR_FEEDBACK_TITLE_TOKEN_RE.search(text):
+        return False
+    return True
+
+
+def safe_legacy_local_secret_ref(value: str) -> bool:
+    """Accept a local-only Unicode ``secret:`` locator without opening its store.
+
+    Older WOM local catalogs used human KeePassXC entry labels after the
+    ``secret:`` prefix.  Those labels may be Unicode and contain spaces, while
+    the portable public ref grammar is deliberately ASCII-only.  Inventory is
+    metadata discovery, so it may recognize this narrow legacy form without
+    treating it as proof that an entry or secret exists.  Raw-token shapes and
+    locator delimiters remain rejected.
+    """
+
+    text = value.strip()
+    if not text.lower().startswith("secret:"):
+        return False
+    suffix = text.split(":", 1)[1].strip()
+    if not suffix or len(text) > 240:
+        return False
+    if any(character in text for character in ("\x00", "\r", "\n", "@", "/", "\\", "&", "=")):
+        return False
+    if "://" in text or contains_forbidden_location_reference(text):
+        return False
+    # Do not scan the literal ``secret:`` scheme as though it were a
+    # ``secret=<value>`` assignment. Scan only the human locator suffix for an
+    # embedded assignment/private-key marker or a known token shape.
+    if DRAFT_SECRET_VALUE_RE.search(suffix) or OPERATOR_FEEDBACK_TITLE_TOKEN_RE.search(suffix):
+        return False
+    # A long compact ASCII value after ``secret:`` is much more likely to be
+    # the secret itself than a human vault label. Human labels may be Unicode,
+    # contain spaces, or use ordinary punctuation.
+    if suffix.isascii() and re.fullmatch(r"[A-Za-z0-9_.:+-]{20,}", suffix):
+        return False
+    return True
 
 
 def safe_credential_ref(value: str) -> bool:
