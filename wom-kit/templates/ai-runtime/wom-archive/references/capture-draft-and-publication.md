@@ -110,11 +110,15 @@ Use the dedicated revision workflow for an already minted zet. Use retirement
 only when the archive's lifecycle policy calls for it; never delete a canonical
 zet or its receipts as cleanup.
 
-When the human asks to publish, begin the `mint-zet --dry-run` workflow in that
-same task. A draft write is not publication. Do not claim completion until the
-approved mint has produced both canonical and receipt evidence. If the preview
-finds a blocker or a separate approval is still required, report that boundary
-immediately; never leave the request silently pending for a later session.
+When the human asks to publish, begin the `mint-zet --dry-run --progress`
+workflow in that same task. A draft write is not publication. Do not claim
+completion until the approved mint has produced both canonical and receipt
+evidence. Progress goes to stderr and is not the final approval result. If the
+preview reports `archive_index_rebuild_required`, explicitly rebuild and check
+the index before replaying the unchanged publication request; never substitute
+a silent live-body scan. If the preview finds another blocker or a separate
+approval is still required, report that boundary immediately; never leave the
+request silently pending for a later session.
 
 ## Keep Derived Work Synchronized
 

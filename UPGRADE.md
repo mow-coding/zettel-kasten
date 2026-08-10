@@ -24,6 +24,39 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.312 Letters 120 And 123 Index Authority And Feedback Bodies
+
+v0.3.312 intentionally requires one explicit rebuild of generated zettel
+indexes created by older versions. It does not rewrite canonical zets or
+automatically scan a real archive during installation.
+
+Before using protected `search`, `view-zets`, or `mint-zet` behavior, run:
+
+```powershell
+archive index <archive-root> --progress --format json
+archive index-health <archive-root> --dry-run --progress --format json
+```
+
+If a protected command returns `archive_index_rebuild_required`, do not trust
+stale rows and do not replace the blocker with raw SQLite or a whole-archive
+body scan. Rebuild explicitly, verify health, and retry the original request.
+
+For a large mint preview, use `mint-zet --dry-run --progress`. Progress stays on
+stderr and the one final result stays on stdout. A heartbeat is not approval or
+completion evidence; canonical plus receipt evidence is still required after
+the separate reviewed mint.
+
+Substantive tool feedback is now composed from an ignored-local six-section
+request through `operator-feedback-compose --dry-run` and its exact reviewed
+replay. Check the body and metadata binding with
+`operator-feedback-body-check --dry-run`, then use its
+`feedback-body-sha256:<digest>` value in the existing feedback lifecycle
+record. These commands do not submit feedback or prove delivery.
+
+See the [Letters 120 and 123 guide](wom-kit/docs/letter120-123-index-lifecycle-and-feedback-body.md),
+the [v0.3.312 release note](wom-kit/docs/releases/v0.3.312.md), and the
+[decision log](wom-kit/docs/archive-infra-decision-log-2026-08-10-v03312-index-authority-and-feedback-body.md).
+
 ## v0.3.311 Letters 118 And 119 Credential Continuity And Reviewed Recovery
 
 v0.3.311 is compatible with v0.3.310 archives and performs no automatic

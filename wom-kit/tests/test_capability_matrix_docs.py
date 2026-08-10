@@ -9,7 +9,7 @@ from wom_kit import __version__
 
 KIT_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = KIT_ROOT.parent
-EXPECTED_CURRENT_VERSION = "0.3.311"
+EXPECTED_CURRENT_VERSION = "0.3.312"
 EXPECTED_CURRENT_TAG = f"v{EXPECTED_CURRENT_VERSION}"
 CURRENT_VERSION = f"v{__version__}"
 CURRENT_RELEASE_NOTE = f"{EXPECTED_CURRENT_TAG}.md"
@@ -20,7 +20,7 @@ CURRENT_WHEEL_URL = (
     f"wom_kit-{EXPECTED_CURRENT_VERSION}-py3-none-any.whl"
 )
 CURRENT_RUNTIME_STATUS = (
-    f"Status: {CURRENT_VERSION} Letters 118-119 credential continuity and reviewed Notion recovery checkpoint"
+    f"Status: {CURRENT_VERSION} Letters 120 and 123 current-index, mint-progress, and feedback-body checkpoint"
 )
 CURRENT_MATRIX_VERSION = f"Version: {CURRENT_VERSION} implementation and release scope"
 MATRIX_PATH = KIT_ROOT / "docs" / "capability-matrix.md"
@@ -10775,7 +10775,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             guide_text,
         )
         self.assertIn(
-            "wom-kit/ai-command-path-routing/v0.12",
+            "wom-kit/ai-command-path-routing/v0.13",
             routing_text,
         )
         self.assertIn(
@@ -10989,6 +10989,115 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                 self.assertNotIn("C:\\Users\\", text)
         self.assertIn("releases/v0.3.310.md", public_map_text)
         self.assertIn("releases/v0.3.310.md", public_map_ko_text)
+
+    def test_v03312_letters120_123_public_contract_is_current_and_unproven_live(
+        self,
+    ) -> None:
+        release_path = KIT_ROOT / "docs" / "releases" / "v0.3.312.md"
+        packaged_release_path = (
+            KIT_ROOT
+            / "src"
+            / "wom_kit"
+            / "_resources"
+            / "release-notes"
+            / "v0.3.312.md"
+        )
+        guide_path = (
+            KIT_ROOT
+            / "docs"
+            / "letter120-123-index-lifecycle-and-feedback-body.md"
+        )
+        decision_path = (
+            KIT_ROOT
+            / "docs"
+            / "archive-infra-decision-log-2026-08-10-v03312-index-authority-and-feedback-body.md"
+        )
+        runtime_path = KIT_ROOT / "docs" / "runtime-canonical-entrypoints.md"
+        public_map_path = KIT_ROOT / "docs" / "public-documentation-map.md"
+        public_map_ko_path = KIT_ROOT / "docs" / "public-documentation-map.ko.md"
+
+        release_text = release_path.read_text(encoding="utf-8")
+        release_flat = " ".join(release_text.split())
+        guide_text = guide_path.read_text(encoding="utf-8")
+        decision_text = decision_path.read_text(encoding="utf-8")
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        runtime_text = runtime_path.read_text(encoding="utf-8")
+        public_map_text = public_map_path.read_text(encoding="utf-8")
+        public_map_ko_text = public_map_ko_path.read_text(encoding="utf-8")
+
+        self.assertEqual(__version__, EXPECTED_CURRENT_VERSION)
+        self.assertEqual(CURRENT_VERSION, EXPECTED_CURRENT_TAG)
+        self.assertEqual(release_path.read_bytes(), packaged_release_path.read_bytes())
+        self.assertIn(CURRENT_MATRIX_VERSION, matrix_text)
+        self.assertIn(CURRENT_RUNTIME_STATUS, matrix_text)
+        self.assertIn(CURRENT_RUNTIME_STATUS, runtime_text)
+
+        public_contract_tokens = (
+            "archive_index_rebuild_required",
+            "view-zets",
+            "mint-zet --progress",
+            "feedback-body-sha256:",
+        )
+        for token in public_contract_tokens:
+            for document_name, text in (
+                ("release", release_text),
+                ("guide", guide_text),
+                ("matrix", matrix_text),
+            ):
+                with self.subTest(token=token, document=document_name):
+                    self.assertIn(token, text)
+
+        for token in (
+            "archive_index_rebuild_required",
+            "operator-feedback-compose",
+            "operator-feedback-body-check",
+        ):
+            for document_name, text in (
+                ("release", release_text),
+                ("matrix", matrix_text),
+                ("runtime", runtime_text),
+            ):
+                with self.subTest(token=token, document=document_name):
+                    self.assertIn(token, text)
+
+        for phrase in (
+            "real-archive, or human-acceptance evidence",
+            "No beta archive was modified or automatically rebuilt",
+            "do not submit feedback externally",
+            "not a separate Markdown file and receipt",
+            "remain the next release scope",
+        ):
+            with self.subTest(release_boundary=phrase):
+                self.assertIn(phrase, release_flat)
+
+        public_paths = (
+            "letter120-123-index-lifecycle-and-feedback-body.md",
+            "archive-infra-decision-log-2026-08-10-v03312-index-authority-and-feedback-body.md",
+            "releases/v0.3.312.md",
+        )
+        for public_path in public_paths:
+            for document_name, text in (
+                ("public-map", public_map_text),
+                ("public-map-ko", public_map_ko_text),
+            ):
+                with self.subTest(path=public_path, document=document_name):
+                    self.assertIn(public_path, text)
+
+        for text in (
+            release_text,
+            guide_text,
+            decision_text,
+            matrix_text,
+            runtime_text,
+            public_map_text,
+            public_map_ko_text,
+        ):
+            with self.subTest(document="public-privacy-boundary"):
+                self.assertNotIn("C:\\Users\\", text)
+
+        self.assertTrue((KIT_ROOT / "docs" / "releases" / "v0.3.311.md").is_file())
+        self.assertIn("releases/v0.3.311.md", public_map_text)
+        self.assertIn("releases/v0.3.311.md", public_map_ko_text)
 
     def test_active_source_docs_use_module_launcher_not_direct_wrapper(self) -> None:
         active_paths = (

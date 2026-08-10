@@ -10,12 +10,12 @@ It is not a website, SaaS app, dashboard, or visual note-taking product. The int
 
 ## Install The Command-Line Tool
 
-The exact v0.3.311 GitHub Release, when present, uses the self-contained wheel
+The exact v0.3.312 GitHub Release, when present, uses the self-contained wheel
 below. Confirm that the release exists and lists the wheel before installing
 it. The versioned URL alone is not proof that the asset is available.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.311/wom_kit-0.3.311-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.312/wom_kit-0.3.312-py3-none-any.whl"
 archive --version
 ```
 
@@ -212,6 +212,22 @@ broadly, write to Notion, or mutate canonical zets. See
 and [`docs/releases/v0.3.311.md`](docs/releases/v0.3.311.md). Source tests do
 not prove live credential adoption or a completed 620-page recovery; CI, tag,
 Release, wheel, fresh installation, and human execution remain separate gates.
+
+v0.3.312 gives protected index-backed zettel reads and mint planning one
+fail-closed current-index authority. Structured `view-zets` filters no longer
+depend on path order, and a stale, missing, legacy, incomplete, or dirty index
+returns `archive_index_rebuild_required` instead of plausible rows or an
+all-canonical body fallback. `mint-zet --progress` sends content-free start,
+progress, and heartbeat evidence to stderr while keeping stdout for the final
+result. A separate six-section operator-feedback body companion adds
+content-free planning, digest-bound reviewed create-only approval, and
+lifecycle binding checks without external submission or human-receipt claims.
+See
+[`docs/letter120-123-index-lifecycle-and-feedback-body.md`](docs/letter120-123-index-lifecycle-and-feedback-body.md)
+and [`docs/releases/v0.3.312.md`](docs/releases/v0.3.312.md). Source tests do
+not prove a real beta archive was rebuilt or that external feedback was
+delivered; CI, exact tag, Release, wheel, fresh install, real-archive execution,
+and human acceptance remain separate evidence layers.
 
 Use a dedicated virtual environment when installing with plain `pip`. WOM-kit
 is not published to PyPI yet, so `pip install wom-kit` is not an official

@@ -1181,7 +1181,7 @@ class RuntimeGuidanceReadinessTests(unittest.TestCase):
                 "not_proven",
             )
 
-    def test_runtime_feedback_route_requires_plan_ledger_human_preview_approve(self) -> None:
+    def test_runtime_feedback_route_requires_body_plan_human_approval_and_binding_check(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             _repo, archive_root = self.make_repo(Path(tmp))
             context = archive_services.runtime_context(archive_root)
@@ -1196,9 +1196,12 @@ class RuntimeGuidanceReadinessTests(unittest.TestCase):
             [
                 "read_feedback_policy",
                 "inspect_feedback_ledger",
+                "preview_feedback_body",
                 "human_review",
+                "approve_feedback_body",
                 "preview_feedback_record",
                 "approve_feedback_record",
+                "verify_feedback_body_binding",
             ],
         )
         self.assertIn(
@@ -1209,12 +1212,17 @@ class RuntimeGuidanceReadinessTests(unittest.TestCase):
             "operator-feedback-ledger",
             route["sequence"][1]["command"],
         )
-        self.assertTrue(route["sequence"][2]["required_gate"])
-        self.assertIsNone(route["sequence"][2]["command"])
-        self.assertIn("--dry-run", route["sequence"][3]["command"])
-        self.assertNotIn("--approve", route["sequence"][3]["command"])
+        self.assertIn("operator-feedback-compose", route["sequence"][2]["command"])
+        self.assertIn("--dry-run", route["sequence"][2]["command"])
+        self.assertTrue(route["sequence"][3]["required_gate"])
+        self.assertIsNone(route["sequence"][3]["command"])
         self.assertIn("--approve", route["sequence"][4]["command"])
         self.assertIn("--reviewed-by", route["sequence"][4]["command"])
+        self.assertIn("--dry-run", route["sequence"][5]["command"])
+        self.assertNotIn("--approve", route["sequence"][5]["command"])
+        self.assertIn("--approve", route["sequence"][6]["command"])
+        self.assertIn("--reviewed-by", route["sequence"][6]["command"])
+        self.assertIn("operator-feedback-body-check", route["sequence"][7]["command"])
         self.assertFalse(
             route["user_knowledge_objets_are_canonical_feedback_tracker"]
         )

@@ -1,8 +1,10 @@
 ﻿# WOM-kit Capability Matrix
 
-Status: v0.3.311 Letters 118-119 credential continuity and reviewed Notion recovery checkpoint
+Status: v0.3.312 Letters 120 and 123 current-index, mint-progress, and feedback-body checkpoint
 Date: 2026-08-10
-Version: v0.3.311 implementation and release scope
+Version: v0.3.312 implementation and release scope
+
+Previous checkpoint: Status: v0.3.311 Letters 118-119 credential continuity and reviewed Notion recovery checkpoint
 
 Previous checkpoint: Status: v0.3.310 Letter 117 reviewed imported-reference checkpoint
 
@@ -120,6 +122,35 @@ Previous checkpoint: Status: v0.3.199 object-storage WOM location reconcile chec
 Previous checkpoint: Status: v0.3.198 reconcile approval-result status checkpoint
 Previous checkpoint: Status: v0.3.197 reconcile dry-run next-action guidance checkpoint
 Previous checkpoint: Status: v0.3.196 doctor progress-log path-policy clarification checkpoint
+
+## v0.3.312 Letters 120 And 123 Index Authority, Mint Progress, And Feedback Bodies
+
+- Index-backed `search`, structured `view-zets`, and mint planning share one
+  current-index authority. Missing, legacy, incomplete, dirty, unsafe, or
+  live-stat mismatched evidence returns `archive_index_rebuild_required`, zero
+  protected query rows, and no mint decision. There is no silent live-body
+  fallback.
+- Generated zettel index metadata records an explicit state and generation.
+  Bounded duplicate keys and publication fields let mint read only indexed
+  candidates and let callers request recent canonical WOM-native rows directly.
+  Supported mint/retirement mutations apply the exact index delta or leave the
+  index dirty; a failed delta is not warning-success.
+- `mint-zet --progress` covers dry-run and approval. An immediate content-free
+  start plus bounded stderr JSONL/compact heartbeats keeps stdout reserved for
+  the one final result. Fixed stages include `self_contained`, `quality`,
+  `duplicate_title`, `canonical_conflict`, and `receipt_plan`; the final JSON
+  can include only their safe status/count/duration summary.
+- `operator-feedback-compose` gives an ignored-local exact six-section request
+  a write-free content-free plan and exact reviewed create-only body/receipt
+  replay. `operator-feedback-body-check` verifies structure, digest, privacy,
+  and the existing metadata record's `feedback-body-sha256:<digest>` binding
+  without returning feedback prose or claiming external delivery.
+- Controlled performance evidence uses only a temporary synthetic 8,599-zettel
+  fixture. Source tests do not prove a beta archive rebuild, real feedback
+  submission, PR/CI, exact tag, public wheel, fresh install, or human
+  acceptance. Letter 121 source-to-draft fidelity remains the next scope. See
+  `docs/letter120-123-index-lifecycle-and-feedback-body.md` and
+  `docs/releases/v0.3.312.md`.
 
 ## v0.3.311 Letters 118-119 Credential Continuity And Reviewed Notion Recovery
 
@@ -543,6 +574,9 @@ rollback, or recovery algorithms.
 
 | Capability | Status in current working tree | Write behavior | Notes |
 | --- | --- | --- | --- |
+| Current zettel index authority | `implemented generated-index gate` | readers write nothing; explicit rebuild writes the disposable index; supported mint/retire writers apply an exact delta or leave it dirty | Since v0.3.312, protected `search`, structured `view-zets`, and mint planning share one current-index check. Missing, legacy, incomplete, dirty, unsafe, or live-stat mismatched evidence returns `archive_index_rebuild_required`, zero protected query rows, and no mint decision. The command never silently trusts stale rows or parses every canonical body as fallback. Existing indexes require one explicit `archive index --progress` plus `index-health --dry-run --progress`. Bounded indexed duplicate keys and publication fields support candidate-only mint checks and explicit status/origin/mint-time/sort/dedupe views. SQLite transaction atomicity does not extend to separate Markdown and receipt files; interrupted cross-file lifecycles stay dirty and require reconciliation. |
+| Mint progress and bounded duplicate planning | `implemented optional CLI progress` | progress writes stderr only; preview writes nothing; approved mint retains its existing gated file/receipt behavior plus generated-index closeout | Since v0.3.312, `archive mint-zet ... --progress` emits an immediate content-free start and bounded heartbeat/stage events for preview and approval. JSON mode keeps stdout as one final JSON value and emits stderr JSONL with only fixed stages/events, safe counts, elapsed time, and last-completed stage. It includes `self_contained`, `quality`, `duplicate_title`, `canonical_conflict`, and `receipt_plan`; paths, ids, titles, bodies, queries, raw exceptions, and rejected values are excluded. The final progress summary is likewise content-free. Duplicate planning reads only the target and bounded indexed candidates; a stale index blocks instead of scanning all canonical bodies. |
+| Checked operator-feedback body companion | `read-only exact plan and check plus approval-gated create-only body write` | plan/check write nothing; approve creates one Markdown body and one immutable receipt without overwrite | Since v0.3.312, `operator-feedback-compose` accepts one ignored-local exact-schema request containing `environment`, `task`, `observed_failure`, `suspected_cause`, `requested_resolution`, and `reproduction`. Planning returns only digest/presence/byte-count evidence. Approval requires the unchanged plan SHA-256 and reviewer, then creates `ops/feedback/letters/<id>.md` plus a digest receipt. `operator-feedback-body-check` validates structure, privacy, hash, and the existing metadata record's `feedback-body-sha256:<digest>` binding without returning prose. It does not submit feedback, change delivery state, or prove human receipt. |
 | MCP content-free error boundary | `implemented local protocol boundary` | no archive write; failed calls return a fixed wire envelope | Since v0.3.288, every failed MCP tool returns exact text `Tool execution failed.`, exact structured code `tool_execution_failed`, and `isError: true`; internal exception messages, exception types, paths, frontmatter values, provider details, validation details, method/tool names, and caller-controlled values are not interpolated into error `message` or `data`. A valid JSON-RPC request id remains unchanged in the top-level `id` correlation field. JSON-RPC parse, invalid-request, method-not-found, invalid-params, and internal failures use fixed category messages only. Only literal `null` and objects are accepted for request `params` and tool `arguments`; `false`, `0`, strings, and arrays are rejected instead of becoming empty objects. Strict per-line UTF-8 decoding, non-finite JSON number rejection, request-id type checks, ASCII-safe string escaping, excessive-nesting containment, strict output JSON, and quiet closed-stdout handling prevent raw transport tracebacks and invalid JSON-RPC wire values. If stdout fails while the server reports invalid UTF-8, the server stops before it reads any later tool request. Internal exception chaining remains available for in-process diagnosis. Successful results and existing dry-run, approval, allowed-root, redaction, provider, and write boundaries are unchanged. |
 | Artifact primacy and human drift doctrine | `implemented runtime operator contract` | AI guidance and regression checks only; no archive or graph write | Since v0.3.246, the English/Korean product philosophy, whitepaper, and product blueprint define durable time-situated artifacts and chronology as the primary evidence layer. Since v0.3.247, the installed runtime skill, focused reading/capture references, complete operator contract, and personal/company/family `AGENTS.md` templates give the operating AI the same rule: `canonical` is reviewed current state rather than objective truth; matching labels never authorize silent identity merges; contradictions and changed meanings remain evidence; nodes, ties, edges, indexes, embeddings, and graph projections remain regenerable aids or reviewable claims. Runtime-skill validation and focused tests guard these phrases. This checkpoint adds no entity resolver, model call, graph mutation, schema migration, archive write, or UI. |
 | Philosophy implementation traceability | `implemented public evidence map` | documentation and regression checks only; no archive or host write | Since v0.3.252, paired English/Korean evidence maps connect the Memento Problem, artifact primacy, non-objective canonical state, node-first exhaustive abstract reading, subordinate graph projections, local sovereignty, human approval, AI artifact/session handoff, and progressive disclosure to their shipped commands, runtime rules, and regression suites. Every row also states what remains semantic real-use validation, guidance-level behavior, live remote verification, or provider-specific future work. The historical v0.3.203 node-first decision now preserves its original non-claim while linking the v0.3.204-v0.3.217 implementation follow-through. No new command, schema, receipt, model call, entity resolver, archive write, remote call, or UI is added. |

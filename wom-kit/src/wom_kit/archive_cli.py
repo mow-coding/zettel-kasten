@@ -36,6 +36,10 @@ Commands:
           Read-only delivery-status ledger of operator feedback records (status + ids only).
   operator-feedback-mark-delivered
           Preview or approve a batched draft->delivered delivery-boundary commit.
+  operator-feedback-compose
+           Preview or approve a reviewed operator-feedback body request.
+  operator-feedback-body-check
+           Check one composed operator-feedback body without echoing private input.
   approval-handoff-plan
           Show the AI-to-human approval handoff storage and lifecycle contract.
   approval-handoff-record
@@ -1393,6 +1397,214 @@ class CommandProgressReporter:
             if stage_annotation:
                 message += f" {stage_annotation}"
             self._emit(stage, message, current, total)
+
+    def close(self) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=max(1.0, self._interval * 2))
+
+
+MINT_PUBLIC_PROGRESS_STAGES = (
+    "self_contained",
+    "quality",
+    "duplicate_title",
+    "canonical_conflict",
+    "receipt_plan",
+)
+MINT_PROGRESS_STAGES = (
+    *MINT_PUBLIC_PROGRESS_STAGES,
+    "target",
+    "policy",
+    "index_snapshot",
+)
+MINT_PROGRESS_EVENTS = ("start", "progress", "heartbeat", "done")
+MINT_INITIAL_PROGRESS_STAGE = "target"
+
+
+class MintProgressReporter:
+    """Strict, content-free mint progress with a machine-readable JSONL mode."""
+
+    def __init__(
+        self,
+        enabled: bool,
+        *,
+        json_lines: bool,
+        heartbeat_interval_seconds: float = 1.0,
+    ) -> None:
+        self._enabled = bool(enabled)
+        self._json_lines = bool(json_lines)
+        self._started_at = time.monotonic()
+        self._interval = min(2.0, max(0.01, heartbeat_interval_seconds))
+        self._state_lock = threading.Lock()
+        self._output_lock = threading.Lock()
+        self._stop = threading.Event()
+        self._current_stage = MINT_INITIAL_PROGRESS_STAGE
+        self._current: int | None = None
+        self._total: int | None = None
+        self._last_completed_stage: str | None = None
+        self._last_event: tuple[str, str] | None = None
+        self._stage_status = {
+            stage: "not_started" for stage in MINT_PUBLIC_PROGRESS_STAGES
+        }
+        self._stage_elapsed_ms = {
+            stage: 0 for stage in MINT_PUBLIC_PROGRESS_STAGES
+        }
+        self._stage_active_since: dict[str, float] = {}
+        self._stage_counts: dict[str, tuple[int | None, int | None]] = {}
+        self._thread: threading.Thread | None = None
+
+    @staticmethod
+    def _safe_stage(stage: object) -> str:
+        value = str(stage or "").strip().lower().replace("-", "_")
+        return value if value in MINT_PROGRESS_STAGES else "unknown"
+
+    @staticmethod
+    def _safe_count(value: object) -> int | None:
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            return None
+        return value
+
+    @staticmethod
+    def _event_from_message(message: object) -> str:
+        value = str(message or "").strip().lower()
+        if value == "start" or value.startswith("start "):
+            return "start"
+        if value == "done" or value.startswith("done "):
+            return "done"
+        if value == "heartbeat" or value.startswith("heartbeat "):
+            return "heartbeat"
+        return "progress"
+
+    def start(self) -> None:
+        if not self._enabled:
+            return
+        self._emit(MINT_INITIAL_PROGRESS_STAGE, "start", None, None)
+        if self._enabled:
+            self._thread = threading.Thread(
+                target=self._heartbeat_loop,
+                name="wom-mint-zet-heartbeat",
+                daemon=True,
+            )
+            self._thread.start()
+
+    def progress(self, stage: str, message: str, current: int | None, total: int | None) -> None:
+        if not self._enabled:
+            return
+        self._emit(
+            self._safe_stage(stage),
+            self._event_from_message(message),
+            self._safe_count(current),
+            self._safe_count(total),
+        )
+
+    def finish(self) -> None:
+        if not self._enabled:
+            return
+        with self._state_lock:
+            stage = self._current_stage
+            current = self._current
+            total = self._total
+            last_event = self._last_event
+        if last_event != (stage, "done"):
+            self._emit(stage, "done", current, total)
+
+    def summary(self) -> dict[str, object]:
+        now = time.monotonic()
+        rows: list[dict[str, object]] = []
+        with self._state_lock:
+            for stage in MINT_PUBLIC_PROGRESS_STAGES:
+                elapsed_ms = self._stage_elapsed_ms[stage]
+                active_since = self._stage_active_since.get(stage)
+                if active_since is not None:
+                    elapsed_ms += max(0, int((now - active_since) * 1000))
+                row: dict[str, object] = {
+                    "stage": stage,
+                    "status": self._stage_status[stage],
+                    "elapsed_ms": elapsed_ms,
+                }
+                current, total = self._stage_counts.get(stage, (None, None))
+                if current is not None and total is not None:
+                    row["current"] = current
+                    row["total"] = total
+                rows.append(row)
+        return {"stages": rows}
+
+    def _heartbeat_loop(self) -> None:
+        while not self._stop.wait(self._interval):
+            with self._state_lock:
+                stage = self._current_stage
+                current = self._current
+                total = self._total
+            self._emit(stage, "heartbeat", current, total)
+
+    def _emit(self, stage: str, event: str, current: int | None, total: int | None) -> None:
+        if not self._enabled:
+            return
+        safe_stage = self._safe_stage(stage)
+        safe_event = event if event in MINT_PROGRESS_EVENTS else "progress"
+        safe_current = self._safe_count(current)
+        safe_total = self._safe_count(total)
+        if safe_current is not None and safe_total is not None and safe_current > safe_total:
+            safe_current = None
+            safe_total = None
+        now = time.monotonic()
+        with self._state_lock:
+            self._current_stage = safe_stage
+            self._current = safe_current
+            self._total = safe_total
+            if safe_stage in MINT_PUBLIC_PROGRESS_STAGES:
+                active_since = self._stage_active_since.get(safe_stage)
+                if safe_event == "start":
+                    if active_since is None:
+                        self._stage_active_since[safe_stage] = now
+                    self._stage_status[safe_stage] = "in_progress"
+                elif safe_event == "done":
+                    if active_since is not None:
+                        self._stage_elapsed_ms[safe_stage] += max(
+                            0,
+                            int((now - active_since) * 1000),
+                        )
+                        self._stage_active_since.pop(safe_stage, None)
+                    self._stage_status[safe_stage] = "completed"
+                elif self._stage_status[safe_stage] == "not_started":
+                    self._stage_active_since[safe_stage] = now
+                    self._stage_status[safe_stage] = "in_progress"
+                if safe_current is not None and safe_total is not None:
+                    self._stage_counts[safe_stage] = (safe_current, safe_total)
+            if safe_event == "done" and safe_stage != "unknown":
+                self._last_completed_stage = safe_stage
+            last_completed_stage = self._last_completed_stage
+            self._last_event = (safe_stage, safe_event)
+        payload = {
+            "stage": safe_stage,
+            "event": safe_event,
+            "current": safe_current,
+            "total": safe_total,
+            "elapsed_ms": max(0, int((now - self._started_at) * 1000)),
+            "last_completed_stage": last_completed_stage,
+        }
+        try:
+            with self._output_lock:
+                if self._json_lines:
+                    print(
+                        json.dumps(payload, ensure_ascii=True, separators=(",", ":"), sort_keys=True),
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                else:
+                    count = ""
+                    if safe_current is not None and safe_total is not None:
+                        count = f" {safe_current}/{safe_total}"
+                    print(
+                        f"[mint-zet] {safe_stage}: {safe_event}{count} elapsed_ms={payload['elapsed_ms']}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+        except Exception:
+            # Progress is observational. A closed PTY or broken stderr must not
+            # change mint transaction truth or the command's final result.
+            self._enabled = False
+            self._stop.set()
 
     def close(self) -> None:
         self._stop.set()
@@ -4770,6 +4982,120 @@ def command_operator_feedback_mark_delivered(args: argparse.Namespace) -> int:
             print("Warnings:")
             for warning in result["warnings"]:
                 print(f"- {warning}")
+    return 0 if result.get("ok", True) else 1
+
+
+def _operator_feedback_body_api() -> Any:
+    # Kept as a tiny late-import seam so the CLI contract can be tested without
+    # importing implementation details or reflecting a private request value.
+    from . import operator_feedback_body
+
+    return operator_feedback_body
+
+
+def _operator_feedback_body_error(
+    args: argparse.Namespace,
+    *,
+    command: str,
+    reason_code: str,
+) -> int:
+    if getattr(args, "format", None) == "json":
+        print_json(
+            {
+                "ok": False,
+                "state": "blocked",
+                "lifecycle_action": command.replace("-", "_"),
+                "reason_codes": [reason_code],
+                "private_values_echoed": False,
+            }
+        )
+    else:
+        print(
+            f"{command} failed; private request values were not echoed.",
+            file=sys.stderr,
+        )
+    return 1
+
+
+def command_operator_feedback_compose(args: argparse.Namespace) -> int:
+    if bool(args.dry_run) == bool(args.approve):
+        return _operator_feedback_body_error(
+            args,
+            command="operator-feedback-compose",
+            reason_code="feedback_compose_exactly_one_action_required",
+        )
+    if args.approve and not (args.expected_plan_sha256 or "").strip():
+        return _operator_feedback_body_error(
+            args,
+            command="operator-feedback-compose",
+            reason_code="feedback_compose_expected_plan_sha256_required",
+        )
+    if args.approve and not (args.reviewed_by or "").strip():
+        return _operator_feedback_body_error(
+            args,
+            command="operator-feedback-compose",
+            reason_code="feedback_compose_reviewer_required",
+        )
+    try:
+        api = _operator_feedback_body_api()
+        if args.dry_run:
+            result = api.plan_operator_feedback_body(
+                Path(args.archive_root),
+                args.request,
+            )
+        else:
+            result = api.approve_operator_feedback_body(
+                Path(args.archive_root),
+                args.request,
+                expected_plan_sha256=args.expected_plan_sha256,
+                reviewed_by=args.reviewed_by,
+            )
+        if not isinstance(result, dict):
+            raise TypeError("operator_feedback_body_result_invalid")
+    except Exception:
+        return _operator_feedback_body_error(
+            args,
+            command="operator-feedback-compose",
+            reason_code="feedback_compose_failed",
+        )
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        print("Operator feedback body composition.")
+        print(f"State: {result.get('state') or '-'}")
+        print("Approved: " + ("yes" if args.approve and result.get("ok", True) else "no"))
+    return 0 if result.get("ok", True) else 1
+
+
+def command_operator_feedback_body_check(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        return _operator_feedback_body_error(
+            args,
+            command="operator-feedback-body-check",
+            reason_code="feedback_body_check_dry_run_required",
+        )
+    try:
+        api = _operator_feedback_body_api()
+        result = api.check_operator_feedback_body(
+            Path(args.archive_root),
+            args.feedback_id,
+        )
+        if not isinstance(result, dict):
+            raise TypeError("operator_feedback_body_result_invalid")
+    except Exception:
+        return _operator_feedback_body_error(
+            args,
+            command="operator-feedback-body-check",
+            reason_code="feedback_body_check_failed",
+        )
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        print("Operator feedback body check.")
+        print(f"State: {result.get('state') or '-'}")
+        print("Body contract: " + ("valid" if result.get("ok", True) else "blocked"))
     return 0 if result.get("ok", True) else 1
 
 
@@ -15023,42 +15349,109 @@ def command_promote(args: argparse.Namespace) -> int:
     return 0
 
 
+def _mint_cli_error(
+    args: argparse.Namespace,
+    *,
+    reason_code: str,
+    message: str,
+    progress_summary: dict[str, object] | None = None,
+) -> int:
+    if getattr(args, "format", None) == "json" and bool(getattr(args, "progress", False)):
+        result: dict[str, object] = {
+            "ok": False,
+            "state": "blocked",
+            "lifecycle_action": "mint_zettel",
+            "reason_codes": [reason_code],
+            "private_values_echoed": False,
+        }
+        if progress_summary is not None:
+            result["progress_summary"] = progress_summary
+        print_json(result)
+    else:
+        print(message, file=sys.stderr)
+    return 1
+
+
 def command_mint_zettel(args: argparse.Namespace) -> int:
     affirm_ids = args.affirm or []
     reviewer = (args.reviewed_by or "").strip()
     if affirm_ids and not reviewer:
-        print(
-            "--affirm requires --reviewed-by to attribute the human affirmation.",
-            file=sys.stderr,
+        return _mint_cli_error(
+            args,
+            reason_code="mint_affirmation_reviewer_required",
+            message="--affirm requires --reviewed-by to attribute the human affirmation.",
         )
-        return 1
     unknown_affirm_ids = sorted(
         item_id
         for item_id in affirm_ids
         if item_id not in archive_services.HUMAN_AFFIRMABLE_CHECKLIST_ITEMS
     )
     if unknown_affirm_ids:
-        print(
-            "--affirm only accepts human-review items: "
+        return _mint_cli_error(
+            args,
+            reason_code="mint_affirmation_invalid",
+            message="--affirm only accepts human-review items: "
             + ", ".join(sorted(archive_services.HUMAN_AFFIRMABLE_CHECKLIST_ITEMS))
             + ".",
-            file=sys.stderr,
         )
-        return 1
     affirmations = {item_id: reviewer for item_id in affirm_ids} if reviewer else {}
 
-    if args.dry_run:
-        try:
+    if not args.dry_run and not args.approve:
+        return _mint_cli_error(
+            args,
+            reason_code="mint_approval_required",
+            message="Real minting requires --approve.",
+        )
+    if not args.dry_run and not args.reviewed_by:
+        return _mint_cli_error(
+            args,
+            reason_code="mint_reviewer_required",
+            message="Real minting requires --reviewed-by.",
+        )
+
+    progress_enabled = bool(getattr(args, "progress", False))
+    reporter = MintProgressReporter(
+        progress_enabled,
+        json_lines=getattr(args, "format", None) == "json",
+        heartbeat_interval_seconds=1.0,
+    )
+    progress_callback = reporter.progress if progress_enabled else None
+    reporter.start()
+    try:
+        if args.dry_run:
             result = archive_services.mint_zettel_dry_run(
                 Path(args.archive_root),
                 zettel_id=args.zettel_id,
                 relative_path=args.path,
                 affirmations=affirmations,
+                progress_callback=progress_callback,
             )
-        except archive_services.ArchiveServiceError as exc:
-            print(str(exc), file=sys.stderr)
-            return 1
+        else:
+            result = archive_services.mint_zettel(
+                Path(args.archive_root),
+                zettel_id=args.zettel_id,
+                relative_path=args.path,
+                reviewed_by=args.reviewed_by,
+                allow_warnings=args.allow_warnings,
+                affirmations=affirmations,
+                progress_callback=progress_callback,
+            )
+        reporter.finish()
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        return _mint_cli_error(
+            args,
+            reason_code="mint_service_failed",
+            message=str(exc),
+            progress_summary=reporter.summary(),
+        )
+    finally:
+        reporter.close()
 
+    if getattr(args, "format", None) == "json" and progress_enabled:
+        result = dict(result)
+        result["progress_summary"] = reporter.summary()
+
+    if args.dry_run:
         if args.format == "json":
             print_json(result)
         else:
@@ -15086,26 +15479,6 @@ def command_mint_zettel(args: argparse.Namespace) -> int:
             print("Mint dry-run passed." if result["ok"] else "Mint dry-run blocked.")
         return 0 if result["ok"] else 1
 
-    if not args.approve:
-        print("Real minting requires --approve.", file=sys.stderr)
-        return 1
-    if not args.reviewed_by:
-        print("Real minting requires --reviewed-by.", file=sys.stderr)
-        return 1
-
-    try:
-        result = archive_services.mint_zettel(
-            Path(args.archive_root),
-            zettel_id=args.zettel_id,
-            relative_path=args.path,
-            reviewed_by=args.reviewed_by,
-            allow_warnings=args.allow_warnings,
-            affirmations=affirmations,
-        )
-    except (archive_services.ArchiveServiceError, OSError) as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
-
     if args.format == "json":
         print_json(result)
     else:
@@ -15124,7 +15497,7 @@ def command_mint_zettel(args: argparse.Namespace) -> int:
             print(f"Affirmed by {reviewer}: " + ", ".join(affirmed_ids))
         for action in result.get("next_safe_actions", []):
             print(f"Next: {action}")
-    return 0
+    return 0 if result.get("ok", True) else 1
 
 
 def command_zet_self_contained_check(args: argparse.Namespace) -> int:
@@ -15783,6 +16156,18 @@ def command_index(args: argparse.Namespace) -> int:
     return result_exit_code
 
 
+VIEW_ZETS_SORT_MAP = {
+    "minted_at:desc": "minted_at_desc",
+    "minted_at:asc": "minted_at_asc",
+    "created_at:desc": "created_at_desc",
+    "path:asc": "path_asc",
+}
+VIEW_ZETS_DEDUPE_MAP = {
+    "id": "zettel_id",
+    "none": "none",
+}
+
+
 def command_view_zets(args: argparse.Namespace) -> int:
     facets: dict[str, str] = {}
     for raw in args.facet or []:
@@ -15791,8 +16176,20 @@ def command_view_zets(args: argparse.Namespace) -> int:
             return 1
         key, value = raw.split("=", 1)
         facets[key.strip()] = value.strip()
-    if bool(args.view_id) == bool(facets):
-        print("Provide exactly one of --view-id or --facet.", file=sys.stderr)
+    structured_filter = any(
+        getattr(args, name, None) is not None
+        for name in ("status", "origin", "minted_after", "minted_before")
+    ) or getattr(args, "sort", "path:asc") != "path:asc" or getattr(
+        args, "dedupe_by", "none"
+    ) != "none"
+    if bool(args.view_id) and bool(facets):
+        print("Provide only one of --view-id or --facet.", file=sys.stderr)
+        return 1
+    if not args.view_id and not facets and not structured_filter:
+        print(
+            "Provide --view-id, --facet, or at least one structured status/origin/mint-time filter.",
+            file=sys.stderr,
+        )
         return 1
     try:
         result = archive_services.view_zets(
@@ -15800,6 +16197,12 @@ def command_view_zets(args: argparse.Namespace) -> int:
             view_id=args.view_id,
             facets=facets or None,
             limit=args.limit,
+            status=getattr(args, "status", None),
+            origin=getattr(args, "origin", None),
+            minted_after=getattr(args, "minted_after", None),
+            minted_before=getattr(args, "minted_before", None),
+            sort=VIEW_ZETS_SORT_MAP.get(getattr(args, "sort", "path:asc"), "path_asc"),
+            dedupe_by=VIEW_ZETS_DEDUPE_MAP.get(getattr(args, "dedupe_by", "none"), "none"),
         )
     except archive_services.ArchiveServiceError as exc:
         print(str(exc), file=sys.stderr)
@@ -15813,7 +16216,7 @@ def command_view_zets(args: argparse.Namespace) -> int:
             print(f"  {item['id']}\t{item['status']}\t{item['title'] or ''}")
         for blocker in result.get("blockers", []):
             print(f"BLOCKED: {blocker}")
-    return 0 if result.get("ok") else 1
+    return 0 if result.get("ok", True) else 1
 
 
 def command_view_health(args: argparse.Namespace) -> int:
@@ -16130,6 +16533,13 @@ def command_search(args: argparse.Namespace) -> int:
         )
     except archive_services.ArchiveServiceError as exc:
         print(str(exc), file=sys.stderr)
+        return 1
+
+    if not result.get("ok", True):
+        if args.format == "json":
+            print_json(result)
+        else:
+            print("Search blocked because the generated archive index is not current.")
         return 1
 
     if args.format == "json":
@@ -21840,6 +22250,41 @@ def build_parser() -> argparse.ArgumentParser:
     operator_feedback_mark_delivered.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     operator_feedback_mark_delivered.set_defaults(func=command_operator_feedback_mark_delivered)
 
+    operator_feedback_compose = subcommands.add_parser(
+        "operator-feedback-compose",
+        help="Preview or approve one reviewed operator-feedback body request.",
+    )
+    operator_feedback_compose.add_argument("archive_root", help="Archive root to inspect or update.")
+    operator_feedback_compose.add_argument(
+        "--request",
+        required=True,
+        help="Archive-relative private operator-feedback body request.",
+    )
+    operator_feedback_compose_action = operator_feedback_compose.add_mutually_exclusive_group(required=True)
+    operator_feedback_compose_action.add_argument("--dry-run", action="store_true", help="Plan only; write nothing.")
+    operator_feedback_compose_action.add_argument("--approve", action="store_true", help="Approve the exact reviewed plan.")
+    operator_feedback_compose.add_argument(
+        "--expected-plan-sha256",
+        help="Exact plan digest required for approval.",
+    )
+    operator_feedback_compose.add_argument("--reviewed-by", help="Reviewer id required for approval.")
+    operator_feedback_compose.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    operator_feedback_compose.set_defaults(func=command_operator_feedback_compose)
+
+    operator_feedback_body_check = subcommands.add_parser(
+        "operator-feedback-body-check",
+        help="Check one composed operator-feedback body without echoing private input.",
+    )
+    operator_feedback_body_check.add_argument("archive_root", help="Archive root to inspect.")
+    operator_feedback_body_check.add_argument(
+        "--feedback-id",
+        required=True,
+        help="Private operator-feedback identifier to check.",
+    )
+    operator_feedback_body_check.add_argument("--dry-run", action="store_true", help="Required. Check only; write nothing.")
+    operator_feedback_body_check.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    operator_feedback_body_check.set_defaults(func=command_operator_feedback_body_check)
+
     objet_capture_enable = subcommands.add_parser(
         "objet-capture-enable",
         aliases=["capture-enable"],
@@ -27097,6 +27542,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Allow real minting when dry-run warnings are present.",
     )
+    mint.add_argument(
+        "--progress",
+        action="store_true",
+        help="Print content-free progress with a heartbeat no slower than two seconds; JSON output uses JSONL on stderr.",
+    )
     mint.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     mint.set_defaults(func=command_mint_zettel)
 
@@ -27350,12 +27800,36 @@ def build_parser() -> argparse.ArgumentParser:
 
     view_zets_parser = subcommands.add_parser(
         "view-zets",
-        help="Execute a saved view's facet filters (views/*.yml) or ad-hoc --facet filters against the index.",
+        help="Execute a saved view or structured ad-hoc filters against the current index.",
     )
     view_zets_parser.add_argument("archive_root", help="Archive root to inspect.")
     view_zets_parser.add_argument("--view-id", help="Saved view id from views/*.yml (top-level or saved_views).")
     view_zets_parser.add_argument("--facet", action="append", help="Ad-hoc facet filter key=value (repeatable, ANDed).")
     view_zets_parser.add_argument("--limit", type=int, default=50, help="Maximum zets to return.")
+    view_zets_parser.add_argument(
+        "--status",
+        choices=["canonical", "draft", "archived"],
+        help="Filter by one zettel lifecycle status.",
+    )
+    view_zets_parser.add_argument(
+        "--origin",
+        choices=["wom_native", "notion_import", "other_import"],
+        help="Filter by one normalized zettel origin.",
+    )
+    view_zets_parser.add_argument("--minted-after", help="Include zettels minted on or after this ISO timestamp.")
+    view_zets_parser.add_argument("--minted-before", help="Include zettels minted before this ISO timestamp.")
+    view_zets_parser.add_argument(
+        "--sort",
+        choices=list(VIEW_ZETS_SORT_MAP),
+        default="path:asc",
+        help="Stable zettel result ordering.",
+    )
+    view_zets_parser.add_argument(
+        "--dedupe-by",
+        choices=list(VIEW_ZETS_DEDUPE_MAP),
+        default="none",
+        help="Optionally deduplicate logical zettels by id.",
+    )
     view_zets_parser.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     view_zets_parser.set_defaults(func=command_view_zets)
 
@@ -30729,6 +31203,8 @@ def main(argv: list[str] | None = None) -> int:
             "notion-reviewed-page-recovery-plan",
             "notion-page-recovery",
             "notion-reviewed-page-recovery",
+            "operator-feedback-compose",
+            "operator-feedback-body-check",
         }
     )
     if raw_argv[:1] == ["credential-adopt"] and any(

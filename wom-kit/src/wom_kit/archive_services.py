@@ -78,7 +78,36 @@ ZETTEL_CONTENT_STATUSES = frozenset({"draft", "canonical", "archived", "redacted
 ZETTEL_QUERYABLE_STATUSES = ("draft", "canonical", "archived")
 ZETTEL_QUARANTINED_STATUS = "unreadable"
 INDEX_RELATIVE_PATH = "db/archive-index.sqlite"
-INDEX_METADATA_SCHEMA = "wom-kit/archive-index-metadata/v0.2"
+INDEX_METADATA_SCHEMA = "wom-kit/archive-index-metadata/v0.3"
+INDEX_STATE_CURRENT = "current"
+INDEX_STATE_DIRTY = "dirty"
+INDEX_REBUILD_REQUIRED = "archive_index_rebuild_required"
+INDEX_GENERATION_RE = re.compile(r"^gen:[0-9a-f]{32}$")
+INDEX_SNAPSHOT_SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+ZETTEL_ORIGIN_CLASSES = frozenset({"wom_native", "notion_import", "other_import"})
+ZETTEL_VIEW_SORTS = frozenset(
+    {
+        "minted_at_desc",
+        "minted_at_asc",
+        "created_at_desc",
+        "created_at_asc",
+        "path_asc",
+        "path_desc",
+    }
+)
+ZETTEL_VIEW_DEDUPE_FIELDS = frozenset({"zettel_id", "normalized_title", "none"})
+MINT_PROGRESS_STAGES = frozenset(
+    {
+        "target",
+        "policy",
+        "self_contained",
+        "quality",
+        "index_snapshot",
+        "duplicate_title",
+        "canonical_conflict",
+        "receipt_plan",
+    }
+)
 ARCHIVE_INDEX_BUSY_TIMEOUT_MS = 30_000
 DERIVED_TEXT_MANIFEST_RELATIVE_PATH = "objects/manifests/derived-text.jsonl"
 DERIVED_TEXT_STORE_PREFIX = "objects/derived-text/sha256"
@@ -4632,7 +4661,7 @@ def _write_bytes_create_if_absent(path: Path, value: bytes) -> None:
 
 def operator_feedback_runtime_routing() -> dict[str, Any]:
     return {
-        "schema": "wom-kit/operator-feedback-runtime-routing/v0.1",
+        "schema": "wom-kit/operator-feedback-runtime-routing/v0.2",
         "canonical_metadata_dir": OPERATOR_FEEDBACK_DIR,
         "canonical_receipt_dir": OPERATOR_FEEDBACK_RECEIPTS_DIR,
         "user_knowledge_objets_are_canonical_feedback_tracker": False,
@@ -4657,17 +4686,39 @@ def operator_feedback_runtime_routing() -> dict[str, Any]:
             },
             {
                 "step": 3,
-                "action": "human_review",
-                "command": None,
-                "required_gate": True,
-                "meaning": (
-                    "A human reviews the existing ledger and the intended "
-                    "feedback metadata before any record preview."
+                "action": "preview_feedback_body",
+                "command": (
+                    "archive operator-feedback-compose <archive-root> "
+                    "--request profiles/local/operator-feedback/requests/<private>.json "
+                    "--dry-run --format json"
                 ),
                 "writes": False,
             },
             {
                 "step": 4,
+                "action": "human_review",
+                "command": None,
+                "required_gate": True,
+                "meaning": (
+                    "A human reviews the existing ledger, content-free body plan, "
+                    "and intended feedback metadata before either approval."
+                ),
+                "writes": False,
+            },
+            {
+                "step": 5,
+                "action": "approve_feedback_body",
+                "command": (
+                    "archive operator-feedback-compose <archive-root> "
+                    "--request profiles/local/operator-feedback/requests/<private>.json "
+                    "--expected-plan-sha256 <sha256> --reviewed-by <human-actor> "
+                    "--approve --format json"
+                ),
+                "requires_completed_human_review": True,
+                "writes": True,
+            },
+            {
+                "step": 6,
                 "action": "preview_feedback_record",
                 "command": (
                     "archive operator-feedback-record <archive-root> "
@@ -4678,7 +4729,7 @@ def operator_feedback_runtime_routing() -> dict[str, Any]:
                 "writes": False,
             },
             {
-                "step": 5,
+                "step": 7,
                 "action": "approve_feedback_record",
                 "command": (
                     "archive operator-feedback-record <archive-root> "
@@ -4690,9 +4741,20 @@ def operator_feedback_runtime_routing() -> dict[str, Any]:
                 "requires_completed_human_review": True,
                 "writes": True,
             },
+            {
+                "step": 8,
+                "action": "verify_feedback_body_binding",
+                "command": (
+                    "archive operator-feedback-body-check <archive-root> "
+                    "--feedback-id <safe-id> --dry-run --format json"
+                ),
+                "requires_completed_human_review": True,
+                "writes": False,
+            },
         ],
         "truth_boundaries": {
             "feedback_body_read": False,
+            "feedback_body_companion_supported": True,
             "external_submission_performed": False,
             "delivered_status_proves_external_submission": False,
             "delivered_status_proves_human_receipt": False,
@@ -4716,7 +4778,7 @@ def operator_feedback_plan(archive_root: Path | str, *, dry_run: bool = True) ->
             "feedback_dir": OPERATOR_FEEDBACK_DIR,
             "receipt_dir": OPERATOR_FEEDBACK_RECEIPTS_DIR,
             "statuses": list(OPERATOR_FEEDBACK_STATUSES),
-            "body_storage": "not_managed_by_this_command",
+            "body_storage": "managed_by_companion_commands_not_this_plan",
             "external_submission": "future_boundary",
         },
         "data": {
@@ -4726,6 +4788,15 @@ def operator_feedback_plan(archive_root: Path | str, *, dry_run: bool = True) ->
                 "archive operator-feedback-record <archive-root> --feedback-id <safe-id> "
                 "--feedback-ref <safe-ref> --status draft --intent create "
                 "--dry-run --format json"
+            ),
+            "recommended_body_plan_command": (
+                "archive operator-feedback-compose <archive-root> "
+                "--request profiles/local/operator-feedback/requests/<private>.json "
+                "--dry-run --format json"
+            ),
+            "recommended_body_check_command": (
+                "archive operator-feedback-body-check <archive-root> "
+                "--feedback-id <safe-id> --dry-run --format json"
             ),
             "lifecycle": [
                 {"status": "draft", "meaning": "feedback exists but has not been sent or recorded as delivered"},
@@ -41805,14 +41876,89 @@ def activity_group_membership_removal_recover(
     )
 
 
+def created_file_cleanup_if_exact(path: Path, expected_sha256: str) -> bool:
+    """Checkpointed best-effort cleanup; external writer quiescence is required.
+
+    The regular-file identity and expected hash are checked immediately before
+    unlink, but portable Python has no expected-inode compare-and-swap unlink.
+    """
+
+    if not SHA256_RE.fullmatch(str(expected_sha256 or "")):
+        return False
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    unsafe_identity = object()
+
+    def regular_identity() -> tuple[int, int, int, int] | object | None:
+        try:
+            current = os.lstat(path)
+        except FileNotFoundError:
+            return None
+        except OSError:
+            return unsafe_identity
+        if (
+            stat.S_ISLNK(current.st_mode)
+            or not stat.S_ISREG(current.st_mode)
+            or (
+                reparse_flag
+                and getattr(current, "st_file_attributes", 0) & reparse_flag
+            )
+        ):
+            return unsafe_identity
+        return (
+            int(current.st_dev),
+            int(current.st_ino),
+            int(current.st_size),
+            int(current.st_mtime_ns),
+        )
+
+    before = regular_identity()
+    if before is None:
+        return True
+    if before is unsafe_identity:
+        return False
+    try:
+        if sha256_path(path) != expected_sha256:
+            return False
+    except OSError:
+        return False
+    after = regular_identity()
+    if after != before:
+        return False
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    # A name recreated immediately after unlink is not safe to call cleaned up.
+    return regular_identity() is None
+
+
+def restore_file_create_only_with_exact_bytes(path: Path, content: bytes) -> bool:
+    """Restore removed bytes without ever overwriting a concurrent replacement."""
+
+    expected_sha256 = hashlib.sha256(content).hexdigest()
+    try:
+        with path.open("xb") as handle:
+            handle.write(content)
+    except (FileExistsError, OSError):
+        return False
+    try:
+        return sha256_path(path) == expected_sha256
+    except OSError:
+        return False
+
+
 def promote_zettel_dry_run(
     archive_root: Path | str,
     *,
     zettel_id: str | None = None,
     relative_path: str | None = None,
     affirmations: dict[str, str] | None = None,
+    progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
 ) -> dict[str, Any]:
     root = require_existing_archive_root(archive_root)
+    _emit_mint_progress(progress_callback, "target", "start", 0, 1)
     path = resolve_zettel_path(root, zettel_id=zettel_id, relative_path=relative_path)
     draft_relative = archive_relative_path(path, root)
     source_bytes = path.read_bytes()
@@ -41820,6 +41966,8 @@ def promote_zettel_dry_run(
     frontmatter, body = require_readable_zettel_text(
         decode_utf8_with_universal_newlines(source_bytes)
     )
+    _emit_mint_progress(progress_callback, "target", "done", 1, 1)
+    _emit_mint_progress(progress_callback, "policy", "start", 0, 1)
     rules = load_zettel_rules(root)
     minting_rules = lifecycle_minting_rules(rules)
     paths = rules.get("paths") if isinstance(rules.get("paths"), dict) else {}
@@ -41917,6 +42065,7 @@ def promote_zettel_dry_run(
                 blockers.append(
                     f"Required minting checklist item is not passed: {item['id']} ({item['status']})."
                 )
+    _emit_mint_progress(progress_callback, "policy", "done", 1, 1)
 
     duplicate_check: dict[str, Any] = {}
     near_duplicates = find_promotion_duplicates(
@@ -41926,6 +42075,7 @@ def promote_zettel_dry_run(
         body,
         proposed_path,
         duplicate_check=duplicate_check,
+        progress_callback=progress_callback,
     )
     for duplicate in near_duplicates:
         message = (
@@ -41939,6 +42089,7 @@ def promote_zettel_dry_run(
 
     zettel_id_value = str(frontmatter.get("id") or path.stem)
     proposed_receipt_path = f"{receipt_folder}promotion/{zettel_id_value}.promotion.json"
+    _emit_mint_progress(progress_callback, "receipt_plan", "start", 0, 1)
     receipt_preview = build_promotion_receipt_preview(
         zettel_id=zettel_id_value,
         title=frontmatter.get("title"),
@@ -41954,6 +42105,7 @@ def promote_zettel_dry_run(
         warnings=warnings,
         requires_human_approval=bool(minting_rules.get("requires_human_approval", True)),
     )
+    _emit_mint_progress(progress_callback, "receipt_plan", "done", 1, 1)
     return {
         "ok": not blockers,
         "dry_run": True,
@@ -41988,13 +42140,19 @@ def promote_zettel(
     relative_path: str | None = None,
     reviewed_by: str,
     allow_warnings: bool = False,
+    progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
 ) -> dict[str, Any]:
     reviewer = reviewed_by.strip()
     if not reviewer:
         raise ArchiveServiceError("Real promotion requires --reviewed-by.")
 
     root = require_existing_archive_root(archive_root)
-    dry_run = promote_zettel_dry_run(root, zettel_id=zettel_id, relative_path=relative_path)
+    dry_run = promote_zettel_dry_run(
+        root,
+        zettel_id=zettel_id,
+        relative_path=relative_path,
+        progress_callback=progress_callback,
+    )
     if dry_run["blockers"]:
         raise ArchiveServiceError("Promotion blocked by dry-run: " + "; ".join(dry_run["blockers"]))
     if dry_run["warnings"] and not allow_warnings:
@@ -42047,6 +42205,7 @@ def promote_zettel(
     canonical_frontmatter["updated_at"] = now
     canonical_frontmatter["promotion"] = promotion
     canonical_text = "---\n" + dump_yaml(canonical_frontmatter) + "---\n\n" + body.rstrip() + "\n"
+    expected_canonical_sha256 = hashlib.sha256(canonical_text.encode("utf-8")).hexdigest()
     abstract_review_basis = build_abstract_review_basis(
         source_frontmatter,
         body,
@@ -42083,24 +42242,98 @@ def promote_zettel(
             "created_paths": created_paths,
         },
     }
+    receipt_text = json.dumps(
+        json_safe(receipt),
+        indent=2,
+        ensure_ascii=False,
+        default=str,
+    ) + "\n"
+    expected_receipt_sha256 = hashlib.sha256(receipt_text.encode("utf-8")).hexdigest()
 
     canonical_path.parent.mkdir(parents=True, exist_ok=True)
     receipt_path.parent.mkdir(parents=True, exist_ok=True)
+    duplicate_evidence = dry_run.get("duplicate_check", {}).get("index_evidence", {})
+    expected_index_generation = str(duplicate_evidence.get("generation") or "")
+    begin_archive_index_mutation(
+        root,
+        expected_generation=expected_index_generation,
+        progress_callback=progress_callback,
+    )
     created_canonical = False
     created_receipt = False
     try:
-        with canonical_path.open("x", encoding="utf-8") as handle:
+        with canonical_path.open("x", encoding="utf-8", newline="\n") as handle:
             created_canonical = True
             handle.write(canonical_text)
-        with receipt_path.open("x", encoding="utf-8") as handle:
+        with receipt_path.open("x", encoding="utf-8", newline="\n") as handle:
             created_receipt = True
-            handle.write(json.dumps(json_safe(receipt), indent=2, ensure_ascii=False, default=str) + "\n")
+            handle.write(receipt_text)
     except OSError:
-        if created_canonical and canonical_path.exists():
-            canonical_path.unlink()
-        if created_receipt and receipt_path.exists():
-            receipt_path.unlink()
+        cleanup_ok = True
+        if created_canonical:
+            cleanup_ok = (
+                created_file_cleanup_if_exact(
+                    canonical_path,
+                    expected_canonical_sha256,
+                )
+                and cleanup_ok
+            )
+        if created_receipt:
+            cleanup_ok = (
+                created_file_cleanup_if_exact(
+                    receipt_path,
+                    expected_receipt_sha256,
+                )
+                and cleanup_ok
+            )
+        if cleanup_ok:
+            reseal_archive_index_mutation_without_delta(
+                root,
+                expected_generation=expected_index_generation,
+            )
         raise
+
+    generated_index_updated = False
+    index_marked_dirty = False
+    try:
+        generated_index_updated = upsert_zettel_index_entry(
+            root,
+            canonical_path,
+            canonical_frontmatter,
+            body,
+            expected_generation=expected_index_generation,
+            expected_file_sha256=expected_canonical_sha256,
+        )
+        if not generated_index_updated:
+            raise sqlite3.IntegrityError(INDEX_REBUILD_REQUIRED)
+    except (OSError, sqlite3.Error, ArchiveServiceError):
+        index_marked_dirty = mark_archive_index_dirty(root)
+        return {
+            "ok": False,
+            "state": "canonical_written_index_update_failed",
+            "dry_run": False,
+            "draft_path": dry_run["draft_path"],
+            "zettel_id": zettel_id_value,
+            "title": title,
+            "canonical_path": canonical_relative,
+            "receipt_path": receipt_relative,
+            "reviewed_by": reviewer,
+            "source_sha256": current_source_sha256,
+            "warnings": dry_run["warnings"],
+            "near_duplicates": dry_run["near_duplicates"],
+            "first_read_check": current_first_read_check,
+            "abstract_review_basis": abstract_review_basis,
+            "checklist": dry_run["checklist"],
+            "created_paths": created_paths,
+            "receipt": json_safe(receipt),
+            "generated_index_updated": False,
+            "index_marked_dirty": index_marked_dirty,
+            "partial_result": {
+                "canonical_and_receipt_written": True,
+                "index_current": False,
+            },
+            "blockers": [INDEX_REBUILD_REQUIRED],
+        }
 
     return {
         "ok": True,
@@ -42119,6 +42352,10 @@ def promote_zettel(
         "checklist": dry_run["checklist"],
         "created_paths": created_paths,
         "receipt": json_safe(receipt),
+        "generated_index_updated": generated_index_updated,
+        "index_marked_dirty": False,
+        "index_generation": expected_index_generation,
+        "blockers": [],
     }
 
 
@@ -42128,10 +42365,15 @@ def mint_zettel_dry_run(
     zettel_id: str | None = None,
     relative_path: str | None = None,
     affirmations: dict[str, str] | None = None,
+    progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
 ) -> dict[str, Any]:
     root = require_existing_archive_root(archive_root)
     promotion_dry_run = promote_zettel_dry_run(
-        root, zettel_id=zettel_id, relative_path=relative_path, affirmations=affirmations
+        root,
+        zettel_id=zettel_id,
+        relative_path=relative_path,
+        affirmations=affirmations,
+        progress_callback=progress_callback,
     )
     source_path = resolve_zettel_path(root, zettel_id=zettel_id, relative_path=relative_path)
     source_frontmatter, body = require_readable_zettel_content(source_path)
@@ -42160,16 +42402,19 @@ def mint_zettel_dry_run(
     if snapshot_path.exists():
         blockers.append(f"Draft snapshot path already exists: {snapshot_relative}.")
 
+    _emit_mint_progress(progress_callback, "quality", "start", 0, 1)
     quality_check = zettel_quality_assessment(root, source_path, source_frontmatter, body)
     for issue in quality_check.get("issues", []):
         if isinstance(issue, dict) and issue.get("severity") == "blocker":
             blockers.append(f"Zet quality check blocked: {issue.get('code')}.")
+    _emit_mint_progress(progress_callback, "quality", "done", 1, 1)
 
     if zettel_body_has_tool_execution_trace(body):
         warnings.append("tool_execution_trace_review_required")
     if zettel_body_has_status_contradiction(body):
         warnings.append("internal_status_consistency_review_required")
 
+    _emit_mint_progress(progress_callback, "receipt_plan", "start", 0, 1)
     receipt_preview = build_mint_receipt_preview(
         archive_root=root,
         source_path=source_path,
@@ -42187,7 +42432,10 @@ def mint_zettel_dry_run(
         blockers=blockers,
         warnings=warnings,
     )
+    _emit_mint_progress(progress_callback, "receipt_plan", "done", 1, 1)
+    _emit_mint_progress(progress_callback, "self_contained", "start", 0, 1)
     self_contained_check = zettel_self_contained_assessment(source_frontmatter, body)
+    _emit_mint_progress(progress_callback, "self_contained", "done", 1, 1)
     scratch_cleanup = build_ai_scratch_gc_plan(root, source_path, source_frontmatter, body)
     scratch_would_change = [] if scratch_cleanup.get("blockers") else scratch_cleanup.get("would_change", [])
     return {
@@ -42234,6 +42482,7 @@ def mint_zettel(
     reviewed_by: str,
     allow_warnings: bool = False,
     affirmations: dict[str, str] | None = None,
+    progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
 ) -> dict[str, Any]:
     reviewer = reviewed_by.strip()
     if not reviewer:
@@ -42257,7 +42506,11 @@ def mint_zettel(
 
     root = require_existing_archive_root(archive_root)
     dry_run = mint_zettel_dry_run(
-        root, zettel_id=zettel_id, relative_path=relative_path, affirmations=applied_affirmations
+        root,
+        zettel_id=zettel_id,
+        relative_path=relative_path,
+        affirmations=applied_affirmations,
+        progress_callback=progress_callback,
     )
     if dry_run["blockers"]:
         raise ArchiveServiceError("Minting blocked by dry-run: " + "; ".join(dry_run["blockers"]))
@@ -42331,6 +42584,7 @@ def mint_zettel(
         else:
             canonical_frontmatter.pop("source_refs", None)
     canonical_text = "---\n" + dump_yaml(canonical_frontmatter) + "---\n\n" + body.rstrip() + "\n"
+    expected_canonical_sha256 = hashlib.sha256(canonical_text.encode("utf-8")).hexdigest()
     abstract_review_basis = build_abstract_review_basis(
         source_frontmatter,
         body,
@@ -42345,7 +42599,19 @@ def mint_zettel(
     canonical_path.parent.mkdir(parents=True, exist_ok=True)
     receipt_path.parent.mkdir(parents=True, exist_ok=True)
     snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+    duplicate_check = dry_run.get("duplicate_check") if isinstance(dry_run.get("duplicate_check"), dict) else {}
+    duplicate_evidence = duplicate_check.get("index_evidence") if isinstance(duplicate_check.get("index_evidence"), dict) else {}
+    expected_index_generation = str(duplicate_evidence.get("generation") or "")
+    begin_archive_index_mutation(
+        root,
+        expected_generation=expected_index_generation,
+        progress_callback=progress_callback,
+    )
     created_files: list[Path] = []
+    cleanup_expected_sha256: dict[Path, str] = {
+        canonical_path: expected_canonical_sha256,
+        snapshot_path: current_source_sha256,
+    }
     try:
         with canonical_path.open("x", encoding="utf-8", newline="\n") as handle:
             created_files.append(canonical_path)
@@ -42357,6 +42623,8 @@ def mint_zettel(
         source_sha = current_source_sha256
         canonical_sha = sha256_path(canonical_path)
         snapshot_sha = sha256_path(snapshot_path)
+        if canonical_sha != expected_canonical_sha256:
+            raise OSError("Mint canonical hash does not match the approved bytes.")
         if snapshot_sha != source_sha:
             raise OSError("Mint draft snapshot hash does not match the approved source bytes.")
         receipt = {
@@ -42405,23 +42673,82 @@ def mint_zettel(
                 "created_paths": created_paths,
             },
         }
-        with receipt_path.open("x", encoding="utf-8") as handle:
+        receipt_text = json.dumps(
+            json_safe(receipt),
+            indent=2,
+            ensure_ascii=False,
+            default=str,
+        ) + "\n"
+        cleanup_expected_sha256[receipt_path] = hashlib.sha256(
+            receipt_text.encode("utf-8")
+        ).hexdigest()
+        with receipt_path.open("x", encoding="utf-8", newline="\n") as handle:
             created_files.append(receipt_path)
-            handle.write(json.dumps(json_safe(receipt), indent=2, ensure_ascii=False, default=str) + "\n")
+            handle.write(receipt_text)
     except OSError:
+        cleanup_ok = True
         for created_path in reversed(created_files):
-            if created_path.exists():
-                created_path.unlink()
+            expected_sha256 = cleanup_expected_sha256.get(created_path)
+            cleanup_ok = (
+                isinstance(expected_sha256, str)
+                and created_file_cleanup_if_exact(created_path, expected_sha256)
+                and cleanup_ok
+            )
+        if cleanup_ok:
+            reseal_archive_index_mutation_without_delta(
+                root,
+                expected_generation=expected_index_generation,
+            )
         raise
 
     generated_index_updated = False
-    duplicate_check = dry_run.get("duplicate_check") if isinstance(dry_run.get("duplicate_check"), dict) else {}
-    if duplicate_check.get("used_generated_index"):
-        try:
-            generated_index_updated = upsert_zettel_index_entry(root, canonical_path, canonical_frontmatter, body)
-        except (OSError, sqlite3.Error):
-            generated_index_updated = False
-            dry_run["warnings"].append("Generated index update failed after mint; run archive index before the next large mint batch.")
+    try:
+        if not duplicate_check.get("used_generated_index"):
+            raise sqlite3.IntegrityError(INDEX_REBUILD_REQUIRED)
+        generated_index_updated = upsert_zettel_index_entry(
+            root,
+            canonical_path,
+            canonical_frontmatter,
+            body,
+            expected_generation=expected_index_generation,
+            expected_file_sha256=expected_canonical_sha256,
+        )
+        if not generated_index_updated:
+            raise sqlite3.IntegrityError(INDEX_REBUILD_REQUIRED)
+    except (OSError, sqlite3.Error, ArchiveServiceError):
+        index_marked_dirty = mark_archive_index_dirty(root)
+        return {
+            "ok": False,
+            "state": "canonical_written_index_update_failed",
+            "dry_run": False,
+            "draft_path": dry_run["draft_path"],
+            "zettel_id": zettel_id_value,
+            "title": title,
+            "authority_mode": MINT_AUTHORITY_MODE,
+            "canonical_path": canonical_relative,
+            "mint_receipt_path": receipt_relative,
+            "draft_snapshot_path": snapshot_relative,
+            "reviewed_by": reviewer,
+            "warnings": dry_run["warnings"],
+            "duplicate_check": duplicate_check,
+            "generated_index_updated": False,
+            "index_marked_dirty": index_marked_dirty,
+            "near_duplicates": dry_run["near_duplicates"],
+            "self_contained_check": dry_run.get("self_contained_check", {}),
+            "first_read_check": current_first_read_check,
+            "abstract_review_basis": abstract_review_basis,
+            "quality_check": dry_run.get("quality_check", {}),
+            "scratch_cleanup": {"ok": False, "state": "not_attempted_after_index_failure"},
+            "checklist": dry_run["checklist"],
+            "created_paths": created_paths,
+            "receipt": json_safe(receipt),
+            "partial_result": {
+                "canonical_receipt_and_snapshot_written": True,
+                "index_current": False,
+                "scratch_cleanup_attempted": False,
+            },
+            "blockers": [INDEX_REBUILD_REQUIRED],
+        }
 
     try:
         scratch_cleanup_result = ai_scratch_gc_for_zettel(
@@ -42455,6 +42782,8 @@ def mint_zettel(
         "warnings": dry_run["warnings"],
         "duplicate_check": duplicate_check,
         "generated_index_updated": generated_index_updated,
+        "index_marked_dirty": False,
+        "index_generation": expected_index_generation,
         "near_duplicates": dry_run["near_duplicates"],
         "self_contained_check": dry_run.get("self_contained_check", {}),
         "first_read_check": current_first_read_check,
@@ -42467,6 +42796,7 @@ def mint_zettel(
             f"Verify the mint receipt, then close the consumed inbox draft with 'archive retire-draft --zettel-id {zettel_id_value} --dry-run' before approving retirement.",
         ],
         "receipt": json_safe(receipt),
+        "blockers": [],
     }
 
 
@@ -43095,7 +43425,18 @@ def retire_minted_draft(
     if not approve:
         return plan
 
-    return write_retired_draft_from_plan(root, plan, reviewed_by=reviewer, zettel_id=zettel_id, relative_path=relative_path)
+    index_evidence = require_current_zettel_index(root)
+    if not index_evidence["ok"]:
+        raise ArchiveServiceError(INDEX_REBUILD_REQUIRED)
+
+    return write_retired_draft_from_plan(
+        root,
+        plan,
+        reviewed_by=reviewer,
+        zettel_id=zettel_id,
+        relative_path=relative_path,
+        expected_index_generation=str(index_evidence.get("generation") or ""),
+    )
 
 
 def verify_retired_draft_plan_still_current(root: Path, plan: dict[str, Any]) -> None:
@@ -43124,6 +43465,7 @@ def write_retired_draft_from_plan(
     reviewed_by: str,
     zettel_id: str | None = None,
     relative_path: str | None = None,
+    expected_index_generation: str | None = None,
 ) -> dict[str, Any]:
     root = require_existing_archive_root(archive_root)
     if plan.get("blockers"):
@@ -43146,16 +43488,66 @@ def write_retired_draft_from_plan(
 
     retire_receipt_path = resolve_archive_relative_path(root, plan["retire_receipt_path"])
     retire_receipt_path.parent.mkdir(parents=True, exist_ok=True)
+    if expected_index_generation is None:
+        index_evidence = require_current_zettel_index(root)
+        if not index_evidence.get("ok"):
+            raise ArchiveServiceError(INDEX_REBUILD_REQUIRED)
+        expected_index_generation = str(index_evidence.get("generation") or "")
+    begin_archive_index_mutation(
+        root,
+        expected_generation=expected_index_generation,
+    )
     try:
         draft_path.unlink()
         try:
             with retire_receipt_path.open("x", encoding="utf-8") as handle:
                 handle.write(json.dumps(json_safe(receipt), indent=2, ensure_ascii=False, default=str) + "\n")
-        except OSError:
-            draft_path.write_bytes(source_bytes)
+        except OSError as receipt_error:
+            if not restore_file_create_only_with_exact_bytes(draft_path, source_bytes):
+                # Never overwrite or remove a draft that appeared after unlink.
+                # The committed dirty intent is the recovery authority.
+                raise ArchiveServiceError(
+                    "retired_draft_restore_conflict"
+                ) from receipt_error
             raise
     except OSError:
+        if draft_path.is_file():
+            reseal_archive_index_mutation_without_delta(
+                root,
+                expected_generation=expected_index_generation,
+            )
         raise
+
+    try:
+        index_row_removed = delete_zettel_index_entry(
+            root,
+            plan["draft_path"],
+            expected_generation=expected_index_generation,
+        )
+        if not index_row_removed:
+            raise sqlite3.IntegrityError(INDEX_REBUILD_REQUIRED)
+    except (OSError, sqlite3.Error, ArchiveServiceError):
+        index_marked_dirty = mark_archive_index_dirty(root)
+        result = dict(plan)
+        result.update(
+            {
+                "ok": False,
+                "state": "draft_retired_index_update_failed",
+                "dry_run": False,
+                "reviewed_by": reviewed_by,
+                "removed_paths": [plan["draft_path"]],
+                "created_paths": [plan["retire_receipt_path"]],
+                "receipt": json_safe(receipt),
+                "index_row_removed": False,
+                "index_marked_dirty": index_marked_dirty,
+                "partial_result": {
+                    "draft_removed_and_receipt_written": True,
+                    "index_current": False,
+                },
+                "blockers": [INDEX_REBUILD_REQUIRED],
+            }
+        )
+        return result
 
     result = dict(plan)
     result.update(
@@ -43166,6 +43558,9 @@ def write_retired_draft_from_plan(
             "removed_paths": [plan["draft_path"]],
             "created_paths": [plan["retire_receipt_path"]],
             "receipt": json_safe(receipt),
+            "index_row_removed": True,
+            "index_marked_dirty": False,
+            "index_generation": expected_index_generation,
         }
     )
     return result
@@ -46121,130 +46516,115 @@ def find_promotion_duplicates(
     body: str,
     proposed_path: str,
     duplicate_check: dict[str, Any] | None = None,
+    progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
 ) -> list[dict[str, Any]]:
-    canonical_root = archive_root / "zettels"
-    zettel_id = str(frontmatter.get("id") or "")
-    title_key = normalize_compare_text(str(frontmatter.get("title") or ""))
-    body_key = normalize_compare_text(body)[:500]
-    duplicates: list[dict[str, Any]] = []
-    indexed_rows, index_state = promotion_duplicate_index_rows(archive_root)
-    if duplicate_check is not None:
-        duplicate_check.update(index_state)
-    stale_reason_set = set(index_state.get("stale_reasons") or [])
-    for blocking_reason in (
-        "archive_index_incomplete",
-        "live_zettel_stat_unavailable",
-    ):
-        if blocking_reason in stale_reason_set:
-            # Neither a completed-with-quarantine rebuild nor an unenumerable
-            # live tree is a usable approval oracle.  The latter cannot safely
-            # fall back to another filesystem scan because that scan may omit
-            # the same inaccessible or unsafe entry.
-            return [
-                {
-                    "path": INDEX_RELATIVE_PATH,
-                    "reason": blocking_reason,
-                    "severity": "blocker",
-                }
-            ]
-    if not index_state.get("used_generated_index"):
-        # A missing, unreadable, legacy, or stale DB routes to the live body
-        # scan.  Preflight that scan with the strict enumerator too; otherwise
-        # its compatibility glob could silently omit the very path whose
-        # permission/reparse state made enumeration uncertain.
-        preflight_reasons, _preflight_paths_checked = (
-            archive_index_live_zettel_stat_stale_reasons(archive_root, [])
-        )
-        if "live_zettel_stat_unavailable" in preflight_reasons:
-            index_state["stale_reasons"] = unique_preserve_order(
-                [*(index_state.get("stale_reasons") or []), "live_zettel_stat_unavailable"]
-            )
-            if duplicate_check is not None:
-                duplicate_check.update(index_state)
-            return [
-                {
-                    "path": INDEX_RELATIVE_PATH,
-                    "reason": "live_zettel_stat_unavailable",
-                    "severity": "blocker",
-                }
-            ]
-    if not canonical_root.is_dir():
-        if duplicate_check is not None:
-            duplicate_check.update(
-                {
-                    "source": "none",
-                    "used_generated_index": False,
-                    "fallback_reason": "canonical_root_missing",
-                    "canonical_candidates_checked": 0,
-                }
-            )
-        return []
-    if indexed_rows:
-        return find_promotion_duplicates_from_rows(
-            indexed_rows,
-            draft_path=draft_path,
-            archive_root=archive_root,
-            zettel_id=zettel_id,
-            title_key=title_key,
-            body_key=body_key,
-            proposed_path=proposed_path,
-        )
+    """Query only digest/id/path candidates from one proven-current index."""
 
-    checked = 0
-    for candidate in safe_archive_glob(canonical_root, "*.md", archive_root, recursive=True):
-        if candidate.resolve() == draft_path.resolve():
-            continue
-        checked += 1
-        candidate_relative = archive_relative_path(candidate, archive_root)
+    del draft_path  # The current index contains canonical rows only.
+    zettel_id = str(frontmatter.get("id") or "")
+    title_key = zettel_index_normalized_title(frontmatter)
+    body_prefix_sha256 = zettel_index_body_prefix_sha256(body)
+    _emit_mint_progress(progress_callback, "canonical_conflict", "start", 0, None)
+
+    db_path = archive_root / INDEX_RELATIVE_PATH
+    conn: sqlite3.Connection | None = None
+    try:
+        if not db_path.is_file():
+            evidence = require_current_zettel_index(
+                archive_root,
+                progress_callback=progress_callback,
+            )
+            rows: list[sqlite3.Row] = []
+            indexed_canonical_count = 0
+        else:
+            conn = connect_archive_index(db_path, row_factory=True)
+            conn.execute("BEGIN")
+            evidence = require_current_zettel_index(
+                archive_root,
+                connection=conn,
+                progress_callback=progress_callback,
+            )
+            if evidence["ok"]:
+                indexed_canonical_count = int(
+                    conn.execute(
+                        "SELECT COUNT(*) FROM zettels "
+                        "WHERE status = 'canonical' AND path LIKE 'zettels/%'"
+                    ).fetchone()[0]
+                )
+                rows = conn.execute(
+                    """
+                    SELECT path, zettel_id, normalized_title, body_prefix_sha256
+                    FROM zettels
+                    WHERE status = 'canonical'
+                      AND path LIKE 'zettels/%'
+                      AND (
+                        path = ?
+                        OR (? <> '' AND zettel_id = ?)
+                        OR (? <> '' AND body_prefix_sha256 = ?)
+                      )
+                    ORDER BY path
+                    """,
+                    (
+                        proposed_path,
+                        zettel_id,
+                        zettel_id,
+                        body_prefix_sha256,
+                        body_prefix_sha256,
+                    ),
+                ).fetchall()
+            else:
+                indexed_canonical_count = 0
+                rows = []
+    except sqlite3.Error:
+        evidence = archive_index_rebuild_evidence("archive_index_unreadable")
+        indexed_canonical_count = 0
+        rows = []
+    finally:
+        if conn is not None:
+            if conn.in_transaction:
+                conn.rollback()
+            conn.close()
+
+    state = promotion_duplicate_state(
+        evidence,
+        candidate_count=len(rows),
+        indexed_canonical_count=indexed_canonical_count,
+    )
+    if duplicate_check is not None:
+        duplicate_check.update(state)
+    if not evidence["ok"]:
+        _emit_mint_progress(progress_callback, "canonical_conflict", "done", 0, 0)
+        _emit_mint_progress(progress_callback, "duplicate_title", "start", 0, 0)
+        _emit_mint_progress(progress_callback, "duplicate_title", "done", 0, 0)
+        return [
+            {
+                "path": INDEX_RELATIVE_PATH,
+                "reason": INDEX_REBUILD_REQUIRED,
+                "severity": "blocker",
+            }
+        ]
+
+    _emit_mint_progress(progress_callback, "canonical_conflict", "done", len(rows), len(rows))
+    _emit_mint_progress(progress_callback, "duplicate_title", "start", 0, len(rows))
+    duplicates: list[dict[str, Any]] = []
+    for row in rows:
+        candidate_relative = str(row["path"] or "")
         if candidate_relative == proposed_path:
             duplicates.append(
-                {
-                    "path": candidate_relative,
-                    "reason": "target_path_exists",
-                    "severity": "blocker",
-                }
+                {"path": candidate_relative, "reason": "target_path_exists", "severity": "blocker"}
             )
             continue
-        boundary = read_zettel_content_boundary(candidate)
-        if boundary["state"] == "blocked":
+        if zettel_id and str(row["zettel_id"] or "") == zettel_id:
             duplicates.append(
-                {
-                    "path": candidate_relative,
-                    "reason": "canonical_candidate_unreadable",
-                    "severity": "blocker",
-                }
+                {"path": candidate_relative, "reason": "same_zettel_id", "severity": "blocker"}
             )
             continue
-        if boundary["state"] != "readable":
-            continue
-        candidate_frontmatter = boundary["frontmatter"]
-        candidate_body = boundary["body"]
-        if candidate_frontmatter.get("status") != "canonical":
-            continue
-
-        if zettel_id and candidate_frontmatter.get("id") == zettel_id:
+        same_prefix = bool(body_prefix_sha256) and str(row["body_prefix_sha256"] or "") == body_prefix_sha256
+        if title_key and str(row["normalized_title"] or "") == title_key and same_prefix:
             duplicates.append(
-                {
-                    "path": candidate_relative,
-                    "reason": "same_zettel_id",
-                    "severity": "blocker",
-                }
+                {"path": candidate_relative, "reason": "same_title", "severity": "warning"}
             )
-            continue
-        candidate_body_key = normalize_compare_text(candidate_body)[:500]
-        body_is_similar = len(body_key) >= 120 and candidate_body_key == body_key
-        if title_key and normalize_compare_text(str(candidate_frontmatter.get("title") or "")) == title_key:
-            if not body_is_similar:
-                continue
-            duplicates.append(
-                {
-                    "path": candidate_relative,
-                    "reason": "same_title",
-                    "severity": "warning",
-                }
-            )
-            continue
-        if body_is_similar:
+        elif same_prefix:
             duplicates.append(
                 {
                     "path": candidate_relative,
@@ -46252,81 +46632,73 @@ def find_promotion_duplicates(
                     "severity": "warning",
                 }
             )
-    if duplicate_check is not None:
-        duplicate_check["canonical_candidates_checked"] = checked
+    _emit_mint_progress(progress_callback, "duplicate_title", "done", len(rows), len(rows))
     return duplicates
 
 
-def promotion_duplicate_index_rows(archive_root: Path) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    db_path = archive_root / INDEX_RELATIVE_PATH
-    state: dict[str, Any] = {
-        "source": "live_scan",
-        "used_generated_index": False,
+def promotion_duplicate_state(
+    evidence: dict[str, Any],
+    *,
+    candidate_count: int,
+    indexed_canonical_count: int,
+) -> dict[str, Any]:
+    return {
+        "source": "generated_index" if evidence.get("ok") else "none",
+        "used_generated_index": evidence.get("ok") is True,
         "index_path": INDEX_RELATIVE_PATH,
-        "fallback_reason": None,
-        "stale_reasons": [],
-        "canonical_candidates_checked": 0,
-        "indexed_canonical_count": 0,
-        "staleness_check": "not_checked",
-        "live_staleness_paths_checked": 0,
+        "fallback_reason": None if evidence.get("ok") else INDEX_REBUILD_REQUIRED,
+        "stale_reasons": list(evidence.get("reason_codes") or []),
+        "canonical_candidates_checked": candidate_count,
+        "indexed_canonical_count": indexed_canonical_count,
+        "staleness_check": evidence.get("staleness_check"),
+        "live_staleness_paths_checked": int(evidence.get("live_zettel_count") or 0),
+        "index_evidence": evidence,
     }
-    if not db_path.is_file():
-        state["fallback_reason"] = "archive_index_missing"
-        return [], state
 
-    try:
-        conn = connect_archive_index(db_path, row_factory=True)
+
+def promotion_duplicate_index_rows(
+    archive_root: Path,
+    *,
+    connection: sqlite3.Connection | None = None,
+    progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    root = require_existing_archive_root(archive_root)
+    db_path = root / INDEX_RELATIVE_PATH
+    owns_connection = connection is None
+    conn = connection
+    if conn is None and db_path.is_file():
         try:
-            rows = promotion_duplicate_index_canonical_rows(conn)
-            stat_rows = archive_index_zettel_stat_rows(conn)
-            metadata = read_archive_index_metadata(conn)
-        finally:
-            conn.close()
-    except sqlite3.Error:
-        state["fallback_reason"] = "archive_index_unreadable"
-        return [], state
+            conn = connect_archive_index(db_path, row_factory=True)
+            conn.execute("BEGIN")
+        except sqlite3.Error:
+            conn = None
 
-    metadata_reasons = archive_index_metadata_stale_reasons(metadata, indexed_canonical_count=len(rows))
-    if not metadata_reasons:
-        live_stat_reasons, live_stat_paths_checked = archive_index_live_zettel_stat_stale_reasons(
-            archive_root,
-            stat_rows,
+    if conn is None:
+        evidence = (
+            require_current_zettel_index(root, progress_callback=progress_callback)
+            if not db_path.is_file()
+            else archive_index_rebuild_evidence("archive_index_unreadable")
         )
-        if live_stat_reasons:
-            state.update(
-                {
-                    "fallback_reason": "archive_index_stale",
-                    "staleness_check": "index_metadata_plus_live_stats",
-                    "live_staleness_paths_checked": live_stat_paths_checked,
-                    "stale_reasons": live_stat_reasons,
-                }
-            )
-            return [], state
-        state.update(
-            {
-                "source": "generated_index",
-                "used_generated_index": True,
-                "fallback_reason": None,
-                "indexed_canonical_count": len(rows),
-                "canonical_candidates_checked": len(rows),
-                "staleness_check": "index_metadata_plus_live_stats",
-                "live_staleness_paths_checked": live_stat_paths_checked,
-                "stale_reasons": [],
-                "index_metadata": {
-                    "schema": metadata.get("schema"),
-                    "canonical_zettel_count": metadata.get("canonical_zettel_count"),
-                    "canonical_max_mtime_ns": metadata.get("canonical_max_mtime_ns"),
-                    "index_complete": metadata.get("index_complete"),
-                    "quarantined_zettel_count": metadata.get("quarantined_zettel_count"),
-                    "updated_by": metadata.get("updated_by"),
-                },
-            }
+    else:
+        evidence = require_current_zettel_index(
+            root,
+            connection=conn,
+            progress_callback=progress_callback,
         )
-        return rows, state
 
-    state["staleness_check"] = "legacy_live_scan"
-    state["stale_reasons"] = metadata_reasons
-    return promotion_duplicate_index_rows_legacy_live_check(archive_root, rows, state)
+    rows: list[dict[str, Any]] = []
+    if evidence["ok"] and conn is not None:
+        rows = promotion_duplicate_index_canonical_rows(conn)
+    state = promotion_duplicate_state(
+        evidence,
+        candidate_count=len(rows),
+        indexed_canonical_count=len(rows),
+    )
+    if owns_connection and conn is not None:
+        if conn.in_transaction:
+            conn.rollback()
+        conn.close()
+    return rows, state
 
 
 def promotion_duplicate_index_canonical_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
@@ -46334,12 +46706,12 @@ def promotion_duplicate_index_canonical_rows(conn: sqlite3.Connection) -> list[d
         {
             "path": str(row["path"] or ""),
             "zettel_id": str(row["zettel_id"] or ""),
-            "title": str(row["title"] or ""),
-            "body": str(row["body"] or ""),
+            "normalized_title": str(row["normalized_title"] or ""),
+            "body_prefix_sha256": str(row["body_prefix_sha256"] or ""),
         }
         for row in conn.execute(
             """
-            SELECT path, zettel_id, title, body
+            SELECT path, zettel_id, normalized_title, body_prefix_sha256
             FROM zettels
             WHERE coalesce(status, '') = 'canonical'
               AND path LIKE 'zettels/%'
@@ -46362,13 +46734,18 @@ def archive_index_zettel_stat_rows(conn: sqlite3.Connection) -> list[dict[str, A
     ]
 
 
-def archive_index_live_zettel_stat_stale_reasons(
+def strict_live_zettel_stat_snapshot(
     archive_root: Path,
     indexed_rows: list[dict[str, Any]],
-) -> tuple[list[str], int]:
-    """Compare every physical zettel path/stat tuple with its generated row."""
+    *,
+    progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
+) -> dict[str, Any]:
+    """Take exactly one strict, content-free live stat snapshot and compare it."""
+
+    _emit_mint_progress(progress_callback, "index_snapshot", "start", 0, None)
     live_by_path: dict[str, tuple[int, int]] = {}
     stat_failed = False
+    inspected = 0
     reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
     for folder in ("zettels", "inbox"):
         folder_root = archive_root / folder
@@ -46425,6 +46802,15 @@ def archive_index_live_zettel_stat_stale_reasons(
                     continue
                 relative = PurePosixPath(*path.relative_to(archive_root).parts).as_posix()
                 live_by_path[relative] = (entry_stat.st_size, entry_stat.st_mtime_ns)
+                inspected += 1
+                if inspected == 1 or inspected % 250 == 0:
+                    _emit_mint_progress(
+                        progress_callback,
+                        "index_snapshot",
+                        "scanned",
+                        inspected,
+                        None,
+                    )
 
     indexed_by_path = {str(row.get("path") or ""): row for row in indexed_rows}
     live_paths = set(live_by_path)
@@ -46452,7 +46838,41 @@ def archive_index_live_zettel_stat_stale_reasons(
         reasons.append("archive_index_zettel_stat_invalid")
     if stat_mismatch:
         reasons.append("live_zettel_stat_differs_from_index")
-    return unique_preserve_order(reasons), len(live_by_path)
+    snapshot_rows = [
+        {
+            "path": relative,
+            "file_size": values[0],
+            "file_mtime_ns": values[1],
+        }
+        for relative, values in live_by_path.items()
+    ]
+    snapshot_sha256 = archive_index_snapshot_sha256(snapshot_rows)
+    _emit_mint_progress(
+        progress_callback,
+        "index_snapshot",
+        "done",
+        len(live_by_path),
+        len(live_by_path),
+    )
+    return {
+        "reason_codes": unique_preserve_order(reasons),
+        "live_zettel_count": len(live_by_path),
+        "live_snapshot_sha256": snapshot_sha256,
+    }
+
+
+def archive_index_live_zettel_stat_stale_reasons(
+    archive_root: Path,
+    indexed_rows: list[dict[str, Any]],
+    *,
+    progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
+) -> tuple[list[str], int]:
+    snapshot = strict_live_zettel_stat_snapshot(
+        archive_root,
+        indexed_rows,
+        progress_callback=progress_callback,
+    )
+    return list(snapshot["reason_codes"]), int(snapshot["live_zettel_count"])
 
 
 def read_archive_index_metadata(conn: sqlite3.Connection) -> dict[str, str]:
@@ -46468,12 +46888,25 @@ def read_archive_index_metadata(conn: sqlite3.Connection) -> dict[str, str]:
     return metadata
 
 
-def archive_index_metadata_stale_reasons(metadata: dict[str, str], *, indexed_canonical_count: int) -> list[str]:
+def archive_index_metadata_stale_reasons(
+    metadata: dict[str, str],
+    *,
+    indexed_canonical_count: int,
+    indexed_zettel_count: int | None = None,
+    live_snapshot_sha256: str | None = None,
+) -> list[str]:
     reasons: list[str] = []
     if not metadata:
         return ["archive_index_metadata_missing"]
     if metadata.get("schema") != INDEX_METADATA_SCHEMA:
         reasons.append("archive_index_metadata_schema_mismatch")
+    state = metadata.get("state")
+    if state not in {INDEX_STATE_CURRENT, INDEX_STATE_DIRTY}:
+        reasons.append("archive_index_metadata_state_invalid")
+    elif state == INDEX_STATE_DIRTY:
+        reasons.append("archive_index_dirty")
+    if not INDEX_GENERATION_RE.fullmatch(str(metadata.get("generation") or "")):
+        reasons.append("archive_index_generation_invalid")
     try:
         recorded_count = int(metadata.get("canonical_zettel_count", ""))
     except ValueError:
@@ -46481,6 +46914,15 @@ def archive_index_metadata_stale_reasons(metadata: dict[str, str], *, indexed_ca
     else:
         if recorded_count != indexed_canonical_count:
             reasons.append("archive_index_metadata_canonical_count_mismatch")
+    try:
+        recorded_zettel_count = int(metadata.get("zettel_row_count", ""))
+        if recorded_zettel_count < 0:
+            raise ValueError
+    except ValueError:
+        reasons.append("archive_index_metadata_zettel_count_invalid")
+    else:
+        if indexed_zettel_count is not None and recorded_zettel_count != indexed_zettel_count:
+            reasons.append("archive_index_metadata_zettel_count_mismatch")
     try:
         int(metadata.get("canonical_max_mtime_ns", ""))
     except ValueError:
@@ -46503,112 +46945,296 @@ def archive_index_metadata_stale_reasons(metadata: dict[str, str], *, indexed_ca
             reasons.append("archive_index_metadata_completeness_mismatch")
         elif index_complete == "false" and quarantined_zettel_count == 0:
             reasons.append("archive_index_metadata_completeness_mismatch")
+    recorded_snapshot = metadata.get("live_snapshot_sha256")
+    if not isinstance(recorded_snapshot, str) or not INDEX_SNAPSHOT_SHA256_RE.fullmatch(recorded_snapshot):
+        reasons.append("archive_index_metadata_snapshot_invalid")
+    elif live_snapshot_sha256 is not None and recorded_snapshot != live_snapshot_sha256:
+        reasons.append("archive_index_metadata_snapshot_mismatch")
     return reasons
 
 
-def promotion_duplicate_index_rows_legacy_live_check(
-    archive_root: Path,
-    rows: list[dict[str, Any]],
-    state: dict[str, Any],
-) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    canonical_root = archive_root / "zettels"
-    live_paths = [
-        archive_relative_path(path, archive_root)
-        for path in safe_archive_glob(canonical_root, "*.md", archive_root, recursive=True)
-    ]
-    state["canonical_candidates_checked"] = len(live_paths)
-    state["live_staleness_paths_checked"] = len(live_paths)
-    db_mtime = (archive_root / INDEX_RELATIVE_PATH).stat().st_mtime
-    modified_after_index = []
-    for relative in live_paths:
-        try:
-            if resolve_archive_relative_path(archive_root, relative).stat().st_mtime > db_mtime:
-                modified_after_index.append(relative)
-        except (OSError, ArchivePathError):
-            modified_after_index.append(relative)
-
-    indexed_paths = {row["path"] for row in rows}
-    live_path_set = set(live_paths)
-    stale_reasons = list(state.get("stale_reasons") or [])
-    if live_path_set - indexed_paths:
-        stale_reasons.append("canonical_zettels_missing_from_index")
-    if indexed_paths - live_path_set:
-        stale_reasons.append("index_has_missing_live_canonical_paths")
-    if modified_after_index:
-        stale_reasons.append("canonical_zettel_modified_after_index")
-    if stale_reasons:
-        state["fallback_reason"] = "archive_index_stale"
-        state["stale_reasons"] = unique_preserve_order(stale_reasons)
-        return [], state
-
-    state.update(
-        {
-            "source": "generated_index",
-            "used_generated_index": True,
-            "fallback_reason": None,
-            "indexed_canonical_count": len(rows),
-            "stale_reasons": [],
-        }
-    )
-    return rows, state
+def archive_index_rebuild_evidence(reason_code: str) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "state": "rebuild_required",
+        "schema": None,
+        "generation": None,
+        "indexed_zettel_count": 0,
+        "live_zettel_count": 0,
+        "live_snapshot_sha256": None,
+        "staleness_check": "index_metadata_plus_live_stats",
+        "reason_codes": [reason_code],
+        "blockers": [INDEX_REBUILD_REQUIRED],
+    }
 
 
-def find_promotion_duplicates_from_rows(
-    rows: list[dict[str, Any]],
+def require_current_zettel_index(
+    archive_root: Path | str,
     *,
-    draft_path: Path,
-    archive_root: Path,
-    zettel_id: str,
-    title_key: str,
-    body_key: str,
-    proposed_path: str,
-) -> list[dict[str, Any]]:
-    duplicates: list[dict[str, Any]] = []
-    draft_relative = archive_relative_path(draft_path, archive_root)
-    for row in rows:
-        candidate_relative = str(row.get("path") or "")
-        if candidate_relative == draft_relative:
-            continue
-        if candidate_relative == proposed_path:
-            duplicates.append(
+    connection: sqlite3.Connection | None = None,
+    progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
+) -> dict[str, Any]:
+    """Return content-free current-index evidence or one fixed rebuild blocker."""
+
+    root = require_existing_archive_root(archive_root)
+    db_path = root / INDEX_RELATIVE_PATH
+    base = archive_index_rebuild_evidence("archive_index_unchecked")
+    base["reason_codes"] = []
+    if not db_path.is_file():
+        _emit_mint_progress(progress_callback, "index_snapshot", "start", 0, 0)
+        _emit_mint_progress(progress_callback, "index_snapshot", "done", 0, 0)
+        base["reason_codes"] = ["archive_index_missing"]
+        return base
+
+    owns_connection = connection is None
+    conn = connection or connect_archive_index(db_path, row_factory=True)
+    started_transaction = False
+    try:
+        if owns_connection and not conn.in_transaction:
+            conn.execute("BEGIN")
+            started_transaction = True
+        try:
+            metadata = read_archive_index_metadata(conn)
+            indexed_rows = archive_index_zettel_stat_rows(conn)
+            indexed_canonical_count = int(
+                conn.execute(
+                    "SELECT COUNT(*) FROM zettels WHERE status = 'canonical' AND path LIKE 'zettels/%'"
+                ).fetchone()[0]
+            )
+        except sqlite3.Error:
+            base["reason_codes"] = ["archive_index_schema_unreadable"]
+            return base
+
+        snapshot = strict_live_zettel_stat_snapshot(
+            root,
+            indexed_rows,
+            progress_callback=progress_callback,
+        )
+        reason_codes = list(snapshot["reason_codes"])
+        reason_codes.extend(
+            archive_index_metadata_stale_reasons(
+                metadata,
+                indexed_canonical_count=indexed_canonical_count,
+                indexed_zettel_count=len(indexed_rows),
+                live_snapshot_sha256=str(snapshot["live_snapshot_sha256"]),
+            )
+        )
+        reason_codes = unique_preserve_order(reason_codes)
+        generation = str(metadata.get("generation") or "")
+        evidence = {
+            **base,
+            "schema": INDEX_METADATA_SCHEMA if metadata.get("schema") == INDEX_METADATA_SCHEMA else None,
+            "generation": generation if INDEX_GENERATION_RE.fullmatch(generation) else None,
+            "indexed_zettel_count": len(indexed_rows),
+            "live_zettel_count": int(snapshot["live_zettel_count"]),
+            "live_snapshot_sha256": snapshot["live_snapshot_sha256"],
+            "reason_codes": reason_codes,
+        }
+        if not reason_codes:
+            evidence.update(
                 {
-                    "path": candidate_relative,
-                    "reason": "target_path_exists",
-                    "severity": "blocker",
+                    "ok": True,
+                    "state": INDEX_STATE_CURRENT,
+                    "blockers": [],
                 }
             )
-            continue
-        if zettel_id and str(row.get("zettel_id") or "") == zettel_id:
-            duplicates.append(
-                {
-                    "path": candidate_relative,
-                    "reason": "same_zettel_id",
-                    "severity": "blocker",
-                }
+        return evidence
+    finally:
+        if owns_connection:
+            try:
+                if started_transaction and conn.in_transaction:
+                    conn.rollback()
+            finally:
+                conn.close()
+
+
+def begin_archive_index_mutation(
+    archive_root: Path | str,
+    *,
+    expected_generation: str,
+    progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
+) -> str:
+    """Commit a generation-bound dirty intent before any indexed file mutation.
+
+    This transaction is atomic only inside SQLite.  The later filesystem write
+    and exact index delta are intentionally not described as one atomic unit.
+    """
+
+    root = require_existing_archive_root(archive_root)
+    if not INDEX_GENERATION_RE.fullmatch(str(expected_generation or "")):
+        raise ArchiveServiceError(INDEX_REBUILD_REQUIRED)
+    db_path = root / INDEX_RELATIVE_PATH
+    if not db_path.is_file():
+        raise ArchiveServiceError(INDEX_REBUILD_REQUIRED)
+    conn = connect_archive_index(db_path, write=True, row_factory=True)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        evidence = require_current_zettel_index(
+            root,
+            connection=conn,
+            progress_callback=progress_callback,
+        )
+        if (
+            not evidence.get("ok")
+            or evidence.get("generation") != expected_generation
+        ):
+            raise ArchiveServiceError(INDEX_REBUILD_REQUIRED)
+        conn.execute(
+            "UPDATE index_metadata SET value = ? WHERE key = 'state'",
+            (INDEX_STATE_DIRTY,),
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO index_metadata(key, value) VALUES ('updated_at', ?)",
+            (datetime.now().astimezone().replace(microsecond=0).isoformat(),),
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO index_metadata(key, value) VALUES ('updated_by', ?)",
+            (f"wom-kit/{WOM_KIT_VERSION}",),
+        )
+        conn.commit()
+        return expected_generation
+    except BaseException:
+        if conn.in_transaction:
+            conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def seal_archive_index_mutation(
+    root: Path,
+    conn: sqlite3.Connection,
+    *,
+    expected_generation: str,
+) -> dict[str, Any]:
+    """Reseal one exact delta only when its dirty generation still owns it."""
+
+    metadata = read_archive_index_metadata(conn)
+    if (
+        metadata.get("schema") != INDEX_METADATA_SCHEMA
+        or metadata.get("state") != INDEX_STATE_DIRTY
+        or metadata.get("generation") != expected_generation
+        or not INDEX_GENERATION_RE.fullmatch(str(expected_generation or ""))
+    ):
+        raise sqlite3.IntegrityError(INDEX_REBUILD_REQUIRED)
+    quarantined_zettel_count = int(
+        conn.execute(
+            "SELECT COUNT(*) FROM zettels WHERE status = ?",
+            (ZETTEL_QUARANTINED_STATUS,),
+        ).fetchone()[0]
+    )
+    if quarantined_zettel_count:
+        raise sqlite3.IntegrityError(INDEX_REBUILD_REQUIRED)
+    canonical_row = conn.execute(
+        "SELECT COUNT(*), COALESCE(MAX(file_mtime_ns), 0) FROM zettels "
+        "WHERE status = 'canonical' AND path LIKE 'zettels/%'"
+    ).fetchone()
+    stat_rows = archive_index_zettel_stat_rows(conn)
+    replace_archive_index_metadata(
+        conn,
+        canonical_zettel_count=int(canonical_row[0]),
+        canonical_max_mtime_ns=int(canonical_row[1] or 0),
+        index_complete=True,
+        quarantined_zettel_count=0,
+        zettel_row_count=len(stat_rows),
+        live_snapshot_sha256=archive_index_snapshot_sha256(stat_rows),
+        state=INDEX_STATE_CURRENT,
+        generation=expected_generation,
+    )
+    # This is a fresh live-tree comparison after the delta, not a claim based
+    # only on the SQLite rows.  Any unrelated concurrent zet change therefore
+    # rolls this transaction back to the previously committed dirty intent.
+    evidence = require_current_zettel_index(root, connection=conn)
+    if (
+        not evidence.get("ok")
+        or evidence.get("generation") != expected_generation
+    ):
+        raise sqlite3.IntegrityError(INDEX_REBUILD_REQUIRED)
+    return evidence
+
+
+def reseal_archive_index_mutation_without_delta(
+    archive_root: Path | str,
+    *,
+    expected_generation: str,
+) -> bool:
+    """Return a cleaned-up failed write to current only after a fresh proof."""
+
+    root = require_existing_archive_root(archive_root)
+    db_path = root / INDEX_RELATIVE_PATH
+    if not db_path.is_file():
+        return False
+    try:
+        conn = connect_archive_index(db_path, write=True, row_factory=True)
+    except sqlite3.Error:
+        return False
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        seal_archive_index_mutation(
+            root,
+            conn,
+            expected_generation=expected_generation,
+        )
+        conn.commit()
+        return True
+    except (OSError, sqlite3.Error, ArchiveServiceError, ValueError):
+        if conn.in_transaction:
+            conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+
+def mark_archive_index_dirty(
+    archive_root: Path | str,
+    *,
+    expected_generation: str | None = None,
+) -> bool:
+    """Atomically mark only SQLite metadata dirty; no filesystem atomicity is claimed."""
+
+    root = require_existing_archive_root(archive_root)
+    db_path = root / INDEX_RELATIVE_PATH
+    if not db_path.is_file():
+        return False
+    try:
+        conn = connect_archive_index(db_path, write=True)
+    except sqlite3.Error:
+        return False
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        metadata = read_archive_index_metadata(conn)
+        generation = str(metadata.get("generation") or "")
+        if (
+            metadata.get("schema") != INDEX_METADATA_SCHEMA
+            or metadata.get("state") not in {INDEX_STATE_CURRENT, INDEX_STATE_DIRTY}
+            or not INDEX_GENERATION_RE.fullmatch(generation)
+            or (
+                expected_generation is not None
+                and generation != expected_generation
             )
-            continue
-        candidate_body_key = normalize_compare_text(str(row.get("body") or ""))[:500]
-        body_is_similar = len(body_key) >= 120 and candidate_body_key == body_key
-        if title_key and normalize_compare_text(str(row.get("title") or "")) == title_key:
-            if not body_is_similar:
-                continue
-            duplicates.append(
-                {
-                    "path": candidate_relative,
-                    "reason": "same_title",
-                    "severity": "warning",
-                }
-            )
-            continue
-        if body_is_similar:
-            duplicates.append(
-                {
-                    "path": candidate_relative,
-                    "reason": "very_similar_body_start",
-                    "severity": "warning",
-                }
-            )
-    return duplicates
+        ):
+            conn.rollback()
+            return False
+        conn.execute(
+            "INSERT OR REPLACE INTO index_metadata(key, value) VALUES ('state', ?)",
+            (INDEX_STATE_DIRTY,),
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO index_metadata(key, value) VALUES ('updated_at', ?)",
+            (datetime.now().astimezone().replace(microsecond=0).isoformat(),),
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO index_metadata(key, value) VALUES ('updated_by', ?)",
+            (f"wom-kit/{WOM_KIT_VERSION}",),
+        )
+        conn.commit()
+        return True
+    except sqlite3.Error:
+        if conn.in_transaction:
+            conn.rollback()
+        return False
+    finally:
+        conn.close()
 
 
 def title_is_generic_for_checklist(title: str) -> bool:
@@ -100085,7 +100711,7 @@ def runtime_context_write_action_routes() -> list[dict[str, Any]]:
 
 def runtime_context_action_routing() -> dict[str, Any]:
     return {
-        "schema": "wom-kit/ai-command-path-routing/v0.12",
+        "schema": "wom-kit/ai-command-path-routing/v0.13",
         "official_wom_command_required_for_archive_actions": True,
         "location_policy_alone_is_sufficient": False,
         "raw_filesystem_search_is_authoritative": False,
@@ -107823,6 +108449,114 @@ def sensitive_categories_for_frontmatter(frontmatter: dict[str, Any]) -> list[st
     return sorted(found)
 
 
+def _emit_mint_progress(
+    progress_callback: Callable[[str, str, int | None, int | None], None] | None,
+    stage: str,
+    message: str,
+    current: int | None = None,
+    total: int | None = None,
+) -> None:
+    """Emit only the fixed, content-free mint progress vocabulary."""
+
+    if progress_callback is None:
+        return
+    if stage not in MINT_PROGRESS_STAGES:
+        raise ArchiveServiceError("mint_progress_stage_invalid")
+    progress_callback(stage, message, current, total)
+
+
+def zettel_index_normalized_title(frontmatter: dict[str, Any]) -> str:
+    title = frontmatter.get("title")
+    return normalize_compare_text(title if isinstance(title, str) else "")
+
+
+def zettel_index_body_prefix_sha256(body: str) -> str:
+    normalized = normalize_compare_text(body)[:500]
+    if len(normalized) < 120:
+        return ""
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def zettel_index_timestamp(value: Any) -> str | None:
+    """Normalize one timezone-aware ISO timestamp for safe SQL ordering."""
+
+    if not isinstance(value, str) or not value.strip() or len(value) > 64:
+        return None
+    text = value.strip()
+    candidate = text[:-1] + "+00:00" if text.endswith("Z") else text
+    try:
+        parsed = datetime.fromisoformat(candidate)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.astimezone(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def zettel_index_safe_mint_receipt_path(root: Path, frontmatter: dict[str, Any]) -> str | None:
+    mint = frontmatter.get("mint") if isinstance(frontmatter.get("mint"), dict) else {}
+    raw = mint.get("receipt_path")
+    if not isinstance(raw, str) or not raw.strip() or len(raw) > 512:
+        return None
+    try:
+        resolved = resolve_archive_relative_path(root, raw.strip())
+        relative = archive_relative_path(resolved, root)
+    except (ArchivePathError, ArchiveServiceError, OSError, ValueError):
+        return None
+    if not relative.startswith("receipts/mint/") or not relative.endswith(".json"):
+        return None
+    return relative
+
+
+def zettel_index_origin_class(frontmatter: dict[str, Any]) -> str:
+    if notion_import_frontmatter_is_notion(frontmatter):
+        return "notion_import"
+
+    zettel_id = str(frontmatter.get("id") or "").strip().casefold()
+    if zettel_id.startswith(("zet_import_", "zet_imported_")):
+        return "other_import"
+    import_markers = {
+        "import",
+        "imported_at",
+        "import_source",
+        "source_system",
+        "provider_system",
+        "external_system",
+    }
+
+    def contains_import_marker(value: Any) -> bool:
+        if isinstance(value, dict):
+            for key, child in value.items():
+                normalized_key = notion_source_map_normalized_key(key)
+                if normalized_key in import_markers:
+                    marker = str(child or "").strip().casefold()
+                    if marker and marker not in {"wom", "wom-kit", "local", "human"}:
+                        return True
+                if isinstance(child, (dict, list)) and contains_import_marker(child):
+                    return True
+        elif isinstance(value, list):
+            return any(contains_import_marker(child) for child in value)
+        return False
+
+    return "other_import" if contains_import_marker(frontmatter) else "wom_native"
+
+
+def zettel_index_projection(
+    root: Path,
+    frontmatter: dict[str, Any],
+    body: str,
+) -> dict[str, str | None]:
+    mint = frontmatter.get("mint") if isinstance(frontmatter.get("mint"), dict) else {}
+    return {
+        "normalized_title": zettel_index_normalized_title(frontmatter),
+        "body_prefix_sha256": zettel_index_body_prefix_sha256(body),
+        "origin_class": zettel_index_origin_class(frontmatter),
+        "minted_at": zettel_index_timestamp(mint.get("minted_at")),
+        "created_at": zettel_index_timestamp(frontmatter.get("created_at")),
+        "mint_receipt_path": zettel_index_safe_mint_receipt_path(root, frontmatter),
+    }
+
+
 def index_archive(
     archive_root: Path | str,
     *,
@@ -107871,7 +108605,13 @@ def index_archive(
               file_mtime_ns INTEGER,
               body_sha256 TEXT,
               approved_body_sha256 TEXT,
-              forbidden_location_reference_found INTEGER
+              forbidden_location_reference_found INTEGER,
+              normalized_title TEXT,
+              body_prefix_sha256 TEXT,
+              origin_class TEXT,
+              minted_at TEXT,
+              created_at TEXT,
+              mint_receipt_path TEXT
             );
             CREATE TABLE IF NOT EXISTS objects (
               object_id TEXT PRIMARY KEY,
@@ -107942,12 +108682,23 @@ def index_archive(
             """
         )
         ensure_archive_index_zettel_columns(conn)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS zettels_duplicate_candidates "
+            "ON zettels(status, normalized_title, body_prefix_sha256, "
+            "zettel_id, path)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS zettels_view_origin_time "
+            "ON zettels(status, origin_class, minted_at, created_at, path)"
+        )
         if progress_callback is not None:
             progress_callback("index-lock-and-schema", "done", None, None)
 
         warnings: list[str] = []
         canonical_metadata_count = 0
         canonical_metadata_max_mtime_ns = 0
+        index_stat_snapshot_rows: list[dict[str, Any]] = []
+        index_generation = "gen:" + secrets.token_hex(16)
 
         principal_records, principal_issues = load_registered_principals(root)
         warnings.extend(principal_issues)
@@ -107999,9 +108750,11 @@ def index_archive(
                 INSERT OR REPLACE INTO zettels(
                   path, zettel_id, title, status, kind, body, frontmatter_json,
                   file_size, file_mtime_ns, body_sha256, approved_body_sha256,
-                  forbidden_location_reference_found
+                  forbidden_location_reference_found, normalized_title,
+                  body_prefix_sha256, origin_class, minted_at, created_at,
+                  mint_receipt_path
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     relative_path,
@@ -108016,6 +108769,12 @@ def index_archive(
                     "",
                     "",
                     0,
+                    "",
+                    "",
+                    None,
+                    None,
+                    None,
+                    None,
                 ),
             )
             quarantined_zettels.append({"path": relative_path, "code": issue_code})
@@ -108033,6 +108792,13 @@ def index_archive(
             except OSError:
                 zettel_mtime_ns = 0
                 zettel_size = 0
+            index_stat_snapshot_rows.append(
+                {
+                    "path": relative_path,
+                    "file_size": zettel_size,
+                    "file_mtime_ns": zettel_mtime_ns,
+                }
+            )
             try:
                 text = path.read_text(encoding="utf-8")
             except UnicodeError:
@@ -108077,14 +108843,17 @@ def index_archive(
             # never be written into the disposable on-disk index. path/id/status/kind are kept so the row
             # stays countable + filterable; search additionally excludes redacted rows entirely.
             redacted = zettel_status == "redacted"
+            projection = zettel_index_projection(root, frontmatter, body)
             conn.execute(
                 """
                 INSERT OR REPLACE INTO zettels(
                   path, zettel_id, title, status, kind, body, frontmatter_json,
                   file_size, file_mtime_ns, body_sha256, approved_body_sha256,
-                  forbidden_location_reference_found
+                  forbidden_location_reference_found, normalized_title,
+                  body_prefix_sha256, origin_class, minted_at, created_at,
+                  mint_receipt_path
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     relative_path,
@@ -108099,6 +108868,12 @@ def index_archive(
                     "" if redacted else sha256_text(body),
                     "" if redacted else approved_body_sha256,
                     1 if (not redacted and contains_forbidden_location_reference(text)) else 0,
+                    "" if redacted else projection["normalized_title"],
+                    "" if redacted else projection["body_prefix_sha256"],
+                    None if redacted else projection["origin_class"],
+                    None if redacted else projection["minted_at"],
+                    None if redacted else projection["created_at"],
+                    None if redacted else projection["mint_receipt_path"],
                 ),
             )
             zettel_count += 1
@@ -108300,6 +109075,10 @@ def index_archive(
             canonical_max_mtime_ns=canonical_metadata_max_mtime_ns,
             index_complete=not bool(quarantined_zettels),
             quarantined_zettel_count=len(quarantined_zettels),
+            zettel_row_count=len(index_stat_snapshot_rows),
+            live_snapshot_sha256=archive_index_snapshot_sha256(index_stat_snapshot_rows),
+            state=INDEX_STATE_CURRENT if not quarantined_zettels else INDEX_STATE_DIRTY,
+            generation=index_generation,
         )
         rebuild_session.install_private_rows_after_public()
         rebuild_session.validate_and_commit()
@@ -108335,6 +109114,9 @@ def index_archive(
         "index_rebuilt": True,
         "index_complete": index_complete,
         "index_path": archive_relative_path(db_path, root),
+        "index_state": INDEX_STATE_CURRENT if index_complete else INDEX_STATE_DIRTY,
+        "index_generation": index_generation,
+        "live_snapshot_sha256": archive_index_snapshot_sha256(index_stat_snapshot_rows),
         "zettels": zettel_count,
         "objects": object_count,
         "derived_texts": derived_text_count,
@@ -108350,6 +109132,20 @@ def index_archive(
     }
 
 
+def archive_index_snapshot_sha256(rows: Iterable[dict[str, Any]]) -> str:
+    normalized = [
+        [
+            str(row.get("path") or ""),
+            int(row.get("file_size") or 0),
+            int(row.get("file_mtime_ns") or 0),
+        ]
+        for row in rows
+    ]
+    normalized.sort(key=lambda item: item[0])
+    encoded = json.dumps(normalized, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
 def replace_archive_index_metadata(
     conn: sqlite3.Connection,
     *,
@@ -108357,6 +109153,10 @@ def replace_archive_index_metadata(
     canonical_max_mtime_ns: int,
     index_complete: bool,
     quarantined_zettel_count: int,
+    zettel_row_count: int | None = None,
+    live_snapshot_sha256: str | None = None,
+    state: str = INDEX_STATE_CURRENT,
+    generation: str | None = None,
 ) -> None:
     conn.execute(
         """
@@ -108366,10 +109166,24 @@ def replace_archive_index_metadata(
         )
         """
     )
+    normalized_state = state if state in {INDEX_STATE_CURRENT, INDEX_STATE_DIRTY} else INDEX_STATE_DIRTY
+    normalized_generation = generation if isinstance(generation, str) and INDEX_GENERATION_RE.fullmatch(generation) else None
+    if normalized_generation is None:
+        normalized_generation = "gen:" + secrets.token_hex(16)
+    snapshot_value = (
+        live_snapshot_sha256
+        if isinstance(live_snapshot_sha256, str)
+        and INDEX_SNAPSHOT_SHA256_RE.fullmatch(live_snapshot_sha256)
+        else ""
+    )
     payload = {
         "schema": INDEX_METADATA_SCHEMA,
+        "state": normalized_state,
+        "generation": normalized_generation,
         "canonical_zettel_count": str(max(0, canonical_zettel_count)),
         "canonical_max_mtime_ns": str(max(0, canonical_max_mtime_ns)),
+        "zettel_row_count": str(max(0, int(zettel_row_count or 0))),
+        "live_snapshot_sha256": snapshot_value,
         "index_complete": "true" if index_complete else "false",
         "quarantined_zettel_count": str(max(0, quarantined_zettel_count)),
         "updated_at": datetime.now().astimezone().replace(microsecond=0).isoformat(),
@@ -108387,83 +109201,119 @@ def ensure_archive_index_zettel_columns(conn: sqlite3.Connection) -> None:
         "body_sha256": "TEXT",
         "approved_body_sha256": "TEXT",
         "forbidden_location_reference_found": "INTEGER",
+        "normalized_title": "TEXT",
+        "body_prefix_sha256": "TEXT",
+        "origin_class": "TEXT",
+        "minted_at": "TEXT",
+        "created_at": "TEXT",
+        "mint_receipt_path": "TEXT",
     }
     for name, ddl_type in columns.items():
         if name not in existing:
             conn.execute(f"ALTER TABLE zettels ADD COLUMN {name} {ddl_type}")
 
 
-def upsert_zettel_index_entry(root: Path, zettel_path: Path, frontmatter: dict[str, Any], body: str) -> bool:
+def upsert_zettel_index_entry(
+    root: Path,
+    zettel_path: Path,
+    frontmatter: dict[str, Any],
+    body: str,
+    *,
+    expected_generation: str | None = None,
+    expected_file_sha256: str | None = None,
+) -> bool:
+    """Apply one canonical row delta and reseal its precommitted dirty generation."""
+
+    # Callers pass their reviewed projection for compatibility, but the index
+    # authority is rebound to the exact on-disk bytes written by this mutation.
+    del frontmatter, body
     db_path = root / INDEX_RELATIVE_PATH
     if not db_path.is_file():
         return False
+    if (
+        not INDEX_GENERATION_RE.fullmatch(str(expected_generation or ""))
+        or not SHA256_RE.fullmatch(str(expected_file_sha256 or ""))
+    ):
+        return False
 
     relative = archive_relative_path(zettel_path, root)
-    boundary = read_zettel_content_boundary(zettel_path)
-    quarantined = boundary["state"] == "blocked"
+    try:
+        exact_bytes = zettel_path.read_bytes()
+        if hashlib.sha256(exact_bytes).hexdigest() != expected_file_sha256:
+            return False
+        boundary = parse_zettel_content_boundary(
+            decode_utf8_with_universal_newlines(exact_bytes)
+        )
+        zettel_stat = zettel_path.stat()
+    except (OSError, UnicodeError):
+        return False
+    if boundary["state"] == "blocked" or zettel_stat.st_size != len(exact_bytes):
+        # A quarantined row is never a successful mint/promote delta.  The
+        # already-committed dirty intent remains the honest recovery state.
+        return False
     frontmatter = boundary["frontmatter"]
     body = boundary["body"]
-    zettel_status = (
-        ZETTEL_QUARANTINED_STATUS if quarantined else frontmatter.get("status")
-    )
+    zettel_status = frontmatter.get("status")
     zettel_id = str(frontmatter.get("id") or "")
     redacted = zettel_status == "redacted"
 
     conn = connect_archive_index(db_path, write=True)
     try:
+        conn.execute("BEGIN IMMEDIATE")
+        metadata = read_archive_index_metadata(conn)
+        if (
+            metadata.get("schema") != INDEX_METADATA_SCHEMA
+            or metadata.get("state") != INDEX_STATE_DIRTY
+            or metadata.get("generation") != expected_generation
+        ):
+            raise sqlite3.IntegrityError(INDEX_REBUILD_REQUIRED)
         ensure_archive_index_zettel_columns(conn)
         old_row = conn.execute(
-            "SELECT status, zettel_id FROM zettels WHERE path = ?", (relative,)
+            "SELECT zettel_id FROM zettels WHERE path = ?", (relative,)
         ).fetchone()
-        old_status = (
-            old_row[0] if old_row is not None and not isinstance(old_row, sqlite3.Row)
-            else old_row["status"] if old_row is not None
-            else None
-        )
         old_zettel_id = str((
-            old_row[1] if old_row is not None and not isinstance(old_row, sqlite3.Row)
+            old_row[0] if old_row is not None and not isinstance(old_row, sqlite3.Row)
             else old_row["zettel_id"] if old_row is not None
             else ""
         ) or "")
-        old_is_canonical = (
-            old_row is not None
-            and relative.startswith("zettels/")
-            and str(old_status or "") == "canonical"
-        )
-        try:
-            zettel_stat = zettel_path.stat()
-            zettel_size = zettel_stat.st_size
-            zettel_mtime_ns = zettel_stat.st_mtime_ns
-        except OSError:
-            zettel_size = 0
-            zettel_mtime_ns = 0
+        zettel_size = zettel_stat.st_size
+        zettel_mtime_ns = zettel_stat.st_mtime_ns
         draft_creation = frontmatter.get("draft_creation") if isinstance(frontmatter.get("draft_creation"), dict) else {}
         approved_body_sha256 = draft_creation.get("approved_body_sha256")
         if not isinstance(approved_body_sha256, str) or not SHA256_RE.match(approved_body_sha256):
             approved_body_sha256 = None
         full_text = "---\n" + dump_yaml(frontmatter) + "---\n" + body
+        projection = zettel_index_projection(root, frontmatter, body)
         conn.execute(
             """
             INSERT OR REPLACE INTO zettels(
               path, zettel_id, title, status, kind, body, frontmatter_json,
               file_size, file_mtime_ns, body_sha256, approved_body_sha256,
-              forbidden_location_reference_found
+              forbidden_location_reference_found, normalized_title,
+              body_prefix_sha256, origin_class, minted_at, created_at,
+              mint_receipt_path
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 relative,
                 zettel_id or None,
-                "" if (redacted or quarantined) else frontmatter.get("title"),
+                "" if redacted else frontmatter.get("title"),
                 zettel_status,
-                None if quarantined else frontmatter.get("kind"),
-                "" if (redacted or quarantined) else body,
-                "" if (redacted or quarantined) else json.dumps(json_safe(frontmatter), ensure_ascii=False, default=str),
+                frontmatter.get("kind"),
+                "" if redacted else body,
+                "" if redacted else json.dumps(json_safe(frontmatter), ensure_ascii=False, default=str),
                 zettel_size,
                 zettel_mtime_ns,
-                "" if (redacted or quarantined) else sha256_text(body),
-                "" if (redacted or quarantined) else approved_body_sha256,
-                1 if (not redacted and not quarantined and contains_forbidden_location_reference(full_text)) else 0,
+                "" if redacted else sha256_text(body),
+                "" if redacted else approved_body_sha256,
+                1 if (not redacted and contains_forbidden_location_reference(full_text)) else 0,
+                "" if redacted else projection["normalized_title"],
+                "" if redacted else projection["body_prefix_sha256"],
+                None if redacted else projection["origin_class"],
+                None if redacted else projection["minted_at"],
+                None if redacted else projection["created_at"],
+                None if redacted else projection["mint_receipt_path"],
             ),
         )
 
@@ -108473,7 +109323,7 @@ def upsert_zettel_index_entry(root: Path, zettel_path: Path, frontmatter: dict[s
         if zettel_id:
             conn.execute("DELETE FROM edges WHERE from_id = ?", (zettel_id,))
             conn.execute("DELETE FROM zettel_facets WHERE zettel_id = ?", (zettel_id,))
-            if not redacted and not quarantined:
+            if not redacted:
                 for ref in collect_referenced_zets(frontmatter):
                     conn.execute(
                         "INSERT INTO edges(from_id, to_id, edge_type) VALUES (?, ?, ?)",
@@ -108489,71 +109339,97 @@ def upsert_zettel_index_entry(root: Path, zettel_path: Path, frontmatter: dict[s
                                     "INSERT INTO zettel_facets(zettel_id, facet_key, facet_value) VALUES (?, ?, ?)",
                                     (zettel_id, str(facet_key), str(item)),
                                 )
-        update_archive_index_metadata_for_zettel_upsert(
+        # Bind the delta to the intended canonical bytes again immediately
+        # before live-tree resealing.  Corruption between write and upsert can
+        # never be relabeled as a successful quarantine update.
+        if sha256_path(zettel_path) != expected_file_sha256:
+            raise sqlite3.IntegrityError(INDEX_REBUILD_REQUIRED)
+        seal_archive_index_mutation(
+            root,
             conn,
-            zettel_path=zettel_path,
-            old_is_canonical=old_is_canonical,
-            new_is_canonical=(
-                not quarantined
-                and relative.startswith("zettels/")
-                and zettel_status == "canonical"
-            ),
-            old_is_quarantined=str(old_status or "") == ZETTEL_QUARANTINED_STATUS,
-            new_is_quarantined=quarantined,
+            expected_generation=expected_generation,
         )
+        if sha256_path(zettel_path) != expected_file_sha256:
+            raise sqlite3.IntegrityError(INDEX_REBUILD_REQUIRED)
         conn.commit()
+    except (OSError, sqlite3.IntegrityError, ArchiveServiceError, ValueError):
+        if conn.in_transaction:
+            conn.rollback()
+        return False
+    except BaseException:
+        if conn.in_transaction:
+            conn.rollback()
+        raise
     finally:
         conn.close()
     return True
 
 
-def update_archive_index_metadata_for_zettel_upsert(
-    conn: sqlite3.Connection,
+def delete_zettel_index_entry(
+    root: Path,
+    relative_path: str,
     *,
-    zettel_path: Path,
-    old_is_canonical: bool,
-    new_is_canonical: bool,
-    old_is_quarantined: bool,
-    new_is_quarantined: bool,
-) -> None:
-    metadata = read_archive_index_metadata(conn)
-    if not metadata or metadata.get("schema") != INDEX_METADATA_SCHEMA:
-        return
+    expected_generation: str | None = None,
+) -> bool:
+    """Delete one absent draft row and reseal its precommitted dirty generation."""
+
+    db_path = root / INDEX_RELATIVE_PATH
+    if not db_path.is_file():
+        return False
+    if not INDEX_GENERATION_RE.fullmatch(str(expected_generation or "")):
+        return False
+    retired_path = resolve_archive_relative_path(root, relative_path)
+    if retired_path.exists():
+        return False
+    conn = connect_archive_index(db_path, write=True, row_factory=True)
     try:
-        canonical_count = int(metadata.get("canonical_zettel_count", "0"))
-        canonical_max_mtime_ns = int(metadata.get("canonical_max_mtime_ns", "0"))
-        quarantined_zettel_count = int(metadata.get("quarantined_zettel_count", ""))
-    except ValueError:
-        return
-    index_complete_value = metadata.get("index_complete")
-    if index_complete_value not in {"true", "false"} or quarantined_zettel_count < 0:
-        return
-    index_complete = index_complete_value == "true"
-    if old_is_canonical and not new_is_canonical:
-        canonical_count = max(0, canonical_count - 1)
-    elif new_is_canonical and not old_is_canonical:
-        canonical_count += 1
-    if new_is_canonical:
-        try:
-            canonical_max_mtime_ns = max(canonical_max_mtime_ns, zettel_path.stat().st_mtime_ns)
-        except OSError:
-            pass
-    if old_is_quarantined and not new_is_quarantined:
-        quarantined_zettel_count = max(0, quarantined_zettel_count - 1)
-    elif new_is_quarantined and not old_is_quarantined:
-        quarantined_zettel_count += 1
-    if new_is_quarantined:
-        index_complete = False
-    replace_archive_index_metadata(
-        conn,
-        canonical_zettel_count=canonical_count,
-        canonical_max_mtime_ns=canonical_max_mtime_ns,
-        # A partial upsert cannot prove that every prior quarantine has been
-        # repaired, so it may make completeness false but never promote false
-        # back to true.  Only a full rebuild can do that.
-        index_complete=index_complete,
-        quarantined_zettel_count=quarantined_zettel_count,
-    )
+        conn.execute("BEGIN IMMEDIATE")
+        metadata = read_archive_index_metadata(conn)
+        if (
+            metadata.get("schema") != INDEX_METADATA_SCHEMA
+            or metadata.get("state") != INDEX_STATE_DIRTY
+            or metadata.get("generation") != expected_generation
+        ):
+            raise sqlite3.IntegrityError(INDEX_REBUILD_REQUIRED)
+        row = conn.execute(
+            "SELECT zettel_id FROM zettels WHERE path = ?",
+            (relative_path,),
+        ).fetchone()
+        if row is None:
+            raise sqlite3.IntegrityError("archive_index_retired_draft_row_missing")
+        zettel_id = str(row["zettel_id"] or "")
+        conn.execute("DELETE FROM zettels WHERE path = ?", (relative_path,))
+        if zettel_id:
+            remaining = int(
+                conn.execute(
+                    "SELECT COUNT(*) FROM zettels WHERE zettel_id = ?",
+                    (zettel_id,),
+                ).fetchone()[0]
+            )
+            if remaining == 0:
+                conn.execute("DELETE FROM edges WHERE from_id = ?", (zettel_id,))
+                conn.execute("DELETE FROM zettel_facets WHERE zettel_id = ?", (zettel_id,))
+        if retired_path.exists():
+            raise sqlite3.IntegrityError(INDEX_REBUILD_REQUIRED)
+        seal_archive_index_mutation(
+            root,
+            conn,
+            expected_generation=expected_generation,
+        )
+        if retired_path.exists():
+            raise sqlite3.IntegrityError(INDEX_REBUILD_REQUIRED)
+        conn.commit()
+        return True
+    except (OSError, sqlite3.IntegrityError, ArchiveServiceError, ValueError):
+        if conn.in_transaction:
+            conn.rollback()
+        return False
+    except BaseException:
+        if conn.in_transaction:
+            conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def view_zets(
@@ -108561,6 +109437,12 @@ def view_zets(
     *,
     view_id: str | None = None,
     facets: dict[str, str] | None = None,
+    status: str | None = None,
+    origin: str | None = None,
+    minted_after: str | None = None,
+    minted_before: str | None = None,
+    sort: str = "path_asc",
+    dedupe_by: str = "none",
     limit: int = 50,
 ) -> dict[str, Any]:
     """Execute a saved view's facet filters (or ad-hoc facet filters) against the index.
@@ -108571,24 +109453,52 @@ def view_zets(
     a BROADER set than the view declared). Redacted zettels are never returned.
     """
     root = require_existing_archive_root(archive_root)
-    if bool(view_id) == bool(facets):
-        raise ArchiveServiceError("Provide exactly one of view_id or facets.")
+    structured_filter_selected = (
+        status is not None
+        or origin is not None
+        or minted_after is not None
+        or minted_before is not None
+        or sort != "path_asc"
+        or dedupe_by != "none"
+    )
+    if view_id is not None and facets is not None:
+        raise ArchiveServiceError("Provide view_id or ad-hoc filters, not both.")
+    if view_id is None and not facets and not structured_filter_selected:
+        raise ArchiveServiceError("Provide view_id or at least one ad-hoc filter.")
+    if status is not None and status not in ZETTEL_QUERYABLE_STATUSES:
+        raise ArchiveServiceError("status must be draft, canonical, or archived.")
+    if origin is not None and origin not in ZETTEL_ORIGIN_CLASSES:
+        raise ArchiveServiceError("origin must be wom_native, notion_import, or other_import.")
+    if sort not in ZETTEL_VIEW_SORTS:
+        raise ArchiveServiceError("unsupported zet view sort.")
+    if dedupe_by not in ZETTEL_VIEW_DEDUPE_FIELDS:
+        raise ArchiveServiceError("dedupe_by must be zettel_id, normalized_title, or none.")
+    normalized_minted_after = zettel_index_timestamp(minted_after) if minted_after is not None else None
+    normalized_minted_before = zettel_index_timestamp(minted_before) if minted_before is not None else None
+    if minted_after is not None and normalized_minted_after is None:
+        raise ArchiveServiceError("minted_after must be a timezone-aware ISO timestamp.")
+    if minted_before is not None and normalized_minted_before is None:
+        raise ArchiveServiceError("minted_before must be a timezone-aware ISO timestamp.")
+    if (
+        normalized_minted_after is not None
+        and normalized_minted_before is not None
+        and normalized_minted_after > normalized_minted_before
+    ):
+        raise ArchiveServiceError("minted_after must not be later than minted_before.")
     db_path = root / INDEX_RELATIVE_PATH
-    if not db_path.is_file():
-        raise ArchiveServiceError("Archive index is missing. Run archive index first.")
     limit = max(1, min(int(limit), 500))
     blockers: list[str] = []
     resolved_name: str | None = None
 
     wanted: dict[str, str] = {}
-    if facets:
+    if facets is not None:
         for raw_key, raw_value in facets.items():
             key = str(raw_key)
             if isinstance(raw_value, list):
                 blockers.append(f"view filter value list not supported: facets.{key}")
                 continue
             wanted[key] = str(raw_value)
-    else:
+    elif view_id is not None:
         authority = saved_view_authority_scan(root)
         if not authority["ok"]:
             raise ArchiveServiceError("Saved view authority is blocked; run archive view-health --dry-run.")
@@ -108619,28 +109529,125 @@ def view_zets(
             "filters": wanted,
             "count": 0,
             "zettels": [],
+            "index_evidence": None,
             "blockers": blockers,
             "warnings": [],
         }
 
-    sql = [
-        "SELECT zettel_id, title, status, kind, path FROM zettels",
-        "WHERE zettel_id IS NOT NULL AND status IN ('draft', 'canonical', 'archived')",
-    ]
+    query_filters: dict[str, Any] = {
+        "facets": wanted,
+        "status": status,
+        "origin": origin,
+        "minted_after": normalized_minted_after,
+        "minted_before": normalized_minted_before,
+        "sort": sort,
+        "dedupe_by": dedupe_by,
+    }
+    if not db_path.is_file():
+        index_evidence = require_current_zettel_index(root)
+        return {
+            "ok": False,
+            "view_id": view_id,
+            "view_name": resolved_name,
+            "filters": query_filters,
+            "count": 0,
+            "zettels": [],
+            "index_evidence": index_evidence,
+            "blockers": [INDEX_REBUILD_REQUIRED],
+            "warnings": [],
+        }
+
+    where = ["zettel_id IS NOT NULL", "AND status IN ('draft', 'canonical', 'archived')"]
     params: list[Any] = []
     for key, value in wanted.items():
-        sql.append(
+        where.append(
             "AND EXISTS (SELECT 1 FROM zettel_facets f WHERE f.zettel_id = zettels.zettel_id"
             " AND f.facet_key = ? AND f.facet_value = ?)"
         )
         params.extend([key, value])
-    sql.append("ORDER BY path LIMIT ?")
+    if status is not None:
+        where.append("AND status = ?")
+        params.append(status)
+    if origin is not None:
+        where.append("AND origin_class = ?")
+        params.append(origin)
+    if normalized_minted_after is not None:
+        where.append("AND minted_at IS NOT NULL AND minted_at >= ?")
+        params.append(normalized_minted_after)
+    if normalized_minted_before is not None:
+        where.append("AND minted_at IS NOT NULL AND minted_at < ?")
+        params.append(normalized_minted_before)
+
+    order_sql = {
+        "minted_at_desc": "COALESCE(minted_at, '') DESC, path ASC",
+        "minted_at_asc": "COALESCE(minted_at, '') ASC, path ASC",
+        "created_at_desc": "COALESCE(created_at, '') DESC, path ASC",
+        "created_at_asc": "COALESCE(created_at, '') ASC, path ASC",
+        "path_asc": "path ASC",
+        "path_desc": "path DESC",
+    }[sort]
+    partition_sql = {
+        "zettel_id": "COALESCE(NULLIF(zettel_id, ''), path)",
+        "normalized_title": "COALESCE(NULLIF(normalized_title, ''), path)",
+        "none": "path",
+    }[dedupe_by]
+    sql = f"""
+        WITH filtered AS (
+          SELECT zettel_id, title, status, kind, path, normalized_title,
+                 origin_class, minted_at, created_at, mint_receipt_path
+          FROM zettels
+          WHERE {' '.join(where)}
+        ), ranked AS (
+          SELECT *, ROW_NUMBER() OVER (
+            PARTITION BY {partition_sql}
+            ORDER BY CASE status WHEN 'canonical' THEN 0 WHEN 'archived' THEN 1 ELSE 2 END,
+                     COALESCE(minted_at, created_at, '') DESC,
+                     path ASC
+          ) AS dedupe_rank
+          FROM filtered
+        )
+        SELECT zettel_id, title, status, kind, path, normalized_title,
+               origin_class, minted_at, created_at, mint_receipt_path
+        FROM ranked
+        WHERE dedupe_rank = 1
+        ORDER BY {order_sql}
+        LIMIT ?
+    """
     params.append(limit)
 
     conn = connect_archive_index(db_path, row_factory=True)
     try:
-        rows = conn.execute(" ".join(sql), params).fetchall()
+        conn.execute("BEGIN")
+        index_evidence = require_current_zettel_index(root, connection=conn)
+        if not index_evidence["ok"]:
+            return {
+                "ok": False,
+                "view_id": view_id,
+                "view_name": resolved_name,
+                "filters": query_filters,
+                "count": 0,
+                "zettels": [],
+                "index_evidence": index_evidence,
+                "blockers": [INDEX_REBUILD_REQUIRED],
+                "warnings": [],
+            }
+        rows = conn.execute(sql, params).fetchall()
+    except sqlite3.Error:
+        index_evidence = archive_index_rebuild_evidence("archive_index_unreadable")
+        return {
+            "ok": False,
+            "view_id": view_id,
+            "view_name": resolved_name,
+            "filters": query_filters,
+            "count": 0,
+            "zettels": [],
+            "index_evidence": index_evidence,
+            "blockers": [INDEX_REBUILD_REQUIRED],
+            "warnings": [],
+        }
     finally:
+        if conn.in_transaction:
+            conn.rollback()
         conn.close()
     zettels = [
         {
@@ -108649,6 +109656,10 @@ def view_zets(
             "status": row["status"],
             "kind": row["kind"],
             "path": row["path"],
+            "origin_class": row["origin_class"],
+            "minted_at": row["minted_at"],
+            "created_at": row["created_at"],
+            "mint_receipt_path": row["mint_receipt_path"],
         }
         for row in rows
     ]
@@ -108656,9 +109667,10 @@ def view_zets(
         "ok": True,
         "view_id": view_id,
         "view_name": resolved_name,
-        "filters": wanted,
+        "filters": query_filters,
         "count": len(zettels),
         "zettels": zettels,
+        "index_evidence": index_evidence,
         "blockers": [],
         "warnings": [],
     }
@@ -110231,6 +111243,23 @@ def objet_rediscovery_plan(
             query_present=True,
         )
 
+    # v0.3 index freshness is the shared authority for every indexed lookup.
+    # Rediscovery must not reinterpret a search rebuild blocker as malformed
+    # evidence or fall back to stale per-channel rows.
+    if (
+        isinstance(search_result, dict)
+        and search_result.get("ok") is False
+        and search_result.get("blockers") == ["archive_index_rebuild_required"]
+    ):
+        return blocked_objet_rediscovery_result(
+            diagnostic_code="archive_index_rebuild_required",
+            blocker=(
+                "Objet rediscovery planning requires an explicitly rebuilt "
+                "current archive index."
+            ),
+            query_present=True,
+        )
+
     raw_composed_index_state = health.get("index_state")
     if raw_composed_index_state not in {
         "current",
@@ -110705,6 +111734,31 @@ def search_archive_immutable_snapshot(
     )
 
 
+def blocked_search_result(
+    query: str,
+    *,
+    limit: int,
+    index_evidence: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "query": query,
+        "count": 0,
+        "returned": 0,
+        "truncated": False,
+        "complete": False,
+        "total_matches": None,
+        "total_matches_known": False,
+        "matches_by_type": None,
+        "limit_applied": limit,
+        "limit_ceiling": SEARCH_LIMIT_CEILING,
+        "results": [],
+        "index_evidence": index_evidence,
+        "blockers": [INDEX_REBUILD_REQUIRED],
+        "warnings": [],
+    }
+
+
 def _search_archive_impl(
     archive_root: Path | str,
     query: str,
@@ -110718,12 +111772,16 @@ def _search_archive_impl(
     if not query.strip():
         raise ArchiveServiceError("query is required.")
     db_path = root / INDEX_RELATIVE_PATH
-    if not db_path.is_file():
-        raise ArchiveServiceError("Archive index is missing. Run archive index first.")
-
-    like = f"%{query.lower()}%"
     requested_limit = max(1, int(limit))
     limit = min(requested_limit, SEARCH_LIMIT_CEILING)
+    if not db_path.is_file():
+        return blocked_search_result(
+            query,
+            limit=limit,
+            index_evidence=require_current_zettel_index(root),
+        )
+
+    like = f"%{query.lower()}%"
     # Read one row past the caller's limit. That single extra row is what proves
     # whether more matches exist, and it keeps every channel's LIMIT in place so
     # the cascade still stops early instead of scanning whole tables.
@@ -110749,6 +111807,13 @@ def _search_archive_impl(
         # the same database state even if a rebuild commits alongside.
         if owns_connection:
             conn.execute("BEGIN")
+        index_evidence = require_current_zettel_index(root, connection=conn)
+        if not index_evidence["ok"]:
+            return blocked_search_result(
+                query,
+                limit=limit,
+                index_evidence=index_evidence,
+            )
         for row in conn.execute(
             f"""
             SELECT path, zettel_id, title, status, kind, body, frontmatter_json
@@ -110917,6 +111982,7 @@ def _search_archive_impl(
                 conn.close()
 
     return {
+        "ok": True,
         "query": query,
         # `count` is the number of returned results and is kept for
         # compatibility; `total_matches` is the scope-wide number when known.
@@ -110932,6 +111998,9 @@ def _search_archive_impl(
         "limit_applied": limit,
         "limit_ceiling": SEARCH_LIMIT_CEILING,
         "results": results,
+        "index_evidence": index_evidence,
+        "blockers": [],
+        "warnings": [],
     }
 
 
