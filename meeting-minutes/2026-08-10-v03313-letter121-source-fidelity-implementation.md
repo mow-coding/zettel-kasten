@@ -192,3 +192,37 @@ after those runs; the exact committed tree still requires remote CI. These
 results do not yet claim commit, push, pull request, merge, tag, GitHub Release,
 an exact merged-commit wheel, public installation, real-archive execution,
 external sharing, or human acceptance.
+
+## Release closeout
+
+The remaining release boundaries were subsequently completed without changing
+the approved product implementation:
+
+- pull request 56 passed all required Linux, Windows, Python 3.10, Python 3.12,
+  release-readiness, and Required CI jobs;
+- the exact pull-request head received an independent final diff review with
+  P0 0, P1 0, P2 0, and no public private-value or real-secret finding;
+- pull request 56 was squash-merged as commit
+  `377284ebf5d4014cc8c44af5a51c748cf9003e46`;
+- annotated tag `v0.3.313` points to that exact merge commit, and the tag CI
+  passed;
+- the release wheel built from the exact merge commit is 1,748,470 bytes with
+  SHA-256
+  `074e9f1b7164a50833f62a2633e92148eda71f17d3dd3bc425ec8c8c1183822d`;
+- the wheel verified all 145 packaged resources, version 0.3.313, all four CLI
+  entrypoints, and both MCP aliases with 121 tools each;
+- the non-draft, non-prerelease GitHub Release `v0.3.313` was published with
+  that exact wheel;
+- a new anonymous download returned HTTP 200 and the same byte count and
+  SHA-256, installed into a new Python 3.12 environment, passed `pip check`,
+  reported version 0.3.313, and reproduced byte-identical MCP inventories with
+  canonical SHA-256
+  `931dc2bd42037c41b3bb2bb05b04dec5b4b4c58ebf384b57deb6420ef2d8be98`.
+
+No live external service, user-owned archive, credential store, provider
+endpoint, or user source content was used by implementation, CI, wheel, or
+public-install verification. Letter 121 still records zero confirmed canonical
+data loss
+because the operator stopped before create-draft or mint. Human acceptance,
+external sharing, and any later real-archive operation remain separate future
+evidence rather than claims of this release.
