@@ -1,13 +1,13 @@
 # Install WOM-kit As A Python Tool
 
-Status: v0.3.312 conditional GitHub wheel contract and Letters 120-123 release scope
+Status: v0.3.313 conditional GitHub wheel and source-fidelity release contract
 
 WOM-kit is a command-line tool. It should live in its own Python environment
 instead of being mixed into an application project's dependencies.
 
-The v0.3.312 URL below is a conditional contract, not proof that an artifact is
+The v0.3.313 URL below is a conditional contract, not proof that an artifact is
 public. Use it only after the matching GitHub Release exists and lists the
-verified wheel. See the [v0.3.312 release note](releases/v0.3.312.md) for the
+verified wheel. See the [v0.3.313 release note](releases/v0.3.313.md) for the
 separate source and release-evidence boundary.
 
 ## Recommended Install
@@ -17,7 +17,7 @@ verified wheel. The versioned URL alone is not proof that the asset is
 available:
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.312/wom_kit-0.3.312-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.313/wom_kit-0.3.313-py3-none-any.whl"
 archive --version
 ```
 
@@ -35,7 +35,7 @@ Plain `pip` works when it is placed inside a dedicated virtual environment:
 
 ```powershell
 py -m venv "$HOME\.wom-tools\wom-kit"
-& "$HOME\.wom-tools\wom-kit\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.312/wom_kit-0.3.312-py3-none-any.whl"
+& "$HOME\.wom-tools\wom-kit\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.313/wom_kit-0.3.313-py3-none-any.whl"
 & "$HOME\.wom-tools\wom-kit\Scripts\archive.exe" --version
 ```
 
@@ -84,7 +84,7 @@ The argv exists only when `runtime_alignment.integrity.verified` is true after
 local real-path, project-local Git-metadata, raw worktree/index/flag, exact
 source/resource-byte, closed-import, annotated-tag, tagged-version, and
 `origin/main` ancestry checks. Its Python `-I -S` bootstrap binds the expected
-commit, tag, wrapper blob, and all 144 synchronized resources, executes the
+commit, tag, wrapper blob, and every synchronized resource listed in the manifest, executes the
 wrapper from verified memory, and permits only the read-only `version`
 command. It does not put the project source root on `sys.path`: it purges
 project aliases and an exact-object-id custom finder loads only `wom_kit`, so

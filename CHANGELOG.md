@@ -6,6 +6,34 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.313 - 2026-08-10
+
+- Added a source-fidelity contract for every new AI-assisted and AI-generated
+  draft. One manifested content-addressed source, explicit `verbatim`,
+  `faithful_summary`, or `sanitized_derivative` mode, intended audience, dry-run
+  body and plan digests, and attributed human approval are required before the
+  first draft write.
+- Restricted `verbatim` to personal archives with `private_self` audience.
+  Newline comparison changes only CRLF or lone CR to LF; it does not trim,
+  normalize Unicode, or remove a BOM. Private personal data is preserved under
+  that explicit request, while credential secrets fail closed before writing.
+- Added a create-only private draft-fidelity receipt and mint-time source/body
+  re-verification. Public draft, canonical, CLI, and MCP projections expose only
+  safe status and digest evidence, never the private source object id, source
+  path, source text, or receipt authority.
+- Kept human-written draft creation compatible. This is an intentional breaking
+  change for all new AI automation: declared AI provenance cannot downgrade to
+  the human route, and existing AI drafts receive no inferred fidelity claim;
+  they require an attributed legacy review before mint.
+- Added CLI create/mint replay hashes and matching MCP create-draft inputs.
+  Audience remains descriptive metadata, not access control or permission to
+  share, export, publish, or call a provider.
+- The reported shortening attempt stopped before any draft or mint write, so
+  verified data loss is zero. Local focused and synthetic tests are
+  implementation evidence only; merge, CI, exact tag, GitHub Release, wheel,
+  fresh install, real-archive execution, external sharing, and human acceptance
+  remain separately unverified at this source checkpoint.
+
 ## v0.3.312 - 2026-08-10
 
 - Unified generated-index authority for index-backed zettel query and mint

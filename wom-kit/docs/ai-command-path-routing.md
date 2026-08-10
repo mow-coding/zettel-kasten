@@ -1,6 +1,6 @@
 # AI Command-Path Routing
 
-Status: implemented in v0.3.278, extended through v0.3.305
+Status: implemented in v0.3.278, extended through v0.3.313
 
 ## Purpose
 
@@ -115,6 +115,14 @@ v0.3.312 advances the current routing envelope to
 `wom-kit/operator-feedback-runtime-routing/v0.2` and adds the body plan,
 reviewed body approval, and final body/metadata binding check.
 
+v0.3.313 does not add a new action or advance the v0.13 routing schema. It
+tightens the existing draft-create and mint routes: every new AI draft carries
+one manifested source, explicit fidelity mode and audience, a dry-run body and
+plan digest, and attributed human replay. Declared AI provenance cannot use the
+human route. Mint re-verifies the private receipt and source/body authority.
+Human-written creation remains compatible; old AI drafts use an attributed
+legacy review. Audience metadata never authorizes sharing or transport.
+
 The additive routes cover:
 
 - provider-neutral locator plan, record, recovery, and exact revert;
@@ -228,6 +236,9 @@ Every write remains preview-first and human-reviewed.
 - v0.3.312 advances routing to
   `wom-kit/ai-command-path-routing/v0.13` and adds the reviewed feedback-body
   companion sequence without changing delivery semantics.
+- v0.3.313 keeps routing at v0.13 and strengthens the existing draft/mint route
+  with source-fidelity dry-run, reviewed replay, private receipt, and mint
+  re-verification semantics. It adds no share or provider route.
 - v0.3.293 advances routing to
   `wom-kit/ai-command-path-routing/v0.7` and adds the complete
   operator-feedback sequence without changing existing action contracts.

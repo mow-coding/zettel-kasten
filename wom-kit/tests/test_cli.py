@@ -205,6 +205,62 @@ class ArchiveCliTests(unittest.TestCase):
             code = archive_cli.main(args)
         return code, stdout.getvalue(), stderr.getvalue()
 
+    def manifest_source_fidelity_fixture(
+        self,
+        archive_root: Path,
+        source_text: str,
+    ) -> str:
+        raw = source_text.encode("utf-8")
+        digest = hashlib.sha256(raw).hexdigest()
+        object_id = f"sha256:{digest}"
+        logical_key = f"objects/sha256/{digest[:2]}/{digest}"
+        object_path = archive_root.joinpath(*logical_key.split("/"))
+        object_path.parent.mkdir(parents=True, exist_ok=True)
+        object_path.write_bytes(raw)
+
+        manifest_path = archive_root / "objects" / "manifests" / "files.jsonl"
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        existing_text = (
+            manifest_path.read_text(encoding="utf-8")
+            if manifest_path.exists()
+            else ""
+        )
+        records = [
+            json.loads(line)
+            for line in existing_text.splitlines()
+            if line.strip()
+        ]
+        if not any(record.get("object_id") == object_id for record in records):
+            separator = "" if not existing_text or existing_text.endswith("\n") else "\n"
+            record = {
+                "object_id": object_id,
+                "sha256": digest,
+                "logical_key": logical_key,
+                "mime": "text/plain",
+                "size_bytes": len(raw),
+                "locations": [
+                    {
+                        "provider": "local",
+                        "path": logical_key,
+                        "availability": "available",
+                    }
+                ],
+                "provenance": {
+                    "created_in": archive_services.read_archive_config(archive_root)[
+                        "archive_id"
+                    ],
+                    "source": "source_fidelity_test_fixture",
+                },
+            }
+            manifest_path.write_text(
+                existing_text
+                + separator
+                + json.dumps(record, sort_keys=True, separators=(",", ":"))
+                + "\n",
+                encoding="utf-8",
+            )
+        return object_id
+
     def create_inbox_pipeline_audit_draft(
         self,
         archive_root: Path,
@@ -215,23 +271,62 @@ class ArchiveCliTests(unittest.TestCase):
         promotion_stage: str = "captured",
         legacy_draft_suffix: bool = False,
     ) -> Path:
-        result = archive_services.create_draft_zettel(
-            archive_root,
-            title=title,
-            body=f"PRIVATE_BODY_{draft_id}",
-            abstract=f"PRIVATE ABSTRACT FOR {draft_id}",
-            facets={"domain": "private_fixture"},
-            created_by="ai_runtime:private-fixture",
-            source="private_fixture",
-            creation_mode=creation_mode,
-            assisted_by=(
+        create_arguments = {
+            "title": title,
+            "body": f"PRIVATE_BODY_{draft_id}",
+            "abstract": f"PRIVATE ABSTRACT FOR {draft_id}",
+            "facets": {"domain": "private_fixture"},
+            "created_by": (
+                "ai_runtime:private-fixture"
+                if creation_mode in {"ai_assisted", "ai_generated"}
+                else "person:private-fixture"
+            ),
+            "source": "private_fixture",
+            "creation_mode": creation_mode,
+            "assisted_by": (
                 ["ai_runtime:private-fixture"]
                 if creation_mode in {"ai_assisted", "ai_generated"}
                 else None
             ),
-            draft_id=draft_id,
-            created_at="2026-07-29T01:02:03+09:00",
-        )
+            "draft_id": draft_id,
+            "created_at": "2026-07-29T01:02:03+09:00",
+        }
+        if creation_mode in {"ai_assisted", "ai_generated"}:
+            source_object_id = self.manifest_source_fidelity_fixture(
+                archive_root,
+                f"PRIVATE_SOURCE_{draft_id}",
+            )
+            create_arguments.update(
+                {
+                    "source_fidelity_mode": "faithful_summary",
+                    "source_fidelity_audience": "private_self",
+                    "fidelity_source_object_id": source_object_id,
+                }
+            )
+            preview = archive_services.create_draft_zettel(
+                archive_root,
+                dry_run=True,
+                **create_arguments,
+            )
+            self.assertTrue(preview["ok"], preview)
+            replay = preview["approval_replay"]
+            result = archive_services.create_draft_zettel(
+                archive_root,
+                dry_run=False,
+                approved=True,
+                draft_approved_by="person:private-fixture",
+                expected_body_sha256=replay["expected_body_sha256"],
+                expected_source_fidelity_plan_sha256=replay[
+                    "expected_source_fidelity_plan_sha256"
+                ],
+                **create_arguments,
+            )
+        else:
+            # This branch is intentionally human-written for classification tests.
+            result = archive_services.create_draft_zettel(
+                archive_root,
+                **create_arguments,
+            )
         source_path = archive_root / result["path"]
         if promotion_stage == "captured" and not legacy_draft_suffix:
             return source_path
@@ -1779,6 +1874,8 @@ class ArchiveCliTests(unittest.TestCase):
         assert match is not None
         frontmatter = archive_cli.load_yaml(match.group(1))
         body = text[match.end() :].lstrip()
+        frontmatter["provenance"]["created_by"] = "person:test-fixture"
+        frontmatter["provenance"]["creation_mode"] = "human_written"
         frontmatter["title"] = title
         frontmatter["kind"] = "permanent_note"
         frontmatter["promotion"] = {
@@ -1798,6 +1895,8 @@ class ArchiveCliTests(unittest.TestCase):
         self.assertIsNotNone(match)
         assert match is not None
         frontmatter = archive_cli.load_yaml(match.group(1))
+        frontmatter["provenance"]["created_by"] = "person:test-fixture"
+        frontmatter["provenance"]["creation_mode"] = "human_written"
         frontmatter["id"] = zettel_id
         frontmatter["title"] = title
         frontmatter["kind"] = "permanent_note"
@@ -35704,6 +35803,19 @@ state:
                 ]
             )
             self.assertEqual(missing_code, 1)
+            missing_result = json.loads(missing_output)
+            self.assertEqual(
+                missing_result["reason_codes"],
+                ["create_draft_service_failed"],
+            )
+            self.assertFalse(missing_result["private_values_echoed"])
+            for private_value in (
+                str(archive_root),
+                "Missing prompt boundary report",
+                "This command should fail cleanly.",
+                str(Path(tmp) / "missing.json"),
+            ):
+                self.assertNotIn(private_value, missing_output)
             self.assertNotIn("Traceback", missing_output)
 
             invalid_path = Path(tmp) / "invalid-prompt-boundary-report.json"
@@ -35724,7 +35836,20 @@ state:
                 ]
             )
             self.assertEqual(invalid_code, 1)
-            self.assertIn("prompt-boundary report must be valid JSON", invalid_output)
+            invalid_result = json.loads(invalid_output)
+            self.assertEqual(
+                invalid_result["reason_codes"],
+                ["create_draft_service_failed"],
+            )
+            self.assertFalse(invalid_result["private_values_echoed"])
+            for private_value in (
+                str(archive_root),
+                "Invalid prompt boundary report",
+                "This command should fail cleanly.",
+                str(invalid_path),
+                "{not valid json",
+            ):
+                self.assertNotIn(private_value, invalid_output)
             self.assertNotIn("Traceback", invalid_output)
 
             traversal_code, traversal_output = self.run_cli(
@@ -35743,7 +35868,19 @@ state:
                 ]
             )
             self.assertEqual(traversal_code, 1)
-            self.assertIn("path traversal", traversal_output)
+            traversal_result = json.loads(traversal_output)
+            self.assertEqual(
+                traversal_result["reason_codes"],
+                ["create_draft_service_failed"],
+            )
+            self.assertFalse(traversal_result["private_values_echoed"])
+            for private_value in (
+                str(archive_root),
+                "Traversal prompt boundary report",
+                "This command should fail cleanly.",
+                "..\\prompt-boundary-report.json",
+            ):
+                self.assertNotIn(private_value, traversal_output)
             self.assertNotIn("Traceback", traversal_output)
 
     def test_mint_preserves_prompt_boundary_metadata_in_preview_and_receipt(self) -> None:
@@ -59174,6 +59311,18 @@ archive_services.zet_abstract_backfill_recover(
                 "archive:personal:ai-draft-integrity",
             )
             self.assertEqual(init_code, 0, init_output)
+            source_object_id = self.manifest_source_fidelity_fixture(
+                archive_root,
+                "Manifested conversation source for the AI publication draft.",
+            )
+            fidelity_args = [
+                "--source-fidelity",
+                "faithful_summary",
+                "--fidelity-audience",
+                "private_self",
+                "--fidelity-source-object-id",
+                source_object_id,
+            ]
 
             incomplete_code, incomplete_output = self.run_cli(
                 [
@@ -59187,6 +59336,7 @@ archive_services.zet_abstract_backfill_recover(
                     "ai_assisted",
                     "--assisted-by",
                     "ai_runtime:codex",
+                    *fidelity_args,
                     "--dry-run",
                     "--format",
                     "json",
@@ -59215,6 +59365,10 @@ archive_services.zet_abstract_backfill_recover(
                     "A reviewed body that is intended to become canonical memory.",
                     "--facet",
                     "domain=operations",
+                    "--draft-id",
+                    "zet_20260810_121_ai_publication_draft",
+                    "--created-at",
+                    "2026-08-10T12:10:00+09:00",
                     "--format",
                     "json",
                 ]
@@ -59237,6 +59391,11 @@ archive_services.zet_abstract_backfill_recover(
                     "ai_generated",
                     "--assisted-by",
                     "ai_runtime:codex",
+                    "--draft-id",
+                    "zet_20260810_121_ai_publication_draft",
+                    "--created-at",
+                    "2026-08-10T12:10:00+09:00",
+                    *fidelity_args,
                     "--dry-run",
                     "--format",
                     "json",
@@ -59245,7 +59404,7 @@ archive_services.zet_abstract_backfill_recover(
             self.assertEqual(duplicate_code, 1, duplicate_output)
             duplicate = json.loads(duplicate_output)
             self.assertIn(
-                "An unminted inbox draft with the same normalized title already exists; revise that draft in place instead of creating another one.",
+                "source_fidelity_draft_create_only_conflict",
                 duplicate["blockers"],
             )
             self.assertEqual(
@@ -59292,24 +59451,39 @@ archive_services.zet_abstract_backfill_recover(
             init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:unsafe-draft")
             self.assertEqual(init_code, 0, init_output)
 
+            private_title = "Unsafe draft"
+            private_body = "This mentions X:\\example\\secret.txt."
             code, output = self.run_cli(
                 [
                     "create-draft",
                     str(archive_root),
                     "--title",
-                    "Unsafe draft",
+                    private_title,
                     "--body",
-                    "This mentions X:\\example\\secret.txt.",
+                    private_body,
+                    "--format",
+                    "json",
                 ]
             )
             self.assertEqual(code, 1)
-            self.assertIn("absolute path", output)
+            result = json.loads(output)
+            self.assertEqual(
+                result["reason_codes"],
+                ["create_draft_service_failed"],
+            )
+            self.assertFalse(result["private_values_echoed"])
+            for private_value in (str(archive_root), private_title, private_body):
+                self.assertNotIn(private_value, output)
 
     def test_create_draft_dry_run_returns_preview_and_writes_no_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = Path(tmp) / "personal-archive"
             init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:draft-dry-run")
             self.assertEqual(init_code, 0, init_output)
+            source_object_id = self.manifest_source_fidelity_fixture(
+                archive_root,
+                "Manifested conversation source for the assisted draft.",
+            )
 
             code, output = self.run_cli(
                 [
@@ -59342,6 +59516,12 @@ archive_services.zet_abstract_backfill_recover(
                     "user_conversation",
                     "--assisted-by",
                     "ai_runtime:codex",
+                    "--source-fidelity",
+                    "faithful_summary",
+                    "--fidelity-audience",
+                    "private_self",
+                    "--fidelity-source-object-id",
+                    source_object_id,
                     "--supervised-by",
                     "person:test",
                     "--derived-from",
@@ -59382,11 +59562,13 @@ archive_services.zet_abstract_backfill_recover(
             self.assertEqual(init_code, 0, init_output)
             body = "Approved safe draft body."
             expected_hash = hashlib.sha256((body.rstrip() + "\n").encode("utf-8")).hexdigest()
-
-            code, output = self.run_cli(
-                [
-                    "create-draft",
-                    str(archive_root),
+            source_object_id = self.manifest_source_fidelity_fixture(
+                archive_root,
+                "Manifested conversation source reviewed for the approved draft.",
+            )
+            create_args = [
+                "create-draft",
+                str(archive_root),
                     "--title",
                     "Approved AI draft",
                     "--abstract",
@@ -59413,6 +59595,12 @@ archive_services.zet_abstract_backfill_recover(
                     "user_conversation",
                     "--assisted-by",
                     "ai_runtime:codex",
+                    "--source-fidelity",
+                    "faithful_summary",
+                    "--fidelity-audience",
+                    "private_self",
+                    "--fidelity-source-object-id",
+                    source_object_id,
                     "--supervised-by",
                     "person:test",
                     "--derived-from",
@@ -59425,8 +59613,22 @@ archive_services.zet_abstract_backfill_recover(
                     "zet_20260524_020304_approved_ai_draft",
                     "--created-at",
                     "2026-05-24T02:03:04+09:00",
+            ]
+            preview_code, preview_output = self.run_cli(
+                [*create_args, "--dry-run", "--format", "json"]
+            )
+            self.assertEqual(preview_code, 0, preview_output)
+            replay = json.loads(preview_output)["approval_replay"]
+            self.assertEqual(replay["expected_body_sha256"], expected_hash)
+
+            code, output = self.run_cli(
+                [
+                    *create_args,
+                    "--approve",
                     "--expected-body-sha256",
-                    expected_hash,
+                    replay["expected_body_sha256"],
+                    "--expected-source-fidelity-plan-sha256",
+                    replay["expected_source_fidelity_plan_sha256"],
                     "--draft-approved-by",
                     "person:test",
                     "--format",
@@ -59480,6 +59682,18 @@ archive_services.zet_abstract_backfill_recover(
             archive_root = Path(tmp) / "personal-archive"
             init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:draft-ai-identity")
             self.assertEqual(init_code, 0, init_output)
+            source_object_id = self.manifest_source_fidelity_fixture(
+                archive_root,
+                "Manifested conversation source for the AI identity draft.",
+            )
+            fidelity_args = [
+                "--source-fidelity",
+                "faithful_summary",
+                "--fidelity-audience",
+                "private_self",
+                "--fidelity-source-object-id",
+                source_object_id,
+            ]
 
             for created_by in ["person:test", "cli:archive", "mcp:zettel-kasten-archive-mcp"]:
                 code, output = self.run_cli(
@@ -59499,6 +59713,7 @@ archive_services.zet_abstract_backfill_recover(
                         "ai_assisted",
                         "--created-by",
                         created_by,
+                        *fidelity_args,
                         "--format",
                         "json",
                     ]
@@ -59525,6 +59740,7 @@ archive_services.zet_abstract_backfill_recover(
                     "person:test",
                     "--assisted-by",
                     "ai_runtime:codex",
+                    *fidelity_args,
                     "--format",
                     "json",
                 ]
@@ -59660,7 +59876,13 @@ archive_services.zet_abstract_backfill_recover(
             self.assertEqual(code, 1)
             result = json.loads(output)
             self.assertFalse(result["ok"])
-            self.assertIn("Unsafe local path or provider locator", "; ".join(result["blockers"]))
+            self.assertEqual(
+                result["blockers"], ["private_locator_or_path_present"]
+            )
+            serialized = json.dumps(result, ensure_ascii=False)
+            self.assertNotIn(r"X:\example\private.txt", serialized)
+            self.assertNotIn("s3://example-bucket/private.txt", serialized)
+            self.assertNotIn("gs://example-bucket/session", serialized)
 
     def test_ai_start_here_surfaces_unpublished_and_out_of_pipeline_draft_attention(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -59839,7 +60061,16 @@ archive_services.zet_abstract_backfill_recover(
                 consistent_path,
                 strict=True,
             )
-            self.assertNotIn("draft_creation", consistent_frontmatter)
+            self.assertEqual(
+                consistent_frontmatter["draft_creation"]["approved_by"],
+                "person:private-fixture",
+            )
+            self.assertRegex(
+                consistent_frontmatter["draft_creation"][
+                    "approved_source_fidelity_plan_sha256"
+                ],
+                r"^[0-9a-f]{64}$",
+            )
             before = {
                 path.relative_to(archive_root).as_posix(): path.read_bytes()
                 for path in archive_root.rglob("*")
@@ -63419,7 +63650,7 @@ archive_services.zet_abstract_backfill_recover(
                     (archive_root / "zettels" / "zet_20260519_draft_ai_lunch_note.md").exists()
                 )
 
-    def test_promote_dry_run_blocks_unreviewed_fleeting_capture(self) -> None:
+    def test_promote_dry_run_routes_unreviewed_legacy_ai_draft_to_mint(self) -> None:
         archive_root = KIT_ROOT / "examples" / "fake-life-archive"
         code, output = self.run_cli(
             [
@@ -63435,9 +63666,14 @@ archive_services.zet_abstract_backfill_recover(
         self.assertEqual(code, 1)
         result = json.loads(output)
         self.assertFalse(result["ok"])
-        self.assertIn("Note kind cannot be promoted to canonical memory: fleeting_capture.", result["blockers"])
-        self.assertTrue(any(item["status"] == "needs_human_review" for item in result["checklist"]))
-        self.assertEqual(result["receipt_preview"]["receipt_path"], result["proposed_receipt_path"])
+        self.assertEqual(
+            result["blockers"],
+            ["ai_source_fidelity_draft_requires_mint_zettel"],
+        )
+        self.assertIsNone(result["title"])
+        self.assertIsNone(result["draft_path"])
+        self.assertEqual(result["checklist"], [])
+        self.assertEqual(result["receipt_preview"], {})
 
     def test_mint_zet_blocks_private_provider_locator_in_body(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -63822,6 +64058,8 @@ archive_services.zet_abstract_backfill_recover(
                     "--approve",
                     "--reviewed-by",
                     "person:test",
+                    "--affirm",
+                    "legacy_source_fidelity_reviewed",
                     "--format",
                     "json",
                 ]
@@ -64239,6 +64477,10 @@ archive_services.zet_abstract_backfill_recover(
                     "--path",
                     "inbox/zet_20260519_draft_ai_lunch_note.md",
                     "--dry-run",
+                    "--reviewed-by",
+                    "person:test",
+                    "--affirm",
+                    "legacy_source_fidelity_reviewed",
                     "--format",
                     "json",
                 ]
@@ -64258,6 +64500,8 @@ archive_services.zet_abstract_backfill_recover(
                     "--approve",
                     "--reviewed-by",
                     "person:test",
+                    "--affirm",
+                    "legacy_source_fidelity_reviewed",
                     "--format",
                     "json",
                 ]
@@ -76478,6 +76722,8 @@ archive_services.zet_abstract_backfill_recover(
         assert match is not None
         frontmatter = archive_cli.load_yaml(match.group(1))
         body = text[match.end() :].lstrip()
+        frontmatter["provenance"]["created_by"] = "person:test-fixture"
+        frontmatter["provenance"]["creation_mode"] = "human_written"
         frontmatter["title"] = "Human review needed note"
         frontmatter["kind"] = "permanent_note"
         if edges is not None:

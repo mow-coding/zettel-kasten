@@ -1,6 +1,6 @@
 # WOM AI Runtime Skill And Plugin Layer
 
-Status: v0.3.244 runtime skill package and approval-gated host lifecycle baseline
+Status: v0.3.313 runtime skill package with private source-fidelity guidance
 
 ## Purpose
 
@@ -27,6 +27,30 @@ Where may drafts and zets live?
 What safe actions are available?
 Are there blockers before I continue?
 ```
+
+## v0.3.313 Source-Fidelity Runtime Rule
+
+Every new AI-assisted or AI-generated draft uses the existing official
+`create-draft` route but now requires one manifested content-addressed source,
+`--source-fidelity`, `--fidelity-audience`, and
+`--fidelity-source-object-id`. Preview first; the unchanged write replay needs
+`--approve`, `--draft-approved-by`, `--expected-body-sha256`, and
+`--expected-source-fidelity-plan-sha256`. If `created_by` or `assisted_by`
+declares AI provenance, or `local_ai_sessions` is non-empty, the runtime must
+not relabel the request as human-written to avoid this gate.
+
+Use `verbatim` only for a personal archive with `private_self`. Personal source
+data stays intact under that explicit request, while credential secrets block.
+Use `faithful_summary` or a separately reviewed `sanitized_derivative` for a
+derivative candidate; matching digests do not prove its semantic quality.
+
+Mint preview re-verifies the private receipt, manifested source, and raw draft
+body. Approved mint needs the current fidelity-plan hash. Existing human-written
+draft creation remains compatible; an older AI draft needs the attributed
+`legacy_source_fidelity_reviewed` affirmation instead of an inferred mode.
+MCP `create_draft_zettel` carries the matching create fields and binds its own
+AI identity; `mint_zettel_check` stays preview-only. Audience is not an ACL and
+does not authorize sharing, export, transport, or a provider call.
 
 ## First-Run Personal WOM Onboarding
 

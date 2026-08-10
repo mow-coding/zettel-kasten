@@ -1,8 +1,8 @@
 {
   "schema": "wom-kit/package-resource-manifest/v0.1",
-  "version": "0.3.312",
+  "version": "0.3.313",
   "source_of_truth": "wom-kit source resource directories",
-  "file_count": 144,
+  "file_count": 145,
   "files": [
     {
       "source": "schemas/activity-group-membership-receipt.schema.json",
@@ -413,6 +413,12 @@
       "sha256": "ddd3200653e34ab3e136de4bb144e2f17d7ca08c3a314a81b0729d86d5847621"
     },
     {
+      "source": "schemas/source-fidelity-draft-receipt.schema.json",
+      "packaged": "schemas/source-fidelity-draft-receipt.schema.json",
+      "bytes": 5883,
+      "sha256": "dd89ecccbfa5acb7491f2ea4bc23d149151bbc1842191ac9924af6fc9fdc9c19"
+    },
+    {
       "source": "schemas/source-intake-batch-receipt.schema.json",
       "packaged": "schemas/source-intake-batch-receipt.schema.json",
       "bytes": 1552,
@@ -571,14 +577,14 @@
     {
       "source": "templates/ai-runtime/wom-archive/SKILL.md",
       "packaged": "templates/ai-runtime/wom-archive/SKILL.md",
-      "bytes": 10651,
-      "sha256": "4ffeac6a28685dd305015833b2a8210e542b3aa1584c3a7e8392296b4dd9cf24"
+      "bytes": 10713,
+      "sha256": "65af678182ac817ee9f598c6be7e06fba7e462f25afdc347d65afafe294f8240"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/capture-draft-and-publication.md",
       "packaged": "templates/ai-runtime/wom-archive/references/capture-draft-and-publication.md",
-      "bytes": 6640,
-      "sha256": "c4b7d0fb6a2dd69ad161caa0e29039240a191f046253809ab0d2638402758eac"
+      "bytes": 8352,
+      "sha256": "2c28d76716ced8a0f82ac34c6ac2cae1235193fe69505ca1e6082f20c8dcae72"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/foreign-sharing-and-trust.md",
@@ -757,8 +763,8 @@
     {
       "source": "templates/personal/AGENTS.md",
       "packaged": "templates/personal/AGENTS.md",
-      "bytes": 10795,
-      "sha256": "09eb9f93113c5514bfcb26a9cc13cfa6d27e8f3762e83d604263405a8dc90a8a"
+      "bytes": 11803,
+      "sha256": "8565f4845a4e8f22e73c424328aea6d0f3e40034d560b217d6c8042733697dba"
     },
     {
       "source": "templates/personal/archive-identity.yml",
@@ -863,10 +869,10 @@
       "sha256": "d619dc26af3216498c8392dfe838b0fe752d4bad9da998a58ca682d668fc510c"
     },
     {
-      "source": "docs/releases/v0.3.312.md",
-      "packaged": "release-notes/v0.3.312.md",
-      "bytes": 5049,
-      "sha256": "3924c4868d7bcebcee2aab0b88bf083938402bb5e30e8aacb1a9d78b1a015ff7"
+      "source": "docs/releases/v0.3.313.md",
+      "packaged": "release-notes/v0.3.313.md",
+      "bytes": 6160,
+      "sha256": "810d6880a83af2bf19af50768bea7eb76954acd554d1e864c0c17873d17eda5a"
     }
   ]
 }

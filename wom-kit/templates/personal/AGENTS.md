@@ -41,6 +41,7 @@ For operator feedback, run `archive operator-feedback-plan <archive-root> --dry-
 - Before suggesting artifact cleanup, run `archive artifact-lifecycle-inventory <archive-root> --dry-run --format json`; incomplete coverage blocks absence claims, and no inventory class or age grants deletion authority.
 - Create AI-generated zettel drafts only with `archive create-draft` dry-run followed by its exact human-reviewed replay. Never write Markdown directly into `inbox/`.
 - AI-assisted or AI-generated drafts require an explicit reviewed abstract and at least one stable facet. If the same normalized title already exists in `inbox/`, revise that draft in place instead of creating another file.
+- Every new AI draft also requires a manifested source, fidelity mode, audience, dry-run body/plan hashes, and the exact attributed approved replay. Never relabel AI `created_by`, `assisted_by`, or non-empty `local_ai_sessions` evidence as human-written. Mint must re-verify the private receipt and current fidelity plan; audience is not permission to share.
 - A request to publish starts the `mint-zet --dry-run --progress` preview workflow now. Progress is stderr evidence, not the final result. Report blockers or a remaining approval gate immediately, and claim completion only after canonical plus receipt evidence exists.
 - Use the official dry-run and approval routes for `mint-zet`, `zettel-edge`, source/objet intake, and operational-context updates; knowing a destination path is not write authorization.
 - For a persistent saved view, prepare a reviewed private request under `.wom-scratch/private/saved-views/`, preview `archive saved-view-write`, and use only its exact approval-gated write or revert route. Never edit persistent `views/*.yml` directly.
@@ -68,6 +69,7 @@ For operator feedback, run `archive operator-feedback-plan <archive-root> --dry-
 - PROVENANCE FIDELITY: record the source the human ACTUALLY encountered — the exact video, edition, translation, or language they saw. Never silently swap it for a "more authoritative" or "original" source. If a better source exists, ASK; if it is recorded, keep it as a SEPARATE ref, not a replacement of the encountered one. The archive preserves the provenance of the user's own thought, not the canonical work behind it.
 - ENUMERATE TOOLS BEFORE DECLARING IMPOSSIBLE: before you say a task cannot be done or degrade it (e.g. "verbatim capture is not possible, I will summarize"), systematically check the installed and available tools — local CLIs, MCP servers, and the derive-text tool-readiness surface. Do not conclude "impossible" from one or two probes.
 - CARRY ESTABLISHED STATE: carry forward what has already been set up or approved in this session or recorded in operational-context (credentials configured, permissions granted, resources present). Do NOT re-ask for or re-confirm already-established state as if first-time. When unsure, CHECK the recorded context (operational-context, receipts) before asking again.
+- PRIVATE VERBATIM FIDELITY: when the owner explicitly requests `private_self` verbatim preservation, do not silently omit, mask, anonymize, reorder, or summarize private personal data such as names, contact details, dates, or conversation turns. Preserve the encountered source as a manifested objet and use the source-fidelity dry-run/replay route. Credential secrets are a different class and must remain outside the zet. Any client or public form is a separate human-reviewed `sanitized_derivative`; never mutate the private source or treat an audience label as permission to share.
 
 ## Plain-Language for Humans
 
@@ -78,4 +80,4 @@ For operator feedback, run `archive operator-feedback-plan <archive-root> --dry-
 
 ## Privacy
 
-Personal records are private by default. When deriving content for company, family, or shared archives, create a sanitized derivative rather than exposing private sources.
+Personal records are private by default. When deriving content for company, family, or shared archives, create a sanitized derivative rather than exposing or changing private sources. Sharing still requires its own explicit approval.

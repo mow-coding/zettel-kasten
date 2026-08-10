@@ -58,6 +58,8 @@ class IndexLifecycleV03312Tests(unittest.TestCase):
     def ready_draft(self, root: Path, *, body: str | None = None) -> Path:
         path = root / "inbox" / "zet_20260519_draft_ai_lunch_note.md"
         frontmatter, existing_body = archive_services.require_readable_zettel_content(path)
+        frontmatter["provenance"]["created_by"] = "person:test-fixture"
+        frontmatter["provenance"]["creation_mode"] = "human_written"
         frontmatter["title"] = "Letter 123 progress fixture"
         frontmatter["kind"] = "permanent_note"
         frontmatter["promotion"] = {
@@ -560,21 +562,35 @@ class IndexLifecycleV03312Tests(unittest.TestCase):
                 raise RuntimeError("synthetic crash before canonical write")
             return original_open(path, *args, **kwargs)
 
+        original_create_bytes = archive_services._write_bytes_create_if_absent
+
+        def crash_first_canonical_create(path: Path, payload: bytes):
+            if path.parent.name == "zettels":
+                raise RuntimeError("synthetic crash before canonical write")
+            return original_create_bytes(path, payload)
+
         for operation in ("promote", "mint"):
             with self.subTest(operation=operation), tempfile.TemporaryDirectory() as tmp:
                 root = self.copy_archive(Path(tmp))
                 self.ready_draft(root, body=f"{operation} dirty intent fixture body. " * 20)
                 archive_services.index_archive(root)
-                with patch.object(Path, "open", new=crash_first_canonical_open):
-                    with self.assertRaisesRegex(RuntimeError, "before canonical write"):
-                        if operation == "promote":
+                with self.assertRaisesRegex(RuntimeError, "before canonical write"):
+                    if operation == "promote":
+                        with patch.object(
+                            Path, "open", new=crash_first_canonical_open
+                        ):
                             archive_services.promote_zettel(
                                 root,
                                 relative_path="inbox/zet_20260519_draft_ai_lunch_note.md",
                                 reviewed_by="person:test",
                                 allow_warnings=True,
                             )
-                        else:
+                    else:
+                        with patch.object(
+                            archive_services,
+                            "_write_bytes_create_if_absent",
+                            new=crash_first_canonical_create,
+                        ):
                             archive_services.mint_zettel(
                                 root,
                                 relative_path="inbox/zet_20260519_draft_ai_lunch_note.md",

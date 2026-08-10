@@ -2,6 +2,7 @@
 
 상태: 공개 navigation baseline
 날짜: 2026-05-27
+갱신: 2026-08-10
 철학 갱신: 2026-07-15
 하네스 호환 경계 갱신: 2026-07-16
 
@@ -48,6 +49,8 @@
 - [Zettel-Kasten Layer](../specs/zettel-kasten.md)
 - [Agent Operator Capabilities Manifest](agent-operator-capabilities.md)
 - [Operator Feedback Lifecycle](operator-feedback-lifecycle.md)
+- [원문 충실도와 비공개 verbatim 보존](source-fidelity-and-private-verbatim.md)
+- [v0.3.313 원문 충실도 결정 기록](archive-infra-decision-log-2026-08-10-v03313-source-fidelity.md)
 - [Letter 120·123 인덱스 수명주기와 피드백 본문](letter120-123-index-lifecycle-and-feedback-body.md)
 - [v0.3.312 인덱스 권위와 피드백 본문 결정 기록](archive-infra-decision-log-2026-08-10-v03312-index-authority-and-feedback-body.md)
 - [Approval Handoff Lifecycle](approval-handoff-lifecycle.md)
@@ -409,6 +412,7 @@ local archive
 - [v0.3.310 릴리스 노트](releases/v0.3.310.md)
 - [v0.3.311 릴리스 노트](releases/v0.3.311.md)
 - [v0.3.312 릴리스 노트](releases/v0.3.312.md)
+- [v0.3.313 릴리스 노트](releases/v0.3.313.md)
 
 작업일지는 제품 명세가 아닙니다.
 
@@ -435,6 +439,7 @@ Specs:
 Schemas:
 
 - [Schemas Directory](../schemas/)
+- [Source-Fidelity Draft Receipt Schema](../schemas/source-fidelity-draft-receipt.schema.json)
 - [IMAP Mailbox Adapter Manifest Schema](../schemas/imap-mailbox-adapter-manifest.schema.json)
 
 이 문서들은 구현 계약에 가깝습니다. 제품 철학 문서보다 더 정확하고 엄격해야 합니다.
