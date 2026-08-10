@@ -163,7 +163,7 @@ MCP clients must not request `redact_local_paths: false` unless trusted local de
 Introduced in v0.3.278 and extended through v0.3.305, runtime-context,
 ai-start-here, operational-context, and
 canonical entrypoint metadata return
-`wom-kit/ai-command-path-routing/v0.12`.
+`wom-kit/ai-command-path-routing/v0.13`.
 
 The routing object names official WOM commands for search, local version
 truth, checked-layer objet rediscovery before global absence claims,

@@ -1,6 +1,6 @@
 # Runtime Canonical Entry Points
 
-Status: v0.3.311 Letters 118-119 credential continuity and reviewed Notion recovery checkpoint
+Status: v0.3.312 Letters 120 and 123 current-index, mint-progress, and feedback-body checkpoint
 
 When an AI runtime enters a WOM archive, it needs a small, explicit "start
 here" map. The archive may contain zets, source bindings, provider metadata,
@@ -54,7 +54,7 @@ consumption as `not_proven`.
 ## Official Action Routing
 
 Introduced in v0.3.278 and extended through v0.3.308, `action_routing` uses
-`wom-kit/ai-command-path-routing/v0.12`. It tells an AI which official command
+`wom-kit/ai-command-path-routing/v0.13`. It tells an AI which official command
 handles session entry, search, local version truth, saved-view inspection,
 inbox pipeline-shape review, explicit event-membership add/removal planning, command
 discovery, draft creation, minting, typed edges, source capture, and
@@ -132,6 +132,26 @@ protected literal is not implemented. See
 [Letter 117 Completion](letter117-completion.md). Source documentation and
 external CI, exact-tag, GitHub Release, and wheel evidence remain distinct
 verification layers.
+
+## Letters 120 and 123 index and feedback entry points
+
+From v0.3.312, official index-backed search, structured zettel views, and mint
+planning use the same current-index authority. `archive_index_rebuild_required`
+means that the command returned no authoritative rows or mint decision. Run an
+explicit `archive index --progress`, verify with `index-health --dry-run
+--progress`, and then retry; do not use raw SQLite, stale rows, or a silent live
+body scan as a substitute.
+
+Large mint previews and approvals accept `--progress`. Stderr carries only
+content-free progress while stdout remains the final result. Progress is not an
+approval receipt.
+
+Substantive operator feedback uses `operator-feedback-compose --dry-run`, the
+unchanged digest-bound reviewed replay, and
+`operator-feedback-body-check --dry-run`. The body digest is then bound through
+the existing `operator-feedback-record` metadata lifecycle. A metadata row or
+delivery status alone does not prove body completeness, external submission, or
+human receipt.
 
 ## Letters 118-119 Credential And Reviewed Recovery Entry Points
 
@@ -395,7 +415,7 @@ Read and follow the returned `action_routing`.
 Read `inbox_attention` and surface every unpublished-draft count before broad work.
 Use `archive search <archive-root> <query> --count-total --format json` for official WOM search.
 Raw grep and raw SQL are not authoritative WOM search results.
-For operator feedback, run `archive operator-feedback-plan <archive-root> --dry-run --format json`, inspect `archive operator-feedback-ledger <archive-root> --dry-run --format json`, require human review, preview `archive operator-feedback-record <archive-root> ... --intent create|update --dry-run --format json`, and only then use the reviewed `--approve` replay; create never overwrites, while update also requires the fresh `--expected-record-sha256`.
+For operator feedback, run `archive operator-feedback-plan <archive-root> --dry-run --format json`, inspect `archive operator-feedback-ledger <archive-root> --dry-run --format json`, compose and approve the six-section body through `operator-feedback-compose`, verify it with `operator-feedback-body-check --dry-run`, require human review, preview `archive operator-feedback-record <archive-root> ... --feedback-ref feedback-body-sha256:<digest> --intent create|update --dry-run --format json`, and only then use the reviewed `--approve` replay; create never overwrites, while update also requires the fresh `--expected-record-sha256`.
 <!-- WOM-RUNTIME-GUIDANCE-ROUTING v0.3.293 END -->
 ```
 

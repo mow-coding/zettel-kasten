@@ -6,6 +6,19 @@ The filesystem folder is `wom-kit/`, the Python import package is `wom_kit`, and
 
 See `wom-kit/docs/concepts/naming-and-terminology.md` for the naming baseline.
 
+v0.3.312 adds structured `view-zets` selection, one shared fail-closed
+current-index authority for protected query and mint planning, and optional
+content-free `mint-zet --progress` events on stderr while stdout remains the
+final-result channel. `operator-feedback-compose` uses a private exact
+six-section request for content-free planning and digest-bound reviewed
+create-only body/receipt approval; `operator-feedback-body-check` verifies the
+body digest, privacy boundary, and lifecycle binding. None of these commands
+automatically rebuilds a real archive, submits feedback externally, or proves
+human receipt. See
+`wom-kit/docs/letter120-123-index-lifecycle-and-feedback-body.md` and
+`wom-kit/docs/releases/v0.3.312.md`. Source and injected-test completion is not
+evidence of real-archive repair, external delivery, or human acceptance.
+
 v0.3.311 adds release-facing `credential-adopt`, `credential-secure-list`,
 `credential-lifecycle`, `notion-page-recovery-plan`, and
 `notion-page-recovery` commands. Credential intake accepts a PAT only through

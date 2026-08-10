@@ -2,6 +2,39 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.3.312 Letter 120·123 인덱스 권위와 피드백 본문
+
+v0.3.312에서는 이전 버전이 만든 generated zettel index를 한 번 명시적으로
+다시 만들어야 합니다. 설치만으로 canonical zet을 고치거나 실제 아카이브를
+자동 전수 검사하지 않습니다.
+
+보호된 `search`, `view-zets`, `mint-zet`을 사용하기 전에 다음을 실행하세요.
+
+```powershell
+archive index <archive-root> --progress --format json
+archive index-health <archive-root> --dry-run --progress --format json
+```
+
+보호된 명령이 `archive_index_rebuild_required`를 반환하면 오래된 index 행을
+믿거나 raw SQLite·전체 본문 스캔으로 우회하지 마세요. index를 명시적으로 다시
+만들고 health를 확인한 뒤 원래 요청을 다시 실행합니다.
+
+큰 아카이브의 민팅 미리보기에는 `mint-zet --dry-run --progress`를 사용합니다.
+진행 정보는 stderr, 최종 결과 하나는 stdout에 남습니다. heartbeat는 승인이나
+완료 증거가 아니며, 별도 검토 후 민팅의 canonical·receipt 증거가 여전히
+필요합니다.
+
+내용이 있는 도구 피드백은 무시되는 local 요청의 여섯 section을
+`operator-feedback-compose --dry-run`과 바뀌지 않은 검토 승인으로 작성합니다.
+`operator-feedback-body-check --dry-run`으로 본문과 metadata binding을 확인한 뒤
+`feedback-body-sha256:<digest>`를 기존 feedback lifecycle record에 연결합니다.
+이 명령들은 피드백을 외부에 보내거나 전달 완료를 증명하지 않습니다.
+
+자세한 내용은 [Letter 120·123 가이드](wom-kit/docs/letter120-123-index-lifecycle-and-feedback-body.md),
+[v0.3.312 릴리스 노트](wom-kit/docs/releases/v0.3.312.md),
+[결정 기록](wom-kit/docs/archive-infra-decision-log-2026-08-10-v03312-index-authority-and-feedback-body.md)을
+보세요.
+
 ## v0.3.311 Letter 118·119 자격증명 연속성과 검토된 복구
 
 v0.3.311은 v0.3.310 아카이브와 호환되며 자격증명 migration, provider 호출,

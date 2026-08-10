@@ -1,6 +1,6 @@
 {
   "schema": "wom-kit/package-resource-manifest/v0.1",
-  "version": "0.3.311",
+  "version": "0.3.312",
   "source_of_truth": "wom-kit source resource directories",
   "file_count": 144,
   "files": [
@@ -571,14 +571,14 @@
     {
       "source": "templates/ai-runtime/wom-archive/SKILL.md",
       "packaged": "templates/ai-runtime/wom-archive/SKILL.md",
-      "bytes": 10731,
-      "sha256": "d786998579441a8de18af2492ed5862488feb68c8656e2ac512cfb4943d58b2d"
+      "bytes": 10651,
+      "sha256": "4ffeac6a28685dd305015833b2a8210e542b3aa1584c3a7e8392296b4dd9cf24"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/capture-draft-and-publication.md",
       "packaged": "templates/ai-runtime/wom-archive/references/capture-draft-and-publication.md",
-      "bytes": 6371,
-      "sha256": "752bc05f4ec13e36bf73e6f9867544d92e44363baf42ddae0c57a9b7fce2cdca"
+      "bytes": 6640,
+      "sha256": "c4b7d0fb6a2dd69ad161caa0e29039240a191f046253809ab0d2638402758eac"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/foreign-sharing-and-trust.md",
@@ -613,8 +613,8 @@
     {
       "source": "templates/company/AGENTS.md",
       "packaged": "templates/company/AGENTS.md",
-      "bytes": 10045,
-      "sha256": "37d9817ead412b4e45d1a74067bc26e74b7e554ad6df3d11fb9207cc689db171"
+      "bytes": 10585,
+      "sha256": "89f1432ae5b07da0e0e15e7d76aa696e97a2c6cdf46bf7a8db6bcd3af5f6a5fa"
     },
     {
       "source": "templates/company/archive-identity.yml",
@@ -685,8 +685,8 @@
     {
       "source": "templates/family/AGENTS.md",
       "packaged": "templates/family/AGENTS.md",
-      "bytes": 10185,
-      "sha256": "324864da9de9244976040af2b940d822b8e1e670efe8b48319ec23dcecc59f39"
+      "bytes": 10725,
+      "sha256": "ef21e90cb53a830551f93f6cabe4fb7736a9fdf48078d27a263acd56e39a4aaf"
     },
     {
       "source": "templates/family/archive-identity.yml",
@@ -757,8 +757,8 @@
     {
       "source": "templates/personal/AGENTS.md",
       "packaged": "templates/personal/AGENTS.md",
-      "bytes": 10255,
-      "sha256": "addff20c2bf7da72ad6bb0fe2608eae2e793bba1037adfcdf880864ac9f0dd4b"
+      "bytes": 10795,
+      "sha256": "09eb9f93113c5514bfcb26a9cc13cfa6d27e8f3762e83d604263405a8dc90a8a"
     },
     {
       "source": "templates/personal/archive-identity.yml",
@@ -863,10 +863,10 @@
       "sha256": "d619dc26af3216498c8392dfe838b0fe752d4bad9da998a58ca682d668fc510c"
     },
     {
-      "source": "docs/releases/v0.3.311.md",
-      "packaged": "release-notes/v0.3.311.md",
-      "bytes": 6849,
-      "sha256": "ec01587c5a5b9310484f2b3f240c8556743f59966f5775a7a526e2748e31227a"
+      "source": "docs/releases/v0.3.312.md",
+      "packaged": "release-notes/v0.3.312.md",
+      "bytes": 5049,
+      "sha256": "3924c4868d7bcebcee2aab0b88bf083938402bb5e30e8aacb1a9d78b1a015ff7"
     }
   ]
 }

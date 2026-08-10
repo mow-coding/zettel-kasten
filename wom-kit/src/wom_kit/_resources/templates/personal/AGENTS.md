@@ -10,7 +10,7 @@ Read and follow the returned `action_routing`.
 Read `inbox_attention` and surface every unpublished-draft count before broad work.
 Use `archive search <archive-root> <query> --count-total --format json` for official WOM search.
 Raw grep and raw SQL are not authoritative WOM search results.
-For operator feedback, run `archive operator-feedback-plan <archive-root> --dry-run --format json`, inspect `archive operator-feedback-ledger <archive-root> --dry-run --format json`, require human review, preview `archive operator-feedback-record <archive-root> ... --intent create|update --dry-run --format json`, and only then use the reviewed `--approve` replay; create never overwrites, while update also requires the fresh `--expected-record-sha256`.
+For operator feedback, run `archive operator-feedback-plan <archive-root> --dry-run --format json`, inspect `archive operator-feedback-ledger <archive-root> --dry-run --format json`, compose and approve the six-section body through `operator-feedback-compose`, verify it with `operator-feedback-body-check --dry-run`, require human review, preview `archive operator-feedback-record <archive-root> ... --feedback-ref feedback-body-sha256:<digest> --intent create|update --dry-run --format json`, and only then use the reviewed `--approve` replay; create never overwrites, while update also requires the fresh `--expected-record-sha256`.
 <!-- WOM-RUNTIME-GUIDANCE-ROUTING v0.3.293 END -->
 
 ## Read Order
@@ -36,11 +36,12 @@ For operator feedback, run `archive operator-feedback-plan <archive-root> --dry-
 ## Write Policy
 
 - Search with `archive search <archive-root> <query> --count-total --format json`; raw grep and raw SQL are not authoritative WOM search results.
+- If search, view, or mint returns `archive_index_rebuild_required`, stop and run an explicit `archive index <archive-root> --progress --format json` followed by `archive index-health <archive-root> --dry-run --progress --format json`; never trust stale rows or silently scan every body.
 - When Doctor reports a possible inbox pipeline bypass, inspect it with `archive inbox-pipeline-audit <archive-root> --dry-run --format json`; its classes are review signals, not proof, and authorize no automatic repair.
 - Before suggesting artifact cleanup, run `archive artifact-lifecycle-inventory <archive-root> --dry-run --format json`; incomplete coverage blocks absence claims, and no inventory class or age grants deletion authority.
 - Create AI-generated zettel drafts only with `archive create-draft` dry-run followed by its exact human-reviewed replay. Never write Markdown directly into `inbox/`.
 - AI-assisted or AI-generated drafts require an explicit reviewed abstract and at least one stable facet. If the same normalized title already exists in `inbox/`, revise that draft in place instead of creating another file.
-- A request to publish starts the `mint-zet` preview workflow now. Report blockers or a remaining approval gate immediately, and claim completion only after canonical plus receipt evidence exists.
+- A request to publish starts the `mint-zet --dry-run --progress` preview workflow now. Progress is stderr evidence, not the final result. Report blockers or a remaining approval gate immediately, and claim completion only after canonical plus receipt evidence exists.
 - Use the official dry-run and approval routes for `mint-zet`, `zettel-edge`, source/objet intake, and operational-context updates; knowing a destination path is not write authorization.
 - For a persistent saved view, prepare a reviewed private request under `.wom-scratch/private/saved-views/`, preview `archive saved-view-write`, and use only its exact approval-gated write or revert route. Never edit persistent `views/*.yml` directly.
 - A human-owned rough draft may be incomplete, but an AI-created draft must enter through the stricter metadata-complete route above. Before `mint-zet`, `mint-zettel`, or `promote`, require one human-reviewed explicit `frontmatter.abstract`; compatibility fields do not authorize canonical publication.

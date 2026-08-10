@@ -69,7 +69,7 @@ cannot prove the host actually consumed them, so
 ## Official Read And Write Paths
 
 Introduced in v0.3.278 and extended through v0.3.294, JSON output includes
-the current `wom-kit/ai-command-path-routing/v0.12`, and Markdown output renders
+the current `wom-kit/ai-command-path-routing/v0.13`, and Markdown output renders
 `Official Read Command Paths` and `Official Write Command Paths`.
 
 The routes require `archive search --count-total --format json` for

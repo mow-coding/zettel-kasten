@@ -1,6 +1,6 @@
 # AI Response Contract
 
-Status: v0.3.305 human-record and publication-completion integrity checkpoint
+Status: v0.3.312 current-index, mint-progress, and feedback-body reporting checkpoint
 
 `archive ai-response-contract` gives AI operators a read-only contract for
 answering a human after running WOM commands.
@@ -47,6 +47,22 @@ starts the mint preview workflow. A draft write is not publication, and the AI
 must not claim completion until an approved `mint-zet` result has canonical and
 receipt evidence. When preview or approval is blocked, report that boundary in
 the same response rather than silently deferring it.
+
+If an index-backed search, view, or mint preview returns
+`archive_index_rebuild_required`, report zero authoritative protected results
+and the explicit rebuild-plus-health-check action. Do not turn stale rows, raw
+SQLite output, or a silent live body scan into a successful answer.
+
+`mint-zet --progress` separates liveness from outcome: content-free progress is
+stderr evidence, while stdout is the final result. A heartbeat is not approval,
+publication, or receipt evidence. Report the last completed stage when a caller
+interrupts, and keep the durable outcome unknown until the official result or
+recovery evidence is available.
+
+For operator feedback, distinguish body completeness from lifecycle metadata
+and delivery. Report `operator-feedback-compose` plan/approval evidence and the
+content-free `operator-feedback-body-check` binding state separately; do not
+claim a body, external submission, or human receipt from a metadata row alone.
 
 When the answer is for a human, follow the plain-language convention: translate
 git/infrastructure/WOM-internal jargon into everyday language and keep the exact

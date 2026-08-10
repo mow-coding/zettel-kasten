@@ -50,6 +50,8 @@ Supporting philosophy and model docs:
 - [Zettel-Kasten Layer](../specs/zettel-kasten.md)
 - [Agent Operator Capabilities Manifest](agent-operator-capabilities.md)
 - [Operator Feedback Lifecycle](operator-feedback-lifecycle.md)
+- [Letters 120 and 123 Index Lifecycle And Feedback Body](letter120-123-index-lifecycle-and-feedback-body.md)
+- [v0.3.312 Index Authority And Feedback Body Decision](archive-infra-decision-log-2026-08-10-v03312-index-authority-and-feedback-body.md)
 - [Approval Handoff Lifecycle](approval-handoff-lifecycle.md)
 - [Approval Handoff Audit](approval-handoff-audit.md)
 - [Operation Status Taxonomy](operation-status-taxonomy.md)
@@ -420,6 +422,7 @@ These documents record public-safe work already performed.
 - [v0.3.309 Release Note](releases/v0.3.309.md)
 - [v0.3.310 Release Note](releases/v0.3.310.md)
 - [v0.3.311 Release Note](releases/v0.3.311.md)
+- [v0.3.312 Release Note](releases/v0.3.312.md)
 
 Work logs are not the same as product specs.
 

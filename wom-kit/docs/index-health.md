@@ -2,8 +2,9 @@
 
 Status: v0.3.91 read-only generated index drift check; v0.3.255 adds opt-in
 progress/result capture and a crash-safe rebuild procedure; v0.3.256 adds
-fail-closed frontmatter inspection and physical-path accounting
-Date: 2026-06-17; updated 2026-07-17
+fail-closed frontmatter inspection and physical-path accounting; v0.3.312 makes
+current-index evidence a shared fail-closed authority for query and mint
+Date: 2026-06-17; updated 2026-08-10
 
 `index-health` checks whether the generated local SQLite index still matches
 the live zettel files.
@@ -189,6 +190,38 @@ later scratch publish fails. Run a fresh read-only health check to distinguish
 that partial result-capture failure.
 
 ## Relationship To `archive index`
+
+### v0.3.312 current-index authority
+
+From v0.3.312, index-backed zettel query and mint planning share one current
+index decision. Generated-index metadata carries a schema version, an explicit
+`current` or `dirty` state, one generation id, and the complete-build evidence.
+The consumer then compares one bounded live path/stat snapshot with the indexed
+snapshot.
+
+This shared command gate is body-free: it detects path, size, and
+nanosecond-mtime drift, not a same-size rewrite whose mtime was deliberately
+preserved. After unmanaged tooling that preserves both values, explicitly
+rebuild the generated index before relying on protected commands.
+
+Missing, legacy, incomplete, dirty, unsafe, or mismatched evidence blocks with
+`archive_index_rebuild_required`. The protected command returns no stale query
+rows and does not silently parse every canonical body as a fallback. Existing
+pre-v0.3.312 index metadata therefore requires one explicit rebuild.
+
+The safe operator sequence is:
+
+```powershell
+archive index <archive-root> --progress --format json
+archive index-health <archive-root> --dry-run --progress --format json
+```
+
+Only then retry the original `search`, `view-zets`, or `mint-zet` command.
+Supported mint and retirement writers mark the index dirty before the
+filesystem lifecycle can make the old snapshot stale, and return it to current
+only after the exact SQLite delta succeeds. SQLite transaction atomicity does
+not extend to the separate Markdown and receipt files, so an interrupted
+cross-file lifecycle stays dirty and requires reconciliation.
 
 Use `index-health` to decide whether the generated index is stale.
 

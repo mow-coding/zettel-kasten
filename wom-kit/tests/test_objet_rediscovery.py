@@ -318,7 +318,7 @@ class ObjetRediscoveryPlanTests(unittest.TestCase):
             )
             self.assert_fixed_private_boundary(result)
 
-    def test_stale_zettel_and_all_non_zettel_channels_are_snapshot_only(self) -> None:
+    def test_stale_zettel_blocks_all_channels_until_explicit_rebuild(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_archive(Path(tmp))
             zettel_path = (
@@ -346,33 +346,21 @@ class ObjetRediscoveryPlanTests(unittest.TestCase):
             after = self.tree_digest(archive_root)
 
         self.assertEqual(before, after)
-        self.assertEqual(result["status"], "search_incomplete")
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(
+            result["diagnostic_codes"],
+            ["archive_index_rebuild_required"],
+        )
         self.assertEqual(
             result["index_health"]["index_state"],
-            "stale_or_incomplete",
+            "blocked",
         )
         self.assertFalse(
             result["index_health"]["zettel_identity_metadata_current"]
         )
-        self.assertIn(
-            "live_zettel_modified_after_index",
-            result["index_health"]["stale_reason_codes"],
-        )
-        self.assertIn(
-            "index_freshness_not_current",
-            result["diagnostic_codes"],
-        )
         self.assertEqual(
-            result["checked_layers"][0]["check_state"],
-            "checked_snapshot_only",
-        )
-        self.assertEqual(
-            result["checked_layers"][0]["reason_codes"],
-            ["index_freshness_not_current"],
-        )
-        self.assertEqual(
-            [layer["freshness_proven"] for layer in result["checked_layers"][:5]],
-            [False] * 5,
+            [layer["check_state"] for layer in result["checked_layers"]],
+            ["blocked"] * len(result["checked_layers"]),
         )
         self.assertNotIn("PRIVATE_STALE_BODY_CANARY", json.dumps(result))
         self.assert_fixed_private_boundary(result)
@@ -1458,7 +1446,7 @@ class ObjetRediscoveryPlanTests(unittest.TestCase):
             routing = packet["action_routing"]
             self.assertEqual(
                 routing["schema"],
-                "wom-kit/ai-command-path-routing/v0.12",
+                "wom-kit/ai-command-path-routing/v0.13",
             )
             route = next(
                 item
@@ -1483,9 +1471,12 @@ class ObjetRediscoveryPlanTests(unittest.TestCase):
                 [
                     "read_feedback_policy",
                     "inspect_feedback_ledger",
+                    "preview_feedback_body",
                     "human_review",
+                    "approve_feedback_body",
                     "preview_feedback_record",
                     "approve_feedback_record",
+                    "verify_feedback_body_binding",
                 ],
             )
             readiness = packet["runtime_guidance_readiness"]

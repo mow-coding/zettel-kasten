@@ -386,7 +386,7 @@ class CompletionWorkflowTests(unittest.TestCase):
         )
         self.assertEqual(
             routing["schema"],
-            "wom-kit/ai-command-path-routing/v0.12",
+            "wom-kit/ai-command-path-routing/v0.13",
         )
         read_actions = {
             row["action"] for row in routing["read_action_routes"]

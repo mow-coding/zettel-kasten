@@ -110,6 +110,11 @@ wom-kit/ai-command-path-routing/v0.12
 action: inspect_artifact_lifecycle
 ```
 
+v0.3.312 advances the current routing envelope to
+`wom-kit/ai-command-path-routing/v0.13`. Its nested operator-feedback route is
+`wom-kit/operator-feedback-runtime-routing/v0.2` and adds the body plan,
+reviewed body approval, and final body/metadata binding check.
+
 The additive routes cover:
 
 - provider-neutral locator plan, record, recovery, and exact revert;
@@ -132,10 +137,13 @@ The feedback route is ordered and an AI must not skip the human gate:
 ```text
 operator-feedback-plan --dry-run
 operator-feedback-ledger --dry-run
+operator-feedback-compose --request <ignored-local-request> --dry-run
 required human review
+operator-feedback-compose --request <same-request> --expected-plan-sha256 <sha256> --approve --reviewed-by <human-actor>
 operator-feedback-record --intent create|update --dry-run
 operator-feedback-record --intent create --approve --reviewed-by <human-actor>
 operator-feedback-record --intent update --expected-record-sha256 <sha256> --approve --reviewed-by <human-actor>
+operator-feedback-body-check --feedback-id <safe-id> --dry-run
 ```
 
 This is guidance, not proof that the earlier steps or human review occurred.
@@ -217,6 +225,9 @@ Every write remains preview-first and human-reviewed.
 - v0.3.303 advances routing to
   `wom-kit/ai-command-path-routing/v0.12` and adds the read-only
   `inspect_artifact_lifecycle` route without adding a cleanup route.
+- v0.3.312 advances routing to
+  `wom-kit/ai-command-path-routing/v0.13` and adds the reviewed feedback-body
+  companion sequence without changing delivery semantics.
 - v0.3.293 advances routing to
   `wom-kit/ai-command-path-routing/v0.7` and adds the complete
   operator-feedback sequence without changing existing action contracts.

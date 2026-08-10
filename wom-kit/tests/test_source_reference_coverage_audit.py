@@ -884,7 +884,7 @@ class SourceReferenceCoverageAuditTests(unittest.TestCase):
         routing = archive_services.runtime_context_action_routing()
         self.assertEqual(
             routing["schema"],
-            "wom-kit/ai-command-path-routing/v0.12",
+            "wom-kit/ai-command-path-routing/v0.13",
         )
         route = next(
             item

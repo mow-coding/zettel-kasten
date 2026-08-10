@@ -7,7 +7,7 @@ progress in v0.3.224; aggregate edge-receipt progress in v0.3.227; current
 local-profile safety counters in v0.3.228; index and index-health progress,
 complete-only result capture, and crash-safe index rebuild in v0.3.255;
 quarantined-index completion semantics and honest unreadable-source counts in
-v0.3.256
+v0.3.256; content-free mint preview and approval progress in v0.3.312
 
 ## Purpose
 
@@ -30,6 +30,27 @@ Since v0.3.255, the same transport-safety contract also covers:
 archive index
 archive index-health
 ```
+
+Since v0.3.312, `archive mint-zet ... --progress` uses the same channel
+separation for both preview and approved execution.
+
+## v0.3.312 mint progress
+
+Minting validates several gates before it can return a final preview or write
+result. `--progress` emits an immediate start and bounded heartbeats so that a
+large archive no longer looks frozen while stdout is still waiting for the
+complete result.
+
+For `--format json --progress`, stdout remains exactly one final JSON value and
+stderr is UTF-8 JSON Lines. Each stderr object is restricted to the approved
+stage/event labels, safe counts, elapsed milliseconds, and the last completed
+stage. It never contains a path, zettel id, title, body, query, raw exception,
+or rejected value. The renderer is observational: a broken output stream does
+not alter the mint decision or turn a rejected mint into success.
+
+Progress does not authorize work. `archive_index_rebuild_required` still stops
+the mint plan and requires an explicit index rebuild and health check before a
+new preview.
 
 ## Progress Contract
 

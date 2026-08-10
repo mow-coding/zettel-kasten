@@ -18,11 +18,8 @@ current chat is temporary working memory.
 archive ai-start-here <archive-root> --dry-run --progress --format json
 ```
 
-4. Read the returned summary, `inbox_attention`, `action_routing`, and
-   `next_safe_steps` before choosing a deeper command. The route table, not a
-   remembered folder location, selects the official WOM command for an archive
-   action. Never let unpublished-draft attention silently roll into a later
-   session.
+4. Follow the returned `action_routing` and `next_safe_steps`; never silently
+   carry unpublished-draft attention into a later session.
 5. Run the full Doctor only when the quick result requests it, the human asks
    for it, or a write workflow requires it:
 
@@ -35,27 +32,20 @@ prompt-boundary, fallback, progress, and version-update details.
 
 ## Load Only The Relevant Reference
 
-Choose the smallest reference that matches the human's goal:
+Load only the reference matching the goal:
 
-- Find what the archive knows, scan abstracts, check freshness, audit a
-  revision, or restore exact prior bytes: read
-  [reading-memory-and-revision.md](references/reading-memory-and-revision.md).
-- Bring in a file, conversation export, transcript, OCR result, or other source;
-  create a draft; mint; revise; or retire: read
-  [capture-draft-and-publication.md](references/capture-draft-and-publication.md).
-- Inspect a foreign/shared block, quarantine it, review trust evidence, or plan
-  ZET transport: read
-  [foreign-sharing-and-trust.md](references/foreign-sharing-and-trust.md).
-- Interpret command output, choose a safe action, or explain state to a human:
-  read
-  [safety-results-and-human-language.md](references/safety-results-and-human-language.md).
-- Need an exact advanced command or a historical boundary not summarized in
-  the focused references: search
-  [operator-contract.md](references/operator-contract.md) for the command name
-  and read only its surrounding section.
+- reading, search, freshness, revision, or byte restoration:
+  [reading-memory-and-revision.md](references/reading-memory-and-revision.md);
+- capture, draft, mint, revise, or retire:
+  [capture-draft-and-publication.md](references/capture-draft-and-publication.md);
+- foreign/shared review, quarantine, trust, or transport:
+  [foreign-sharing-and-trust.md](references/foreign-sharing-and-trust.md);
+- results and human explanation:
+  [safety-results-and-human-language.md](references/safety-results-and-human-language.md); and
+- advanced or historical details: search the relevant section of
+  [operator-contract.md](references/operator-contract.md).
 
-Do not preload every reference. Progressive reading is part of the safety and
-token-budget contract.
+Do not preload every reference.
 
 ## Universal Safety Contract
 
@@ -73,6 +63,11 @@ token-budget contract.
 - Search with `archive search <archive-root> <query> --count-total --format
   json`. Raw grep and raw SQL may help diagnose files or generated indexes, but
   they are not authoritative WOM search results.
+- Treat `archive_index_rebuild_required` as a hard stop for index-backed search,
+  view, and mint planning. Run one explicit `archive index <archive-root>
+  --progress --format json`, then `archive index-health <archive-root> --dry-run
+  --progress --format json`; never trust stale rows or replace the blocker with
+  a silent whole-archive body scan.
 - Before saying that an objet, source file, or preserved original does not
   exist, run `archive objet-rediscovery-plan <archive-root> <query> --dry-run
   --count-total --format json`. A complete `archive search` page proves only
@@ -148,6 +143,14 @@ token-budget contract.
   gate. Claim publication only after the approved mint succeeds and canonical
   plus receipt evidence exists. If preview or approval is blocked, tell the
   human immediately what remains instead of silently deferring it.
+- For a large archive, add `--progress` to `mint-zet`. Progress is content-free
+  stderr JSONL or compact stderr, while stdout remains the one final result;
+  never parse progress as the approval result.
+- Record a substantive operator-feedback body through
+  `operator-feedback-compose --dry-run` and its exact reviewed replay before
+  binding `feedback-body-sha256:<digest>` in the lifecycle record. Verify the
+  body and metadata binding with `operator-feedback-body-check --dry-run`.
+  Metadata alone does not prove that the required feedback sections exist.
 - Never expose secret values, credential-store responses, private local paths,
   or source-body excerpts in ordinary output.
 - Never call a provider, run transport, mint, revise, retire, import, trust, or
@@ -161,27 +164,19 @@ token-budget contract.
 
 ## Finish The Human's Goal
 
-Do not stop after gathering context. After the relevant checks:
-
-1. answer the human's actual question or complete the approved action;
-2. state the current archive condition in ordinary language;
-3. name the next safe action only when one is genuinely needed;
-4. distinguish completed engineering work from human review and future
-   real-use validation;
-5. leave a durable WOM record when the conversation contains a substantial
-   decision, correction, implementation, or design change.
-6. before a context reset or session handoff, follow the receipt-backed close
-   procedure in
-   [reading-memory-and-revision.md](references/reading-memory-and-revision.md);
-   never claim that chat-only context was saved merely because the archive is
-   structurally healthy.
+After checking context, finish the approved action, explain the archive state,
+and name only a genuinely needed next step. Separate engineering completion
+from human review and real-use validation. Record substantial decisions,
+corrections, implementations, and design changes. Before reset or handoff, use
+the receipt-backed close procedure in
+[reading-memory-and-revision.md](references/reading-memory-and-revision.md);
+archive health alone does not prove chat context was saved.
 
 ## Human-Facing Language
 
-Lead with meaning, not internal machinery. Prefer phrases such as "published
-note", "source file", "change record", "health check", and "preview" in the
-human-facing answer. Put an exact command or internal term in parentheses or a
-code block only when it helps verification.
+Lead with meaning, using terms such as "published note", "source file",
+"change record", "health check", and "preview". Show internal terms only when
+they help verification.
 
 Use `zettel` for the general zettel-kasten concept, `zet` for one concrete WOM
 document, and `ZET` for the shareable format or protocol layer.

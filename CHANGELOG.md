@@ -6,6 +6,31 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.312 - 2026-08-10
+
+- Unified generated-index authority for index-backed zettel query and mint
+  planning. Missing, legacy, incomplete, dirty, unsafe, or live-stat mismatched
+  evidence now returns `archive_index_rebuild_required` instead of stale
+  success or a silent whole-corpus body fallback.
+- Added bounded indexed duplicate candidates and structured zettel publication
+  fields. Supported mint and retirement lifecycles apply the exact SQLite delta
+  or leave the generated index explicitly dirty; index failure is no longer a
+  warning-success result.
+- Added optional `mint-zet --progress` for preview and approval. An immediate
+  content-free start and bounded stderr heartbeat/progress stream keep stdout
+  reserved for the one final result and never carry paths, ids, titles, bodies,
+  queries, or raw errors.
+- Added structured `view-zets` status, origin, mint-time, sort, and dedupe
+  controls so recent canonical WOM-native publication is queried explicitly
+  instead of guessed from path order or file mtime.
+- Added digest-planned, explicitly reviewed, create-only operator-feedback body
+  composition and a content-free body/metadata binding check. The six required
+  report sections remain separate from lifecycle metadata, and neither command
+  submits feedback or proves delivery.
+- Reproduced Letter 123 only in a temporary 8,599-canonical synthetic fixture;
+  no beta archive was modified or automatically rebuilt. Letter 121's separate
+  source-to-draft fidelity gate remains the next release scope.
+
 ## v0.3.311 - 2026-08-10
 
 - Added Windows-native, spawned-child credential intake with exact encrypted-

@@ -58,9 +58,9 @@ EMPTY_ALLOWLIST_SHA256 = (
     "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
 )
 
-CLI_COUNT = 549
+CLI_COUNT = 551
 CLI_CANONICAL_SHA256 = (
-    "6c9e9b13c8a1376b2ca2d3bdc46d1d6482222e157230ff25fa9220c5ac5eb802"
+    "a177a1fcbfd86601c04f23a26f1605b8e685205988c2fbe70b342d3b7241f638"
 )
 MCP_COUNT = 121
 MCP_CANONICAL_SHA256 = (
@@ -72,7 +72,7 @@ DB_SOURCE_CANONICAL_SHA256 = (
 )
 RESOURCE_ADDITIONS = frozenset(
     {
-        "release-notes/v0.3.311.md",
+        "release-notes/v0.3.312.md",
         "schemas/artifact-lifecycle-inventory.schema.json",
         "schemas/authoring-conventions.schema.json",
         "schemas/draft-discard-receipt.schema.json",
@@ -1189,7 +1189,7 @@ class PrivateObjetMetadataIndexPrivacyGateTests(unittest.TestCase):
             manifest["schema"],
             "wom-kit/package-resource-manifest/v0.1",
         )
-        self.assertEqual(manifest["version"], "0.3.311")
+        self.assertEqual(manifest["version"], "0.3.312")
         self.assertEqual(manifest["file_count"], len(manifest["files"]))
         current_paths = {row["packaged"] for row in manifest["files"]}
         self.assertEqual(
