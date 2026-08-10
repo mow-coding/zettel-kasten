@@ -10,12 +10,12 @@ It is not a website, SaaS app, dashboard, or visual note-taking product. The int
 
 ## Install The Command-Line Tool
 
-The exact v0.3.310 GitHub Release, when present, uses the self-contained wheel
+The exact v0.3.311 GitHub Release, when present, uses the self-contained wheel
 below. Confirm that the release exists and lists the wheel before installing
 it. The versioned URL alone is not proof that the asset is available.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.310/wom_kit-0.3.310-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.311/wom_kit-0.3.311-py3-none-any.whl"
 archive --version
 ```
 
@@ -198,6 +198,20 @@ and fail closed; partial outside-span normalization remains future work. See
 [`docs/releases/v0.3.310.md`](docs/releases/v0.3.310.md). Source documentation
 and external CI, exact-tag, GitHub Release, and wheel evidence remain distinct
 verification layers.
+
+v0.3.311 adds a Windows-native, spawned-child credential intake and
+authenticated human lifecycle plus approval-gated recovery for the complete
+reviewed Letter 118 request of 577 plus 43 Notion pages. Dry-run performs no
+credential read, provider call, or write. Approved bounded slices use the
+read-only Notion 2026-03-11 adapter and preserve exact Markdown bytes as
+content-addressed objets with resumable evidence. Legacy credential metadata
+is never promoted into persistence proof, other valid credentials are never
+automatically deleted or revoked, and recovery does not search a workspace
+broadly, write to Notion, or mutate canonical zets. See
+[`docs/letter118-119-credential-continuity-and-notion-page-recovery.md`](docs/letter118-119-credential-continuity-and-notion-page-recovery.md)
+and [`docs/releases/v0.3.311.md`](docs/releases/v0.3.311.md). Source tests do
+not prove live credential adoption or a completed 620-page recovery; CI, tag,
+Release, wheel, fresh installation, and human execution remain separate gates.
 
 Use a dedicated virtual environment when installing with plain `pip`. WOM-kit
 is not published to PyPI yet, so `pip install wom-kit` is not an official

@@ -24,6 +24,36 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.311 Letters 118 And 119 Credential Continuity And Reviewed Recovery
+
+v0.3.311 is compatible with v0.3.310 archives and performs no automatic
+credential migration, provider call, or canonical-zettel rewrite. Existing
+credential-reference rows remain metadata only with store presence unchecked.
+
+On Windows, use `credential-adopt` in dry-run mode first and approve only the
+exact returned request digest. Approval opens a native masked dialog in a
+spawned child; never paste a PAT into a command argument, environment variable,
+normal stdin, file, chat, or clipboard. After authenticated listing, use the
+separate `credential-lifecycle` dry-run/approval pair to choose one current
+credential for an exact workspace. WOM does not delete or revoke the other
+valid entries.
+
+The reviewed Notion recovery request must stay under the ignored local profile
+and contain the complete Letter 118 set: `zet_notion_db3` with 577 items and
+`zet_notion_db1` with 43 items. Run `notion-page-recovery-plan --dry-run` for a
+small `--max-items` slice, review the fixed capabilities and exact plan digest,
+then approve only that unchanged slice with `notion-page-recovery`. A local
+verified replay may avoid live calls, but approval still authorizes credential
+reads, read-only provider GETs, and archive evidence writes for every selected
+item. Recovered bytes become objets and itemized evidence; canonical zets are
+not changed.
+
+This release does not mean a real PAT has been adopted or that all 620 pages
+have been recovered. Those remain operator execution and human acceptance
+steps. See the [Letters 118 and 119 guide](wom-kit/docs/letter118-119-credential-continuity-and-notion-page-recovery.md),
+the [v0.3.311 release note](wom-kit/docs/releases/v0.3.311.md), and the
+[decision log](wom-kit/docs/archive-infra-decision-log-2026-08-10-v03311-letter118-119-credential-lifecycle.md).
+
 ## v0.3.310 Letter 117 Reviewed Imported-Reference Completion
 
 v0.3.310 is compatible with v0.3.309 archives and requires no automatic

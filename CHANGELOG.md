@@ -6,6 +6,40 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.311 - 2026-08-10
+
+- Added Windows-native, spawned-child credential intake with exact encrypted-
+  store presence, Notion identity and reviewed-anchor verification, atomic
+  authenticated receipts, mutable-buffer wiping, and value-free rollback or
+  repair outcomes. Raw credentials are never accepted through command-line
+  arguments, environment variables, normal stdin, files, chat, or clipboard.
+  Process-start failures are distinguished from post-start unknown durable
+  state so a crashed worker cannot be mislabeled as zero writes.
+- Added authenticated credential listing and digest-bound human lifecycle
+  selection. Legacy references remain metadata-only `presence: not_checked`;
+  duplicate valid credentials are retained and never automatically revoked or
+  deleted. Archive-key access and post-start failures now preserve unknown or
+  observed operation state instead of falsely reporting exact zero.
+- Added approval-gated recovery for the complete reviewed Letter 118 request of
+  two groups, 577 plus 43 pages. Dry-run is secret/provider/write-free; bounded
+  approved slices preserve exact Notion enhanced-Markdown bytes as
+  content-addressed objets with durable resume, projection, and receipt
+  evidence.
+- Hardened the Notion 2026-03-11 read-only adapter with exact response identity,
+  no redirects, bounded responses and retries, ambiguous-404 reporting,
+  snapshot-drift detection, and archive-local interprocess pacing at no more
+  than three GET attempts per second. Recovery also revalidates archive and
+  credential lifecycle authority before live/commit boundaries and verifies
+  complete durable writes after publication.
+- Corrected operator-feedback title validation so descriptive words such as
+  `credential` and `token` are allowed while concrete secret, URL, e-mail-like,
+  local-path, NUL, and multiline shapes still fail closed without value echo.
+  The separate Letter 120 feedback-body contract remains future work.
+- Kept transcripts, media downloads, broad workspace discovery, Notion writes,
+  canonical-zettel mutation, edge inference, page minting, MCP writing, and UI
+  changes out of scope. Injected tests are implementation evidence, not proof
+  of real credential adoption or a completed 620-page recovery.
+
 ## v0.3.310 - 2026-08-09
 
 - Added reviewed static-reference bindings for exact, lowercase,
