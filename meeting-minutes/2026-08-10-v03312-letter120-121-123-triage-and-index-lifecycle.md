@@ -158,5 +158,5 @@ candidate test with one SQL candidate and zero canonical-body reads. Full
 unittest shards, CI, release readiness, wheel/fresh-install, exact-tag, and
 public-download verification remain required before release completion.
 
-No production archive, Basoon source, Notion provider, credential store, or
+No production archive, external source archive, Notion provider, credential store, or
 external service was changed or invoked.
