@@ -48,6 +48,8 @@
 - [Zettel-Kasten Layer](../specs/zettel-kasten.md)
 - [Agent Operator Capabilities Manifest](agent-operator-capabilities.md)
 - [Operator Feedback Lifecycle](operator-feedback-lifecycle.md)
+- [Letter 120·123 인덱스 수명주기와 피드백 본문](letter120-123-index-lifecycle-and-feedback-body.md)
+- [v0.3.312 인덱스 권위와 피드백 본문 결정 기록](archive-infra-decision-log-2026-08-10-v03312-index-authority-and-feedback-body.md)
 - [Approval Handoff Lifecycle](approval-handoff-lifecycle.md)
 - [Approval Handoff Audit](approval-handoff-audit.md)
 - [Operation Status Taxonomy](operation-status-taxonomy.md)
@@ -406,6 +408,7 @@ local archive
 - [v0.3.309 릴리스 노트](releases/v0.3.309.md)
 - [v0.3.310 릴리스 노트](releases/v0.3.310.md)
 - [v0.3.311 릴리스 노트](releases/v0.3.311.md)
+- [v0.3.312 릴리스 노트](releases/v0.3.312.md)
 
 작업일지는 제품 명세가 아닙니다.
 

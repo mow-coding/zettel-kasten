@@ -1787,6 +1787,8 @@ class ArchiveCliTests(unittest.TestCase):
             "checklist": {item_id: True for item_id in PROMOTION_CHECKLIST_IDS},
         }
         path.write_text("---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + (replacement_body if replacement_body is not None else body), encoding="utf-8")
+        indexed = archive_services.index_archive(archive_root)
+        self.assertTrue(indexed["index_complete"], indexed)
         return path
 
     def make_batch_ready_draft(self, archive_root: Path, zettel_id: str, title: str, body: str) -> Path:
@@ -1806,6 +1808,8 @@ class ArchiveCliTests(unittest.TestCase):
         }
         path = archive_root / "inbox" / f"{zettel_id}.md"
         path.write_text("---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + body, encoding="utf-8")
+        indexed = archive_services.index_archive(archive_root)
+        self.assertTrue(indexed["index_complete"], indexed)
         return path
 
     def fake_lunch_canonical_body(self, archive_root: Path) -> str:
@@ -11701,7 +11705,7 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertFalse(operational_context["closed_actions"]["files_written"])
             self.assertEqual(
                 operational_context["action_routing"]["schema"],
-                "wom-kit/ai-command-path-routing/v0.12",
+                "wom-kit/ai-command-path-routing/v0.13",
             )
             entrypoints = result["canonical_entrypoints"]
             self.assertEqual(entrypoints["lifecycle_action"], "runtime_canonical_entrypoints")
@@ -12223,7 +12227,7 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(result["first_read"]["source_truths"]["canonical_zets"], "zettels/")
             self.assertEqual(
                 result["action_routing"]["schema"],
-                "wom-kit/ai-command-path-routing/v0.12",
+                "wom-kit/ai-command-path-routing/v0.13",
             )
             self.assertEqual(
                 result["operational_context"]["action_routing"],
@@ -35063,6 +35067,9 @@ state:
                 "checklist": {item_id: True for item_id in PROMOTION_CHECKLIST_IDS},
             }
             draft_path.write_text("---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + body, encoding="utf-8")
+            self.assertTrue(
+                archive_services.index_archive(archive_root)["index_complete"]
+            )
 
             mint_code, mint_output = self.run_cli(
                 ["mint-zet", str(archive_root), "--path", create_result["path"], "--dry-run", "--format", "json"]
@@ -35222,6 +35229,9 @@ state:
                 "checklist": {item_id: True for item_id in PROMOTION_CHECKLIST_IDS},
             }
             draft_path.write_text("---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + body + "\n", encoding="utf-8")
+            self.assertTrue(
+                archive_services.index_archive(archive_root)["index_complete"]
+            )
             mint_code, mint_output = self.run_cli(
                 ["mint-zet", str(archive_root), "--path", write_result["path"], "--dry-run", "--format", "json"]
             )
@@ -35347,6 +35357,9 @@ state:
                 "checklist": {item_id: True for item_id in PROMOTION_CHECKLIST_IDS},
             }
             draft_path.write_text("---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + body + "\n", encoding="utf-8")
+            self.assertTrue(
+                archive_services.index_archive(archive_root)["index_complete"]
+            )
             mint_code, mint_output = self.run_cli(
                 ["mint-zet", str(archive_root), "--path", result["path"], "--dry-run", "--format", "json"]
             )
@@ -35778,6 +35791,9 @@ state:
             draft_path.write_text(
                 "---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + body + "\n",
                 encoding="utf-8",
+            )
+            self.assertTrue(
+                archive_services.index_archive(archive_root)["index_complete"]
             )
 
             dry_code, dry_output = self.run_cli(
@@ -58278,6 +58294,9 @@ archive_services.zet_abstract_backfill_recover(
             frontmatter["source_refs"] = [{"type": "external_citation", "value": source_marker, "role": "citation"}]
             frontmatter["derived_artifacts"] = [{"artifact_ref": "report:status-board-fixture"}]
             draft_path.write_text("---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + body, encoding="utf-8")
+            self.assertTrue(
+                archive_services.index_archive(archive_root)["index_complete"]
+            )
 
             mint_code, mint_output = self.run_cli(
                 [
@@ -63322,6 +63341,10 @@ archive_services.zet_abstract_backfill_recover(
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
             self.make_fake_lunch_draft_promotion_ready(archive_root)
+            index_code, index_output = self.run_cli(
+                ["index", str(archive_root), "--format", "json"]
+            )
+            self.assertEqual(index_code, 0, index_output)
             code, output = self.run_cli(
                 [
                     "promote",
@@ -63569,6 +63592,9 @@ archive_services.zet_abstract_backfill_recover(
                 "https://www.youtube.com/watch?v=public-reference.\n"
             )
             draft_path.write_text("---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + body, encoding="utf-8")
+            self.assertTrue(
+                archive_services.index_archive(archive_root)["index_complete"]
+            )
 
             code, output = self.run_cli(
                 [
@@ -63766,6 +63792,9 @@ archive_services.zet_abstract_backfill_recover(
             }
             body = "# Scratch GC fixture\n\nAll durable context from the scratch note is now summarized inside this zet.\n"
             draft_path.write_text("---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + body, encoding="utf-8")
+            self.assertTrue(
+                archive_services.index_archive(archive_root)["index_complete"]
+            )
 
             check_code, check_output = self.run_cli(
                 [
@@ -63971,6 +64000,7 @@ archive_services.zet_abstract_backfill_recover(
                 title="Fake thought while eating alone",
                 replacement_body=self.fake_lunch_canonical_body(archive_root),
             )
+            self.assertTrue(archive_services.index_archive(archive_root)["index_complete"])
 
             code, output = self.run_cli(
                 [
@@ -64073,6 +64103,10 @@ archive_services.zet_abstract_backfill_recover(
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
             self.make_fake_lunch_draft_promotion_ready(archive_root)
+            index_code, index_output = self.run_cli(
+                ["index", str(archive_root), "--format", "json"]
+            )
+            self.assertEqual(index_code, 0, index_output)
             code, output = self.run_cli(
                 [
                     "mint-zettel",
@@ -64149,6 +64183,10 @@ archive_services.zet_abstract_backfill_recover(
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
             self.make_fake_lunch_draft_promotion_ready(archive_root)
+            index_code, index_output = self.run_cli(
+                ["index", str(archive_root), "--format", "json"]
+            )
+            self.assertEqual(index_code, 0, index_output)
             code, output = self.run_cli(
                 [
                     "mint-zet",
@@ -64190,6 +64228,9 @@ archive_services.zet_abstract_backfill_recover(
                 }
             ]
             draft_path.write_text("---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + body, encoding="utf-8")
+            self.assertTrue(
+                archive_services.index_archive(archive_root)["index_complete"]
+            )
 
             dry_code, dry_output = self.run_cli(
                 [
@@ -64854,6 +64895,13 @@ archive_services.zet_abstract_backfill_recover(
                 )
                 self.assertEqual(edge_code, 0, edge_output)
 
+            # zettel-edge intentionally changes the canonical Markdown.  The
+            # v0.3 index authority therefore requires one explicit rebuild
+            # before a later protected retirement operation.
+            self.assertTrue(
+                archive_services.index_archive(archive_root)["index_complete"]
+            )
+
             retire_plan_path = archive_root / "workbench" / "retire-edge-batch.plan.json"
             retire_plan_path.write_text(
                 json.dumps(
@@ -64914,6 +64962,9 @@ archive_services.zet_abstract_backfill_recover(
             body = text[match.end() :].lstrip()
             frontmatter["mint"] = {"stage": "draft"}
             draft_path.write_text("---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + body, encoding="utf-8")
+            self.assertTrue(
+                archive_services.index_archive(archive_root)["index_complete"]
+            )
 
             mint_code, mint_output = self.run_cli(
                 [
@@ -65036,6 +65087,9 @@ archive_services.zet_abstract_backfill_recover(
                 ]
             )
             self.assertEqual(edge_code, 0, edge_output)
+            self.assertTrue(
+                archive_services.index_archive(archive_root)["index_complete"]
+            )
 
             dry_code, dry_output = self.run_cli(
                 [
@@ -65079,6 +65133,9 @@ archive_services.zet_abstract_backfill_recover(
             lf_source_text = draft_path.read_text(encoding="utf-8").replace("\r\n", "\n")
             draft_path.write_bytes(lf_source_text.encode("utf-8"))
             source_bytes = draft_path.read_bytes()
+            self.assertTrue(
+                archive_services.index_archive(archive_root)["index_complete"]
+            )
 
             mint_code, mint_output = self.run_cli(
                 [
@@ -67132,6 +67189,9 @@ archive_services.zet_abstract_backfill_recover(
             body = text[match.end() :].lstrip()
             frontmatter["promotion"]["checklist"].pop("understandable_title")
             draft_path.write_text("---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + body, encoding="utf-8")
+            self.assertTrue(
+                archive_services.index_archive(archive_root)["index_complete"]
+            )
 
             code, output = self.run_cli(
                 [
@@ -67416,6 +67476,7 @@ archive_services.zet_abstract_backfill_recover(
                 title="Fake thought while eating alone",
                 replacement_body=self.fake_lunch_canonical_body(archive_root),
             )
+            self.assertTrue(archive_services.index_archive(archive_root)["index_complete"])
             code, output = self.run_cli(
                 [
                     "promote",
@@ -67437,6 +67498,7 @@ archive_services.zet_abstract_backfill_recover(
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
             self.make_fake_lunch_draft_promotion_ready(archive_root, title="Fake thought while eating alone")
+            self.assertTrue(archive_services.index_archive(archive_root)["index_complete"])
             code, output = self.run_cli(
                 [
                     "promote",
@@ -67459,7 +67521,11 @@ archive_services.zet_abstract_backfill_recover(
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
             code, output = self.run_cli(["search", str(archive_root), "lunch", "--format", "json"])
             self.assertEqual(code, 1)
-            self.assertIn("Archive index is missing", output)
+            result = json.loads(output)
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["results"], [])
+            self.assertEqual(result["blockers"], ["archive_index_rebuild_required"])
+            self.assertIn("archive_index_missing", result["index_evidence"]["reason_codes"])
 
     def test_search_reports_truncation_instead_of_silently_capping(self) -> None:
         # WOM's own doctrine forbids presenting a truncated read as complete
@@ -67576,7 +67642,18 @@ archive_services.zet_abstract_backfill_recover(
 
             second_code, second_output = self.run_cli(["index", str(archive_root), "--format", "json"])
             self.assertEqual(second_code, 0, second_output)
-            self.assertEqual(json.loads(second_output), first_result)
+            second_result = json.loads(second_output)
+            self.assertRegex(first_result["index_generation"], r"^gen:[0-9a-f]{32}$")
+            self.assertRegex(second_result["index_generation"], r"^gen:[0-9a-f]{32}$")
+            self.assertNotEqual(
+                second_result["index_generation"],
+                first_result["index_generation"],
+            )
+            first_without_generation = dict(first_result)
+            second_without_generation = dict(second_result)
+            first_without_generation.pop("index_generation")
+            second_without_generation.pop("index_generation")
+            self.assertEqual(second_without_generation, first_without_generation)
 
             zettel_code, zettel_output = self.run_cli(["search", str(archive_root), "lunch", "--format", "json"])
             self.assertEqual(zettel_code, 0, zettel_output)
@@ -67842,7 +67919,7 @@ archive_services.zet_abstract_backfill_recover(
             readable_frontmatter, readable_body = archive_services.require_readable_zettel_content(
                 readable_path
             )
-            self.assertTrue(
+            self.assertFalse(
                 archive_services.upsert_zettel_index_entry(
                     archive_root,
                     readable_path,
@@ -67858,6 +67935,7 @@ archive_services.zet_abstract_backfill_recover(
                 metadata_after_upsert = archive_services.read_archive_index_metadata(conn)
             finally:
                 conn.close()
+            self.assertEqual(metadata_after_upsert["state"], archive_services.INDEX_STATE_DIRTY)
             self.assertEqual(metadata_after_upsert["index_complete"], "false")
             self.assertEqual(metadata_after_upsert["quarantined_zettel_count"], "1")
 
@@ -67882,8 +67960,8 @@ archive_services.zet_abstract_backfill_recover(
             rows, state = archive_services.promotion_duplicate_index_rows(archive_root)
             self.assertEqual(rows, [])
             self.assertFalse(state["used_generated_index"])
-            self.assertEqual(state["source"], "live_scan")
-            self.assertEqual(state["fallback_reason"], "archive_index_stale")
+            self.assertEqual(state["source"], "none")
+            self.assertEqual(state["fallback_reason"], "archive_index_rebuild_required")
             self.assertIn("archive_index_incomplete", state["stale_reasons"])
 
             mint_code, mint_output = self.run_cli(
@@ -67903,7 +67981,7 @@ archive_services.zet_abstract_backfill_recover(
             self.assertIn("archive_index_incomplete", mint_result["duplicate_check"]["stale_reasons"])
             self.assertEqual(
                 [item["reason"] for item in mint_result["near_duplicates"]],
-                ["archive_index_incomplete"],
+                ["archive_index_rebuild_required"],
             )
 
             validate_code, validate_output = self.run_cli(
@@ -67953,10 +68031,10 @@ archive_services.zet_abstract_backfill_recover(
             self.assertIn("archive_index_incomplete", result["duplicate_check"]["stale_reasons"])
             self.assertEqual(
                 [item["reason"] for item in result["near_duplicates"]],
-                ["archive_index_incomplete"],
+                ["archive_index_rebuild_required"],
             )
 
-    def test_current_index_stat_check_falls_back_and_blocks_corrupted_candidate(self) -> None:
+    def test_current_index_stat_check_requires_rebuild_without_reading_corrupted_candidate(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
             self.make_fake_lunch_draft_promotion_ready(
@@ -67990,9 +68068,9 @@ archive_services.zet_abstract_backfill_recover(
                 relative_path="inbox/zet_20260519_draft_ai_lunch_note.md",
             )
             self.assertFalse(result["ok"], result)
-            self.assertIn(
-                "canonical_candidate_unreadable",
+            self.assertEqual(
                 [item["reason"] for item in result["near_duplicates"]],
+                ["archive_index_rebuild_required"],
             )
             self.assertNotIn(secret, json.dumps(result))
 
@@ -68020,13 +68098,13 @@ archive_services.zet_abstract_backfill_recover(
 
             self.assertEqual(rows, [])
             self.assertFalse(state["used_generated_index"])
-            self.assertEqual(state["fallback_reason"], "archive_index_stale")
+            self.assertEqual(state["fallback_reason"], "archive_index_rebuild_required")
             self.assertIn("live_zettel_stat_unavailable", state["stale_reasons"])
             self.assertNotIn("UNSTATABLE_TREE_SECRET_7306", json.dumps(state))
             self.assertFalse(result["ok"], result)
             self.assertEqual(
                 [item["reason"] for item in result["near_duplicates"]],
-                ["live_zettel_stat_unavailable"],
+                ["archive_index_rebuild_required"],
             )
             self.assertNotIn("UNSTATABLE_TREE_SECRET_7306", json.dumps(result))
 
@@ -68045,15 +68123,15 @@ archive_services.zet_abstract_backfill_recover(
             self.assertFalse(no_index_result["ok"], no_index_result)
             self.assertEqual(
                 [item["reason"] for item in no_index_result["near_duplicates"]],
-                ["live_zettel_stat_unavailable"],
+                ["archive_index_rebuild_required"],
             )
             self.assertIn(
-                "live_zettel_stat_unavailable",
+                "archive_index_missing",
                 no_index_result["duplicate_check"]["stale_reasons"],
             )
             self.assertNotIn("UNSTATABLE_TREE_SECRET_7306", json.dumps(no_index_result))
 
-    def test_live_duplicate_fallback_blocks_unreadable_canonical_candidate(self) -> None:
+    def test_missing_index_requires_rebuild_without_reading_unreadable_candidate(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
             self.make_fake_lunch_draft_promotion_ready(
@@ -68080,13 +68158,10 @@ archive_services.zet_abstract_backfill_recover(
             )
 
             self.assertFalse(result["ok"], result)
-            blocker = next(
-                item
-                for item in result["near_duplicates"]
-                if item["path"] == relative
+            self.assertEqual(
+                [item["reason"] for item in result["near_duplicates"]],
+                ["archive_index_rebuild_required"],
             )
-            self.assertEqual(blocker["reason"], "canonical_candidate_unreadable")
-            self.assertEqual(blocker["severity"], "blocker")
             self.assertNotIn(secret, json.dumps(result))
 
     def test_invalid_view_yaml_index_failure_is_sanitized_and_rolls_back(self) -> None:
@@ -76421,6 +76496,8 @@ archive_services.zet_abstract_backfill_recover(
             "---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + body,
             encoding="utf-8",
         )
+        indexed = archive_services.index_archive(archive_root)
+        self.assertTrue(indexed["index_complete"], indexed)
         return path
 
     def test_create_draft_unknown_kind_warns_and_lists_without_blocking(self) -> None:
@@ -78127,6 +78204,9 @@ class ObjetCaptureTests(unittest.TestCase):
                 "checklist": {item_id: True for item_id in PROMOTION_CHECKLIST_IDS},
             }
             draft_path.write_text("---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + body, encoding="utf-8")
+            self.assertTrue(
+                archive_services.index_archive(archive_root)["index_complete"]
+            )
             code, output = self.run_cli(
                 [
                     "mint-zet",

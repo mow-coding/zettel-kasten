@@ -1,6 +1,6 @@
 # Operator Feedback Lifecycle
 
-Status: v0.3.149 approval-gated metadata checkpoint; runtime discoverability and shipped schema files since v0.3.160; delivery ledger + batched mark-delivered since v0.3.169
+Status: v0.3.149 approval-gated metadata checkpoint; runtime discoverability and shipped schema files since v0.3.160; delivery ledger + batched mark-delivered since v0.3.169; create-only checked body companion in v0.3.312
 
 WOM now gives operator-generated tool feedback a separate lifecycle surface.
 
@@ -25,6 +25,65 @@ approval, or treat `delivered` as proof of either external submission or
 human receipt. User knowledge objets are not the canonical feedback tracker.
 
 ## Commands
+
+### Feedback body companion (v0.3.312)
+
+The lifecycle record remains metadata. A substantive report is composed and
+checked through a separate body contract:
+
+```powershell
+archive operator-feedback-compose <archive-root> `
+  --request profiles/local/operator-feedback/requests/<private>.json `
+  --dry-run `
+  --format json
+
+archive operator-feedback-compose <archive-root> `
+  --request profiles/local/operator-feedback/requests/<private>.json `
+  --expected-plan-sha256 <sha256> `
+  --reviewed-by <actor> `
+  --approve `
+  --format json
+
+archive operator-feedback-body-check <archive-root> `
+  --feedback-id <id> `
+  --dry-run `
+  --format json
+```
+
+The ignored-local request has exactly six sections: `environment`, `task`,
+`observed_failure`, `suspected_cause`, `requested_resolution`, and
+`reproduction`. Planning returns content-free presence and byte-count evidence
+plus a digest; it never echoes the request path, title, body, or rejected value.
+Approval creates the body and receipt without overwrite. The metadata record
+then binds the body as `feedback-body-sha256:<64 hex>`.
+
+The request is exact-schema JSON:
+
+```json
+{
+  "schema": "wom-kit/operator-feedback-body-request/v0.1",
+  "feedback_id": "feedback-example-001",
+  "title": "Reviewed example failure report",
+  "sections": {
+    "environment": "Describe the reviewed environment.",
+    "task": "Describe the attempted task.",
+    "observed_failure": "State only the observed failure.",
+    "suspected_cause": "Label the suspected cause as an inference.",
+    "requested_resolution": "Describe the requested resolution.",
+    "reproduction": "List the reviewed reproduction steps."
+  }
+}
+```
+
+Store it under `profiles/local/operator-feedback/requests/*.json`. The archive
+root `.gitignore` must contain the exact `profiles/local/` private boundary;
+for this command, any later negation is rejected conservatively rather than
+risk treating trackable feedback content as ignored.
+
+`operator-feedback-body-check` validates the structure, digest, privacy
+boundary, and lifecycle binding without returning the feedback prose. A body
+without the matching lifecycle record is incomplete; metadata alone does not
+prove that a body exists or that its required sections are usable.
 
 Preview the policy:
 
