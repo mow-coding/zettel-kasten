@@ -1,6 +1,6 @@
 # Runtime Canonical Entry Points
 
-Status: v0.3.312 Letters 120 and 123 current-index, mint-progress, and feedback-body checkpoint
+Status: v0.3.313 source-fidelity and private-verbatim preservation checkpoint
 
 When an AI runtime enters a WOM archive, it needs a small, explicit "start
 here" map. The archive may contain zets, source bindings, provider metadata,
@@ -133,6 +133,39 @@ protected literal is not implemented. See
 external CI, exact-tag, GitHub Release, and wheel evidence remain distinct
 verification layers.
 
+## v0.3.313 Source-Fidelity Entry Points
+
+Every new AI-assisted or AI-generated draft starts with one manifested local
+content-addressed source. Preview `archive create-draft` with
+`--source-fidelity`, `--fidelity-audience`, and
+`--fidelity-source-object-id`, then replay the unchanged request only with
+`--approve`, `--draft-approved-by`, `--expected-body-sha256`, and
+`--expected-source-fidelity-plan-sha256`. Declared AI `created_by`,
+`assisted_by`, or non-empty `local_ai_sessions` evidence cannot downgrade to
+the human route; it fails as `ai_provenance_requires_ai_creation_mode`.
+
+Use `verbatim` only for a personal archive and `private_self`; private personal
+data remains intact while credential secrets block. `faithful_summary` and
+`sanitized_derivative` bind an exact human-reviewed candidate but do not claim
+machine-proven semantic faithfulness. The full source authority stays in a
+private create-only receipt; frontmatter and ordinary CLI/MCP output expose a
+safe projection with explicit reviewer attribution.
+
+Before publication, run `mint-zet --dry-run` and use its current
+source-fidelity plan digest in the approved CLI replay. Mint re-reads the source
+and raw draft body. Existing human-written creation remains compatible; an old
+AI draft needs the attributed `legacy_source_fidelity_reviewed` affirmation,
+not an inferred historical mode. MCP `create_draft_zettel` carries the matching
+create fields and binds its own AI identity; `mint_zettel_check` is preview-only.
+Audience is not an ACL and none of these actions shares, exports, transports,
+or calls a provider.
+
+The stopped shortening attempt produced no draft or mint write, so verified
+data loss is zero. Local tests establish implementation behavior only, not
+merge, CI, tag, Release, wheel, fresh-install, real-archive, sharing, or human
+acceptance evidence. See [Source Fidelity And Private Verbatim Preservation](source-fidelity-and-private-verbatim.md)
+and the [v0.3.313 release note](releases/v0.3.313.md).
+
 ## Letters 120 and 123 index and feedback entry points
 
 From v0.3.312, official index-backed search, structured zettel views, and mint
@@ -211,8 +244,11 @@ content-free checkpoint over fixed local lifecycle roots. It grants no cleanup
 authority and checks no provider or sibling object store. AI drafts use
 `archive create-draft` preview and exact reviewed replay; a direct Markdown
 write into `inbox/` is forbidden. Declared AI drafts require an explicit safe
-abstract and non-empty facets, and a same-title inbox draft must be revised in
-place. A publication request starts mint preview and is not complete until the
+abstract, non-empty facets, manifested source, fidelity mode, and audience;
+their approved replay is bound to both the reviewed body and fidelity-plan
+digests. AI provenance cannot use the human route. A same-title inbox draft
+must be revised in place. A publication request starts mint preview, including
+source/body re-verification when applicable, and is not complete until the
 approved mint has canonical and receipt evidence; blockers must be reported
 immediately. `archive version` does not verify remote
 release freshness. `archive inbox-pipeline-audit --dry-run` returns

@@ -1264,6 +1264,29 @@ PRINCIPAL_KINDS = frozenset(
     }
 )
 DRAFT_CREATION_MODES = {"human_written", "ai_assisted", "ai_generated", "imported", "derived"}
+SOURCE_FIDELITY_SCHEMA = "wom-kit/source-fidelity/v0.1"
+SOURCE_FIDELITY_DRAFT_RECEIPT_SCHEMA = (
+    "wom-kit/source-fidelity-draft-receipt/v0.1"
+)
+SOURCE_FIDELITY_REVIEW_BINDING_SCHEMA = (
+    "wom-kit/source-fidelity-review-binding/v0.1"
+)
+SOURCE_FIDELITY_MODES = frozenset(
+    {"verbatim", "faithful_summary", "sanitized_derivative"}
+)
+SOURCE_FIDELITY_COMPARISON_BASIS = "utf8_newlines_lf"
+SOURCE_FIDELITY_DRAFT_RECEIPTS_DIR = "receipts/source-fidelity/drafts"
+SOURCE_FIDELITY_MAX_SOURCE_BYTES = 16 * 1024 * 1024
+SOURCE_FIDELITY_MAX_DRAFT_BYTES = 32 * 1024 * 1024
+SOURCE_FIDELITY_DRAFT_CREATION_KEYS = frozenset(
+    {
+        "approved_by",
+        "approval_scope",
+        "approved_body_sha256",
+        "approved_source_fidelity_plan_sha256",
+        "approved_source_fidelity_review_binding_sha256",
+    }
+)
 SOURCE_INTAKE_ROLES = {"primary_source", "context", "attachment", "derived_context"}
 SOURCE_INTAKE_DEFAULT_ROLE = "primary_source"
 SOURCE_INTAKE_RUNTIMES = {"codex", "claude_code", "other"}
@@ -1607,6 +1630,23 @@ DRAFT_SECRET_VALUE_RE = re.compile(
     r"|-----BEGIN (?:RSA |DSA |EC |OPENSSH )?PRIVATE KEY-----"
     r"|\bAKIA[0-9A-Z]{16}\b"
     r"|\bghp_[A-Za-z0-9_]{20,}\b"
+)
+SOURCE_FIDELITY_CREDENTIAL_SECRET_RE = re.compile(
+    r"(?i)(?:\bBearer\s+[A-Za-z0-9._~+/=-]{12,})"
+    r"|(?:\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b)"
+    r"|(?:\bgh[pousr]_[A-Za-z0-9_]{20,}\b)"
+    r"|(?:\bgithub_pat_[A-Za-z0-9_]{20,}\b)"
+    r"|(?:\bglpat-[A-Za-z0-9_-]{16,}\b)"
+    r"|(?:\bxox[baprs]-[A-Za-z0-9-]{10,}\b)"
+    r"|(?:\bsecret_[A-Za-z0-9]{20,}\b)"
+    r"|(?:\bntn_[A-Za-z0-9]{20,}\b)"
+    r"|(?:\bAIza[0-9A-Za-z_-]{35}\b)"
+    r"|(?:\bAKIA[0-9A-Z]{16}\b)"
+    r"|(?:\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b)"
+    r"|(?:\b(?:sk|rk)_live_[A-Za-z0-9]{16,}\b)"
+    r"|(?:-----BEGIN (?:RSA |DSA |EC |OPENSSH )?PRIVATE KEY-----)"
+    r"|(?:(?:api[_-]?key|aws[_-]?secret[_-]?access[_-]?key|secret[_-]?access[_-]?key|access[_-]?token|client[_-]?secret|password|credential|secret|token)"
+    r"\s*[:=]\s*['\"]?[A-Za-z0-9_./+=:-]{16,})"
 )
 PROMPT_BOUNDARY_TEXT_EXTENSIONS = {".md", ".markdown", ".txt"}
 PROMPT_BOUNDARY_SOFT_TEXT_LIMIT_CHARS = 1_000_000
@@ -3285,7 +3325,13 @@ ZET_CATALOG_CONTINUATION_SCHEMA = "wom-kit/zet-catalog-continuation/v0.3"
 ZET_CATALOG_ENTRY_IDENTITY_BASIS = "snapshot_id_path_order_ordinal_status_sha256"
 ZETTEL_EDGE_EXTERNAL_REF_RE = re.compile(r"^zet:(?P<source>[A-Za-z0-9_-]+):(?P<external_id>[A-Za-z0-9_-]+)$")
 MACHINE_ENFORCED_CHECKLIST_ITEMS = {"object_id_only", "allowed_edges"}
-HUMAN_AFFIRMABLE_CHECKLIST_ITEMS = {"one_clear_purpose", "sensitive_content_reviewed"}
+HUMAN_AFFIRMABLE_CHECKLIST_ITEMS = {
+    "one_clear_purpose",
+    "sensitive_content_reviewed",
+    # Synthetic, attributed review path for AI-authored drafts created before
+    # the source-fidelity contract existed. This is never inferred from prose.
+    "legacy_source_fidelity_reviewed",
+}
 ZETTEL_PRIVATE_PROVIDER_LOCATOR_RE = re.compile(
     r"(?i)\bhttps?://(?:[^/\s\"'<>)]*\.)?(?:app\.notion\.com|notion\.so|api\.notion\.com|tiro\.ooo|api\.tiro\.ooo)(?:[/?#:]|$)"
 )
@@ -4627,6 +4673,55 @@ class _OperatorFeedbackRecordLock:
 def _write_bytes_create_if_absent(path: Path, value: bytes) -> None:
     """Publish complete bytes atomically and never replace an existing file."""
 
+    expected_digest = hashlib.sha256(value).hexdigest()
+
+    def verify_exact_regular_file(candidate: Path) -> tuple[int, int]:
+        before = os.lstat(candidate)
+        reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or stat.S_ISLNK(before.st_mode)
+            or (
+                reparse_flag
+                and getattr(before, "st_file_attributes", 0) & reparse_flag
+            )
+            or before.st_size != len(value)
+        ):
+            raise OSError("create_only_publication_not_exact_regular_file")
+        digest = hashlib.sha256()
+        with candidate.open("rb") as handle:
+            opened = os.fstat(handle.fileno())
+            if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
+                raise OSError("create_only_publication_identity_changed")
+            while True:
+                chunk = handle.read(1024 * 1024)
+                if not chunk:
+                    break
+                digest.update(chunk)
+            opened_after = os.fstat(handle.fileno())
+        after = os.lstat(candidate)
+        identity = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+        if identity != (
+            opened.st_dev,
+            opened.st_ino,
+            opened.st_size,
+            opened.st_mtime_ns,
+        ) or identity != (
+            opened_after.st_dev,
+            opened_after.st_ino,
+            opened_after.st_size,
+            opened_after.st_mtime_ns,
+        ) or identity != (
+            after.st_dev,
+            after.st_ino,
+            after.st_size,
+            after.st_mtime_ns,
+        ):
+            raise OSError("create_only_publication_identity_changed")
+        if digest.hexdigest() != expected_digest:
+            raise OSError("create_only_publication_verification_failed")
+        return before.st_dev, before.st_ino
+
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary_path: Path | None = None
     descriptor: int | None = None
@@ -4647,11 +4742,20 @@ def _write_bytes_create_if_absent(path: Path, value: bytes) -> None:
             raise OSError("could_not_reserve_create_temporary_file")
         with os.fdopen(descriptor, "wb") as handle:
             descriptor = None
-            handle.write(value)
+            view = memoryview(value)
+            offset = 0
+            while offset < len(view):
+                written = handle.write(view[offset:])
+                if written is None or written <= 0:
+                    raise OSError("create_only_temporary_write_incomplete")
+                offset += written
             handle.flush()
             os.fsync(handle.fileno())
+        temporary_identity = verify_exact_regular_file(temporary_path)
         os.link(temporary_path, path)
         fsync_directory(path.parent)
+        if verify_exact_regular_file(path) != temporary_identity:
+            raise OSError("create_only_publication_identity_changed")
     finally:
         if descriptor is not None:
             os.close(descriptor)
@@ -6356,6 +6460,7 @@ def ai_response_contract(archive_root: Path | str, *, dry_run: bool = True) -> d
         "dry_run": True,
         "lifecycle_action": "ai_response_contract",
         "archive_id": read_archive_id(root),
+        "source_fidelity_policy": source_fidelity_policy(),
         "summary": {
             "schema": AI_RESPONSE_CONTRACT_SCHEMA,
             "required_section_count": sum(1 for item in response_sections if item.get("required")),
@@ -33639,6 +33744,760 @@ def build_abstract_review_basis(
     }
 
 
+def source_fidelity_policy() -> dict[str, Any]:
+    """One content-free policy projection shared by every AI runtime surface."""
+
+    return {
+        "schema": SOURCE_FIDELITY_SCHEMA,
+        "modes": sorted(SOURCE_FIDELITY_MODES),
+        "comparison_basis": SOURCE_FIDELITY_COMPARISON_BASIS,
+        "data_classes": [
+            "credential_secret",
+            "private_source_personal_data",
+            "shared_derivative_personal_data",
+        ],
+        "explicit_private_verbatim_no_silent_redaction": True,
+        "summary_semantic_fidelity_machine_verified": False,
+        "sanitized_derivative_semantic_fidelity_machine_verified": False,
+        "repeated_information_loss_or_user_request_routes_to_feedback": True,
+        "source_text_echoed": False,
+        "source_locator_echoed": False,
+    }
+
+
+def _source_fidelity_digest_bytes(value: bytes) -> str:
+    return hashlib.sha256(value).hexdigest()
+
+
+def _source_fidelity_digest_json(value: Any) -> str:
+    payload = json.dumps(
+        json_safe(value),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return _source_fidelity_digest_bytes(payload)
+
+
+def _source_fidelity_bound_root_and_path(
+    root: Path,
+    path: Path,
+) -> tuple[Path, Path]:
+    """Keep Windows short/long spellings consistent for bound-handle reads."""
+
+    lexical_root = Path(root).absolute()
+    try:
+        relative = Path(path).absolute().relative_to(lexical_root)
+    except ValueError as exc:
+        raise OSError("source_fidelity_path_outside_archive") from exc
+    canonical_root = lexical_root.resolve()
+    return canonical_root, canonical_root.joinpath(*relative.parts)
+
+
+def _source_fidelity_manifest_records_strict(
+    root: Path,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    path = root / "objects" / "manifests" / "files.jsonl"
+    blockers: list[str] = []
+    try:
+        bound_root, bound_path = _source_fidelity_bound_root_and_path(
+            root, path
+        )
+        with hold_activity_group_evidence_file(
+            bound_root,
+            bound_path,
+            max_bytes=64 * 1024 * 1024,
+        ) as snapshot:
+            raw = snapshot["raw"]
+    except (OSError, ValueError):
+        return [], ["source_fidelity_manifest_missing_or_unsafe"]
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return [], ["source_fidelity_manifest_not_utf8"]
+
+    class DuplicateManifestKey(ValueError):
+        pass
+
+    def reject_duplicate_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise DuplicateManifestKey(key)
+            result[key] = value
+        return result
+
+    records: list[dict[str, Any]] = []
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(
+                line,
+                object_pairs_hook=reject_duplicate_pairs,
+                parse_constant=lambda value: (_ for _ in ()).throw(ValueError(value)),
+            )
+        except (DuplicateManifestKey, json.JSONDecodeError, ValueError, RecursionError):
+            blockers.append("source_fidelity_manifest_invalid")
+            break
+        if not isinstance(record, dict):
+            blockers.append("source_fidelity_manifest_invalid")
+            break
+        records.append(record)
+    return records, unique_preserve_order(blockers)
+
+
+def _source_fidelity_read_manifested_object(
+    root: Path,
+    object_id_value: Any,
+) -> tuple[dict[str, Any] | None, bytes | None, list[str]]:
+    """Read one local content-addressed UTF-8 objet without reflecting its content."""
+
+    blockers: list[str] = []
+    object_id = str(object_id_value or "").strip().lower()
+    if not OBJECT_ID_RE.fullmatch(object_id):
+        return None, None, ["source_fidelity_object_id_invalid"]
+    digest = object_id.removeprefix("sha256:")
+    logical_key = f"objects/sha256/{digest[:2]}/{digest}"
+    records, manifest_blockers = _source_fidelity_manifest_records_strict(root)
+    blockers.extend(manifest_blockers)
+    matching = [
+        record
+        for record in records
+        if str(record.get("object_id") or "").strip().lower() == object_id
+    ]
+    if not manifest_blockers and len(matching) != 1:
+        blockers.append("source_fidelity_manifest_exactly_one_record_required")
+    record = matching[0] if len(matching) == 1 else {}
+    if record and (
+        str(record.get("sha256") or "").strip().lower() != digest
+        or str(record.get("logical_key") or "").strip() != logical_key
+    ):
+        blockers.append("source_fidelity_manifest_authority_mismatch")
+
+    object_path = root.joinpath(*PurePosixPath(logical_key).parts)
+    try:
+        bound_root, bound_path = _source_fidelity_bound_root_and_path(
+            root, object_path
+        )
+        with hold_activity_group_evidence_file(
+            bound_root,
+            bound_path,
+            max_bytes=SOURCE_FIDELITY_MAX_SOURCE_BYTES,
+        ) as snapshot:
+            raw = snapshot["raw"]
+    except (OSError, ValueError):
+        return None, None, unique_preserve_order(
+            [*blockers, "source_fidelity_object_missing_or_unsafe"]
+        )
+    if _source_fidelity_digest_bytes(raw) != digest:
+        blockers.append("source_fidelity_object_digest_mismatch")
+    if record:
+        recorded_size = record.get("size_bytes")
+        if (
+            isinstance(recorded_size, bool)
+            or not isinstance(recorded_size, int)
+            or recorded_size != len(raw)
+        ):
+            blockers.append("source_fidelity_manifest_size_mismatch")
+    try:
+        source_text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return None, None, unique_preserve_order(
+            [*blockers, "source_fidelity_source_not_utf8"]
+        )
+    if "\x00" in source_text:
+        blockers.append("source_fidelity_source_contains_nul")
+    normalized_text = source_text.replace("\r\n", "\n").replace("\r", "\n")
+    normalized = normalized_text.encode("utf-8")
+    evidence = {
+        "object_id": object_id,
+        "raw_sha256": digest,
+        "raw_size_bytes": len(raw),
+        "normalized_sha256": _source_fidelity_digest_bytes(normalized),
+        "normalized_size_bytes": len(normalized),
+        "comparison_basis": SOURCE_FIDELITY_COMPARISON_BASIS,
+        "newline_transformation_applied": raw != normalized,
+        "source_text_stored": False,
+        "source_locator_stored": False,
+    }
+    return evidence, normalized, unique_preserve_order(blockers)
+
+
+def _source_fidelity_ai_provenance_declared(
+    *,
+    creation_mode: Any = None,
+    created_by: Any = None,
+    assisted_by: Any = None,
+    local_ai_sessions: Any = None,
+) -> bool:
+    return bool(
+        creation_mode in {"ai_assisted", "ai_generated"}
+        or str(created_by or "").startswith("ai_runtime:")
+        or str(created_by or "").startswith("ai:")
+        or str(created_by or "") == "mcp:zettel-kasten-archive-mcp"
+        or assisted_by
+        or local_ai_sessions
+    )
+
+
+def _source_fidelity_request_metadata_blockers(value: Any) -> list[str]:
+    """Classify unsafe caller metadata without ever reflecting its values."""
+
+    blockers: list[str] = []
+
+    def inspect(item: Any) -> None:
+        if isinstance(item, dict):
+            for key, child in item.items():
+                inspect(key)
+                inspect(child)
+            return
+        if isinstance(item, (list, tuple, set)):
+            for child in item:
+                inspect(child)
+            return
+        if item is None or isinstance(item, (bool, int, float)):
+            return
+        text = str(item)
+        if (
+            SOURCE_FIDELITY_CREDENTIAL_SECRET_RE.search(text)
+            or DRAFT_SECRET_VALUE_RE.search(text)
+            or source_intake_secret_like(text)
+        ):
+            blockers.append("credential_secret_present")
+        if (
+            contains_forbidden_location_reference(text)
+            or zettel_body_has_private_provider_locator(text)
+        ):
+            blockers.append("private_locator_or_path_present")
+
+    inspect(value)
+    return unique_preserve_order(blockers)
+
+
+def _source_fidelity_value_contains_private_authority(
+    value: Any,
+    *,
+    private_values: set[str],
+) -> bool:
+    if isinstance(value, dict):
+        return any(
+            _source_fidelity_value_contains_private_authority(
+                child, private_values=private_values
+            )
+            for item in value.items()
+            for child in item
+        )
+    if isinstance(value, (list, tuple, set)):
+        return any(
+            _source_fidelity_value_contains_private_authority(
+                child, private_values=private_values
+            )
+            for child in value
+        )
+    return isinstance(value, str) and any(
+        private_value.casefold() in value.casefold()
+        for private_value in private_values
+        if private_value
+    )
+
+
+def _source_fidelity_private_authority_values(
+    source: Any,
+) -> set[str]:
+    if not isinstance(source, dict):
+        return set()
+    object_id = source.get("object_id")
+    values = {
+        str(source.get("raw_sha256") or ""),
+        str(source.get("normalized_sha256") or ""),
+    }
+    if isinstance(object_id, str) and OBJECT_ID_RE.fullmatch(object_id):
+        values.update(
+            {
+                object_id,
+                f"objet:{object_id}",
+                object_id.removeprefix("sha256:"),
+            }
+        )
+    return {value for value in values if value}
+
+
+def _source_fidelity_content_free_blocked_preview(
+    reason_codes: list[str],
+) -> dict[str, Any]:
+    """Return the stable AI-draft failure envelope with no caller value."""
+
+    return {
+        "ok": False,
+        "dry_run": True,
+        "lifecycle_action": "create_draft",
+        "target_archive": {
+            "archive_id": None,
+            "archive_type": None,
+            "profile_id": None,
+            "profile_operator_id": None,
+            "profile_authority_mode": None,
+        },
+        "proposed_path": None,
+        "frontmatter_preview": {},
+        "body_sha256": None,
+        "source_fidelity": None,
+        "source_fidelity_plan_sha256": None,
+        "source_fidelity_draft_receipt_path": None,
+        "first_read_check": {
+            "contract": "wom-kit/explicit-abstract-publication/v0.1",
+            "status": "blocked_private_metadata",
+            "ready_for_publication": False,
+            "source_field": None,
+            "abstract_char_count": 0,
+            "abstract_sha256": None,
+            "max_chars": ZET_ABSTRACT_MAX_CHARS,
+            "abstract_text_echoed": False,
+            "body_read_for_check": False,
+        },
+        "existing_draft_title_check": {
+            "complete": False,
+            "drafts_checked": 0,
+            "same_title_count": 0,
+            "unreadable_frontmatter_count": 0,
+            "body_text_read": False,
+            "paths_or_titles_echoed": False,
+            "reason": "blocked_private_metadata",
+        },
+        "blockers": unique_preserve_order(reason_codes),
+        "warnings": [],
+        "would_change": [],
+        "approval_replay": {
+            "draft_id": None,
+            "created_at": None,
+            "expected_body_sha256": None,
+            "expected_source_fidelity_plan_sha256": None,
+            "expected_archive_id": None,
+            "expected_type": None,
+            "profile_id": None,
+        },
+    }
+
+
+def _source_fidelity_content_free_mint_blocked_preview(
+    reason_codes: list[str],
+) -> dict[str, Any]:
+    """Hide all draft-derived fields when the mint privacy gate fires."""
+
+    return {
+        "ok": False,
+        "dry_run": True,
+        "draft_path": None,
+        "zettel_id": None,
+        "title": None,
+        "authority_mode": MINT_AUTHORITY_MODE,
+        "proposed_canonical_path": None,
+        "proposed_mint_receipt_path": None,
+        "proposed_draft_snapshot_path": None,
+        "blockers": unique_preserve_order(reason_codes),
+        "warnings": [],
+        "checklist": [],
+        "mint_checklist_guidance": [],
+        "duplicate_check": {},
+        "near_duplicates": [],
+        "first_read_check": {
+            "ready_for_publication": False,
+            "abstract_text_echoed": False,
+            "body_read_for_check": False,
+        },
+        "abstract_review_basis": None,
+        "self_contained_check": {},
+        "quality_check": {},
+        "source_fidelity": None,
+        "current_source_fidelity_plan_sha256": None,
+        "legacy_source_fidelity_reviewed": False,
+        "scratch_cleanup": {
+            "blockers": ["blocked_private_metadata"],
+            "would_change": [],
+        },
+        "receipt_preview": {},
+        "would_change": [],
+    }
+
+
+def _source_fidelity_content_free_promotion_blocked_preview() -> dict[str, Any]:
+    """Block the legacy promotion surface without reflecting an AI draft."""
+
+    return {
+        "ok": False,
+        "dry_run": True,
+        "draft_path": None,
+        "zettel_id": None,
+        "title": None,
+        "proposed_canonical_path": None,
+        "proposed_receipt_path": None,
+        "source_sha256": None,
+        "blockers": ["ai_source_fidelity_draft_requires_mint_zettel"],
+        "warnings": [],
+        "checklist": [],
+        "duplicate_check": {},
+        "near_duplicates": [],
+        "first_read_check": {
+            "ready_for_publication": False,
+            "abstract_text_echoed": False,
+            "body_read_for_check": False,
+        },
+        "abstract_review_basis": None,
+        "receipt_preview": {},
+        "would_change": [],
+    }
+
+
+def _source_fidelity_frontmatter_authority_sha256(
+    frontmatter: dict[str, Any],
+) -> str:
+    # These two fields contain the plan itself and its approval projection, so
+    # including them would make the digest recursive. Every other frontmatter
+    # field belongs to the exact reviewed candidate authority.
+    selected = {
+        key: value
+        for key, value in frontmatter.items()
+        if key not in {"draft_creation", "source_fidelity"}
+    }
+    return _source_fidelity_digest_json(
+        {
+            "schema": "wom-kit/source-fidelity-frontmatter-authority/v0.1",
+            "frontmatter": selected,
+            "excluded_recursive_fields": [
+                "draft_creation",
+                "source_fidelity",
+            ],
+        }
+    )
+
+
+def _source_fidelity_plan_sha256(
+    *,
+    archive_id: str,
+    archive_type: str | None,
+    draft_id: str,
+    draft_path: str,
+    created_at: str,
+    creation_mode: str,
+    fidelity: dict[str, Any],
+    final_body_sha256: str,
+    region: dict[str, Any] | None,
+    frontmatter: dict[str, Any],
+    frontmatter_authority_sha256: str | None = None,
+) -> str:
+    fidelity_authority = {
+        key: value
+        for key, value in fidelity.items()
+        if key != "creation_plan_sha256"
+    }
+    authority = {
+        "schema": SOURCE_FIDELITY_SCHEMA,
+        "archive_id": archive_id,
+        "archive_type": archive_type,
+        "draft_id": draft_id,
+        "draft_path": draft_path,
+        "created_at": created_at,
+        "creation_mode": creation_mode,
+        "source_fidelity": json_safe(fidelity_authority),
+        "final_body_sha256": final_body_sha256,
+        "region": json_safe(region) if isinstance(region, dict) else None,
+        "frontmatter_authority_sha256": (
+            frontmatter_authority_sha256
+            or _source_fidelity_frontmatter_authority_sha256(frontmatter)
+        ),
+    }
+    return _source_fidelity_digest_json(authority)
+
+
+def _source_fidelity_review_binding_sha256(
+    *,
+    archive_id: str,
+    draft_id: str,
+    draft_path: str,
+    body_sha256: str,
+    source_fidelity_plan_sha256: str,
+    reviewed_by: str,
+) -> str:
+    return _source_fidelity_digest_json(
+        {
+            "schema": SOURCE_FIDELITY_REVIEW_BINDING_SCHEMA,
+            "archive_id": archive_id,
+            "draft_id": draft_id,
+            "draft_path": draft_path,
+            "body_sha256": body_sha256,
+            "source_fidelity_plan_sha256": (
+                source_fidelity_plan_sha256
+            ),
+            "reviewed_by": reviewed_by,
+        }
+    )
+
+
+def _source_fidelity_safe_projection(
+    fidelity: dict[str, Any] | None,
+    *,
+    review_state: str | None = None,
+    publication_plan_sha256: str | None = None,
+    publication_reviewed_by: str | None = None,
+    publication_reviewed_at: str | None = None,
+) -> dict[str, Any] | None:
+    """Project fidelity state without any private objet identity or digest."""
+
+    if not isinstance(fidelity, dict):
+        return None
+    projection: dict[str, Any] = {
+        "schema": SOURCE_FIDELITY_SCHEMA,
+        "mode": fidelity.get("mode"),
+        "audience": fidelity.get("audience"),
+        "comparison_basis": SOURCE_FIDELITY_COMPARISON_BASIS,
+        "evidence_id": fidelity.get("evidence_id"),
+        "creation_plan_sha256": fidelity.get("creation_plan_sha256"),
+        "byte_exact": False,
+        "mechanically_verified": fidelity.get("mechanically_verified") is True,
+        "semantic_fidelity_machine_verified": False,
+        "human_review_required": True,
+        "source_changed": False,
+        "share_performed": False,
+        "private_source_authority_stored_in_frontmatter": False,
+        "source_text_stored": False,
+        "source_locator_stored": False,
+    }
+    if review_state:
+        projection["review_state"] = review_state
+    if publication_plan_sha256:
+        projection["publication_plan_sha256"] = publication_plan_sha256
+    if publication_reviewed_by:
+        projection["publication_reviewed_by"] = publication_reviewed_by
+    if publication_reviewed_at:
+        projection["publication_reviewed_at"] = publication_reviewed_at
+    return projection
+
+
+def _source_fidelity_private_visibility_valid(value: Any) -> bool:
+    return bool(
+        isinstance(value, dict)
+        and value.get("scope") == "private"
+        and value.get("source_visibility") == "private"
+        and isinstance(value.get("allowed_archives"), list)
+        and not value.get("allowed_archives")
+    )
+
+
+def _source_fidelity_prepare_candidate(
+    root: Path,
+    *,
+    archive_type: str | None,
+    context_body: str,
+    mode_value: Any,
+    audience_value: Any,
+    object_id_value: Any,
+) -> tuple[bytes, dict[str, Any] | None, list[str]]:
+    blockers: list[str] = []
+    mode = str(mode_value or "").strip()
+    audience = str(audience_value or "").strip()
+    if mode not in SOURCE_FIDELITY_MODES:
+        blockers.append("source_fidelity_mode_required_or_invalid")
+    if audience not in ZET_QUALITY_AUDIENCES:
+        blockers.append("source_fidelity_audience_required_or_invalid")
+    if mode == "verbatim" and (
+        archive_type != "personal" or audience != "private_self"
+    ):
+        blockers.append("verbatim_requires_personal_private_self")
+
+    source, normalized_source, source_blockers = (
+        _source_fidelity_read_manifested_object(root, object_id_value)
+    )
+    blockers.extend(source_blockers)
+    source_has_reviewable_text = bool(
+        normalized_source is not None
+        and normalized_source.decode("utf-8").lstrip("\ufeff").strip()
+    )
+    if normalized_source is not None and not source_has_reviewable_text:
+        blockers.append(
+            "source_fidelity_source_must_contain_non_whitespace_text"
+        )
+    context = (
+        normalize_draft_body(context_body).encode("utf-8")
+        if context_body
+        else b""
+    )
+    region: dict[str, Any] | None = None
+    candidate = context
+    if mode == "verbatim" and normalized_source is not None:
+        region = {
+            "offset_bytes": len(context),
+            "length_bytes": len(normalized_source),
+            "sha256": _source_fidelity_digest_bytes(normalized_source),
+        }
+        candidate = context + normalized_source
+    if "credential_secret_present" in (
+        _source_fidelity_request_metadata_blockers(
+            candidate.decode("utf-8", errors="ignore")
+        )
+    ):
+        blockers.append("credential_secret_present")
+    if source is None:
+        return candidate, None, unique_preserve_order(blockers)
+
+    mechanically_verified = (
+        mode == "verbatim"
+        and not source_blockers
+        and source_has_reviewable_text
+    )
+    fidelity = {
+        "schema": SOURCE_FIDELITY_SCHEMA,
+        "mode": mode,
+        "audience": audience,
+        "comparison_basis": SOURCE_FIDELITY_COMPARISON_BASIS,
+        "source": source,
+        "region": region,
+        "byte_exact": False,
+        "mechanically_verified": mechanically_verified,
+        "semantic_fidelity_machine_verified": False,
+        "human_review_required": True,
+        "source_changed": False,
+        "share_performed": False,
+        "source_text_stored": False,
+        "source_locator_stored": False,
+    }
+    fidelity["evidence_id"] = (
+        "source-fidelity-evidence:"
+        + _source_fidelity_digest_json(
+            {
+                "source": source,
+                "region": region,
+                "mode": mode,
+                "audience": audience,
+                "comparison_basis": SOURCE_FIDELITY_COMPARISON_BASIS,
+            }
+        )[:24]
+    )
+    return candidate, fidelity, unique_preserve_order(blockers)
+
+
+def _source_fidelity_draft_receipt(
+    *,
+    archive_id: str,
+    archive_type: str | None,
+    draft_id: str,
+    draft_path: str,
+    body_sha256: str,
+    creation_mode: str,
+    frontmatter_authority_sha256: str,
+    reviewed_by: str,
+    review_binding_sha256: str,
+    candidate_created_at: str,
+    fidelity: dict[str, Any],
+    plan_sha256: str,
+) -> dict[str, Any]:
+    return {
+        "schema": SOURCE_FIDELITY_DRAFT_RECEIPT_SCHEMA,
+        "action": "create_source_fidelity_draft",
+        "archive_id": archive_id,
+        "archive_type": archive_type,
+        "draft_id": draft_id,
+        "draft_path": draft_path,
+        "body_sha256": body_sha256,
+        "creation_mode": creation_mode,
+        "frontmatter_authority_sha256": frontmatter_authority_sha256,
+        "source_fidelity_plan_sha256": plan_sha256,
+        "reviewed_by": reviewed_by,
+        "review_binding_sha256": review_binding_sha256,
+        "candidate_created_at": candidate_created_at,
+        "source_fidelity": json_safe(fidelity),
+        "content_contract": {
+            "source_text_stored": False,
+            "source_locator_stored": False,
+            "source_path_stored": False,
+        },
+        "result": {
+            "draft_written_create_only": True,
+            "receipt_written_create_only": True,
+            "source_changed": False,
+            "share_performed": False,
+        },
+    }
+
+
+def _source_fidelity_existing_state(
+    root: Path,
+    path: Path,
+    expected: bytes,
+) -> str:
+    try:
+        bound_root, bound_path = _source_fidelity_bound_root_and_path(
+            root, path
+        )
+        with hold_activity_group_evidence_file(
+            bound_root,
+            bound_path,
+            max_bytes=max(len(expected), 1),
+        ) as snapshot:
+            actual = snapshot["raw"]
+    except FileNotFoundError:
+        return "absent"
+    except OSError:
+        return "absent" if not path.exists() else "conflict"
+    return "exact" if hmac.compare_digest(actual, expected) else "conflict"
+
+
+def _source_fidelity_publish_create_only(
+    root: Path,
+    path: Path,
+    expected: bytes,
+    *,
+    conflict_code: str,
+) -> bool:
+    state = _source_fidelity_existing_state(root, path, expected)
+    if state == "exact":
+        return False
+    if state == "conflict":
+        raise ArchiveServiceError(conflict_code)
+    # Bind and, when needed, create every parent component from the archive
+    # root outward.  Calling mkdir(parents=True) before this check could follow
+    # a junction/reparse point and mutate a location outside the archive.
+    try:
+        bound_root, bound_path = _source_fidelity_bound_root_and_path(
+            root, path
+        )
+        with activity_group_bound_directory_chain(
+            bound_root,
+            bound_path.parent,
+            create=True,
+        ):
+            if zet_revision_path_has_symlink_component(
+                bound_root, bound_path.parent
+            ):
+                raise ArchiveServiceError(conflict_code)
+            try:
+                _write_bytes_create_if_absent(bound_path, expected)
+            except FileExistsError:
+                if (
+                    _source_fidelity_existing_state(
+                        bound_root, bound_path, expected
+                    )
+                    == "exact"
+                ):
+                    return False
+                raise ArchiveServiceError(conflict_code) from None
+            if (
+                zet_revision_path_has_symlink_component(
+                    bound_root, bound_path
+                )
+                or _source_fidelity_existing_state(
+                    bound_root, bound_path, expected
+                )
+                != "exact"
+            ):
+                raise ArchiveServiceError(conflict_code)
+    except ArchiveServiceError:
+        raise
+    except OSError as exc:
+        raise ArchiveServiceError(conflict_code) from exc
+    return True
+
+
 def create_draft_zettel(
     archive_root: Path | str,
     *,
@@ -33669,6 +34528,11 @@ def create_draft_zettel(
     created_at: str | None = None,
     expected_body_sha256: str | None = None,
     draft_approved_by: str | None = None,
+    approved: bool = False,
+    source_fidelity_mode: str | None = None,
+    source_fidelity_audience: str | None = None,
+    fidelity_source_object_id: str | None = None,
+    expected_source_fidelity_plan_sha256: str | None = None,
 ) -> dict[str, Any]:
     require_yaml()
     root = require_existing_archive_root(archive_root)
@@ -33679,7 +34543,62 @@ def create_draft_zettel(
         body = ""
     blockers: list[str] = []
     warnings: list[str] = []
-    if not body.strip():
+    ai_request_declared = _source_fidelity_ai_provenance_declared(
+        creation_mode=creation_mode,
+        created_by=created_by,
+        assisted_by=assisted_by,
+        local_ai_sessions=local_ai_sessions,
+    )
+    request_metadata_blockers = (
+        _source_fidelity_request_metadata_blockers(
+            {
+                "title": title,
+                "body": body,
+                "abstract": abstract,
+                "archive_id": archive_id,
+                "kind": kind,
+                "facets": facets,
+                "visibility": visibility,
+                "created_by": created_by,
+                "source": source,
+                "expected_archive_id": expected_archive_id,
+                "expected_type": expected_type,
+                "profile_id": profile_id,
+                "profile_operator_id": profile_operator_id,
+                "profile_authority_mode": profile_authority_mode,
+                "creation_mode": creation_mode,
+                "assisted_by": assisted_by,
+                "supervised_by": supervised_by,
+                "derived_from": derived_from,
+                "source_refs": source_refs,
+                "source_intake_plan": source_intake_plan,
+                "prompt_boundary_report": prompt_boundary_report,
+                "local_ai_sessions": local_ai_sessions,
+                "draft_id": draft_id,
+                "created_at": created_at,
+                "expected_body_sha256": expected_body_sha256,
+                "draft_approved_by": draft_approved_by,
+                "source_fidelity_mode": source_fidelity_mode,
+                "source_fidelity_audience": source_fidelity_audience,
+                "fidelity_source_object_id": fidelity_source_object_id,
+                "expected_source_fidelity_plan_sha256": (
+                    expected_source_fidelity_plan_sha256
+                ),
+            }
+        )
+        if ai_request_declared
+        else []
+    )
+    if request_metadata_blockers:
+        if dry_run:
+            return _source_fidelity_content_free_blocked_preview(
+                request_metadata_blockers
+            )
+        raise ArchiveServiceError(
+            "Draft creation blocked: "
+            + "; ".join(request_metadata_blockers)
+        )
+    if not body.strip() and source_fidelity_mode != "verbatim":
         blockers.append("body is required and must contain non-whitespace text.")
 
     normalized_abstract: str | None = None
@@ -33701,9 +34620,17 @@ def create_draft_zettel(
     if not resolved_archive_id:
         blockers.append("archive.yml does not contain archive_id and archive_id was not provided.")
     if expected_archive_id and expected_archive_id != resolved_archive_id:
-        blockers.append(f"Expected archive id mismatch: expected {expected_archive_id}, found {resolved_archive_id}.")
+        blockers.append(
+            "expected_archive_id_mismatch"
+            if ai_request_declared
+            else f"Expected archive id mismatch: expected {expected_archive_id}, found {resolved_archive_id}."
+        )
     if expected_type and expected_type != archive_type:
-        blockers.append(f"Expected archive type mismatch: expected {expected_type}, found {archive_type or 'unknown'}.")
+        blockers.append(
+            "expected_archive_type_mismatch"
+            if ai_request_declared
+            else f"Expected archive type mismatch: expected {expected_type}, found {archive_type or 'unknown'}."
+        )
 
     now = (created_at or datetime.now().astimezone().replace(microsecond=0).isoformat()).strip()
     if not now:
@@ -33719,8 +34646,60 @@ def create_draft_zettel(
     else:
         zettel_id = make_zettel_id(title, now)
 
-    normalized_body = normalize_draft_body(body)
-    body_sha256 = sha256_text(normalized_body)
+    assisted = clean_optional_string_list(assisted_by)
+    ai_provenance_declared = _source_fidelity_ai_provenance_declared(
+        created_by=created_by,
+        assisted_by=assisted,
+        local_ai_sessions=local_ai_sessions,
+    )
+    is_ai_draft = _source_fidelity_ai_provenance_declared(
+        creation_mode=creation_mode,
+        created_by=created_by,
+        assisted_by=assisted,
+        local_ai_sessions=local_ai_sessions,
+    )
+    if ai_provenance_declared and creation_mode not in {
+        "ai_assisted",
+        "ai_generated",
+    }:
+        blockers.append("ai_provenance_requires_ai_creation_mode")
+    source_fidelity: dict[str, Any] | None = None
+    if is_ai_draft:
+        candidate_body_bytes, source_fidelity, fidelity_blockers = (
+            _source_fidelity_prepare_candidate(
+                root,
+                archive_type=archive_type,
+                context_body=body,
+                mode_value=source_fidelity_mode,
+                audience_value=source_fidelity_audience,
+                object_id_value=fidelity_source_object_id,
+            )
+        )
+        blockers.extend(fidelity_blockers)
+        if "credential_secret_present" in fidelity_blockers:
+            if dry_run:
+                return _source_fidelity_content_free_blocked_preview(
+                    ["credential_secret_present"]
+                )
+            raise ArchiveServiceError(
+                "Draft creation blocked: credential_secret_present"
+            )
+    else:
+        candidate_body_bytes = normalize_draft_body(body).encode("utf-8")
+        if any(
+            value is not None
+            for value in (
+                source_fidelity_mode,
+                source_fidelity_audience,
+                fidelity_source_object_id,
+                expected_source_fidelity_plan_sha256,
+            )
+        ):
+            blockers.append("source_fidelity_only_valid_for_ai_drafts")
+    normalized_body = candidate_body_bytes.decode("utf-8")
+    if source_fidelity_mode == "verbatim" and not normalized_body.strip():
+        blockers.append("verbatim_source_must_contain_non_whitespace_text")
+    body_sha256 = _source_fidelity_digest_bytes(candidate_body_bytes)
     if expected_body_sha256:
         expected_hash = expected_body_sha256.strip().lower()
         if not SHA256_RE.match(expected_hash):
@@ -33746,7 +34725,6 @@ def create_draft_zettel(
                 + ". The draft was created; mint will warn on this kind too."
             )
 
-    assisted = clean_optional_string_list(assisted_by)
     supervised = clean_optional_string_list(supervised_by)
     explicit_derived = clean_optional_string_list(derived_from)
     source_intake = prepare_source_intake_plan_for_draft(source_intake_plan, blockers)
@@ -33758,6 +34736,35 @@ def create_draft_zettel(
     explicit_refs = normalize_source_refs(source_refs or [], blockers)
     refs = [*explicit_refs, *source_intake.get("source_refs", [])]
     sessions = normalize_local_ai_sessions(local_ai_sessions or [], blockers)
+    fidelity_source_object_id = None
+    fidelity_private_authority_values: set[str] = set()
+    if is_ai_draft and isinstance(source_fidelity, dict):
+        fidelity_source = source_fidelity.get("source")
+        fidelity_private_authority_values = (
+            _source_fidelity_private_authority_values(fidelity_source)
+        )
+        if isinstance(fidelity_source, dict) and isinstance(
+            fidelity_source.get("object_id"), str
+        ):
+            fidelity_source_object_id = fidelity_source["object_id"]
+    if fidelity_source_object_id:
+        private_authority_refs = {
+            fidelity_source_object_id,
+            f"objet:{fidelity_source_object_id}",
+        }
+        refs = [
+            ref
+            for ref in refs
+            if not (
+                isinstance(ref, dict)
+                and ref.get("value") in private_authority_refs
+            )
+        ]
+        derived = [
+            value
+            for value in derived
+            if value not in private_authority_refs
+        ]
     validate_safe_draft_values(
         {
             "created_by": created_by,
@@ -33795,7 +34802,7 @@ def create_draft_zettel(
         if not expected_body_sha256:
             warnings.append("Profile-bound write replay will require expected_body_sha256.")
 
-    if creation_mode in {"ai_assisted", "ai_generated"}:
+    if is_ai_draft:
         if not assisted:
             blockers.append("AI-assisted or AI-generated drafts must identify the assisting AI runtime.")
         if normalized_abstract is None:
@@ -33806,6 +34813,26 @@ def create_draft_zettel(
             blockers.append(
                 "AI-assisted or AI-generated drafts require at least one stable facet before creation."
             )
+        if not dry_run:
+            if approved is not True:
+                blockers.append("ai_draft_write_requires_approved")
+            if not draft_approved_by:
+                blockers.append("ai_draft_write_requires_reviewer")
+            if not expected_body_sha256:
+                blockers.append("ai_draft_write_requires_expected_body_sha256")
+            if not expected_source_fidelity_plan_sha256:
+                blockers.append(
+                    "ai_draft_write_requires_expected_source_fidelity_plan_sha256"
+                )
+        else:
+            if not draft_approved_by:
+                warnings.append("AI draft write replay requires draft_approved_by.")
+            if not expected_body_sha256:
+                warnings.append("AI draft write replay requires expected_body_sha256.")
+            if not expected_source_fidelity_plan_sha256:
+                warnings.append(
+                    "AI draft write replay requires expected_source_fidelity_plan_sha256."
+                )
 
     frontmatter = {
         "id": zettel_id,
@@ -33830,6 +34857,14 @@ def create_draft_zettel(
             "ready_for_promotion": False,
         },
     }
+    if (
+        is_ai_draft
+        and source_fidelity_mode == "verbatim"
+        and not _source_fidelity_private_visibility_valid(
+            frontmatter.get("visibility")
+        )
+    ):
+        blockers.append("verbatim_requires_private_visibility")
     if normalized_abstract:
         frontmatter["abstract"] = normalized_abstract
     first_read_check = explicit_abstract_publication_check(frontmatter)
@@ -33847,7 +34882,56 @@ def create_draft_zettel(
         frontmatter["prompt_boundary"] = prompt_boundary
     if sessions:
         frontmatter["local_ai_sessions"] = sessions
-    if draft_approved_by or expected_body_sha256:
+    frontmatter_serialized = json.dumps(
+        json_safe(frontmatter),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    frontmatter_credential_secret_present = bool(
+        is_ai_draft
+        and SOURCE_FIDELITY_CREDENTIAL_SECRET_RE.search(
+            frontmatter_serialized
+        )
+    )
+    frontmatter_private_authority_exposed = bool(
+        fidelity_private_authority_values
+        and _source_fidelity_value_contains_private_authority(
+            {
+                "frontmatter": frontmatter,
+                "draft_approved_by": draft_approved_by,
+                "expected_archive_id": expected_archive_id,
+                "expected_type": expected_type,
+                "profile_id": profile_id,
+                "profile_operator_id": profile_operator_id,
+                "profile_authority_mode": profile_authority_mode,
+            },
+            private_values=fidelity_private_authority_values,
+        )
+    )
+    if frontmatter_credential_secret_present:
+        blockers.append("credential_secret_present")
+    if frontmatter_private_authority_exposed:
+        blockers.append("source_fidelity_private_authority_exposed")
+    if (
+        frontmatter_credential_secret_present
+        or frontmatter_private_authority_exposed
+    ):
+        fixed_reason_codes = []
+        if frontmatter_credential_secret_present:
+            fixed_reason_codes.append("credential_secret_present")
+        if frontmatter_private_authority_exposed:
+            fixed_reason_codes.append(
+                "source_fidelity_private_authority_exposed"
+            )
+        if dry_run:
+            return _source_fidelity_content_free_blocked_preview(
+                fixed_reason_codes
+            )
+        raise ArchiveServiceError(
+            "Draft creation blocked: " + "; ".join(fixed_reason_codes)
+        )
+    if (draft_approved_by or expected_body_sha256) and not is_ai_draft:
         frontmatter["draft_creation"] = {
             "approved_by": draft_approved_by,
             "approval_scope": "inbox_draft_only",
@@ -33858,23 +34942,9 @@ def create_draft_zettel(
         root,
         title,
     )
-    if not existing_draft_title_check["complete"]:
-        blockers.append(
-            "Existing inbox draft title check could not complete safely."
-        )
-    elif existing_draft_title_check["same_title_count"]:
-        if creation_mode in {"ai_assisted", "ai_generated"}:
-            blockers.append(
-                "An unminted inbox draft with the same normalized title already exists; revise that draft in place instead of creating another one."
-            )
-        else:
-            warnings.append(
-                "One or more unminted inbox drafts have the same normalized title; review and revise an existing draft in place when they represent the same record."
-            )
-
     inbox = archive_internal_path(root, "inbox")
     path = inbox / f"{zettel_id}.md"
-    if draft_id is None and not dry_run:
+    if draft_id is None and not dry_run and not is_ai_draft:
         suffix = 2
         base_zettel_id = zettel_id
         while path.exists():
@@ -33882,14 +34952,176 @@ def create_draft_zettel(
             frontmatter["id"] = zettel_id
             path = inbox / f"{zettel_id}.md"
             suffix += 1
-    elif path.exists():
+    elif path.exists() and not is_ai_draft:
         blockers.append(f"Proposed draft path already exists: inbox/{zettel_id}.md.")
 
     proposed_path = f"inbox/{zettel_id}.md"
+    if not existing_draft_title_check["complete"]:
+        blockers.append(
+            "Existing inbox draft title check could not complete safely."
+        )
+    elif existing_draft_title_check["same_title_count"]:
+        if is_ai_draft:
+            if not (
+                path.exists()
+                and existing_draft_title_check["same_title_count"] == 1
+            ):
+                blockers.append(
+                    "An unminted inbox draft with the same normalized title already exists; revise that draft in place instead of creating another one."
+                )
+        else:
+            warnings.append(
+                "One or more unminted inbox drafts have the same normalized title; review and revise an existing draft in place when they represent the same record."
+            )
+
+    source_fidelity_plan_sha256: str | None = None
+    source_fidelity_frontmatter_authority_sha256: str | None = None
+    source_fidelity_review_binding_sha256: str | None = None
+    fidelity_receipt_relative: str | None = None
+    fidelity_receipt_path: Path | None = None
+    fidelity_receipt_bytes: bytes | None = None
+    if is_ai_draft and source_fidelity is not None:
+        source_fidelity_frontmatter_authority_sha256 = (
+            _source_fidelity_frontmatter_authority_sha256(frontmatter)
+        )
+        source_fidelity_plan_sha256 = _source_fidelity_plan_sha256(
+            archive_id=resolved_archive_id,
+            archive_type=archive_type,
+            draft_id=zettel_id,
+            draft_path=proposed_path,
+            created_at=now,
+            creation_mode=str(creation_mode),
+            fidelity=source_fidelity,
+            final_body_sha256=body_sha256,
+            region=(
+                source_fidelity.get("region")
+                if isinstance(source_fidelity.get("region"), dict)
+                else None
+            ),
+            frontmatter=frontmatter,
+            frontmatter_authority_sha256=(
+                source_fidelity_frontmatter_authority_sha256
+            ),
+        )
+        source_fidelity["creation_plan_sha256"] = (
+            source_fidelity_plan_sha256
+        )
+        source_fidelity_review_binding_sha256 = (
+            _source_fidelity_review_binding_sha256(
+                archive_id=resolved_archive_id,
+                draft_id=zettel_id,
+                draft_path=proposed_path,
+                body_sha256=body_sha256,
+                source_fidelity_plan_sha256=(
+                    source_fidelity_plan_sha256
+                ),
+                reviewed_by=str(
+                    draft_approved_by or "<required-on-approve>"
+                ),
+            )
+        )
+        frontmatter["source_fidelity"] = _source_fidelity_safe_projection(
+            source_fidelity
+        )
+        frontmatter["draft_creation"] = {
+            "approved_by": draft_approved_by,
+            "approval_scope": "inbox_draft_only",
+            "approved_body_sha256": body_sha256,
+            "approved_source_fidelity_plan_sha256": (
+                source_fidelity_plan_sha256
+            ),
+            "approved_source_fidelity_review_binding_sha256": (
+                source_fidelity_review_binding_sha256
+            ),
+        }
+        expected_plan = str(
+            expected_source_fidelity_plan_sha256 or ""
+        ).strip().lower()
+        if expected_source_fidelity_plan_sha256:
+            if not SHA256_RE.fullmatch(expected_plan):
+                blockers.append(
+                    "expected_source_fidelity_plan_sha256_invalid"
+                )
+            elif expected_plan != source_fidelity_plan_sha256:
+                blockers.append(
+                    "expected_source_fidelity_plan_sha256_mismatch"
+                )
+
+    draft_bytes = (
+        "---\n" + dump_yaml(frontmatter) + "---\n\n"
+    ).encode("utf-8") + candidate_body_bytes
+    if source_fidelity_plan_sha256 and source_fidelity is not None:
+        fidelity_receipt_relative = (
+            f"{SOURCE_FIDELITY_DRAFT_RECEIPTS_DIR}/"
+            f"{source_fidelity_plan_sha256}.json"
+        )
+        fidelity_receipt_path = resolve_archive_relative_path(
+            root, fidelity_receipt_relative
+        )
+        fidelity_receipt = _source_fidelity_draft_receipt(
+            archive_id=resolved_archive_id,
+            archive_type=archive_type,
+            draft_id=zettel_id,
+            draft_path=proposed_path,
+            body_sha256=body_sha256,
+            creation_mode=str(creation_mode),
+            frontmatter_authority_sha256=str(
+                source_fidelity_frontmatter_authority_sha256
+            ),
+            reviewed_by=str(draft_approved_by or "<required-on-approve>"),
+            review_binding_sha256=str(
+                source_fidelity_review_binding_sha256
+            ),
+            candidate_created_at=now,
+            fidelity=source_fidelity,
+            plan_sha256=source_fidelity_plan_sha256,
+        )
+        fidelity_receipt_bytes = (
+            json.dumps(
+                json_safe(fidelity_receipt),
+                indent=2,
+                ensure_ascii=False,
+                default=str,
+            )
+            + "\n"
+        ).encode("utf-8")
+
+    planned_writes = [proposed_path]
+    if fidelity_receipt_relative:
+        planned_writes.append(fidelity_receipt_relative)
+    if is_ai_draft and path.exists():
+        draft_state = _source_fidelity_existing_state(root, path, draft_bytes)
+        if draft_state == "conflict":
+            blockers.append("source_fidelity_draft_create_only_conflict")
+        elif draft_state == "exact":
+            planned_writes = [item for item in planned_writes if item != proposed_path]
+    if fidelity_receipt_path is not None and fidelity_receipt_bytes is not None:
+        receipt_state = _source_fidelity_existing_state(
+            root, fidelity_receipt_path, fidelity_receipt_bytes
+        )
+        if receipt_state == "conflict":
+            blockers.append("source_fidelity_receipt_create_only_conflict")
+        elif receipt_state == "exact":
+            planned_writes = [
+                item
+                for item in planned_writes
+                if item != fidelity_receipt_relative
+            ]
+
     approval_replay = {
-        "draft_id": zettel_id,
+        "draft_id": (
+            None
+            if (
+                frontmatter_credential_secret_present
+                or frontmatter_private_authority_exposed
+            )
+            else zettel_id
+        ),
         "created_at": now,
         "expected_body_sha256": body_sha256,
+        "expected_source_fidelity_plan_sha256": (
+            source_fidelity_plan_sha256
+        ),
         "expected_archive_id": expected_archive_id or resolved_archive_id,
         "expected_type": expected_type or archive_type,
         "profile_id": profile_id,
@@ -33906,14 +35138,35 @@ def create_draft_zettel(
         "dry_run": True,
         "lifecycle_action": "create_draft",
         "target_archive": target_archive,
-        "proposed_path": proposed_path,
-        "frontmatter_preview": json_safe(frontmatter),
+        "proposed_path": (
+            None
+            if (
+                frontmatter_credential_secret_present
+                or frontmatter_private_authority_exposed
+            )
+            else proposed_path
+        ),
+        "frontmatter_preview": (
+            {}
+            if (
+                frontmatter_credential_secret_present
+                or frontmatter_private_authority_exposed
+            )
+            else json_safe(frontmatter)
+        ),
         "body_sha256": body_sha256,
+        "source_fidelity": json_safe(
+            _source_fidelity_safe_projection(source_fidelity)
+        ),
+        "source_fidelity_plan_sha256": source_fidelity_plan_sha256,
+        "source_fidelity_draft_receipt_path": fidelity_receipt_relative,
         "first_read_check": first_read_check,
         "existing_draft_title_check": existing_draft_title_check,
         "blockers": unique_preserve_order(blockers),
         "warnings": unique_preserve_order(warnings),
-        "would_change": [] if blockers else [f"write {proposed_path}"],
+        "would_change": (
+            [] if blockers else [f"write {item}" for item in planned_writes]
+        ),
         "approval_replay": approval_replay,
     }
     if dry_run:
@@ -33922,9 +35175,32 @@ def create_draft_zettel(
         raise ArchiveServiceError("Draft creation blocked: " + "; ".join(unique_preserve_order(blockers)))
 
     inbox.mkdir(parents=True, exist_ok=True)
-    # A kill mid-write must not leave a half-written zet in the inbox for a later
-    # read to treat as a real draft.
-    write_text_atomic(path, "---\n" + dump_yaml(frontmatter) + "---\n\n" + normalized_body)
+    created_paths: list[str] = []
+    if is_ai_draft:
+        if _source_fidelity_publish_create_only(
+            root,
+            path,
+            draft_bytes,
+            conflict_code="source_fidelity_draft_create_only_conflict",
+        ):
+            created_paths.append(proposed_path)
+        if fidelity_receipt_path is None or fidelity_receipt_bytes is None:
+            raise ArchiveServiceError("source_fidelity_receipt_plan_missing")
+        if _source_fidelity_publish_create_only(
+            root,
+            fidelity_receipt_path,
+            fidelity_receipt_bytes,
+            conflict_code="source_fidelity_receipt_create_only_conflict",
+        ):
+            created_paths.append(str(fidelity_receipt_relative))
+    else:
+        try:
+            _write_bytes_create_if_absent(path, draft_bytes)
+        except FileExistsError as exc:
+            raise ArchiveServiceError(
+                "draft_create_only_conflict"
+            ) from exc
+        created_paths.append(proposed_path)
     return {
         "ok": True,
         "dry_run": False,
@@ -33935,11 +35211,824 @@ def create_draft_zettel(
         "target_archive": target_archive,
         "frontmatter": json_safe(frontmatter),
         "body_sha256": body_sha256,
+        "source_fidelity": json_safe(
+            _source_fidelity_safe_projection(source_fidelity)
+        ),
+        "source_fidelity_plan_sha256": source_fidelity_plan_sha256,
+        "source_fidelity_draft_receipt_path": fidelity_receipt_relative,
         "first_read_check": first_read_check,
         "existing_draft_title_check": existing_draft_title_check,
         "warnings": unique_preserve_order(warnings),
-        "created_paths": [archive_relative_path(path, root)],
+        "created_paths": created_paths,
+        "idempotent_replay": not created_paths,
         "approval_replay": approval_replay,
+    }
+
+
+def _source_fidelity_raw_draft_snapshot(
+    root: Path,
+    path: Path,
+) -> dict[str, Any]:
+    """Parse a fidelity draft without BOM removal, newline conversion, or lstrip."""
+
+    blocked = lambda code: {
+        "ok": False,
+        "blockers": [code],
+        "frontmatter": {},
+        "body_bytes": b"",
+        "raw": b"",
+    }
+    try:
+        bound_root, bound_path = _source_fidelity_bound_root_and_path(
+            root, path
+        )
+        with hold_activity_group_evidence_file(
+            bound_root,
+            bound_path,
+            max_bytes=SOURCE_FIDELITY_MAX_DRAFT_BYTES,
+        ) as snapshot:
+            raw = snapshot["raw"]
+    except (OSError, ValueError):
+        return blocked("source_fidelity_draft_missing_or_unsafe")
+    if raw.startswith(b"\xef\xbb\xbf"):
+        return blocked("source_fidelity_draft_frontmatter_bom_forbidden")
+    if not raw.startswith(b"---\n"):
+        return blocked("source_fidelity_draft_frontmatter_boundary_invalid")
+    cursor = 4
+    closing_start: int | None = None
+    closing_end: int | None = None
+    while cursor < len(raw):
+        newline = raw.find(b"\n", cursor)
+        if newline < 0:
+            break
+        if raw[cursor : newline + 1] == b"---\n":
+            closing_start = cursor
+            closing_end = newline + 1
+            break
+        cursor = newline + 1
+    if closing_start is None or closing_end is None:
+        return blocked("source_fidelity_draft_frontmatter_boundary_invalid")
+    if raw[closing_end : closing_end + 1] != b"\n":
+        return blocked("source_fidelity_draft_body_separator_invalid")
+    try:
+        frontmatter_text = raw[4:closing_start].decode("utf-8")
+        loaded = load_approval_yaml_without_duplicate_keys(frontmatter_text)
+        frontmatter = normalize_approval_json_tree(loaded)
+    except ApprovalYamlDuplicateKeyError:
+        return blocked("source_fidelity_draft_frontmatter_duplicate_key")
+    except (UnicodeError, ApprovalYamlValueError, ValueError, RecursionError):
+        return blocked("source_fidelity_draft_frontmatter_invalid")
+    except Exception:
+        return blocked("source_fidelity_draft_frontmatter_invalid")
+    if not isinstance(frontmatter, dict):
+        return blocked("source_fidelity_draft_frontmatter_not_object")
+    body_start = closing_end + 1
+    body_bytes = raw[body_start:]
+    try:
+        body_bytes.decode("utf-8")
+    except UnicodeDecodeError:
+        return blocked("source_fidelity_draft_body_not_utf8")
+    return {
+        "ok": True,
+        "blockers": [],
+        "frontmatter": frontmatter,
+        "body_bytes": body_bytes,
+        "body_start": body_start,
+        "raw": raw,
+        "raw_sha256": _source_fidelity_digest_bytes(raw),
+    }
+
+
+def _source_fidelity_find_exact_regions(
+    body: bytes,
+    needle: bytes,
+    *,
+    limit: int = 2,
+) -> list[int]:
+    if not needle:
+        return []
+    positions: list[int] = []
+    cursor = 0
+    while len(positions) < limit:
+        position = body.find(needle, cursor)
+        if position < 0:
+            break
+        positions.append(position)
+        cursor = position + 1
+    return positions
+
+
+def _source_fidelity_private_receipt_shape_valid(value: Any) -> bool:
+    """Validate the complete private receipt contract without a runtime dependency.
+
+    The packaged JSON Schema is the public contract.  WOM-kit deliberately
+    keeps ``jsonschema`` out of the installed runtime, so this verifier mirrors
+    the schema's closed keys, primitive types, constants, and nested source and
+    region shapes before mint trusts any receipt field.
+    """
+
+    if not isinstance(value, dict) or set(value) != {
+        "schema",
+        "action",
+        "archive_id",
+        "archive_type",
+        "draft_id",
+        "draft_path",
+        "body_sha256",
+        "creation_mode",
+        "frontmatter_authority_sha256",
+        "source_fidelity_plan_sha256",
+        "reviewed_by",
+        "review_binding_sha256",
+        "candidate_created_at",
+        "source_fidelity",
+        "content_contract",
+        "result",
+    }:
+        return False
+    if (
+        value.get("schema") != SOURCE_FIDELITY_DRAFT_RECEIPT_SCHEMA
+        or value.get("action") != "create_source_fidelity_draft"
+        or not isinstance(value.get("archive_id"), str)
+        or not value.get("archive_id")
+        or (
+            value.get("archive_type") is not None
+            and not isinstance(value.get("archive_type"), str)
+        )
+        or not isinstance(value.get("draft_id"), str)
+        or not valid_draft_zettel_id(value["draft_id"])
+        or not isinstance(value.get("draft_path"), str)
+        or re.fullmatch(r"inbox/[A-Za-z0-9_-]+\.md", value["draft_path"])
+        is None
+        or not isinstance(value.get("reviewed_by"), str)
+        or not value.get("reviewed_by")
+        or not isinstance(value.get("review_binding_sha256"), str)
+        or SHA256_RE.fullmatch(value["review_binding_sha256"]) is None
+        or not isinstance(value.get("candidate_created_at"), str)
+        or not valid_iso_timestamp(value["candidate_created_at"])
+        or value.get("creation_mode") not in {
+            "ai_assisted",
+            "ai_generated",
+        }
+    ):
+        return False
+    for key in (
+        "body_sha256",
+        "frontmatter_authority_sha256",
+        "source_fidelity_plan_sha256",
+    ):
+        if not isinstance(value.get(key), str) or SHA256_RE.fullmatch(
+            value[key]
+        ) is None:
+            return False
+
+    content_contract = value.get("content_contract")
+    if not isinstance(content_contract, dict) or set(content_contract) != {
+        "source_text_stored",
+        "source_locator_stored",
+        "source_path_stored",
+    }:
+        return False
+    if any(content_contract.get(key) is not False for key in content_contract):
+        return False
+
+    result = value.get("result")
+    if not isinstance(result, dict) or set(result) != {
+        "draft_written_create_only",
+        "receipt_written_create_only",
+        "source_changed",
+        "share_performed",
+    }:
+        return False
+    if (
+        result.get("draft_written_create_only") is not True
+        or result.get("receipt_written_create_only") is not True
+        or result.get("source_changed") is not False
+        or result.get("share_performed") is not False
+    ):
+        return False
+
+    fidelity = value.get("source_fidelity")
+    if not isinstance(fidelity, dict) or set(fidelity) != {
+        "schema",
+        "mode",
+        "audience",
+        "comparison_basis",
+        "source",
+        "region",
+        "byte_exact",
+        "mechanically_verified",
+        "semantic_fidelity_machine_verified",
+        "human_review_required",
+        "source_changed",
+        "share_performed",
+        "source_text_stored",
+        "source_locator_stored",
+        "creation_plan_sha256",
+        "evidence_id",
+    }:
+        return False
+    mode = fidelity.get("mode")
+    if (
+        fidelity.get("schema") != SOURCE_FIDELITY_SCHEMA
+        or mode not in SOURCE_FIDELITY_MODES
+        or fidelity.get("audience") not in ZET_QUALITY_AUDIENCES
+        or fidelity.get("comparison_basis")
+        != SOURCE_FIDELITY_COMPARISON_BASIS
+        or fidelity.get("byte_exact") is not False
+        or fidelity.get("mechanically_verified") is not (mode == "verbatim")
+        or fidelity.get("semantic_fidelity_machine_verified") is not False
+        or fidelity.get("human_review_required") is not True
+        or fidelity.get("source_changed") is not False
+        or fidelity.get("share_performed") is not False
+        or fidelity.get("source_text_stored") is not False
+        or fidelity.get("source_locator_stored") is not False
+        or not isinstance(fidelity.get("creation_plan_sha256"), str)
+        or SHA256_RE.fullmatch(fidelity["creation_plan_sha256"]) is None
+        or not isinstance(fidelity.get("evidence_id"), str)
+        or re.fullmatch(
+            r"source-fidelity-evidence:[0-9a-f]{24}",
+            fidelity["evidence_id"],
+        )
+        is None
+    ):
+        return False
+
+    source = fidelity.get("source")
+    if not isinstance(source, dict) or set(source) != {
+        "object_id",
+        "raw_sha256",
+        "raw_size_bytes",
+        "normalized_sha256",
+        "normalized_size_bytes",
+        "comparison_basis",
+        "newline_transformation_applied",
+        "source_text_stored",
+        "source_locator_stored",
+    }:
+        return False
+    if (
+        not isinstance(source.get("object_id"), str)
+        or OBJECT_ID_RE.fullmatch(source["object_id"]) is None
+        or source["object_id"].removeprefix("sha256:")
+        != source.get("raw_sha256")
+        or not isinstance(source.get("raw_sha256"), str)
+        or SHA256_RE.fullmatch(source["raw_sha256"]) is None
+        or not isinstance(source.get("normalized_sha256"), str)
+        or SHA256_RE.fullmatch(source["normalized_sha256"]) is None
+        or isinstance(source.get("raw_size_bytes"), bool)
+        or not isinstance(source.get("raw_size_bytes"), int)
+        or source["raw_size_bytes"] < 0
+        or isinstance(source.get("normalized_size_bytes"), bool)
+        or not isinstance(source.get("normalized_size_bytes"), int)
+        or source["normalized_size_bytes"] < 0
+        or source.get("comparison_basis")
+        != SOURCE_FIDELITY_COMPARISON_BASIS
+        or not isinstance(source.get("newline_transformation_applied"), bool)
+        or source.get("source_text_stored") is not False
+        or source.get("source_locator_stored") is not False
+    ):
+        return False
+
+    region = fidelity.get("region")
+    if mode == "verbatim":
+        if not isinstance(region, dict) or set(region) != {
+            "offset_bytes",
+            "length_bytes",
+            "sha256",
+        }:
+            return False
+        if (
+            isinstance(region.get("offset_bytes"), bool)
+            or not isinstance(region.get("offset_bytes"), int)
+            or region["offset_bytes"] < 0
+            or isinstance(region.get("length_bytes"), bool)
+            or not isinstance(region.get("length_bytes"), int)
+            or region["length_bytes"] < 0
+            or not isinstance(region.get("sha256"), str)
+            or SHA256_RE.fullmatch(region["sha256"]) is None
+        ):
+            return False
+    elif region is not None:
+        return False
+    return True
+
+
+def _source_fidelity_private_receipt_for_mint(
+    root: Path,
+    *,
+    frontmatter: dict[str, Any],
+    draft_path: str,
+) -> tuple[dict[str, Any] | None, list[str]]:
+    projection = frontmatter.get("source_fidelity")
+    if not isinstance(projection, dict):
+        return None, ["source_fidelity_metadata_invalid"]
+    plan_sha256 = str(
+        projection.get("creation_plan_sha256") or ""
+    ).strip().lower()
+    if not SHA256_RE.fullmatch(plan_sha256):
+        return None, ["source_fidelity_creation_plan_sha256_invalid"]
+    receipt_relative = (
+        f"{SOURCE_FIDELITY_DRAFT_RECEIPTS_DIR}/{plan_sha256}.json"
+    )
+    receipt_path = root.joinpath(*PurePosixPath(receipt_relative).parts)
+    try:
+        bound_root, bound_path = _source_fidelity_bound_root_and_path(
+            root, receipt_path
+        )
+        with hold_activity_group_evidence_file(
+            bound_root,
+            bound_path,
+            max_bytes=1024 * 1024,
+        ) as snapshot:
+            raw = snapshot["raw"]
+    except (OSError, ValueError):
+        return None, ["source_fidelity_private_receipt_missing_or_unsafe"]
+
+    class DuplicateReceiptKey(ValueError):
+        pass
+
+    def reject_duplicate_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise DuplicateReceiptKey(key)
+            result[key] = value
+        return result
+
+    try:
+        receipt = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=reject_duplicate_pairs,
+            parse_constant=lambda value: (_ for _ in ()).throw(ValueError(value)),
+        )
+    except (
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        DuplicateReceiptKey,
+        ValueError,
+        RecursionError,
+    ):
+        return None, ["source_fidelity_private_receipt_invalid"]
+    if not isinstance(receipt, dict):
+        return None, ["source_fidelity_private_receipt_invalid"]
+    if not _source_fidelity_private_receipt_shape_valid(receipt):
+        return None, ["source_fidelity_private_receipt_schema_invalid"]
+    draft_creation = (
+        frontmatter.get("draft_creation")
+        if isinstance(frontmatter.get("draft_creation"), dict)
+        else {}
+    )
+    receipt_archive_config = read_archive_config(root)
+    expected = {
+        "schema": SOURCE_FIDELITY_DRAFT_RECEIPT_SCHEMA,
+        "action": "create_source_fidelity_draft",
+        "archive_id": str(frontmatter.get("archive_id") or ""),
+        "archive_type": (
+            receipt_archive_config.get("type")
+            if isinstance(receipt_archive_config.get("type"), str)
+            else None
+        ),
+        "draft_id": str(frontmatter.get("id") or ""),
+        "draft_path": draft_path,
+        "body_sha256": draft_creation.get("approved_body_sha256"),
+        "source_fidelity_plan_sha256": plan_sha256,
+        "reviewed_by": draft_creation.get("approved_by"),
+        "review_binding_sha256": draft_creation.get(
+            "approved_source_fidelity_review_binding_sha256"
+        ),
+        "candidate_created_at": frontmatter.get("created_at"),
+    }
+    if any(receipt.get(key) != value for key, value in expected.items()):
+        return receipt, [
+            "source_fidelity_private_receipt_authority_mismatch"
+        ]
+    expected_review_binding = _source_fidelity_review_binding_sha256(
+        archive_id=str(receipt.get("archive_id") or ""),
+        draft_id=str(receipt.get("draft_id") or ""),
+        draft_path=str(receipt.get("draft_path") or ""),
+        body_sha256=str(receipt.get("body_sha256") or ""),
+        source_fidelity_plan_sha256=str(
+            receipt.get("source_fidelity_plan_sha256") or ""
+        ),
+        reviewed_by=str(receipt.get("reviewed_by") or ""),
+    )
+    if not hmac.compare_digest(
+        expected_review_binding,
+        str(receipt.get("review_binding_sha256") or ""),
+    ):
+        return receipt, ["source_fidelity_review_binding_invalid"]
+    full_fidelity = receipt.get("source_fidelity")
+    if not isinstance(full_fidelity, dict):
+        return receipt, [
+            "source_fidelity_private_receipt_evidence_invalid"
+        ]
+    expected_projection = _source_fidelity_safe_projection(full_fidelity)
+    if projection != expected_projection:
+        return receipt, [
+            "source_fidelity_private_receipt_projection_mismatch"
+        ]
+    return receipt, []
+
+
+def _source_fidelity_verify_for_mint(
+    root: Path,
+    path: Path,
+    *,
+    affirmations: dict[str, str] | None,
+) -> dict[str, Any]:
+    legacy_snapshot = validated_approval_zettel_snapshot(
+        path,
+        max_bytes=SOURCE_FIDELITY_MAX_DRAFT_BYTES,
+        expected_zettel_id=None,
+        expected_archive_id=read_archive_id(root),
+        expected_status="draft",
+    )
+    if not legacy_snapshot.get("ok"):
+        return {
+            "applicable": True,
+            "ok": False,
+            "legacy_review": False,
+            "current_plan_sha256": None,
+            "source_fidelity": None,
+            "blockers": [
+                "source_fidelity_legacy_boundary_invalid"
+            ],
+        }
+    frontmatter = legacy_snapshot["frontmatter"]
+    provenance = (
+        frontmatter.get("provenance")
+        if isinstance(frontmatter.get("provenance"), dict)
+        else {}
+    )
+    creation_mode = provenance.get("creation_mode")
+    is_ai = _source_fidelity_ai_provenance_declared(
+        creation_mode=creation_mode,
+        created_by=provenance.get("created_by"),
+        assisted_by=provenance.get("assisted_by"),
+        local_ai_sessions=frontmatter.get("local_ai_sessions"),
+    )
+    fidelity_projection = frontmatter.get("source_fidelity")
+    metadata_blockers = _source_fidelity_request_metadata_blockers(
+        frontmatter
+    )
+    legacy_body_blockers = [
+        code
+        for code in _source_fidelity_request_metadata_blockers(
+            legacy_snapshot.get("body")
+        )
+        if code == "credential_secret_present"
+    ]
+    if is_ai and (metadata_blockers or legacy_body_blockers):
+        return {
+            "applicable": True,
+            "ok": False,
+            "legacy_review": False,
+            "current_plan_sha256": None,
+            "source_fidelity": None,
+            "blockers": unique_preserve_order(
+                [*metadata_blockers, *legacy_body_blockers]
+            ),
+        }
+    if not is_ai and not isinstance(fidelity_projection, dict):
+        return {
+            "applicable": False,
+            "ok": True,
+            "legacy_review": False,
+            "current_plan_sha256": None,
+            "source_fidelity": None,
+            "blockers": [],
+        }
+    if is_ai and not isinstance(fidelity_projection, dict):
+        affirmed = bool(
+            affirmations
+            and affirmations.get("legacy_source_fidelity_reviewed")
+        )
+        return {
+            "applicable": True,
+            "ok": affirmed,
+            "legacy_review": affirmed,
+            "current_plan_sha256": None,
+            "source_fidelity": {
+                "schema": SOURCE_FIDELITY_SCHEMA,
+                "state": (
+                    "legacy_human_reviewed"
+                    if affirmed
+                    else "legacy_human_review_required"
+                ),
+                "inferred_from_legacy_content": False,
+                "source_text_echoed": False,
+            },
+            "blockers": (
+                []
+                if affirmed
+                else ["legacy_source_fidelity_review_required"]
+            ),
+        }
+    if not isinstance(fidelity_projection, dict):
+        return {
+            "applicable": True,
+            "ok": False,
+            "legacy_review": False,
+            "current_plan_sha256": None,
+            "source_fidelity": None,
+            "blockers": ["source_fidelity_metadata_invalid"],
+        }
+
+    # v0.3.313 fidelity drafts use an LF-only byte contract.  Legacy AI drafts
+    # are classified and affirmed above through the tolerant, duplicate-safe
+    # approval parser so old Windows CRLF records remain reviewable.
+    snapshot = _source_fidelity_raw_draft_snapshot(root, path)
+    if not snapshot.get("ok"):
+        return {
+            "applicable": True,
+            "ok": False,
+            "legacy_review": False,
+            "current_plan_sha256": None,
+            "source_fidelity": None,
+            "blockers": snapshot.get("blockers", []),
+        }
+    frontmatter = snapshot["frontmatter"]
+    provenance = (
+        frontmatter.get("provenance")
+        if isinstance(frontmatter.get("provenance"), dict)
+        else {}
+    )
+    creation_mode = provenance.get("creation_mode")
+    fidelity_projection = frontmatter.get("source_fidelity")
+
+    draft_relative = archive_relative_path(path, root)
+    private_receipt, receipt_blockers = (
+        _source_fidelity_private_receipt_for_mint(
+            root,
+            frontmatter=frontmatter,
+            draft_path=draft_relative,
+        )
+    )
+    blockers: list[str] = list(receipt_blockers)
+    fidelity = (
+        private_receipt.get("source_fidelity")
+        if isinstance(private_receipt, dict)
+        and isinstance(private_receipt.get("source_fidelity"), dict)
+        else {}
+    )
+    mode = fidelity.get("mode")
+    audience = fidelity.get("audience")
+    if fidelity.get("schema") != SOURCE_FIDELITY_SCHEMA:
+        blockers.append("source_fidelity_schema_invalid")
+    if mode not in SOURCE_FIDELITY_MODES:
+        blockers.append("source_fidelity_mode_invalid")
+    if audience not in ZET_QUALITY_AUDIENCES:
+        blockers.append("source_fidelity_audience_invalid")
+    if fidelity.get("comparison_basis") != SOURCE_FIDELITY_COMPARISON_BASIS:
+        blockers.append("source_fidelity_comparison_basis_invalid")
+    archive_config = read_archive_config(root)
+    archive_id = str(archive_config.get("archive_id") or "")
+    archive_type = (
+        archive_config.get("type")
+        if isinstance(archive_config.get("type"), str)
+        else None
+    )
+    if mode == "verbatim" and (
+        archive_type != "personal" or audience != "private_self"
+    ):
+        blockers.append("verbatim_requires_personal_private_self")
+    if mode == "verbatim" and not _source_fidelity_private_visibility_valid(
+        frontmatter.get("visibility")
+    ):
+        blockers.append("verbatim_requires_private_visibility")
+
+    source_meta = (
+        fidelity.get("source")
+        if isinstance(fidelity.get("source"), dict)
+        else {}
+    )
+    current_source, normalized_source, source_blockers = (
+        _source_fidelity_read_manifested_object(
+            root,
+            source_meta.get("object_id"),
+        )
+    )
+    blockers.extend(source_blockers)
+    if current_source is None or normalized_source is None:
+        blockers.append("source_fidelity_source_object_unavailable")
+    else:
+        if json_safe(source_meta) != json_safe(current_source):
+            blockers.append("source_fidelity_source_object_drift")
+
+    private_authority_values = _source_fidelity_private_authority_values(
+        source_meta
+    )
+    public_frontmatter_authority = {
+        key: value
+        for key, value in frontmatter.items()
+        if key not in {"source_fidelity", "draft_creation"}
+    }
+    draft_creation = (
+        frontmatter.get("draft_creation")
+        if isinstance(frontmatter.get("draft_creation"), dict)
+        else {}
+    )
+    if set(draft_creation) != SOURCE_FIDELITY_DRAFT_CREATION_KEYS:
+        blockers.append("source_fidelity_draft_creation_schema_invalid")
+    draft_creation_private_authority = {
+        key: value
+        for key, value in draft_creation.items()
+        if key != "approved_body_sha256"
+    }
+    if (
+        private_authority_values
+        and _source_fidelity_value_contains_private_authority(
+            {
+                "frontmatter": public_frontmatter_authority,
+                "draft_creation": draft_creation_private_authority,
+            },
+            private_values=private_authority_values,
+        )
+    ):
+        blockers.append("source_fidelity_private_authority_exposed")
+
+    approved_body_sha256 = str(
+        draft_creation.get("approved_body_sha256") or ""
+    ).strip().lower()
+    creation_plan_sha256 = str(
+        fidelity.get("creation_plan_sha256") or ""
+    ).strip().lower()
+    if not SHA256_RE.fullmatch(approved_body_sha256):
+        blockers.append("source_fidelity_approved_body_sha256_invalid")
+    if not SHA256_RE.fullmatch(creation_plan_sha256):
+        blockers.append("source_fidelity_creation_plan_sha256_invalid")
+    if (
+        draft_creation.get("approved_source_fidelity_plan_sha256")
+        != creation_plan_sha256
+    ):
+        blockers.append("source_fidelity_creation_approval_binding_invalid")
+
+    stored_region = (
+        fidelity.get("region")
+        if isinstance(fidelity.get("region"), dict)
+        else None
+    )
+    expected_evidence_id = (
+        "source-fidelity-evidence:"
+        + _source_fidelity_digest_json(
+            {
+                "source": source_meta,
+                "region": stored_region,
+                "mode": mode,
+                "audience": audience,
+                "comparison_basis": SOURCE_FIDELITY_COMPARISON_BASIS,
+            }
+        )[:24]
+    )
+    if fidelity.get("evidence_id") != expected_evidence_id:
+        blockers.append("source_fidelity_evidence_id_invalid")
+    if isinstance(private_receipt, dict) and SHA256_RE.fullmatch(
+        creation_plan_sha256
+    ):
+        expected_creation_plan = _source_fidelity_plan_sha256(
+            archive_id=str(private_receipt.get("archive_id") or ""),
+            archive_type=(
+                private_receipt.get("archive_type")
+                if isinstance(private_receipt.get("archive_type"), str)
+                else None
+            ),
+            draft_id=str(private_receipt.get("draft_id") or ""),
+            draft_path=str(private_receipt.get("draft_path") or ""),
+            created_at=str(
+                private_receipt.get("candidate_created_at") or ""
+            ),
+            creation_mode=str(private_receipt.get("creation_mode") or ""),
+            fidelity=fidelity,
+            final_body_sha256=str(
+                private_receipt.get("body_sha256") or ""
+            ),
+            region=stored_region,
+            frontmatter=frontmatter,
+            frontmatter_authority_sha256=str(
+                private_receipt.get("frontmatter_authority_sha256") or ""
+            ),
+        )
+        if not hmac.compare_digest(
+            expected_creation_plan, creation_plan_sha256
+        ):
+            blockers.append("source_fidelity_creation_plan_tampered")
+
+    body_bytes = snapshot["body_bytes"]
+    current_body_sha256 = _source_fidelity_digest_bytes(body_bytes)
+    current_region: dict[str, Any] | None = None
+    if SOURCE_FIDELITY_CREDENTIAL_SECRET_RE.search(
+        body_bytes.decode("utf-8", errors="ignore")
+    ):
+        blockers.append("credential_secret_present")
+    if mode == "verbatim" and normalized_source is not None:
+        if not isinstance(stored_region, dict):
+            blockers.append("source_fidelity_region_missing")
+        else:
+            offset = stored_region.get("offset_bytes")
+            length = stored_region.get("length_bytes")
+            region_sha = stored_region.get("sha256")
+            region_shape_valid = (
+                not isinstance(offset, bool)
+                and isinstance(offset, int)
+                and offset >= 0
+                and not isinstance(length, bool)
+                and isinstance(length, int)
+                and length == len(normalized_source)
+                and region_sha
+                == _source_fidelity_digest_bytes(normalized_source)
+            )
+            if not region_shape_valid:
+                blockers.append("source_fidelity_region_metadata_invalid")
+            else:
+                selected = body_bytes[offset : offset + length]
+                if hmac.compare_digest(selected, normalized_source):
+                    current_region = dict(stored_region)
+                elif current_body_sha256 == approved_body_sha256:
+                    blockers.append("source_fidelity_region_mismatch")
+                else:
+                    matches = _source_fidelity_find_exact_regions(
+                        body_bytes, normalized_source
+                    )
+                    if len(matches) != 1:
+                        blockers.append("source_fidelity_region_mismatch")
+                    else:
+                        current_region = {
+                            "offset_bytes": matches[0],
+                            "length_bytes": len(normalized_source),
+                            "sha256": _source_fidelity_digest_bytes(
+                                normalized_source
+                            ),
+                        }
+    elif mode in {"faithful_summary", "sanitized_derivative"}:
+        if stored_region is not None:
+            blockers.append("source_fidelity_region_for_non_verbatim")
+
+    if mode == "verbatim" and isinstance(current_region, dict):
+        region_offset = current_region["offset_bytes"]
+        region_length = current_region["length_bytes"]
+        context_bytes = (
+            body_bytes[:region_offset]
+            + body_bytes[region_offset + region_length :]
+        )
+        if zettel_body_has_forbidden_location_reference(
+            context_bytes.decode("utf-8")
+        ):
+            blockers.append(
+                "private_locator_outside_verified_verbatim_region"
+            )
+
+    current_plan_sha256: str | None = None
+    if not blockers:
+        current_plan_sha256 = _source_fidelity_plan_sha256(
+            archive_id=archive_id,
+            archive_type=archive_type,
+            draft_id=str(frontmatter.get("id") or path.stem),
+            draft_path=draft_relative,
+            created_at=str(frontmatter.get("created_at") or ""),
+            creation_mode=str(creation_mode),
+            fidelity=fidelity,
+            final_body_sha256=current_body_sha256,
+            region=current_region,
+            frontmatter=frontmatter,
+        )
+    safe_fidelity = _source_fidelity_safe_projection(
+        fidelity,
+        review_state=(
+            "unchanged_since_draft_approval"
+            if current_body_sha256 == approved_body_sha256
+            else "mint_reapproval_required"
+        ),
+    )
+    if isinstance(safe_fidelity, dict):
+        safe_fidelity["mechanically_verified"] = (
+            mode == "verbatim" and not blockers
+        )
+    privacy_blocked = any(
+        code
+        in {
+            "credential_secret_present",
+            "private_locator_or_path_present",
+            "source_fidelity_private_authority_exposed",
+        }
+        for code in blockers
+    )
+    return {
+        "applicable": True,
+        "ok": not blockers,
+        "legacy_review": False,
+        "current_plan_sha256": (
+            None if privacy_blocked else current_plan_sha256
+        ),
+        "creation_plan_sha256": (
+            None if privacy_blocked else creation_plan_sha256 or None
+        ),
+        "current_body_sha256": (
+            None if privacy_blocked else current_body_sha256
+        ),
+        "source_fidelity": None if privacy_blocked else safe_fidelity,
+        "raw_snapshot": snapshot if not blockers else None,
+        "blockers": unique_preserve_order(blockers),
     }
 
 
@@ -41956,6 +44045,7 @@ def promote_zettel_dry_run(
     relative_path: str | None = None,
     affirmations: dict[str, str] | None = None,
     progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
+    _mint_fidelity_route: bool = False,
 ) -> dict[str, Any]:
     root = require_existing_archive_root(archive_root)
     _emit_mint_progress(progress_callback, "target", "start", 0, 1)
@@ -42015,7 +44105,16 @@ def promote_zettel_dry_run(
         blockers.append("Title must be present.")
     if not body.strip():
         blockers.append("Body must be present.")
-    if zettel_body_has_forbidden_location_reference(body):
+    fidelity_projection = frontmatter.get("source_fidelity")
+    private_verbatim_projection = bool(
+        isinstance(fidelity_projection, dict)
+        and fidelity_projection.get("mode") == "verbatim"
+        and fidelity_projection.get("audience") == "private_self"
+    )
+    if (
+        zettel_body_has_forbidden_location_reference(body)
+        and not private_verbatim_projection
+    ):
         blockers.append("Body appears to contain a private provider locator or local absolute path.")
     first_read_check = explicit_abstract_publication_check(frontmatter)
     if not first_read_check["ready_for_publication"]:
@@ -42041,6 +44140,21 @@ def promote_zettel_dry_run(
         for field in ["created_by", "created_in", "source", "derived_from"]:
             if field not in provenance:
                 blockers.append(f"Provenance is missing required field: {field}.")
+    is_ai_draft = bool(
+        isinstance(provenance, dict)
+        and _source_fidelity_ai_provenance_declared(
+            creation_mode=provenance.get("creation_mode"),
+            created_by=provenance.get("created_by"),
+            assisted_by=provenance.get("assisted_by"),
+            local_ai_sessions=frontmatter.get("local_ai_sessions"),
+        )
+    )
+    if (
+        (is_ai_draft or isinstance(fidelity_projection, dict))
+        and not _mint_fidelity_route
+    ):
+        _emit_mint_progress(progress_callback, "policy", "done", 1, 1)
+        return _source_fidelity_content_free_promotion_blocked_preview()
 
     visibility = frontmatter.get("visibility")
     if not isinstance(visibility, dict):
@@ -42374,6 +44488,7 @@ def mint_zettel_dry_run(
         relative_path=relative_path,
         affirmations=affirmations,
         progress_callback=progress_callback,
+        _mint_fidelity_route=True,
     )
     source_path = resolve_zettel_path(root, zettel_id=zettel_id, relative_path=relative_path)
     source_frontmatter, body = require_readable_zettel_content(source_path)
@@ -42383,6 +44498,55 @@ def mint_zettel_dry_run(
     snapshot_relative = f"{MINT_DRAFT_SNAPSHOTS_DIR}/{zettel_id_value}.draft.md"
     blockers = list(promotion_dry_run["blockers"])
     warnings = list(promotion_dry_run["warnings"])
+    source_provenance = (
+        source_frontmatter.get("provenance")
+        if isinstance(source_frontmatter.get("provenance"), dict)
+        else {}
+    )
+    fidelity_applicable = bool(
+        _source_fidelity_ai_provenance_declared(
+            creation_mode=source_provenance.get("creation_mode"),
+            created_by=source_provenance.get("created_by"),
+            assisted_by=source_provenance.get("assisted_by"),
+            local_ai_sessions=source_frontmatter.get("local_ai_sessions"),
+        )
+        or isinstance(source_frontmatter.get("source_fidelity"), dict)
+    )
+    fidelity_verification = (
+        _source_fidelity_verify_for_mint(
+            root,
+            source_path,
+            affirmations=affirmations,
+        )
+        if fidelity_applicable
+        else {
+            "applicable": False,
+            "ok": True,
+            "legacy_review": False,
+            "current_plan_sha256": None,
+            "source_fidelity": None,
+            "blockers": [],
+        }
+    )
+    blockers.extend(
+        str(code)
+        for code in fidelity_verification.get("blockers", [])
+        if isinstance(code, str)
+    )
+    privacy_blockers = [
+        str(code)
+        for code in fidelity_verification.get("blockers", [])
+        if code
+        in {
+            "credential_secret_present",
+            "private_locator_or_path_present",
+            "source_fidelity_private_authority_exposed",
+        }
+    ]
+    if privacy_blockers:
+        return _source_fidelity_content_free_mint_blocked_preview(
+            privacy_blockers
+        )
     first_read_check = promotion_dry_run["first_read_check"]
     abstract_review_basis = (
         build_abstract_review_basis(
@@ -42431,6 +44595,10 @@ def mint_zettel_dry_run(
         abstract_review_basis=abstract_review_basis,
         blockers=blockers,
         warnings=warnings,
+        source_fidelity=fidelity_verification.get("source_fidelity"),
+        current_source_fidelity_plan_sha256=(
+            fidelity_verification.get("current_plan_sha256")
+        ),
     )
     _emit_mint_progress(progress_callback, "receipt_plan", "done", 1, 1)
     _emit_mint_progress(progress_callback, "self_contained", "start", 0, 1)
@@ -42458,6 +44626,15 @@ def mint_zettel_dry_run(
         "abstract_review_basis": abstract_review_basis,
         "self_contained_check": self_contained_check,
         "quality_check": quality_check,
+        "source_fidelity": json_safe(
+            fidelity_verification.get("source_fidelity")
+        ),
+        "current_source_fidelity_plan_sha256": (
+            fidelity_verification.get("current_plan_sha256")
+        ),
+        "legacy_source_fidelity_reviewed": bool(
+            fidelity_verification.get("legacy_review")
+        ),
         "scratch_cleanup": scratch_cleanup,
         "receipt_preview": receipt_preview,
         "would_change": [
@@ -42482,6 +44659,7 @@ def mint_zettel(
     reviewed_by: str,
     allow_warnings: bool = False,
     affirmations: dict[str, str] | None = None,
+    expected_source_fidelity_plan_sha256: str | None = None,
     progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
 ) -> dict[str, Any]:
     reviewer = reviewed_by.strip()
@@ -42519,6 +44697,28 @@ def mint_zettel(
             "Minting has warnings; rerun with --allow-warnings to approve them: "
             + "; ".join(dry_run["warnings"])
         )
+    current_fidelity_plan = dry_run.get(
+        "current_source_fidelity_plan_sha256"
+    )
+    supplied_fidelity_plan = str(
+        expected_source_fidelity_plan_sha256 or ""
+    ).strip().lower()
+    if isinstance(current_fidelity_plan, str):
+        if not SHA256_RE.fullmatch(supplied_fidelity_plan):
+            raise ArchiveServiceError(
+                "Minting source fidelity requires "
+                "expected_source_fidelity_plan_sha256."
+            )
+        if not hmac.compare_digest(
+            supplied_fidelity_plan, current_fidelity_plan
+        ):
+            raise ArchiveServiceError(
+                "expected_source_fidelity_plan_sha256_mismatch"
+            )
+    elif expected_source_fidelity_plan_sha256 is not None:
+        raise ArchiveServiceError(
+            "expected_source_fidelity_plan_sha256_only_valid_for_fidelity_drafts"
+        )
 
     source_path = resolve_zettel_path(root, zettel_id=zettel_id, relative_path=relative_path)
     source_bytes = source_path.read_bytes()
@@ -42528,6 +44728,62 @@ def mint_zettel(
         raise ArchiveServiceError("Minting blocked because the source draft changed after dry-run.")
     source_text = decode_utf8_with_universal_newlines(source_bytes)
     source_frontmatter, body = require_readable_zettel_text(source_text)
+    source_provenance = (
+        source_frontmatter.get("provenance")
+        if isinstance(source_frontmatter.get("provenance"), dict)
+        else {}
+    )
+    fidelity_applicable = bool(
+        _source_fidelity_ai_provenance_declared(
+            creation_mode=source_provenance.get("creation_mode"),
+            created_by=source_provenance.get("created_by"),
+            assisted_by=source_provenance.get("assisted_by"),
+            local_ai_sessions=source_frontmatter.get("local_ai_sessions"),
+        )
+        or isinstance(source_frontmatter.get("source_fidelity"), dict)
+    )
+    current_fidelity_verification = (
+        _source_fidelity_verify_for_mint(
+            root,
+            source_path,
+            affirmations=applied_affirmations,
+        )
+        if fidelity_applicable
+        else {
+            "ok": True,
+            "current_plan_sha256": None,
+            "source_fidelity": None,
+        }
+    )
+    if not current_fidelity_verification.get("ok"):
+        raise ArchiveServiceError(
+            "Minting source fidelity verification failed: "
+            + "; ".join(
+                str(item)
+                for item in current_fidelity_verification.get(
+                    "blockers", []
+                )
+            )
+        )
+    if current_fidelity_verification.get(
+        "current_plan_sha256"
+    ) != current_fidelity_plan:
+        raise ArchiveServiceError(
+            "Minting source fidelity plan changed after dry-run."
+        )
+    fidelity_raw_snapshot = current_fidelity_verification.get(
+        "raw_snapshot"
+    )
+    if isinstance(current_fidelity_plan, str):
+        if not isinstance(fidelity_raw_snapshot, dict):
+            raise ArchiveServiceError(
+                "Minting source fidelity raw snapshot is unavailable."
+            )
+        source_frontmatter = fidelity_raw_snapshot["frontmatter"]
+        canonical_body_bytes = fidelity_raw_snapshot["body_bytes"]
+        body = canonical_body_bytes.decode("utf-8")
+    else:
+        canonical_body_bytes = (body.rstrip() + "\n").encode("utf-8")
     current_first_read_check = explicit_abstract_publication_check(source_frontmatter)
     if (
         not current_first_read_check["ready_for_publication"]
@@ -42577,14 +44833,26 @@ def mint_zettel(
     canonical_frontmatter["updated_at"] = now
     canonical_frontmatter["mint"] = mint
     canonical_frontmatter["promotion"] = promotion
+    if isinstance(current_fidelity_plan, str):
+        canonical_frontmatter["source_fidelity"] = (
+            _source_fidelity_safe_projection(
+                current_fidelity_verification.get("source_fidelity"),
+                review_state="reviewed_at_publication",
+                publication_plan_sha256=current_fidelity_plan,
+                publication_reviewed_by=reviewer,
+                publication_reviewed_at=now,
+            )
+        )
     canonical_source_refs = zettel_source_refs_without_ai_scratch(source_frontmatter)
     if canonical_source_refs is not None:
         if canonical_source_refs:
             canonical_frontmatter["source_refs"] = canonical_source_refs
         else:
             canonical_frontmatter.pop("source_refs", None)
-    canonical_text = "---\n" + dump_yaml(canonical_frontmatter) + "---\n\n" + body.rstrip() + "\n"
-    expected_canonical_sha256 = hashlib.sha256(canonical_text.encode("utf-8")).hexdigest()
+    canonical_bytes = (
+        "---\n" + dump_yaml(canonical_frontmatter) + "---\n\n"
+    ).encode("utf-8") + canonical_body_bytes
+    expected_canonical_sha256 = hashlib.sha256(canonical_bytes).hexdigest()
     abstract_review_basis = build_abstract_review_basis(
         source_frontmatter,
         body,
@@ -42613,12 +44881,10 @@ def mint_zettel(
         snapshot_path: current_source_sha256,
     }
     try:
-        with canonical_path.open("x", encoding="utf-8", newline="\n") as handle:
-            created_files.append(canonical_path)
-            handle.write(canonical_text)
-        with snapshot_path.open("xb") as handle:
-            created_files.append(snapshot_path)
-            handle.write(source_bytes)
+        _write_bytes_create_if_absent(canonical_path, canonical_bytes)
+        created_files.append(canonical_path)
+        _write_bytes_create_if_absent(snapshot_path, source_bytes)
+        created_files.append(snapshot_path)
 
         source_sha = current_source_sha256
         canonical_sha = sha256_path(canonical_path)
@@ -42627,6 +44893,18 @@ def mint_zettel(
             raise OSError("Mint canonical hash does not match the approved bytes.")
         if snapshot_sha != source_sha:
             raise OSError("Mint draft snapshot hash does not match the approved source bytes.")
+        if isinstance(current_fidelity_plan, str):
+            canonical_snapshot = _source_fidelity_raw_draft_snapshot(
+                root, canonical_path
+            )
+            if (
+                not canonical_snapshot.get("ok")
+                or canonical_snapshot.get("body_bytes")
+                != canonical_body_bytes
+            ):
+                raise OSError(
+                    "Mint canonical source-fidelity body verification failed."
+                )
         receipt = {
             "receipt_id": f"receipt:mint:{zettel_id_value}",
             "receipt_path": receipt_relative,
@@ -42660,6 +44938,12 @@ def mint_zettel(
             "prompt_boundary": extract_mint_prompt_boundary(source_frontmatter),
             "edges": source_frontmatter.get("edges") if isinstance(source_frontmatter.get("edges"), list) else [],
             "local_ai_sessions": extract_mint_local_ai_sessions(source_frontmatter),
+            "source_fidelity": json_safe(
+                canonical_frontmatter.get("source_fidelity")
+            ),
+            "source_fidelity_publication_plan_sha256": (
+                current_fidelity_plan
+            ),
             "first_read_check": current_first_read_check,
             "abstract_review_basis": abstract_review_basis,
             "checklist": dry_run["checklist"],
@@ -42738,6 +45022,10 @@ def mint_zettel(
             "first_read_check": current_first_read_check,
             "abstract_review_basis": abstract_review_basis,
             "quality_check": dry_run.get("quality_check", {}),
+            "source_fidelity": json_safe(
+                canonical_frontmatter.get("source_fidelity")
+            ),
+            "current_source_fidelity_plan_sha256": current_fidelity_plan,
             "scratch_cleanup": {"ok": False, "state": "not_attempted_after_index_failure"},
             "checklist": dry_run["checklist"],
             "created_paths": created_paths,
@@ -42789,6 +45077,10 @@ def mint_zettel(
         "first_read_check": current_first_read_check,
         "abstract_review_basis": abstract_review_basis,
         "quality_check": dry_run.get("quality_check", {}),
+        "source_fidelity": json_safe(
+            canonical_frontmatter.get("source_fidelity")
+        ),
+        "current_source_fidelity_plan_sha256": current_fidelity_plan,
         "scratch_cleanup": scratch_cleanup_result,
         "checklist": dry_run["checklist"],
         "created_paths": created_paths,
@@ -47375,6 +49667,8 @@ def build_mint_receipt_preview(
     abstract_review_basis: dict[str, Any] | None,
     blockers: list[str],
     warnings: list[str],
+    source_fidelity: dict[str, Any] | None = None,
+    current_source_fidelity_plan_sha256: str | None = None,
 ) -> dict[str, Any]:
     source_sha = sha256_path(source_path)
     return {
@@ -47409,6 +49703,10 @@ def build_mint_receipt_preview(
         "prompt_boundary": extract_mint_prompt_boundary(frontmatter),
         "edges": frontmatter.get("edges") if isinstance(frontmatter.get("edges"), list) else [],
         "local_ai_sessions": extract_mint_local_ai_sessions(frontmatter),
+        "source_fidelity": json_safe(source_fidelity),
+        "source_fidelity_publication_plan_sha256": (
+            current_source_fidelity_plan_sha256
+        ),
         "first_read_check": first_read_check,
         "abstract_review_basis": abstract_review_basis,
         "checklist": checklist,
@@ -73620,6 +75918,7 @@ def authoring_conventions(
             "silent_deferral_allowed": False,
             "revise_same_title_unminted_draft_in_place": True,
         },
+        "source_fidelity_policy": source_fidelity_policy(),
         "template": {
             "schema": AUTHORING_CONVENTIONS_SCHEMA,
             "language": "ko-KR",
@@ -95516,6 +97815,7 @@ def runtime_context(
         "identity_consistency": identity_consistency,
         "owner": runtime_context_owner_summary(identity_doc),
         "ai_write_policy": runtime_context_ai_write_policy_summary(archive_config),
+        "source_fidelity_policy": source_fidelity_policy(),
         "paths": paths,
         "wom_kit_version": wom_kit_version_info(root, redact_local_paths=redact_local_paths),
         "storage_authority": local_sovereignty_authority_model(),
@@ -99956,6 +102256,11 @@ def ai_start_here(
         "ai_runtime_order": ai_runtime_order,
         "remaining_ai_runtime_order": remaining_ai_runtime_order,
         "action_routing": action_routing,
+        "source_fidelity_policy": (
+            context.get("source_fidelity_policy")
+            if isinstance(context.get("source_fidelity_policy"), dict)
+            else source_fidelity_policy()
+        ),
         "inbox_attention": inbox_attention,
         "runtime_guidance_readiness": context.get("runtime_guidance_readiness"),
         "operational_context": {
@@ -100489,9 +102794,34 @@ def runtime_context_write_action_routes() -> list[dict[str, Any]]:
         {
             "action": "create_ai_draft",
             "when": "the AI needs to preserve a new zettel draft",
-            "preview_command": "archive create-draft <archive-root> --title <title> --body-file <private-body-file> --creation-mode ai_assisted --created-by <ai-actor> --dry-run --format json",
-            "approved_command": "rerun archive create-draft with the preview's --draft-id, --created-at, and --expected-body-sha256 plus --draft-approved-by <human-actor>",
-            "writes_when_approved": ["inbox/<draft>.md"],
+            "preview_command": (
+                "archive create-draft <archive-root> --title <title> "
+                "--abstract <abstract> --facet <facet> "
+                "--body-file <private-context-file> --creation-mode ai_assisted "
+                "--created-by <ai-actor> --assisted-by <ai-runtime> "
+                "--source-fidelity <mode> "
+                "--fidelity-audience <audience> "
+                "--fidelity-source-object-id <manifested-object-id> "
+                "--dry-run --format json"
+            ),
+            "approved_command": (
+                "archive create-draft <archive-root> --title <title> "
+                "--abstract <abstract> --facet <facet> "
+                "--body-file <private-context-file> --creation-mode ai_assisted "
+                "--created-by <ai-actor> --assisted-by <ai-runtime> "
+                "--source-fidelity <mode> "
+                "--fidelity-audience <audience> "
+                "--fidelity-source-object-id <manifested-object-id> "
+                "--draft-id <draft-id> --created-at <created-at> "
+                "--expected-body-sha256 <body-sha256> "
+                "--expected-source-fidelity-plan-sha256 <fidelity-plan-sha256> "
+                "--draft-approved-by <human-actor> --approve --format json"
+            ),
+            "writes_when_approved": [
+                "inbox/<draft>.md",
+                "receipts/source-fidelity/drafts/<plan>.json",
+            ],
+            "source_fidelity_policy": source_fidelity_policy(),
             "requires_human_approval": True,
             "direct_file_write_allowed": False,
             "separate_mint_approval_required": True,
@@ -100500,7 +102830,7 @@ def runtime_context_write_action_routes() -> list[dict[str, Any]]:
             "action": "mint_reviewed_draft",
             "when": "a human-reviewed inbox draft may be ready for canonical publication",
             "preview_command": "archive mint-zet <archive-root> --zettel-id <draft-id> --dry-run --format json",
-            "approved_command": "archive mint-zet <archive-root> --zettel-id <draft-id> --approve --reviewed-by <human-actor> --format json",
+            "approved_command": "archive mint-zet <archive-root> --zettel-id <draft-id> --expected-source-fidelity-plan-sha256 <current-plan> --approve --reviewed-by <human-actor> --format json",
             "requires_human_approval": True,
             "direct_file_write_allowed": False,
             "create_draft_approval_is_sufficient": False,

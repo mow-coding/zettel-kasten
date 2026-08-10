@@ -6,6 +6,18 @@ The filesystem folder is `wom-kit/`, the Python import package is `wom_kit`, and
 
 See `wom-kit/docs/concepts/naming-and-terminology.md` for the naming baseline.
 
+v0.3.313 makes source fidelity a pre-write contract for every new AI-assisted
+or AI-generated draft. `create-draft` now requires one manifested source,
+explicit mode and audience, a dry-run body/plan digest, and an attributed
+approved replay; declared AI provenance cannot downgrade to a human route.
+Mint preview re-verifies the private receipt and raw body, while public CLI/MCP
+results expose only safe projection evidence. Human-written routes remain
+compatible, but old AI automation must adopt the new approval inputs. Audience
+does not share, export, or call a provider. See
+`wom-kit/docs/source-fidelity-and-private-verbatim.md` and
+`wom-kit/docs/releases/v0.3.313.md`. Local tests do not prove merge, tag,
+Release, wheel, real-archive use, sharing, or human acceptance.
+
 v0.3.312 adds structured `view-zets` selection, one shared fail-closed
 current-index authority for protected query and mint planning, and optional
 content-free `mint-zet --progress` events on stderr while stdout remains the
@@ -179,7 +191,7 @@ read-zettel
   Read one zettel by id or archive-relative path.
 
 create-draft
-  Create a draft zettel in inbox/. It can consume a validated source-intake dry-run plan with --source-intake-plan and a validated prompt-boundary dry-run report with --prompt-boundary-report.
+  Preview or create a draft zettel in inbox/. New AI routes require --source-fidelity, --fidelity-audience, --fidelity-source-object-id, then an exact --approve replay with --draft-approved-by, --expected-body-sha256, and --expected-source-fidelity-plan-sha256. Human-written routes remain compatible. Draft approval neither mints nor shares.
 
 profile-wallet --dry-run
   Preview wallet-ready WOM profile/node identity metadata. This never generates private keys, signs data, stores secrets, creates wallets, or calls blockchain/provider APIs.
@@ -299,10 +311,10 @@ object-storage --approve --reviewed-by
   Write only local provider metadata and a provider setup receipt. This does not create buckets, authenticate, upload, sync, copy, hash, or import source files.
 
 mint-zet --dry-run
-  Check minting readiness and preview canonical path, mint receipt, and draft snapshot without writing.
+  Check minting readiness, re-verify source fidelity when present, and preview canonical path, mint receipt, draft snapshot, and safe current fidelity-plan digest without writing.
 
 mint-zet --approve --reviewed-by
-  Mint an inbox draft zet into canonical private archive memory and write receipt/snapshot evidence.
+  Mint an inbox draft zet into canonical private archive memory and write receipt/snapshot evidence. Fidelity-bound drafts also require --expected-source-fidelity-plan-sha256; legacy AI drafts require the attributed legacy_source_fidelity_reviewed affirmation.
 
 mint-zettel
   Transitional compatibility alias for mint-zet.
@@ -517,11 +529,12 @@ blockers
 warnings
 ```
 
-Dry-run writes nothing. Real minting is available only through the CLI and requires both an approval flag and a reviewer id:
+Dry-run writes nothing. Real minting is available only through the CLI and requires an approval flag, reviewer id, and—when the draft is fidelity-bound—the exact current fidelity plan returned by dry-run:
 
 ```powershell
 python -m wom_kit.archive_cli mint-zet .\tmp-my-archive `
   --path inbox\PUT-THE-DRAFT-FILENAME-HERE.md `
+  --expected-source-fidelity-plan-sha256 PUT-THE-CURRENT-SHA256-HERE `
   --approve `
   --reviewed-by person:me
 ```
@@ -534,7 +547,7 @@ receipts/mint/<zettel_id>.mint.json
 receipts/mint/drafts/<zettel_id>.draft.md
 ```
 
-It keeps the original inbox draft. Blockers always stop the command. If warnings are present, add `--allow-warnings` only after intentionally reviewing them. `promote` remains available as a compatibility command for older examples and tests.
+It keeps the original inbox draft. Blockers always stop the command. Existing AI drafts without a receipt are not assigned a guessed mode; after source review use `--affirm legacy_source_fidelity_reviewed --reviewed-by <human>` as compatibility evidence. If warnings are present, add `--allow-warnings` only after intentionally reviewing them. `promote` remains available as a compatibility command for older examples and tests.
 
 Build the generated search index:
 
@@ -743,13 +756,21 @@ python -m wom_kit.archive_cli source-intake .\tmp-my-archive `
 
 python -m wom_kit.archive_cli create-draft .\tmp-my-archive `
   --title "Draft title" `
-  --body "Draft body" `
+  --body-file .\private-draft-body.md `
+  --abstract "Reviewed compact first read" `
+  --facet topic=example `
+  --creation-mode ai_assisted `
+  --created-by ai_runtime:codex `
+  --assisted-by ai_runtime:codex `
+  --source-fidelity faithful_summary `
+  --fidelity-audience private_self `
+  --fidelity-source-object-id sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa `
   --dry-run `
   --source-intake-plan source-intake-plan.json `
   --format json
 ```
 
-`create-draft` validates the plan before using it. The plan must be a successful source-intake dry-run with no blockers and metadata-only content access. WOM-kit does not read the original source file, follow local paths in the plan, or store the local plan file path in draft frontmatter.
+`create-draft` validates the plan before using it. The plan must be a successful source-intake dry-run with no blockers and metadata-only content access. WOM-kit does not follow local paths in the plan or store the plan path in frontmatter. For an AI route it reads the separately manifested content-addressed objet as fidelity authority. Review the dry-run body and content-free plan, then replay the unchanged request with `--approve --draft-approved-by <human> --expected-body-sha256 <sha256> --expected-source-fidelity-plan-sha256 <sha256>`. The private receipt is create-only and ordinary output does not reveal its source authority; reviewer attribution remains explicit.
 
 Preview a block header from an existing zet:
 

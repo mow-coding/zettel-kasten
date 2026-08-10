@@ -103,6 +103,66 @@ class McpServerTests(unittest.TestCase):
         shutil.copytree(KIT_ROOT / "examples" / "fake-life-archive", root)
         return root
 
+    def source_fidelity_fixture_arguments(
+        self,
+        archive_root: Path,
+        source_text: str,
+    ) -> dict[str, str]:
+        raw = source_text.encode("utf-8")
+        digest = hashlib.sha256(raw).hexdigest()
+        object_id = f"sha256:{digest}"
+        logical_key = f"objects/sha256/{digest[:2]}/{digest}"
+        object_path = archive_root.joinpath(*logical_key.split("/"))
+        object_path.parent.mkdir(parents=True, exist_ok=True)
+        object_path.write_bytes(raw)
+
+        manifest_path = archive_root / "objects" / "manifests" / "files.jsonl"
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        existing_text = (
+            manifest_path.read_text(encoding="utf-8")
+            if manifest_path.exists()
+            else ""
+        )
+        records = [
+            json.loads(line)
+            for line in existing_text.splitlines()
+            if line.strip()
+        ]
+        if not any(record.get("object_id") == object_id for record in records):
+            separator = "" if not existing_text or existing_text.endswith("\n") else "\n"
+            record = {
+                "object_id": object_id,
+                "sha256": digest,
+                "logical_key": logical_key,
+                "mime": "text/plain",
+                "size_bytes": len(raw),
+                "locations": [
+                    {
+                        "provider": "local",
+                        "path": logical_key,
+                        "availability": "available",
+                    }
+                ],
+                "provenance": {
+                    "created_in": archive_services.read_archive_config(archive_root)[
+                        "archive_id"
+                    ],
+                    "source": "source_fidelity_test_fixture",
+                },
+            }
+            manifest_path.write_text(
+                existing_text
+                + separator
+                + json.dumps(record, sort_keys=True, separators=(",", ":"))
+                + "\n",
+                encoding="utf-8",
+            )
+        return {
+            "source_fidelity_mode": "faithful_summary",
+            "source_fidelity_audience": "private_self",
+            "fidelity_source_object_id": object_id,
+        }
+
     def write_shared_update_record_fixture(self, archive_root: Path, relative_path: str = "workbench/shared-update.json", **overrides) -> str:
         payload = {
             "record_kind": "zet_shared_update_record_preview",
@@ -8290,7 +8350,20 @@ class McpServerTests(unittest.TestCase):
                 )
                 self.assertFalse(init_response["result"]["isError"])
 
-                draft_response = self.send(
+                draft_arguments = {
+                    "archive_root": str(archive_root),
+                    "title": "MCP draft note",
+                    "body": "# MCP draft note\n\nCreated by a test.",
+                    "abstract": "A compact MCP-created draft for first-pass reading.",
+                    "facets": {"domain": "test"},
+                    "draft_id": "zet_20260524_mcp_draft_note",
+                    "created_at": "2026-05-24T02:03:04+09:00",
+                    **self.source_fidelity_fixture_arguments(
+                        archive_root,
+                        "Manifested source conversation for the MCP draft note.",
+                    ),
+                }
+                preview_response = self.send(
                     process,
                     {
                         "jsonrpc": "2.0",
@@ -8298,12 +8371,34 @@ class McpServerTests(unittest.TestCase):
                         "method": "tools/call",
                         "params": {
                             "name": "create_draft_zettel",
+                            "arguments": draft_arguments,
+                        },
+                    },
+                )
+                self.assertFalse(preview_response["result"]["isError"])
+                preview = preview_response["result"]["structuredContent"]
+                self.assertTrue(preview["ok"], preview)
+                replay = preview["approval_replay"]
+
+                draft_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 20,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "create_draft_zettel",
                             "arguments": {
-                                "archive_root": str(archive_root),
-                                "title": "MCP draft note",
-                                "body": "# MCP draft note\n\nCreated by a test.",
-                                "abstract": "A compact MCP-created draft for first-pass reading.",
-                                "facets": {"domain": "test"},
+                                **draft_arguments,
+                                "dry_run": False,
+                                "approved": True,
+                                "draft_approved_by": "person:mcp-test",
+                                "expected_body_sha256": replay[
+                                    "expected_body_sha256"
+                                ],
+                                "expected_source_fidelity_plan_sha256": replay[
+                                    "expected_source_fidelity_plan_sha256"
+                                ],
                             },
                         },
                     },
@@ -8477,7 +8572,10 @@ class McpServerTests(unittest.TestCase):
                                 "creation_mode": "ai_assisted",
                                 "created_by": "ai_runtime:codex",
                                 "source": "user_conversation",
-                                "assisted_by": ["ai_runtime:codex"],
+                                **self.source_fidelity_fixture_arguments(
+                                    archive_root,
+                                    "Manifested source conversation for the MCP dry-run draft.",
+                                ),
                                 "supervised_by": ["person:mcp-dry-run"],
                                 "derived_from": ["object:mcp-source"],
                                 "source_refs": [
@@ -10754,9 +10852,15 @@ class McpServerTests(unittest.TestCase):
                             "arguments": {
                                 "archive_root": str(archive_root),
                                 "title": "MCP source intake composed draft",
+                                "abstract": "A reviewed first read for the source-intake draft.",
                                 "body": "Safe MCP draft body with a source intake plan.",
+                                "facets": {"domain": "test"},
                                 "dry_run": True,
                                 "source_intake_plan": source_plan,
+                                **self.source_fidelity_fixture_arguments(
+                                    archive_root,
+                                    "Manifested source for the source-intake composed draft.",
+                                ),
                             },
                         },
                     },
@@ -10821,6 +10925,10 @@ class McpServerTests(unittest.TestCase):
                     "draft_provenance_suggestions": {},
                     "blockers": [],
                 }
+                fidelity_arguments = self.source_fidelity_fixture_arguments(
+                    archive_root,
+                    "Manifested source for blocked source-intake plan tests.",
+                )
                 cases = [
                     {**base_plan, "dry_run": False},
                     {**base_plan, "source_refs_for_draft": [{"type": "provider_object_ref", "value": "https://example.invalid/private"}]},
@@ -10837,9 +10945,12 @@ class McpServerTests(unittest.TestCase):
                                 "arguments": {
                                     "archive_root": str(archive_root),
                                     "title": "MCP blocked plan draft",
+                                    "abstract": "A reviewed first read for a blocked plan draft.",
                                     "body": "Safe MCP draft body.",
+                                    "facets": {"domain": "test"},
                                     "dry_run": True,
                                     "source_intake_plan": source_plan,
+                                    **fidelity_arguments,
                                 },
                             },
                         },
@@ -10908,9 +11019,15 @@ class McpServerTests(unittest.TestCase):
                             "arguments": {
                                 "archive_root": str(archive_root),
                                 "title": "MCP prompt boundary composed draft",
+                                "abstract": "A reviewed first read for the prompt-boundary draft.",
                                 "body": "Safe MCP draft body with a prompt boundary report.",
+                                "facets": {"domain": "test"},
                                 "dry_run": True,
                                 "prompt_boundary_report": self.prompt_boundary_report_fixture(),
+                                **self.source_fidelity_fixture_arguments(
+                                    archive_root,
+                                    "Manifested source for the prompt-boundary composed draft.",
+                                ),
                             },
                         },
                     },
@@ -10960,9 +11077,15 @@ class McpServerTests(unittest.TestCase):
                             "arguments": {
                                 "archive_root": str(archive_root),
                                 "title": "MCP high prompt boundary draft",
+                                "abstract": "A reviewed first read for the high-risk prompt test.",
                                 "body": "Safe MCP draft body.",
+                                "facets": {"domain": "test"},
                                 "dry_run": True,
                                 "prompt_boundary_report": self.prompt_boundary_report_fixture("high"),
+                                **self.source_fidelity_fixture_arguments(
+                                    archive_root,
+                                    "Manifested source for the high-risk prompt-boundary test.",
+                                ),
                             },
                         },
                     },
@@ -10995,7 +11118,7 @@ class McpServerTests(unittest.TestCase):
         finally:
             self.stop_server(process)
 
-    def test_create_draft_zettel_dry_run_blocks_ai_mode_without_assisted_by(self) -> None:
+    def test_create_draft_zettel_dry_run_binds_mcp_assisted_identity(self) -> None:
         process = self.start_server()
         try:
             with tempfile.TemporaryDirectory() as tmp:
@@ -11037,14 +11160,21 @@ class McpServerTests(unittest.TestCase):
                                 "dry_run": True,
                                 "creation_mode": "ai_assisted",
                                 "created_by": "mcp:zettel-kasten-archive-mcp",
+                                **self.source_fidelity_fixture_arguments(
+                                    archive_root,
+                                    "Manifested source for the MCP-bound AI identity draft.",
+                                ),
                             },
                         },
                     },
                 )
                 self.assertFalse(draft_response["result"]["isError"])
                 result = draft_response["result"]["structuredContent"]
-                self.assertFalse(result["ok"])
-                self.assertIn("assisting AI runtime", "; ".join(result["blockers"]))
+                self.assertTrue(result["ok"], result)
+                self.assertEqual(
+                    result["frontmatter_preview"]["provenance"]["assisted_by"],
+                    ["ai_runtime:mcp"],
+                )
                 self.assertEqual(list((archive_root / "inbox").glob("*.md")), [])
         finally:
             self.stop_server(process)
@@ -11076,7 +11206,47 @@ class McpServerTests(unittest.TestCase):
                 body = "Approved MCP draft body."
                 expected_hash = hashlib.sha256((body.rstrip() + "\n").encode("utf-8")).hexdigest()
 
-                draft_response = self.send(
+                draft_arguments = {
+                    "archive_root": str(archive_root),
+                    "title": "MCP approved draft",
+                    "abstract": "A compact reviewed first read for the approved MCP draft.",
+                    "body": body,
+                    "facets": {"domain": "test"},
+                    "expected_archive_id": "archive:personal:mcp-approved",
+                    "expected_type": "personal",
+                    "profile_context": {
+                        "profile_id": "profile:personal:mcp",
+                        "operator_id": "person:mcp-approved",
+                        "authority_mode": "draft_only",
+                    },
+                    "creation_mode": "ai_assisted",
+                    "created_by": "ai_runtime:codex",
+                    "source": "user_conversation",
+                    "supervised_by": ["person:mcp-approved"],
+                    "source_refs": [
+                        {
+                            "type": "local_ai_session",
+                            "value": "session:mcp-approved",
+                            "role": "prompt_context",
+                        }
+                    ],
+                    "local_ai_sessions": [
+                        {
+                            "runtime": "codex",
+                            "session_ref": "session:mcp-approved",
+                            "profile_id": "profile:personal:mcp",
+                            "archive_id": "archive:personal:mcp-approved",
+                            "authority_mode": "draft_only",
+                        }
+                    ],
+                    "draft_id": "zet_20260524_mcp_approved",
+                    "created_at": "2026-05-24T04:05:06+09:00",
+                    **self.source_fidelity_fixture_arguments(
+                        archive_root,
+                        "Manifested source conversation reviewed for the approved MCP draft.",
+                    ),
+                }
+                preview_response = self.send(
                     process,
                     {
                         "jsonrpc": "2.0",
@@ -11084,40 +11254,35 @@ class McpServerTests(unittest.TestCase):
                         "method": "tools/call",
                         "params": {
                             "name": "create_draft_zettel",
+                            "arguments": draft_arguments,
+                        },
+                    },
+                )
+                self.assertFalse(preview_response["result"]["isError"])
+                preview = preview_response["result"]["structuredContent"]
+                self.assertTrue(preview["ok"], preview)
+                replay = preview["approval_replay"]
+                self.assertEqual(replay["expected_body_sha256"], expected_hash)
+
+                draft_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 3,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "create_draft_zettel",
                             "arguments": {
-                                "archive_root": str(archive_root),
-                                "title": "MCP approved draft",
-                                "abstract": "A compact reviewed first read for the approved MCP draft.",
-                                "body": body,
-                                "facets": {"domain": "test"},
-                                "expected_archive_id": "archive:personal:mcp-approved",
-                                "expected_type": "personal",
-                                "profile_context": {
-                                    "profile_id": "profile:personal:mcp",
-                                    "operator_id": "person:mcp-approved",
-                                    "authority_mode": "draft_only",
-                                },
-                                "creation_mode": "ai_assisted",
-                                "created_by": "ai_runtime:codex",
-                                "source": "user_conversation",
-                                "assisted_by": ["ai_runtime:codex"],
-                                "supervised_by": ["person:mcp-approved"],
-                                "source_refs": [
-                                    {"type": "local_ai_session", "value": "session:mcp-approved", "role": "prompt_context"}
-                                ],
-                                "local_ai_sessions": [
-                                    {
-                                        "runtime": "codex",
-                                        "session_ref": "session:mcp-approved",
-                                        "profile_id": "profile:personal:mcp",
-                                        "archive_id": "archive:personal:mcp-approved",
-                                        "authority_mode": "draft_only",
-                                    }
-                                ],
-                                "draft_id": "zet_20260524_mcp_approved",
-                                "created_at": "2026-05-24T04:05:06+09:00",
-                                "expected_body_sha256": expected_hash,
+                                **draft_arguments,
+                                "dry_run": False,
+                                "approved": True,
                                 "draft_approved_by": "person:mcp-approved",
+                                "expected_body_sha256": replay[
+                                    "expected_body_sha256"
+                                ],
+                                "expected_source_fidelity_plan_sha256": replay[
+                                    "expected_source_fidelity_plan_sha256"
+                                ],
                             },
                         },
                     },
@@ -11519,11 +11684,15 @@ class McpServerTests(unittest.TestCase):
             self.assertFalse(result["isError"])
             self.assertTrue(result["structuredContent"]["dry_run"])
             self.assertFalse(result["structuredContent"]["ok"])
-            self.assertIn("receipt_preview", result["structuredContent"])
-            self.assertIn("checklist", result["structuredContent"])
+            self.assertEqual(
+                result["structuredContent"]["blockers"],
+                ["ai_source_fidelity_draft_requires_mint_zettel"],
+            )
+            self.assertEqual(result["structuredContent"]["receipt_preview"], {})
+            self.assertEqual(result["structuredContent"]["checklist"], [])
             self.assertEqual(
                 result["structuredContent"]["proposed_receipt_path"],
-                "receipts/promotion/zet_20260519_draft_ai_lunch_note.promotion.json",
+                None,
             )
             self.assertFalse((archive_root / "zettels" / "zet_20260519_draft_ai_lunch_note.md").exists())
             self.assertFalse(

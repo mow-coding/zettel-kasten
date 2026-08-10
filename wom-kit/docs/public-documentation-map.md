@@ -2,7 +2,7 @@
 
 Status: public navigation baseline
 Date: 2026-06-02
-Updated: 2026-06-03
+Updated: 2026-08-10
 Philosophy clarified: 2026-07-15
 Harness compatibility clarified: 2026-07-16
 
@@ -50,6 +50,8 @@ Supporting philosophy and model docs:
 - [Zettel-Kasten Layer](../specs/zettel-kasten.md)
 - [Agent Operator Capabilities Manifest](agent-operator-capabilities.md)
 - [Operator Feedback Lifecycle](operator-feedback-lifecycle.md)
+- [Source Fidelity And Private Verbatim Preservation](source-fidelity-and-private-verbatim.md)
+- [v0.3.313 Source Fidelity Decision](archive-infra-decision-log-2026-08-10-v03313-source-fidelity.md)
 - [Letters 120 and 123 Index Lifecycle And Feedback Body](letter120-123-index-lifecycle-and-feedback-body.md)
 - [v0.3.312 Index Authority And Feedback Body Decision](archive-infra-decision-log-2026-08-10-v03312-index-authority-and-feedback-body.md)
 - [Approval Handoff Lifecycle](approval-handoff-lifecycle.md)
@@ -423,6 +425,7 @@ These documents record public-safe work already performed.
 - [v0.3.310 Release Note](releases/v0.3.310.md)
 - [v0.3.311 Release Note](releases/v0.3.311.md)
 - [v0.3.312 Release Note](releases/v0.3.312.md)
+- [v0.3.313 Release Note](releases/v0.3.313.md)
 
 Work logs are not the same as product specs.
 
@@ -449,6 +452,7 @@ Specs:
 Schemas:
 
 - [Schemas Directory](../schemas/)
+- [Source-Fidelity Draft Receipt Schema](../schemas/source-fidelity-draft-receipt.schema.json)
 - [IMAP Mailbox Adapter Manifest Schema](../schemas/imap-mailbox-adapter-manifest.schema.json)
 
 These documents are closer to implementation contracts. They should stay more precise than product philosophy documents.

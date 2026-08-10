@@ -31,9 +31,16 @@ selection, and preview capture before approval. A source-intake plan is not
 permission to copy, capture, import, or upload anything.
 
 AI conversation JSONL and AI-generated working documents may be preserved as
-objets when they are relevant evidence. Do not paste a raw conversation log
-into a canonical zet. Create a human-readable zet that states the durable
-decision or knowledge and links to the preserved source objet.
+objets when they are relevant evidence. Normally keep the original objet and a
+human-readable zet as separate immutable layers. This default is not
+permission to override an explicit personal `private_self` verbatim request:
+in that case preserve the selected source in full, including names, contact
+details, chronology, whitespace, and wording, and let the source-fidelity
+verifier bind the exact source region. Credential secrets remain excluded and
+must move through a human-controlled secret store. For a client or public use,
+keep the private source unchanged and create a separately reviewed
+`sanitized_derivative`; its audience label is not access control or permission
+to share.
 
 Keep source text, OCR output, parser diagnostics, confidence, and human
 corrections distinguishable. Working metadata must not silently become
@@ -75,6 +82,21 @@ when either is absent. It performs a bounded frontmatter-only same-title check;
 an AI route cannot create a second unminted draft with the same normalized
 title. Re-open and revise the existing draft instead.
 
+Every new AI draft must declare exactly one source-fidelity mode:
+
+- `verbatim`: the tool appends and verifies the complete selected source region;
+- `faithful_summary`: a human approves a fixed candidate, while semantic
+  fidelity remains unverified by the machine; or
+- `sanitized_derivative`: a new reviewed derivative is created without
+  changing or sharing the private source.
+
+Use a manifested local content-addressed objet as the source authority. The
+`utf8_newlines_lf` comparison changes only CRLF or lone CR to LF; it does not
+trim, normalize Unicode, or remove a BOM, and it is explicitly not byte-exact.
+Preview first, review the returned content-free plan digest, then replay with
+`--approve`, the expected body and fidelity plan hashes, and `--draft-approved-by`.
+Source text and paths do not belong in stdout, receipts, or error messages.
+
 Do not manually copy local paths or unsafe source excerpts into frontmatter.
 Never write Markdown directly into `inbox/`; a location policy is not a write
 route. Draft approval writes only to `inbox/` through `archive create-draft`;
@@ -101,6 +123,13 @@ Before publication, require:
 - stable title, type, provenance, and source links;
 - a clean mint preview bound to the exact draft bytes;
 - separate human approval for the mint write.
+
+For an AI draft, also require a current source-fidelity plan. Mint re-reads the
+manifested source and raw draft region, blocks any changed verbatim region, and
+binds the reviewed current plan into the mint receipt. Only `verbatim` may be
+reported as mechanically verified. `faithful_summary` and
+`sanitized_derivative` remain human-reviewed claims even when every digest
+matches.
 
 `gist`, `summary`, `description`, and `overview` do not substitute for the
 required abstract. A structural gate does not prove that the content is true,

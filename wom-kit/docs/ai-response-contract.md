@@ -1,6 +1,6 @@
 # AI Response Contract
 
-Status: v0.3.312 current-index, mint-progress, and feedback-body reporting checkpoint
+Status: v0.3.313 source-fidelity and private-verbatim reporting checkpoint
 
 `archive ai-response-contract` gives AI operators a read-only contract for
 answering a human after running WOM commands.
@@ -78,6 +78,29 @@ available tools before declaring a task impossible, and carrying
 already-established/approved state instead of re-asking. Like the plain-language
 convention, these are guidance the AI applies; this contract validates nothing and
 enforces nothing about them.
+
+Source fidelity has three distinct classes. A credential secret never belongs
+in a zet. Private personal source data may be preserved without masking when a
+personal archive owner explicitly requests `private_self` `verbatim`; the AI
+must not substitute a summary for that request. A client or public result is a
+separate `sanitized_derivative` and requires human review plus a separate share
+decision. `verbatim` alone can have mechanical region verification under the
+`utf8_newlines_lf` basis (newline conversion only, not trimming, Unicode
+normalization, or BOM removal). `faithful_summary` and
+`sanitized_derivative` remain human-reviewed semantic claims, never
+machine-proven fidelity. If the human reports repeatable information loss, the
+AI must route it through the official operator-feedback lifecycle instead of
+dismissing it as merely its own mistake.
+
+For every new AI-assisted or AI-generated draft, report the dry-run body and
+source-fidelity plan evidence separately from the approved draft write and its
+private receipt. Declared AI provenance cannot be described as human-written.
+Before claiming publication, report the mint-time source/body re-verification
+and the approved current fidelity-plan digest. Human-written creation remains
+compatible; an older AI draft's attributed legacy review is not retrospective
+verbatim proof. Reviewer attribution remains explicit, but private source
+authority and excerpts stay out of ordinary output. Audience is not an ACL or
+evidence of sharing, export, transport, or provider execution.
 
 Before composing a zet, run `archive authoring-conventions <archive-root>
 --dry-run --format json`. An archive may declare its durable writing rules at

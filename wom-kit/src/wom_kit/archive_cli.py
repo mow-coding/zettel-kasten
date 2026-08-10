@@ -13630,14 +13630,74 @@ def command_notion_objet_manifest_locator_label(args: argparse.Namespace) -> int
     return 0 if result.get("ok", True) else 1
 
 
+def _create_draft_cli_error(
+    args: argparse.Namespace,
+    *,
+    reason_code: str,
+    message: str,
+) -> int:
+    """Return a fixed, content-free create-draft failure.
+
+    Draft arguments may contain an entire private source.  Argparse and service
+    exception strings are therefore never reflected at this boundary.
+    """
+
+    if getattr(args, "format", None) == "json":
+        print_json(
+            {
+                "ok": False,
+                "state": "blocked",
+                "lifecycle_action": "create_draft",
+                "reason_codes": [reason_code],
+                "private_values_echoed": False,
+            }
+        )
+    else:
+        print(message, file=sys.stderr)
+    return 1
+
+
+def _source_fidelity_plan_sha256_from_result(result: dict[str, Any]) -> str | None:
+    """Read a safe plan digest across preview/result schema nesting."""
+
+    for key in (
+        "current_source_fidelity_plan_sha256",
+        "source_fidelity_plan_sha256",
+        "plan_sha256",
+    ):
+        value = result.get(key)
+        if isinstance(value, str) and value:
+            return value
+    for section_name in ("source_fidelity", "source_fidelity_check", "approval_replay"):
+        section = result.get(section_name)
+        if not isinstance(section, dict):
+            continue
+        for key in (
+            "current_plan_sha256",
+            "plan_sha256",
+            "source_fidelity_plan_sha256",
+            "expected_source_fidelity_plan_sha256",
+        ):
+            value = section.get(key)
+            if isinstance(value, str) and value:
+                return value
+    return None
+
+
 def command_create_draft(args: argparse.Namespace) -> int:
     if args.list_kinds:
         try:
             rules = archive_services.load_zettel_rules(Path(args.archive_root))
             valid_kinds = sorted(archive_services.note_kind_rules(rules).keys())
-        except (archive_services.ArchiveServiceError, OSError) as exc:
-            print(str(exc), file=sys.stderr)
-            return 1
+        except (archive_services.ArchiveServiceError, OSError):
+            return _create_draft_cli_error(
+                args,
+                reason_code="create_draft_kind_list_failed",
+                message=(
+                    "create-draft could not list note kinds; private argument "
+                    "values were not echoed."
+                ),
+            )
         if args.format == "json":
             print_json({"note_kinds": valid_kinds})
         else:
@@ -13647,14 +13707,65 @@ def command_create_draft(args: argparse.Namespace) -> int:
         return 0
 
     if not args.title:
-        print("create-draft requires --title (unless --list-kinds is used).", file=sys.stderr)
-        return 1
-    if args.body is None and args.body_file is None:
-        print("create-draft requires --body or --body-file.", file=sys.stderr)
-        return 1
+        return _create_draft_cli_error(
+            args,
+            reason_code="create_draft_title_required",
+            message="create-draft requires --title (unless --list-kinds is used).",
+        )
+    if (
+        args.body is None
+        and args.body_file is None
+        and args.source_fidelity != "verbatim"
+    ):
+        return _create_draft_cli_error(
+            args,
+            reason_code="create_draft_body_required",
+            message=(
+                "create-draft requires --body or --body-file unless "
+                "--source-fidelity verbatim composes the exact source region."
+            ),
+        )
+
+    ai_creation_mode = args.creation_mode in {"ai_assisted", "ai_generated"}
+    if ai_creation_mode and bool(args.dry_run) == bool(args.approve):
+        return _create_draft_cli_error(
+            args,
+            reason_code="create_draft_ai_execution_mode_invalid",
+            message=(
+                "AI-assisted/generated create-draft requires exactly one of "
+                "--dry-run or --approve."
+            ),
+        )
+    if ai_creation_mode and args.approve:
+        missing_approval_fields = [
+            option
+            for option, value in (
+                ("--draft-approved-by", args.draft_approved_by),
+                ("--expected-body-sha256", args.expected_body_sha256),
+                (
+                    "--expected-source-fidelity-plan-sha256",
+                    args.expected_source_fidelity_plan_sha256,
+                ),
+            )
+            if not isinstance(value, str) or not value.strip()
+        ]
+        if missing_approval_fields:
+            return _create_draft_cli_error(
+                args,
+                reason_code="create_draft_ai_approval_evidence_required",
+                message=(
+                    "AI draft approval requires --draft-approved-by, "
+                    "--expected-body-sha256, and "
+                    "--expected-source-fidelity-plan-sha256."
+                ),
+            )
 
     try:
-        body = read_body_arg(args)
+        body = (
+            ""
+            if args.body is None and args.body_file is None
+            else read_body_arg(args)
+        )
         created_by = args.created_by or "cli:archive"
         source = args.source or "cli_command"
         result = archive_services.create_draft_zettel(
@@ -13685,10 +13796,23 @@ def command_create_draft(args: argparse.Namespace) -> int:
             created_at=args.created_at,
             expected_body_sha256=args.expected_body_sha256,
             draft_approved_by=args.draft_approved_by,
+            approved=args.approve,
+            source_fidelity_mode=args.source_fidelity,
+            source_fidelity_audience=args.fidelity_audience,
+            fidelity_source_object_id=args.fidelity_source_object_id,
+            expected_source_fidelity_plan_sha256=(
+                args.expected_source_fidelity_plan_sha256
+            ),
         )
-    except (archive_services.ArchiveServiceError, ValueError, OSError) as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
+    except (archive_services.ArchiveServiceError, ValueError, OSError):
+        return _create_draft_cli_error(
+            args,
+            reason_code="create_draft_service_failed",
+            message=(
+                "create-draft failed before a privacy-safe result could be "
+                "produced; private argument values were not echoed."
+            ),
+        )
 
     if args.format == "json":
         print_json(result)
@@ -13704,6 +13828,9 @@ def command_create_draft(args: argparse.Namespace) -> int:
                 print("Warnings:")
                 for warning in result["warnings"]:
                     print(f"- {warning}")
+            source_fidelity_plan_sha256 = _source_fidelity_plan_sha256_from_result(result)
+            if source_fidelity_plan_sha256:
+                print(f"Source-fidelity plan: {source_fidelity_plan_sha256}")
             print("Draft dry-run passed." if result["ok"] else "Draft dry-run blocked.")
         else:
             print(f"Created draft zettel {result['zettel_id']} at {result['path']}")
@@ -15435,6 +15562,9 @@ def command_mint_zettel(args: argparse.Namespace) -> int:
                 allow_warnings=args.allow_warnings,
                 affirmations=affirmations,
                 progress_callback=progress_callback,
+                expected_source_fidelity_plan_sha256=(
+                    args.expected_source_fidelity_plan_sha256
+                ),
             )
         reporter.finish()
     except (archive_services.ArchiveServiceError, OSError) as exc:
@@ -15476,6 +15606,9 @@ def command_mint_zettel(args: argparse.Namespace) -> int:
                 print("Warnings:")
                 for warning in result["warnings"]:
                     print(f"- {warning}")
+            source_fidelity_plan_sha256 = _source_fidelity_plan_sha256_from_result(result)
+            if source_fidelity_plan_sha256:
+                print(f"Current source-fidelity plan: {source_fidelity_plan_sha256}")
             print("Mint dry-run passed." if result["ok"] else "Mint dry-run blocked.")
         return 0 if result["ok"] else 1
 
@@ -27001,6 +27134,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     create_draft.add_argument("--facet", action="append", help="Facet in KEY=VALUE form. May be repeated; at least one is required for AI-assisted/generated drafts.")
     create_draft.add_argument("--dry-run", action="store_true", help="Preview draft creation without writing files.")
+    create_draft.add_argument(
+        "--approve",
+        action="store_true",
+        help=(
+            "Approve an exact reviewed AI draft replay. AI-assisted/generated "
+            "creation requires exactly one of --dry-run or --approve."
+        ),
+    )
     create_draft.add_argument("--expected-archive-id", help="Expected archive id; mismatch blocks.")
     create_draft.add_argument(
         "--expected-type",
@@ -27028,6 +27169,33 @@ def build_parser() -> argparse.ArgumentParser:
     create_draft.add_argument("--created-at", help="Deterministic ISO timestamp for dry-run replay.")
     create_draft.add_argument("--expected-body-sha256", help="Expected SHA-256 of the normalized draft body.")
     create_draft.add_argument("--draft-approved-by", help="Human actor approving inbox draft creation.")
+    create_draft.add_argument(
+        "--source-fidelity",
+        choices=sorted(archive_services.SOURCE_FIDELITY_MODES),
+        help=(
+            "Source transformation contract: verbatim, faithful_summary, or "
+            "sanitized_derivative."
+        ),
+    )
+    create_draft.add_argument(
+        "--fidelity-audience",
+        choices=sorted(archive_services.ZET_QUALITY_AUDIENCES),
+        help="Intended audience bound into the source-fidelity plan.",
+    )
+    create_draft.add_argument(
+        "--fidelity-source-object-id",
+        help=(
+            "Content-addressed source object id in "
+            "sha256:<64 lowercase hex> form; no local source path is accepted."
+        ),
+    )
+    create_draft.add_argument(
+        "--expected-source-fidelity-plan-sha256",
+        help=(
+            "Exact source-fidelity plan SHA-256 from the reviewed dry-run; "
+            "required for an approved AI replay."
+        ),
+    )
     create_draft.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     create_draft.set_defaults(func=command_create_draft)
 
@@ -27530,11 +27698,19 @@ def build_parser() -> argparse.ArgumentParser:
     mint.add_argument("--approve", action="store_true", help="Actually mint after dry-run gates pass.")
     mint.add_argument("--reviewed-by", help="Reviewer id required for real minting, e.g. person:me.")
     mint.add_argument(
+        "--expected-source-fidelity-plan-sha256",
+        help=(
+            "Exact current source-fidelity plan SHA-256 returned by mint-zet "
+            "--dry-run; required by fidelity-bound mint approval."
+        ),
+    )
+    mint.add_argument(
         "--affirm",
         action="append",
         help=(
             "Record an attributed human affirmation for a human-review checklist item "
-            "(one_clear_purpose, sensitive_content_reviewed). May be repeated. Requires --reviewed-by."
+            "(one_clear_purpose, sensitive_content_reviewed, "
+            "legacy_source_fidelity_reviewed). May be repeated. Requires --reviewed-by."
         ),
     )
     mint.add_argument(
@@ -31205,6 +31381,7 @@ def main(argv: list[str] | None = None) -> int:
             "notion-reviewed-page-recovery",
             "operator-feedback-compose",
             "operator-feedback-body-check",
+            "create-draft",
         }
     )
     if raw_argv[:1] == ["credential-adopt"] and any(
