@@ -104,12 +104,16 @@ CURRENT_CLI_COUNT = 551
 CURRENT_CLI_CANONICAL_SHA256 = (
     "a177a1fcbfd86601c04f23a26f1605b8e685205988c2fbe70b342d3b7241f638"
 )
+CURRENT_MCP_COUNT = 121
+CURRENT_MCP_CANONICAL_SHA256 = (
+    "622e90ed08dd189d2d79a49cc352051aecd0063d1b6913ac5f1f22eec4850f96"
+)
 CURRENT_DATABASE_COUNT = 3
 CURRENT_DATABASE_CANONICAL_SHA256 = (
     "d9a42f08ee12a6d42e40214cfb12441e4077bf50c38c25b2692ec1344328294a"
 )
 RESOURCE_ADDITIONS = {
-    "release-notes/v0.3.312.md",
+    "release-notes/v0.3.313.md",
     "schemas/artifact-lifecycle-inventory.schema.json",
     "schemas/authoring-conventions.schema.json",
     "schemas/draft-discard-receipt.schema.json",
@@ -141,13 +145,14 @@ RESOURCE_ADDITIONS = {
     "schemas/source-reference-coverage-audit-result-v0.1.schema.json",
     "schemas/source-intake-batch-receipt.schema.json",
     "schemas/source-intake-batch-request.schema.json",
+    "schemas/source-fidelity-draft-receipt.schema.json",
     "schemas/zettel-objet-link-receipt.schema.json",
     "schemas/zettel-objet-link-revert-receipt.schema.json",
 }
 RESOURCE_REMOVALS = {"release-notes/v0.3.297.md"}
-CURRENT_RESOURCE_COUNT = 144
+CURRENT_RESOURCE_COUNT = 145
 CURRENT_RESOURCE_CANONICAL_SHA256 = (
-    "07f85acf825687c4447225048db1542c40e866bae8950552e25468093bdb4f65"
+    "58a42495b95d9ae178eaa22521a7fdc2728da755cc1dd7755ab3debb68dc2c81"
 )
 
 
@@ -378,21 +383,73 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
             CURRENT_DATABASE_CANONICAL_SHA256,
         )
 
-    def test_mcp_name_and_input_schema_rows_exactly_match_v03297(self) -> None:
-        expected = self.fixture["mcp"]["tools"]
-        actual = current_mcp_tools()
-        self.assertEqual(
-            actual,
-            expected,
-            named_row_diff_message("MCP name/inputSchema rows", expected, actual, "name"),
-        )
-        self.assertEqual(len(actual), BASELINE_EXPECTATIONS["mcp"]["count"])
-        self.assertEqual(
-            canonical_sha256(actual),
-            BASELINE_EXPECTATIONS["mcp"]["canonical_sha256"],
-        )
+    def test_mcp_surface_changes_only_create_draft_source_fidelity_contract(self) -> None:
+        predecessor = self.fixture["mcp"]["tools"]
+        current = current_mcp_tools()
+        self.assertEqual(len(current), CURRENT_MCP_COUNT)
+        self.assertEqual(canonical_sha256(current), CURRENT_MCP_CANONICAL_SHA256)
 
-    def test_resource_paths_are_v03297_plus_exact_v03298_v03312_delta(self) -> None:
+        predecessor_by_name = {row["name"]: row for row in predecessor}
+        current_by_name = {row["name"]: row for row in current}
+        self.assertEqual(set(current_by_name), set(predecessor_by_name))
+
+        changed = sorted(
+            name
+            for name in current_by_name
+            if current_by_name[name] != predecessor_by_name[name]
+        )
+        self.assertEqual(changed, ["create_draft_zettel"])
+
+        before = predecessor_by_name["create_draft_zettel"]["inputSchema"]
+        after = current_by_name["create_draft_zettel"]["inputSchema"]
+        added_properties = {
+            "approved",
+            "expected_source_fidelity_plan_sha256",
+            "fidelity_source_object_id",
+            "source_fidelity_audience",
+            "source_fidelity_mode",
+        }
+        changed_properties = {"assisted_by", "body", "creation_mode", "dry_run"}
+        self.assertEqual(
+            set(after["properties"]) - set(before["properties"]),
+            added_properties,
+        )
+        self.assertFalse(set(before["properties"]) - set(after["properties"]))
+        self.assertEqual(
+            {
+                key
+                for key in before["properties"]
+                if before["properties"][key] != after["properties"][key]
+            },
+            changed_properties,
+        )
+        self.assertEqual(
+            after["required"],
+            [
+                "archive_root",
+                "title",
+                "abstract",
+                "facets",
+                "source_fidelity_mode",
+                "source_fidelity_audience",
+                "fidelity_source_object_id",
+            ],
+        )
+        self.assertEqual(
+            after["properties"]["creation_mode"]["enum"],
+            ["ai_assisted", "ai_generated"],
+        )
+        self.assertEqual(
+            after["properties"]["assisted_by"]["items"]["const"],
+            "ai_runtime:mcp",
+        )
+        self.assertTrue(after["properties"]["dry_run"]["default"])
+        self.assertFalse(after["properties"]["approved"]["default"])
+        self.assertEqual(
+            after["properties"]["fidelity_source_object_id"]["pattern"],
+            "^sha256:[0-9a-f]{64}$",
+        )
+    def test_resource_paths_are_v03297_plus_exact_v03298_v03313_delta(self) -> None:
         predecessor_paths = set(self.fixture["package_resources"]["packaged_paths"])
         self.assertTrue(
             RESOURCE_REMOVALS <= predecessor_paths,
@@ -422,10 +479,10 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
             actual,
             expected,
             "Current package-resource paths must be the full v0.3.297 set plus "
-            "the exact cumulative v0.3.298 through v0.3.312 delta. "
+            "the exact cumulative v0.3.298 through v0.3.313 delta. "
             f"missing={compact(missing)}; extra={compact(extra)}",
         )
-        self.assertEqual(manifest["version"], "0.3.312")
+        self.assertEqual(manifest["version"], "0.3.313")
         self.assertEqual(len(actual), CURRENT_RESOURCE_COUNT)
         self.assertEqual(
             canonical_sha256(actual),
@@ -444,14 +501,14 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
         self.assertIn("does not undo", predecessor_flat)
         self.assertNotIn("C:\\Users\\", predecessor_text)
 
-    def test_v03312_release_note_is_public_and_synchronized(self) -> None:
-        current_source_release = KIT_ROOT / "docs" / "releases" / "v0.3.312.md"
+    def test_v03313_release_note_is_public_and_synchronized(self) -> None:
+        current_source_release = KIT_ROOT / "docs" / "releases" / "v0.3.313.md"
         current_packaged_release = (
             SRC_ROOT
             / "wom_kit"
             / "_resources"
             / "release-notes"
-            / "v0.3.312.md"
+            / "v0.3.313.md"
         )
         self.assertEqual(
             current_source_release.read_bytes(),
@@ -460,17 +517,15 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
         current_text = current_source_release.read_text(encoding="utf-8")
         current_flat = " ".join(current_text.split())
         for token in (
-            "mint-zet --progress",
-            "view-zets",
-            "operator-feedback-compose",
-            "operator-feedback-body-check",
-            "archive_index_rebuild_required",
-            "zero protected query rows",
-            "UTF-8 JSON object",
-            "feedback-body-sha256:<64 hex>",
-            "No beta archive was modified or automatically rebuilt",
-            "do not submit feedback externally",
-            "prove human receipt",
+            "verbatim",
+            "faithful_summary",
+            "sanitized_derivative",
+            "--expected-source-fidelity-plan-sha256",
+            "create_draft_zettel",
+            "mint_zettel_check",
+            "ai_provenance_requires_ai_creation_mode",
+            "Verified data loss is therefore zero",
+            "not an ACL",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, current_flat)

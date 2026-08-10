@@ -9,7 +9,7 @@ from wom_kit import __version__
 
 KIT_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = KIT_ROOT.parent
-EXPECTED_CURRENT_VERSION = "0.3.312"
+EXPECTED_CURRENT_VERSION = "0.3.313"
 EXPECTED_CURRENT_TAG = f"v{EXPECTED_CURRENT_VERSION}"
 CURRENT_VERSION = f"v{__version__}"
 CURRENT_RELEASE_NOTE = f"{EXPECTED_CURRENT_TAG}.md"
@@ -20,7 +20,7 @@ CURRENT_WHEEL_URL = (
     f"wom_kit-{EXPECTED_CURRENT_VERSION}-py3-none-any.whl"
 )
 CURRENT_RUNTIME_STATUS = (
-    f"Status: {CURRENT_VERSION} Letters 120 and 123 current-index, mint-progress, and feedback-body checkpoint"
+    f"Status: {CURRENT_VERSION} source-fidelity and private-verbatim preservation checkpoint"
 )
 CURRENT_MATRIX_VERSION = f"Version: {CURRENT_VERSION} implementation and release scope"
 MATRIX_PATH = KIT_ROOT / "docs" / "capability-matrix.md"
@@ -251,7 +251,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                 self.assertIn("identity-reconcile", text)
                 self.assertIn("proposed", text)
                 self.assertIn("SHA-256", text)
-        self.assertIn(f"{CURRENT_VERSION} pre-release", versioning_text)
+        self.assertIn(CURRENT_VERSION, versioning_text)
         self.assertIn(__version__, versioning_text)
         self.assertIn("archive-identity-reconcile.md", public_map_text)
 
@@ -425,8 +425,8 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                 self.assertIn("intentional_change", text)
                 self.assertIn("unintentional_change", text)
                 self.assertIn("uncertain", text)
-        self.assertIn(f"{CURRENT_VERSION} pre-release", readme_text)
-        self.assertIn(f"{CURRENT_VERSION} pre-release", readme_ko_text)
+        self.assertIn(CURRENT_VERSION, readme_text)
+        self.assertIn(CURRENT_VERSION, readme_ko_text)
         self.assertIn(f"{CURRENT_VERSION} (current checkpoint)", readme_text)
         self.assertIn(f"{CURRENT_VERSION} (현재 checkpoint)", readme_ko_text)
 
@@ -1612,7 +1612,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            f"{CURRENT_VERSION} pre-release",
+            CURRENT_VERSION,
             "[Version Truth Source](wom-kit/docs/version-truth-source.md)",
             "[Project Version Update](wom-kit/docs/project-version-update.md)",
             "read-only WOM-kit version truth-source checks",
@@ -9632,7 +9632,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(document="v03287-version-surface"):
                 self.assertIn("v0.3.287", text)
                 self.assertIn("notion-import-locator-evidence-plan", text)
-        self.assertIn(f"{CURRENT_VERSION} pre-release", versioning_text)
+        self.assertIn(CURRENT_VERSION, versioning_text)
 
     def test_v03288_mcp_content_free_error_boundary_is_current_and_synchronized(
         self,
@@ -10476,7 +10476,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             matrix_text,
         )
         self.assertIn(CURRENT_RUNTIME_STATUS, runtime_entrypoints_text)
-        self.assertIn(f"{CURRENT_VERSION} pre-release", versioning_text)
+        self.assertIn(CURRENT_VERSION, versioning_text)
 
         for text in (
             root_readme_text,
@@ -10990,27 +10990,27 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         self.assertIn("releases/v0.3.310.md", public_map_text)
         self.assertIn("releases/v0.3.310.md", public_map_ko_text)
 
-    def test_v03312_letters120_123_public_contract_is_current_and_unproven_live(
+    def test_v03313_source_fidelity_public_contract_is_current_and_unproven_live(
         self,
     ) -> None:
-        release_path = KIT_ROOT / "docs" / "releases" / "v0.3.312.md"
+        release_path = KIT_ROOT / "docs" / "releases" / "v0.3.313.md"
         packaged_release_path = (
             KIT_ROOT
             / "src"
             / "wom_kit"
             / "_resources"
             / "release-notes"
-            / "v0.3.312.md"
+            / "v0.3.313.md"
         )
         guide_path = (
             KIT_ROOT
             / "docs"
-            / "letter120-123-index-lifecycle-and-feedback-body.md"
+            / "source-fidelity-and-private-verbatim.md"
         )
         decision_path = (
             KIT_ROOT
             / "docs"
-            / "archive-infra-decision-log-2026-08-10-v03312-index-authority-and-feedback-body.md"
+            / "archive-infra-decision-log-2026-08-10-v03313-source-fidelity.md"
         )
         runtime_path = KIT_ROOT / "docs" / "runtime-canonical-entrypoints.md"
         public_map_path = KIT_ROOT / "docs" / "public-documentation-map.md"
@@ -11033,10 +11033,10 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         self.assertIn(CURRENT_RUNTIME_STATUS, runtime_text)
 
         public_contract_tokens = (
-            "archive_index_rebuild_required",
-            "view-zets",
-            "mint-zet --progress",
-            "feedback-body-sha256:",
+            "verbatim",
+            "faithful_summary",
+            "sanitized_derivative",
+            "private_self",
         )
         for token in public_contract_tokens:
             for document_name, text in (
@@ -11048,9 +11048,10 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                     self.assertIn(token, text)
 
         for token in (
-            "archive_index_rebuild_required",
-            "operator-feedback-compose",
-            "operator-feedback-body-check",
+            "--expected-source-fidelity-plan-sha256",
+            "ai_provenance_requires_ai_creation_mode",
+            "create_draft_zettel",
+            "mint_zettel_check",
         ):
             for document_name, text in (
                 ("release", release_text),
@@ -11061,19 +11062,19 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                     self.assertIn(token, text)
 
         for phrase in (
-            "real-archive, or human-acceptance evidence",
-            "No beta archive was modified or automatically rebuilt",
-            "do not submit feedback externally",
-            "not a separate Markdown file and receipt",
-            "remain the next release scope",
+            "does not prove merge, external CI, exact tag, GitHub Release",
+            "Verified data loss is therefore zero",
+            "Audience is descriptive intent, not an ACL",
+            "Human-written legacy draft creation remains compatible",
+            "not a live mint writer",
         ):
             with self.subTest(release_boundary=phrase):
                 self.assertIn(phrase, release_flat)
 
         public_paths = (
-            "letter120-123-index-lifecycle-and-feedback-body.md",
-            "archive-infra-decision-log-2026-08-10-v03312-index-authority-and-feedback-body.md",
-            "releases/v0.3.312.md",
+            "source-fidelity-and-private-verbatim.md",
+            "archive-infra-decision-log-2026-08-10-v03313-source-fidelity.md",
+            "releases/v0.3.313.md",
         )
         for public_path in public_paths:
             for document_name, text in (
@@ -11095,9 +11096,9 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(document="public-privacy-boundary"):
                 self.assertNotIn("C:\\Users\\", text)
 
-        self.assertTrue((KIT_ROOT / "docs" / "releases" / "v0.3.311.md").is_file())
-        self.assertIn("releases/v0.3.311.md", public_map_text)
-        self.assertIn("releases/v0.3.311.md", public_map_ko_text)
+        self.assertTrue((KIT_ROOT / "docs" / "releases" / "v0.3.312.md").is_file())
+        self.assertIn("releases/v0.3.312.md", public_map_text)
+        self.assertIn("releases/v0.3.312.md", public_map_ko_text)
 
     def test_active_source_docs_use_module_launcher_not_direct_wrapper(self) -> None:
         active_paths = (

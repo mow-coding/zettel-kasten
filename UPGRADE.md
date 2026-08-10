@@ -24,6 +24,51 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.313 Source Fidelity And Private Verbatim Preservation
+
+v0.3.313 does not rewrite existing zets, drafts, receipts, or source objets.
+Human-written draft creation remains compatible. It intentionally changes every
+new `ai_assisted` and `ai_generated` draft workflow: the first write now requires
+an explicit source-fidelity contract and an attributed human-approved replay.
+An AI identity in `created_by` or `assisted_by`, or any non-empty
+`local_ai_sessions` evidence, cannot be relabeled as `human_written`; that
+fails with `ai_provenance_requires_ai_creation_mode`.
+
+For a new AI draft, first preserve the source as a manifested local
+content-addressed objet. Preview with all of these inputs:
+
+```powershell
+archive create-draft <archive-root> --title <title> --body-file <private-candidate> --abstract <abstract> --facet <key=value> --creation-mode ai_assisted --created-by ai_runtime:<runtime> --assisted-by ai_runtime:<runtime> --source-fidelity <verbatim|faithful_summary|sanitized_derivative> --fidelity-audience <audience> --fidelity-source-object-id <sha256:...> --dry-run --format json
+```
+
+Review the proposed body and content-free plan, then replay the unchanged
+request with `--approve --draft-approved-by <human-actor>
+--expected-body-sha256 <sha256>
+--expected-source-fidelity-plan-sha256 <sha256>`. The approved operation creates
+one inbox draft and one private create-only fidelity receipt. It does not mint,
+share, export, or call a provider.
+
+Before mint, run `mint-zet --dry-run` again. Approval must include the returned
+current `--expected-source-fidelity-plan-sha256` together with the existing
+`--reviewed-by` and `--approve` gates. WOM re-reads the manifested source and
+raw draft body; source drift or a changed verbatim region blocks publication.
+
+Existing AI drafts are not assigned a guessed mode. When a human has reviewed
+one such draft against its source, record the compatibility affirmation as
+`--affirm legacy_source_fidelity_reviewed --reviewed-by <human-actor>` during
+the mint workflow. This is attributed review evidence, not retrospective proof
+that old bytes were verbatim.
+
+`verbatim` is limited to a personal archive and `private_self`. It preserves
+private personal data but never credential secrets. `audience` records intent;
+it is not an ACL or permission to disclose anything. For other recipients,
+keep the private source unchanged and make a separately reviewed
+`sanitized_derivative`.
+
+See the [source-fidelity guide](wom-kit/docs/source-fidelity-and-private-verbatim.md),
+[v0.3.313 release note](wom-kit/docs/releases/v0.3.313.md), and
+[decision record](wom-kit/docs/archive-infra-decision-log-2026-08-10-v03313-source-fidelity.md).
+
 ## v0.3.312 Letters 120 And 123 Index Authority And Feedback Bodies
 
 v0.3.312 intentionally requires one explicit rebuild of generated zettel

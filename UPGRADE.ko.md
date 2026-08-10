@@ -2,6 +2,45 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.3.313 원문 충실도와 비공개 verbatim 보존
+
+v0.3.313은 기존 zet, draft, receipt, source objet을 자동으로 고치지 않습니다.
+사람이 직접 쓴 draft 경로는 계속 호환됩니다. 다만 새 `ai_assisted`·
+`ai_generated` draft는 처음 파일을 쓰기 전부터 명시적인 source-fidelity 계약과
+사람이 승인한 replay가 필요합니다. `created_by`·`assisted_by`에 AI를 선언했거나
+`local_ai_sessions` 증거가 하나라도 있는데 `human_written`으로 낮춰 우회하면
+`ai_provenance_requires_ai_creation_mode`로 차단됩니다.
+
+먼저 원문을 manifest에 등록된 local content-addressed objet으로 보존하세요. 새 AI
+draft 미리보기에는 `--source-fidelity`, `--fidelity-audience`,
+`--fidelity-source-object-id`와 기존 AI provenance를 함께 지정합니다. 본문과 내용
+없는 plan을 검토한 뒤, 바뀌지 않은 요청을 `--approve`,
+`--draft-approved-by`, `--expected-body-sha256`,
+`--expected-source-fidelity-plan-sha256`와 함께 다시 실행합니다. 이 승인은 inbox
+draft 하나와 비공개 create-only fidelity receipt 하나만 만들며, 민팅·공유·
+내보내기·provider 호출은 하지 않습니다.
+
+민팅 전에는 `mint-zet --dry-run`으로 원문과 raw draft body를 다시 검증하세요.
+실제 민팅 승인에는 기존 `--reviewed-by --approve`와 함께 현재
+`--expected-source-fidelity-plan-sha256`가 필요합니다. source가 바뀌었거나
+verbatim region이 달라졌으면 publication을 차단합니다.
+
+기존 AI draft에는 과거 mode를 추정해서 붙이지 않습니다. 사람이 source와 대조해
+검토한 경우 민팅 workflow에서
+`--affirm legacy_source_fidelity_reviewed --reviewed-by <human-actor>`를
+기록합니다. 이것은 사람이 검토했다는 증거이지 과거 byte가 verbatim이었다는
+소급 증명은 아닙니다.
+
+`verbatim`은 personal archive의 `private_self`에서만 허용됩니다. 개인 원문 정보는
+보존하지만 자격증명 비밀값은 언제나 차단합니다. `audience`는 의도를 기록할 뿐
+ACL이나 공개 권한이 아닙니다. 다른 사람을 위한 결과는 비공개 원문을 바꾸지 말고
+별도의 `sanitized_derivative`로 검토하세요.
+
+자세한 내용은 [원문 충실도 가이드](wom-kit/docs/source-fidelity-and-private-verbatim.md),
+[v0.3.313 릴리스 노트](wom-kit/docs/releases/v0.3.313.md),
+[결정 기록](wom-kit/docs/archive-infra-decision-log-2026-08-10-v03313-source-fidelity.md)을
+보세요.
+
 ## v0.3.312 Letter 120·123 인덱스 권위와 피드백 본문
 
 v0.3.312에서는 이전 버전이 만든 generated zettel index를 한 번 명시적으로

@@ -2639,26 +2639,66 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
     },
     {
         "name": "create_draft_zettel",
-        "description": "Create a draft zettel in inbox/. Declared AI modes require an explicit abstract and non-empty facets and block same-title inbox duplicates. This never mints canonical memory.",
+        "description": (
+            "Preview or explicitly approve an AI-assisted/generated inbox draft. "
+            "Dry-run returns the exact source-fidelity plan and approval replay; "
+            "live writing requires approved=true and the reviewed body and plan "
+            "digests. Verbatim mode may compose its body from one content-addressed "
+            "source object. This never mints canonical memory and never accepts a "
+            "mutable source path."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "archive_root": {"type": "string"},
                 "title": {"type": "string"},
-                "body": {"type": "string"},
+                "body": {
+                    "type": "string",
+                    "description": (
+                        "Private candidate body. Required except when verbatim mode "
+                        "composes the exact source region. Never echoed in tool summaries."
+                    ),
+                },
                 "abstract": {"type": "string", "maxLength": archive_services.ZET_ABSTRACT_MAX_CHARS},
                 "archive_id": {"type": "string"},
                 "kind": {"type": "string", "default": "fleeting_capture"},
                 "facets": {"type": "object"},
                 "visibility": {"type": "object"},
-                "dry_run": {"type": "boolean", "default": False},
+                "dry_run": {
+                    "type": "boolean",
+                    "default": True,
+                    "description": "Preview only. Exactly one of dry_run or approved must be true.",
+                },
+                "approved": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": (
+                        "Explicitly approve the exact reviewed replay. Exactly one "
+                        "of dry_run or approved must be true."
+                    ),
+                },
                 "expected_archive_id": {"type": "string"},
                 "expected_type": {"type": "string", "enum": sorted(archive_services.RUNTIME_CONTEXT_ARCHIVE_TYPES)},
                 "profile_context": {"type": "object"},
-                "creation_mode": {"type": "string", "enum": sorted(archive_services.DRAFT_CREATION_MODES)},
+                "creation_mode": {
+                    "type": "string",
+                    "enum": ["ai_assisted", "ai_generated"],
+                    "default": "ai_assisted",
+                    "description": "MCP is an AI-only authoring surface; human_written is not accepted.",
+                },
                 "created_by": {"type": "string"},
                 "source": {"type": "string"},
-                "assisted_by": {"type": "array", "items": {"type": "string"}},
+                "assisted_by": {
+                    "type": "array",
+                    "items": {"type": "string", "const": "ai_runtime:mcp"},
+                    "minItems": 1,
+                    "maxItems": 1,
+                    "default": ["ai_runtime:mcp"],
+                    "description": (
+                        "Fixed MCP authoring identity. Caller-supplied actor "
+                        "spoofing is rejected."
+                    ),
+                },
                 "supervised_by": {"type": "array", "items": {"type": "string"}},
                 "derived_from": {"type": "array", "items": {"type": "string"}},
                 "source_refs": {"type": "array", "items": {"type": "object"}},
@@ -2669,8 +2709,39 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "created_at": {"type": "string"},
                 "expected_body_sha256": {"type": "string"},
                 "draft_approved_by": {"type": "string"},
+                "source_fidelity_mode": {
+                    "type": "string",
+                    "enum": sorted(archive_services.SOURCE_FIDELITY_MODES),
+                    "description": (
+                        "verbatim, faithful_summary, or sanitized_derivative; "
+                        "bound into the reviewed source-fidelity plan."
+                    ),
+                },
+                "source_fidelity_audience": {
+                    "type": "string",
+                    "enum": sorted(archive_services.ZET_QUALITY_AUDIENCES),
+                    "description": "Intended audience bound into the source-fidelity plan.",
+                },
+                "fidelity_source_object_id": {
+                    "type": "string",
+                    "pattern": "^sha256:[0-9a-f]{64}$",
+                    "description": "Immutable source object id; a local source path is never accepted.",
+                },
+                "expected_source_fidelity_plan_sha256": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$",
+                    "description": "Exact plan digest from the reviewed dry-run replay.",
+                },
             },
-            "required": ["archive_root", "title", "body"],
+            "required": [
+                "archive_root",
+                "title",
+                "abstract",
+                "facets",
+                "source_fidelity_mode",
+                "source_fidelity_audience",
+                "fidelity_source_object_id",
+            ],
         },
     },
     {
@@ -2774,7 +2845,12 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
     },
     {
         "name": "mint_zettel_check",
-        "description": "Dry-run check whether an inbox draft zet can be minted. This never writes canonical memory, receipts, or snapshots.",
+        "description": (
+            "Dry-run check whether an inbox draft zet can be minted. Returns "
+            "content-free source-fidelity evidence and the current reviewed plan "
+            "digest without reflecting source text. This never writes canonical "
+            "memory, receipts, or snapshots."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -5699,7 +5775,57 @@ def tool_foreign_block_attestation_statement_draft_decision_preview(arguments: d
 def tool_create_draft_zettel(arguments: dict[str, Any]) -> dict[str, Any]:
     archive_root = require_path_arg(arguments, "archive_root")
     title = require_string_arg(arguments, "title")
-    body = require_string_arg(arguments, "body")
+    creation_mode = optional_string_arg(arguments, "creation_mode") or "ai_assisted"
+    if creation_mode not in {"ai_assisted", "ai_generated"}:
+        raise ToolError()
+    requested_assisted_by = optional_string_list_arg(arguments, "assisted_by")
+    if requested_assisted_by not in (None, ["ai_runtime:mcp"]):
+        raise ToolError()
+    source_fidelity_mode = optional_string_arg(arguments, "source_fidelity_mode")
+    if (
+        source_fidelity_mode is not None
+        and source_fidelity_mode not in archive_services.SOURCE_FIDELITY_MODES
+    ):
+        raise ToolError()
+    source_fidelity_audience = optional_string_arg(arguments, "source_fidelity_audience")
+    if (
+        source_fidelity_audience is not None
+        and source_fidelity_audience not in archive_services.ZET_QUALITY_AUDIENCES
+    ):
+        raise ToolError()
+    raw_body = arguments.get("body")
+    if raw_body in (None, "") and source_fidelity_mode == "verbatim":
+        body = ""
+    elif not isinstance(raw_body, str) or not raw_body:
+        raise ToolError()
+    else:
+        body = raw_body
+
+    raw_dry_run = arguments.get("dry_run", True)
+    raw_approved = arguments.get("approved", False)
+    if not isinstance(raw_dry_run, bool) or not isinstance(raw_approved, bool):
+        raise ToolError()
+    dry_run = raw_dry_run
+    approved = raw_approved
+    if dry_run == approved:
+        raise ToolError()
+
+    expected_body_sha256 = optional_string_arg(arguments, "expected_body_sha256")
+    draft_approved_by = optional_string_arg(arguments, "draft_approved_by")
+    expected_source_fidelity_plan_sha256 = optional_string_arg(
+        arguments,
+        "expected_source_fidelity_plan_sha256",
+    )
+    if approved and not all(
+        isinstance(value, str) and value.strip()
+        for value in (
+            draft_approved_by,
+            expected_body_sha256,
+            expected_source_fidelity_plan_sha256,
+        )
+    ):
+        raise ToolError()
+
     archive_id = optional_string_arg(arguments, "archive_id")
     kind = optional_string_arg(arguments, "kind") or "fleeting_capture"
     facets = arguments.get("facets") if isinstance(arguments.get("facets"), dict) else {}
@@ -5729,7 +5855,7 @@ def tool_create_draft_zettel(arguments: dict[str, Any]) -> dict[str, Any]:
         visibility=visibility,
         created_by=created_by,
         source=source,
-        dry_run=bool(arguments.get("dry_run", False)),
+        dry_run=dry_run,
         expected_archive_id=optional_string_arg(arguments, "expected_archive_id"),
         expected_type=optional_string_arg(arguments, "expected_type"),
         profile_id=profile_context.get("profile_id") if isinstance(profile_context.get("profile_id"), str) else None,
@@ -5747,8 +5873,8 @@ def tool_create_draft_zettel(arguments: dict[str, Any]) -> dict[str, Any]:
             if isinstance(profile_context.get("profile_authority_mode"), str)
             else None
         ),
-        creation_mode=optional_string_arg(arguments, "creation_mode"),
-        assisted_by=optional_string_list_arg(arguments, "assisted_by"),
+        creation_mode=creation_mode,
+        assisted_by=["ai_runtime:mcp"],
         supervised_by=optional_string_list_arg(arguments, "supervised_by"),
         derived_from=optional_string_list_arg(arguments, "derived_from"),
         source_refs=source_refs,
@@ -5757,14 +5883,25 @@ def tool_create_draft_zettel(arguments: dict[str, Any]) -> dict[str, Any]:
         local_ai_sessions=local_ai_sessions,
         draft_id=optional_string_arg(arguments, "draft_id"),
         created_at=optional_string_arg(arguments, "created_at"),
-        expected_body_sha256=optional_string_arg(arguments, "expected_body_sha256"),
-        draft_approved_by=optional_string_arg(arguments, "draft_approved_by"),
+        expected_body_sha256=expected_body_sha256,
+        draft_approved_by=draft_approved_by,
+        approved=approved,
+        source_fidelity_mode=source_fidelity_mode,
+        source_fidelity_audience=source_fidelity_audience,
+        fidelity_source_object_id=optional_string_arg(
+            arguments,
+            "fidelity_source_object_id",
+        ),
+        expected_source_fidelity_plan_sha256=(
+            expected_source_fidelity_plan_sha256
+        ),
     )
 
     if result.get("dry_run"):
         state = "passed" if result.get("ok") else "blocked"
         return tool_success_result(f"create_draft_zettel dry-run: {state}.", result)
-    return tool_success_result(f"Created draft zettel {result['zettel_id']}.", result)
+    state = "recorded" if result.get("ok", True) else "blocked"
+    return tool_success_result(f"create_draft_zettel: {state}.", result)
 
 
 def tool_list_views(arguments: dict[str, Any]) -> dict[str, Any]:

@@ -64,7 +64,7 @@ CLI_CANONICAL_SHA256 = (
 )
 MCP_COUNT = 121
 MCP_CANONICAL_SHA256 = (
-    "b031dd940504250a5c451d55ba072367c694898bb1ebef2098fa904ed58d5c8f"
+    "622e90ed08dd189d2d79a49cc352051aecd0063d1b6913ac5f1f22eec4850f96"
 )
 DB_SOURCE_COUNT = 3
 DB_SOURCE_CANONICAL_SHA256 = (
@@ -72,7 +72,7 @@ DB_SOURCE_CANONICAL_SHA256 = (
 )
 RESOURCE_ADDITIONS = frozenset(
     {
-        "release-notes/v0.3.312.md",
+        "release-notes/v0.3.313.md",
         "schemas/artifact-lifecycle-inventory.schema.json",
         "schemas/authoring-conventions.schema.json",
         "schemas/draft-discard-receipt.schema.json",
@@ -104,6 +104,7 @@ RESOURCE_ADDITIONS = frozenset(
         "schemas/source-reference-coverage-audit-result-v0.1.schema.json",
         "schemas/source-intake-batch-receipt.schema.json",
         "schemas/source-intake-batch-request.schema.json",
+        "schemas/source-fidelity-draft-receipt.schema.json",
         "schemas/zettel-objet-link-receipt.schema.json",
         "schemas/zettel-objet-link-revert-receipt.schema.json",
     }
@@ -1189,7 +1190,7 @@ class PrivateObjetMetadataIndexPrivacyGateTests(unittest.TestCase):
             manifest["schema"],
             "wom-kit/package-resource-manifest/v0.1",
         )
-        self.assertEqual(manifest["version"], "0.3.312")
+        self.assertEqual(manifest["version"], "0.3.313")
         self.assertEqual(manifest["file_count"], len(manifest["files"]))
         current_paths = {row["packaged"] for row in manifest["files"]}
         self.assertEqual(

@@ -125,13 +125,12 @@ Do not preload every reference.
   use conservative defaults and ask before inventing a format. Keep commands,
   hashes, receipt counts, and tool traces out of ordinary zet prose. Re-read
   after edits, resolve contradictions, and cite only openable archive files.
-- Create an AI-assisted draft only through `archive create-draft` dry-run and
-  its exact reviewed replay. Never write Markdown directly into `inbox/`.
-  Supply an explicit reviewed abstract and at least one stable facet; the AI
-  route blocks before writing when either is absent. If the same normalized
-  title is already present in `inbox/`, revise that unminted draft in place,
-  including title changes, instead of creating another file. Use
-  `discard-draft` and `discard-draft-restore` instead of `rm`.
+- Never downgrade AI provenance; use `archive create-draft` dry-run and exact
+  reviewed replay. Require an abstract, facet, fidelity mode, audience, and
+  manifested objet. Personal `private_self` verbatim preserves personal data;
+  credential secrets block and sharing uses a reviewed `sanitized_derivative`.
+  Never write directly, duplicate a same-title draft, or use `rm`; revise in
+  place or use receipt-backed discard.
 - Add a manifested objet to a zet's structured `assets` only through
   `zettel-objet-link`. Require a complete SHA-256; truncated hashes block mint.
 - Before a write, show the human what will change, where it will change, and
@@ -151,6 +150,8 @@ Do not preload every reference.
   binding `feedback-body-sha256:<digest>` in the lifecycle record. Verify the
   body and metadata binding with `operator-feedback-body-check --dry-run`.
   Metadata alone does not prove that the required feedback sections exist.
+  When the human requests feedback about repeatable information loss, route it
+  here; do not dismiss it merely because the AI made the mistake.
 - Never expose secret values, credential-store responses, private local paths,
   or source-body excerpts in ordinary output.
 - Never call a provider, run transport, mint, revise, retire, import, trust, or
