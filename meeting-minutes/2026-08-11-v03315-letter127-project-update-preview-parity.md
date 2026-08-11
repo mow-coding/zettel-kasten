@@ -156,3 +156,18 @@ A deterministic regression changes a tracked runtime file from the progress
 callback and verifies all of those properties without exposing the path or
 bytes. The complete Letter 127 integration group then passed 51/51, and the
 Letter 128 batch/recovery integration group passed 115/115 on the same tree.
+
+## Cross-platform CI correction
+
+The first PR CI run showed that five tests which perform the real Windows
+preservation move were also being executed on Ubuntu. The product correctly
+kept that approval path Windows-only, so those tests received recovery states
+instead of the Windows-only success states they asserted. This was a test
+selection error, not a request to emulate Windows file-handle behavior on
+POSIX.
+
+Those five tests now use an explicit `os.name == "nt"` requirement. Planning,
+opaque projection, unsupported-platform behavior, bounds, and no-move cases
+remain cross-platform. The full Windows module still executes the real move,
+receipt, lock, zero-byte, and interruption cases; Ubuntu records the five
+Windows-only cases as intentional skips.
