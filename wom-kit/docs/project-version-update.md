@@ -76,6 +76,46 @@ to the actual worktree, current tree, and target tree. Those mappings affect the
 digest but are never returned. Exact raw current-tree membership is checked
 first, so canonical equality cannot turn an ignored alias into a tracked file.
 
+When a result contains multiple references, classify the complete unchanged
+set with one planner pass. Do not pass `--entry-ref`; `inspect-all` derives the
+exact complete set from the target and materialization digest:
+
+```powershell
+archive project-version-update-collision <project-or-archive-root> `
+  --target vX.Y.Z `
+  --expected-plan-sha256 sha256:<64-lowercase-hex> `
+  --action inspect-all `
+  --dry-run `
+  --format json
+```
+
+The CLI returns only counts, fixed entry/runtime kinds, and an eligible
+remediation route. It does not print the derived local references, filenames,
+relative paths, or absolute paths. If and only if the complete set is verified
+as ignored derived Python bytecode plus its cache directories, the output gives
+these three separate manual steps:
+
+```powershell
+archive project-bytecode-repair-plan <project-or-archive-root> `
+  --target vX.Y.Z `
+  --expected-materialization-plan-sha256 sha256:<64-lowercase-hex> `
+  --dry-run --format json
+
+archive project-bytecode-repair <project-or-archive-root> `
+  --target vX.Y.Z `
+  --expected-materialization-plan-sha256 sha256:<64-lowercase-hex> `
+  --expected-plan-sha256 <repair-plan-sha256> `
+  --approve --reviewed-by <actor> `
+  --affirm-external-writers-quiescent --format json
+
+archive project-version-update <project-or-archive-root> `
+  --target vX.Y.Z --dry-run --format json
+```
+
+Review the repair plan before the second command. The third command is always a
+fresh preview; neither collision inspection nor repair automatically retries an
+old updater approval.
+
 If a result reports one of these references, inspect it without rerunning the
 updater:
 

@@ -307,10 +307,15 @@ PRINCIPAL_RECEIPTS_DIR = "receipts/principals"
 PROJECT_BYTECODE_REPAIR_RECEIPT_SCHEMA = (
     "wom-kit/project-bytecode-repair-receipt/v0.1"
 )
+PROJECT_BYTECODE_REPAIR_INTENT_SCHEMA = (
+    "wom-kit/project-bytecode-repair-intent/v0.1"
+)
 PROJECT_BYTECODE_REPAIR_RECEIPTS_DIR = (
     ".zettel-kasten/receipts/project-bytecode-repair"
 )
 PROJECT_BYTECODE_REPAIR_MAX_FILES = 10000
+PROJECT_BYTECODE_REPAIR_MAX_FILE_BYTES = 64 * 1024 * 1024
+PROJECT_BYTECODE_REPAIR_MAX_TOTAL_BYTES = 512 * 1024 * 1024
 _SENSITIVE_QUERY_KEYS = frozenset(
     {
         "access_token",
@@ -9879,7 +9884,7 @@ def relation_candidate_decide(
 
 def _project_mirror_for_repair(
     inspection_root: Path,
-) -> tuple[Path | None, str | None]:
+) -> tuple[Path | None, Path | None, str | None]:
     for _label, search_root in (
         archive_services.wom_kit_project_source_mirror_search_roots(
             inspection_root
@@ -9894,8 +9899,8 @@ def _project_mirror_for_repair(
                 mirror,
             )
         ):
-            return mirror, None
-    return None, "project_source_mirror_unavailable"
+            return search_root.resolve(), mirror.resolve(), None
+    return None, None, "project_source_mirror_unavailable"
 
 
 class _PrincipalLock:
@@ -10554,6 +10559,9 @@ def _project_bytecode_plan_core(
     inspection_root: Path | str,
     *,
     max_files: int,
+    target: str | None = None,
+    expected_materialization_plan_sha256: str | None = None,
+    owned_lock_identity: tuple[int, int] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     root = Path(inspection_root).expanduser().resolve()
     blockers: list[str] = []
@@ -10565,11 +10573,27 @@ def _project_bytecode_plan_core(
         file_limit = 0
     if not 1 <= file_limit <= PROJECT_BYTECODE_REPAIR_MAX_FILES:
         blockers.append("project_bytecode_max_files_invalid")
+    target_tag = str(target or "").strip()
+    collision_plan_sha256 = str(
+        expected_materialization_plan_sha256 or ""
+    ).strip()
+    collision_binding_requested = bool(
+        target_tag or collision_plan_sha256
+    )
+    if collision_binding_requested and not (
+        archive_services.WOM_KIT_PROJECT_UPDATE_TAG_RE.fullmatch(target_tag)
+        and archive_services.WOM_KIT_PROJECT_UPDATE_COLLISION_PLAN_RE.fullmatch(
+            collision_plan_sha256
+        )
+    ):
+        blockers.append("project_bytecode_collision_binding_invalid")
     mirror: Path | None = None
     if not blockers:
-        mirror, mirror_error = _project_mirror_for_repair(root)
+        project_root, mirror, mirror_error = _project_mirror_for_repair(root)
         if mirror_error:
             blockers.append(mirror_error)
+        elif project_root is not None:
+            root = project_root
     source_root = (
         mirror / "wom-kit" / "src" / "wom_kit"
         if mirror is not None
@@ -10586,6 +10610,7 @@ def _project_bytecode_plan_core(
         blockers.append("project_runtime_source_root_unavailable")
 
     candidates: list[dict[str, Any]] = []
+    candidate_total_bytes = 0
     pycache_dirs: list[Path] = []
     reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
     if not blockers and source_root is not None and mirror is not None:
@@ -10637,6 +10662,11 @@ def _project_bytecode_plan_core(
                             "project_bytecode_path_unsafe"
                         )
                         continue
+                    if path_stat.st_nlink != 1:
+                        blockers.append(
+                            "project_bytecode_hardlink_refused"
+                        )
+                        continue
                     relative = path.relative_to(mirror).as_posix()
                     tracked, _output = (
                         archive_services.wom_kit_project_update_git(
@@ -10654,13 +10684,87 @@ def _project_bytecode_plan_core(
                             "project_bytecode_tracked_file_refused"
                         )
                         continue
-                    value = path.read_bytes()
+                    ignored, _output = (
+                        archive_services.wom_kit_project_update_git(
+                            mirror,
+                            [
+                                "check-ignore",
+                                "--quiet",
+                                "--",
+                                relative,
+                            ],
+                        )
+                    )
+                    if not ignored:
+                        blockers.append(
+                            "project_bytecode_not_ignored_refused"
+                        )
+                        continue
+                    value, read_reason = (
+                        archive_services._bounded_stable_regular_file_read(
+                            path,
+                            max_bytes=PROJECT_BYTECODE_REPAIR_MAX_FILE_BYTES,
+                        )
+                    )
+                    if value is None:
+                        blockers.append(
+                            "project_bytecode_file_too_large"
+                            if read_reason == "too_large"
+                            else "project_bytecode_changed_during_plan"
+                            if read_reason == "changed"
+                            else "project_bytecode_path_unsafe"
+                        )
+                        continue
+                    try:
+                        final_stat = os.lstat(path)
+                    except OSError:
+                        blockers.append(
+                            "project_bytecode_changed_during_plan"
+                        )
+                        continue
+                    identity = {
+                        "device": int(final_stat.st_dev),
+                        "inode": int(final_stat.st_ino),
+                        "size": int(final_stat.st_size),
+                        "mtime_ns": int(
+                            getattr(
+                                final_stat,
+                                "st_mtime_ns",
+                                int(final_stat.st_mtime * 1_000_000_000),
+                            )
+                        ),
+                        "link_count": int(final_stat.st_nlink),
+                    }
+                    if (
+                        identity["link_count"] != 1
+                        or identity["size"] != len(value)
+                        or identity["device"] != int(path_stat.st_dev)
+                        or (
+                            int(path_stat.st_ino)
+                            and identity["inode"]
+                            and identity["inode"] != int(path_stat.st_ino)
+                        )
+                    ):
+                        blockers.append(
+                            "project_bytecode_changed_during_plan"
+                        )
+                        continue
+                    candidate_total_bytes += len(value)
+                    if (
+                        candidate_total_bytes
+                        > PROJECT_BYTECODE_REPAIR_MAX_TOTAL_BYTES
+                    ):
+                        blockers.append(
+                            "project_bytecode_total_bytes_exceeded"
+                        )
+                        break
                     candidates.append(
                         {
                             "path": path,
                             "relative": relative,
                             "bytes": len(value),
                             "sha256": _sha256_bytes(value),
+                            "identity": identity,
                         }
                     )
                     if len(candidates) > file_limit:
@@ -10668,22 +10772,216 @@ def _project_bytecode_plan_core(
                             "project_bytecode_file_bound_exceeded"
                         )
                         break
-                if "project_bytecode_file_bound_exceeded" in blockers:
+                if any(
+                    blocker
+                    in {
+                        "project_bytecode_file_bound_exceeded",
+                        "project_bytecode_total_bytes_exceeded",
+                    }
+                    for blocker in blockers
+                ):
                     break
         except (OSError, RuntimeError, ValueError):
             blockers.append("project_bytecode_inventory_failed")
 
+    pycache_directory_bindings: list[dict[str, Any]] = []
+    candidate_relative_paths = {
+        str(item["relative"]) for item in candidates
+    }
+    bounded_inventory_entries = set(candidate_relative_paths)
+    if not blockers and mirror is not None:
+        for directory in sorted(set(pycache_dirs)):
+            directory_relative = directory.relative_to(mirror).as_posix()
+            try:
+                directory_stat = os.lstat(directory)
+                children: list[tuple[str, int]] = []
+                bounded_inventory_entries.add(directory_relative)
+                if len(bounded_inventory_entries) > file_limit:
+                    blockers.append(
+                        "project_bytecode_inventory_bound_exceeded"
+                    )
+                with os.scandir(directory) as entries:
+                    for child in entries:
+                        children.append(
+                            (
+                                child.name,
+                                int(
+                                    child.stat(
+                                        follow_symlinks=False
+                                    ).st_mode
+                                ),
+                            )
+                        )
+                        bounded_inventory_entries.add(
+                            f"{directory_relative}/{child.name}"
+                        )
+                        if len(bounded_inventory_entries) > file_limit:
+                            blockers.append(
+                                "project_bytecode_inventory_bound_exceeded"
+                            )
+                            break
+                children.sort()
+            except (OSError, RuntimeError, ValueError):
+                blockers.append("project_bytecode_inventory_failed")
+                break
+            if blockers:
+                break
+            if any(
+                f"{directory_relative}/{child_name}"
+                not in candidate_relative_paths
+                for child_name, _child_mode in children
+            ):
+                blockers.append(
+                    "project_bytecode_cache_directory_contains_unsupported_entry"
+                )
+                break
+            if (
+                not stat.S_ISDIR(directory_stat.st_mode)
+                or stat.S_ISLNK(directory_stat.st_mode)
+                or (
+                    reparse_flag
+                    and getattr(
+                        directory_stat,
+                        "st_file_attributes",
+                        0,
+                    )
+                    & reparse_flag
+                )
+            ):
+                blockers.append("project_bytecode_path_unsafe")
+                break
+            tracked, _output = archive_services.wom_kit_project_update_git(
+                mirror,
+                [
+                    "ls-files",
+                    "--error-unmatch",
+                    "--",
+                    directory_relative,
+                ],
+            )
+            ignored, _output = archive_services.wom_kit_project_update_git(
+                mirror,
+                [
+                    "check-ignore",
+                    "--quiet",
+                    "--",
+                    directory_relative,
+                ],
+            )
+            if tracked:
+                blockers.append(
+                    "project_bytecode_tracked_directory_refused"
+                )
+                break
+            if not ignored:
+                blockers.append(
+                    "project_bytecode_directory_not_ignored_refused"
+                )
+                break
+            pycache_directory_bindings.append(
+                {
+                    "relative": directory_relative,
+                    "device": int(directory_stat.st_dev),
+                    "inode": int(directory_stat.st_ino),
+                    "mtime_ns": int(
+                        getattr(
+                            directory_stat,
+                            "st_mtime_ns",
+                            int(
+                                directory_stat.st_mtime
+                                * 1_000_000_000
+                            ),
+                        )
+                    ),
+                    "children": children,
+                }
+            )
+
+    collision_binding_verified = False
+    collision_entry_count: int | None = None
+    collision_private: dict[str, Any] | None = None
+    if not blockers and collision_binding_requested:
+        collision_result, collision_private_value = (
+            archive_services
+            ._wom_kit_project_version_update_collision_inspect_batch_core(
+                root,
+                target=target_tag,
+                expected_plan_sha256=collision_plan_sha256,
+                owned_lock_identity=owned_lock_identity,
+            )
+        )
+        collision_private = collision_private_value
+        collision_entry_count = int(
+            collision_result.get("summary", {}).get(
+                "inspected_entry_count",
+                0,
+            )
+        )
+        exact_files = set(
+            collision_private.get("derived_bytecode_file_paths", [])
+        )
+        exact_directories = set(
+            collision_private.get("bytecode_cache_directory_paths", [])
+        )
+        planned_files = {
+            str(item["relative"]) for item in candidates
+        }
+        planned_directories = {
+            str(item["relative"])
+            for item in pycache_directory_bindings
+        }
+        collision_binding_verified = bool(
+            collision_result.get("ok") is True
+            and collision_result.get(
+                "project_bytecode_repair_route_eligible"
+            )
+            is True
+            and collision_private.get("exact_collision_set_covered") is True
+            and exact_files == planned_files
+            and exact_directories == planned_directories
+            and collision_private.get("mirror_path") == mirror
+        )
+        if not collision_binding_verified:
+            blockers.append("project_bytecode_collision_set_mismatch")
+
     binding = {
-        "schema": "wom-kit/project-bytecode-repair-plan-binding/v0.1",
+        "schema": "wom-kit/project-bytecode-repair-plan-binding/v0.2",
         "mirror_head": None,
         "files": [
             {
                 "relative": item["relative"],
                 "bytes": item["bytes"],
                 "sha256": item["sha256"],
+                "identity": item["identity"],
             }
             for item in candidates
         ],
+        "pycache_directories": pycache_directory_bindings,
+        "collision_authority": (
+            {
+                "target": target_tag,
+                "materialization_plan_sha256": collision_plan_sha256,
+                "exact_set_verified": collision_binding_verified,
+                "collision_entry_count": collision_entry_count,
+                "target_commit": (
+                    collision_private.get("target_commit")
+                    if isinstance(collision_private, dict)
+                    else None
+                ),
+                "head_before": (
+                    collision_private.get("head_before")
+                    if isinstance(collision_private, dict)
+                    else None
+                ),
+                "target_ref_snapshot": (
+                    collision_private.get("target_ref_snapshot")
+                    if isinstance(collision_private, dict)
+                    else None
+                ),
+            }
+            if collision_binding_requested
+            else None
+        ),
     }
     if mirror is not None:
         head_ok, head_value = archive_services.wom_kit_project_update_git(
@@ -10694,13 +10992,34 @@ def _project_bytecode_plan_core(
             binding["mirror_head"] = head_value.lower()
         else:
             blockers.append("project_mirror_head_unavailable")
+    if (
+        collision_binding_requested
+        and collision_binding_verified
+        and mirror is not None
+        and isinstance(collision_private, dict)
+    ):
+        current_target_ref_snapshot = (
+            archive_services.wom_kit_project_update_target_ref_snapshot(
+                mirror,
+                target_tag,
+            )
+        )
+        if (
+            binding["mirror_head"]
+            != collision_private.get("head_before")
+            or current_target_ref_snapshot
+            != collision_private.get("target_ref_snapshot")
+        ):
+            collision_binding_verified = False
+            binding["collision_authority"]["exact_set_verified"] = False
+            blockers.append("project_bytecode_collision_authority_drifted")
     plan_sha256 = _sha256_bytes(_canonical_json_bytes(binding))
     aggregate = archive_services.unique_preserve_order(blockers)
     result = {
         "ok": not aggregate,
         "state": (
             "ready"
-            if not aggregate and candidates
+            if not aggregate and (candidates or pycache_dirs)
             else "clean"
             if not aggregate
             else "blocked"
@@ -10712,26 +11031,44 @@ def _project_bytecode_plan_core(
             "bytecode_total_bytes": sum(
                 int(item["bytes"]) for item in candidates
             ),
+            "max_file_bytes": PROJECT_BYTECODE_REPAIR_MAX_FILE_BYTES,
+            "max_total_bytes": PROJECT_BYTECODE_REPAIR_MAX_TOTAL_BYTES,
             "pycache_directory_count": len(pycache_dirs),
+            "bounded_inventory_entry_count": len(
+                bounded_inventory_entries
+            ),
+            "max_inventory_entries": file_limit,
             "plan_sha256": plan_sha256 if not aggregate else None,
             "source_files_modified": False,
             "derived_bytecode_only": True,
+            "collision_binding_requested": collision_binding_requested,
+            "collision_binding_verified": collision_binding_verified,
+            "collision_entry_count": collision_entry_count,
+            "collision_target": (
+                target_tag if collision_binding_requested else None
+            ),
+            "materialization_plan_sha256": (
+                collision_plan_sha256
+                if collision_binding_requested
+                else None
+            ),
         },
         "blockers": aggregate,
         "warnings": (
             ["No runtime bytecode cleanup is needed."]
-            if not aggregate and not candidates
+            if not aggregate and not candidates and not pycache_dirs
             else []
         ),
         "would_change": (
-            ["project runtime bytecode files (count only)"]
-            if not aggregate and candidates
+            ["project runtime bytecode files and empty cache directories (counts only)"]
+            if not aggregate and (candidates or pycache_dirs)
             else []
         ),
         "privacy_guards": {
             "project_absolute_path_echoed": False,
             "bytecode_filenames_echoed": False,
             "source_bytes_read": False,
+            "derived_bytecode_bytes_read": bool(candidates),
             "source_files_written": False,
             "network_checked": False,
             "writes": False,
@@ -10743,8 +11080,12 @@ def _project_bytecode_plan_core(
         "source_root": source_root,
         "candidates": candidates,
         "pycache_dirs": pycache_dirs,
+        "pycache_directory_bindings": pycache_directory_bindings,
         "binding": binding,
         "plan_sha256": plan_sha256,
+        "collision_binding_requested": collision_binding_requested,
+        "collision_binding_verified": collision_binding_verified,
+        "collision_private": collision_private,
     }
     return result, private
 
@@ -10753,181 +11094,452 @@ def project_bytecode_repair_plan(
     inspection_root: Path | str,
     *,
     max_files: int = PROJECT_BYTECODE_REPAIR_MAX_FILES,
+    target: str | None = None,
+    expected_materialization_plan_sha256: str | None = None,
 ) -> dict[str, Any]:
     result, _private = _project_bytecode_plan_core(
         inspection_root,
         max_files=max_files,
+        target=target,
+        expected_materialization_plan_sha256=(
+            expected_materialization_plan_sha256
+        ),
     )
     return result
 
 
-def project_bytecode_repair(
-    inspection_root: Path | str,
+def _project_bytecode_partial_result(
+    fresh: dict[str, Any],
+    *,
+    state: str,
+    blocker: str,
+    removed_count: int,
+    removed_dir_count: int,
+    intent_relative: str | None,
+    writes_may_have_occurred: bool = False,
+) -> dict[str, Any]:
+    files_written = [intent_relative] if intent_relative else []
+    return {
+        **fresh,
+        "ok": False,
+        "state": state,
+        "dry_run": False,
+        "approved": True,
+        "lifecycle_action": "project_bytecode_repair",
+        "summary": {
+            **fresh["summary"],
+            "removed_count": removed_count,
+            "removed_empty_pycache_directory_count": removed_dir_count,
+            "receipt_path": None,
+            "recovery": "run_fresh_plan_and_reconcile",
+        },
+        "blockers": [blocker],
+        "warnings": [],
+        "would_change": [],
+        "files_written": files_written,
+        "writes_may_have_occurred": writes_may_have_occurred,
+        "next_safe_actions": [
+            "Run a fresh project-version-update --dry-run, then inspect-all and create a new exact-set-bound bytecode repair plan for any remaining collisions.",
+            "Reconcile the retained private intent; never reuse either the repair approval or the project-update approval automatically.",
+        ],
+        "privacy_guards": {
+            **fresh["privacy_guards"],
+            "writes": bool(
+                intent_relative
+                or removed_count
+                or removed_dir_count
+                or writes_may_have_occurred
+            ),
+        },
+    }
+
+
+def _project_bytecode_directory_is_exact_empty(
+    mirror: Path,
+    binding: dict[str, Any],
+) -> tuple[Path | None, bool]:
+    relative = binding.get("relative")
+    if not isinstance(relative, str) or not relative:
+        return None, False
+    directory = mirror.joinpath(*relative.split("/"))
+    try:
+        current = os.lstat(directory)
+        with os.scandir(directory) as entries:
+            empty = next(entries, None) is None
+    except OSError:
+        return directory, False
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    safe = bool(
+        stat.S_ISDIR(current.st_mode)
+        and not stat.S_ISLNK(current.st_mode)
+        and not (
+            reparse_flag
+            and getattr(current, "st_file_attributes", 0) & reparse_flag
+        )
+        and int(current.st_dev) == int(binding.get("device", -1))
+        and (
+            not int(current.st_ino)
+            or not int(binding.get("inode", 0))
+            or int(current.st_ino) == int(binding["inode"])
+        )
+        and empty
+    )
+    return directory, safe
+
+
+def _project_bytecode_ensure_receipt_root(
+    root: Path,
+) -> tuple[Path | None, list[str]]:
+    metadata_root = root / ".zettel-kasten"
+    receipts_root = metadata_root / "receipts"
+    repair_root = receipts_root / "project-bytecode-repair"
+    if (
+        archive_services.wom_kit_real_path_kind(root, metadata_root)
+        != "directory"
+    ):
+        return None, []
+    for candidate in (receipts_root, repair_root):
+        kind = archive_services.wom_kit_real_path_kind(root, candidate)
+        if kind not in {"missing", "directory"}:
+            return None, []
+        if not archive_services.wom_kit_existing_path_components_are_real(
+            root,
+            candidate,
+        ):
+            return None, []
+
+    created: list[str] = []
+    for candidate in (receipts_root, repair_root):
+        kind = archive_services.wom_kit_real_path_kind(root, candidate)
+        if kind == "missing":
+            try:
+                candidate.mkdir(mode=0o700)
+            except OSError:
+                return None, created
+            created.append(candidate.relative_to(root).as_posix())
+        if (
+            archive_services.wom_kit_real_path_kind(root, candidate)
+            != "directory"
+            or not archive_services.wom_kit_existing_path_components_are_real(
+                root,
+                candidate,
+            )
+        ):
+            return None, created
+    return repair_root, created
+
+
+def _project_bytecode_repair_under_lock(
+    root: Path,
     *,
     max_files: int,
-    expected_plan_sha256: str | None,
-    reviewed_by: str | None,
+    expected: str,
+    reviewer: str,
+    target: str | None,
+    expected_materialization_plan_sha256: str | None,
+    owned_lock_identity: tuple[int, int],
 ) -> dict[str, Any]:
-    result, private = _project_bytecode_plan_core(
-        inspection_root,
+    fresh, fresh_private = _project_bytecode_plan_core(
+        root,
         max_files=max_files,
+        target=target,
+        expected_materialization_plan_sha256=(
+            expected_materialization_plan_sha256
+        ),
+        owned_lock_identity=owned_lock_identity,
     )
-    blockers = list(result["blockers"])
-    expected = str(expected_plan_sha256 or "").strip().lower()
-    reviewer = archive_services.safe_project_intake_actor_id(reviewed_by)
-    if not re.fullmatch(r"[0-9a-f]{64}", expected):
-        blockers.append("project_bytecode_expected_plan_sha256_invalid")
-    elif expected != private["plan_sha256"]:
-        blockers.append("project_bytecode_plan_changed")
-    if reviewer is None:
-        blockers.append("project_bytecode_reviewer_invalid")
-    if not private["candidates"]:
-        blockers.append("project_bytecode_nothing_to_repair")
-    if blockers:
+    if not fresh["ok"] or fresh_private["plan_sha256"] != expected:
         return {
-            **result,
+            **fresh,
             "ok": False,
             "state": "blocked",
             "dry_run": False,
             "approved": False,
             "lifecycle_action": "project_bytecode_repair",
-            "blockers": archive_services.unique_preserve_order(blockers),
+            "blockers": archive_services.unique_preserve_order(
+                [*fresh["blockers"], "project_bytecode_plan_changed"]
+            ),
             "would_change": [],
             "files_written": [],
         }
 
-    root: Path = private["root"]
-    lock_root = root / ".zettel-kasten" / "locks"
-    lock_root.mkdir(parents=True, exist_ok=True)
-    # The generic mutation lock needs archive-internal path semantics, while
-    # project repair may run above an archive. Use an adjacent project lock.
-    lock_path = lock_root / "project-bytecode-repair.lock"
-    with lock_path.open("a+b") as lock_handle:
-        if lock_handle.seek(0, os.SEEK_END) == 0:
-            lock_handle.write(b"\0")
-            lock_handle.flush()
-            os.fsync(lock_handle.fileno())
-        lock_handle.seek(0)
-        if os.name == "nt":
-            import msvcrt
+    mirror = fresh_private.get("mirror")
+    if not isinstance(mirror, Path):
+        return {
+            **fresh,
+            "ok": False,
+            "state": "blocked",
+            "dry_run": False,
+            "approved": False,
+            "lifecycle_action": "project_bytecode_repair",
+            "blockers": ["project_source_mirror_unavailable"],
+            "would_change": [],
+            "files_written": [],
+        }
 
-            msvcrt.locking(lock_handle.fileno(), msvcrt.LK_LOCK, 1)
-        else:
-            import fcntl
+    receipt_relative = f"{PROJECT_BYTECODE_REPAIR_RECEIPTS_DIR}/{expected}.json"
+    intent_relative = (
+        f"{PROJECT_BYTECODE_REPAIR_RECEIPTS_DIR}/.{expected}.intent.json"
+    )
+    receipt_root, receipt_directories_created = (
+        _project_bytecode_ensure_receipt_root(root)
+    )
+    if receipt_root is None:
+        return {
+            **fresh,
+            "ok": False,
+            "state": (
+                "recovery_required"
+                if receipt_directories_created
+                else "blocked"
+            ),
+            "dry_run": False,
+            "approved": False,
+            "lifecycle_action": "project_bytecode_repair",
+            "blockers": ["project_bytecode_receipt_root_unsafe"],
+            "would_change": [],
+            "files_written": [],
+            "paths_created": receipt_directories_created,
+            "writes_may_have_occurred": False,
+            "privacy_guards": {
+                **fresh["privacy_guards"],
+                "writes": bool(receipt_directories_created),
+            },
+        }
+    receipt_path = receipt_root / f"{expected}.json"
+    intent_path = receipt_root / f".{expected}.intent.json"
+    if archive_services.wom_kit_real_path_kind(root, receipt_path) != "missing":
+        return {
+            **fresh,
+            "ok": False,
+            "state": "recovery_required",
+            "dry_run": False,
+            "approved": False,
+            "lifecycle_action": "project_bytecode_repair",
+            "blockers": ["project_bytecode_completion_receipt_already_exists"],
+            "would_change": [],
+            "files_written": [],
+        }
 
-            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+    intent_doc = {
+        "schema": PROJECT_BYTECODE_REPAIR_INTENT_SCHEMA,
+        "plan_sha256": expected,
+        "mirror_head": fresh_private["binding"]["mirror_head"],
+        "reviewed_by": reviewer,
+        "file_count": fresh["summary"]["bytecode_file_count"],
+        "total_bytes": fresh["summary"]["bytecode_total_bytes"],
+        "pycache_directory_count": fresh["summary"][
+            "pycache_directory_count"
+        ],
+        "private_binding": fresh_private["binding"],
+    }
+    intent_bytes = _canonical_json_bytes(intent_doc)
+    intent_created = False
+    intent_kind = archive_services.wom_kit_real_path_kind(root, intent_path)
+    if intent_kind == "missing":
         try:
-            fresh, fresh_private = _project_bytecode_plan_core(
+            archive_services._write_bytes_create_if_absent(
+                intent_path,
+                intent_bytes,
+            )
+        except Exception:
+            observed, _reason = (
+                archive_services._bounded_stable_regular_file_read(
+                    intent_path,
+                    max_bytes=len(intent_bytes),
+                )
+            )
+            if observed != intent_bytes:
+                return _project_bytecode_partial_result(
+                    fresh,
+                    state="recovery_required",
+                    blocker="project_bytecode_intent_evidence_unverified",
+                    removed_count=0,
+                    removed_dir_count=0,
+                    intent_relative=None,
+                    writes_may_have_occurred=True,
+                )
+        intent_created = True
+    elif intent_kind == "file":
+        observed, _reason = archive_services._bounded_stable_regular_file_read(
+            intent_path,
+            max_bytes=len(intent_bytes),
+        )
+        if observed != intent_bytes:
+            return _project_bytecode_partial_result(
+                fresh,
+                state="recovery_required",
+                blocker="project_bytecode_intent_evidence_conflict",
+                removed_count=0,
+                removed_dir_count=0,
+                intent_relative=None,
+            )
+    else:
+        return _project_bytecode_partial_result(
+            fresh,
+            state="recovery_required",
+            blocker="project_bytecode_intent_evidence_unsafe",
+            removed_count=0,
+            removed_dir_count=0,
+            intent_relative=None,
+        )
+
+    intent_written = intent_relative if intent_created else None
+    removed_count = 0
+    removed_dir_count = 0
+    for item in fresh_private["candidates"]:
+        try:
+            identity = item.get("identity")
+            if not isinstance(identity, dict):
+                raise OSError("project_bytecode_identity_missing")
+            archive_services.delete_activity_group_evidence_exact(
                 root,
-                max_files=max_files,
+                item["path"],
+                expected_sha256=f"sha256:{item['sha256']}",
+                max_bytes=PROJECT_BYTECODE_REPAIR_MAX_FILE_BYTES,
+                expected_identity=(
+                    int(identity["device"]),
+                    int(identity["inode"]),
+                    int(identity["size"]),
+                ),
             )
-            if not fresh["ok"] or fresh_private["plan_sha256"] != expected:
-                return {
-                    **fresh,
-                    "ok": False,
-                    "state": "blocked",
-                    "dry_run": False,
-                    "approved": False,
-                    "lifecycle_action": "project_bytecode_repair",
-                    "blockers": archive_services.unique_preserve_order(
-                        [*fresh["blockers"], "project_bytecode_plan_changed"]
-                    ),
-                    "would_change": [],
-                    "files_written": [],
-                }
-            removed_count = 0
-            for item in fresh_private["candidates"]:
-                try:
-                    current = item["path"].read_bytes()
-                except OSError:
-                    return {
-                        **fresh,
-                        "ok": False,
-                        "state": "partial",
-                        "dry_run": False,
-                        "approved": True,
-                        "lifecycle_action": "project_bytecode_repair",
-                        "summary": {
-                            **fresh["summary"],
-                            "removed_count": removed_count,
-                            "recovery": "rerun_fresh_plan",
-                        },
-                        "blockers": ["project_bytecode_changed_during_repair"],
-                        "would_change": [],
-                        "files_written": [],
-                    }
-                if (
-                    len(current) != item["bytes"]
-                    or _sha256_bytes(current) != item["sha256"]
-                ):
-                    return {
-                        **fresh,
-                        "ok": False,
-                        "state": "partial",
-                        "dry_run": False,
-                        "approved": True,
-                        "lifecycle_action": "project_bytecode_repair",
-                        "summary": {
-                            **fresh["summary"],
-                            "removed_count": removed_count,
-                            "recovery": "rerun_fresh_plan",
-                        },
-                        "blockers": ["project_bytecode_changed_during_repair"],
-                        "would_change": [],
-                        "files_written": [],
-                    }
-                item["path"].unlink()
+        except (OSError, RuntimeError, ValueError):
+            observed_kind = archive_services.wom_kit_real_path_kind(
+                root,
+                item["path"],
+            )
+            if observed_kind == "missing":
                 removed_count += 1
-            removed_dir_count = 0
-            for directory in sorted(
-                fresh_private["pycache_dirs"],
-                key=lambda path: len(path.parts),
-                reverse=True,
-            ):
-                try:
-                    directory.rmdir()
-                    removed_dir_count += 1
-                except OSError:
-                    continue
-            timestamp = _now()
-            receipt_relative = (
-                f"{PROJECT_BYTECODE_REPAIR_RECEIPTS_DIR}/{expected}.json"
-            )
-            receipt_path = root.joinpath(
-                *Path(receipt_relative).parts
-            )
-            receipt_doc = {
-                "schema": PROJECT_BYTECODE_REPAIR_RECEIPT_SCHEMA,
-                "plan_sha256": expected,
-                "mirror_head": fresh_private["binding"]["mirror_head"],
-                "removed_file_count": removed_count,
-                "removed_total_bytes": fresh["summary"][
-                    "bytecode_total_bytes"
-                ],
-                "removed_empty_pycache_directory_count": removed_dir_count,
-                "source_files_modified": False,
-                "reviewed_by": reviewer,
-                "created_at": timestamp,
-            }
-            if not receipt_path.exists():
-                archive_services._write_bytes_create_if_absent(
-                    receipt_path,
-                    _canonical_json_bytes(receipt_doc),
+                return _project_bytecode_partial_result(
+                    fresh,
+                    state="partial",
+                    blocker=(
+                        "project_bytecode_removal_durability_unverified"
+                    ),
+                    removed_count=removed_count,
+                    removed_dir_count=removed_dir_count,
+                    intent_relative=intent_written,
+                    writes_may_have_occurred=True,
                 )
-        finally:
-            lock_handle.seek(0)
-            if os.name == "nt":
-                import msvcrt
-
-                msvcrt.locking(
-                    lock_handle.fileno(),
-                    msvcrt.LK_UNLCK,
-                    1,
+            observed, _reason = (
+                archive_services._bounded_stable_regular_file_read(
+                    item["path"],
+                    max_bytes=PROJECT_BYTECODE_REPAIR_MAX_FILE_BYTES,
                 )
-            else:
-                import fcntl
+            )
+            current_identity: tuple[int, int, int] | None = None
+            try:
+                current_stat = os.lstat(item["path"])
+                current_identity = (
+                    int(current_stat.st_dev),
+                    int(current_stat.st_ino),
+                    int(current_stat.st_size),
+                )
+            except OSError:
+                pass
+            expected_identity = (
+                int(identity["device"]),
+                int(identity["inode"]),
+                int(identity["size"]),
+            )
+            original_remains_exact = bool(
+                observed is not None
+                and _sha256_bytes(observed) == item["sha256"]
+                and current_identity == expected_identity
+            )
+            return _project_bytecode_partial_result(
+                fresh,
+                state="partial",
+                blocker=(
+                    "project_bytecode_removal_failed"
+                    if original_remains_exact
+                    else "project_bytecode_removal_outcome_unverified"
+                ),
+                removed_count=removed_count,
+                removed_dir_count=removed_dir_count,
+                intent_relative=intent_written,
+                writes_may_have_occurred=not original_remains_exact,
+            )
+        removed_count += 1
 
-                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+    bindings = {
+        item["relative"]: item
+        for item in fresh_private["pycache_directory_bindings"]
+    }
+    for directory in sorted(
+        fresh_private["pycache_dirs"],
+        key=lambda path: len(path.parts),
+        reverse=True,
+    ):
+        relative = directory.relative_to(mirror).as_posix()
+        exact_directory, safe_empty = _project_bytecode_directory_is_exact_empty(
+            mirror,
+            bindings.get(relative, {}),
+        )
+        if exact_directory != directory or not safe_empty:
+            return _project_bytecode_partial_result(
+                fresh,
+                state="partial",
+                blocker="project_bytecode_cache_directory_changed",
+                removed_count=removed_count,
+                removed_dir_count=removed_dir_count,
+                intent_relative=intent_written,
+            )
+        try:
+            directory.rmdir()
+        except OSError:
+            return _project_bytecode_partial_result(
+                fresh,
+                state="partial",
+                blocker="project_bytecode_cache_directory_removal_failed",
+                removed_count=removed_count,
+                removed_dir_count=removed_dir_count,
+                intent_relative=intent_written,
+            )
+        if archive_services.wom_kit_real_path_kind(root, directory) != "missing":
+            return _project_bytecode_partial_result(
+                fresh,
+                state="partial",
+                blocker="project_bytecode_cache_directory_removal_unverified",
+                removed_count=removed_count,
+                removed_dir_count=removed_dir_count,
+                intent_relative=intent_written,
+            )
+        removed_dir_count += 1
+
+    timestamp = _now()
+    receipt_doc = {
+        "schema": PROJECT_BYTECODE_REPAIR_RECEIPT_SCHEMA,
+        "plan_sha256": expected,
+        "mirror_head": fresh_private["binding"]["mirror_head"],
+        "removed_file_count": removed_count,
+        "removed_total_bytes": fresh["summary"]["bytecode_total_bytes"],
+        "removed_empty_pycache_directory_count": removed_dir_count,
+        "source_files_modified": False,
+        "reviewed_by": reviewer,
+        "created_at": timestamp,
+    }
+    receipt_bytes = _canonical_json_bytes(receipt_doc)
+    try:
+        archive_services._write_bytes_create_if_absent(
+            receipt_path,
+            receipt_bytes,
+        )
+    except Exception:
+        observed, _reason = archive_services._bounded_stable_regular_file_read(
+            receipt_path,
+            max_bytes=len(receipt_bytes),
+        )
+        if observed != receipt_bytes:
+            return _project_bytecode_partial_result(
+                fresh,
+                state="evidence_incomplete",
+                blocker="project_bytecode_receipt_evidence_incomplete",
+                removed_count=removed_count,
+                removed_dir_count=removed_dir_count,
+                intent_relative=intent_written,
+                writes_may_have_occurred=True,
+            )
 
     return {
         **fresh,
@@ -10946,9 +11558,208 @@ def project_bytecode_repair(
         "blockers": [],
         "warnings": [],
         "would_change": [],
-        "files_written": [receipt_relative],
+        "files_written": archive_services.unique_preserve_order(
+            [
+                *([intent_relative] if intent_created else []),
+                receipt_relative,
+            ]
+        ),
+        "writes_may_have_occurred": False,
+        "next_safe_actions": [
+            "Run a fresh project-version-update --dry-run; do not reuse the prior update approval.",
+            "Only after the fresh preview is ready, review and separately approve the project update.",
+        ],
         "privacy_guards": {
             **fresh["privacy_guards"],
             "writes": True,
         },
     }
+
+
+def project_bytecode_repair(
+    inspection_root: Path | str,
+    *,
+    max_files: int,
+    expected_plan_sha256: str | None,
+    reviewed_by: str | None,
+    affirm_external_writers_quiescent: bool = False,
+    target: str | None = None,
+    expected_materialization_plan_sha256: str | None = None,
+) -> dict[str, Any]:
+    result, private = _project_bytecode_plan_core(
+        inspection_root,
+        max_files=max_files,
+        target=target,
+        expected_materialization_plan_sha256=(
+            expected_materialization_plan_sha256
+        ),
+    )
+    blockers = list(result["blockers"])
+    expected = str(expected_plan_sha256 or "").strip().lower()
+    reviewer = archive_services.safe_project_intake_actor_id(reviewed_by)
+    if not re.fullmatch(r"[0-9a-f]{64}", expected):
+        blockers.append("project_bytecode_expected_plan_sha256_invalid")
+    elif expected != private["plan_sha256"]:
+        blockers.append("project_bytecode_plan_changed")
+    if reviewer is None:
+        blockers.append("project_bytecode_reviewer_invalid")
+    if not affirm_external_writers_quiescent:
+        blockers.append("project_bytecode_external_writers_not_quiescent")
+    if not private["candidates"] and not private["pycache_dirs"]:
+        blockers.append("project_bytecode_nothing_to_repair")
+    if blockers:
+        return {
+            **result,
+            "ok": False,
+            "state": "blocked",
+            "dry_run": False,
+            "approved": False,
+            "lifecycle_action": "project_bytecode_repair",
+            "blockers": archive_services.unique_preserve_order(blockers),
+            "would_change": [],
+            "files_written": [],
+        }
+
+    root: Path = private["root"]
+    metadata_root = root / ".zettel-kasten"
+    lock_path = root / archive_services.WOM_KIT_PROJECT_UPDATE_LOCK_RELATIVE
+    lock_identity: tuple[int, int] | None = None
+    lock_kind = archive_services.wom_kit_real_path_kind(root, lock_path)
+    if lock_kind != "missing":
+        lock_bytes = archive_services.wom_kit_read_bounded_real_bytes(
+            root,
+            lock_path,
+            max_bytes=len(
+                archive_services.WOM_KIT_PROJECT_UPDATE_LOCK_BYTES
+            ),
+        )
+        return {
+            **result,
+            "ok": False,
+            "state": (
+                "blocked"
+                if lock_kind == "file"
+                and lock_bytes
+                == archive_services.WOM_KIT_PROJECT_UPDATE_LOCK_BYTES
+                else "recovery_required"
+            ),
+            "dry_run": False,
+            "approved": False,
+            "lifecycle_action": "project_bytecode_repair",
+            "blockers": [
+                "project_version_update_lock_active"
+                if lock_kind == "file"
+                and lock_bytes
+                == archive_services.WOM_KIT_PROJECT_UPDATE_LOCK_BYTES
+                else "project_version_update_lock_unavailable"
+            ],
+            "would_change": [],
+            "files_written": [],
+        }
+    try:
+        lock_identity = (
+            archive_services.wom_kit_project_update_acquire_lock_exclusive(
+                root,
+                metadata_root,
+                lock_path,
+                reservation_callback=lambda _identity: None,
+            )
+        )
+    except FileExistsError:
+        return {
+            **result,
+            "ok": False,
+            "state": "blocked",
+            "dry_run": False,
+            "approved": False,
+            "lifecycle_action": "project_bytecode_repair",
+            "blockers": ["project_version_update_lock_active"],
+            "would_change": [],
+            "files_written": [],
+        }
+    except Exception:
+        return {
+            **result,
+            "ok": False,
+            "state": "recovery_required",
+            "dry_run": False,
+            "approved": False,
+            "lifecycle_action": "project_bytecode_repair",
+            "blockers": ["project_version_update_lock_unavailable"],
+            "would_change": [],
+            "files_written": [],
+            "writes_may_have_occurred": True,
+        }
+
+    operation_result: dict[str, Any] | None = None
+    operation_error: BaseException | None = None
+    try:
+        operation_result = _project_bytecode_repair_under_lock(
+            root,
+            max_files=max_files,
+            expected=expected,
+            reviewer=reviewer,
+            target=target,
+            expected_materialization_plan_sha256=(
+                expected_materialization_plan_sha256
+            ),
+            owned_lock_identity=lock_identity,
+        )
+    except BaseException as error:
+        operation_error = error
+    try:
+        lock_released = (
+            archive_services.wom_kit_project_update_release_owned_lock(
+                root,
+                lock_path,
+                lock_identity,
+            )
+        )
+    except Exception:
+        lock_released = False
+    if operation_error is not None:
+        if isinstance(operation_error, (KeyboardInterrupt, SystemExit)):
+            raise operation_error
+        operation_result = _project_bytecode_partial_result(
+            result,
+            state="recovery_required",
+            blocker="project_bytecode_outcome_unverified",
+            removed_count=0,
+            removed_dir_count=0,
+            intent_relative=None,
+            writes_may_have_occurred=True,
+        )
+    if operation_result is None:
+        operation_result = _project_bytecode_partial_result(
+            result,
+            state="recovery_required",
+            blocker="project_bytecode_outcome_unverified",
+            removed_count=0,
+            removed_dir_count=0,
+            intent_relative=None,
+            writes_may_have_occurred=True,
+        )
+    coordination = {
+        "project_version_update_lock_acquired": lock_identity is not None,
+        "project_version_update_lock_released": lock_released,
+    }
+    if not lock_released:
+        operation_result = {
+            **operation_result,
+            "ok": False,
+            "state": "recovery_required",
+            "blockers": archive_services.unique_preserve_order(
+                [
+                    *operation_result.get("blockers", []),
+                    "project_version_update_lock_release_unverified",
+                ]
+            ),
+            "writes_may_have_occurred": True,
+            "coordination": coordination,
+        }
+    else:
+        operation_result = {
+            **operation_result,
+            "coordination": coordination,
+        }
+    return operation_result

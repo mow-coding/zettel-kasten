@@ -107,23 +107,37 @@ use the required Windows approval form:
 archive project-version-update <project-or-archive-root> --target vX.Y.Z --approve --reviewed-by <actor> --affirm-external-writers-quiescent --progress --output .zettel-kasten/diagnostics/update-apply-20260811-001.json --format json
 ```
 
-If the updater returns a `materialization_plan_sha256` and opaque
-`update-entry:NNNN` collision, do not infer the hidden path, move/delete a file
-by hand, or repeat updater approval. Inspect that exact bound item:
+When updater output has a plan digest and opaque collisions, do not infer paths, edit files, or repeat approval; inspect the complete set once:
+
+```text
+archive project-version-update-collision <project-or-archive-root> --target vX.Y.Z --expected-plan-sha256 sha256:<digest> --action inspect-all --dry-run --format json
+```
+
+Only an exact complete set eligible for `project_bytecode_repair` may continue
+to the separately approved target/digest-bound repair:
+
+```text
+archive project-bytecode-repair-plan <project-or-archive-root> --target vX.Y.Z --expected-materialization-plan-sha256 sha256:<digest> --dry-run --format json
+archive project-bytecode-repair <project-or-archive-root> --target vX.Y.Z --expected-materialization-plan-sha256 sha256:<digest> --expected-plan-sha256 <repair-plan-sha256> --approve --reviewed-by <actor> --affirm-external-writers-quiescent --format json
+```
+
+Repair shares the updater lock, accepts only exact supported ignored cache
+artifacts, and never fetches, changes `HEAD`/pin, retries, or grants update
+approval. Then run a fresh updater preview and separate approval. Mixed or
+unsupported sets remain remediation-unavailable.
+
+For one exact item, inspect that bound item:
 
 ```text
 archive project-version-update-collision <project-or-archive-root> --target vX.Y.Z --entry-ref update-entry:0001 --expected-plan-sha256 sha256:<digest> --action inspect --dry-run --format json
 ```
 
-Only when inspection reports an eligible ignored regular entry may you run a
-separate `--action preserve-relocate --dry-run`, review it, and replay with
-`--approve --reviewed-by <actor> --affirm-external-writers-quiescent`. It does
-not delete/overwrite the payload, copy, fetch, retry the updater, or change a
-pin. After success, run a fresh updater dry-run and a separate updater approval.
-Treat nullable write/relocation fields or `recovery_required` as uncertain:
-retain the private case and lock and do not clean up or replay. The private
-binding is unauthenticated internal consistency, not a signature or same-user
-tamper defense.
+Only an eligible ignored regular entry may use a separate preserve-relocate
+preview and reviewed approval. It never deletes/overwrites/copies/fetches,
+retries, or changes a pin. Then run a fresh updater preview and separate
+approval. Nullable writes/relocation or `recovery_required` means retain the
+case and lock without replay; the private binding is unauthenticated internal
+consistency, not a signature or same-user tamper defense.
 
 The result must report `external_writer_quiescence_required: true`,
 `external_writer_quiescence_affirmed: true`,

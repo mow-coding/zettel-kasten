@@ -10,12 +10,12 @@ It is not a website, SaaS app, dashboard, or visual note-taking product. The int
 
 ## Install The Command-Line Tool
 
-The exact v0.3.315 GitHub Release, when present, uses the self-contained wheel
+The exact v0.3.316 GitHub Release, when present, uses the self-contained wheel
 below. Confirm that the release exists and lists the wheel before installing
 it. The versioned URL alone is not proof that the asset is available.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.315/wom_kit-0.3.315-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.316/wom_kit-0.3.316-py3-none-any.whl"
 archive --version
 ```
 
@@ -212,6 +212,21 @@ broadly, write to Notion, or mutate canonical zets. See
 and [`docs/releases/v0.3.311.md`](docs/releases/v0.3.311.md). Source tests do
 not prove live credential adoption or a completed 620-page recovery; CI, tag,
 Release, wheel, fresh installation, and human execution remain separate gates.
+
+v0.3.316 completes the supported Python-cache recovery path that v0.3.315
+could detect but could not make usable. One CLI-only
+`project-version-update-collision --action inspect-all` call classifies the
+complete opaque collision set against one exact materialization plan. Only an
+exact all-cache set can continue to a separate `project-bytecode-repair-plan`
+and reviewed repair bound to that target, digest, and exact set. Repair shares
+the updater lock and never fetches, changes a pin, retries the updater, or
+grants update approval. Run a fresh updater preview and approve that new update
+separately. See
+[`docs/project-version-update.md`](docs/project-version-update.md),
+[`docs/operation-control.md`](docs/operation-control.md), and
+[`docs/releases/v0.3.316.md`](docs/releases/v0.3.316.md). Local source tests do
+not prove merge, CI, tag, Release, wheel, fresh installation, beta-client use,
+or human acceptance.
 
 v0.3.315 makes project-update preview and approval use the same exact target
 materialization plan. An unexpected destination collision now blocks with a
@@ -494,8 +509,12 @@ project-version-update --dry-run --target vX.Y.Z
 project-version-update --approve --target vX.Y.Z --reviewed-by <actor> --affirm-external-writers-quiescent
   Preview locally, then on Windows approval-gate one configured-origin fetch, exact annotated-tag/main-ancestry/version verification, manual complete commit-tree materialization, recognized pin alignment, and an O_EXCL v0.2 project receipt. Windows holds every source/.git/pin/lock/receipt directory path without FILE_SHARE_DELETE; missing receipt parents are created and held in order. Raw worktree/index/flag snapshots avoid git status and filters, but they are checkpointed detection rather than atomic file CAS. After dry-run, keep external editors, sync/backup clients, and other Git writers quiescent for the whole transaction and pass `--affirm-external-writers-quiescent` with the reviewer on every approval. Results say `external_writer_quiescence_required: true`, `external_writer_quiescence_affirmed: true`, `atomic_file_compare_and_swap: false`, and `checkpointed_change_detection: true`; the v0.2 receipt records `external_writer_quiescence: {affirmed: true, scope: complete_project_version_update_transaction}`. The config digest binds effective Git config plus exactly GIT_ASKPASS/GIT_PROXY_COMMAND/GIT_SSH/GIT_SSH_COMMAND; the selected Git executable, PATH, HTTP_PROXY, HTTPS_PROXY, SSL_CERT_FILE, CURL_CA_BUNDLE, SSH_AUTH_SOCK, HOME, and other non-GIT toolchain/transport environment are unbound trusted-stable prerequisites. Config drift immediately before rollback skips restore and preserves the lock. POSIX dry-run remains preview-only and POSIX approval blocks. Runtime scans stream under caps, and ignored `wom-kit/src` shadows block before mutation. v0.3.215 is the bootstrap boundary.
 
-project-version-update-collision --action inspect|preserve-relocate --dry-run
-  Inspect one blocked v0.3.315 target collision by its opaque item reference and materialization-plan digest. `preserve-relocate` has its own reviewed approval and moves the current private bytes to a WOM-owned preservation location without deleting, overwriting, or fetching the target. After preservation, run a fresh updater dry-run and approve that new updater plan separately; WOM never retries the updater automatically.
+project-version-update-collision --action inspect|inspect-all|preserve-relocate --dry-run
+  Inspect one bound collision or classify the complete collision set from one exact materialization plan. `inspect-all` accepts no entry ref and offers `project_bytecode_repair` only for an exact complete supported ignored Python-cache set. Repair planning and approval are separate, exact-set-bound commands; afterward run a fresh updater dry-run and approve the new updater plan separately. WOM never guesses private paths or retries the updater automatically.
+
+project-bytecode-repair-plan --target vX.Y.Z --expected-materialization-plan-sha256 sha256:<digest> --dry-run
+project-bytecode-repair --target vX.Y.Z --expected-materialization-plan-sha256 sha256:<digest> --expected-plan-sha256 <repair-plan-sha256> --approve --reviewed-by <actor> --affirm-external-writers-quiescent
+  Preview and separately approve removal of only the exact supported ignored Python bytecode/cache set bound by inspect-all. These commands share the project-version-update lock; they do not fetch, change `HEAD` or a pin, retry the updater, or approve an update.
 
 onboard
   Plan or apply first archive setup. Dry-run writes nothing; --approve creates the archive, provider-bindings.yml, and runs strict doctor.

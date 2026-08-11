@@ -2,6 +2,53 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.3.316 Python 캐시 충돌 복구
+
+v0.3.315는 ignored Python 캐시 충돌 묶음을 정확히 찾아 멈출 수 있었지만,
+항목을 하나씩 느리게 검사해야 했고 이 종류에 쓸 수 있는 공식 복구 방법이
+없었습니다. v0.3.316은 전체 충돌을 한 번에 검사하고, 아주 좁게 제한된 공식
+캐시 복구 경로를 제공합니다.
+
+정확한 v0.3.316 GitHub Release에 wheel이 실제로 올라온 뒤에만 설치하세요.
+새 프로세스에서 `archive --version`을 확인하고, 복구와 업데이트 승인 동안에는
+편집기, 동기화/백업 프로그램, 다른 Git writer를 멈춰 두세요.
+
+새 `project-version-update --dry-run`이 돌려준 target과
+`materialization_plan_sha256`을 보관합니다. 개별 `entry_ref`를 넣지 말고 전체
+충돌 집합을 한 번에 검사하세요.
+
+```powershell
+archive project-version-update-collision <project-or-archive-root> --target v0.3.316 --expected-plan-sha256 sha256:<materialization-digest> --action inspect-all --dry-run --format json
+```
+
+결과가 정확한 전체 집합에 대해 `project_bytecode_repair` 가능이라고 말할 때만
+같은 target과 digest에 묶인 별도 복구 계획을 미리 봅니다.
+
+```powershell
+archive project-bytecode-repair-plan <project-or-archive-root> --target v0.3.316 --expected-materialization-plan-sha256 sha256:<materialization-digest> --dry-run --format json
+```
+
+정확한 개수와 `plan_sha256`을 검토한 뒤 그 복구 계획을 승인하세요.
+
+```powershell
+archive project-bytecode-repair <project-or-archive-root> --target v0.3.316 --expected-materialization-plan-sha256 sha256:<materialization-digest> --expected-plan-sha256 <repair-plan-sha256> --approve --reviewed-by <actor> --affirm-external-writers-quiescent --format json
+```
+
+이 복구는 지원되는 ignored Python bytecode/cache의 정확한 집합만 받습니다.
+사람이 작성한 원본을 지우거나, target을 fetch하거나, `HEAD`나 프로젝트 버전
+pin을 바꾸거나, updater를 재시도하거나, 업데이트를 승인하지 않습니다. 검사나
+복구가 unavailable, blocked, partial, uncertain, retained-evidence 상태를 반환하면
+멈추고 결과에 적힌 고정 next action을 따르세요.
+
+복구 뒤에는 예전 updater 승인 정보를 버립니다. 새
+`project-version-update --dry-run`을 실행해 새 계획을 검토하고 업데이트를
+따로 승인하세요. 마지막으로 새 프로세스의 `archive version`에서 실행 중 import,
+프로젝트 source, pin, 정확한 tag가 모두 일치하는지 확인합니다.
+
+자세한 내용은 [v0.3.316 릴리스 노트](wom-kit/docs/releases/v0.3.316.md),
+[프로젝트 업데이트 가이드](wom-kit/docs/project-version-update.md),
+[operation-control 가이드](wom-kit/docs/operation-control.md)를 보세요.
+
 ## v0.3.315 업데이트 충돌과 paired batch 복구
 
 정확한 v0.3.315 Release에 검증된 wheel이 실제로 올라온 뒤에만 그 파일을

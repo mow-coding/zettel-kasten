@@ -1391,7 +1391,17 @@ def _project_update_completed_next_actions(
         and isinstance(collision_refs[0], str)
         and SAFE_COLLISION_REF_RE.fullmatch(collision_refs[0]) is not None
     ):
-        actions = [
+        if len(collision_refs) > 1:
+            return [
+                "Inspect the complete bound collision set in one read-only "
+                "batch without revealing local paths: "
+                "archive project-version-update-collision "
+                "<project-or-archive-root> "
+                f"--target {target_tag} "
+                f"--expected-plan-sha256 {materialization_plan_sha256} "
+                "--action inspect-all --dry-run --format json"
+            ]
+        return [
             "Inspect the bound collision without revealing a local path: "
             "archive project-version-update-collision "
             "<project-or-archive-root> "
@@ -1399,11 +1409,6 @@ def _project_update_completed_next_actions(
             f"--expected-plan-sha256 {materialization_plan_sha256} "
             "--action inspect --dry-run --format json"
         ]
-        if len(collision_refs) > 1:
-            actions.append(
-                "The complete result contains additional opaque collision references; inspect each reference separately and do not rerun approval yet"
-            )
-        return actions
 
     blocker_codes = domain.get("blocker_codes")
     has_materialization_blocker = bool(

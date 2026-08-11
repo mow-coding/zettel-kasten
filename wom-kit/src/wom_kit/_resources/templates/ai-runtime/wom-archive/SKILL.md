@@ -124,11 +124,14 @@ Do not preload every reference.
   `--affirm-external-writers-quiescent`. After completion, start a new process
   and require `archive version` import/source/pin/tag agreement. A local version
   check does not prove remote release freshness.
-- If an updater returns a bound collision, keep its opaque entry ref and plan
-  digest. Use CLI-only `project-version-update-collision` inspect first. A
-  separate preserve-relocate approval never retries the updater; after success
-  run a fresh updater preview and separate approval. Retain uncertain cases and
-  locks for recovery; never guess a path, delete evidence, or blindly replay.
+- If an updater returns bound collisions, keep the exact target and plan
+  digest. Use CLI-only `project-version-update-collision --action inspect-all`
+  once for the complete opaque set. Only an exact all-supported cache set may
+  continue to a separately reviewed, target/digest-bound
+  `project-bytecode-repair`; single eligible payloads retain the separate
+  preserve-relocate route. Neither route retries the updater. After success run
+  a fresh updater preview and separate approval. Retain uncertain cases and
+  locks; never guess a path, delete evidence, or blindly replay.
 
 ## Finish
 
