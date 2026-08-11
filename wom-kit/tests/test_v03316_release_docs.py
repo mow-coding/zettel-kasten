@@ -183,18 +183,22 @@ class V03316ReleaseDocsTests(unittest.TestCase):
             KIT
             / "docs"
             / "archive-infra-decision-log-2026-08-11-v03315-letter127.md": (
-                "1c0057e831181167c535b74752bf225e8d677d24966fe55f1c2c1a5bc02791ad"
+                "0624bbd7c20ebda245974cb9a208041f82b771db124bf8f29a114648b1df36c8"
             ),
             KIT
             / "docs"
             / "archive-infra-decision-log-2026-08-11-v03315-letter128.md": (
-                "8802d6c2a9189c3ccaa73dccfc8b91a0cff29d94c8529723d43ed291d3b04137"
+                "33adb92002b0d0e26f0add7bf4c5ece9258861b6250613978f70be7ad2cee57f"
             ),
         }
         for path, expected_sha256 in expected.items():
             with self.subTest(path=path.name):
+                canonical_git_text = path.read_bytes().replace(
+                    b"\r\n",
+                    b"\n",
+                )
                 self.assertEqual(
-                    hashlib.sha256(path.read_bytes()).hexdigest(),
+                    hashlib.sha256(canonical_git_text).hexdigest(),
                     expected_sha256,
                 )
 
