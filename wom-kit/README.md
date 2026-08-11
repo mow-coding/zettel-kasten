@@ -10,12 +10,12 @@ It is not a website, SaaS app, dashboard, or visual note-taking product. The int
 
 ## Install The Command-Line Tool
 
-The exact v0.3.313 GitHub Release, when present, uses the self-contained wheel
+The exact v0.3.314 GitHub Release, when present, uses the self-contained wheel
 below. Confirm that the release exists and lists the wheel before installing
 it. The versioned URL alone is not proof that the asset is available.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.313/wom_kit-0.3.313-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.314/wom_kit-0.3.314-py3-none-any.whl"
 archive --version
 ```
 
@@ -212,6 +212,21 @@ broadly, write to Notion, or mutate canonical zets. See
 and [`docs/releases/v0.3.311.md`](docs/releases/v0.3.311.md). Source tests do
 not prove live credential adoption or a completed 620-page recovery; CI, tag,
 Release, wheel, fresh installation, and human execution remain separate gates.
+
+v0.3.314 closes the Letter 126 long-operation and generated-index recovery
+gaps. Project target-tree materialization uses bounded Git batch streams
+instead of per-file child processes. Generated SQLite indexes persist in
+rollback `DELETE` mode, and public/private inspection blocks legacy WAL,
+sidecars, and invalid headers before SQLite opens. With a fresh `--output`,
+`project-version-update`, `index`, and `index-health` print an opaque
+`operation_ref`; a later CLI process can use read-only status, a bounded wait,
+or recovery guidance. Result completion requires the bound output digest and
+embedded operation evidence. Cancel and resume are explicitly unsupported;
+there is no daemon, queue, background launcher, MCP control, force kill, or
+lock deletion. See [`docs/operation-control.md`](docs/operation-control.md) and
+[`docs/releases/v0.3.314.md`](docs/releases/v0.3.314.md). Local benchmarks and
+tests do not prove merge, tag, Release, wheel, fresh install, real-archive use,
+or human acceptance.
 
 v0.3.313 requires every new AI-assisted or AI-generated draft to bind one
 manifested content-addressed source, an explicit `verbatim`,
@@ -1554,8 +1569,9 @@ backed `mint-zet` uses that metadata instead of glob/stat checking every
 canonical zettel before each mint. Approved mint upserts keep the metadata
 current during large batches; older indexes without metadata still fall back to
 the legacy live staleness scan. The same release opens generated-index SQLite
-connections with a 30s busy timeout, uses WAL mode on index write paths, and
-keeps WAL/SHM/journal sidecars in the generated-artifact ignore/hygiene layer.
+connections with a 30s busy timeout. From v0.3.314, index read/write paths
+require a clean rollback `DELETE` snapshot and reject WAL/SHM/journal sidecars
+before SQLite opens; one ordinary explicit rebuild converts an older cache.
 v0.3.119 adds `mint-zet-batch` / `bulk-mint` and `retire-draft-batch` /
 `bulk-retire` so large mint and retired-draft cleanup runs can use one reviewed
 plan, one WOM-kit process, `--skip-existing`, `--max-items`, per-item failure

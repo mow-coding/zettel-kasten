@@ -24,6 +24,43 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.314 Letter 126 Long-Operation And Generated-Index Recovery
+
+v0.3.314 does not rewrite canonical zets, objets, manifests, durable private
+metadata authority, or database schemas during installation. It changes the
+disposable generated-index storage contract: an older WAL-mode index must be
+rebuilt once before protected index-backed work continues.
+
+After installing the exact release and starting a new process, stop other
+archive/SQLite writers and use fresh private diagnostic filenames:
+
+```powershell
+archive index <archive-root> --progress --output .wom-scratch/diagnostics/index-v03314.json --format json
+archive index-health <archive-root> --dry-run --progress --output .wom-scratch/diagnostics/index-health-v03314.json --format json
+```
+
+The first command converts only the disposable generated cache to rollback
+`DELETE` mode and rebuilds the private projection in the same transaction. The
+second must report a clean current result before protected search/view/mint
+work resumes. Do not hand-edit, rename, or delete SQLite files or sidecars.
+
+For future long project updates or index operations, always opt into a new
+`--output` file and retain the opaque `operation_ref` printed at startup. If
+the caller times out, do not start a duplicate writer. Inspect the same run:
+
+```powershell
+archive operation-control <project-or-archive-root> --operation-ref op:sha256:<digest> --action status --dry-run --format json
+archive operation-control <project-or-archive-root> --operation-ref op:sha256:<digest> --action wait --timeout-seconds 60 --dry-run --format json
+archive operation-control <project-or-archive-root> --operation-ref op:sha256:<digest> --action recovery-plan --dry-run --format json
+```
+
+A wait deadline is not failure or cancellation. Cancel and resume are not
+implemented; cancel returns nonzero `operation_cancel_not_supported` and writes
+nothing. There is no daemon, queue, background launcher, force kill, lock
+deletion, or MCP control. See [Bounded operation control](wom-kit/docs/operation-control.md),
+[v0.3.314 release notes](wom-kit/docs/releases/v0.3.314.md), and the
+[decision record](wom-kit/docs/archive-infra-decision-log-2026-08-11-v03314-letter126.md).
+
 ## v0.3.313 Source Fidelity And Private Verbatim Preservation
 
 v0.3.313 does not rewrite existing zets, drafts, receipts, or source objets.

@@ -1,6 +1,8 @@
 # WOM-kit Version Truth Source
 
-Status: v0.3.291 read-only runtime alignment plus approval-gated project update
+Status: v0.3.314 runtime alignment, bounded project update, and operation recovery
+
+Previous checkpoint: Status: v0.3.291 read-only runtime alignment plus approval-gated project update
 
 WOM-kit has several places where a human or AI might see a version-like value:
 the installed CLI, the source checkout, and a project-local pin left by a setup
@@ -259,6 +261,7 @@ archive project-version-update <project-or-archive-root> `
   --target vX.Y.Z `
   --dry-run `
   --progress `
+  --output .zettel-kasten/diagnostics/update-preview-20260811-001.json `
   --format json
 
 archive project-version-update <project-or-archive-root> `
@@ -267,8 +270,26 @@ archive project-version-update <project-or-archive-root> `
   --reviewed-by <actor> `
   --affirm-external-writers-quiescent `
   --progress `
+  --output .zettel-kasten/diagnostics/update-apply-20260811-001.json `
   --format json
 ```
+
+These project-local output paths opt into v0.3.314 operation observation. An
+archive-root invocation instead uses a fresh
+`.wom-scratch/diagnostics/*.json` output. Stderr prints an opaque
+`operation_ref` early. If a caller times out, inspect that exact operation from
+a later process rather than starting another writer:
+
+```powershell
+archive operation-control <project-or-archive-root> --operation-ref op:sha256:<digest> --action status --dry-run --format json
+archive operation-control <project-or-archive-root> --operation-ref op:sha256:<digest> --action wait --timeout-seconds 60 --dry-run --format json
+archive operation-control <project-or-archive-root> --operation-ref op:sha256:<digest> --action recovery-plan --dry-run --format json
+```
+
+A wait deadline is neutral. Cancel is fixed unsupported and writes nothing;
+resume, daemon, queue, background launch, force kill, and lock deletion are not
+implemented. A completed operation artifact still does not reload the caller;
+start a new process and verify `archive version`.
 
 Approval changes only the project-local source mirror, recognized version pins,
 and one project update receipt. The updater manually materializes the complete
@@ -277,6 +298,14 @@ Strict cross-platform path checks reject aliases, reserved names, unsafe path
 components, and ambiguous file/directory transitions before the first source
 write. It then verifies raw worktree bytes, the rebuilt stage-zero index, index
 flags, the closed import tree, and all synchronized runtime resources.
+
+From v0.3.314, each complete tracked target tree uses one bounded `ls-tree`
+inventory and one strict unique-blob `cat-file --batch` stream instead of one
+Git child per file. In the controlled four-tree reproduction, this reduced
+11,184 Git processes to eight and loaded the four trees in 2.538 seconds.
+Object framing, type, size, rehash, per-file/total byte caps, and trailing bytes
+remain fail closed. The timing is one local benchmark, not a universal update
+runtime guarantee.
 
 The transaction reserves its lock and receipt with exclusive `O_EXCL` creation
 and records file identity before writing. Source, pin, configuration, lock, and

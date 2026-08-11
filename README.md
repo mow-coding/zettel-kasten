@@ -34,10 +34,10 @@ not re-grow baseline ladders or tag lists here.
 Current public baseline:
 
 ```text
-v0.3.313
+v0.3.314
 ```
 
-Previous public baseline: v0.3.312.
+Previous public baseline: v0.3.313.
 
 Full release history: see [CHANGELOG.md](CHANGELOG.md) and [wom-kit/docs/releases/](wom-kit/docs/releases/).
 
@@ -57,7 +57,7 @@ matching GitHub Release exists and lists this wheel. The versioned URL alone is
 not proof that the asset is available.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.313/wom_kit-0.3.313-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.314/wom_kit-0.3.314-py3-none-any.whl"
 archive --version
 ```
 
@@ -96,6 +96,7 @@ approval-gated write, or docs-only), see the
 - a Windows-native, spawned-child credential-intake and authenticated-lifecycle boundary plus approval-gated recovery for the complete reviewed Letter 118 set of 577 plus 43 Notion pages; dry-run reads no secret and performs no provider call or write, approved bounded slices preserve exact Markdown bytes as objets with resumable evidence, and WOM never accepts a PAT through argv/stdin/environment, searches a workspace broadly, writes to Notion, or rewrites canonical zets; see [Letters 118 and 119](wom-kit/docs/letter118-119-credential-continuity-and-notion-page-recovery.md),
 - one fail-closed current-index authority for protected search, structured `view-zets`, and mint planning; `mint-zet --progress` now emits content-free start and heartbeat evidence to stderr while reserving stdout for the final result, and the separate operator-feedback body companion uses an exact six-section private request plus digest-bound human approval and lifecycle checking without submitting externally or proving real-archive repair; see [Letters 120 and 123](wom-kit/docs/letter120-123-index-lifecycle-and-feedback-body.md),
 - a private source-fidelity gate for every new AI-assisted or AI-generated draft: one manifested content-addressed source, explicit `verbatim`, `faithful_summary`, or `sanitized_derivative` mode, dry-run hashes, and attributed human replay are required before a write; `private_self` verbatim preserves personal source data while credential secrets block, declared AI provenance cannot downgrade to the human route, mint re-verifies the private receipt, and audience metadata never shares or exports anything; see [Source Fidelity And Private Verbatim Preservation](wom-kit/docs/source-fidelity-and-private-verbatim.md),
+- bounded recovery evidence for the long `project-version-update`, `index`, and `index-health` commands when they use a fresh `--output`: an early opaque operation reference can be checked by a later process with read-only status, bounded wait, or recovery guidance, while generated SQLite inspection now requires a clean rollback-mode snapshot and project update tree materialization uses bounded Git batches; cancel, resume, daemon, queue, background execution, and MCP control remain unimplemented; see [Bounded Operation Control](wom-kit/docs/operation-control.md) and [v0.3.314 release notes](wom-kit/docs/releases/v0.3.314.md),
 - a bounded read-only artifact lifecycle inventory over fixed archive-owned scratch, staging, draft, workpack, generated-index, and local content-addressed object surfaces, with independent per-root coverage, content-free stable review refs, strict manifest candidate reconciliation, expiry review without deletion inference, and presence-only protection for non-canonical in-root original storage,
 - WOM-kit local CLI and MCP tooling under `wom-kit/`, importing as `wom_kit`,
 - an exact installed-wheel resource integrity gate: release checking rejects
@@ -107,7 +108,7 @@ approval-gated write, or docs-only), see the
 - honest `archive remint-reconcile` (and the sibling `archive retire-draft-reconcile` for retire receipts) that re-issues a receipt's recorded sha256 after a zet drifts on disk (a CRLF/BOM re-checkout or a human content edit): it classifies the drift as newline/BOM-only `format_drift` or `content_change` even when the draft snapshot itself drifted — checking every content frontmatter field (a full-field reconstruction plus an `id`/`title` cross-check against the mint receipt) so an edit to any field, or a content-tampered snapshot, can never anchor `format_drift` — always shows the on-disk content, requires a reviewer to approve, offers an opt-in `--strip-bom` that never bypasses the content-change ack gate (and, since v0.3.172, previews the same strip-intent metadata on a dry-run as an approve run records — a strict classification no-op that never launders a `content_change`), surfaces (since v0.3.176) a content-free `body_diff_diagnostic` on a `content_change` whose body still differs after the BOM/newline fold — a category label plus a normalized-form byte offset and length delta, never any body text — and now offers dry-run JSON `--diagnostic-only` to omit canonical body text and frontmatter values while preserving those drift numbers; since v0.3.230, every `content_change` also returns a content-free ordered human-review plan and requires its SHA-256 again at approval, so changed bytes or receipt refs invalidate stale approval before any write, never masks corruption, and writes both an in-place receipt update and a separate immutable audit receipt,
 - reconcile approve results now report `status: reconcile_applied` with doctor verification next-actions, so an applied approval no longer carries the earlier dry-run review status in JSON or text output,
 - object-storage doctor now accepts same-key `skipped_remote_same` coverage, offers approval-gated `object-storage-wom-location-reconcile` for genuine missing `wom_uploaded` manifest bindings, and validates that command's audit receipts with a dedicated schema,
-- generated-index-backed duplicate checks, metadata-backed mint staleness fast paths, SQLite busy-timeout/WAL hardening for generated-index write paths, and standard-id source-path fast resolution for large archives,
+- generated-index-backed duplicate checks, metadata-backed mint staleness fast paths, clean rollback-mode generated-index inspection/writes, and standard-id source-path fast resolution for large archives,
 - scoped `validate --since` / `validate --scope` checks with generated-index body SHA cache support and optional `--progress`, plus stage/count progress output for long `doctor --strict`, large `object-storage-adopt-existing`, and `staged-cleanup-check` runs; large adopt plan resolution now uses a per-run manifest index, explicit `--skip-existing-wom-uploaded` resume helper, read-only `--stop-after-plan` diagnostics, resume-gap counts for matching `declared_uploaded` versus `wom_uploaded` locations, same-provider nonmatching store/key diagnostics, and same-store `wom_uploaded` raw-vs-gating counts, doctor reuses per-run file SHA/frontmatter caches and reports deeper `mint-receipts` target-frontmatter, mint-link, receipt-completion progress, every-receipt heartbeat, every-receipt file-ref liveness, target file-ref drilldown, target edge-receipt index lifecycle plus aggregate source/candidate/cache-hit heartbeats and a final summary, hash start/end liveness, retired-source skips, local-profile secret-safety liveness, early ETA warm-up, compact default `--progress`, opt-in verbose tracing, JSONL progress logs, full result capture with archive-relative `--output`, compact summaries, stdout severity filters, output/progress-log path-policy metadata, and staged cleanup can show content-free walk/verify/hash progress while remaining report-only; per-source edge candidate details stay in verbose/JSONL output instead of flooding compact stderr, while `ai-start-here`, `upgrade-check`, and CLI `zet-catalog` share content-free progress, 10-second heartbeat, and scratch-scoped full-result output; `zet-catalog-pass` completes all strict pages in one process with ephemeral memory reuse and final local revalidation before publishing one SHA-pinned private scratch JSONL, `zet-catalog-pass-read` validates that whole artifact before returning one bounded page, and `zet-catalog-pass-cleanup` deletes only the matching complete scratch file after preview and explicit human approval,
 - completed full-Doctor handoffs retain bounded ERROR/WARN items, complete code counts, and suggested commands instead of collapsing actionable findings to severity totals; a BOM finding now fills its reconcile dry-run with the validated canonical zet id and omits the command when that id is absent or unsafe instead of emitting an unresolved placeholder; compact heartbeat prioritizes the current local-profile secret-safety file/content/profile counts over a preserved older edge aggregate, and the regular-file safety walk reuses its checked directory boundary while keeping strict symlink escape checks,
 - read-only `archive zet-quality-check --dry-run` for entity-term, document-type, OCR/parse metadata, table-structure, correction-event, source-rights, audience, and derived-artifact dependency risks before mint; optional `zet-quality-rules.yml` project rules can make forbidden entity aliases mint blockers without echoing matched terms,
@@ -516,7 +517,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
-v0.3.313 (current checkpoint)
+v0.3.314 (current checkpoint)
 ```
 
 Public releases from `v0.2.5` onward are tagged as compatibility checkpoints.

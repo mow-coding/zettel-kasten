@@ -325,22 +325,25 @@ class V03297ArchiveIndexIntegrationTests(unittest.TestCase):
             (0, 0, 0, 0, 0, 0),
         )
         self.assertEqual(private["diagnostic_codes"], [])
-    def _assert_clean_wal_c6_without_sidecars(
+    def _assert_closed_delete_c10_without_sidecars(
         self,
         archive_root: Path,
     ) -> None:
         db_path = archive_root / archive_services.INDEX_RELATIVE_PATH
         wal_path = Path(str(db_path) + "-wal")
         shm_path = Path(str(db_path) + "-shm")
+        journal_path = Path(str(db_path) + "-journal")
+        self.assertEqual(db_path.read_bytes()[18:20], b"\x01\x01")
         self.assertFalse(wal_path.exists())
         self.assertFalse(shm_path.exists())
+        self.assertFalse(journal_path.exists())
         health = archive_services.index_health(
             archive_root,
             dry_run=True,
         )
         private = health["private_objet_metadata"]
-        self.assertFalse(health["ok"])
-        self.assertEqual(health["index_state"], "stale_or_incomplete")
+        self.assertTrue(health["ok"])
+        self.assertEqual(health["index_state"], "current")
         self.assertEqual(
             (
                 private["authority_validity"],
@@ -351,14 +354,15 @@ class V03297ArchiveIndexIntegrationTests(unittest.TestCase):
             ),
             (
                 "valid",
-                "unverifiable",
-                "unverifiable",
-                "blocked",
-                ["private_objet_metadata_projection_unavailable"],
+                "valid",
+                "current",
+                "current",
+                [],
             ),
         )
         self.assertFalse(wal_path.exists())
         self.assertFalse(shm_path.exists())
+        self.assertFalse(journal_path.exists())
 
     def _open_coherent_wal_anchor(
         self,
@@ -367,6 +371,7 @@ class V03297ArchiveIndexIntegrationTests(unittest.TestCase):
         db_path = archive_root / archive_services.INDEX_RELATIVE_PATH
         connection = sqlite3.connect(db_path)
         connection.execute("PRAGMA journal_mode=WAL")
+        connection.execute("BEGIN IMMEDIATE")
         self.assertTrue(Path(str(db_path) + "-wal").exists())
         self.assertTrue(Path(str(db_path) + "-shm").exists())
         return connection
@@ -557,23 +562,63 @@ class V03297ArchiveIndexIntegrationTests(unittest.TestCase):
                 f"private layer escaped the one transaction: {table_name}",
             )
 
-    def test_clean_wal_health_is_c6_before_query_and_creates_no_sidecars(
+    def test_closed_delete_rebuild_health_is_c10_and_creates_no_sidecars(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             archive_root = self._copy_archive(Path(temporary))
             archive_services.index_archive(archive_root)
-            self._assert_clean_wal_c6_without_sidecars(archive_root)
+            self._assert_closed_delete_c10_without_sidecars(archive_root)
 
-    def test_coherent_existing_wal_health_is_exact_c10(self) -> None:
+    def test_existing_wal_anchor_is_c6_without_read_sidecar_changes(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             archive_root = self._copy_archive(Path(temporary))
             archive_services.index_archive(archive_root)
             anchor = self._open_coherent_wal_anchor(archive_root)
             try:
-                self._assert_c10_current(archive_root)
+                db_path = archive_root / archive_services.INDEX_RELATIVE_PATH
+                wal_path = Path(str(db_path) + "-wal")
+                shm_path = Path(str(db_path) + "-shm")
+                before = {
+                    path.name: (
+                        path.stat().st_size,
+                        path.stat().st_mtime_ns,
+                        path.stat().st_ctime_ns,
+                        path.stat().st_ino,
+                    )
+                    for path in (db_path, wal_path, shm_path)
+                }
+                health = archive_services.index_health(
+                    archive_root,
+                    dry_run=True,
+                )
+                after = {
+                    path.name: (
+                        path.stat().st_size,
+                        path.stat().st_mtime_ns,
+                        path.stat().st_ctime_ns,
+                        path.stat().st_ino,
+                    )
+                    for path in (db_path, wal_path, shm_path)
+                }
             finally:
+                anchor.rollback()
                 anchor.close()
+            self.assertFalse(health["ok"])
+            self.assertEqual(health["index_state"], "blocked")
+            self.assertIn(
+                "archive_index_rebuild_required",
+                health["blockers"],
+            )
+            self.assertIn(
+                "private_objet_metadata_projection_unavailable",
+                health["blockers"],
+            )
+            self.assertEqual(
+                health["private_objet_metadata"]["index_state"],
+                "blocked",
+            )
+            self.assertEqual(before, after)
 
     def test_precommit_public_failure_preserves_old_public_and_private_snapshot(
         self,
@@ -662,11 +707,7 @@ class V03297ArchiveIndexIntegrationTests(unittest.TestCase):
                 str(caught.exception),
                 "archive_index_post_commit_progress_failed",
             )
-            anchor = self._open_coherent_wal_anchor(archive_root)
-            try:
-                self._assert_c10_current(archive_root)
-            finally:
-                anchor.close()
+            self._assert_c10_current(archive_root)
 
     def test_private_trigger_bridge_blocks_and_rolls_back_public_copy(
         self,
@@ -675,13 +716,13 @@ class V03297ArchiveIndexIntegrationTests(unittest.TestCase):
             archive_root = self._copy_archive(Path(temporary))
             archive_services.index_archive(archive_root)
             db_path = archive_root / archive_services.INDEX_RELATIVE_PATH
-            anchor = self._open_coherent_wal_anchor(archive_root)
+            connection = sqlite3.connect(db_path)
             try:
-                private_fingerprint = anchor.execute(
+                private_fingerprint = connection.execute(
                     "SELECT private_authority_fingerprint_sha256 "
                     "FROM private_objet_index_metadata"
                 ).fetchone()[0]
-                anchor.execute(
+                connection.execute(
                     "CREATE TRIGGER public_private_bridge "
                     "AFTER DELETE ON index_metadata BEGIN "
                     "INSERT OR REPLACE INTO source_map_entries"
@@ -693,7 +734,7 @@ class V03297ArchiveIndexIntegrationTests(unittest.TestCase):
                     "FROM private_objet_index_metadata LIMIT 1; "
                     "END"
                 )
-                anchor.commit()
+                connection.commit()
                 health = archive_services.index_health(
                     archive_root,
                     dry_run=True,
@@ -713,7 +754,7 @@ class V03297ArchiveIndexIntegrationTests(unittest.TestCase):
                 )
                 after = self._logical_snapshot_tokens(archive_root)
                 self.assertEqual(before, after)
-                copied = anchor.execute(
+                copied = connection.execute(
                     "SELECT COUNT(*) FROM source_map_entries "
                     "WHERE item_id='synthetic-trigger-row'"
                 ).fetchone()[0]
@@ -732,7 +773,7 @@ class V03297ArchiveIndexIntegrationTests(unittest.TestCase):
                     "private fingerprint escaped through a generic result",
                 )
             finally:
-                anchor.close()
+                connection.close()
 
 
 if __name__ == "__main__":

@@ -6,6 +6,22 @@ The filesystem folder is `wom-kit/`, the Python import package is `wom_kit`, and
 
 See `wom-kit/docs/concepts/naming-and-terminology.md` for the naming baseline.
 
+v0.3.314 adds one alias-free `operation-control` surface for output-supervised
+`project-version-update`, `index`, and `index-health` runs. A fresh `--output`
+causes an early opaque operation reference; a later process can request
+content-free `status`, a 1-60 second `wait`, or read-only `recovery-plan` with
+the exact starting root. Completed state requires the saved output binding,
+digest, size, and embedded operation evidence. `cancel` always returns
+`operation_cancel_not_supported`; cancel/resume support, MCP control, daemon,
+queue, background launch, force kill, and lock deletion are not implemented.
+The same release replaces per-file project-update Git materialization with
+bounded batch streams and requires generated SQLite reads to pass a clean
+rollback `DELETE` preflight before SQLite opens. See
+`wom-kit/docs/operation-control.md` and
+`wom-kit/docs/releases/v0.3.314.md`. Local tests and benchmarks do not prove
+merge, tag, Release, wheel, fresh installation, real-archive use, or human
+acceptance.
+
 v0.3.313 makes source fidelity a pre-write contract for every new AI-assisted
 or AI-generated draft. `create-draft` now requires one manifested source,
 explicit mode and audience, a dry-run body/plan digest, and an attributed

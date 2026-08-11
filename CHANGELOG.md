@@ -6,6 +6,31 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.314 - 2026-08-11
+
+- Replaced per-file target-tree Git materialization with bounded
+  `cat-file --batch` streams. The reproduced four-tree workload fell from
+  11,184 Git processes to eight and took 2.538 seconds in the local controlled
+  benchmark while retaining strict blob identity, size, framing, and byte caps.
+- Moved the disposable generated SQLite index to rollback `DELETE` mode.
+  Normal public/private inspection now blocks legacy WAL headers, invalid
+  headers, and WAL/SHM/journal sidecars before opening SQLite, so a read-only
+  health check cannot create a sidecar or invent comparisons it did not run.
+- Made the ordinary explicit `archive index` rebuild the one supported
+  conversion and private-projection repair path. Canonical zets, durable
+  private authority, and the database schema are not migrated.
+- Added alias-free CLI `operation-control` for long
+  `project-version-update`, `index`, and `index-health` commands started with a
+  fresh `--output`. It provides content-free status, bounded wait, and
+  recovery guidance with exact root/reference and output-digest verification.
+- Kept control claims deliberately narrow: wait timeout is not cancellation or
+  failure; cancel always returns `operation_cancel_not_supported`; resume,
+  daemon, queue, background launch, force kill, lock deletion, and MCP control
+  are not implemented. The journal hash chain is not a MAC or signature.
+- Local tests and the controlled benchmark are implementation evidence only;
+  merge, external CI, exact tag, GitHub Release, wheel, fresh installation,
+  real-archive execution, and human acceptance remain separate gates.
+
 ## v0.3.313 - 2026-08-10
 
 - Added a source-fidelity contract for every new AI-assisted and AI-generated

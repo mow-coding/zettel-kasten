@@ -50,3 +50,18 @@ different meaning in a different artifact or moment.
 This decision adds no entity resolver, model call, graph mutation, schema
 migration, archive write, UI, or automatic interpretation. It establishes the
 design boundary that such future work must respect.
+
+## 2026-08-11 clarification
+
+This is not a new 2026-08-11 philosophy. The 2026-07-15 decision already
+distinguished enterprise entity/world-model mapping from WOM's refusal to make
+stable global entity mapping the primary authority for human memory. For the
+same subject, changes and contradictions in human perception remain preserved
+as chronological artifacts; any mapping remains a scoped, reviewable reading
+aid under those artifacts.
+
+The clarification was required because an assistant product evaluation
+compressed the existing distinction into generic “artifact-first” wording and
+mistakenly treated the sharper design as absent. It corrects that evaluation,
+not the original WOM design, and changes no schema, migration, writer,
+resolver, or UI scope.

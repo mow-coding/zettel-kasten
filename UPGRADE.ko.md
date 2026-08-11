@@ -2,6 +2,44 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.3.314 Letter 126 장시간 작업과 generated index 복구
+
+v0.3.314를 설치해도 canonical zet, objet, manifest, 비공개 원본 권위, database
+schema를 자동으로 고치지 않습니다. 대신 폐기 가능한 generated index의 저장 계약이
+바뀝니다. 이전 WAL-mode index는 보호된 index 기반 작업을 다시 시작하기 전에 한 번
+명시적으로 재구축해야 합니다.
+
+정확한 릴리스를 설치하고 새 프로세스를 시작한 뒤, 다른 archive/SQLite writer를
+멈추고 서로 다른 새 비공개 진단 파일을 사용하세요.
+
+```powershell
+archive index <archive-root> --progress --output .wom-scratch/diagnostics/index-v03314.json --format json
+archive index-health <archive-root> --dry-run --progress --output .wom-scratch/diagnostics/index-health-v03314.json --format json
+```
+
+첫 명령은 폐기 가능한 generated cache만 rollback `DELETE` mode로 바꾸고 같은
+transaction에서 private projection을 다시 만듭니다. 두 번째 health가 clean current
+결과를 보여준 뒤에만 보호된 search/view/mint 작업을 계속하세요. SQLite 파일이나
+sidecar를 손으로 편집·이름변경·삭제하지 마세요.
+
+앞으로 긴 project update나 index 작업은 항상 새 `--output` 파일을 지정하고 시작
+직후 stderr에 나온 `operation_ref`를 보관하세요. 호출 화면이 timeout으로 먼저
+끝나도 같은 writer를 중복 시작하지 말고 다음처럼 같은 작업을 확인합니다.
+
+```powershell
+archive operation-control <project-or-archive-root> --operation-ref op:sha256:<digest> --action status --dry-run --format json
+archive operation-control <project-or-archive-root> --operation-ref op:sha256:<digest> --action wait --timeout-seconds 60 --dry-run --format json
+archive operation-control <project-or-archive-root> --operation-ref op:sha256:<digest> --action recovery-plan --dry-run --format json
+```
+
+wait 시간이 끝난 것은 실패나 취소가 아닙니다. cancel과 resume은 구현하지 않았고,
+cancel은 쓰기 없이 nonzero `operation_cancel_not_supported`를 반환합니다. daemon,
+queue, background launcher, force kill, lock 삭제, MCP control도 없습니다. 자세한
+내용은 [제한된 operation control](wom-kit/docs/operation-control.md),
+[v0.3.314 릴리스 노트](wom-kit/docs/releases/v0.3.314.md),
+[결정 기록](wom-kit/docs/archive-infra-decision-log-2026-08-11-v03314-letter126.md)을
+보세요.
+
 ## v0.3.313 원문 충실도와 비공개 verbatim 보존
 
 v0.3.313은 기존 zet, draft, receipt, source objet을 자동으로 고치지 않습니다.

@@ -480,7 +480,16 @@ class PrivateObjetIndexRebuildSession:
         connection.execute(
             f"PRAGMA busy_timeout = {self._busy_timeout_ms}"
         )
-        connection.execute("PRAGMA journal_mode=WAL")
+        journal_mode = connection.execute(
+            "PRAGMA journal_mode=DELETE"
+        ).fetchone()
+        if (
+            journal_mode is None
+            or str(journal_mode[0]).lower() != "delete"
+        ):
+            raise PrivateObjetIndexRebuildError(
+                PRIVATE_OBJET_METADATA_PROJECTION_UNAVAILABLE
+            )
         connection.execute("PRAGMA synchronous=NORMAL")
         connection.execute("PRAGMA foreign_keys=ON")
         foreign_keys = connection.execute(
