@@ -1,13 +1,13 @@
 # Install WOM-kit As A Python Tool
 
-Status: v0.3.313 conditional GitHub wheel and source-fidelity release contract
+Status: v0.3.314 conditional GitHub wheel and Letter 126 recovery contract
 
 WOM-kit is a command-line tool. It should live in its own Python environment
 instead of being mixed into an application project's dependencies.
 
-The v0.3.313 URL below is a conditional contract, not proof that an artifact is
+The v0.3.314 URL below is a conditional contract, not proof that an artifact is
 public. Use it only after the matching GitHub Release exists and lists the
-verified wheel. See the [v0.3.313 release note](releases/v0.3.313.md) for the
+verified wheel. See the [v0.3.314 release note](releases/v0.3.314.md) for the
 separate source and release-evidence boundary.
 
 ## Recommended Install
@@ -17,7 +17,7 @@ verified wheel. The versioned URL alone is not proof that the asset is
 available:
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.313/wom_kit-0.3.313-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.314/wom_kit-0.3.314-py3-none-any.whl"
 archive --version
 ```
 
@@ -35,7 +35,7 @@ Plain `pip` works when it is placed inside a dedicated virtual environment:
 
 ```powershell
 py -m venv "$HOME\.wom-tools\wom-kit"
-& "$HOME\.wom-tools\wom-kit\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.313/wom_kit-0.3.313-py3-none-any.whl"
+& "$HOME\.wom-tools\wom-kit\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.314/wom_kit-0.3.314-py3-none-any.whl"
 & "$HOME\.wom-tools\wom-kit\Scripts\archive.exe" --version
 ```
 
@@ -112,8 +112,16 @@ backup tools, and every other Git writer for the complete update transaction.
 Approve only while they remain paused:
 
 ```powershell
-archive project-version-update <project-or-archive-root> --target vX.Y.Z --approve --reviewed-by <actor> --affirm-external-writers-quiescent --format json
+archive project-version-update <project-or-archive-root> --target vX.Y.Z --approve --reviewed-by <actor> --affirm-external-writers-quiescent --progress --output .zettel-kasten/diagnostics/update-20260811-001.json --format json
 ```
+
+From v0.3.314, the explicit output also prints an opaque `operation_ref` early.
+If the caller times out, retain that reference and use `operation-control`
+status or bounded wait against the exact starting root instead of launching a
+duplicate updater. Output-supervised archive-root updates use a fresh
+`.wom-scratch/diagnostics/*.json` path instead. Cancel and resume are not
+implemented, and status does not replace a fresh `archive version` check after
+the update finishes.
 
 The result reports `external_writer_quiescence_required: true`,
 `external_writer_quiescence_affirmed: true`,

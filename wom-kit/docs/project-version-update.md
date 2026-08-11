@@ -1,6 +1,6 @@
 # Project Version Update
 
-Status: implemented in v0.3.215
+Status: implemented in v0.3.215; bounded Git batch and operation observation in v0.3.314
 
 ## Plain-Language Purpose
 
@@ -26,6 +26,7 @@ archive project-version-update <project-or-archive-root> `
   --target vX.Y.Z `
   --dry-run `
   --progress `
+  --output .zettel-kasten/diagnostics/update-preview-20260811-001.json `
   --format json
 ```
 
@@ -46,8 +47,17 @@ archive project-version-update <project-or-archive-root> `
   --reviewed-by <actor> `
   --affirm-external-writers-quiescent `
   --progress `
+  --output .zettel-kasten/diagnostics/update-apply-20260811-001.json `
   --format json
 ```
+
+These project-local output paths opt into v0.3.314 operation observation. When
+the command is started from an archive root, use a fresh
+`.wom-scratch/diagnostics/*.json` output instead. Stderr prints an opaque
+`operation_ref` before the long work. If the caller times out, do not start a
+duplicate updater; use `operation-control` status, bounded wait, or recovery
+guidance with the exact root and reference. Cancel and resume are unsupported,
+and completion still requires a fresh-process `archive version` check.
 
 ## Platform Boundary
 
@@ -312,6 +322,15 @@ inventory. It avoids both per-resource process multiplication and long
 path-argument lists while preserving exact object framing, OID rehash,
 tree/index modes, manifest size/hash, source/package parity, bounded real-file
 bytes, and packaged-resource closed-world checks.
+
+v0.3.314 applies the same bounded-process principle to the complete target
+tree. Each tree is enumerated once and its unique blobs are materialized
+through one strict `git cat-file --batch` stream rather than one child per
+path. The controlled four-tree reproduction used eight Git processes instead
+of 11,184 and completed the four loads in 2.538 seconds. Object id/type/size,
+rehash, framing, per-file and total limits, and trailing-byte checks remain
+fail closed. The timing is local benchmark evidence, not a guarantee for every
+machine or repository.
 
 The argv is a one-invocation bridge to the project-pinned source. It does not
 replace `archive` on `PATH`, update a global Python environment, infer whether

@@ -52,6 +52,22 @@ Progress lines are liveness evidence, not the result. Make the final decision
 from the captured JSON result and exit code. If the command is interrupted,
 report the last completed phase and do not present partial output as success.
 
+For `project-version-update`, `index`, and `index-health`, opt into a fresh
+`--output` file. Archive commands use `.wom-scratch/diagnostics/*.json`; a
+project-root updater uses `.zettel-kasten/diagnostics/*.json`. Preserve the
+opaque `operation_ref` printed early on stderr. If the caller times out, do not
+start a duplicate writer. Inspect the same operation from a later process:
+
+```text
+archive operation-control <exact-starting-root> --operation-ref op:sha256:<digest> --action status --dry-run --format json
+archive operation-control <exact-starting-root> --operation-ref op:sha256:<digest> --action wait --timeout-seconds 60 --dry-run --format json
+archive operation-control <exact-starting-root> --operation-ref op:sha256:<digest> --action recovery-plan --dry-run --format json
+```
+
+A wait deadline is not failure or cancellation. Cancel and resume are
+unsupported and write nothing. There is no MCP control, daemon, queue,
+background launcher, force kill, lock deletion, or automatic rollback.
+
 ## Development Fallback When The Console Script Is Missing
 
 From an active source checkout, use the package module. In PowerShell from
@@ -79,7 +95,7 @@ refuse caches, extra source, or modified tracked bytes.
 Inspect the update plan first:
 
 ```text
-archive project-version-update <project-or-archive-root> --target vX.Y.Z --dry-run --format json
+archive project-version-update <project-or-archive-root> --target vX.Y.Z --dry-run --progress --output .zettel-kasten/diagnostics/update-preview-20260811-001.json --format json
 ```
 
 Apply only the command's explicit approval path after reviewing the expected
@@ -88,7 +104,7 @@ sync/backup clients, and other Git writers for the complete transaction, then
 use the required Windows approval form:
 
 ```text
-archive project-version-update <project-or-archive-root> --target vX.Y.Z --approve --reviewed-by <actor> --affirm-external-writers-quiescent --format json
+archive project-version-update <project-or-archive-root> --target vX.Y.Z --approve --reviewed-by <actor> --affirm-external-writers-quiescent --progress --output .zettel-kasten/diagnostics/update-apply-20260811-001.json --format json
 ```
 
 The result must report `external_writer_quiescence_required: true`,

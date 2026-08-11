@@ -50,6 +50,7 @@ For operator feedback, run `archive operator-feedback-plan <archive-root> --dry-
 
 ## WOM-kit Updates
 
+- Start long `project-version-update`, `index`, and `index-health` work with a fresh command-appropriate `--output` and preserve its early `operation_ref`. After caller timeout, use read-only `operation-control` status, bounded wait, or recovery-plan with the exact starting root; never start a duplicate writer. Cancel/resume, MCP control, daemon, queue, background launch, force kill, and lock deletion are unsupported.
 - When available, use `project-version-update --dry-run` first. Before Windows approval, pause editors, sync/backup clients, and other Git writers for the complete transaction, then use `--approve --reviewed-by <actor> --affirm-external-writers-quiescent`; do not hand-edit the source checkout or installed-version pins.
 - After `updated_restart_required`, start a new process and require `archive version` import/source/pin/tag agreement before claiming the new runtime is active. Never bypass a dirty-state, tag, metadata, lock, or rollback blocker.
 - `archive version` proves local runtime/source/pin and already-fetched tag state only. Check an authoritative remote release surface separately before claiming that no newer release exists.

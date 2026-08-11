@@ -153,8 +153,9 @@ jobs:
           wom-kit/tests/test_v03296_private_metadata_win32.py
           wom-kit/tests/test_v03296_private_metadata_writer_authority.py
 
-      # The saved-view lifecycle and the v0.3.297-v0.3.298 private-index/finder
-      # modules use pytest functions, fixtures, parametrization, or monkeypatch.
+      # The saved-view lifecycle, v0.3.297-v0.3.298 private-index/finder, and
+      # v0.3.314 private-projection recovery modules use pytest functions,
+      # fixtures, parametrization, or monkeypatch.
       # Run them once per interpreter/platform lane, outside unittest discovery,
       # so a module collected as zero unittest tests cannot look green.
       - name: WOM-kit pytest-native cross-platform suite
@@ -165,6 +166,7 @@ jobs:
           wom-kit/tests/test_v03297_private_objet_metadata_index_authority.py
           wom-kit/tests/test_v03297_private_objet_metadata_index_rebuild.py
           wom-kit/tests/test_v03298_private_objet_finder.py
+          wom-kit/tests/test_v03314_index_private_projection_recovery.py
 
       # A test that writes into the repository would break the project's
       # artifact-hygiene contract, so fail loudly instead of silently drifting.

@@ -9,7 +9,7 @@ PERSONAL = ROOT / "wom-kit" / "templates" / "personal" / "AGENTS.md"
 DOC = ROOT / "wom-kit" / "docs" / "source-fidelity-and-private-verbatim.md"
 RESPONSE = ROOT / "wom-kit" / "docs" / "ai-response-contract.md"
 RELEASE = ROOT / "wom-kit" / "docs" / "releases" / "v0.3.313.md"
-PACKAGED_RELEASE = (
+HISTORICAL_PACKAGED_RELEASE = (
     ROOT
     / "wom-kit"
     / "src"
@@ -84,14 +84,15 @@ class V03313SourceFidelityDocsTests(unittest.TestCase):
         words = SKILL.read_text(encoding="utf-8").split()
         self.assertLessEqual(len(words), 1400)
 
-    def test_current_release_and_schema_are_packaged_exactly(self) -> None:
-        self.assertEqual(RELEASE.read_bytes(), PACKAGED_RELEASE.read_bytes())
+    def test_historical_release_stays_source_only_and_schema_is_packaged(self) -> None:
+        self.assertTrue(RELEASE.is_file())
+        self.assertFalse(HISTORICAL_PACKAGED_RELEASE.exists())
         self.assertEqual(SCHEMA.read_bytes(), PACKAGED_SCHEMA.read_bytes())
 
     def test_current_public_surfaces_link_the_contract_and_predecessor(self) -> None:
         expected_status = (
-            "Status: v0.3.313 source-fidelity and private-verbatim "
-            "preservation checkpoint"
+            "Status: v0.3.314 Letter 126 long-operation and "
+            "generated-index recovery checkpoint"
         )
         for path in (MATRIX, RUNTIME):
             with self.subTest(document=path.name):

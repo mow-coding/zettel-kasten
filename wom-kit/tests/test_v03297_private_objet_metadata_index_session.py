@@ -785,7 +785,7 @@ class PrivateObjetIndexReadSessionTests(unittest.TestCase):
                     "private_objet_metadata_projection_unavailable",
                 )
 
-    def test_coherent_uncheckpointed_wal_and_same_identity_append_succeed(self) -> None:
+    def test_coherent_uncheckpointed_wal_is_rejected_before_open(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "archive"
             writer = create_synthetic_archive(root, wal=True)
@@ -795,29 +795,32 @@ class PrivateObjetIndexReadSessionTests(unittest.TestCase):
             self.assertTrue(db_path.with_name(db_path.name + "-wal").is_file())
             self.assertTrue(db_path.with_name(db_path.name + "-shm").is_file())
             before = session._capture_sqlite_identity_token(db_path)
-            counts_seen: list[int] = []
-
-            def consume(
-                api: session.PrivateObjetIndexReadAPI,
-                _health: object,
-            ) -> None:
-                counts_seen.append(
-                    api.scalar("SELECT COUNT(*) FROM private_probe")  # type: ignore[arg-type]
-                )
-                writer.execute("INSERT INTO private_probe(value) VALUES (2)")
-                writer.commit()
-                counts_seen.append(
-                    api.scalar("SELECT COUNT(*) FROM private_probe")  # type: ignore[arg-type]
-                )
-                return None
+            consumed: list[str] = []
 
             try:
-                result = run_session(root, consumer=consume)
+                with mock.patch.object(
+                    session,
+                    "_open_private_objet_index_connection",
+                    wraps=session._open_private_objet_index_connection,
+                ) as opened:
+                    with self.assertRaises(
+                        session.PrivateObjetIndexSessionError
+                    ) as caught:
+                        run_session(
+                            root,
+                            consumer=lambda _api, _health: consumed.append(
+                                "consumer"
+                            ),
+                        )
                 after = session._capture_sqlite_identity_token(db_path)
             finally:
                 writer.close()
-        self.assertEqual(result["index_state"], "current")
-        self.assertEqual(counts_seen, [1, 1])
+        self.assertEqual(
+            caught.exception.code,
+            "private_objet_metadata_projection_unavailable",
+        )
+        opened.assert_not_called()
+        self.assertEqual(consumed, [])
         self.assertEqual(before, after)
 
     def test_clean_wal_without_sidecars_blocks_before_query_consumption(

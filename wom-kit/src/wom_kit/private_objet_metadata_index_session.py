@@ -231,12 +231,12 @@ _CASE_DIAGNOSTICS: dict[str, tuple[str, ...]] = {
     "C11": (),
 }
 _CASE_TOP_LEVEL: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
-    "C1": ((), (_SNAPSHOT_CHANGED,)),
-    "C2": ((), (_PROJECTION_UNAVAILABLE,)),
+    "C1": ((_SNAPSHOT_CHANGED,), ()),
+    "C2": ((_PROJECTION_UNAVAILABLE,), ()),
     "C3": (("private_objet_metadata_authority_blocked",), ()),
     "C4": (("private_objet_metadata_authority_invalid",), ()),
     "C5": (("archive_index_missing",), ("index_health_blocked",)),
-    "C6": ((), (_PROJECTION_UNAVAILABLE,)),
+    "C6": ((_PROJECTION_UNAVAILABLE,), ()),
     "C7": ((_PROJECTION_INVALID,), ()),
     "C8": ((), (_PRIVATE_MISSING,)),
     "C9": ((), ("private_objet_metadata_stale",)),
@@ -491,6 +491,7 @@ class _SQLiteIdentityToken:
     database: _PathIdentity
     wal: _PathIdentity
     shm: _PathIdentity
+    journal: _PathIdentity
 
     @property
     def database_present(self) -> bool:
@@ -562,11 +563,16 @@ def _capture_sqlite_identity_token(db_path: Path) -> _SQLiteIdentityToken:
         expected_directory=False,
         allow_missing=True,
     )
-    if not database.present and (wal.present or shm.present):
+    journal = _path_identity(
+        db_path.with_name(db_path.name + "-journal"),
+        expected_directory=False,
+        allow_missing=True,
+    )
+    if not database.present and (wal.present or shm.present or journal.present):
         raise PrivateObjetIndexSessionError(_PROJECTION_INVALID)
     if database.present and not _same_resolved_path(db_path):
         raise PrivateObjetIndexSessionError(_PROJECTION_INVALID)
-    return _SQLiteIdentityToken(parent_token, database, wal, shm)
+    return _SQLiteIdentityToken(parent_token, database, wal, shm, journal)
 
 
 def _private_objet_index_read_uri(db_path: Path) -> str:
@@ -585,7 +591,7 @@ def _open_private_objet_index_connection(db_path: Path) -> sqlite3.Connection:
     )
 
 
-def _database_header_advertises_wal(db_path: Path) -> bool:
+def _database_header_read_write_versions(db_path: Path) -> bytes | None:
     """Inspect SQLite header bytes without opening a connection or sidecar."""
 
     try:
@@ -597,22 +603,33 @@ def _database_header_advertises_wal(db_path: Path) -> bool:
         len(header) != _SQLITE_HEADER_PREFIX_LENGTH
         or header[:16] != _SQLITE_HEADER_MAGIC
     ):
-        return False
-    return header[18:20] == b"\x02\x02"
+        return None
+    return header[18:20]
 
 
-def _wal_sidecars_are_preopen_coherent(
+def _database_header_advertises_wal(db_path: Path) -> bool:
+    return _database_header_read_write_versions(db_path) == b"\x02\x02"
+
+
+def _database_header_advertises_delete(db_path: Path) -> bool:
+    return _database_header_read_write_versions(db_path) == b"\x01\x01"
+
+
+def _rollback_read_boundary_is_preopen_coherent(
     db_path: Path,
     identity: _SQLiteIdentityToken,
 ) -> bool:
-    """Require an already-present WAL/SHM pair before any WAL query."""
+    """Require the v0.3.314 rollback-mode snapshot before any SQLite query."""
 
-    wal_advertised = _database_header_advertises_wal(db_path)
     wal_present = identity.wal.present
     shm_present = identity.shm.present
-    if wal_advertised:
-        return wal_present and shm_present
-    return not wal_present and not shm_present
+    journal_present = identity.journal.present
+    return (
+        _database_header_advertises_delete(db_path)
+        and not wal_present
+        and not shm_present
+        and not journal_present
+    )
 
 
 class PrivateObjetIndexReadAPI:
@@ -820,7 +837,7 @@ def _with_private_objet_index_read_session(
             )
             result = build_private_objet_metadata_health_envelope("C5")
             return dict(result)
-        if not _wal_sidecars_are_preopen_coherent(db_path, identity_a):
+        if not _rollback_read_boundary_is_preopen_coherent(db_path, identity_a):
             final_tokens_checked = True
             _require_stable_authority_and_db(
                 capture_authority,

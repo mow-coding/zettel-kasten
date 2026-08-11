@@ -1,14 +1,14 @@
 # WOM-kit Python 도구 설치
 
-상태: v0.3.313 조건부 GitHub wheel 및 원문 충실도 릴리스 계약
+상태: v0.3.314 조건부 GitHub wheel 및 Letter 126 복구 계약
 
 WOM-kit은 명령줄 도구입니다. 일반 앱 프로젝트의 Python 의존성과 섞지 말고
 별도의 격리된 Python 환경에 설치하는 것이 좋습니다.
 
-아래 v0.3.313 URL은 조건부 계약이며 공개 자산이 실제로 존재한다는 증거가
+아래 v0.3.314 URL은 조건부 계약이며 공개 자산이 실제로 존재한다는 증거가
 아닙니다. 정확히 일치하는 GitHub Release가 존재하고 검증된 wheel을 자산으로
 나열한 뒤에만 사용하세요. 소스 상태와 릴리스 증거의 구분은
-[v0.3.313 릴리스 노트](releases/v0.3.313.md)를 보세요.
+[v0.3.314 릴리스 노트](releases/v0.3.314.md)를 보세요.
 
 ## 권장 설치
 
@@ -17,7 +17,7 @@ WOM-kit은 명령줄 도구입니다. 일반 앱 프로젝트의 Python 의존�
 증거가 되지는 않습니다.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.313/wom_kit-0.3.313-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.314/wom_kit-0.3.314-py3-none-any.whl"
 archive --version
 ```
 
@@ -35,7 +35,7 @@ archive --version
 
 ```powershell
 py -m venv "$HOME\.wom-tools\wom-kit"
-& "$HOME\.wom-tools\wom-kit\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.313/wom_kit-0.3.313-py3-none-any.whl"
+& "$HOME\.wom-tools\wom-kit\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.314/wom_kit-0.3.314-py3-none-any.whl"
 & "$HOME\.wom-tools\wom-kit\Scripts\archive.exe" --version
 ```
 
@@ -112,8 +112,16 @@ backup 도구, 다른 모든 Git writer를 전체 업데이트 transaction 동�
 멈추고, 멈춘 상태에서 다음처럼 승인해야 합니다.
 
 ```powershell
-archive project-version-update <project-or-archive-root> --target vX.Y.Z --approve --reviewed-by <actor> --affirm-external-writers-quiescent --format json
+archive project-version-update <project-or-archive-root> --target vX.Y.Z --approve --reviewed-by <actor> --affirm-external-writers-quiescent --progress --output .zettel-kasten/diagnostics/update-20260811-001.json --format json
 ```
+
+v0.3.314부터 명시한 output은 시작 직후 내용 없는 `operation_ref`도 출력합니다.
+호출 화면이 timeout으로 먼저 끝나면 updater를 중복 실행하지 말고, 그 reference와
+정확한 시작 root로 `operation-control` status 또는 제한된 wait를 실행하세요.
+archive root에서 시작한 update의 output은 새
+`.wom-scratch/diagnostics/*.json` 경로를 사용합니다. cancel과 resume은 구현되지
+않았고, status는 update 완료 후 새 프로세스의 `archive version` 확인을 대신하지
+않습니다.
 
 결과에는 `external_writer_quiescence_required: true`,
 `external_writer_quiescence_affirmed: true`,

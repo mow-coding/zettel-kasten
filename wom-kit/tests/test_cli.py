@@ -18,7 +18,7 @@ import time
 import unittest
 import unicodedata
 import uuid
-from contextlib import contextmanager, redirect_stderr, redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path, PurePosixPath
 from typing import Any
 from unittest.mock import patch
@@ -156,19 +156,6 @@ _R2_SECRET_HEX64 = "3f786850e387550fdab836ed7e6dc881de23001b3f786850e387550fdab8
 _AWS_SECRET_40 = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
 _FAKE_SHA_A = "acc6e73fb84988ecb538dfc0ceb883b88694e469a05172a5aeb0cce8902ce136"
 _FAKE_SHA_B = "9dabf9b965a3f789b1b36100f3f70515ce8dfd81b411b1503e1e2c3304303647"
-
-
-@contextmanager
-def _coherent_private_index_wal(archive_root: Path):
-    """Keep the existing WAL/SHM pair readable for one health assertion."""
-
-    db_path = archive_root / archive_services.INDEX_RELATIVE_PATH
-    connection = sqlite3.connect(db_path)
-    try:
-        connection.execute("PRAGMA journal_mode=WAL")
-        yield
-    finally:
-        connection.close()
 
 
 class ArchiveCliTests(unittest.TestCase):
@@ -67508,11 +67495,10 @@ archive_services.zet_abstract_backfill_recover(
             self.assertGreater(approve_result["duplicate_check"]["live_staleness_paths_checked"], 0)
             self.assertTrue(approve_result["generated_index_updated"])
 
-            with _coherent_private_index_wal(archive_root):
-                health = archive_services.index_health(
-                    archive_root,
-                    dry_run=True,
-                )
+            health = archive_services.index_health(
+                archive_root,
+                dry_run=True,
+            )
             self.assertTrue(health["ok"], health)
             self.assertFalse(
                 (archive_root / "db" / "archive-index.sqlite").stat().st_mtime
@@ -67921,7 +67907,7 @@ archive_services.zet_abstract_backfill_recover(
             source_result = json.loads(source_output)
             self.assertTrue(any(item["type"] == "source_map" for item in source_result["results"]))
 
-    def test_archive_index_uses_wal_and_busy_timeout_for_batch_writes(self) -> None:
+    def test_archive_index_uses_delete_journal_and_busy_timeout_for_batch_writes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
 
@@ -67936,7 +67922,7 @@ archive_services.zet_abstract_backfill_recover(
             finally:
                 conn.close()
 
-            self.assertEqual(journal_mode, "wal")
+            self.assertEqual(journal_mode, "delete")
             self.assertEqual(busy_timeout, archive_services.ARCHIVE_INDEX_BUSY_TIMEOUT_MS)
 
     def test_interrupted_index_rebuild_rolls_back_and_preserves_previous_rows(self) -> None:
@@ -67997,7 +67983,7 @@ archive_services.zet_abstract_backfill_recover(
             self.assertEqual(health["summary"]["indexed_zettel_count"], previous_count)
             self.assertEqual(health["summary"]["missing_from_index_count"], 1)
 
-    def test_interrupted_first_index_build_is_structured_as_incomplete_schema(self) -> None:
+    def test_interrupted_first_index_build_blocks_without_false_comparison(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
             db_path = archive_root / archive_services.INDEX_RELATIVE_PATH
@@ -68026,14 +68012,20 @@ archive_services.zet_abstract_backfill_recover(
             self.assertTrue(db_path.is_file())
             health = archive_services.index_health(archive_root, dry_run=True)
             self.assertFalse(health["ok"])
-            self.assertEqual(health["index_state"], "stale_or_incomplete")
-            self.assertIn("archive_index_schema_incomplete", health["stale_reasons"])
+            self.assertEqual(health["index_state"], "blocked")
+            self.assertEqual(health["stale_reasons"], ["index_health_blocked"])
+            self.assertIn("archive_index_rebuild_required", health["blockers"])
+            self.assertIn(
+                "private_objet_metadata_projection_unavailable",
+                health["blockers"],
+            )
+            self.assertFalse(
+                health["summary"]["live_zettel_enumeration_performed"]
+            )
+            self.assertFalse(health["summary"]["index_comparison_performed"])
             self.assertFalse(health["summary"]["index_schema_complete"])
             self.assertEqual(health["summary"]["indexed_zettel_count"], 0)
-            self.assertEqual(
-                health["summary"]["missing_from_index_count"],
-                health["summary"]["live_zettel_count"],
-            )
+            self.assertEqual(health["summary"]["missing_from_index_count"], 0)
 
     def test_post_commit_progress_failure_returns_failure_without_relabeling_index(
         self,
@@ -68058,11 +68050,10 @@ archive_services.zet_abstract_backfill_recover(
                     archive_root,
                     progress_callback=break_only_after_commit,
                 )
-            with _coherent_private_index_wal(archive_root):
-                health = archive_services.index_health(
-                    archive_root,
-                    dry_run=True,
-                )
+            health = archive_services.index_health(
+                archive_root,
+                dry_run=True,
+            )
 
             self.assertTrue(health["ok"], health)
             self.assertEqual(
@@ -68771,20 +68762,19 @@ archive_services.zet_abstract_backfill_recover(
                 index_code = archive_cli.main(
                     ["index", str(archive_root), "--format", "json"]
                 )
-                with _coherent_private_index_wal(archive_root):
-                    health_code = archive_cli.main(
-                        [
-                            "index-health",
-                            str(archive_root),
-                            "--dry-run",
-                            "--format",
-                            "json",
-                        ]
-                    )
-                    health = archive_services.index_health(
-                        archive_root,
-                        dry_run=True,
-                    )
+                health_code = archive_cli.main(
+                    [
+                        "index-health",
+                        str(archive_root),
+                        "--dry-run",
+                        "--format",
+                        "json",
+                    ]
+                )
+                health = archive_services.index_health(
+                    archive_root,
+                    dry_run=True,
+                )
             self.assertEqual(index_code, 0)
             self.assertEqual(health_code, 0)
             self.assertTrue(health["ok"], health)
@@ -68884,18 +68874,17 @@ archive_services.zet_abstract_backfill_recover(
             self.assertEqual(progress_code, 0)
             self.assertTrue(json.loads(progress_stdout)["ok"])
 
-            with _coherent_private_index_wal(progress_root):
-                health_code, health_stdout, _stderr = run_with_closed_stream(
-                    [
-                        "index-health",
-                        str(progress_root),
-                        "--dry-run",
-                        "--progress",
-                        "--format",
-                        "json",
-                    ],
-                    closed_stream="stderr",
-                )
+            health_code, health_stdout, _stderr = run_with_closed_stream(
+                [
+                    "index-health",
+                    str(progress_root),
+                    "--dry-run",
+                    "--progress",
+                    "--format",
+                    "json",
+                ],
+                closed_stream="stderr",
+            )
             self.assertEqual(health_code, 0)
             self.assertEqual(json.loads(health_stdout)["index_state"], "current")
 
@@ -78956,11 +78945,10 @@ class ObjetCaptureTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self._facet_archive(tmp)
             db_path = archive_root / archive_services.INDEX_RELATIVE_PATH
-            with _coherent_private_index_wal(archive_root):
-                current = archive_services.index_health(
-                    archive_root,
-                    dry_run=True,
-                )
+            current = archive_services.index_health(
+                archive_root,
+                dry_run=True,
+            )
             self.assertTrue(current["ok"], current)
             self.assertEqual(current["index_state"], "current")
             self.assertEqual(
@@ -79010,11 +78998,10 @@ class ObjetCaptureTests(unittest.TestCase):
                 "---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\nSensitive body must not be echoed.\n",
                 encoding="utf-8",
             )
-            with _coherent_private_index_wal(archive_root):
-                stale = archive_services.index_health(
-                    archive_root,
-                    dry_run=True,
-                )
+            stale = archive_services.index_health(
+                archive_root,
+                dry_run=True,
+            )
             self.assertFalse(stale["ok"], stale)
             self.assertEqual(stale["index_state"], "stale_or_incomplete")
             self.assertEqual(stale["summary"]["missing_from_index_count"], 1)
@@ -79036,16 +79023,15 @@ class ObjetCaptureTests(unittest.TestCase):
                 [],
             )
 
-            with _coherent_private_index_wal(archive_root):
-                code, output = self.run_cli(
-                    [
-                        "index-health",
-                        str(archive_root),
-                        "--dry-run",
-                        "--format",
-                        "json",
-                    ]
-                )
+            code, output = self.run_cli(
+                [
+                    "index-health",
+                    str(archive_root),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
             self.assertEqual(code, 1, output)
             self.assertEqual(json.loads(output)["summary"]["missing_from_index_count"], 1)
             no_dry_code, no_dry_output = self.run_cli(["index-health", str(archive_root)])
@@ -79054,11 +79040,10 @@ class ObjetCaptureTests(unittest.TestCase):
 
             rebuild_code, rebuild_output = self.run_cli(["index", str(archive_root), "--format", "json"])
             self.assertEqual(rebuild_code, 0, rebuild_output)
-            with _coherent_private_index_wal(archive_root):
-                rebuilt = archive_services.index_health(
-                    archive_root,
-                    dry_run=True,
-                )
+            rebuilt = archive_services.index_health(
+                archive_root,
+                dry_run=True,
+            )
             self.assertTrue(rebuilt["ok"], rebuilt)
             self.assertEqual(rebuilt["index_state"], "current")
             self.assertEqual(
@@ -79117,10 +79102,7 @@ class ObjetCaptureTests(unittest.TestCase):
                     raise AssertionError("index-health must not read the complete zettel body")
                 return real_read_text(path, *args, **kwargs)
 
-            with (
-                _coherent_private_index_wal(archive_root),
-                patch.object(Path, "read_text", reject_full_zettel_read),
-            ):
+            with patch.object(Path, "read_text", reject_full_zettel_read):
                 current = archive_services.index_health(
                     archive_root,
                     dry_run=True,
@@ -79143,19 +79125,18 @@ class ObjetCaptureTests(unittest.TestCase):
                 encoding="utf-8",
             )
             output_relative = ".wom-scratch/diagnostics/index-health-stale.json"
-            with _coherent_private_index_wal(archive_root):
-                code, stdout, stderr = self.run_cli_split(
-                    [
-                        "index-health",
-                        str(archive_root),
-                        "--dry-run",
-                        "--progress",
-                        "--output",
-                        output_relative,
-                        "--format",
-                        "json",
-                    ]
-                )
+            code, stdout, stderr = self.run_cli_split(
+                [
+                    "index-health",
+                    str(archive_root),
+                    "--dry-run",
+                    "--progress",
+                    "--output",
+                    output_relative,
+                    "--format",
+                    "json",
+                ]
+            )
 
             self.assertEqual(code, 1, stdout + stderr)
             summary = json.loads(stdout)
@@ -79183,11 +79164,10 @@ class ObjetCaptureTests(unittest.TestCase):
             bad_relative = "zettels/zet_non_utf8_probe.md"
             (archive_root / bad_relative).write_bytes(b"\xff\xfePRIVATE-BINARY-MARKER")
 
-            with _coherent_private_index_wal(archive_root):
-                health = archive_services.index_health(
-                    archive_root,
-                    dry_run=True,
-                )
+            health = archive_services.index_health(
+                archive_root,
+                dry_run=True,
+            )
 
             self.assertFalse(health["ok"], health)
             self.assertEqual(
@@ -79233,11 +79213,10 @@ class ObjetCaptureTests(unittest.TestCase):
             )
             archive_services.index_archive(archive_root)
 
-            with _coherent_private_index_wal(archive_root):
-                health = archive_services.index_health(
-                    archive_root,
-                    dry_run=True,
-                )
+            health = archive_services.index_health(
+                archive_root,
+                dry_run=True,
+            )
 
             self.assertFalse(health["ok"], health)
             self.assertEqual(health["index_state"], "stale_or_incomplete")
@@ -79345,27 +79324,26 @@ class ObjetCaptureTests(unittest.TestCase):
             child_env = dict(os.environ)
             child_env["PYTHONDONTWRITEBYTECODE"] = "1"
             child_env["PYTHONPATH"] = str(SRC_ROOT)
-            with _coherent_private_index_wal(archive_root):
-                completed = subprocess.run(
-                    [
-                        sys.executable,
-                        "-m",
-                        "wom_kit.archive_cli",
-                        "index-health",
-                        str(archive_root),
-                        "--dry-run",
-                        "--output",
-                        output_relative,
-                        "--format",
-                        "json",
-                    ],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    check=False,
-                    cwd=KIT_ROOT,
-                    env=child_env,
-                )
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "wom_kit.archive_cli",
+                    "index-health",
+                    str(archive_root),
+                    "--dry-run",
+                    "--output",
+                    output_relative,
+                    "--format",
+                    "json",
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+                cwd=KIT_ROOT,
+                env=child_env,
+            )
 
             self.assertEqual(completed.returncode, 0, completed.stderr)
             saved = json.loads((archive_root / output_relative).read_text(encoding="utf-8"))

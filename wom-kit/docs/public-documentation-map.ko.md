@@ -51,11 +51,13 @@
 - [Operator Feedback Lifecycle](operator-feedback-lifecycle.md)
 - [원문 충실도와 비공개 verbatim 보존](source-fidelity-and-private-verbatim.md)
 - [v0.3.313 원문 충실도 결정 기록](archive-infra-decision-log-2026-08-10-v03313-source-fidelity.md)
+- [v0.3.314 Letter 126 복구 결정 기록](archive-infra-decision-log-2026-08-11-v03314-letter126.md)
 - [Letter 120·123 인덱스 수명주기와 피드백 본문](letter120-123-index-lifecycle-and-feedback-body.md)
 - [v0.3.312 인덱스 권위와 피드백 본문 결정 기록](archive-infra-decision-log-2026-08-10-v03312-index-authority-and-feedback-body.md)
 - [Approval Handoff Lifecycle](approval-handoff-lifecycle.md)
 - [Approval Handoff Audit](approval-handoff-audit.md)
 - [Operation Status Taxonomy](operation-status-taxonomy.md)
+- [제한된 Operation Control](operation-control.md)
 - [Input Provenance Taxonomy](input-provenance-taxonomy.md)
 - [Secret Signal Taxonomy](secret-signal-taxonomy.md)
 - [Local Sovereignty And Backup Authority](local-sovereignty-and-backup-authority.md)
@@ -413,6 +415,7 @@ local archive
 - [v0.3.311 릴리스 노트](releases/v0.3.311.md)
 - [v0.3.312 릴리스 노트](releases/v0.3.312.md)
 - [v0.3.313 릴리스 노트](releases/v0.3.313.md)
+- [v0.3.314 릴리스 노트](releases/v0.3.314.md)
 
 작업일지는 제품 명세가 아닙니다.
 

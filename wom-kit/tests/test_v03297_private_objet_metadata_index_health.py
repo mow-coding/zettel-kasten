@@ -402,14 +402,14 @@ class PrivateObjetHealthDecisionTests(unittest.TestCase):
     def test_every_c1_c11_decision_composes_exact_top_level_delta(self) -> None:
         expected = {
             "C1": (
-                [],
                 ["private_objet_metadata_snapshot_changed"],
-                "stale_or_incomplete",
+                [],
+                "blocked",
             ),
             "C2": (
-                [],
                 ["private_objet_metadata_projection_unavailable"],
-                "stale_or_incomplete",
+                [],
+                "blocked",
             ),
             "C3": (
                 ["private_objet_metadata_authority_blocked"],
@@ -427,9 +427,9 @@ class PrivateObjetHealthDecisionTests(unittest.TestCase):
                 "blocked",
             ),
             "C6": (
-                [],
                 ["private_objet_metadata_projection_unavailable"],
-                "stale_or_incomplete",
+                [],
+                "blocked",
             ),
             "C7": (
                 ["private_objet_metadata_projection_invalid"],
@@ -495,7 +495,13 @@ class PrivateObjetHealthDecisionTests(unittest.TestCase):
             decision_for("C9"),
         )
         for key in health.PUBLIC_INDEX_HEALTH_KEYS:
-            if key not in {"ok", "index_state", "stale_reasons", "blockers"}:
+            if key not in {
+                "ok",
+                "index_state",
+                "stale_reasons",
+                "blockers",
+                "next_safe_actions",
+            }:
                 self.assertEqual(result[key], source[key])
         self.assertEqual(result["blockers"], ["legacy_blocker"])
         self.assertEqual(
@@ -504,6 +510,15 @@ class PrivateObjetHealthDecisionTests(unittest.TestCase):
         )
         self.assertEqual(result["index_state"], "blocked")
         self.assertIs(result["ok"], False)
+        self.assertEqual(result["next_safe_actions"][0], "legacy")
+        self.assertIn(
+            "archive index <archive-root> --progress --format json",
+            result["next_safe_actions"][1],
+        )
+        self.assertIn(
+            "archive index-health <archive-root> --dry-run --progress --format json",
+            result["next_safe_actions"][2],
+        )
 
     def test_invalid_public_shape_and_mutated_decision_fail_closed(self) -> None:
         wrong_order = public_health()

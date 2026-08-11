@@ -9,7 +9,7 @@ from wom_kit import __version__
 
 KIT_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = KIT_ROOT.parent
-EXPECTED_CURRENT_VERSION = "0.3.313"
+EXPECTED_CURRENT_VERSION = "0.3.314"
 EXPECTED_CURRENT_TAG = f"v{EXPECTED_CURRENT_VERSION}"
 CURRENT_VERSION = f"v{__version__}"
 CURRENT_RELEASE_NOTE = f"{EXPECTED_CURRENT_TAG}.md"
@@ -20,7 +20,7 @@ CURRENT_WHEEL_URL = (
     f"wom_kit-{EXPECTED_CURRENT_VERSION}-py3-none-any.whl"
 )
 CURRENT_RUNTIME_STATUS = (
-    f"Status: {CURRENT_VERSION} source-fidelity and private-verbatim preservation checkpoint"
+    f"Status: {CURRENT_VERSION} Letter 126 long-operation and generated-index recovery checkpoint"
 )
 CURRENT_MATRIX_VERSION = f"Version: {CURRENT_VERSION} implementation and release scope"
 MATRIX_PATH = KIT_ROOT / "docs" / "capability-matrix.md"
@@ -10990,17 +10990,18 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         self.assertIn("releases/v0.3.310.md", public_map_text)
         self.assertIn("releases/v0.3.310.md", public_map_ko_text)
 
-    def test_v03313_source_fidelity_public_contract_is_current_and_unproven_live(
+    def test_v03313_source_fidelity_contract_is_historical_and_current_release_is_packaged(
         self,
     ) -> None:
         release_path = KIT_ROOT / "docs" / "releases" / "v0.3.313.md"
+        current_release_path = KIT_ROOT / "docs" / "releases" / CURRENT_RELEASE_NOTE
         packaged_release_path = (
             KIT_ROOT
             / "src"
             / "wom_kit"
             / "_resources"
             / "release-notes"
-            / "v0.3.313.md"
+            / CURRENT_RELEASE_NOTE
         )
         guide_path = (
             KIT_ROOT
@@ -11027,7 +11028,11 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
 
         self.assertEqual(__version__, EXPECTED_CURRENT_VERSION)
         self.assertEqual(CURRENT_VERSION, EXPECTED_CURRENT_TAG)
-        self.assertEqual(release_path.read_bytes(), packaged_release_path.read_bytes())
+        self.assertEqual(
+            current_release_path.read_bytes(),
+            packaged_release_path.read_bytes(),
+        )
+        self.assertFalse(packaged_release_path.with_name("v0.3.313.md").exists())
         self.assertIn(CURRENT_MATRIX_VERSION, matrix_text)
         self.assertIn(CURRENT_RUNTIME_STATUS, matrix_text)
         self.assertIn(CURRENT_RUNTIME_STATUS, runtime_text)

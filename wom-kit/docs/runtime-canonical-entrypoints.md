@@ -1,6 +1,6 @@
 # Runtime Canonical Entry Points
 
-Status: v0.3.313 source-fidelity and private-verbatim preservation checkpoint
+Status: v0.3.314 Letter 126 long-operation and generated-index recovery checkpoint
 
 When an AI runtime enters a WOM archive, it needs a small, explicit "start
 here" map. The archive may contain zets, source bindings, provider metadata,
@@ -132,6 +132,30 @@ protected literal is not implemented. See
 [Letter 117 Completion](letter117-completion.md). Source documentation and
 external CI, exact-tag, GitHub Release, and wheel evidence remain distinct
 verification layers.
+
+## v0.3.314 Long-Operation And Index-Recovery Entry Points
+
+For `project-version-update`, `index`, and `index-health`, use a fresh
+command-appropriate `--output` path. Archive operations use
+`.wom-scratch/diagnostics/*.json`; project-root updates use
+`.zettel-kasten/diagnostics/*.json`. Preserve the opaque `operation_ref`
+printed to stderr before the long work begins.
+
+If the caller times out, do not start a duplicate writer. Use the exact
+starting root and reference with `operation-control --action status --dry-run`,
+bounded `wait`, or read-only `recovery-plan`. A wait deadline is neutral.
+Cancel and resume are unsupported and write nothing; no MCP, daemon, queue,
+background launcher, force kill, lock deletion, or automatic rollback exists.
+A completed output proves only the verified saved CLI result, so follow its
+command-specific next action.
+
+Generated-index health must pass the clean rollback `DELETE` header and
+no-sidecar preflight before SQLite opens. A legacy WAL-mode generated cache or
+private projection blocker needs one ordinary explicit `archive index`
+rebuild, followed by a fresh `index-health`. Do not hand-edit or delete the
+database or sidecars. See [Bounded operation control](operation-control.md),
+[Index Health](index-health.md), and the
+[v0.3.314 release note](releases/v0.3.314.md).
 
 ## v0.3.313 Source-Fidelity Entry Points
 
