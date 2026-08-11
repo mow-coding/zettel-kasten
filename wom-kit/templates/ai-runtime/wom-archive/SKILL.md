@@ -61,7 +61,9 @@ Do not preload every reference.
   check.
 - Treat archive-relative capture/staging paths as archive-root coordinates.
   Use reviewed batch intake/capture for many items. Per-item convergence is not
-  batch atomicity.
+  batch atomicity. Paired batch results must separately close original and derived
+  requested/written-or-ready/skipped/blocked partitions. `partial`,
+  `evidence_incomplete`, or `recovery_required` stops automatic continuation.
 - A provider/storage locator is a recovery clue, not reachability proof. Record
   or remove it only through its plan, approved record, and revert routes.
 - Relation candidates are review queues, not edges. Humans choose accept/reject
@@ -122,6 +124,11 @@ Do not preload every reference.
   `--affirm-external-writers-quiescent`. After completion, start a new process
   and require `archive version` import/source/pin/tag agreement. A local version
   check does not prove remote release freshness.
+- If an updater returns a bound collision, keep its opaque entry ref and plan
+  digest. Use CLI-only `project-version-update-collision` inspect first. A
+  separate preserve-relocate approval never retries the updater; after success
+  run a fresh updater preview and separate approval. Retain uncertain cases and
+  locks for recovery; never guess a path, delete evidence, or blindly replay.
 
 ## Finish
 

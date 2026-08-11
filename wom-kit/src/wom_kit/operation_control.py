@@ -26,6 +26,11 @@ OPERATION_REF_RE = re.compile(r"op:sha256:([0-9a-f]{64})")
 RUN_ID_RE = re.compile(r"[0-9a-f]{32}")
 SAFE_REVIEWER_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,127}")
 CONTROL_DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}")
+SAFE_DOMAIN_VALUE_RE = re.compile(r"[a-z][a-z0-9_]{0,127}")
+SAFE_RELEASE_TAG_RE = re.compile(r"v[0-9]+\.[0-9]+\.[0-9]+")
+SAFE_COLLISION_REF_RE = re.compile(r"update-entry:(?!0000)[0-9]{4}")
+MAX_DOMAIN_BLOCKER_CODES = 32
+MAX_DOMAIN_COLLISION_REFS = 32
 
 MAX_JOURNAL_BYTES = 1024 * 1024
 MAX_JOURNAL_RECORDS = 4096
@@ -405,6 +410,161 @@ def _validated_result_payload(
     return exit_code, result_ok
 
 
+def _safe_matching_values(
+    value: object,
+    *,
+    pattern: re.Pattern[str],
+    limit: int,
+) -> list[str]:
+    if not isinstance(value, list) or len(value) > limit:
+        return []
+    matched: list[str] = []
+    for item in value:
+        if not isinstance(item, str) or pattern.fullmatch(item) is None:
+            return []
+        if item not in matched:
+            matched.append(item)
+    return matched
+
+
+def _safe_domain_projection(
+    payload: dict[str, Any],
+    *,
+    command: str,
+) -> dict[str, Any] | None:
+    """Project a tiny allowlisted command result without copying raw text.
+
+    Operation control proves that the complete output artifact is bound to the
+    journal.  It does not make domain claims true.  This projection exists only
+    so a later process can distinguish a successful output transport from a
+    blocked project update and give one blocker-specific, path-free next step.
+    """
+
+    if command != "project-version-update":
+        return None
+    raw_status = payload.get("status")
+    status = (
+        raw_status
+        if isinstance(raw_status, str)
+        and SAFE_DOMAIN_VALUE_RE.fullmatch(raw_status) is not None
+        else None
+    )
+    target = payload.get("target")
+    raw_target_tag = target.get("tag") if isinstance(target, dict) else None
+    target_tag = (
+        raw_target_tag
+        if isinstance(raw_target_tag, str)
+        and SAFE_RELEASE_TAG_RE.fullmatch(raw_target_tag) is not None
+        else None
+    )
+
+    containers = [payload]
+    for key in ("materialization_preflight", "materialization_plan"):
+        candidate = payload.get(key)
+        if isinstance(candidate, dict):
+            containers.append(candidate)
+    blocker_codes: list[str] = []
+    collision_refs: list[str] = []
+    materialization_plan_digests: list[str] = []
+    for container in containers:
+        plan_digest = container.get("materialization_plan_sha256")
+        if (
+            isinstance(plan_digest, str)
+            and CONTROL_DIGEST_RE.fullmatch(plan_digest) is not None
+            and plan_digest not in materialization_plan_digests
+        ):
+            materialization_plan_digests.append(plan_digest)
+        for key in ("blocker_codes", "reason_codes"):
+            for code in _safe_matching_values(
+                container.get(key),
+                pattern=SAFE_DOMAIN_VALUE_RE,
+                limit=MAX_DOMAIN_BLOCKER_CODES,
+            ):
+                if (
+                    code not in blocker_codes
+                    and len(blocker_codes) < MAX_DOMAIN_BLOCKER_CODES
+                ):
+                    blocker_codes.append(code)
+        for key in ("collision_refs", "entry_refs"):
+            for entry_ref in _safe_matching_values(
+                container.get(key),
+                pattern=SAFE_COLLISION_REF_RE,
+                limit=MAX_DOMAIN_COLLISION_REFS,
+            ):
+                if (
+                    entry_ref not in collision_refs
+                    and len(collision_refs) < MAX_DOMAIN_COLLISION_REFS
+                ):
+                    collision_refs.append(entry_ref)
+        for key in ("collision_ref", "entry_ref"):
+            entry_ref = container.get(key)
+            if (
+                isinstance(entry_ref, str)
+                and SAFE_COLLISION_REF_RE.fullmatch(entry_ref) is not None
+                and entry_ref not in collision_refs
+                and len(collision_refs) < MAX_DOMAIN_COLLISION_REFS
+            ):
+                collision_refs.append(entry_ref)
+        issue_values = container.get("issues")
+        if not isinstance(issue_values, list):
+            issue_values = container.get("collisions")
+        if not isinstance(issue_values, list):
+            issue_values = container.get("conflicts")
+        if isinstance(issue_values, list) and len(issue_values) <= 128:
+            for issue in issue_values:
+                if not isinstance(issue, dict):
+                    continue
+                reason = issue.get("reason_code")
+                if (
+                    isinstance(reason, str)
+                    and SAFE_DOMAIN_VALUE_RE.fullmatch(reason) is not None
+                    and reason not in blocker_codes
+                    and len(blocker_codes) < MAX_DOMAIN_BLOCKER_CODES
+                ):
+                    blocker_codes.append(reason)
+                for reason_code in _safe_matching_values(
+                    issue.get("reason_codes"),
+                    pattern=SAFE_DOMAIN_VALUE_RE,
+                    limit=MAX_DOMAIN_BLOCKER_CODES,
+                ):
+                    if (
+                        reason_code not in blocker_codes
+                        and len(blocker_codes) < MAX_DOMAIN_BLOCKER_CODES
+                    ):
+                        blocker_codes.append(reason_code)
+                for key in ("collision_ref", "entry_ref"):
+                    entry_ref = issue.get(key)
+                    if (
+                        isinstance(entry_ref, str)
+                        and SAFE_COLLISION_REF_RE.fullmatch(entry_ref) is not None
+                        and entry_ref not in collision_refs
+                        and len(collision_refs) < MAX_DOMAIN_COLLISION_REFS
+                    ):
+                        collision_refs.append(entry_ref)
+
+    result_ok = payload.get("ok")
+    if type(result_ok) is not bool:
+        return None
+    materialization_plan_sha256 = (
+        materialization_plan_digests[0]
+        if len(materialization_plan_digests) == 1
+        else None
+    )
+    return {
+        "command": "project-version-update",
+        "status": status,
+        "completion_ok": result_ok,
+        "attention_required": not result_ok,
+        "target_tag": target_tag,
+        "blocker_codes": blocker_codes,
+        "collision_refs": collision_refs,
+        "materialization_plan_sha256": materialization_plan_sha256,
+        "local_paths_echoed": False,
+        "private_values_echoed": False,
+        "raw_blocker_messages_copied": False,
+    }
+
+
 def _find_result_artifact(
     root: Path,
     *,
@@ -532,6 +692,10 @@ def _find_result_artifact(
                             "bytes": size,
                             "exit_code": exit_code,
                             "result_ok": result_ok,
+                            "domain": _safe_domain_projection(
+                                payload,
+                                command=command,
+                            ),
                         }
                     )
                     if len(matches) > 1:
@@ -1134,6 +1298,7 @@ def _control_base(operation_ref: str, action: str) -> dict[str, Any]:
             "ok": None,
             "exit_code": None,
             "domain_truth_verified": False,
+            "domain": None,
         },
         "control": {
             "control_digest": None,
@@ -1166,6 +1331,96 @@ def _journal_candidates(root: Path, operation_hex: str) -> list[Path]:
         / f"{operation_hex}.jsonl",
     ]
     return [path for path in candidates if path.exists() or path.is_symlink()]
+
+
+_PROJECT_UPDATE_DRY_RUN_REVIEW_ACTIONS = (
+    "Treat this completed result as dry-run only and review the full bound output",
+    "If review still supports the update, use a separate fresh project-version-update approval",
+)
+_PROJECT_UPDATE_SUCCESS_STATUS_ACTIONS = {
+    "ready_for_approval": _PROJECT_UPDATE_DRY_RUN_REVIEW_ACTIONS,
+    "ready_to_fetch_on_approve": _PROJECT_UPDATE_DRY_RUN_REVIEW_ACTIONS,
+    "preview_only_platform_unsupported": (
+        "No update was applied; run a fresh project-version-update --dry-run on supported Windows before considering a separate approval",
+    ),
+    "updated_restart_required": (
+        "Start a new process and run archive version <project-or-archive-root> --format json before claiming the update active",
+    ),
+    "no_change": (
+        "No write or restart is required; run archive version <project-or-archive-root> --format json to verify the project is already current",
+    ),
+}
+_PROJECT_UPDATE_UNKNOWN_SUCCESS_ACTIONS = (
+    "Do not infer update, approval, or restart state from this unrecognized successful status",
+    "Review the complete bound output and run a fresh project-version-update --dry-run before taking another action",
+)
+
+
+def _project_update_completed_next_actions(
+    domain: object,
+) -> list[str] | None:
+    if (
+        not isinstance(domain, dict)
+        or domain.get("command") != "project-version-update"
+    ):
+        return None
+    if domain.get("completion_ok") is True:
+        status = domain.get("status")
+        status_actions = (
+            _PROJECT_UPDATE_SUCCESS_STATUS_ACTIONS.get(status)
+            if isinstance(status, str)
+            else None
+        )
+        return list(
+            status_actions or _PROJECT_UPDATE_UNKNOWN_SUCCESS_ACTIONS
+        )
+
+    target_tag = domain.get("target_tag")
+    collision_refs = domain.get("collision_refs")
+    materialization_plan_sha256 = domain.get(
+        "materialization_plan_sha256"
+    )
+    if (
+        isinstance(target_tag, str)
+        and SAFE_RELEASE_TAG_RE.fullmatch(target_tag) is not None
+        and isinstance(materialization_plan_sha256, str)
+        and CONTROL_DIGEST_RE.fullmatch(materialization_plan_sha256)
+        is not None
+        and isinstance(collision_refs, list)
+        and collision_refs
+        and isinstance(collision_refs[0], str)
+        and SAFE_COLLISION_REF_RE.fullmatch(collision_refs[0]) is not None
+    ):
+        actions = [
+            "Inspect the bound collision without revealing a local path: "
+            "archive project-version-update-collision "
+            "<project-or-archive-root> "
+            f"--target {target_tag} --entry-ref {collision_refs[0]} "
+            f"--expected-plan-sha256 {materialization_plan_sha256} "
+            "--action inspect --dry-run --format json"
+        ]
+        if len(collision_refs) > 1:
+            actions.append(
+                "The complete result contains additional opaque collision references; inspect each reference separately and do not rerun approval yet"
+            )
+        return actions
+
+    blocker_codes = domain.get("blocker_codes")
+    has_materialization_blocker = bool(
+        isinstance(blocker_codes, list)
+        and any(
+            isinstance(code, str)
+            and ("collision" in code or "materialization" in code)
+            for code in blocker_codes
+        )
+    )
+    if has_materialization_blocker:
+        return [
+            "Review the complete output artifact's opaque materialization issue references; do not rerun approved project-version-update until each collision has a fresh read-only inspection"
+        ]
+    return [
+        "Review the complete output artifact's fixed blocker_codes and rerun only a fresh project-version-update --dry-run after the blocker is resolved; do not repeat approval from operation-control alone"
+    ]
 
 
 def inspect_operation(
@@ -1310,6 +1565,11 @@ def inspect_operation(
                     else latest["exit_code"]
                 ),
                 "domain_truth_verified": False,
+                "domain": (
+                    artifact_match.get("domain")
+                    if artifact_match is not None
+                    else None
+                ),
             },
             "control": {
                 "control_digest": first["control_digest"],
@@ -1326,9 +1586,14 @@ def inspect_operation(
             "Wait for the same operation; do not start a duplicate writer and do not treat a caller timeout as cancellation."
         ]
     elif state == "completed_result_available":
-        result["next_safe_actions"] = [
-            "Use the complete output artifact and the command-specific verification step before claiming domain completion."
-        ]
+        result["next_safe_actions"] = (
+            _project_update_completed_next_actions(
+                result["result"].get("domain")
+            )
+            or [
+                "Use the complete output artifact and the command-specific verification step before claiming domain completion."
+            ]
+        )
     else:
         result["next_safe_actions"] = [
             "Run operation-control recovery-plan; preserve journals, results, locks, and SQLite sidecars until command-specific authority is checked."
@@ -1399,9 +1664,16 @@ def recovery_plan(
         ]
     elif result.get("state") == "completed_result_available":
         if kind == "project_version_update":
-            actions = [
-                "Start a new process and run archive version <project-or-archive-root> --format json before claiming the update active."
-            ]
+            actions = (
+                _project_update_completed_next_actions(
+                    result.get("result", {}).get("domain")
+                    if isinstance(result.get("result"), dict)
+                    else None
+                )
+                or [
+                    "Review the complete project-version-update output before deciding whether a fresh dry-run is safe."
+                ]
+            )
         elif kind == "archive_index":
             actions = [
                 "Run archive index-health <archive-root> --dry-run --progress --format json before retrying an index-dependent command."

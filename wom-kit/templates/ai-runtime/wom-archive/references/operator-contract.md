@@ -151,6 +151,21 @@ writers for the complete transaction. Windows approval requires:
 archive project-version-update <project-or-archive-root> --target vX.Y.Z --approve --reviewed-by <actor> --affirm-external-writers-quiescent --progress --format json
 ```
 
+When a result carries `materialization_plan_sha256` and an opaque
+`update-entry:NNNN`, use only the separate CLI collision surface:
+
+```bash
+archive project-version-update-collision <project-or-archive-root> --target vX.Y.Z --entry-ref update-entry:0001 --expected-plan-sha256 sha256:<digest> --action inspect --dry-run --format json
+```
+
+An eligible regular ignored obstruction may be preserve-relocated only through
+its own preview and reviewed approval. The operation never deletes/overwrites
+the payload, copies as fallback, fetches, retries the updater, or changes pins.
+It reports unauthenticated private-state internal consistency, not a signature
+or hostile same-user protection. After success, require a fresh updater preview
+and separate approval. If result write/relocation fields are null or recovery
+is required, retain the private case and owned lock; do not clean up or replay.
+
 The result must report `external_writer_quiescence_required: true`,
 `external_writer_quiescence_affirmed: true`,
 `atomic_file_compare_and_swap: false`, and
@@ -520,8 +535,18 @@ archive objet-capture-batch <archive-root> --manifest <same-json> --expected-pla
 ```
 
 The complete request is structurally checked before source bytes are opened.
-The operation is bounded to 2,000 items and converges per item on replay. It
-does not promise transaction-wide atomicity.
+The operation is bounded to 2,000 items and converges per item on replay. Since
+v0.3.315, paired rows preserve derived-text path and reviewed metadata into the
+exact selection. Request and staged text reads are stable and capped at 64 MiB.
+The lower result must bind the exact selection and `files_written` delta.
+Original and derived requested/written-or-ready/skipped/blocked counts close
+separately and the batch receipt is attempt-bound. `partial`,
+`evidence_incomplete`, `recovery_required`, and
+`batch_capture_outcome_unverified` are review states, never permission for
+automatic replay. A same-request replay may skip existing originals and finish
+derived text; if staging originals are unavailable, use durable capture receipt
+object IDs with a separately reviewed `derive-text capture --from-manifest`.
+The batch does not promise transaction-wide atomicity.
 
 ## External Locators, Relation Review, And Markup Normalization
 

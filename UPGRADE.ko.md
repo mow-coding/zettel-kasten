@@ -2,6 +2,60 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.3.315 업데이트 충돌과 paired batch 복구
+
+정확한 v0.3.315 Release에 검증된 wheel이 실제로 올라온 뒤에만 그 파일을
+설치하세요. 새 터미널을 열고 `archive --version`으로 실행 버전을 확인한 다음
+실제 프로젝트나 아카이브를 다루세요.
+
+### 프로젝트 업데이트가 충돌을 보고한 경우
+
+숨겨진 경로를 추측하거나 파일을 손으로 삭제·이동하거나, 같은 승인을 반복하거나,
+업데이터를 하나 더 실행하지 마세요. 편집기, 동기화·백업 프로그램, 다른 Git writer를
+계속 멈춘 상태로 두고, 결과의 `entry_ref`와 `materialization_plan_sha256`을 보관하세요.
+그 두 값을 그대로 써서 먼저 해당 항목만 검사합니다.
+
+```powershell
+archive project-version-update-collision <project-or-archive-root> --target v0.3.315 --entry-ref update-entry:0001 --expected-plan-sha256 sha256:<digest> --action inspect --dry-run --format json
+```
+
+검사 결과가 보존 이동 가능한 일반 파일이라고 하면 `--action preserve-relocate
+--dry-run`으로 별도의 보존 계획을 미리 봅니다. 그 새 계획을 검토한 뒤
+`--reviewed-by <actor> --affirm-external-writers-quiescent --approve`로 같은 계획만
+승인하세요. 이 동작은 현재 비공개 바이트를 WOM 소유 보존 위치로 옮길 뿐 삭제하거나
+덮어쓰거나 target을 fetch하거나 업데이트를 자동 재시도하지 않습니다. 끝난 뒤에는
+`project-version-update --dry-run`을 새로 실행하고, 그 새 updater 계획을 별도로
+승인해야 합니다. 이 receipt는 `unauthenticated_private_state_internal_consistency`,
+즉 비공개 상태 내부의 일관성 증거입니다. MAC, 서명, ACL, 같은 사용자에 의한
+조정된 변조 전체를 막는 장치는 아닙니다.
+
+```powershell
+archive project-version-update-collision <project-or-archive-root> --target v0.3.315 --entry-ref update-entry:0001 --expected-plan-sha256 sha256:<digest> --action preserve-relocate --dry-run --format json
+archive project-version-update-collision <project-or-archive-root> --target v0.3.315 --entry-ref update-entry:0001 --expected-plan-sha256 sha256:<digest> --action preserve-relocate --approve --reviewed-by <actor> --affirm-external-writers-quiescent --format json
+```
+
+### v0.3.314 paired capture가 중간에 멈춘 경우
+
+이미 capture된 원본을 다시 복사하지 마세요. 먼저 기존과 똑같은
+`objet-capture-batch` 요청을 dry-run하고 새 plan hash로 승인하세요. v0.3.315는
+원본과 derived text 각각의 requested, written, skipped, blocked 수를 따로 보여줍니다.
+
+```powershell
+archive objet-capture-batch <archive-root> --manifest <same-archive-relative-json> --dry-run --format json
+archive objet-capture-batch <archive-root> --manifest <same-archive-relative-json> --expected-plan-sha256 <fresh-plan-sha256> --approve --reviewed-by <actor> --format json
+```
+
+정확히 존재하는 원본은 skip하고 빠진 paired derived text만 완료합니다. 원본 staging
+파일이 더 이상 없다면, 기존 원본 capture receipt의 source object ID로 검토된
+derived-text manifest를 만들고 `derive-text capture --from-manifest`를 사용하세요.
+그 ID를 얻으려고 원본을 다시 복사하면 안 됩니다. `evidence_incomplete`,
+`recovery_required`, `batch_capture_outcome_unverified`는 성공이 아니라 작업을 멈추고
+검토해야 하는 상태입니다.
+
+자세한 내용은 [v0.3.315 릴리스 노트](wom-kit/docs/releases/v0.3.315.md),
+[프로젝트 업데이트 가이드](wom-kit/docs/project-version-update.md),
+[derived-text 가이드](wom-kit/docs/derived-text.md)를 보세요.
+
 ## v0.3.314 Letter 126 장시간 작업과 generated index 복구
 
 v0.3.314를 설치해도 canonical zet, objet, manifest, 비공개 원본 권위, database

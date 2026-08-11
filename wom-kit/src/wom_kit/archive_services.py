@@ -3425,6 +3425,10 @@ class ArchiveServiceError(Exception):
     pass
 
 
+class PublicationOutcomeUnverified(ArchiveServiceError):
+    """A final path may have changed but cannot be bound to expected bytes."""
+
+
 class ArchiveIndexReadBoundaryError(ArchiveServiceError):
     """The generated index cannot be opened without violating read-only I/O."""
 
@@ -37942,6 +37946,15 @@ def activity_group_bound_directory_chain(
         ctypes.POINTER(ByHandleFileInformation),
     ]
     get_information.restype = wintypes.BOOL
+    read_file = kernel32.ReadFile
+    read_file.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
+        ctypes.c_void_p,
+    ]
+    read_file.restype = wintypes.BOOL
     close_handle = kernel32.CloseHandle
     close_handle.argtypes = [wintypes.HANDLE]
     close_handle.restype = wintypes.BOOL
@@ -97978,6 +97991,21 @@ WOM_KIT_PROJECT_UPDATE_MAX_TRACKED_FILES = 20_000
 WOM_KIT_PROJECT_UPDATE_MAX_TRACKED_FILE_BYTES = 64 * 1024 * 1024
 WOM_KIT_PROJECT_UPDATE_MAX_TRACKED_TOTAL_BYTES = 512 * 1024 * 1024
 WOM_KIT_PROJECT_UPDATE_MAX_GIT_METADATA_ENTRIES = 100_000
+WOM_KIT_PROJECT_UPDATE_MAX_MATERIALIZATION_CONFLICT_REFS = 64
+WOM_KIT_PROJECT_UPDATE_COLLISION_SCHEMA = (
+    "wom-kit/project-version-update-collision/v0.1"
+)
+WOM_KIT_PROJECT_UPDATE_COLLISION_ENTRY_REF_RE = re.compile(
+    r"update-entry:(?!0000)[0-9]{4}"
+)
+WOM_KIT_PROJECT_UPDATE_COLLISION_PLAN_RE = re.compile(
+    r"sha256:[0-9a-f]{64}"
+)
+WOM_KIT_PROJECT_UPDATE_COLLISION_REASON_RE = re.compile(r"[a-z0-9_]{1,128}")
+WOM_KIT_PROJECT_UPDATE_COLLISION_MAX_FILE_BYTES = 64 * 1024 * 1024
+WOM_KIT_PROJECT_UPDATE_COLLISION_PRIVATE_RELATIVE = (
+    ".zettel-kasten/private/version-update-collisions"
+)
 WOM_KIT_PROJECT_UPDATE_APPROVAL_PLATFORM_SUPPORTED = os.name == "nt"
 WOM_KIT_PROJECT_UPDATE_GIT_TRANSPORT_ENV_KEYS = {
     "GIT_ASKPASS",
@@ -99076,6 +99104,80 @@ WOM_KIT_PROJECT_UPDATE_HFS_IGNORABLES = {
     "\u206f",
     "\ufeff",
 }
+WOM_KIT_PROJECT_UPDATE_PATH_COMPARISON_SCHEME = (
+    "nfkc-casefold-hfs-windows-v1"
+)
+
+
+def wom_kit_project_update_worktree_component_canonical_key(
+    component: str,
+) -> str | None:
+    """Return the single cross-platform comparison key for one path part.
+
+    ``None`` means that the component cannot be represented safely in a WOM
+    release worktree.  The same function is used for Git trees and the live
+    worktree so an ignored entry cannot exploit different comparison rules.
+    """
+
+    if (
+        not isinstance(component, str)
+        or not component
+        or len(component.encode("utf-8")) > 255
+        or component[-1] in {" ", "."}
+        or any(
+            ord(character) < 32
+            or ord(character) == 127
+            or character in '<>:"\\|?*'
+            for character in component
+        )
+    ):
+        return None
+    canonical = unicodedata.normalize("NFKC", component).casefold()
+    canonical = "".join(
+        character
+        for character in canonical
+        if character not in WOM_KIT_PROJECT_UPDATE_HFS_IGNORABLES
+    ).rstrip(" .")
+    if (
+        not canonical
+        or canonical == ".git"
+        or re.fullmatch(r"\.?git~[0-9]+", canonical)
+        or re.fullmatch(
+            r"[^.~]{1,6}~[0-9]{1,6}(?:\.[^.]{1,3})?",
+            canonical,
+        )
+        or canonical.split(".", 1)[0]
+        in WOM_KIT_PROJECT_UPDATE_WINDOWS_RESERVED_BASENAMES
+    ):
+        return None
+    return canonical
+
+
+def wom_kit_project_update_worktree_path_canonical_key(
+    relative_path: str,
+) -> tuple[str, ...] | None:
+    """Return a safe component-wise worktree key, or ``None``."""
+
+    if (
+        not isinstance(relative_path, str)
+        or not relative_path
+        or len(relative_path.encode("utf-8")) > 4096
+    ):
+        return None
+    pure_path = PurePosixPath(relative_path)
+    if (
+        pure_path.is_absolute()
+        or pure_path.as_posix() != relative_path
+        or any(part in {"", ".", ".."} for part in pure_path.parts)
+    ):
+        return None
+    canonical_parts = tuple(
+        wom_kit_project_update_worktree_component_canonical_key(component)
+        for component in pure_path.parts
+    )
+    if any(component is None for component in canonical_parts):
+        return None
+    return tuple(str(component) for component in canonical_parts)
 
 
 def wom_kit_project_update_safe_worktree_paths(
@@ -99089,8 +99191,8 @@ def wom_kit_project_update_safe_worktree_paths(
     Windows or macOS.
     """
 
-    canonical_files: set[str] = set()
-    canonical_directories: set[str] = set()
+    canonical_files: set[tuple[str, ...]] = set()
+    canonical_directories: set[tuple[str, ...]] = set()
     seen_original: set[str] = set()
     for relative_path in relative_paths:
         if (
@@ -99101,49 +99203,14 @@ def wom_kit_project_update_safe_worktree_paths(
         ):
             return False
         seen_original.add(relative_path)
-        pure_path = PurePosixPath(relative_path)
-        if (
-            pure_path.is_absolute()
-            or pure_path.as_posix() != relative_path
-            or any(part in {"", ".", ".."} for part in pure_path.parts)
-        ):
+        canonical_path = wom_kit_project_update_worktree_path_canonical_key(
+            relative_path
+        )
+        if canonical_path is None:
             return False
-        canonical_parts: list[str] = []
-        for component in pure_path.parts:
-            if (
-                len(component.encode("utf-8")) > 255
-                or component[-1] in {" ", "."}
-                or any(
-                    ord(character) < 32
-                    or ord(character) == 127
-                    or character in '<>:"\\|?*'
-                    for character in component
-                )
-            ):
-                return False
-            canonical = unicodedata.normalize("NFKC", component).casefold()
-            hfs_canonical = "".join(
-                character
-                for character in canonical
-                if character not in WOM_KIT_PROJECT_UPDATE_HFS_IGNORABLES
-            ).rstrip(" .")
-            if (
-                hfs_canonical == ".git"
-                or re.fullmatch(r"\.?git~[0-9]+", hfs_canonical)
-            ):
-                return False
-            windows_basename = hfs_canonical.split(".", 1)[0]
-            if (
-                not hfs_canonical
-                or windows_basename
-                in WOM_KIT_PROJECT_UPDATE_WINDOWS_RESERVED_BASENAMES
-            ):
-                return False
-            canonical_parts.append(hfs_canonical)
-        canonical_path = "/".join(canonical_parts)
         canonical_prefixes = {
-            "/".join(canonical_parts[:index])
-            for index in range(1, len(canonical_parts))
+            canonical_path[:index]
+            for index in range(1, len(canonical_path))
         }
         if (
             canonical_path in canonical_files
@@ -99211,15 +99278,88 @@ def wom_kit_project_update_tree_blobs(
     return entries if entries else None
 
 
-def wom_kit_project_update_worktree_allows_plan(
+def wom_kit_project_update_conflict_projection(
+    conflicts: Iterable[tuple[str, str]],
+    *,
+    complete: bool,
+    authority: Iterable[tuple[str, str]] = (),
+) -> dict[str, Any]:
+    """Project path conflicts without returning path or filename material.
+
+    ``entry_ref`` values are deterministic ordinals over the sorted internal
+    path set.  They deliberately are not path hashes: a hash would let a caller
+    test guesses about an ignored private filename.  The projection is capped,
+    while the total counts remain bounded by the worktree traversal cap.
+    """
+
+    grouped: dict[str, set[str]] = {}
+    for internal_ref, reason_code in conflicts:
+        grouped.setdefault(internal_ref, set()).add(reason_code)
+    ordered = sorted(grouped.items(), key=lambda item: item[0])
+    ordered_authority = sorted(set(authority))
+    authority_hasher = hashlib.sha256()
+    authority_hasher.update(b"wom-kit/project-update-materialization-plan/v1\0")
+    authority_hasher.update(b"1\0" if complete else b"0\0")
+    for category, value in ordered_authority:
+        category_bytes = category.encode("utf-8")
+        value_bytes = value.encode("utf-8")
+        authority_hasher.update(len(category_bytes).to_bytes(4, "big"))
+        authority_hasher.update(category_bytes)
+        authority_hasher.update(len(value_bytes).to_bytes(8, "big"))
+        authority_hasher.update(value_bytes)
+    for internal_ref, reason_codes in ordered:
+        internal_ref_bytes = internal_ref.encode("utf-8")
+        authority_hasher.update(len(internal_ref_bytes).to_bytes(4, "big"))
+        authority_hasher.update(internal_ref_bytes)
+        for reason_code in sorted(reason_codes):
+            reason_bytes = reason_code.encode("ascii")
+            authority_hasher.update(len(reason_bytes).to_bytes(4, "big"))
+            authority_hasher.update(reason_bytes)
+    projected = [
+        {
+            "entry_ref": f"update-entry:{index:04d}",
+            "reason_codes": sorted(reason_codes),
+        }
+        for index, (_, reason_codes) in enumerate(
+            ordered[:WOM_KIT_PROJECT_UPDATE_MAX_MATERIALIZATION_CONFLICT_REFS],
+            start=1,
+        )
+    ]
+    return {
+        "safe": not ordered,
+        "conflict_count": len(ordered),
+        "conflict_reason_count": sum(
+            len(reason_codes) for _, reason_codes in ordered
+        ),
+        "conflict_count_complete": complete,
+        "conflicts": projected,
+        "conflicts_truncated": len(ordered) > len(projected),
+        "entry_ref_scheme": "update-entry-sorted-ordinal-v1",
+        "materialization_plan_sha256": (
+            f"sha256:{authority_hasher.hexdigest()}"
+        ),
+        "local_paths_echoed": False,
+        "entry_names_echoed": False,
+    }
+
+
+def wom_kit_project_update_worktree_conflicts(
     mirror_path: Path,
     current_paths: set[str],
     target_paths: set[str],
-) -> bool:
+) -> tuple[list[tuple[str, str]], bool, list[tuple[str, str]]]:
     actual_files: set[str] = set()
     actual_directories: set[str] = set()
+    conflicts: list[tuple[str, str]] = []
+    authority: list[tuple[str, str]] = [
+        (
+            "worktree-path-comparison-scheme",
+            WOM_KIT_PROJECT_UPDATE_PATH_COMPARISON_SCHEME,
+        )
+    ]
     stack = [mirror_path]
     seen = 0
+    complete = True
     reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
     try:
         while stack:
@@ -99233,9 +99373,48 @@ def wom_kit_project_update_worktree_allows_plan(
                         seen
                         > WOM_KIT_PROJECT_UPDATE_MAX_TRACKED_FILES * 4
                     ):
-                        return False
+                        conflicts.append(
+                            (
+                                "\0worktree-scan-cap",
+                                "worktree_scan_entry_limit_exceeded",
+                            )
+                        )
+                        complete = False
+                        return conflicts, complete, authority
                     entry_path = Path(entry.path)
                     entry_stat = entry.stat(follow_symlinks=False)
+                    relative_path = PurePosixPath(
+                        *entry_path.relative_to(mirror_path).parts
+                    ).as_posix()
+                    authority.append(
+                        (
+                            "worktree-entry",
+                            "\0".join(
+                                [
+                                    relative_path,
+                                    str(entry_stat.st_mode),
+                                    str(entry_stat.st_size),
+                                    str(
+                                        getattr(
+                                            entry_stat,
+                                            "st_mtime_ns",
+                                            int(entry_stat.st_mtime * 1_000_000_000),
+                                        )
+                                    ),
+                                    str(
+                                        getattr(
+                                            entry_stat,
+                                            "st_ctime_ns",
+                                            int(entry_stat.st_ctime * 1_000_000_000),
+                                        )
+                                    ),
+                                    str(entry_stat.st_nlink),
+                                    str(entry_stat.st_dev),
+                                    str(entry_stat.st_ino),
+                                ]
+                            ),
+                        )
+                    )
                     if (
                         stat.S_ISLNK(entry_stat.st_mode)
                         or (
@@ -99244,45 +99423,164 @@ def wom_kit_project_update_worktree_allows_plan(
                             & reparse_flag
                         )
                     ):
-                        return False
-                    relative_path = PurePosixPath(
-                        *entry_path.relative_to(mirror_path).parts
-                    ).as_posix()
+                        conflicts.append(
+                            (
+                                relative_path,
+                                "unsafe_reparse_or_symlink_entry",
+                            )
+                        )
+                        continue
                     if stat.S_ISDIR(entry_stat.st_mode):
                         actual_directories.add(relative_path)
                         stack.append(entry_path)
                     elif stat.S_ISREG(entry_stat.st_mode):
                         actual_files.add(relative_path)
                     else:
-                        return False
+                        conflicts.append(
+                            (
+                                relative_path,
+                                "unsupported_filesystem_entry",
+                            )
+                        )
     except (OSError, RuntimeError, ValueError):
-        return False
+        conflicts.append(("\0worktree-scan-error", "worktree_scan_failed"))
+        return conflicts, False, authority
 
-    if not current_paths.issubset(actual_files):
-        return False
+    # Exact raw membership is authoritative before canonical comparison.  An
+    # ignored ``foo.txt`` must remain untracked when the current tree says
+    # ``Foo.txt``; canonical equality must never launder it into tracked state.
+    for missing_path in current_paths - actual_files:
+        conflicts.append((missing_path, "tracked_path_missing_or_not_regular"))
     untracked_files = actual_files - current_paths
-    runtime_source_prefix = ("wom-kit", "src")
-    if any(
-        PurePosixPath(path).parts[:2] == runtime_source_prefix
-        for path in untracked_files
-    ):
-        return False
-    allowed_directories = {
+    current_directories = {
         PurePosixPath(*PurePosixPath(path).parts[:index]).as_posix()
-        for path in current_paths | target_paths
+        for path in current_paths
         for index in range(1, len(PurePosixPath(path).parts))
     }
-    if any(
-        PurePosixPath(path).parts[:2] == runtime_source_prefix
-        and path not in allowed_directories
-        for path in actual_directories
-    ):
-        return False
+    allowed_directories = current_directories | {
+        PurePosixPath(*PurePosixPath(path).parts[:index]).as_posix()
+        for path in target_paths
+        for index in range(1, len(PurePosixPath(path).parts))
+    }
     target_directories = {
         PurePosixPath(*PurePosixPath(path).parts[:index]).as_posix()
         for path in target_paths
         for index in range(1, len(PurePosixPath(path).parts))
     }
+
+    def canonical_map(
+        kind: str,
+        paths: Iterable[str],
+    ) -> dict[tuple[str, ...], set[str]]:
+        mapped: dict[tuple[str, ...], set[str]] = {}
+        for path in sorted(set(paths)):
+            key = wom_kit_project_update_worktree_path_canonical_key(path)
+            authority.append(
+                (
+                    "worktree-path-canonical-map",
+                    "\0".join(
+                        [
+                            kind,
+                            path,
+                            "/".join(key) if key is not None else "<unsafe>",
+                        ]
+                    ),
+                )
+            )
+            if key is None:
+                conflicts.append((path, "worktree_path_unsafe_cross_platform"))
+                continue
+            mapped.setdefault(key, set()).add(path)
+        return mapped
+
+    actual_file_keys = canonical_map("actual-file", actual_files)
+    actual_directory_keys = canonical_map(
+        "actual-directory",
+        actual_directories,
+    )
+    current_file_keys = canonical_map("current-file", current_paths)
+    current_directory_keys = canonical_map(
+        "current-directory",
+        current_directories,
+    )
+    target_file_keys = canonical_map("target-file", target_paths)
+    target_directory_keys = canonical_map(
+        "target-directory",
+        target_directories,
+    )
+
+    actual_all_keys: dict[tuple[str, ...], set[str]] = {}
+    for mapped in (actual_file_keys, actual_directory_keys):
+        for key, paths in mapped.items():
+            actual_all_keys.setdefault(key, set()).update(paths)
+    for paths in actual_all_keys.values():
+        if len(paths) > 1:
+            conflicts.extend(
+                (path, "worktree_path_canonical_alias_collision")
+                for path in sorted(paths)
+            )
+
+    # A raw spelling change that compares equal on Windows/HFS is not proven
+    # safe here.  This deliberately blocks case-only tracked renames, as well as
+    # ignored aliases, before either dry-run approval or mutation.
+    for actual_map in (actual_file_keys, actual_directory_keys):
+        for key, actual_raw_paths in actual_map.items():
+            comparison_paths: set[str] = set()
+            for comparison_map in (
+                current_file_keys,
+                current_directory_keys,
+                target_file_keys,
+                target_directory_keys,
+            ):
+                comparison_paths.update(comparison_map.get(key, set()))
+            for actual_raw_path in actual_raw_paths:
+                if any(
+                    comparison_path != actual_raw_path
+                    for comparison_path in comparison_paths
+                ):
+                    conflicts.append(
+                        (
+                            actual_raw_path,
+                            "worktree_path_canonical_alias_collision",
+                        )
+                    )
+    for key, current_raw_paths in current_file_keys.items():
+        for current_raw_path in current_raw_paths:
+            if any(
+                target_raw_path != current_raw_path
+                for target_raw_path in target_file_keys.get(key, set())
+            ):
+                conflicts.append(
+                    (
+                        current_raw_path,
+                        "tracked_case_or_unicode_only_rename_unproven",
+                    )
+                )
+
+    runtime_source_key = (
+        wom_kit_project_update_worktree_path_canonical_key("wom-kit/src")
+    )
+    for path in untracked_files:
+        path_key = wom_kit_project_update_worktree_path_canonical_key(path)
+        if (
+            runtime_source_key is not None
+            and path_key is not None
+            and path_key[: len(runtime_source_key)] == runtime_source_key
+        ):
+            conflicts.append(
+                (path, "ignored_or_untracked_runtime_source_shadow")
+            )
+    for path in actual_directories:
+        path_key = wom_kit_project_update_worktree_path_canonical_key(path)
+        if (
+            runtime_source_key is not None
+            and path_key is not None
+            and path_key[: len(runtime_source_key)] == runtime_source_key
+            and path not in allowed_directories
+        ):
+            conflicts.append(
+                (path, "ignored_or_untracked_runtime_source_shadow")
+            )
 
     def is_beneath(path: str, parent: str) -> bool:
         path_parts = PurePosixPath(path).parts
@@ -99293,15 +99591,24 @@ def wom_kit_project_update_worktree_allows_plan(
         )
 
     for untracked_path in untracked_files:
-        if (
-            untracked_path in target_paths
-            or untracked_path in target_directories
-            or any(
-                is_beneath(untracked_path, target_path)
-                for target_path in target_paths
+        if untracked_path in target_paths:
+            conflicts.append(
+                (untracked_path, "untracked_entry_overlaps_target_file")
             )
+        if untracked_path in target_directories:
+            conflicts.append(
+                (
+                    untracked_path,
+                    "untracked_entry_overlaps_target_directory",
+                )
+            )
+        if any(
+            is_beneath(untracked_path, target_path)
+            for target_path in target_paths
         ):
-            return False
+            conflicts.append(
+                (untracked_path, "untracked_entry_beneath_target_file")
+            )
 
     for actual_directory in actual_directories & target_paths:
         current_descendants = {
@@ -99314,11 +99621,62 @@ def wom_kit_project_update_worktree_allows_plan(
             for path in untracked_files
             if is_beneath(path, actual_directory)
         }
+        untracked_descendant_directories = {
+            path
+            for path in actual_directories
+            if is_beneath(path, actual_directory)
+            and path not in current_directories
+        }
         # A directory may become a file only when that directory exists solely
         # to contain tracked current-tree files which the plan will remove.
-        if not current_descendants or untracked_descendants:
-            return False
-    return True
+        if not current_descendants:
+            conflicts.append(
+                (
+                    actual_directory,
+                    "untracked_directory_overlaps_target_file",
+                )
+            )
+        if untracked_descendants or untracked_descendant_directories:
+            conflicts.append(
+                (
+                    actual_directory,
+                    "untracked_directory_contains_untracked_entries",
+                )
+            )
+    authority.extend(("current-path", path) for path in current_paths)
+    authority.extend(("target-path", path) for path in target_paths)
+    return conflicts, complete, authority
+
+
+def wom_kit_project_update_worktree_plan(
+    mirror_path: Path,
+    current_paths: set[str],
+    target_paths: set[str],
+) -> dict[str, Any]:
+    conflicts, complete, authority = wom_kit_project_update_worktree_conflicts(
+        mirror_path,
+        current_paths,
+        target_paths,
+    )
+    return wom_kit_project_update_conflict_projection(
+        conflicts,
+        complete=complete,
+        authority=authority,
+    )
+
+
+def wom_kit_project_update_worktree_allows_plan(
+    mirror_path: Path,
+    current_paths: set[str],
+    target_paths: set[str],
+) -> bool:
+    return bool(
+        wom_kit_project_update_worktree_plan(
+            mirror_path,
+            current_paths,
+            target_paths,
+        )["safe"]
+    )
 
 
 def wom_kit_project_update_branch_points_to_commit(
@@ -99432,16 +99790,146 @@ def wom_kit_project_update_unlink_tracked_file(
     return True
 
 
-def wom_kit_project_update_materialize_commit(
+def _wom_kit_project_update_target_worktree_snapshot_matches_internal(
+    mirror_path: Path,
+    target_entries: dict[str, tuple[str, str, bytes]],
+) -> bool:
+    """Verify exact target names, per-key cardinality, modes, and bytes.
+
+    Harmless ignored entries outside the target namespace remain allowed.  They
+    may not use an unsafe spelling or share a canonical key with any target file
+    or directory.
+    """
+
+    target_paths = set(target_entries)
+    if not target_paths or not wom_kit_project_update_safe_worktree_paths(
+        target_paths
+    ):
+        return False
+    target_directories = {
+        PurePosixPath(*PurePosixPath(path).parts[:index]).as_posix()
+        for path in target_paths
+        for index in range(1, len(PurePosixPath(path).parts))
+    }
+    actual_files: set[str] = set()
+    actual_directories: set[str] = set()
+    stack = [mirror_path]
+    seen = 0
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    try:
+        while stack:
+            directory = stack.pop()
+            with os.scandir(directory) as scanner:
+                for entry in scanner:
+                    if directory == mirror_path and entry.name == ".git":
+                        continue
+                    seen += 1
+                    if seen > WOM_KIT_PROJECT_UPDATE_MAX_TRACKED_FILES * 4:
+                        return False
+                    entry_path = Path(entry.path)
+                    entry_stat = entry.stat(follow_symlinks=False)
+                    relative_path = PurePosixPath(
+                        *entry_path.relative_to(mirror_path).parts
+                    ).as_posix()
+                    if (
+                        wom_kit_project_update_worktree_path_canonical_key(
+                            relative_path
+                        )
+                        is None
+                        or stat.S_ISLNK(entry_stat.st_mode)
+                        or (
+                            reparse_flag
+                            and getattr(entry_stat, "st_file_attributes", 0)
+                            & reparse_flag
+                        )
+                    ):
+                        return False
+                    if stat.S_ISDIR(entry_stat.st_mode):
+                        actual_directories.add(relative_path)
+                        stack.append(entry_path)
+                    elif stat.S_ISREG(entry_stat.st_mode):
+                        actual_files.add(relative_path)
+                    else:
+                        return False
+    except (OSError, RuntimeError, ValueError):
+        return False
+
+    if not target_paths.issubset(actual_files) or not target_directories.issubset(
+        actual_directories
+    ):
+        return False
+    actual_by_key: dict[tuple[str, ...], set[str]] = {}
+    for actual_path in actual_files | actual_directories:
+        key = wom_kit_project_update_worktree_path_canonical_key(actual_path)
+        if key is None:
+            return False
+        actual_by_key.setdefault(key, set()).add(actual_path)
+    for target_path in target_paths | target_directories:
+        key = wom_kit_project_update_worktree_path_canonical_key(target_path)
+        if key is None or actual_by_key.get(key) != {target_path}:
+            return False
+
+    for relative_path, (mode, _, blob) in target_entries.items():
+        path = mirror_path.joinpath(*PurePosixPath(relative_path).parts)
+        if (
+            wom_kit_read_bounded_real_bytes(
+                mirror_path,
+                path,
+                max_bytes=len(blob),
+            )
+            != blob
+        ):
+            return False
+        if os.name != "nt":
+            try:
+                executable = bool(os.lstat(path).st_mode & 0o111)
+            except OSError:
+                return False
+            if executable != (mode == "100755"):
+                return False
+    return True
+
+
+def wom_kit_project_update_target_worktree_snapshot_matches(
+    mirror_path: Path,
+    target_entries: dict[str, tuple[str, str, bytes]],
+) -> bool:
+    """Public test seam for the final pre-HEAD target snapshot proof."""
+
+    return _wom_kit_project_update_target_worktree_snapshot_matches_internal(
+        mirror_path,
+        target_entries,
+    )
+
+
+def _wom_kit_project_update_materialization_plan_details_internal(
     mirror_path: Path,
     target_commit: str,
     *,
     attach_branch: str | None = None,
-    dry_run: bool = False,
-    directory_guard: WomKitProjectUpdateDirectoryGuard | None = None,
-) -> bool:
+) -> tuple[
+    dict[str, Any],
+    dict[str, tuple[str, str, bytes]] | None,
+    dict[str, tuple[str, str, bytes]] | None,
+    list[tuple[str, str]],
+    list[tuple[str, str]],
+]:
+    conflicts: list[tuple[str, str]] = []
+    authority: list[tuple[str, str]] = [
+        ("target-commit-input", str(target_commit)),
+        ("attach-branch-present", str(attach_branch is not None).lower()),
+    ]
+    complete = True
     if not re.fullmatch(r"[0-9a-fA-F]{40,64}", target_commit):
-        return False
+        conflicts.append(
+            ("\0target-commit", "target_commit_identifier_invalid")
+        )
+        projection = wom_kit_project_update_conflict_projection(
+            conflicts,
+            complete=True,
+            authority=authority,
+        )
+        return projection, None, None, conflicts, authority
     target_commit = target_commit.lower()
     if (
         attach_branch is not None
@@ -99451,54 +99939,163 @@ def wom_kit_project_update_materialize_commit(
             target_commit,
         )
     ):
-        return False
+        conflicts.append(
+            ("\0attach-branch", "attach_branch_binding_invalid")
+        )
+        projection = wom_kit_project_update_conflict_projection(
+            conflicts,
+            complete=True,
+            authority=authority,
+        )
+        return projection, None, None, conflicts, authority
+
     target_entries = wom_kit_project_update_tree_blobs(
         mirror_path,
         target_commit,
     )
     current_entries = wom_kit_project_update_tree_blobs(mirror_path, "HEAD")
+    if target_entries is None:
+        conflicts.append(
+            ("\0target-tree", "target_tree_unavailable_or_unsafe")
+        )
+    if current_entries is None:
+        conflicts.append(
+            ("\0current-tree", "current_tree_unavailable_or_unsafe")
+        )
     if target_entries is None or current_entries is None:
-        return False
+        projection = wom_kit_project_update_conflict_projection(
+            conflicts,
+            complete=True,
+            authority=authority,
+        )
+        return (
+            projection,
+            target_entries,
+            current_entries,
+            conflicts,
+            authority,
+        )
+
     target_paths = set(target_entries)
     current_paths = set(current_entries)
-
-    if not wom_kit_project_update_worktree_allows_plan(
-        mirror_path,
-        current_paths,
-        target_paths,
-    ):
-        return False
+    authority.extend(
+        (
+            "target-tree-entry",
+            "\0".join([path, mode, object_id, str(len(blob))]),
+        )
+        for path, (mode, object_id, blob) in target_entries.items()
+    )
+    authority.extend(
+        (
+            "current-tree-entry",
+            "\0".join([path, mode, object_id, str(len(blob))]),
+        )
+        for path, (mode, object_id, blob) in current_entries.items()
+    )
+    worktree_conflicts, complete, worktree_authority = (
+        wom_kit_project_update_worktree_conflicts(
+            mirror_path,
+            current_paths,
+            target_paths,
+        )
+    )
+    authority.extend(worktree_authority)
+    conflicts.extend(worktree_conflicts)
     for relative_path in sorted(current_paths):
         path = mirror_path.joinpath(*PurePosixPath(relative_path).parts)
         if (
             not is_path_within_root(path, mirror_path)
-            or not wom_kit_existing_path_components_are_real(mirror_path, path)
+            or not wom_kit_existing_path_components_are_real(
+                mirror_path,
+                path,
+            )
         ):
-            return False
+            conflicts.append((relative_path, "tracked_path_component_unsafe"))
+            continue
         try:
             path_stat = os.lstat(path)
         except FileNotFoundError:
-            if relative_path in current_paths:
-                return False
+            conflicts.append((relative_path, "tracked_path_missing"))
             continue
         except OSError:
-            return False
+            conflicts.append((relative_path, "tracked_path_unreadable"))
+            continue
         if not stat.S_ISREG(path_stat.st_mode):
-            return False
+            conflicts.append((relative_path, "tracked_path_not_regular"))
 
-    if dry_run:
-        return True
-    if (
-        os.name == "nt"
-        and (
-            directory_guard is None
-            or not directory_guard.is_held(mirror_path)
+    projection = wom_kit_project_update_conflict_projection(
+        conflicts,
+        complete=complete,
+        authority=authority,
+    )
+    return projection, target_entries, current_entries, conflicts, authority
+
+
+def wom_kit_project_update_materialization_plan_details(
+    mirror_path: Path,
+    target_commit: str,
+    *,
+    attach_branch: str | None = None,
+) -> tuple[
+    dict[str, Any],
+    dict[str, tuple[str, str, bytes]] | None,
+    dict[str, tuple[str, str, bytes]] | None,
+]:
+    """Return the public-safe planner plus tree materialization inputs.
+
+    The internal conflict-to-path authority is intentionally discarded at this
+    boundary.  Only the collision remediation service below may resolve an
+    opaque ordinal, and it does so only after reproducing the exact expected
+    materialization digest.
+    """
+
+    plan, target_entries, current_entries, _, _ = (
+        _wom_kit_project_update_materialization_plan_details_internal(
+            mirror_path,
+            target_commit,
+            attach_branch=attach_branch,
         )
-    ):
-        return False
+    )
+    return plan, target_entries, current_entries
 
+
+def wom_kit_project_update_materialization_plan(
+    mirror_path: Path,
+    target_commit: str,
+    *,
+    attach_branch: str | None = None,
+) -> dict[str, Any]:
+    """Bounded, structured, read-only commit materialization preflight."""
+
+    plan, _, _ = wom_kit_project_update_materialization_plan_details(
+        mirror_path,
+        target_commit,
+        attach_branch=attach_branch,
+    )
+    return {
+        "state": "ready" if plan["safe"] else "blocked",
+        "evaluated": True,
+        "required": True,
+        "no_write": True,
+        "bounded": True,
+        **plan,
+    }
+
+
+def _wom_kit_project_update_apply_tree_entries(
+    mirror_path: Path,
+    source_entries: dict[str, tuple[str, str, bytes]],
+    destination_entries: dict[str, tuple[str, str, bytes]],
+    destination_index_ref: str,
+    *,
+    directory_guard: WomKitProjectUpdateDirectoryGuard | None,
+) -> bool:
+    """Apply one already-planned tree without moving HEAD."""
+
+    source_paths = set(source_entries)
+    destination_paths = set(destination_entries)
     removed_paths = sorted(
-        current_paths - target_paths,
+        source_paths - destination_paths,
         key=lambda value: (len(PurePosixPath(value).parts), value),
         reverse=True,
     )
@@ -99558,10 +100155,10 @@ def wom_kit_project_update_materialize_commit(
                     return False
                 if not directory_nonempty:
                     return False
-        target_directories = sorted(
+        destination_directories = sorted(
             {
                 parent
-                for relative_path in target_paths
+                for relative_path in destination_paths
                 for parent in (
                     mirror_path.joinpath(
                         *PurePosixPath(relative_path).parts
@@ -99572,7 +100169,7 @@ def wom_kit_project_update_materialize_commit(
             },
             key=lambda value: (len(value.parts), str(value)),
         )
-        for directory in target_directories:
+        for directory in destination_directories:
             if directory_guard is None:
                 directory.mkdir(exist_ok=True)
             elif not directory_guard.ensure_directory(
@@ -99580,7 +100177,9 @@ def wom_kit_project_update_materialize_commit(
                 directory,
             ):
                 return False
-        for relative_path, (mode, _, blob) in sorted(target_entries.items()):
+        for relative_path, (mode, _, blob) in sorted(
+            destination_entries.items()
+        ):
             path = mirror_path.joinpath(*PurePosixPath(relative_path).parts)
             if (
                 directory_guard is not None
@@ -99597,10 +100196,98 @@ def wom_kit_project_update_materialize_commit(
 
     index_ok, _ = wom_kit_project_update_git(
         mirror_path,
-        ["read-tree", target_commit],
+        ["read-tree", destination_index_ref],
         timeout_seconds=60,
     )
-    if not index_ok:
+    return index_ok
+
+
+def wom_kit_project_update_materialize_commit(
+    mirror_path: Path,
+    target_commit: str,
+    *,
+    attach_branch: str | None = None,
+    dry_run: bool = False,
+    directory_guard: WomKitProjectUpdateDirectoryGuard | None = None,
+    project_root: Path | None = None,
+    expected_source_snapshot: dict[str, Any] | None = None,
+) -> bool:
+    plan, target_entries, current_entries = (
+        wom_kit_project_update_materialization_plan_details(
+            mirror_path,
+            target_commit,
+            attach_branch=attach_branch,
+        )
+    )
+    if (
+        not plan["safe"]
+        or target_entries is None
+        or current_entries is None
+    ):
+        return False
+    target_commit = target_commit.lower()
+
+    if dry_run:
+        return True
+    if (
+        os.name == "nt"
+        and (
+            directory_guard is None
+            or not directory_guard.is_held(mirror_path)
+        )
+    ):
+        return False
+
+    # Planning can read thousands of tree entries. Recheck the exact source
+    # authority after that work and immediately before the first filesystem
+    # mutation, so bytes that appeared after approval are never overwritten.
+    if expected_source_snapshot is not None:
+        if (
+            project_root is None
+            or not wom_kit_project_update_source_matches_snapshot(
+                project_root,
+                mirror_path,
+                expected_source_snapshot,
+            )
+        ):
+            raise WomKitProjectUpdateSourceSnapshotChangedError(
+                "project_source_changed_before_materialization"
+            )
+
+    if not _wom_kit_project_update_apply_tree_entries(
+        mirror_path,
+        current_entries,
+        target_entries,
+        target_commit,
+        directory_guard=directory_guard,
+    ):
+        return False
+    if not wom_kit_project_update_target_worktree_snapshot_matches(
+        mirror_path,
+        target_entries,
+    ):
+        # HEAD has not moved.  Roll back only when the internal verifier proves
+        # the just-written target snapshot exactly; otherwise retain the outer
+        # update lock and require recovery instead of overwriting a concurrent
+        # change.
+        if _wom_kit_project_update_target_worktree_snapshot_matches_internal(
+            mirror_path,
+            target_entries,
+        ):
+            rolled_back = _wom_kit_project_update_apply_tree_entries(
+                mirror_path,
+                target_entries,
+                current_entries,
+                "HEAD",
+                directory_guard=directory_guard,
+            )
+            rolled_back = bool(
+                rolled_back
+                and _wom_kit_project_update_target_worktree_snapshot_matches_internal(
+                    mirror_path,
+                    current_entries,
+                )
+            )
         return False
     if attach_branch is None:
         head_ok, _ = wom_kit_project_update_git(
@@ -99913,6 +100600,12 @@ def write_bytes_atomic(path: Path, value: bytes) -> None:
 
 
 class WomKitProjectUpdateReceiptUncertainError(OSError):
+    pass
+
+
+class WomKitProjectUpdateSourceSnapshotChangedError(RuntimeError):
+    """The source mirror changed after planning but before the first write."""
+
     pass
 
 
@@ -100702,6 +101395,2008 @@ def wom_kit_project_update_all_pins_match_snapshot(
     )
 
 
+WOM_KIT_PROJECT_UPDATE_MATERIALIZATION_BLOCKER = (
+    "The verified target cannot be materialized without overwriting an ignored "
+    "or unsafe filesystem entry; no source or pin mutation was attempted."
+)
+WOM_KIT_PROJECT_UPDATE_MATERIALIZATION_BLOCKER_CODE = (
+    "project_version_update_materialization_conflict"
+)
+WOM_KIT_PROJECT_UPDATE_SOURCE_DRIFT_BLOCKER = (
+    "The project source mirror changed immediately before materialization; "
+    "no source or pin mutation was attempted."
+)
+WOM_KIT_PROJECT_UPDATE_SOURCE_DRIFT_BLOCKER_CODE = (
+    "project_version_update_source_changed_before_materialization"
+)
+
+
+def wom_kit_project_update_blocker_codes(
+    blockers: Iterable[str],
+) -> list[str]:
+    codes: list[str] = []
+    for blocker in blockers:
+        code = (
+            WOM_KIT_PROJECT_UPDATE_MATERIALIZATION_BLOCKER_CODE
+            if blocker == WOM_KIT_PROJECT_UPDATE_MATERIALIZATION_BLOCKER
+            else WOM_KIT_PROJECT_UPDATE_SOURCE_DRIFT_BLOCKER_CODE
+            if blocker == WOM_KIT_PROJECT_UPDATE_SOURCE_DRIFT_BLOCKER
+            else "project_version_update_blocked"
+        )
+        if code not in codes:
+            codes.append(code)
+    return codes
+
+
+def wom_kit_project_update_materialization_preflight_state(
+    state: str,
+) -> dict[str, Any]:
+    projection = wom_kit_project_update_conflict_projection(
+        [],
+        complete=state != "deferred_until_approval_fetch",
+    )
+    return {
+        "state": state,
+        "evaluated": False,
+        "required": None,
+        "safe": None,
+        "checkout_required": None,
+        "target_runtime_source_integrity_verified": False,
+        "no_write": True,
+        "bounded": True,
+        **{
+            key: value
+            for key, value in projection.items()
+            if key not in {"safe", "materialization_plan_sha256"}
+        },
+        "materialization_plan_sha256": None,
+    }
+
+
+def wom_kit_project_update_materialization_preflight(
+    project_root: Path,
+    mirror_path: Path,
+    *,
+    target_commit: str,
+    head_before: str | None,
+    original_branch: str | None,
+) -> dict[str, Any]:
+    """Use the approval materializer's exact bounded no-write decision."""
+
+    checkout_required = bool(
+        head_before != target_commit
+        or original_branch is not None
+    )
+    target_runtime_source_integrity_verified = False
+    if not checkout_required and head_before == target_commit:
+        runtime_source_before = wom_kit_runtime_tracked_python_integrity(
+            project_root,
+            mirror_path,
+        )
+        runtime_resources_before = wom_kit_runtime_resource_integrity(
+            project_root,
+            mirror_path,
+            ref=head_before or "HEAD",
+        )
+        target_runtime_source_integrity_verified = bool(
+            runtime_source_before["tracked_python_sources_verified"]
+            and runtime_resources_before["runtime_resources_verified"]
+        )
+    required = bool(
+        checkout_required
+        or not target_runtime_source_integrity_verified
+    )
+    if not required:
+        projection = wom_kit_project_update_conflict_projection(
+            [],
+            complete=True,
+            authority=[
+                ("target-commit", target_commit),
+                ("head-before", str(head_before or "")),
+                (
+                    "original-branch-present",
+                    str(original_branch is not None).lower(),
+                ),
+            ],
+        )
+        return {
+            "state": "not_required",
+            "evaluated": True,
+            "required": False,
+            "checkout_required": checkout_required,
+            "target_runtime_source_integrity_verified": True,
+            "no_write": True,
+            "bounded": True,
+            **projection,
+        }
+
+    plan = wom_kit_project_update_materialization_plan(
+        mirror_path,
+        target_commit,
+    )
+    return {
+        **plan,
+        "checkout_required": checkout_required,
+        "target_runtime_source_integrity_verified": (
+            target_runtime_source_integrity_verified
+        ),
+    }
+
+
+def _wom_kit_project_update_collision_resolve_ref(
+    conflicts: Iterable[tuple[str, str]],
+    entry_ref: str,
+) -> tuple[str, list[str]] | None:
+    """Resolve one public ordinal without ever returning a public path map."""
+
+    if not WOM_KIT_PROJECT_UPDATE_COLLISION_ENTRY_REF_RE.fullmatch(entry_ref):
+        return None
+    ordinal = int(entry_ref.rsplit(":", 1)[1])
+    grouped: dict[str, set[str]] = {}
+    for internal_path, reason_code in conflicts:
+        grouped.setdefault(internal_path, set()).add(reason_code)
+    ordered = sorted(grouped.items(), key=lambda item: item[0])
+    if (
+        ordinal < 1
+        or ordinal > len(ordered)
+        or ordinal > WOM_KIT_PROJECT_UPDATE_MAX_MATERIALIZATION_CONFLICT_REFS
+    ):
+        return None
+    internal_path, reason_codes = ordered[ordinal - 1]
+    return internal_path, sorted(reason_codes)
+
+
+def _wom_kit_project_update_collision_authority_matches(
+    authority: Iterable[tuple[str, str]],
+    internal_path: str,
+    observed: os.stat_result,
+) -> bool:
+    matches = [
+        value
+        for category, value in authority
+        if category == "worktree-entry"
+        and value.split("\0", 1)[0] == internal_path
+    ]
+    if len(matches) != 1:
+        return False
+    fields = matches[0].split("\0")
+    if len(fields) != 8:
+        return False
+    try:
+        expected = tuple(int(value) for value in fields[1:])
+    except ValueError:
+        return False
+    observed_values = (
+        int(observed.st_mode),
+        int(observed.st_size),
+        int(
+            getattr(
+                observed,
+                "st_mtime_ns",
+                int(observed.st_mtime * 1_000_000_000),
+            )
+        ),
+        int(
+            getattr(
+                observed,
+                "st_ctime_ns",
+                int(observed.st_ctime * 1_000_000_000),
+            )
+        ),
+        int(observed.st_nlink),
+        int(observed.st_dev),
+        int(observed.st_ino),
+    )
+    return bool(
+        expected[:4] == observed_values[:4]
+        and all(
+            expected_value in {0, observed_value}
+            for expected_value, observed_value in zip(
+                expected[4:],
+                observed_values[4:],
+            )
+        )
+    )
+
+
+def _wom_kit_project_update_collision_git_eligibility(
+    mirror_path: Path,
+    internal_path: str,
+) -> tuple[bool, bool]:
+    ignored, _ = wom_kit_project_update_git(
+        mirror_path,
+        ["check-ignore", "--quiet", "--no-index", "--", internal_path],
+        max_output_bytes=256,
+    )
+    index_checked, index_text = wom_kit_project_update_git(
+        mirror_path,
+        ["ls-files", "--stage", "--", internal_path],
+        max_output_bytes=4096,
+    )
+    return bool(ignored), bool(index_checked and index_text == "")
+
+
+def _wom_kit_project_update_collision_write_private_receipt(
+    project_root: Path,
+    path: Path,
+    payload: dict[str, Any],
+    *,
+    directory_guard: WomKitProjectUpdateDirectoryGuard,
+) -> bool:
+    """Create and verify one create-only private receipt without replacement."""
+
+    try:
+        value = (
+            json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2)
+            + "\n"
+        ).encode("utf-8")
+    except (TypeError, ValueError, UnicodeError):
+        return False
+    if (
+        len(value) > 256 * 1024
+        or not directory_guard.is_held(path.parent)
+        or wom_kit_real_path_kind(project_root, path) != "missing"
+        or not wom_kit_existing_path_components_are_real(project_root, path)
+    ):
+        return False
+    try:
+        _write_bytes_create_if_absent(path, value)
+    except (OSError, OverflowError, ValueError):
+        # The create-only helper can report a cleanup failure after the final
+        # hardlink was already published.  Accept only independently verified
+        # exact final bytes; never retry or replace the final name.
+        pass
+    return bool(
+        directory_guard.is_held(path.parent)
+        and wom_kit_real_path_kind(project_root, path) == "file"
+        and wom_kit_read_bounded_real_bytes(
+            project_root,
+            path,
+            max_bytes=256 * 1024,
+        )
+        == value
+    )
+
+
+def _wom_kit_project_update_collision_hash_open_windows_handle(
+    handle: Any,
+    read_file: Any,
+    expected_size: int,
+    *,
+    content_read_observer: Callable[[], None] | None = None,
+) -> str | None:
+    """Hash one already-open, write-denying Windows handle within the bound."""
+
+    if (
+        os.name != "nt"
+        or expected_size < 0
+        or expected_size > WOM_KIT_PROJECT_UPDATE_COLLISION_MAX_FILE_BYTES
+    ):
+        return None
+    digest = hashlib.sha256()
+    remaining = expected_size
+    content_read_observed = False
+    while remaining:
+        requested = min(1024 * 1024, remaining)
+        buffer = ctypes.create_string_buffer(requested)
+        read_count = ctypes.c_ulong(0)
+        if not read_file(
+            handle,
+            buffer,
+            requested,
+            ctypes.byref(read_count),
+            None,
+        ):
+            return None
+        actual = int(read_count.value)
+        if actual <= 0 or actual > requested:
+            return None
+        if content_read_observer is not None and not content_read_observed:
+            content_read_observer()
+            content_read_observed = True
+        digest.update(buffer.raw[:actual])
+        remaining -= actual
+    trailing = ctypes.create_string_buffer(1)
+    trailing_count = ctypes.c_ulong(0)
+    if not read_file(
+        handle,
+        trailing,
+        1,
+        ctypes.byref(trailing_count),
+        None,
+    ) or int(trailing_count.value) != 0:
+        return None
+    return "sha256:" + digest.hexdigest()
+
+
+def _wom_kit_project_update_collision_private_file_binding_windows(
+    project_root: Path,
+    path: Path,
+    *,
+    share_delete: bool,
+    content_read_observer: Callable[[], None] | None = None,
+) -> dict[str, int | str] | None:
+    """Read a private content/identity binding through one no-reparse handle."""
+
+    if (
+        os.name != "nt"
+        or not is_path_within_root(path, project_root)
+        or wom_kit_real_path_kind(project_root, path) != "file"
+        or not wom_kit_path_components_are_real(project_root, path)
+    ):
+        return None
+    from ctypes import wintypes
+
+    class ByHandleFileInformation(ctypes.Structure):
+        _fields_ = [
+            ("attributes", wintypes.DWORD),
+            ("creation_time", wintypes.FILETIME),
+            ("access_time", wintypes.FILETIME),
+            ("write_time", wintypes.FILETIME),
+            ("volume_serial", wintypes.DWORD),
+            ("size_high", wintypes.DWORD),
+            ("size_low", wintypes.DWORD),
+            ("link_count", wintypes.DWORD),
+            ("file_index_high", wintypes.DWORD),
+            ("file_index_low", wintypes.DWORD),
+        ]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    create_file = kernel32.CreateFileW
+    create_file.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    ]
+    create_file.restype = wintypes.HANDLE
+    get_information = kernel32.GetFileInformationByHandle
+    get_information.argtypes = [
+        wintypes.HANDLE,
+        ctypes.POINTER(ByHandleFileInformation),
+    ]
+    get_information.restype = wintypes.BOOL
+    read_file = kernel32.ReadFile
+    read_file.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
+        ctypes.c_void_p,
+    ]
+    read_file.restype = wintypes.BOOL
+    close_handle = kernel32.CloseHandle
+    close_handle.argtypes = [wintypes.HANDLE]
+    close_handle.restype = wintypes.BOOL
+    invalid_handle = ctypes.c_void_p(-1).value
+    handle = create_file(
+        str(path),
+        0x80000000 | 0x00000080,  # GENERIC_READ | FILE_READ_ATTRIBUTES
+        0x00000001 | (0x00000004 if share_delete else 0),
+        None,
+        3,
+        0x00200000 | 0x08000000,  # OPEN_REPARSE_POINT | SEQUENTIAL_SCAN
+        None,
+    )
+    handle_value = handle if isinstance(handle, int) else getattr(handle, "value", None)
+    if handle_value in {None, invalid_handle}:
+        return None
+    binding: dict[str, int | str] | None = None
+    close_ok = False
+    try:
+        before = os.lstat(path)
+        information = ByHandleFileInformation()
+        if not get_information(handle, ctypes.byref(information)):
+            return None
+        attributes = int(information.attributes)
+        size = (int(information.size_high) << 32) | int(information.size_low)
+        file_index = (int(information.file_index_high) << 32) | int(
+            information.file_index_low
+        )
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or stat.S_ISLNK(before.st_mode)
+            or int(information.link_count) != 1
+            or size != int(before.st_size)
+            or size < 0
+            or size > WOM_KIT_PROJECT_UPDATE_COLLISION_MAX_FILE_BYTES
+            or file_index <= 0
+            or attributes & (0x00000010 | 0x00000400)
+            or (before.st_ino and int(before.st_ino) != file_index)
+        ):
+            return None
+        content_sha256 = (
+            _wom_kit_project_update_collision_hash_open_windows_handle(
+                handle,
+                read_file,
+                size,
+                content_read_observer=content_read_observer,
+            )
+        )
+        after = os.lstat(path)
+        after_information = ByHandleFileInformation()
+        if (
+            content_sha256 is None
+            or not get_information(handle, ctypes.byref(after_information))
+            or int(after_information.volume_serial)
+            != int(information.volume_serial)
+            or int(after_information.file_index_high)
+            != int(information.file_index_high)
+            or int(after_information.file_index_low)
+            != int(information.file_index_low)
+            or int(after_information.size_high) != int(information.size_high)
+            or int(after_information.size_low) != int(information.size_low)
+            or int(after_information.link_count) != 1
+            or after.st_size != size
+            or (after.st_ino and int(after.st_ino) != file_index)
+            or not wom_kit_path_components_are_real(project_root, path)
+        ):
+            return None
+        binding = {
+            "content_sha256": content_sha256,
+            "volume_serial": int(information.volume_serial),
+            "file_index": file_index,
+            "size": size,
+            "link_count": 1,
+        }
+    except (OSError, OverflowError, ValueError):
+        binding = None
+    finally:
+        try:
+            close_ok = bool(close_handle(handle))
+        except BaseException:
+            close_ok = False
+    return binding if close_ok else None
+
+
+def _wom_kit_project_update_collision_move_windows(
+    project_root: Path,
+    source: Path,
+    destination: Path,
+    *,
+    directory_guard: WomKitProjectUpdateDirectoryGuard,
+    pre_move_check: Callable[[os.stat_result, dict[str, int | str]], bool],
+) -> dict[str, Any]:
+    """Atomically rename the exact opened regular file without replacement.
+
+    The result is content-free.  ``uncertain`` means the caller must preserve
+    the quarantine and lock state for review; it must never copy back, delete,
+    or retry the rename.
+    """
+
+    result = {
+        "effect": "no_change",
+        "attempted": False,
+        "_private_content_read_stages": [],
+    }
+    if os.name != "nt":
+        return {"effect": "unsupported", "attempted": False}
+    if (
+        not directory_guard.is_held(source.parent)
+        or not directory_guard.is_held(destination.parent)
+        or not is_path_within_root(source, project_root)
+        or not is_path_within_root(destination, project_root)
+        or is_path_within_root(destination, project_root / ".zettel-kasten" / "source")
+        or wom_kit_real_path_kind(project_root, destination) != "missing"
+        or not wom_kit_existing_path_components_are_real(
+            project_root,
+            destination,
+        )
+    ):
+        return {"effect": "blocked", "attempted": False}
+
+    from ctypes import wintypes
+
+    class ByHandleFileInformation(ctypes.Structure):
+        _fields_ = [
+            ("attributes", wintypes.DWORD),
+            ("creation_time", wintypes.FILETIME),
+            ("access_time", wintypes.FILETIME),
+            ("write_time", wintypes.FILETIME),
+            ("volume_serial", wintypes.DWORD),
+            ("size_high", wintypes.DWORD),
+            ("size_low", wintypes.DWORD),
+            ("link_count", wintypes.DWORD),
+            ("file_index_high", wintypes.DWORD),
+            ("file_index_low", wintypes.DWORD),
+        ]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    create_file = kernel32.CreateFileW
+    create_file.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    ]
+    create_file.restype = wintypes.HANDLE
+    get_information = kernel32.GetFileInformationByHandle
+    get_information.argtypes = [
+        wintypes.HANDLE,
+        ctypes.POINTER(ByHandleFileInformation),
+    ]
+    get_information.restype = wintypes.BOOL
+    read_file = kernel32.ReadFile
+    read_file.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
+        ctypes.c_void_p,
+    ]
+    read_file.restype = wintypes.BOOL
+    set_information = kernel32.SetFileInformationByHandle
+    set_information.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_int,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+    ]
+    set_information.restype = wintypes.BOOL
+    close_handle = kernel32.CloseHandle
+    close_handle.argtypes = [wintypes.HANDLE]
+    close_handle.restype = wintypes.BOOL
+    invalid_handle = ctypes.c_void_p(-1).value
+    source_handle: Any = None
+    source_identity: tuple[int, int] | None = None
+    source_size: int | None = None
+    source_binding: dict[str, int | str] | None = None
+    destination_binding: dict[str, int | str] | None = None
+
+    def mark_private_content_read(stage: str) -> None:
+        stages = result["_private_content_read_stages"]
+        if isinstance(stages, list) and stage not in stages:
+            stages.append(stage)
+
+    def handle_value(handle: Any) -> int | None:
+        value = handle if isinstance(handle, int) else getattr(handle, "value", None)
+        return None if value in {None, invalid_handle} else int(value)
+
+    def query(handle: Any) -> ByHandleFileInformation | None:
+        information = ByHandleFileInformation()
+        if not get_information(handle, ctypes.byref(information)):
+            return None
+        return information
+
+    def information_identity(
+        information: ByHandleFileInformation,
+    ) -> tuple[int, int]:
+        return (
+            int(information.volume_serial),
+            (int(information.file_index_high) << 32)
+            | int(information.file_index_low),
+        )
+
+    def destination_matches() -> bool:
+        nonlocal destination_binding
+        observed_binding = (
+            _wom_kit_project_update_collision_private_file_binding_windows(
+                project_root,
+                destination,
+                share_delete=True,
+                content_read_observer=lambda: mark_private_content_read(
+                    "destination_post_move"
+                ),
+            )
+        )
+        if source_binding is None or observed_binding != source_binding:
+            destination_binding = None
+            return False
+        destination_binding = observed_binding
+        return True
+
+    def classify() -> str:
+        try:
+            source_named = os.lstat(source)
+        except OSError:
+            source_named = None
+        source_still_named = bool(
+            source_named is not None
+            and stat.S_ISREG(source_named.st_mode)
+            and source_identity is not None
+            and (
+                not source_named.st_ino
+                or int(source_named.st_ino) == source_identity[1]
+            )
+        )
+        destination_is_moved_source = destination_matches()
+        if source_still_named and not destination_is_moved_source:
+            return "no_change"
+        if source_named is None and destination_is_moved_source:
+            return "moved"
+        return "uncertain"
+
+    try:
+        source_before = os.lstat(source)
+        destination_parent = os.lstat(destination.parent)
+        reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+        if (
+            not stat.S_ISREG(source_before.st_mode)
+            or source_before.st_nlink != 1
+            or source_before.st_size < 0
+            or source_before.st_size
+            > WOM_KIT_PROJECT_UPDATE_COLLISION_MAX_FILE_BYTES
+            or (
+                reparse_flag
+                and getattr(source_before, "st_file_attributes", 0)
+                & reparse_flag
+            )
+            or not stat.S_ISDIR(destination_parent.st_mode)
+            or source_before.st_dev != destination_parent.st_dev
+        ):
+            result["effect"] = "blocked"
+            return result
+        source_handle = create_file(
+            str(source),
+            0x80000000
+            | 0x00010000
+            | 0x00000080,  # GENERIC_READ | DELETE | FILE_READ_ATTRIBUTES
+            0x00000001,  # FILE_SHARE_READ, never write/delete
+            None,
+            3,
+            0x00200000
+            | 0x08000000,  # FILE_FLAG_OPEN_REPARSE_POINT | SEQUENTIAL_SCAN
+            None,
+        )
+        if handle_value(source_handle) is None:
+            source_handle = None
+            return {"effect": "blocked", "attempted": False}
+        source_information = query(source_handle)
+        if source_information is None:
+            return {"effect": "blocked", "attempted": False}
+        attributes = int(source_information.attributes)
+        source_identity = information_identity(source_information)
+        source_size = (int(source_information.size_high) << 32) | int(
+            source_information.size_low
+        )
+        source_content_sha256 = (
+            _wom_kit_project_update_collision_hash_open_windows_handle(
+                source_handle,
+                read_file,
+                source_size,
+                content_read_observer=lambda: mark_private_content_read(
+                    "source_pre_move"
+                ),
+            )
+        )
+        source_information_after_hash = query(source_handle)
+        source_binding = (
+            {
+                "content_sha256": source_content_sha256,
+                "volume_serial": int(source_information.volume_serial),
+                "file_index": source_identity[1],
+                "size": source_size,
+                "link_count": 1,
+            }
+            if source_content_sha256 is not None
+            and source_information_after_hash is not None
+            and source_identity[1] > 0
+            and information_identity(source_information_after_hash)
+            == source_identity
+            and (
+                (int(source_information_after_hash.size_high) << 32)
+                | int(source_information_after_hash.size_low)
+            )
+            == source_size
+            and int(source_information_after_hash.link_count) == 1
+            else None
+        )
+        source_after_open = os.lstat(source)
+        if (
+            source_binding is None
+            or int(source_information.link_count) != 1
+            or source_size != source_before.st_size
+            or source_size > WOM_KIT_PROJECT_UPDATE_COLLISION_MAX_FILE_BYTES
+            or attributes & (0x00000010 | 0x00000400)
+            or (
+                source_before.st_ino
+                and source_identity[1]
+                and int(source_before.st_ino) != source_identity[1]
+            )
+            or (
+                source_after_open.st_ino
+                and source_identity[1]
+                and int(source_after_open.st_ino) != source_identity[1]
+            )
+            or not pre_move_check(source_after_open, source_binding)
+        ):
+            result["effect"] = "blocked"
+            return result
+        if (
+            wom_kit_real_path_kind(project_root, destination) != "missing"
+            or not directory_guard.is_held(source.parent)
+            or not directory_guard.is_held(destination.parent)
+        ):
+            result["effect"] = "blocked"
+            return result
+        from . import private_metadata_win32 as project_update_win32
+
+        rename_information = project_update_win32.file_rename_info_buffer(
+            destination,
+            replace_if_exists=False,
+        )
+        result["attempted"] = True
+        if not set_information(
+            source_handle,
+            3,  # FileRenameInfo
+            rename_information.backing,
+            rename_information.api_buffer_size,
+        ):
+            result["effect"] = classify()
+            if result["effect"] == "moved" and destination_binding is not None:
+                result["_private_destination_binding"] = dict(
+                    destination_binding
+                )
+            return result
+        result["effect"] = classify()
+        if result["effect"] == "moved" and destination_binding is not None:
+            result["_private_destination_binding"] = dict(destination_binding)
+        return result
+    except BaseException:
+        if source_identity is not None:
+            result["effect"] = classify()
+            if result["effect"] == "moved" and destination_binding is not None:
+                result["_private_destination_binding"] = dict(
+                    destination_binding
+                )
+        else:
+            result["effect"] = "no_change"
+        return result
+    finally:
+        if source_handle is not None:
+            try:
+                if not close_handle(source_handle):
+                    if result.get("effect") == "moved":
+                        result["effect"] = "uncertain"
+                        result.pop("_private_destination_binding", None)
+            except BaseException:
+                if result.get("effect") == "moved":
+                    result["effect"] = "uncertain"
+                    result.pop("_private_destination_binding", None)
+
+
+def _wom_kit_project_update_collision_existing_case_state(
+    project_root: Path,
+    mirror_path: Path,
+    case_directory: Path,
+    *,
+    target_tag: str,
+    target_commit: str,
+    entry_ref: str,
+    expected_plan_sha256: str,
+    case_ref: str,
+) -> dict[str, Any]:
+    """Strictly classify one deterministic private case without changing it.
+
+    The returned internal path is never a public projection.  A caller may use
+    it only after this verifier proves that the same path is an exact key in
+    the already verified target tree.
+    """
+
+    incomplete: dict[str, Any] = {
+        "state": "incomplete_or_tampered",
+        "receipt_private_metadata_read": False,
+        "private_content_read_stages": [],
+    }
+    intent_path = case_directory / "intent.json"
+    completion_path = case_directory / "completed.json"
+    payload_path = case_directory / "payload"
+    if (
+        wom_kit_real_path_kind(project_root, case_directory) != "directory"
+        or not wom_kit_path_components_are_real(project_root, case_directory)
+        or not is_path_within_root(case_directory, project_root)
+    ):
+        return incomplete
+    intent_bytes = wom_kit_read_bounded_real_bytes(
+        project_root,
+        intent_path,
+        max_bytes=256 * 1024,
+    )
+    completion_bytes = wom_kit_read_bounded_real_bytes(
+        project_root,
+        completion_path,
+        max_bytes=256 * 1024,
+    )
+    incomplete["receipt_private_metadata_read"] = bool(
+        intent_bytes is not None or completion_bytes is not None
+    )
+    if intent_bytes is None or completion_bytes is None:
+        return incomplete
+
+    def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate_private_receipt_key")
+            result[key] = value
+        return result
+
+    try:
+        intent_payload = json.loads(
+            intent_bytes.decode("utf-8"),
+            object_pairs_hook=unique_object,
+        )
+        completion_payload = json.loads(
+            completion_bytes.decode("utf-8"),
+            object_pairs_hook=unique_object,
+        )
+    except (UnicodeError, ValueError, TypeError):
+        return incomplete
+    intent_keys = {
+        "schema",
+        "status",
+        "case_ref",
+        "target",
+        "entry_ref",
+        "materialization_plan_sha256",
+        "source_mirror_relative_path",
+        "destination_name",
+        "reason_codes",
+        "reviewed_by",
+        "external_writers_quiescent_affirmed",
+        "source_size",
+        "source_link_count",
+        "source_content_sha256",
+        "source_volume_serial",
+        "source_file_index",
+        "prepared_at",
+    }
+    completion_keys = {
+        "schema",
+        "status",
+        "case_ref",
+        "target",
+        "entry_ref",
+        "materialization_plan_sha256",
+        "intent_name",
+        "payload_name",
+        "payload_size",
+        "payload_link_count",
+        "payload_content_sha256",
+        "payload_volume_serial",
+        "payload_file_index",
+        "completed_at",
+    }
+    if (
+        not isinstance(intent_payload, dict)
+        or set(intent_payload) != intent_keys
+        or not isinstance(completion_payload, dict)
+        or set(completion_payload) != completion_keys
+    ):
+        return incomplete
+    internal_path = intent_payload.get("source_mirror_relative_path")
+    reason_codes = intent_payload.get("reason_codes")
+    source_size = intent_payload.get("source_size")
+    source_link_count = intent_payload.get("source_link_count")
+    source_content_sha256 = intent_payload.get("source_content_sha256")
+    source_volume_serial = intent_payload.get("source_volume_serial")
+    source_file_index = intent_payload.get("source_file_index")
+    reviewer = intent_payload.get("reviewed_by")
+    timestamp_re = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")
+    if (
+        intent_payload.get("schema")
+        != "wom-kit/project-version-update-collision-private-intent/v0.2"
+        or intent_payload.get("status") != "prepared"
+        or intent_payload.get("case_ref") != case_ref
+        or intent_payload.get("target") != target_tag
+        or intent_payload.get("entry_ref") != entry_ref
+        or intent_payload.get("materialization_plan_sha256")
+        != expected_plan_sha256
+        or intent_payload.get("destination_name") != "payload"
+        or intent_payload.get("external_writers_quiescent_affirmed") is not True
+        or not isinstance(internal_path, str)
+        or not isinstance(reason_codes, list)
+        or not reason_codes
+        or any(
+            not isinstance(code, str)
+            or not WOM_KIT_PROJECT_UPDATE_COLLISION_REASON_RE.fullmatch(code)
+            for code in reason_codes
+        )
+        or "untracked_entry_overlaps_target_file" not in reason_codes
+        or safe_foreign_quarantine_actor_id(
+            reviewer if isinstance(reviewer, str) else None
+        )
+        != reviewer
+        or not isinstance(source_size, int)
+        or isinstance(source_size, bool)
+        or not 0 <= source_size <= WOM_KIT_PROJECT_UPDATE_COLLISION_MAX_FILE_BYTES
+        or not isinstance(source_link_count, int)
+        or isinstance(source_link_count, bool)
+        or source_link_count != 1
+        or not isinstance(source_content_sha256, str)
+        or not WOM_KIT_PROJECT_UPDATE_COLLISION_PLAN_RE.fullmatch(
+            source_content_sha256
+        )
+        or not isinstance(source_volume_serial, int)
+        or isinstance(source_volume_serial, bool)
+        or source_volume_serial < 0
+        or not isinstance(source_file_index, int)
+        or isinstance(source_file_index, bool)
+        or source_file_index <= 0
+        or not isinstance(intent_payload.get("prepared_at"), str)
+        or not timestamp_re.fullmatch(intent_payload["prepared_at"])
+    ):
+        return incomplete
+    if (
+        completion_payload.get("schema")
+        != "wom-kit/project-version-update-collision-private-completion/v0.2"
+        or completion_payload.get("status") != "preserved_relocated"
+        or completion_payload.get("case_ref") != case_ref
+        or completion_payload.get("target") != target_tag
+        or completion_payload.get("entry_ref") != entry_ref
+        or completion_payload.get("materialization_plan_sha256")
+        != expected_plan_sha256
+        or completion_payload.get("intent_name") != "intent.json"
+        or completion_payload.get("payload_name") != "payload"
+        or not isinstance(completion_payload.get("payload_size"), int)
+        or isinstance(completion_payload.get("payload_size"), bool)
+        or completion_payload.get("payload_size") != source_size
+        or not isinstance(completion_payload.get("payload_link_count"), int)
+        or isinstance(completion_payload.get("payload_link_count"), bool)
+        or completion_payload.get("payload_link_count") != 1
+        or not isinstance(
+            completion_payload.get("payload_content_sha256"),
+            str,
+        )
+        or completion_payload.get("payload_content_sha256")
+        != source_content_sha256
+        or not isinstance(
+            completion_payload.get("payload_volume_serial"),
+            int,
+        )
+        or isinstance(completion_payload.get("payload_volume_serial"), bool)
+        or completion_payload.get("payload_volume_serial")
+        != source_volume_serial
+        or not isinstance(completion_payload.get("payload_file_index"), int)
+        or isinstance(completion_payload.get("payload_file_index"), bool)
+        or completion_payload.get("payload_file_index") != source_file_index
+        or not isinstance(completion_payload.get("completed_at"), str)
+        or not timestamp_re.fullmatch(completion_payload["completed_at"])
+    ):
+        return incomplete
+    target_entries = wom_kit_project_update_tree_blobs(
+        mirror_path,
+        target_commit,
+    )
+    current_entries = wom_kit_project_update_tree_blobs(mirror_path, "HEAD")
+    if (
+        target_entries is None
+        or current_entries is None
+        or internal_path not in target_entries
+        or internal_path in current_entries
+    ):
+        return incomplete
+    source_path = mirror_path.joinpath(*PurePosixPath(internal_path).parts)
+    if (
+        not is_path_within_root(source_path, mirror_path)
+        or not wom_kit_existing_path_components_are_real(
+            mirror_path,
+            source_path,
+        )
+    ):
+        return incomplete
+    try:
+        os.lstat(source_path)
+    except FileNotFoundError:
+        pass
+    except OSError:
+        return incomplete
+    else:
+        return incomplete
+    def mark_terminal_private_content_read() -> None:
+        incomplete["private_content_read_stages"] = [
+            "preserved_payload_terminal_reobserve"
+        ]
+
+    payload_binding = (
+        _wom_kit_project_update_collision_private_file_binding_windows(
+            project_root,
+            payload_path,
+            share_delete=False,
+            content_read_observer=mark_terminal_private_content_read,
+        )
+    )
+    expected_payload_binding = {
+        "content_sha256": source_content_sha256,
+        "volume_serial": source_volume_serial,
+        "file_index": source_file_index,
+        "size": source_size,
+        "link_count": 1,
+    }
+    if payload_binding != expected_payload_binding:
+        return incomplete
+    return {
+        "state": "complete",
+        "receipt_private_metadata_read": True,
+        "internal_target_path": internal_path,
+        "reason_codes": list(reason_codes),
+        "source_size": source_size,
+        "private_content_read_stages": list(
+            incomplete["private_content_read_stages"]
+        ),
+    }
+
+
+def wom_kit_project_version_update_collision(
+    inspection_root: Path | str,
+    *,
+    target: str,
+    entry_ref: str,
+    action: str,
+    dry_run: bool = False,
+    approve: bool = False,
+    expected_plan_sha256: str | None = None,
+    reviewed_by: str | None = None,
+    affirm_external_writers_quiescent: bool = False,
+    reveal_target_relative_path: bool = False,
+) -> dict[str, Any]:
+    """Inspect or preserve one exact, digest-bound update collision.
+
+    Public output never contains the local conflict path.  The sole disclosure
+    exception is an explicitly requested path that is independently present as
+    the exact same key in the verified target Git tree.
+    """
+
+    blocker_codes: list[str] = []
+    warnings: list[str] = []
+    target_tag = str(target or "").strip()
+    safe_entry_ref = str(entry_ref or "").strip()
+    expected_plan = str(expected_plan_sha256 or "").strip()
+    requested_action = str(action or "").strip()
+    reviewer = safe_foreign_quarantine_actor_id(reviewed_by)
+    current_plan: str | None = None
+    reason_codes: list[str] = []
+    target_relative_path: str | None = None
+    target_relative_path_available = False
+    eligible = False
+    ignored_verified = False
+    index_untracked_verified = False
+    current_tree_untracked_verified = False
+    source_regular_verified = False
+    source_single_link_verified = False
+    source_within_size_bound = False
+    move_effect = "no_change"
+    move_attempted = False
+    intent_written = False
+    completion_written = False
+    receipt_private_metadata_read = False
+    lock_acquired = False
+    lock_released: bool | None = None
+    lock_absent_at_start_verified = False
+    lock_absent_verified = False
+    control_artifacts_written = False
+    case_ref: str | None = None
+    already_completed = False
+    terminal_observation = False
+    outcome_verified = True
+    writes_may_have_occurred = False
+    private_content_read_stages: list[str] = []
+    status = "blocked"
+
+    fixed_messages = {
+        "project_update_collision_mode_invalid": "Choose exactly one collision command mode.",
+        "project_update_collision_action_invalid": "Choose inspect or preserve-relocate.",
+        "project_update_collision_target_invalid": "The target must be one exact stable release tag.",
+        "project_update_collision_entry_ref_invalid": "The entry reference must be one bounded opaque ordinal.",
+        "project_update_collision_expected_plan_invalid": "The exact materialization plan digest is required.",
+        "project_update_collision_inspect_requires_dry_run": "Collision inspection is read-only.",
+        "project_update_collision_reveal_not_allowed": "Target path disclosure is available only during explicit inspection.",
+        "project_update_collision_reviewer_required": "Approved preservation relocation requires a safe reviewer id.",
+        "project_update_collision_quiescence_required": "Approved preservation relocation requires external writers to remain paused.",
+        "project_update_collision_platform_unsupported": "Approved preservation relocation is supported only by the retained Windows filesystem boundary.",
+        "project_update_collision_root_unsafe": "The project or archive root could not be resolved safely.",
+        "project_update_collision_source_mirror_unsafe": "The project source mirror is missing or unsafe.",
+        "project_update_collision_git_state_unsafe": "The exact clean local Git authority could not be verified.",
+        "project_update_collision_target_unverified": "The local target tag and origin-main ancestry could not be verified.",
+        "project_update_collision_plan_drifted": "The materialization plan no longer matches the expected digest.",
+        "project_update_collision_entry_ref_not_found": "The opaque entry reference is not present in the unchanged bounded plan.",
+        "project_update_collision_entry_not_relocatable": "This collision is not an eligible ignored regular single-link target-tree file.",
+        "project_update_collision_concurrent_operation": "A concurrent project update or collision operation holds the project lock.",
+        "project_update_collision_lock_unavailable": "The project update coordination lock could not be created safely.",
+        "project_update_collision_guard_unavailable": "The write-path identity guard could not be retained.",
+        "project_update_collision_private_case_exists": "The deterministic private preservation case already exists and was retained for review.",
+        "project_update_collision_intent_receipt_failed": "The private preservation intent could not be verified; the entry was not moved.",
+        "project_update_collision_move_failed": "The exact no-replace preservation rename did not complete.",
+        "project_update_collision_recovery_required": "The entry or coordination state changed but terminal evidence is incomplete; preserve it for review.",
+        "project_update_collision_outcome_unverified": "The approved collision operation ended without a verified write outcome; preserve the state and lock for recovery review.",
+    }
+
+    def add_blocker(code: str) -> None:
+        if code not in blocker_codes:
+            blocker_codes.append(code)
+
+    def build_result() -> dict[str, Any]:
+        safe_private_content_read_stages = [
+            stage
+            for stage in private_content_read_stages
+            if stage
+            in {
+                "source_pre_move",
+                "destination_post_move",
+                "preserved_payload_terminal_reobserve",
+            }
+        ]
+        safe_reasons = [
+            code
+            for code in reason_codes
+            if WOM_KIT_PROJECT_UPDATE_COLLISION_REASON_RE.fullmatch(code)
+        ]
+        disclosed_target_path = (
+            target_relative_path
+            if reveal_target_relative_path
+            and requested_action == "inspect"
+            and dry_run
+            and target_relative_path_available
+            else None
+        )
+        if status == "preserved_relocated":
+            next_actions = [
+                "Run a fresh project-version-update --dry-run; do not automatically retry the approved update.",
+                "Retain the private preservation receipt and quarantined payload for human review.",
+            ]
+        elif status.endswith("recovery_required"):
+            next_actions = [
+                "Do not retry, delete, overwrite, or move the preserved state.",
+                "Keep the private preservation case and project lock state for operator review.",
+            ]
+        elif status == "ready_to_preserve_relocate":
+            next_actions = [
+                "Review this preview, then replay the same target, entry ref, and plan digest with --approve, reviewer, and quiescence affirmation.",
+            ]
+        elif status == "inspected":
+            next_actions = [
+                "If eligible, run preserve-relocate with --dry-run before any approval.",
+                "Do not rerun approved project-version-update until a fresh updater dry-run is clean.",
+            ]
+        elif "project_update_collision_plan_drifted" in blocker_codes:
+            next_actions = [
+                "Run a fresh project-version-update --dry-run and use only its new opaque ref and exact plan digest.",
+            ]
+        else:
+            next_actions = [
+                "Preserve the colliding entry and resolve the fixed blocker before another preview.",
+            ]
+        return {
+            "ok": outcome_verified
+            and not blocker_codes
+            and status
+            in {
+                "inspected",
+                "ready_to_preserve_relocate",
+                "preserved_relocated",
+            },
+            "dry_run": bool(dry_run),
+            "schema": WOM_KIT_PROJECT_UPDATE_COLLISION_SCHEMA,
+            "lifecycle_action": "project_version_update_collision",
+            "status": status,
+            "outcome_verified": outcome_verified,
+            "action": (
+                requested_action
+                if requested_action in {"inspect", "preserve-relocate"}
+                else None
+            ),
+            "mode": "approve" if approve else "dry_run",
+            "target": {
+                "tag": (
+                    target_tag
+                    if WOM_KIT_PROJECT_UPDATE_TAG_RE.fullmatch(target_tag)
+                    else None
+                ),
+                "target_relative_path": disclosed_target_path,
+                "target_relative_path_available": target_relative_path_available,
+                "target_relative_path_echoed": disclosed_target_path is not None,
+                "target_tree_exact_key_verified": target_relative_path_available,
+            },
+            "entry": {
+                "entry_ref": (
+                    safe_entry_ref
+                    if WOM_KIT_PROJECT_UPDATE_COLLISION_ENTRY_REF_RE.fullmatch(
+                        safe_entry_ref
+                    )
+                    else None
+                ),
+                "reason_codes": safe_reasons,
+                "eligible_for_preserve_relocate": eligible,
+                "ignored_verified": ignored_verified,
+                "index_untracked_verified": index_untracked_verified,
+                "current_tree_untracked_verified": (
+                    current_tree_untracked_verified
+                ),
+                "regular_file_verified": source_regular_verified,
+                "single_link_verified": source_single_link_verified,
+                "within_size_bound": source_within_size_bound,
+                "local_relative_path_echoed": False,
+                "absolute_path_echoed": False,
+                "private_bytes_read": bool(safe_private_content_read_stages),
+                "private_content_read_stages": safe_private_content_read_stages,
+                "private_byte_hash_echoed": False,
+            },
+            "plan": {
+                "expected_plan_sha256": (
+                    expected_plan
+                    if WOM_KIT_PROJECT_UPDATE_COLLISION_PLAN_RE.fullmatch(
+                        expected_plan
+                    )
+                    else None
+                ),
+                "materialization_plan_sha256": current_plan,
+                "current_plan_evaluated": current_plan is not None,
+                "matches_expected": bool(
+                    current_plan is not None and current_plan == expected_plan
+                ),
+                "entry_ref_scheme": "update-entry-sorted-ordinal-v1",
+                "expected_plan_receipt_binding_verified": already_completed,
+                "fresh_preview_required": True,
+            },
+            "quarantine": {
+                "case_ref": case_ref,
+                "outside_source_mirror": True,
+                "same_volume_required": True,
+                "path_echoed": False,
+                "payload_name_echoed": False,
+                "automatic_cleanup": False,
+                "already_completed": already_completed,
+            },
+            "receipt": {
+                "private": True,
+                "intent_written": intent_written,
+                "completion_written": completion_written,
+                "local_mapping_retained": bool(intent_written),
+                "private_metadata_read": receipt_private_metadata_read,
+                "terminal_internal_consistency_verified": already_completed,
+                "terminal_binding_verified": already_completed,
+                "terminal_binding_verification_scope": (
+                    "unauthenticated_private_state_internal_consistency"
+                ),
+                "authenticated_binding_verified": False,
+                "path_echoed": False,
+            },
+            "trust_boundary": {
+                "private_receipt_authentication": "none",
+                "single_artifact_drift_detection": True,
+                "coordinated_same_user_private_state_rewrite_detection": False,
+                "same_user_private_write_access_outside_boundary": True,
+            },
+            "coordination": {
+                "reviewer_verified": bool(approve and reviewer is not None),
+                "reviewer_echoed": False,
+                "external_writers_quiescent_affirmed": bool(
+                    approve and affirm_external_writers_quiescent
+                ),
+                "project_update_lock_acquired": lock_acquired,
+                "project_update_lock_released": lock_released,
+                "project_update_lock_absent_at_start_verified": (
+                    lock_absent_at_start_verified
+                ),
+                "project_update_lock_absent_verified": lock_absent_verified,
+            },
+            "write_boundary": {
+                "writes": (
+                    bool(control_artifacts_written or move_effect == "moved")
+                    if outcome_verified
+                    else None
+                ),
+                "writes_verified": outcome_verified,
+                "writes_may_have_occurred": writes_may_have_occurred,
+                "deletes": False,
+                "delete_semantics": (
+                    "no_collision_payload_byte_deletion_or_unlink_cleanup; "
+                    "successful_atomic_relocation_vacates_source_name; "
+                    "owned_temporary_and_coordination_artifact_cleanup_is_separate"
+                ),
+                "overwrites": False,
+                "update_retried": False,
+                "preservation_relocation_attempted": (
+                    move_attempted if outcome_verified else None
+                ),
+                "preservation_relocation_succeeded": (
+                    move_effect == "moved" if outcome_verified else None
+                ),
+                "relocation_may_have_been_attempted": not outcome_verified,
+                "preservation_relocation_already_completed": already_completed,
+                "terminal_observation_only": terminal_observation,
+                "copy_fallback_used": False,
+                "rollback_move_attempted": False,
+            },
+            "blocker_codes": list(blocker_codes),
+            "blockers": [
+                fixed_messages.get(
+                    code,
+                    "The collision request was blocked by a fixed safety boundary.",
+                )
+                for code in blocker_codes
+            ],
+            "warnings": list(warnings),
+            "next_safe_actions": next_actions,
+            "privacy_guards": {
+                "local_absolute_paths_echoed": False,
+                "local_relative_paths_echoed": False,
+                "private_entry_names_echoed": False,
+                "private_bytes_echoed": False,
+                "private_byte_hashes_echoed": False,
+                "raw_errors_echoed": False,
+                "provider_or_network_called": False,
+            },
+        }
+
+    if dry_run is approve:
+        add_blocker("project_update_collision_mode_invalid")
+    if requested_action not in {"inspect", "preserve-relocate"}:
+        add_blocker("project_update_collision_action_invalid")
+    if not WOM_KIT_PROJECT_UPDATE_TAG_RE.fullmatch(target_tag):
+        add_blocker("project_update_collision_target_invalid")
+    if not WOM_KIT_PROJECT_UPDATE_COLLISION_ENTRY_REF_RE.fullmatch(
+        safe_entry_ref
+    ):
+        add_blocker("project_update_collision_entry_ref_invalid")
+    if not WOM_KIT_PROJECT_UPDATE_COLLISION_PLAN_RE.fullmatch(expected_plan):
+        add_blocker("project_update_collision_expected_plan_invalid")
+    if requested_action == "inspect" and not dry_run:
+        add_blocker("project_update_collision_inspect_requires_dry_run")
+    if reveal_target_relative_path and not (
+        requested_action == "inspect" and dry_run
+    ):
+        add_blocker("project_update_collision_reveal_not_allowed")
+    if approve and requested_action == "preserve-relocate":
+        if reviewer is None:
+            add_blocker("project_update_collision_reviewer_required")
+        if not affirm_external_writers_quiescent:
+            add_blocker("project_update_collision_quiescence_required")
+        if not WOM_KIT_PROJECT_UPDATE_APPROVAL_PLATFORM_SUPPORTED:
+            add_blocker("project_update_collision_platform_unsupported")
+    if blocker_codes:
+        return build_result()
+    case_digest = hashlib.sha256(
+        (
+            "wom-kit/project-version-update-collision-case/v1\0"
+            + target_tag
+            + "\0"
+            + safe_entry_ref
+            + "\0"
+            + expected_plan
+        ).encode("ascii")
+    ).hexdigest()[:32]
+    case_ref = f"collision-case:{case_digest}"
+
+    try:
+        inspection = Path(
+            os.path.abspath(str(Path(inspection_root).expanduser()))
+        )
+        local_metadata_root = inspection / ".zettel-kasten"
+        parent_metadata_root = inspection.parent / ".zettel-kasten"
+        project_root = (
+            inspection.parent
+            if (
+                wom_kit_real_path_kind(inspection, local_metadata_root)
+                == "missing"
+                and wom_kit_real_path_kind(
+                    inspection,
+                    inspection / "archive.yml",
+                )
+                == "file"
+                and wom_kit_real_path_kind(
+                    inspection.parent,
+                    parent_metadata_root,
+                )
+                == "directory"
+            )
+            else inspection
+        )
+    except (OSError, RuntimeError, ValueError):
+        add_blocker("project_update_collision_root_unsafe")
+        return build_result()
+    metadata_root = project_root / ".zettel-kasten"
+    mirror_path = metadata_root / "source"
+    lock_path = project_root / WOM_KIT_PROJECT_UPDATE_LOCK_RELATIVE
+    private_root = metadata_root / "private"
+    cases_root = private_root / "version-update-collisions"
+    case_directory = cases_root / f"case-{case_digest}"
+    destination = case_directory / "payload"
+    intent_path = case_directory / "intent.json"
+    completion_path = case_directory / "completed.json"
+    if (
+        wom_kit_real_path_kind(inspection, inspection) != "directory"
+        or wom_kit_real_path_kind(project_root, project_root) != "directory"
+    ):
+        add_blocker("project_update_collision_root_unsafe")
+    if (
+        wom_kit_real_path_kind(project_root, metadata_root) != "directory"
+        or wom_kit_real_path_kind(project_root, mirror_path) != "directory"
+        or not is_path_within_root(mirror_path, project_root)
+        or not wom_kit_path_components_are_real(project_root, mirror_path)
+        or not wom_kit_project_update_git_metadata_is_local_real(
+            project_root,
+            mirror_path,
+        )
+    ):
+        add_blocker("project_update_collision_source_mirror_unsafe")
+    lock_kind = wom_kit_real_path_kind(project_root, lock_path)
+    case_kind = wom_kit_real_path_kind(project_root, case_directory)
+    lock_path_components_real = wom_kit_existing_path_components_are_real(
+        project_root,
+        lock_path,
+    )
+    lock_absent_at_start_verified = bool(
+        lock_path_components_real and lock_kind == "missing"
+    )
+    if (
+        (not lock_path_components_real or lock_kind != "missing")
+        and case_kind == "missing"
+    ):
+        add_blocker("project_update_collision_concurrent_operation")
+    if blocker_codes:
+        return build_result()
+
+    inside_ok, inside_text = wom_kit_project_update_git(
+        mirror_path,
+        ["rev-parse", "--is-inside-work-tree"],
+    )
+    top_ok, top_text = wom_kit_project_update_git(
+        mirror_path,
+        ["rev-parse", "--show-toplevel"],
+    )
+    head_ok, head_text = wom_kit_project_update_git(
+        mirror_path,
+        ["rev-parse", "--verify", "HEAD"],
+    )
+    symbolic_state, original_branch = wom_kit_project_update_symbolic_head_state(
+        mirror_path
+    )
+    try:
+        exact_top = top_ok and Path(top_text).resolve() == mirror_path.resolve()
+    except (OSError, RuntimeError, ValueError):
+        exact_top = False
+    head_before = (
+        head_text.lower()
+        if head_ok and re.fullmatch(r"[0-9a-fA-F]{40,64}", head_text)
+        else None
+    )
+    git_snapshot = wom_kit_project_update_git_snapshot(mirror_path)
+    if (
+        not inside_ok
+        or inside_text != "true"
+        or not exact_top
+        or head_before is None
+        or symbolic_state == "invalid"
+        or not wom_kit_project_update_snapshot_is_clean(
+            git_snapshot,
+            expected_head=head_before,
+            expected_branch=original_branch,
+        )
+    ):
+        add_blocker("project_update_collision_git_state_unsafe")
+        return build_result()
+
+    target_evidence = wom_kit_project_update_target_evidence(
+        mirror_path,
+        target_tag,
+    )
+    target_ref_snapshot = wom_kit_project_update_target_ref_snapshot(
+        mirror_path,
+        target_tag,
+    )
+    target_commit = target_evidence.get("target_commit")
+    if (
+        target_ref_snapshot is None
+        or not isinstance(target_commit, str)
+        or target_ref_snapshot.get("target_commit") != target_commit
+        or not target_evidence.get("tag_available_locally")
+        or not target_evidence.get("annotated_tag_verified")
+        or not target_evidence.get("all_source_versions_match_target")
+        or not target_evidence.get("origin_main_available_locally")
+        or not target_evidence.get("target_reachable_from_origin_main")
+    ):
+        add_blocker("project_update_collision_target_unverified")
+        return build_result()
+    if case_kind != "missing":
+        existing_case = (
+            _wom_kit_project_update_collision_existing_case_state(
+                project_root,
+                mirror_path,
+                case_directory,
+                target_tag=target_tag,
+                target_commit=target_commit,
+                entry_ref=safe_entry_ref,
+                expected_plan_sha256=expected_plan,
+                case_ref=str(case_ref),
+            )
+        )
+        receipt_private_metadata_read = bool(
+            existing_case.get("receipt_private_metadata_read")
+        )
+        private_content_read_stages = [
+            stage
+            for stage in existing_case.get("private_content_read_stages", [])
+            if stage == "preserved_payload_terminal_reobserve"
+        ]
+        if (
+            existing_case.get("state") == "complete"
+            and lock_absent_at_start_verified
+        ):
+            internal_path = str(existing_case["internal_target_path"])
+            reason_codes = list(existing_case["reason_codes"])
+            target_relative_path = internal_path
+            target_relative_path_available = True
+            current_tree_untracked_verified = True
+            source_within_size_bound = True
+            intent_written = True
+            completion_written = True
+            already_completed = True
+            terminal_observation = True
+            status = "preserved_relocated"
+            return build_result()
+        lock_released = False if not lock_absent_at_start_verified else None
+        add_blocker("project_update_collision_private_case_exists")
+        add_blocker("project_update_collision_recovery_required")
+        status = "collision_state_recovery_required"
+        return build_result()
+
+    (
+        plan,
+        target_entries,
+        current_entries,
+        internal_conflicts,
+        authority,
+    ) = _wom_kit_project_update_materialization_plan_details_internal(
+        mirror_path,
+        target_commit,
+    )
+    current_plan = plan.get("materialization_plan_sha256")
+    if current_plan != expected_plan:
+        add_blocker("project_update_collision_plan_drifted")
+        return build_result()
+    resolved = _wom_kit_project_update_collision_resolve_ref(
+        internal_conflicts,
+        safe_entry_ref,
+    )
+    if resolved is None:
+        add_blocker("project_update_collision_entry_ref_not_found")
+        return build_result()
+    internal_path, reason_codes = resolved
+    target_entries = target_entries or {}
+    current_entries = current_entries or {}
+    target_relative_path_available = internal_path in target_entries
+    target_relative_path = (
+        internal_path if target_relative_path_available else None
+    )
+    current_tree_untracked_verified = internal_path not in current_entries
+    source_path = mirror_path.joinpath(*PurePosixPath(internal_path).parts)
+    if (
+        target_relative_path_available
+        and current_tree_untracked_verified
+        and "untracked_entry_overlaps_target_file" in reason_codes
+        and is_path_within_root(source_path, mirror_path)
+        and wom_kit_path_components_are_real(mirror_path, source_path)
+    ):
+        try:
+            observed = os.lstat(source_path)
+        except OSError:
+            observed = None
+        if observed is not None:
+            reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+            source_regular_verified = bool(
+                stat.S_ISREG(observed.st_mode)
+                and not (
+                    reparse_flag
+                    and getattr(observed, "st_file_attributes", 0)
+                    & reparse_flag
+                )
+            )
+            source_single_link_verified = observed.st_nlink == 1
+            source_within_size_bound = bool(
+                0
+                <= observed.st_size
+                <= WOM_KIT_PROJECT_UPDATE_COLLISION_MAX_FILE_BYTES
+            )
+            authority_verified = (
+                _wom_kit_project_update_collision_authority_matches(
+                    authority,
+                    internal_path,
+                    observed,
+                )
+            )
+            ignored_verified, index_untracked_verified = (
+                _wom_kit_project_update_collision_git_eligibility(
+                    mirror_path,
+                    internal_path,
+                )
+            )
+            eligible = bool(
+                source_regular_verified
+                and source_single_link_verified
+                and source_within_size_bound
+                and authority_verified
+                and ignored_verified
+                and index_untracked_verified
+            )
+
+    if requested_action == "inspect":
+        status = "inspected"
+        return build_result()
+    if not eligible:
+        add_blocker("project_update_collision_entry_not_relocatable")
+        return build_result()
+    if dry_run:
+        status = "ready_to_preserve_relocate"
+        return build_result()
+
+    directory_guard = WomKitProjectUpdateDirectoryGuard(project_root)
+    lock_identity: tuple[int, int] | None = None
+    lock_reservation_identity: tuple[int, int] | None = None
+    preserve_uncertain_lock = False
+    approval_failure = False
+    case_directory_created = False
+    private_source_binding: dict[str, int | str] | None = None
+    try:
+        if not (
+            directory_guard.hold(project_root)
+            and directory_guard.hold(metadata_root)
+            and directory_guard.hold_existing_tree(mirror_path)
+        ):
+            add_blocker("project_update_collision_guard_unavailable")
+            approval_failure = True
+        if not approval_failure:
+            def register_collision_lock(
+                identity: tuple[int, int],
+            ) -> None:
+                nonlocal lock_reservation_identity
+                lock_reservation_identity = identity
+
+            try:
+                lock_identity = wom_kit_project_update_acquire_lock_exclusive(
+                    project_root,
+                    metadata_root,
+                    lock_path,
+                    reservation_callback=register_collision_lock,
+                )
+                lock_acquired = True
+            except FileExistsError:
+                add_blocker("project_update_collision_concurrent_operation")
+                approval_failure = True
+            except WomKitProjectUpdateReceiptUncertainError:
+                lock_identity = lock_reservation_identity
+                lock_acquired = bool(
+                    lock_identity is not None
+                    and wom_kit_project_update_owned_lock_present(
+                        project_root,
+                        lock_path,
+                        lock_identity,
+                    )
+                )
+                preserve_uncertain_lock = True
+                lock_released = False
+                add_blocker("project_update_collision_recovery_required")
+                status = "collision_state_recovery_required"
+                approval_failure = True
+            except OSError:
+                add_blocker("project_update_collision_lock_unavailable")
+                approval_failure = True
+            except BaseException:
+                lock_identity = lock_reservation_identity
+                preserve_uncertain_lock = lock_identity is not None
+                lock_acquired = bool(preserve_uncertain_lock)
+                outcome_verified = False
+                writes_may_have_occurred = True
+                add_blocker("project_update_collision_outcome_unverified")
+                add_blocker("project_update_collision_recovery_required")
+                status = "collision_outcome_unverified_recovery_required"
+                if preserve_uncertain_lock:
+                    lock_released = False
+                approval_failure = True
+        if not approval_failure:
+            if not directory_guard.ensure_directory(metadata_root, private_root):
+                add_blocker("project_update_collision_guard_unavailable")
+                approval_failure = True
+            elif not directory_guard.ensure_directory(private_root, cases_root):
+                add_blocker("project_update_collision_guard_unavailable")
+                approval_failure = True
+            elif wom_kit_real_path_kind(project_root, case_directory) == "directory":
+                if not directory_guard.hold(case_directory):
+                    add_blocker("project_update_collision_guard_unavailable")
+                    approval_failure = True
+                else:
+                    raced_case = (
+                        _wom_kit_project_update_collision_existing_case_state(
+                            project_root,
+                            mirror_path,
+                            case_directory,
+                            target_tag=target_tag,
+                            target_commit=target_commit,
+                            entry_ref=safe_entry_ref,
+                            expected_plan_sha256=expected_plan,
+                            case_ref=str(case_ref),
+                        )
+                    )
+                    receipt_private_metadata_read = bool(
+                        raced_case.get("receipt_private_metadata_read")
+                    )
+                    private_content_read_stages = [
+                        stage
+                        for stage in raced_case.get(
+                            "private_content_read_stages",
+                            [],
+                        )
+                        if stage == "preserved_payload_terminal_reobserve"
+                    ]
+                    preserve_uncertain_lock = True
+                    lock_released = False
+                    add_blocker("project_update_collision_private_case_exists")
+                    add_blocker("project_update_collision_recovery_required")
+                    status = "collision_state_recovery_required"
+                    approval_failure = True
+            elif wom_kit_real_path_kind(project_root, case_directory) != "missing":
+                preserve_uncertain_lock = True
+                lock_released = False
+                add_blocker("project_update_collision_private_case_exists")
+                add_blocker("project_update_collision_recovery_required")
+                status = "collision_state_recovery_required"
+                approval_failure = True
+            elif not directory_guard.ensure_directory(cases_root, case_directory):
+                add_blocker("project_update_collision_guard_unavailable")
+                approval_failure = True
+            else:
+                case_directory_created = True
+                control_artifacts_written = True
+
+        def final_pre_move_check(
+            observed: os.stat_result,
+            opened_source_binding: dict[str, int | str],
+        ) -> bool:
+            nonlocal current_plan, intent_written, control_artifacts_written
+            nonlocal private_source_binding
+            if (
+                set(opened_source_binding)
+                != {
+                    "content_sha256",
+                    "volume_serial",
+                    "file_index",
+                    "size",
+                    "link_count",
+                }
+                or opened_source_binding.get("size") != int(observed.st_size)
+                or opened_source_binding.get("link_count") != 1
+                or not isinstance(
+                    opened_source_binding.get("content_sha256"),
+                    str,
+                )
+                or not WOM_KIT_PROJECT_UPDATE_COLLISION_PLAN_RE.fullmatch(
+                    str(opened_source_binding.get("content_sha256"))
+                )
+            ):
+                return False
+            if (
+                wom_kit_project_update_target_ref_snapshot(
+                    mirror_path,
+                    target_tag,
+                )
+                != target_ref_snapshot
+                or not wom_kit_project_update_snapshot_is_clean(
+                    wom_kit_project_update_git_snapshot(mirror_path),
+                    expected_head=head_before,
+                    expected_branch=original_branch,
+                )
+            ):
+                return False
+            (
+                final_plan,
+                final_target_entries,
+                final_current_entries,
+                final_conflicts,
+                final_authority,
+            ) = _wom_kit_project_update_materialization_plan_details_internal(
+                mirror_path,
+                target_commit,
+            )
+            current_plan = final_plan.get("materialization_plan_sha256")
+            final_resolved = _wom_kit_project_update_collision_resolve_ref(
+                final_conflicts,
+                safe_entry_ref,
+            )
+            final_ignored, final_index_untracked = (
+                _wom_kit_project_update_collision_git_eligibility(
+                    mirror_path,
+                    internal_path,
+                )
+            )
+            if (
+                current_plan != expected_plan
+                or final_resolved is None
+                or final_resolved[0] != internal_path
+                or final_resolved[1] != reason_codes
+                or final_target_entries is None
+                or internal_path not in final_target_entries
+                or final_current_entries is None
+                or internal_path in final_current_entries
+                or "untracked_entry_overlaps_target_file"
+                not in final_resolved[1]
+                or not final_ignored
+                or not final_index_untracked
+                or not _wom_kit_project_update_collision_authority_matches(
+                    final_authority,
+                    internal_path,
+                    observed,
+                )
+            ):
+                return False
+            private_source_binding = dict(opened_source_binding)
+            intent_written = (
+                _wom_kit_project_update_collision_write_private_receipt(
+                    project_root,
+                    intent_path,
+                    {
+                        "schema": "wom-kit/project-version-update-collision-private-intent/v0.2",
+                        "status": "prepared",
+                        "case_ref": case_ref,
+                        "target": target_tag,
+                        "entry_ref": safe_entry_ref,
+                        "materialization_plan_sha256": expected_plan,
+                        "source_mirror_relative_path": internal_path,
+                        "destination_name": "payload",
+                        "reason_codes": reason_codes,
+                        "reviewed_by": reviewer,
+                        "external_writers_quiescent_affirmed": True,
+                        "source_size": int(observed.st_size),
+                        "source_link_count": int(observed.st_nlink),
+                        "source_content_sha256": private_source_binding[
+                            "content_sha256"
+                        ],
+                        "source_volume_serial": private_source_binding[
+                            "volume_serial"
+                        ],
+                        "source_file_index": private_source_binding[
+                            "file_index"
+                        ],
+                        "prepared_at": datetime.now(timezone.utc)
+                        .replace(microsecond=0)
+                        .isoformat()
+                        .replace("+00:00", "Z"),
+                    },
+                    directory_guard=directory_guard,
+                )
+            )
+            control_artifacts_written = bool(
+                control_artifacts_written or intent_written
+            )
+            return intent_written
+
+        if not approval_failure:
+            move_result = _wom_kit_project_update_collision_move_windows(
+                project_root,
+                source_path,
+                destination,
+                directory_guard=directory_guard,
+                pre_move_check=final_pre_move_check,
+            )
+            move_effect = str(move_result.get("effect") or "uncertain")
+            move_attempted = bool(move_result.get("attempted"))
+            private_content_read_stages = [
+                stage
+                for stage in move_result.get(
+                    "_private_content_read_stages",
+                    [],
+                )
+                if stage in {"source_pre_move", "destination_post_move"}
+            ]
+            if move_effect == "moved":
+                private_destination_binding = move_result.get(
+                    "_private_destination_binding"
+                )
+                if (
+                    private_source_binding is not None
+                    and isinstance(private_destination_binding, dict)
+                    and private_destination_binding == private_source_binding
+                ):
+                    completion_written = (
+                        _wom_kit_project_update_collision_write_private_receipt(
+                            project_root,
+                            completion_path,
+                            {
+                                "schema": "wom-kit/project-version-update-collision-private-completion/v0.2",
+                                "status": "preserved_relocated",
+                                "case_ref": case_ref,
+                                "target": target_tag,
+                                "entry_ref": safe_entry_ref,
+                                "materialization_plan_sha256": expected_plan,
+                                "intent_name": "intent.json",
+                                "payload_name": "payload",
+                                "payload_size": private_destination_binding[
+                                    "size"
+                                ],
+                                "payload_link_count": private_destination_binding[
+                                    "link_count"
+                                ],
+                                "payload_content_sha256": private_destination_binding[
+                                    "content_sha256"
+                                ],
+                                "payload_volume_serial": private_destination_binding[
+                                    "volume_serial"
+                                ],
+                                "payload_file_index": private_destination_binding[
+                                    "file_index"
+                                ],
+                                "completed_at": datetime.now(timezone.utc)
+                                .replace(microsecond=0)
+                                .isoformat()
+                                .replace("+00:00", "Z"),
+                            },
+                            directory_guard=directory_guard,
+                        )
+                    )
+                control_artifacts_written = True
+                if completion_written:
+                    status = "preserved_relocated"
+                else:
+                    add_blocker("project_update_collision_recovery_required")
+                    status = "preserved_relocated_recovery_required"
+            elif intent_written:
+                add_blocker("project_update_collision_move_failed")
+                add_blocker("project_update_collision_recovery_required")
+                status = "collision_state_recovery_required"
+            elif move_effect == "uncertain":
+                add_blocker("project_update_collision_recovery_required")
+                status = "collision_state_recovery_required"
+            elif case_directory_created:
+                add_blocker("project_update_collision_recovery_required")
+                status = "collision_state_recovery_required"
+            else:
+                add_blocker("project_update_collision_intent_receipt_failed")
+                status = "blocked"
+        elif status == "blocked" and (
+            case_directory_created
+            or "project_update_collision_private_case_exists"
+            in blocker_codes
+        ):
+            add_blocker("project_update_collision_recovery_required")
+            status = "collision_state_recovery_required"
+    except BaseException:
+        outcome_verified = False
+        writes_may_have_occurred = True
+        add_blocker("project_update_collision_outcome_unverified")
+        add_blocker("project_update_collision_recovery_required")
+        status = "collision_outcome_unverified_recovery_required"
+        preserve_uncertain_lock = bool(
+            lock_identity is not None or lock_reservation_identity is not None
+        )
+        if preserve_uncertain_lock:
+            lock_identity = lock_identity or lock_reservation_identity
+            lock_acquired = True
+            lock_released = False
+    finally:
+        if status.endswith("recovery_required"):
+            preserve_uncertain_lock = lock_identity is not None
+            if preserve_uncertain_lock:
+                lock_released = False
+        if lock_identity is not None and not preserve_uncertain_lock:
+            try:
+                lock_released = wom_kit_project_update_release_owned_lock(
+                    project_root,
+                    lock_path,
+                    lock_identity,
+                )
+            except BaseException:
+                lock_released = False
+            lock_absent_verified = bool(
+                lock_released
+                and wom_kit_existing_path_components_are_real(
+                    project_root,
+                    lock_path,
+                )
+                and wom_kit_real_path_kind(project_root, lock_path) == "missing"
+            )
+            lock_released = lock_absent_verified
+            if not lock_absent_verified:
+                add_blocker("project_update_collision_recovery_required")
+                status = "collision_state_recovery_required"
+        directory_guard.close()
+    return build_result()
+
+
 def wom_kit_project_version_update(
     inspection_root: Path | str,
     *,
@@ -101104,6 +103799,11 @@ def wom_kit_project_version_update(
     target_git_snapshot: dict[str, Any] | None = None
     trusted_target_ref_snapshot: dict[str, str] | None = None
     source_materialization_completed = False
+    materialization_preflight = (
+        wom_kit_project_update_materialization_preflight_state(
+            "not_evaluated"
+        )
+    )
 
     def validate_target_evidence(*, require_local: bool, require_origin_ancestry: bool) -> None:
         if require_local and not target_evidence.get("tag_available_locally"):
@@ -101132,6 +103832,35 @@ def wom_kit_project_version_update(
         validate_target_evidence(require_local=True, require_origin_ancestry=False)
     elif dry_run and not target_evidence.get("tag_available_locally"):
         warnings.append("The target tag is not fetched locally; approval will fetch and verify it before any checkout.")
+        materialization_preflight = (
+            wom_kit_project_update_materialization_preflight_state(
+                "deferred_until_approval_fetch"
+            )
+        )
+    if (
+        dry_run
+        and not blockers
+        and target_evidence.get("tag_available_locally")
+        and isinstance(target_evidence.get("target_commit"), str)
+    ):
+        materialization_preflight = (
+            wom_kit_project_update_materialization_preflight(
+                project_root,
+                mirror_path,
+                target_commit=str(target_evidence["target_commit"]),
+                head_before=head_before,
+                original_branch=original_branch,
+            )
+        )
+        target_runtime_source_integrity_verified = bool(
+            materialization_preflight[
+                "target_runtime_source_integrity_verified"
+            ]
+        )
+        if materialization_preflight["state"] == "blocked":
+            blockers.append(
+                WOM_KIT_PROJECT_UPDATE_MATERIALIZATION_BLOCKER
+            )
 
     def result_payload(status: str) -> dict[str, Any]:
         target_commit = target_evidence.get("target_commit")
@@ -101164,6 +103893,12 @@ def wom_kit_project_version_update(
         restart_required = status == "updated_restart_required"
         if status == "blocked":
             next_actions = (
+                [
+                    "Keep the newly changed source bytes in place and do not reuse the prior approval.",
+                    "Pause editors and sync, backup, and other Git processes, then rerun project-version-update in --dry-run mode before a separate approval.",
+                ]
+                if WOM_KIT_PROJECT_UPDATE_SOURCE_DRIFT_BLOCKER in blockers
+                else
                 [
                     "Choose a target that is at least every recognized project pin and project source version; the running WOM-kit version is informational only.",
                     "Rerun project-version-update in --dry-run mode before approval.",
@@ -101237,6 +103972,12 @@ def wom_kit_project_version_update(
                 "git_repo_verified": git_repo_verified,
                 "worktree_clean_except_untracked_local_pin": worktree_clean,
                 "unexpected_worktree_entry_count": unexpected_worktree_entry_count,
+                "unexpected_nonignored_worktree_entry_count": (
+                    unexpected_worktree_entry_count
+                ),
+                "ignored_entries_checked_by_materialization_preflight": (
+                    materialization_preflight["evaluated"]
+                ),
                 "source_mirror_pin_git_tracked": mirror_pin_tracked,
                 "origin_configured": origin_configured,
                 "origin_url_echoed": False,
@@ -101267,6 +104008,7 @@ def wom_kit_project_version_update(
                 "written_paths": final_pins_written,
                 "write_attempted_paths": list(pin_write_attempted_paths),
             },
+            "materialization_preflight": materialization_preflight,
             "forward_only": {
                 "comparison_basis": "recognized_project_pins_and_project_source_versions",
                 "recognized_project_version_count": len(
@@ -101365,6 +104107,9 @@ def wom_kit_project_version_update(
                 *([display_receipt_relative] if receipt_written and display_receipt_relative else []),
             ],
             "blockers": unique_preserve_order(blockers),
+            "blocker_codes": wom_kit_project_update_blocker_codes(
+                unique_preserve_order(blockers)
+            ),
             "warnings": unique_preserve_order(warnings),
             "next_safe_actions": next_actions,
             "privacy_guards": {
@@ -101730,27 +104475,35 @@ def wom_kit_project_version_update(
 
         target_commit = str(target_evidence["target_commit"])
         pins_already_target = all(spec.get("previous_version") == target_tag for spec in pin_specs)
-        runtime_source_before = wom_kit_runtime_tracked_python_integrity(
-            project_root,
-            mirror_path,
-        )
-        runtime_source_before_verified = bool(
-            runtime_source_before["tracked_python_sources_verified"]
-        )
-        runtime_resources_before = wom_kit_runtime_resource_integrity(
-            project_root,
-            mirror_path,
-            ref=head_before or "HEAD",
+        materialization_preflight = (
+            wom_kit_project_update_materialization_preflight(
+                project_root,
+                mirror_path,
+                target_commit=target_commit,
+                head_before=head_before,
+                original_branch=original_branch,
+            )
         )
         target_runtime_source_integrity_verified = bool(
-            head_before == target_commit
-            and runtime_source_before_verified
-            and runtime_resources_before["runtime_resources_verified"]
+            materialization_preflight[
+                "target_runtime_source_integrity_verified"
+            ]
         )
         checkout_required = bool(
-            head_before != target_commit
-            or original_branch is not None
+            materialization_preflight["checkout_required"]
         )
+        rematerialization_required = bool(
+            materialization_preflight["required"]
+        )
+        if (
+            rematerialization_required
+            and materialization_preflight["state"] == "blocked"
+        ):
+            blockers.append(
+                WOM_KIT_PROJECT_UPDATE_MATERIALIZATION_BLOCKER
+            )
+            release_current_lock_or_raise("blocked")
+            return result_payload("blocked")
         if (
             head_before == target_commit
             and pins_already_target
@@ -101763,30 +104516,41 @@ def wom_kit_project_version_update(
 
         if progress_callback is not None:
             progress_callback("checkout-release", "start", None, None)
-        rematerialization_required = bool(
-            checkout_required
-            or not target_runtime_source_integrity_verified
-        )
         if rematerialization_required:
-            if not wom_kit_project_update_materialize_commit(
-                mirror_path,
-                target_commit,
-                dry_run=True,
-                directory_guard=directory_guard,
-            ):
-                blockers.append(
-                    "The verified target cannot be materialized without overwriting an ignored or unsafe filesystem entry; no source or pin mutation was attempted."
-                )
-                release_current_lock_or_raise("blocked")
-                return result_payload("blocked")
             runtime_source_rematerialization_attempted = True
             runtime_source_rematerialization_succeeded = False
+            try:
+                materialization_succeeded = (
+                    wom_kit_project_update_materialize_commit(
+                        mirror_path,
+                        target_commit,
+                        directory_guard=directory_guard,
+                        project_root=project_root,
+                        expected_source_snapshot=preflight_git_snapshot,
+                    )
+                )
+            except WomKitProjectUpdateSourceSnapshotChangedError:
+                blockers.append(WOM_KIT_PROJECT_UPDATE_SOURCE_DRIFT_BLOCKER)
+                release_current_lock_or_raise("blocked")
+                return result_payload("blocked")
             source_checkout_changed = True
-            if not wom_kit_project_update_materialize_commit(
-                mirror_path,
-                target_commit,
-                directory_guard=directory_guard,
-            ):
+            if not materialization_succeeded:
+                # A final pre-HEAD snapshot failure may have been restored by
+                # the materializer while the owned lock stayed held.  Prove
+                # that exact original snapshot before classifying it as a
+                # verified pre-mutation rollback; otherwise the exception path
+                # preserves the lock for recovery.
+                if (
+                    preflight_git_snapshot is not None
+                    and wom_kit_project_update_git_snapshot(mirror_path)
+                    == preflight_git_snapshot
+                    and wom_kit_project_update_source_matches_snapshot(
+                        project_root,
+                        mirror_path,
+                        preflight_git_snapshot,
+                    )
+                ):
+                    source_checkout_changed = False
                 raise RuntimeError("verified_source_materialization_failed")
             source_materialization_completed = True
             runtime_source_rematerialization_succeeded = True
@@ -118235,47 +120999,315 @@ DERIVED_TEXT_ENCODING_BLOCKER_HINTS = {
 }
 
 
-def _derived_text_read_source_file(text_file: Path | str) -> tuple[bytes | None, list[str]]:
-    # O_NOFOLLOW-fd + fstat read closes the previous lstat->read_bytes TOCTOU window.
-    # The Windows O_NOFOLLOW residual is the same documented policy as the objet-capture
-    # fd reader (see the comment at _objet_capture_fsync_dir): on platforms without
-    # O_NOFOLLOW the lstat pre-check remains the guard. Returns RAW bytes only; decoding
-    # is _derived_text_decode_source_bytes' job.
-    path = Path(text_file)
+def _bounded_stable_regular_file_read(
+    path: Path,
+    *,
+    max_bytes: int,
+) -> tuple[bytes | None, str | None]:
+    """Read at most ``max_bytes`` from one stable regular-file identity.
+
+    The fd is identity/size-bound to the pre-open lstat, the cumulative reader
+    asks for at most cap+1 bytes, and a final fstat rejects growth, truncation,
+    replacement, or same-size writes observed through mtime.  It returns one
+    internal reason token so callers can preserve their public blocker vocab.
+    """
+
     try:
         entry_stat = os.lstat(path)
     except FileNotFoundError:
-        return None, ["text_file_missing"]
+        return None, "missing"
     except OSError:
-        return None, ["text_file_unreadable"]
+        return None, "unreadable"
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+
+    def is_reparse(value: os.stat_result) -> bool:
+        return bool(
+            reparse_flag
+            and getattr(value, "st_file_attributes", 0) & reparse_flag
+        )
+
     if stat.S_ISLNK(entry_stat.st_mode):
-        return None, ["text_file_symlink_not_allowed"]
+        return None, "symlink"
+    if is_reparse(entry_stat):
+        return None, "reparse"
     if stat.S_ISDIR(entry_stat.st_mode):
-        return None, ["text_file_is_directory"]
+        return None, "directory"
     if not stat.S_ISREG(entry_stat.st_mode):
-        return None, ["text_file_special_not_allowed"]
+        return None, "special"
     open_flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
     try:
         fd = os.open(str(path), open_flags)
     except OSError:
-        return None, ["text_file_unreadable"]
+        return None, "unreadable"
+
+    def changed(before: os.stat_result, after: os.stat_result) -> bool:
+        before_ino = int(getattr(before, "st_ino", 0) or 0)
+        after_ino = int(getattr(after, "st_ino", 0) or 0)
+        identity_changed = (
+            int(before.st_dev) != int(after.st_dev)
+            or (
+                before_ino != 0
+                and after_ino != 0
+                and before_ino != after_ino
+            )
+        )
+        return (
+            identity_changed
+            or int(before.st_size) != int(after.st_size)
+            or int(getattr(before, "st_mtime_ns", 0))
+            != int(getattr(after, "st_mtime_ns", 0))
+        )
+
     try:
-        fd_stat = os.fstat(fd)
-        if not stat.S_ISREG(fd_stat.st_mode):
-            return None, ["text_file_special_not_allowed"]
-        if fd_stat.st_size > DERIVED_TEXT_MAX_SOURCE_BYTES:
-            return None, ["text_file_too_large"]
+        before_stat = os.fstat(fd)
+        if not stat.S_ISREG(before_stat.st_mode) or is_reparse(before_stat):
+            return None, "special"
+        if changed(entry_stat, before_stat):
+            return None, "changed"
+        if before_stat.st_size > max_bytes:
+            return None, "too_large"
         chunks: list[bytes] = []
+        total = 0
+        while True:
+            chunk = os.read(
+                fd,
+                min(1024 * 1024, max_bytes + 1 - total),
+            )
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > max_bytes:
+                return None, "too_large"
+            chunks.append(chunk)
+        after_stat = os.fstat(fd)
+        try:
+            final_entry_stat = os.lstat(path)
+        except OSError:
+            return None, "changed"
+        if (
+            not stat.S_ISREG(final_entry_stat.st_mode)
+            or stat.S_ISLNK(final_entry_stat.st_mode)
+            or is_reparse(final_entry_stat)
+            or changed(before_stat, after_stat)
+            or changed(after_stat, final_entry_stat)
+            or total != after_stat.st_size
+        ):
+            return None, "changed"
+        return b"".join(chunks), None
+    except OSError:
+        return None, "unreadable"
+    finally:
+        os.close(fd)
+
+
+def _stable_exact_file_observation(
+    path: Path,
+    *,
+    expected_size: int,
+    expected_sha256: str,
+) -> str:
+    """Return verified_exact, not_written, or ambiguous for one final path."""
+
+    try:
+        entry = os.lstat(path)
+    except FileNotFoundError:
+        return "not_written"
+    except OSError:
+        return "ambiguous"
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+
+    def unsafe(value: os.stat_result) -> bool:
+        return bool(
+            not stat.S_ISREG(value.st_mode)
+            or stat.S_ISLNK(value.st_mode)
+            or (
+                reparse_flag
+                and getattr(value, "st_file_attributes", 0) & reparse_flag
+            )
+        )
+
+    def identity(value: os.stat_result) -> tuple[int, int, int, int]:
+        return (
+            int(value.st_dev),
+            int(getattr(value, "st_ino", 0) or 0),
+            int(value.st_size),
+            int(getattr(value, "st_mtime_ns", 0)),
+        )
+
+    if unsafe(entry) or int(entry.st_size) != expected_size:
+        return "ambiguous"
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(str(path), flags)
+    except OSError:
+        return "ambiguous"
+    try:
+        opened = os.fstat(fd)
+        if unsafe(opened) or identity(opened) != identity(entry):
+            return "ambiguous"
+        digest = hashlib.sha256()
+        total = 0
         while True:
             chunk = os.read(fd, 1024 * 1024)
             if not chunk:
                 break
-            chunks.append(chunk)
-        return b"".join(chunks), []
+            total += len(chunk)
+            if total > expected_size:
+                return "ambiguous"
+            digest.update(chunk)
+        opened_after = os.fstat(fd)
+        try:
+            final_entry = os.lstat(path)
+        except OSError:
+            return "ambiguous"
+        if (
+            unsafe(opened_after)
+            or unsafe(final_entry)
+            or identity(opened_after) != identity(opened)
+            or identity(final_entry) != identity(opened)
+            or total != expected_size
+            or digest.hexdigest() != expected_sha256
+        ):
+            return "ambiguous"
+        return "verified_exact"
     except OSError:
-        return None, ["text_file_unreadable"]
+        return "ambiguous"
     finally:
-        os.close(fd)
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+
+
+def _stable_exact_bytes_observation(path: Path, expected: bytes) -> str:
+    return _stable_exact_file_observation(
+        path,
+        expected_size=len(expected),
+        expected_sha256=hashlib.sha256(expected).hexdigest(),
+    )
+
+
+def _create_only_bytes_outcome_aware(path: Path, value: bytes) -> str:
+    """Create one final file and classify any post-publication exception."""
+
+    try:
+        _write_bytes_create_if_absent(path, value)
+    except FileExistsError:
+        raise
+    except Exception:
+        # Publication helpers must classify ordinary post-publication failures
+        # regardless of exception type.  BaseException subclasses such as
+        # KeyboardInterrupt and SystemExit remain intentionally uncontained.
+        observed = _stable_exact_bytes_observation(path, value)
+        if observed == "verified_exact":
+            return "verified_exact"
+        if observed == "not_written":
+            return "not_written"
+        raise PublicationOutcomeUnverified("create_only_outcome_unverified")
+    observed = _stable_exact_bytes_observation(path, value)
+    if observed == "verified_exact":
+        return "verified_exact"
+    if observed == "not_written":
+        return "not_written"
+    raise PublicationOutcomeUnverified("create_only_outcome_unverified")
+
+
+def _append_bytes_once(path: Path, value: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("ab") as handle:
+        view = memoryview(value)
+        offset = 0
+        while offset < len(view):
+            written = handle.write(view[offset:])
+            if written is None or written <= 0:
+                raise OSError("append_write_incomplete")
+            offset += written
+        handle.flush()
+        os.fsync(handle.fileno())
+
+
+def _append_jsonl_records_outcome_aware(
+    path: Path,
+    records: list[dict[str, Any]],
+) -> str:
+    """Append exact JSONL bytes and classify post-append exceptions."""
+
+    if not records:
+        return "not_written"
+    try:
+        before_entry = os.lstat(path)
+    except FileNotFoundError:
+        before_exists = False
+        before = b""
+    except OSError as error:
+        raise PublicationOutcomeUnverified("manifest_before_unreadable") from error
+    else:
+        before_exists = True
+        raw, reason = _bounded_stable_regular_file_read(
+            path,
+            max_bytes=int(before_entry.st_size),
+        )
+        if reason is not None or raw is None:
+            raise PublicationOutcomeUnverified("manifest_before_unverified")
+        before = raw
+    appended = (
+        (b"\n" if before and not before.endswith(b"\n") else b"")
+        + b"".join(
+            (
+                json.dumps(
+                    record,
+                    ensure_ascii=False,
+                    default=str,
+                    separators=(",", ":"),
+                )
+                + "\n"
+            ).encode("utf-8")
+            for record in records
+        )
+    )
+    expected = before + appended
+
+    def classify_after_exception() -> str:
+        if _stable_exact_bytes_observation(path, expected) == "verified_exact":
+            return "verified_exact"
+        if before_exists:
+            if _stable_exact_bytes_observation(path, before) == "verified_exact":
+                return "not_written"
+        elif _stable_exact_bytes_observation(path, b"") == "not_written":
+            return "not_written"
+        raise PublicationOutcomeUnverified("manifest_append_outcome_unverified")
+
+    try:
+        _append_bytes_once(path, appended)
+    except Exception:
+        # Classify all ordinary exceptions after the append attempt; callers
+        # must not lose an exact durable delta merely because a finalizer used
+        # a non-OSError exception type.
+        return classify_after_exception()
+    if _stable_exact_bytes_observation(path, expected) == "verified_exact":
+        return "verified_exact"
+    return classify_after_exception()
+
+
+def _derived_text_read_source_file(text_file: Path | str) -> tuple[bytes | None, list[str]]:
+    # O_NOFOLLOW-fd + stable bounded read closes both the lstat->open and
+    # fstat->unbounded-growth TOCTOU windows. Returns RAW bytes only; decoding
+    # is _derived_text_decode_source_bytes' job.
+    raw_bytes, reason = _bounded_stable_regular_file_read(
+        Path(text_file),
+        max_bytes=DERIVED_TEXT_MAX_SOURCE_BYTES,
+    )
+    blockers = {
+        "missing": "text_file_missing",
+        "unreadable": "text_file_unreadable",
+        "symlink": "text_file_symlink_not_allowed",
+        "reparse": "text_file_symlink_not_allowed",
+        "directory": "text_file_is_directory",
+        "special": "text_file_special_not_allowed",
+        "too_large": "text_file_too_large",
+        "changed": "text_file_changed_during_read",
+    }
+    return raw_bytes, ([blockers[reason]] if reason is not None else [])
 
 
 def _derived_text_decode_source_bytes(
@@ -118404,14 +121436,24 @@ def _derived_text_write_receipt(root: Path, receipt: dict[str, Any], captured_at
         capture_id = f"{timestamp_compact}-{secrets.token_hex(6)}"
         receipt_path = receipts_dir / f"{capture_id}.json"
         receipt["receipt_id"] = f"receipt:derived-text-capture:{capture_id}"
+        receipt_bytes = (
+            json.dumps(
+                json_safe(receipt),
+                indent=2,
+                ensure_ascii=False,
+                default=str,
+            )
+            + "\n"
+        ).encode("utf-8")
         try:
-            with receipt_path.open("x", encoding="utf-8") as handle:
-                handle.write(json.dumps(json_safe(receipt), indent=2, ensure_ascii=False, default=str) + "\n")
+            outcome = _create_only_bytes_outcome_aware(
+                receipt_path,
+                receipt_bytes,
+            )
         except FileExistsError:
             continue
-        except OSError:
-            receipt_path.unlink(missing_ok=True)
-            raise
+        if outcome == "not_written":
+            raise OSError("derived_text_receipt_not_written")
         return f"{DERIVED_TEXT_CAPTURE_RECEIPTS_DIR}/{capture_id}.json"
 
 
@@ -118728,24 +121770,34 @@ def _derived_text_register(
                             blockers.append("lossless_verification_failed")
                         else:
                             stored_sha256_verified = True
-                except OSError:
-                    tmp.unlink(missing_ok=True)
-                    blockers.append("text_store_write_failed")
+                except Exception:
+                    try:
+                        tmp.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                    observed = _stable_exact_file_observation(
+                        dest,
+                        expected_size=len(text_bytes),
+                        expected_sha256=text_sha256,
+                    )
+                    if observed == "verified_exact":
+                        stored_sha256_verified = True
+                    elif observed == "not_written":
+                        blockers.append("text_store_write_failed")
+                    else:
+                        raise PublicationOutcomeUnverified(
+                            "derived_object_publish_outcome_unverified"
+                        )
             elif action == "skip_already_present":
                 stored_sha256_verified = dest.is_file() and sha256_path(dest) == text_sha256
             if not blockers and action in ("capture", "repair_append"):
-                try:
-                    needs_newline = _jsonl_needs_leading_newline(manifest_path)
-                    with manifest_path.open("a", encoding="utf-8", newline="\n") as manifest_handle:
-                        if needs_newline:
-                            manifest_handle.write("\n")
-                        manifest_handle.write(
-                            json.dumps(record, ensure_ascii=False, default=str, separators=(",", ":")) + "\n"
-                        )
-                        manifest_handle.flush()
-                        os.fsync(manifest_handle.fileno())
+                append_outcome = _append_jsonl_records_outcome_aware(
+                    manifest_path,
+                    [record],
+                )
+                if append_outcome == "verified_exact":
                     manifest_record_appended = True
-                except OSError:
+                else:
                     blockers.append("manifest_append_failed")
     receipt = {
         "receipt_id": None,
@@ -118783,7 +121835,21 @@ def _derived_text_register(
         # hash-keyed reference is the reverse pointer.
         receipt["paired_with"] = paired_with
     if not (blockers and "receipts_dir_unavailable" in blockers):
-        receipt_path_value = _derived_text_write_receipt(root, receipt, captured_at)
+        try:
+            receipt_path_value = _derived_text_write_receipt(
+                root,
+                receipt,
+                captured_at,
+            )
+        except PublicationOutcomeUnverified:
+            raise
+        except OSError:
+            # Bytes and/or the manifest line may already be durable and were
+            # losslessly verified above. Preserve those authoritative flags and
+            # paths in the structured blocked result so callers can report the
+            # exact delta and safely converge on replay instead of discarding it
+            # behind the generic phase-2 exception boundary.
+            blockers.append("derived_text_receipt_write_failed")
     return {
         "ok": not blockers,
         **base_output,
@@ -120133,43 +123199,22 @@ def _objet_capture_staged_text_path_blockers(
 
 
 def _objet_capture_read_staged_text_bytes(root: Path, normalized: str) -> tuple[bytes | None, list[str]]:
-    # Raw bytes via O_NOFOLLOW-fd + fstat (same pattern as the staged_path reader),
-    # closing the lstat->read TOCTOU. The Windows O_NOFOLLOW residual is already
-    # documented policy (see the comment at _objet_capture_fsync_dir); the lstat
-    # pre-check plus the per-component chain check remain the guard there.
     unresolved = root.joinpath(*PurePosixPath(normalized).parts)
-    try:
-        entry_stat = os.lstat(unresolved)
-    except FileNotFoundError:
-        return None, ["source_missing"]
-    except OSError:
-        return None, ["source_unreadable"]
-    if stat.S_ISDIR(entry_stat.st_mode):
-        return None, ["staged_path_is_directory"]
-    if not stat.S_ISREG(entry_stat.st_mode):
-        return None, ["special_file_not_allowed"]
-    open_flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
-    try:
-        fd = os.open(str(unresolved), open_flags)
-    except OSError:
-        return None, ["source_unreadable"]
-    try:
-        fd_stat = os.fstat(fd)
-        if not stat.S_ISREG(fd_stat.st_mode):
-            return None, ["special_file_not_allowed"]
-        if fd_stat.st_size > DERIVED_TEXT_MAX_SOURCE_BYTES:
-            return None, ["text_file_too_large"]
-        chunks: list[bytes] = []
-        while True:
-            chunk = os.read(fd, 1024 * 1024)
-            if not chunk:
-                break
-            chunks.append(chunk)
-        return b"".join(chunks), []
-    except OSError:
-        return None, ["source_unreadable"]
-    finally:
-        os.close(fd)
+    raw_bytes, reason = _bounded_stable_regular_file_read(
+        unresolved,
+        max_bytes=DERIVED_TEXT_MAX_SOURCE_BYTES,
+    )
+    blockers = {
+        "missing": "source_missing",
+        "unreadable": "source_unreadable",
+        "symlink": "special_file_not_allowed",
+        "reparse": "special_file_not_allowed",
+        "directory": "staged_path_is_directory",
+        "special": "special_file_not_allowed",
+        "too_large": "text_file_too_large",
+        "changed": "text_file_changed_during_read",
+    }
+    return raw_bytes, ([blockers[reason]] if reason is not None else [])
 
 
 def _objet_capture_process_item(
@@ -120366,9 +123411,24 @@ def _objet_capture_process_item(
                     dest.unlink(missing_ok=True)
                     return block("lossless_verification_failed")
                 result["stored_sha256_verified"] = True
-            except OSError:
-                tmp.unlink(missing_ok=True)
-                return block("source_unreadable")
+            except Exception:
+                try:
+                    tmp.unlink(missing_ok=True)
+                except OSError:
+                    pass
+                observed = _stable_exact_file_observation(
+                    dest,
+                    expected_size=int(size_bytes),
+                    expected_sha256=digest,
+                )
+                if observed == "verified_exact":
+                    result["stored_sha256_verified"] = True
+                elif observed == "not_written":
+                    return block("source_unreadable")
+                else:
+                    raise PublicationOutcomeUnverified(
+                        "original_object_publish_outcome_unverified"
+                    )
 
         if planned in ("capture", "repair_append"):
             record = {
@@ -120590,14 +123650,24 @@ def _objet_capture_write_receipt(root: Path, receipt: dict[str, Any], captured_a
         capture_id = f"{timestamp_compact}-{secrets.token_hex(6)}"
         receipt_path = receipts_dir / f"{capture_id}.json"
         receipt["receipt_id"] = f"receipt:objet-capture:{capture_id}"
+        receipt_bytes = (
+            json.dumps(
+                json_safe(receipt),
+                indent=2,
+                ensure_ascii=False,
+                default=str,
+            )
+            + "\n"
+        ).encode("utf-8")
         try:
-            with receipt_path.open("x", encoding="utf-8") as handle:
-                handle.write(json.dumps(json_safe(receipt), indent=2, ensure_ascii=False, default=str) + "\n")
+            outcome = _create_only_bytes_outcome_aware(
+                receipt_path,
+                receipt_bytes,
+            )
         except FileExistsError:
             continue
-        except OSError:
-            receipt_path.unlink(missing_ok=True)
-            raise
+        if outcome == "not_written":
+            raise OSError("objet_capture_receipt_not_written")
         return f"{OBJET_CAPTURE_RECEIPTS_DIR}/{capture_id}.json"
 
 
@@ -120650,6 +123720,61 @@ OBJET_CAPTURE_PARTIAL_NEXT_SAFE_ACTIONS = [
     "--source-object-id <object_id from this receipt> --text-file <staged transcript> "
     "--approve --reviewed-by <actor>.",
 ]
+OBJET_CAPTURE_EVIDENCE_INCOMPLETE_NEXT_SAFE_ACTIONS = [
+    "Run objet-capture dry-run again with the same reviewed selection before retrying.",
+    "Re-run the same approved selection: completed object and derived-text halves remain idempotent while the missing capture receipt is recreated.",
+]
+
+
+def objet_capture_files_written(
+    item_results: list[dict[str, Any]],
+    *,
+    receipt_path: str | None,
+) -> list[str]:
+    """Project only artifacts this exact capture attempt verifiably changed.
+
+    The projection is derived from the lower service's actual write/append
+    evidence.  It intentionally excludes staged inputs, locks, directories,
+    and already-present object/text files.
+    """
+
+    changed: list[str] = []
+
+    def append_relative(value: Any) -> None:
+        if not isinstance(value, str) or not value:
+            return
+        try:
+            normalized = normalize_archive_relative_path(value)
+        except (ArchivePathError, ArchiveServiceError, OSError, ValueError):
+            return
+        if normalized == value:
+            changed.append(normalized)
+
+    for entry in item_results:
+        if not isinstance(entry, dict):
+            continue
+        # The original path sets stored_sha256_verified only after a newly
+        # published/re-materialized object has been losslessly verified.  Skip
+        # outcomes leave it false, so this is an exact changed-file signal.
+        if entry.get("stored_sha256_verified") is True:
+            append_relative(entry.get("logical_key"))
+        if entry.get("manifest_record_appended") is True:
+            append_relative("objects/manifests/files.jsonl")
+
+        derived = entry.get("derived_text")
+        if not isinstance(derived, dict):
+            continue
+        if (
+            derived.get("stored_sha256_verified") is True
+            and derived.get("planned_action") in ("capture", "re_materialize")
+        ):
+            append_relative(derived.get("text_logical_key"))
+        if derived.get("manifest_record_appended") is True:
+            append_relative(DERIVED_TEXT_MANIFEST_RELATIVE_PATH)
+        append_relative(derived.get("receipt_path"))
+
+    append_relative(receipt_path)
+    return unique_preserve_order(changed)
 
 
 def _objet_capture_selection_input(
@@ -120716,6 +123841,7 @@ def _objet_capture_run(
     reviewed_by: str | None,
     project_intake_receipt: str | None = None,
     selection_document: dict[str, Any] | None = None,
+    selection_document_path: Path | str | None = None,
 ) -> dict[str, Any]:
     root = Path(archive_root).resolve()
     enablement = read_capture_enablement(root)
@@ -120735,12 +123861,34 @@ def _objet_capture_run(
         )
     else:
         selection_raw = copy.deepcopy(selection_document)
-        selection_relative = None
-        selection_input_blocker = (
-            None
-            if isinstance(selection_raw, dict)
-            else "selection_manifest_not_object"
-        )
+        selection_relative: str | None = None
+        selection_input_blocker: str | None = None
+        if not isinstance(selection_raw, dict):
+            selection_input_blocker = "selection_manifest_not_object"
+        elif selection_document_path is not None:
+            raw_label = os.fspath(selection_document_path).strip()
+            try:
+                candidate = Path(raw_label)
+                if candidate.is_absolute():
+                    resolved = candidate.resolve()
+                    selection_relative = (
+                        resolved.relative_to(root).as_posix()
+                        if is_path_within_root(resolved, root)
+                        else None
+                    )
+                else:
+                    selection_relative = normalize_archive_relative_path(
+                        raw_label
+                    )
+            except (
+                ArchivePathError,
+                ArchiveServiceError,
+                OSError,
+                ValueError,
+            ):
+                selection_relative = None
+            if selection_relative is None:
+                selection_input_blocker = "selection_path_not_archive_relative"
     if selection_input_blocker is not None or selection_raw is None:
         return {
             "ok": False,
@@ -120804,24 +123952,18 @@ def _objet_capture_run(
             return {"ok": False, **base_output, "items": [], "blockers": ["receipts_dir_unavailable"], "warnings": []}
         manifest_path = archive_internal_path(root, "objects/manifests/files.jsonl")
         receipt_path_value: str | None = None
+        receipt_write_failed = False
         with _ObjetCaptureManifestLock(root):
             canonical_ids = objet_capture_canonical_record_ids(load_manifest_records(root))
-            manifest_handle: Any = None
+            pending_manifest_records: list[dict[str, Any]] = []
+            publication_outcome_unverified = False
             try:
                 # Phase 1 — original halves, byte-for-byte unchanged in what they write
                 # (publish bytes -> manifest_appender record).
                 for item in items_sorted:
 
                     def manifest_appender(record: dict[str, Any]) -> None:
-                        nonlocal manifest_handle
-                        if manifest_handle is None:
-                            needs_newline = _objet_capture_manifest_needs_leading_newline(manifest_path)
-                            manifest_handle = manifest_path.open("a", encoding="utf-8", newline="\n")
-                            if needs_newline:
-                                manifest_handle.write("\n")
-                        manifest_handle.write(
-                            json.dumps(record, ensure_ascii=False, default=str, separators=(",", ":")) + "\n"
-                        )
+                        pending_manifest_records.append(record)
 
                     try:
                         item_result = _objet_capture_process_item(
@@ -120837,6 +123979,10 @@ def _objet_capture_run(
                             manifest_appender=manifest_appender,
                             capture_enabled=capture_enabled,
                         )
+                    except PublicationOutcomeUnverified:
+                        aborted = True
+                        publication_outcome_unverified = True
+                        raise
                     except Exception:
                         aborted = True
                         raise
@@ -120851,11 +123997,23 @@ def _objet_capture_run(
                 # construction: nothing in the codebase detects or repairs that
                 # direction. find_manifest_record also reads the manifest from disk,
                 # which is why phase 2 may not run against a buffered handle.
-                if manifest_handle is not None:
-                    manifest_handle.flush()
-                    os.fsync(manifest_handle.fileno())
-                    manifest_handle.close()
-                    manifest_handle = None
+                if pending_manifest_records:
+                    try:
+                        append_outcome = _append_jsonl_records_outcome_aware(
+                            manifest_path,
+                            pending_manifest_records,
+                        )
+                    except PublicationOutcomeUnverified:
+                        aborted = True
+                        publication_outcome_unverified = True
+                        raise
+                    if append_outcome == "not_written":
+                        for entry in item_results:
+                            if entry.get("manifest_record_appended") is True:
+                                entry["manifest_record_appended"] = False
+                                entry["planned_action"] = "blocked"
+                                entry["action"] = "blocked"
+                                entry["blockers"].append("manifest_append_failed")
 
                 # Phase 2 — derived halves, same sorted order, inside the still-held
                 # _ObjetCaptureManifestLock. _DerivedTextManifestLock nests inside it:
@@ -120877,6 +124035,10 @@ def _objet_capture_run(
                             selection=selection,
                             selection_sha256=selection_sha256,
                         )
+                    except PublicationOutcomeUnverified:
+                        aborted = True
+                        publication_outcome_unverified = True
+                        raise
                     except Exception:
                         # Exception containment: _derived_text_write_receipt re-raises
                         # OSError after cleanup; ANY phase-2 exception converts to an
@@ -120887,23 +124049,18 @@ def _objet_capture_run(
                         failed["blockers"].append("derived_text_registration_failed")
                         item_result["derived_text"] = failed
             finally:
-                if manifest_handle is not None:
-                    # Defensive abort path only: the phase boundary above already
-                    # flushed, fsynced, and closed the handle on the normal path.
-                    manifest_handle.flush()
-                    os.fsync(manifest_handle.fileno())
-                    manifest_handle.close()
                 # Receipt built and written AFTER both phases (always-written
                 # guarantee preserved): if phase 2 was never reached, derived
                 # sub-results carry their initialized not-attempted state and
                 # `aborted` reflects reality.
-                for entry in item_results:
-                    entry["status_class"] = _objet_capture_item_status_class(entry, approve=True)
-                summary = objet_capture_summary(item_results, approve=True)
-                run_blockers = unique_preserve_order(
-                    [code for entry in item_results for code in _objet_capture_item_all_blockers(entry)]
-                )
-                receipt = {
+                if not publication_outcome_unverified:
+                    for entry in item_results:
+                        entry["status_class"] = _objet_capture_item_status_class(entry, approve=True)
+                    summary = objet_capture_summary(item_results, approve=True)
+                    run_blockers = unique_preserve_order(
+                        [code for entry in item_results for code in _objet_capture_item_all_blockers(entry)]
+                    )
+                    receipt = {
                     "receipt_id": None,
                     "schema": OBJET_CAPTURE_RECEIPT_SCHEMA,
                     "dry_run": False,
@@ -120925,12 +124082,29 @@ def _objet_capture_run(
                             *[code for entry in item_results for code in _objet_capture_item_all_warnings(entry)],
                         ]
                     ),
-                }
-                receipt_path_value = _objet_capture_write_receipt(root, receipt, captured_at)
+                    }
+                    try:
+                        receipt_path_value = _objet_capture_write_receipt(
+                            root,
+                            receipt,
+                            captured_at,
+                        )
+                    except PublicationOutcomeUnverified:
+                        raise
+                    except OSError:
+                        receipt_write_failed = True
         run_blockers = unique_preserve_order(
             [code for entry in item_results for code in _objet_capture_item_all_blockers(entry)]
         )
-        run_status_class = _objet_capture_run_status_class(item_results, approve=True)
+        if receipt_write_failed:
+            run_blockers = unique_preserve_order(
+                [*run_blockers, "objet_capture_receipt_write_failed"]
+            )
+        run_status_class = (
+            "evidence_incomplete"
+            if receipt_write_failed
+            else _objet_capture_run_status_class(item_results, approve=True)
+        )
         result = {
             "ok": not run_blockers and not aborted,
             **base_output,
@@ -120948,11 +124122,19 @@ def _objet_capture_run(
                     *[code for entry in item_results for code in _objet_capture_item_all_warnings(entry)],
                 ]
             ),
+            "files_written": objet_capture_files_written(
+                item_results,
+                receipt_path=receipt_path_value,
+            ),
         }
         if run_status_class == "partial":
             # v0.3.151 ai_operator_rule: a partial outcome must point at the safe
             # completion routes. No absolute local paths are echoed.
             result["next_safe_actions"] = list(OBJET_CAPTURE_PARTIAL_NEXT_SAFE_ACTIONS)
+        elif run_status_class == "evidence_incomplete":
+            result["next_safe_actions"] = list(
+                OBJET_CAPTURE_EVIDENCE_INCOMPLETE_NEXT_SAFE_ACTIONS
+            )
         return result
 
     canonical_ids = objet_capture_canonical_record_ids(load_manifest_records(root))
@@ -121351,6 +124533,7 @@ def objet_capture_apply(
     *,
     reviewed_by: str,
     project_intake_receipt: str | None = None,
+    selection_document: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return _objet_capture_run(
         archive_root,
@@ -121358,6 +124541,10 @@ def objet_capture_apply(
         approve=True,
         reviewed_by=reviewed_by,
         project_intake_receipt=project_intake_receipt,
+        selection_document=selection_document,
+        selection_document_path=(
+            selection_path if selection_document is not None else None
+        ),
     )
 
 
