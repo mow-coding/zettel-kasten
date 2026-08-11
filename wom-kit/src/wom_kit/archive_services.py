@@ -3425,6 +3425,10 @@ class ArchiveServiceError(Exception):
     pass
 
 
+class ArchiveIndexReadBoundaryError(ArchiveServiceError):
+    """The generated index cannot be opened without violating read-only I/O."""
+
+
 class ObjetRediscoveryArchiveBoundaryError(ArchiveServiceError):
     """The plan cannot enumerate local zettels without crossing an unsafe path."""
 
@@ -3467,11 +3471,23 @@ def connect_archive_index(
 ) -> sqlite3.Connection:
     if write and immutable_read:
         raise ValueError("immutable_read cannot be combined with write")
+    if (
+        (not write and not immutable_read)
+        or (write and os.path.lexists(db_path))
+    ):
+        _require_archive_index_delete_read_boundary(db_path)
     if immutable_read:
         # This inspection path must not create WAL/SHM sidecars.  `immutable=1`
         # is intentionally limited to dry-run evidence summaries: it reads the
         # last complete SQLite snapshot and makes no concurrent-freshness claim.
         database = db_path.resolve(strict=True).as_uri() + "?mode=ro&immutable=1"
+        conn = sqlite3.connect(
+            database,
+            timeout=ARCHIVE_INDEX_BUSY_TIMEOUT_MS / 1000,
+            uri=True,
+        )
+    elif not write:
+        database = db_path.resolve(strict=True).as_uri() + "?mode=ro"
         conn = sqlite3.connect(
             database,
             timeout=ARCHIVE_INDEX_BUSY_TIMEOUT_MS / 1000,
@@ -3486,15 +3502,102 @@ def connect_archive_index(
         conn.row_factory = sqlite3.Row
     try:
         conn.execute(f"PRAGMA busy_timeout = {ARCHIVE_INDEX_BUSY_TIMEOUT_MS}")
-        if immutable_read:
+        if not write:
             conn.execute("PRAGMA query_only=ON")
         if write:
-            conn.execute("PRAGMA journal_mode=WAL")
+            journal_mode = conn.execute(
+                "PRAGMA journal_mode=DELETE"
+            ).fetchone()
+            if (
+                journal_mode is None
+                or str(journal_mode[0]).lower() != "delete"
+            ):
+                raise sqlite3.OperationalError(
+                    "archive_index_delete_journal_mode_unavailable"
+                )
             conn.execute("PRAGMA synchronous=NORMAL")
     except sqlite3.Error:
         conn.close()
         raise
     return conn
+
+
+def _require_archive_index_delete_read_boundary(db_path: Path) -> None:
+    """Require a clean rollback-mode snapshot before SQLite opens the file."""
+
+    descriptor: int | None = None
+    try:
+        path_before = os.lstat(db_path)
+        open_flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
+        open_flags |= getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(db_path, open_flags)
+        opened_before = os.fstat(descriptor)
+        header = os.read(descriptor, 20)
+        opened_after = os.fstat(descriptor)
+        path_after = os.lstat(db_path)
+    except OSError:
+        raise ArchiveIndexReadBoundaryError(
+            "archive_index_read_preflight_failed"
+        ) from None
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+    def identity(observed: os.stat_result) -> tuple[int, ...]:
+        return (
+            int(observed.st_dev),
+            int(observed.st_ino),
+            int(observed.st_mode),
+            int(observed.st_nlink),
+            int(observed.st_size),
+            int(observed.st_mtime_ns),
+            int(getattr(observed, "st_file_attributes", 0)),
+        )
+
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x00000400)
+    if any(
+        stat.S_ISLNK(observed.st_mode)
+        or not stat.S_ISREG(observed.st_mode)
+        or observed.st_nlink != 1
+        or getattr(observed, "st_file_attributes", 0) & reparse_flag
+        for observed in (path_before, opened_before, opened_after, path_after)
+    ) or not (
+        identity(path_before)
+        == identity(opened_before)
+        == identity(opened_after)
+        == identity(path_after)
+    ):
+        raise ArchiveIndexReadBoundaryError("archive_index_rebuild_required")
+    header_is_delete_mode = (
+        len(header) == 20
+        and header[:16] == b"SQLite format 3\x00"
+        and header[18:20] == b"\x01\x01"
+    )
+    sidecars = tuple(
+        db_path.with_name(db_path.name + suffix)
+        for suffix in ("-wal", "-shm", "-journal")
+    )
+    try:
+        sidecar_present = any(
+            _archive_index_path_is_lstat_present(sidecar)
+            for sidecar in sidecars
+        )
+    except OSError:
+        raise ArchiveIndexReadBoundaryError(
+            "archive_index_read_preflight_failed"
+        ) from None
+    if not header_is_delete_mode or sidecar_present:
+        raise ArchiveIndexReadBoundaryError(
+            "archive_index_rebuild_required"
+        )
+
+
+def _archive_index_path_is_lstat_present(path: Path) -> bool:
+    try:
+        os.lstat(path)
+    except FileNotFoundError:
+        return False
+    return True
 
 
 def require_yaml() -> None:
@@ -98575,6 +98678,260 @@ def wom_kit_project_update_git_blob(
     return stdout
 
 
+WOM_KIT_PROJECT_UPDATE_BATCH_TIMEOUT_SECONDS = 180
+WOM_KIT_PROJECT_UPDATE_MAX_BATCH_HEADER_BYTES = 128
+
+
+def wom_kit_project_update_run_batch_capped(
+    command: list[str],
+    *,
+    environment: dict[str, str],
+    timeout_seconds: int,
+    max_output_bytes: int,
+    input_bytes: bytes,
+) -> tuple[int, bytes] | None:
+    """Run one bounded binary Git batch without pipe deadlocks.
+
+    ``git cat-file --batch`` can write a large blob before it consumes the next
+    object id.  Its stdin and stdout therefore have to be drained concurrently;
+    writing every id first can deadlock on Windows once either pipe fills.
+    """
+
+    max_input_bytes = WOM_KIT_PROJECT_UPDATE_MAX_TRACKED_FILES * (64 + 1)
+    if (
+        timeout_seconds <= 0
+        or max_output_bytes < 0
+        or not input_bytes
+        or len(input_bytes) > max_input_bytes
+    ):
+        return None
+    try:
+        process = subprocess.Popen(
+            command,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            env=environment,
+        )
+    except (OSError, ValueError):
+        return None
+    if process.stdin is None or process.stdout is None:
+        try:
+            process.kill()
+        except OSError:
+            pass
+        process.wait()
+        return None
+
+    output_box: list[bytes] = []
+    read_failed = threading.Event()
+    write_failed = threading.Event()
+    overflow = threading.Event()
+
+    def read_capped() -> None:
+        try:
+            chunks: list[bytes] = []
+            total = 0
+            while total <= max_output_bytes:
+                chunk = os.read(
+                    process.stdout.fileno(),
+                    min(64 * 1024, max_output_bytes + 1 - total),
+                )
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                total += len(chunk)
+            output_box.append(b"".join(chunks))
+            if total > max_output_bytes:
+                overflow.set()
+        except (OSError, ValueError):
+            read_failed.set()
+
+    def write_all() -> None:
+        try:
+            offset = 0
+            while offset < len(input_bytes):
+                written = os.write(
+                    process.stdin.fileno(),
+                    input_bytes[offset : offset + 64 * 1024],
+                )
+                if written <= 0:
+                    raise OSError("git_batch_stdin_write_incomplete")
+                offset += written
+        except (BrokenPipeError, OSError, ValueError):
+            write_failed.set()
+        finally:
+            try:
+                process.stdin.close()
+            except OSError:
+                pass
+
+    reader = threading.Thread(target=read_capped, daemon=True)
+    writer = threading.Thread(target=write_all, daemon=True)
+    reader.start()
+    writer.start()
+    deadline = time.monotonic() + timeout_seconds
+    timed_out = False
+    while reader.is_alive() or writer.is_alive():
+        reader.join(timeout=0.02)
+        writer.join(timeout=0.02)
+        if (
+            overflow.is_set()
+            or read_failed.is_set()
+            or write_failed.is_set()
+            or time.monotonic() >= deadline
+        ):
+            timed_out = time.monotonic() >= deadline
+            try:
+                process.kill()
+            except OSError:
+                pass
+            break
+    if timed_out or overflow.is_set() or read_failed.is_set() or write_failed.is_set():
+        for stream in (process.stdin, process.stdout):
+            try:
+                stream.close()
+            except OSError:
+                pass
+    reader.join(timeout=1.0)
+    writer.join(timeout=1.0)
+    if reader.is_alive() or writer.is_alive():
+        try:
+            process.kill()
+        except OSError:
+            pass
+    try:
+        return_code = process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        try:
+            process.kill()
+        except OSError:
+            pass
+        process.wait()
+        return_code = -1
+    for stream in (process.stdin, process.stdout):
+        try:
+            stream.close()
+        except OSError:
+            pass
+    if (
+        timed_out
+        or overflow.is_set()
+        or read_failed.is_set()
+        or write_failed.is_set()
+        or reader.is_alive()
+        or writer.is_alive()
+    ):
+        return None
+    return return_code, output_box[0] if output_box else b""
+
+
+def wom_kit_project_update_git_blob_batch(
+    mirror_path: Path,
+    object_path_counts: dict[str, int],
+) -> dict[str, bytes] | None:
+    """Read each unique tree blob through one strict ``cat-file --batch``."""
+
+    if (
+        not object_path_counts
+        or len(object_path_counts) > WOM_KIT_PROJECT_UPDATE_MAX_TRACKED_FILES
+        or any(
+            not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", object_id)
+            or isinstance(path_count, bool)
+            or not isinstance(path_count, int)
+            or path_count <= 0
+            for object_id, path_count in object_path_counts.items()
+        )
+        or sum(object_path_counts.values())
+        > WOM_KIT_PROJECT_UPDATE_MAX_TRACKED_FILES
+    ):
+        return None
+
+    object_ids = list(object_path_counts)
+    request = b"".join(
+        object_id.encode("ascii") + b"\n" for object_id in object_ids
+    )
+    framing_cap = (
+        WOM_KIT_PROJECT_UPDATE_MAX_TRACKED_FILES
+        * (WOM_KIT_PROJECT_UPDATE_MAX_BATCH_HEADER_BYTES + 1)
+    )
+    completed = wom_kit_project_update_run_batch_capped(
+        wom_kit_project_update_git_command(
+            mirror_path,
+            ["cat-file", "--batch"],
+        ),
+        environment=wom_kit_project_update_git_environment(),
+        timeout_seconds=WOM_KIT_PROJECT_UPDATE_BATCH_TIMEOUT_SECONDS,
+        max_output_bytes=(
+            WOM_KIT_PROJECT_UPDATE_MAX_TRACKED_TOTAL_BYTES + framing_cap
+        ),
+        input_bytes=request,
+    )
+    if completed is None:
+        return None
+    return_code, output = completed
+    if return_code != 0:
+        return None
+
+    blobs: dict[str, bytes] = {}
+    cursor = 0
+    logical_total_bytes = 0
+    header_re = re.compile(
+        rb"([0-9a-fA-F]{40}|[0-9a-fA-F]{64}) blob (0|[1-9][0-9]*)"
+    )
+    for expected_object_id in object_ids:
+        header_end = output.find(
+            b"\n",
+            cursor,
+            min(
+                len(output),
+                cursor + WOM_KIT_PROJECT_UPDATE_MAX_BATCH_HEADER_BYTES + 1,
+            ),
+        )
+        if header_end < 0:
+            return None
+        header = output[cursor:header_end]
+        match = header_re.fullmatch(header)
+        if match is None:
+            return None
+        actual_object_id = match.group(1).decode("ascii").lower()
+        if actual_object_id != expected_object_id:
+            return None
+        try:
+            blob_size = int(match.group(2))
+        except ValueError:
+            return None
+        if blob_size > WOM_KIT_PROJECT_UPDATE_MAX_TRACKED_FILE_BYTES:
+            return None
+        logical_total_bytes += (
+            blob_size * object_path_counts[expected_object_id]
+        )
+        if logical_total_bytes > WOM_KIT_PROJECT_UPDATE_MAX_TRACKED_TOTAL_BYTES:
+            return None
+        blob_start = header_end + 1
+        blob_end = blob_start + blob_size
+        if (
+            blob_end >= len(output)
+            or output[blob_end : blob_end + 1] != b"\n"
+        ):
+            return None
+        blob = output[blob_start:blob_end]
+        object_hasher = (
+            hashlib.sha1()
+            if len(expected_object_id) == 40
+            else hashlib.sha256()
+        )
+        object_hasher.update(f"blob {blob_size}\0".encode("ascii"))
+        object_hasher.update(blob)
+        if object_hasher.hexdigest() != expected_object_id:
+            return None
+        blobs[expected_object_id] = blob
+        cursor = blob_end + 1
+    if cursor != len(output):
+        return None
+    return blobs
+
+
 def wom_kit_project_update_git_config_trust_digest(
     mirror_path: Path,
 ) -> str | None:
@@ -98838,34 +99195,19 @@ def wom_kit_project_update_tree_blobs(
     ):
         return None
 
-    entries: dict[str, tuple[str, str, bytes]] = {}
-    total_bytes = 0
-    for relative_path, mode, object_id in raw_entries:
-        size_ok, size_text = wom_kit_project_update_git(
-            mirror_path,
-            ["cat-file", "-s", object_id],
-            max_output_bytes=256,
-        )
-        try:
-            blob_size = int(size_text) if size_ok else -1
-        except ValueError:
-            return None
-        if (
-            blob_size < 0
-            or blob_size > WOM_KIT_PROJECT_UPDATE_MAX_TRACKED_FILE_BYTES
-        ):
-            return None
-        total_bytes += blob_size
-        if total_bytes > WOM_KIT_PROJECT_UPDATE_MAX_TRACKED_TOTAL_BYTES:
-            return None
-        blob = wom_kit_project_update_git_blob(
-            mirror_path,
-            object_id,
-            blob_size,
-        )
-        if blob is None:
-            return None
-        entries[relative_path] = (mode, object_id.lower(), blob)
+    object_path_counts: dict[str, int] = {}
+    for _, _, object_id in raw_entries:
+        object_path_counts[object_id] = object_path_counts.get(object_id, 0) + 1
+    blobs = wom_kit_project_update_git_blob_batch(
+        mirror_path,
+        object_path_counts,
+    )
+    if blobs is None:
+        return None
+    entries: dict[str, tuple[str, str, bytes]] = {
+        relative_path: (mode, object_id, blobs[object_id])
+        for relative_path, mode, object_id in raw_entries
+    }
     return entries if entries else None
 
 
@@ -112819,21 +113161,37 @@ def _index_health_impl(
 
     max_items = max(1, min(int(max_items), 500))
     db_mtime = db_path.stat().st_mtime if db_path.is_file() else None
+    index_read_blocked = False
+    if (
+        db_path.is_file()
+        and not immutable_index_read
+        and connection is None
+    ):
+        try:
+            _require_archive_index_delete_read_boundary(db_path)
+        except ArchiveIndexReadBoundaryError:
+            blockers.append("archive_index_rebuild_required")
+            index_read_blocked = True
     read_observations = {"zettel_body_text_read": False}
     live_zettel_inspection_issues: list[dict[str, str]] = []
-    live_entries = live_zettel_index_entries(
-        root,
-        db_mtime=db_mtime,
-        progress_callback=progress_callback,
-        read_observations=read_observations,
-        inspection_issues=live_zettel_inspection_issues,
-        reject_reparse_directories=reject_reparse_directories,
+    live_zettel_enumeration_performed = not index_read_blocked
+    live_entries = (
+        live_zettel_index_entries(
+            root,
+            db_mtime=db_mtime,
+            progress_callback=progress_callback,
+            read_observations=read_observations,
+            inspection_issues=live_zettel_inspection_issues,
+            reject_reparse_directories=reject_reparse_directories,
+        )
+        if live_zettel_enumeration_performed
+        else []
     )
     live_by_path = {entry["path"]: entry for entry in live_entries}
     indexed_entries: list[dict[str, Any]] = []
     index_schema_incomplete = False
     index_schema_complete = False
-    if db_path.is_file():
+    if db_path.is_file() and not index_read_blocked:
         owns_connection = connection is None
         if connection is not None:
             if not immutable_index_read:
@@ -112843,63 +113201,79 @@ def _index_health_impl(
             require_objet_rediscovery_borrowed_connection(connection)
             conn = connection
         else:
-            conn = connect_archive_index(
-                db_path,
-                row_factory=True,
-                immutable_read=immutable_index_read,
-            )
-        try:
-            zettels_table = conn.execute(
-                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'zettels'"
-            ).fetchone()
-            if zettels_table is None:
-                index_schema_incomplete = True
-                indexed_rows = []
-            else:
-                index_schema_complete = True
-                indexed_rows = conn.execute(
-                    "SELECT path, zettel_id, status, kind FROM zettels ORDER BY path"
-                ).fetchall()
-            indexed_row_count = len(indexed_rows)
-            if progress_callback is not None:
-                progress_callback("index-health-index-rows", "start", 0, indexed_row_count)
-            for row_index, row in enumerate(indexed_rows, start=1):
-                indexed_entries.append(
-                    {
-                        "path": row["path"],
-                        "zettel_id": row["zettel_id"],
-                        "status": row["status"],
-                        "kind": row["kind"],
-                    }
+            try:
+                conn = connect_archive_index(
+                    db_path,
+                    row_factory=True,
+                    immutable_read=immutable_index_read,
                 )
-                if progress_callback is not None and (
-                    row_index == 1 or row_index == indexed_row_count or row_index % 250 == 0
-                ):
-                    progress_callback(
-                        "index-health-index-rows", "scanned", row_index, indexed_row_count
-                    )
+            except ArchiveIndexReadBoundaryError:
+                blockers.append("archive_index_rebuild_required")
+                index_read_blocked = True
+                conn = None
+        if conn is None:
             if progress_callback is not None:
-                progress_callback(
-                    "index-health-index-rows", "done", indexed_row_count, indexed_row_count
-                )
-        except BaseException:
-            if owns_connection:
-                conn.close()
-            raise
+                progress_callback("index-health-index-rows", "start", 0, 0)
+                progress_callback("index-health-index-rows", "done", 0, 0)
         else:
-            if owns_connection:
-                conn.close()
-    elif progress_callback is not None:
+            try:
+                zettels_table = conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'zettels'"
+                ).fetchone()
+                if zettels_table is None:
+                    index_schema_incomplete = True
+                    indexed_rows = []
+                else:
+                    index_schema_complete = True
+                    indexed_rows = conn.execute(
+                        "SELECT path, zettel_id, status, kind FROM zettels ORDER BY path"
+                    ).fetchall()
+                indexed_row_count = len(indexed_rows)
+                if progress_callback is not None:
+                    progress_callback("index-health-index-rows", "start", 0, indexed_row_count)
+                for row_index, row in enumerate(indexed_rows, start=1):
+                    indexed_entries.append(
+                        {
+                            "path": row["path"],
+                            "zettel_id": row["zettel_id"],
+                            "status": row["status"],
+                            "kind": row["kind"],
+                        }
+                    )
+                    if progress_callback is not None and (
+                        row_index == 1 or row_index == indexed_row_count or row_index % 250 == 0
+                    ):
+                        progress_callback(
+                            "index-health-index-rows", "scanned", row_index, indexed_row_count
+                        )
+                if progress_callback is not None:
+                    progress_callback(
+                        "index-health-index-rows", "done", indexed_row_count, indexed_row_count
+                    )
+            except BaseException:
+                if owns_connection:
+                    conn.close()
+                raise
+            else:
+                if owns_connection:
+                    conn.close()
+    elif progress_callback is not None and not index_read_blocked:
         progress_callback("index-health-index-rows", "start", 0, 0)
         progress_callback("index-health-index-rows", "done", 0, 0)
     indexed_by_path = {str(entry.get("path") or ""): entry for entry in indexed_entries}
 
     live_paths = set(live_by_path)
     indexed_paths = set(indexed_by_path)
-    missing_from_index = sorted(live_paths - indexed_paths)
-    extra_in_index = sorted(indexed_paths - live_paths)
+    missing_from_index = (
+        [] if index_read_blocked else sorted(live_paths - indexed_paths)
+    )
+    extra_in_index = (
+        [] if index_read_blocked else sorted(indexed_paths - live_paths)
+    )
     changed_metadata: list[dict[str, Any]] = []
-    shared_paths = sorted(live_paths & indexed_paths)
+    shared_paths = (
+        [] if index_read_blocked else sorted(live_paths & indexed_paths)
+    )
     shared_path_count = len(shared_paths)
     if progress_callback is not None:
         progress_callback("index-health-compare", "start", 0, shared_path_count)
@@ -112923,7 +113297,15 @@ def _index_health_impl(
             progress_callback("index-health-compare", "compared", path_index, shared_path_count)
     if progress_callback is not None:
         progress_callback("index-health-compare", "done", shared_path_count, shared_path_count)
-    modified_after_index = sorted(entry["path"] for entry in live_entries if entry.get("modified_after_index"))
+    modified_after_index = (
+        []
+        if index_read_blocked
+        else sorted(
+            entry["path"]
+            for entry in live_entries
+            if entry.get("modified_after_index")
+        )
+    )
 
     stale_reasons: list[str] = []
     if index_schema_incomplete:
@@ -112963,11 +113345,17 @@ def _index_health_impl(
         "index_path": INDEX_RELATIVE_PATH,
         "index_state": index_state,
         "summary": {
+            "live_zettel_enumeration_performed": (
+                live_zettel_enumeration_performed
+            ),
             "live_zettel_count": len(live_entries),
             "live_zettel_metadata_readable_count": sum(
                 1 for entry in live_entries if entry.get("metadata_readable")
             ),
             "live_zettel_inspection_issue_count": len(live_zettel_inspection_issues),
+            "index_comparison_performed": (
+                db_path.is_file() and not index_read_blocked
+            ),
             "indexed_zettel_count": len(indexed_entries),
             "missing_from_index_count": len(missing_from_index),
             "extra_in_index_count": len(extra_in_index),

@@ -83,6 +83,24 @@ _SESSION_ERROR_CASES = {
     "private_objet_metadata_projection_invalid": "C7",
     "private_objet_metadata_missing": "C8",
 }
+_PUBLIC_CURRENT_ACTION = (
+    "Generated index matches the live zettel path/id/status/kind snapshot "
+    "checked here."
+)
+_PUBLIC_REBUILD_ACTION = (
+    "Run archive index to rebuild the generated local SQLite index from "
+    "current archive files."
+)
+_PRIVATE_REBUILD_ACTIONS = (
+    "Stop all archive writers, then run `archive index <archive-root> "
+    "--progress --format json` to rebuild the disposable public/private index.",
+    "After the rebuild completes, run `archive index-health <archive-root> "
+    "--dry-run --progress --format json`; continue only when `ok` is true.",
+)
+_PRIVATE_SNAPSHOT_RETRY_ACTION = (
+    "Stop all archive writers, then rerun `archive index-health <archive-root> "
+    "--dry-run --progress --format json` from a fresh command."
+)
 _PRIVATE_TABLE_PRESENCE_SQL = (
     "SELECT name FROM sqlite_schema "
     "WHERE type = 'table' AND name IN (?, ?, ?, ?) "
@@ -404,6 +422,23 @@ def _closed_string_list(value: object, field_name: str) -> list[str]:
     return list(value)
 
 
+def _private_aware_next_safe_actions(
+    public_actions: Sequence[str],
+    case_id: str,
+) -> list[str]:
+    actions = [
+        action
+        for action in public_actions
+        if case_id in {"C10", "C11"}
+        or action not in {_PUBLIC_CURRENT_ACTION, _PUBLIC_REBUILD_ACTION}
+    ]
+    if case_id == "C1":
+        actions.append(_PRIVATE_SNAPSHOT_RETRY_ACTION)
+    elif case_id in {"C2", "C6", "C7", "C8", "C9"}:
+        actions.extend(_PRIVATE_REBUILD_ACTIONS)
+    return list(dict.fromkeys(actions))
+
+
 def compose_private_objet_metadata_index_health(
     public_health: Mapping[str, Any],
     decision: PrivateObjetMetadataHealthDecision,
@@ -435,6 +470,10 @@ def compose_private_objet_metadata_index_health(
         public_health["stale_reasons"],
         "stale_reasons",
     )
+    legacy_actions = _closed_string_list(
+        public_health["next_safe_actions"],
+        "next_safe_actions",
+    )
     blockers, stale_reasons = (
         append_private_objet_metadata_top_level_diagnostics(
             decision.case_id,
@@ -462,6 +501,11 @@ def compose_private_objet_metadata_index_health(
             value = stale_reasons
         elif key == "blockers":
             value = blockers
+        elif key == "next_safe_actions":
+            value = _private_aware_next_safe_actions(
+                legacy_actions,
+                decision.case_id,
+            )
         else:
             value = deepcopy(public_health[key])
         composed[key] = value

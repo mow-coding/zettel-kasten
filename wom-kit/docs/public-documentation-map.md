@@ -52,11 +52,13 @@ Supporting philosophy and model docs:
 - [Operator Feedback Lifecycle](operator-feedback-lifecycle.md)
 - [Source Fidelity And Private Verbatim Preservation](source-fidelity-and-private-verbatim.md)
 - [v0.3.313 Source Fidelity Decision](archive-infra-decision-log-2026-08-10-v03313-source-fidelity.md)
+- [v0.3.314 Letter 126 Recovery Decision](archive-infra-decision-log-2026-08-11-v03314-letter126.md)
 - [Letters 120 and 123 Index Lifecycle And Feedback Body](letter120-123-index-lifecycle-and-feedback-body.md)
 - [v0.3.312 Index Authority And Feedback Body Decision](archive-infra-decision-log-2026-08-10-v03312-index-authority-and-feedback-body.md)
 - [Approval Handoff Lifecycle](approval-handoff-lifecycle.md)
 - [Approval Handoff Audit](approval-handoff-audit.md)
 - [Operation Status Taxonomy](operation-status-taxonomy.md)
+- [Bounded Operation Control](operation-control.md)
 - [Input Provenance Taxonomy](input-provenance-taxonomy.md)
 - [Secret Signal Taxonomy](secret-signal-taxonomy.md)
 - [Local Sovereignty And Backup Authority](local-sovereignty-and-backup-authority.md)
@@ -426,6 +428,7 @@ These documents record public-safe work already performed.
 - [v0.3.311 Release Note](releases/v0.3.311.md)
 - [v0.3.312 Release Note](releases/v0.3.312.md)
 - [v0.3.313 Release Note](releases/v0.3.313.md)
+- [v0.3.314 Release Note](releases/v0.3.314.md)
 
 Work logs are not the same as product specs.
 

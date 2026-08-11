@@ -3,8 +3,10 @@
 Status: v0.3.91 read-only generated index drift check; v0.3.255 adds opt-in
 progress/result capture and a crash-safe rebuild procedure; v0.3.256 adds
 fail-closed frontmatter inspection and physical-path accounting; v0.3.312 makes
-current-index evidence a shared fail-closed authority for query and mint
-Date: 2026-06-17; updated 2026-08-10
+current-index evidence a shared fail-closed authority for query and mint;
+v0.3.314 adds a clean rollback-journal read boundary and private-projection
+recovery through the ordinary combined rebuild
+Date: 2026-06-17; updated 2026-08-11
 
 `index-health` checks whether the generated local SQLite index still matches
 the live zettel files.
@@ -119,8 +121,10 @@ silently absent from both sides of a false `current` comparison.
 
 `summary.index_schema_complete` distinguishes a usable `zettels` table from a
 SQLite file left behind when the very first index build stopped before schema
-commit. That incomplete file is reported as `stale_or_incomplete` with zero
-indexed rows, so the normal explicit rebuild procedure remains available
+commit. A valid rollback-mode SQLite file can still be reported as
+`stale_or_incomplete`. A zero-byte or otherwise invalid first-build file is
+blocked before SQLite opens with `archive_index_rebuild_required`; comparison is
+marked not performed and the same explicit rebuild procedure remains available
 instead of ending in an unstructured `no such table` error.
 
 It does not prove every part of a complete index build. In particular, it does
@@ -148,6 +152,30 @@ It does not:
 - echo provider URLs.
 
 It returns only archive-relative sample paths and basic drift counters.
+
+From v0.3.314, normal public and private index inspection accepts only a clean
+SQLite rollback snapshot: the database header must advertise `DELETE` mode
+(`1/1`) and `archive-index.sqlite-wal`, `archive-index.sqlite-shm`, and
+`archive-index.sqlite-journal` must all be absent. This check happens before a
+true URI `mode=ro` connection is opened. A legacy WAL header, any recovery
+sidecar, an invalid database identity, or an unreadable header blocks before
+SQLite can create or edit a sidecar. In that blocked state public row comparison
+is explicitly not performed; health does not invent missing/extra-row claims.
+The cheap storage preflight also runs before live-zettel enumeration, so this
+known rebuild case returns without rescanning a large archive. The summary sets
+`live_zettel_enumeration_performed: false` and
+`index_comparison_performed: false` rather than presenting zero counts as a
+completed comparison.
+Plan-private `immutable=1` snapshot inspection remains a separate CAS-protected
+path and is not the public `index-health` contract.
+
+Run normal health against a quiescent generated index. The preflight uses a
+bounded descriptor read plus before/after file identity checks, and internal
+writers use the same clean-DELETE boundary. It is not an operating-system-wide
+lock: an unmanaged external SQLite writer could still race after preflight and
+before the later SQLite open. The private session's final identity check fails
+closed when it observes such drift, but operators should stop external writers
+before treating health as conclusive.
 
 For a well-formed zet, live inspection accepts only the exact supported opening
 and closing frontmatter delimiter grammar, a YAML object, and lifecycle status
@@ -183,6 +211,19 @@ Use a new diagnostic filename at each step:
    deliberately nonzero, safe, and incomplete.
 6. Run `index-health` again with another new output filename. Only that final
    health result confirms currentness within this command's scope.
+
+For the v0.3.314 private-projection cases:
+
+- `private_objet_metadata_snapshot_changed` (C1) means stop all archive writers
+  and rerun a fresh `archive index-health ...` command.
+- `private_objet_metadata_projection_unavailable` (C2 or C6), when durable
+  private authority is valid, is a fixed top-level blocker. Stop writers, run
+  `archive index <archive-root> --progress --format json`, then run
+  `archive index-health <archive-root> --dry-run --progress --format json` and
+  continue only when `ok` is true.
+- A pre-v0.3.314 WAL-mode generated database needs that one explicit ordinary
+  rebuild. Do not open, edit, delete, or rename the database or its sidecars by
+  hand, and do not introduce a separate private metadata writer.
 
 If an index output file is absent after interruption, do not immediately assume
 that the database is old or current. The SQLite commit can succeed before the
@@ -238,6 +279,15 @@ inserts, and metadata updates in one explicit SQLite transaction beginning with
 `BEGIN IMMEDIATE`. Failure before the final commit rolls back the whole rebuild
 and preserves the previously committed index. This prevents a delete-only
 intermediate state from becoming the current generated index.
+
+From v0.3.314, that explicit full rebuild is also the only supported conversion
+from a legacy WAL-mode generated database. Full rebuild and incremental writers
+verify `journal_mode=DELETE`; an incremental writer refuses an existing legacy
+WAL or sidecar-bearing database before opening it. The conversion changes only
+the disposable generated database. It does not migrate the database schema or
+durable private authority and does not require a new authority approval. Normal
+health reads then use `mode=ro` and leave the database and all sidecar paths
+unchanged.
 
 Since v0.3.256, one unreadable or invalid zettel does not roll back and preserve
 an older logically unsafe row. The rebuild commits a path/stat-only row with

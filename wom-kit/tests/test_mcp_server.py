@@ -11617,28 +11617,20 @@ class McpServerTests(unittest.TestCase):
                 self.assertEqual(read_result["integrity"]["file_sha256"], None)
                 self.assertEqual(read_result["integrity"]["body_sha256"], None)
 
-                db_path = (
-                    archive_root / archive_services.INDEX_RELATIVE_PATH
-                )
-                wal_anchor = sqlite3.connect(db_path)
-                try:
-                    wal_anchor.execute("PRAGMA journal_mode=WAL")
-                    health_response = self.send(
-                        process,
-                        {
-                            "jsonrpc": "2.0",
-                            "id": 3,
-                            "method": "tools/call",
-                            "params": {
-                                "name": "index_health",
-                                "arguments": {
-                                    "archive_root": str(archive_root)
-                                },
+                health_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 3,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "index_health",
+                            "arguments": {
+                                "archive_root": str(archive_root)
                             },
                         },
-                    )
-                finally:
-                    wal_anchor.close()
+                    },
+                )
                 self.assertFalse(health_response["result"]["isError"])
                 health = health_response["result"]["structuredContent"]
                 self.assertTrue(health["ok"])

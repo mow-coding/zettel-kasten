@@ -706,7 +706,11 @@ class ObjetRediscoveryPlanTests(unittest.TestCase):
                 connection.rollback()
                 connection.close()
 
-        self.assertIn(health["index_state"], {"current", "stale_or_incomplete"})
+        self.assertEqual(health["index_state"], "blocked")
+        self.assertIn(
+            "private_objet_metadata_projection_unavailable",
+            health["blockers"],
+        )
         self.assertTrue(search["total_matches_known"])
         self.assertEqual(set(channels), set(archive_services.SEARCH_CHANNEL_TABLES[index][0] for index in range(len(archive_services.SEARCH_CHANNEL_TABLES))))
 

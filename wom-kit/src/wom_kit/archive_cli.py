@@ -22,6 +22,9 @@ Commands:
           traversed or changed.
   project-version-update
           Preview or approve one verified project source-mirror and version-pin update.
+  operation-control
+          Inspect bounded content-free long-operation status, wait, or recovery
+          guidance; cancel and resume remain unsupported.
   zet-catalog-pass
           Complete one strict catalog pass in one process and publish one private scratch JSONL.
   first-read-readiness
@@ -389,6 +392,7 @@ from . import (
     artifact_lifecycle_inventory,
     completion_workflows,
     legacy_coordination_cleanup as legacy_cleanup,
+    operation_control,
     runtime_guidance,
     runtime_skill_install,
     saved_view_workflows,
@@ -4651,7 +4655,30 @@ def command_project_version_update(args: argparse.Namespace) -> int:
         bool(getattr(args, "progress", False)),
         label="project-version-update",
     )
+    capture: CommandRunResultCapture | None = None
+    operation_journal: operation_control.OperationRunJournal | None = None
     try:
+        if getattr(args, "output", None):
+            control_root = operation_control.require_control_root(
+                Path(args.inspection_root)
+            )
+            archive_scoped = (control_root / "archive.yml").is_file()
+            capture = CommandRunResultCapture.prepare(
+                str(args.output),
+                control_root,
+                command="project-version-update",
+                required_prefix=(
+                    operation_control.ARCHIVE_OUTPUT_PREFIX
+                    if archive_scoped
+                    else operation_control.PROJECT_OUTPUT_PREFIX
+                ),
+                require_archive_root=archive_scoped,
+            )
+            operation_journal = prepare_operation_tracking(capture)
+            best_effort_terminal_print(
+                f"[project-version-update] result pending: {capture.metadata['path']}",
+                file=sys.stderr,
+            )
         result = archive_services.wom_kit_project_version_update(
             Path(args.inspection_root),
             target=args.target,
@@ -4661,13 +4688,55 @@ def command_project_version_update(args: argparse.Namespace) -> int:
             affirm_external_writers_quiescent=bool(
                 args.affirm_external_writers_quiescent
             ),
-            progress_callback=reporter.progress,
+            progress_callback=operation_progress_callback(
+                reporter,
+                operation_journal,
+            ),
         )
-    except (OSError, ValueError):
+    except (operation_control.OperationControlError, OSError, ValueError) as exc:
+        failure_result_written = False
+        if capture is not None:
+            try:
+                capture.write_completed(exit_code=1, error=exc)
+                failure_result_written = True
+            except (OSError, ValueError):
+                pass
+        complete_operation_tracking(
+            operation_journal,
+            capture,
+            exit_code=1,
+            result_available=failure_result_written,
+            result_ok=False if failure_result_written else None,
+        )
         print("Project version update failed before a privacy-safe result could be produced.", file=sys.stderr)
         return 1
     finally:
         reporter.close()
+
+    exit_code = 0 if result.get("ok") else 1
+    if capture is not None:
+        try:
+            capture.write_completed(exit_code=exit_code, result=result)
+        except (OSError, ValueError):
+            complete_operation_tracking(
+                operation_journal,
+                capture,
+                exit_code=1,
+                result_available=False,
+                result_ok=None,
+            )
+            print(
+                "Project version update completed, but no complete result artifact was published.",
+                file=sys.stderr,
+            )
+            return 1
+        complete_operation_tracking(
+            operation_journal,
+            capture,
+            exit_code=exit_code,
+            result_available=True,
+            result_ok=bool(result.get("ok")),
+        )
 
     if args.format == "json":
         print_json(result)
@@ -4687,7 +4756,7 @@ def command_project_version_update(args: argparse.Namespace) -> int:
         print("Next safe actions:")
         for action in result.get("next_safe_actions", []):
             print(f"- {action}")
-    return 0 if result.get("ok") else 1
+    return exit_code
 
 
 def git_version_tags() -> list[str]:
@@ -5267,6 +5336,71 @@ def command_operation_status_taxonomy(args: argparse.Namespace) -> int:
         print("Partial/truncated count as success: no")
         print("Writes: none")
     return 0 if result.get("ok", True) else 1
+
+
+def command_operation_control(args: argparse.Namespace) -> int:
+    action = str(args.action)
+    root = Path(args.inspection_root)
+    if action == "status":
+        result = operation_control.inspect_operation(
+            root,
+            args.operation_ref,
+            action="status",
+        )
+    elif action == "wait":
+        result = operation_control.wait_operation(
+            root,
+            args.operation_ref,
+            args.timeout_seconds,
+        )
+    elif action == "recovery-plan":
+        result = operation_control.recovery_plan(
+            root,
+            args.operation_ref,
+        )
+    else:
+        result = operation_control.unsupported_cancel(
+            root,
+            args.operation_ref,
+            approve=bool(args.approve),
+            reviewed_by=None,
+            expected_control_digest=None,
+        )
+
+    if action != "cancel" and not bool(args.dry_run):
+        result["ok"] = False
+        result["dry_run"] = False
+        result["state"] = "blocked"
+        blockers = list(result.get("blockers") or [])
+        if "operation_control_read_requires_dry_run" not in blockers:
+            blockers.append("operation_control_read_requires_dry_run")
+        result["blockers"] = blockers
+        result["privacy_guards"]["writes"] = False
+        result["next_safe_actions"] = [
+            "Run status, wait, or recovery-plan again with --dry-run; no control write was attempted."
+        ]
+    elif action == "cancel":
+        result["dry_run"] = bool(args.dry_run)
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        print(f"Operation control: {action}")
+        print(f"State: {result.get('state') or 'blocked'}")
+        print(f"Operation ref: {result.get('operation_ref') or '<invalid>'}")
+        print(f"Kind: {result.get('operation_kind') or '-'}")
+        print(f"Stage: {result.get('stage') or '-'}")
+        print(f"Elapsed ms: {result.get('elapsed_ms') if result.get('elapsed_ms') is not None else '-'}")
+        print(f"Terminal: {str(bool(result.get('terminal'))).lower()}")
+        control = result.get("control") if isinstance(result.get("control"), dict) else {}
+        print(f"Cancel supported: {str(bool(control.get('cancel_supported'))).lower()}")
+        print(f"Resume supported: {str(bool(control.get('resume_supported'))).lower()}")
+        for blocker in result.get("blockers", []):
+            print(f"BLOCKED: {blocker}")
+        for next_action in result.get("next_safe_actions", []):
+            print(f"NEXT: {next_action}")
+        print("Writes: none")
+    return 0 if result.get("ok") else 1
 
 
 def command_input_provenance_taxonomy(args: argparse.Namespace) -> int:
@@ -16168,6 +16302,7 @@ def command_index(args: argparse.Namespace) -> int:
         ),
     )
     capture: CommandRunResultCapture | None = None
+    operation_journal: operation_control.OperationRunJournal | None = None
     try:
         if getattr(args, "output", None):
             capture = CommandRunResultCapture.prepare(
@@ -16175,15 +16310,19 @@ def command_index(args: argparse.Namespace) -> int:
                 archive_root,
                 command="index",
             )
+            operation_journal = prepare_operation_tracking(capture)
             best_effort_terminal_print(
                 f"[index] result pending: {capture.metadata['path']}",
                 file=sys.stderr,
             )
         result = archive_services.index_archive(
             archive_root,
-            progress_callback=reporter.progress,
+            progress_callback=operation_progress_callback(
+                reporter,
+                operation_journal,
+            ),
         )
-    except (archive_services.ArchiveServiceError, OSError, UnicodeError, sqlite3.Error, ValueError) as exc:
+    except (archive_services.ArchiveServiceError, operation_control.OperationControlError, OSError, UnicodeError, sqlite3.Error, ValueError) as exc:
         failure_result_written = False
         if capture is not None:
             try:
@@ -16198,6 +16337,13 @@ def command_index(args: argparse.Namespace) -> int:
                     f"Index failed; result capture also failed ({type(capture_exc).__name__}).",
                     file=sys.stderr,
                 )
+        complete_operation_tracking(
+            operation_journal,
+            capture,
+            exit_code=1,
+            result_available=failure_result_written,
+            result_ok=False if failure_result_written else None,
+        )
         if failure_result_written:
             best_effort_terminal_print(
                 "Index failed; the saved result contains a sanitized failure code.",
@@ -16226,11 +16372,25 @@ def command_index(args: argparse.Namespace) -> int:
         try:
             output_metadata = capture.write_completed(exit_code=result_exit_code, result=result)
         except (OSError, ValueError) as exc:
+            complete_operation_tracking(
+                operation_journal,
+                capture,
+                exit_code=1,
+                result_available=False,
+                result_ok=None,
+            )
             best_effort_terminal_print(
                 f"Index completed, but --output result capture failed ({type(exc).__name__}).",
                 file=sys.stderr,
             )
             return 1
+        complete_operation_tracking(
+            operation_journal,
+            capture,
+            exit_code=result_exit_code,
+            result_available=True,
+            result_ok=bool(result.get("ok", True)),
+        )
         best_effort_terminal_print(
             f"[index] completed exit_code={result_exit_code} result={output_metadata['path']}",
             file=sys.stderr,
@@ -16523,6 +16683,7 @@ def command_index_health(args: argparse.Namespace) -> int:
         ),
     )
     capture: CommandRunResultCapture | None = None
+    operation_journal: operation_control.OperationRunJournal | None = None
     try:
         if getattr(args, "output", None):
             capture = CommandRunResultCapture.prepare(
@@ -16530,6 +16691,7 @@ def command_index_health(args: argparse.Namespace) -> int:
                 archive_root,
                 command="index-health",
             )
+            operation_journal = prepare_operation_tracking(capture)
             best_effort_terminal_print(
                 f"[index-health] result pending: {capture.metadata['path']}",
                 file=sys.stderr,
@@ -16538,9 +16700,12 @@ def command_index_health(args: argparse.Namespace) -> int:
             archive_root,
             dry_run=True,
             max_items=args.max_items,
-            progress_callback=reporter.progress,
+            progress_callback=operation_progress_callback(
+                reporter,
+                operation_journal,
+            ),
         )
-    except (archive_services.ArchiveServiceError, OSError, UnicodeError, sqlite3.Error, ValueError) as exc:
+    except (archive_services.ArchiveServiceError, operation_control.OperationControlError, OSError, UnicodeError, sqlite3.Error, ValueError) as exc:
         failure_result_written = False
         if capture is not None:
             try:
@@ -16555,6 +16720,13 @@ def command_index_health(args: argparse.Namespace) -> int:
                     f"Index health failed; result capture also failed ({type(capture_exc).__name__}).",
                     file=sys.stderr,
                 )
+        complete_operation_tracking(
+            operation_journal,
+            capture,
+            exit_code=1,
+            result_available=failure_result_written,
+            result_ok=False if failure_result_written else None,
+        )
         if failure_result_written:
             best_effort_terminal_print(
                 "Index health failed; the saved result contains a sanitized failure code.",
@@ -16583,11 +16755,25 @@ def command_index_health(args: argparse.Namespace) -> int:
         try:
             output_metadata = capture.write_completed(exit_code=exit_code, result=result)
         except (OSError, ValueError) as exc:
+            complete_operation_tracking(
+                operation_journal,
+                capture,
+                exit_code=1,
+                result_available=False,
+                result_ok=None,
+            )
             best_effort_terminal_print(
                 f"Index health completed, but --output result capture failed ({type(exc).__name__}).",
                 file=sys.stderr,
             )
             return 1
+        complete_operation_tracking(
+            operation_journal,
+            capture,
+            exit_code=exit_code,
+            result_available=True,
+            result_ok=bool(result.get("ok")),
+        )
         best_effort_terminal_print(
             f"[index-health] completed exit_code={exit_code} result={output_metadata['path']}",
             file=sys.stderr,
@@ -20792,10 +20978,16 @@ def display_output_path(path: Path, archive_root: Path) -> str:
 def resolve_command_result_output_path(
     archive_root: Path,
     path_arg: str,
+    *,
+    required_prefix: str = operation_control.ARCHIVE_OUTPUT_PREFIX,
+    require_archive_root: bool = True,
 ) -> tuple[Path, Path, str]:
-    root = archive_services.require_existing_archive_root(archive_root)
+    root = (
+        archive_services.require_existing_archive_root(archive_root)
+        if require_archive_root
+        else operation_control.require_control_root(archive_root)
+    )
     normalized = path_arg.replace("\\", "/").strip()
-    required_prefix = ".wom-scratch/diagnostics/"
     if not normalized.startswith(required_prefix):
         raise ValueError(f"--output must be under {required_prefix}")
     if not normalized.lower().endswith(".json"):
@@ -20880,6 +21072,8 @@ class CommandRunResultCapture:
     started_at: str
     relative_path: str
     metadata: dict[str, Any]
+    required_prefix: str = operation_control.ARCHIVE_OUTPUT_PREFIX
+    require_archive_root: bool = True
 
     @classmethod
     def prepare(
@@ -20888,18 +21082,31 @@ class CommandRunResultCapture:
         archive_root: Path,
         *,
         command: str,
+        required_prefix: str = operation_control.ARCHIVE_OUTPUT_PREFIX,
+        require_archive_root: bool = True,
     ) -> "CommandRunResultCapture":
-        root, output_path, normalized = resolve_command_result_output_path(archive_root, path_arg)
+        root, output_path, normalized = resolve_command_result_output_path(
+            archive_root,
+            path_arg,
+            required_prefix=required_prefix,
+            require_archive_root=require_archive_root,
+        )
         if output_path.exists() or output_path.is_symlink():
             raise ValueError("--output refuses to overwrite an existing result file.")
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        checked_root, checked_path, checked_normalized = resolve_command_result_output_path(root, normalized)
+        checked_root, checked_path, checked_normalized = resolve_command_result_output_path(
+            root,
+            normalized,
+            required_prefix=required_prefix,
+            require_archive_root=require_archive_root,
+        )
+        project_scoped = required_prefix == operation_control.PROJECT_OUTPUT_PREFIX
         if checked_root != root or checked_path != output_path or checked_normalized != normalized:
             raise ValueError("--output path changed while it was being prepared.")
         metadata = {
             "path": display_output_path(output_path, root),
-            "path_kind": "archive_relative_scratch",
-            "relative_to": "archive_root",
+            "path_kind": "project_relative_scratch" if project_scoped else "archive_relative_scratch",
+            "relative_to": "project_root" if project_scoped else "archive_root",
             "contains": "complete_command_result_and_cli_execution_json",
             "command": command,
             "result_artifact_written": True,
@@ -20916,6 +21123,8 @@ class CommandRunResultCapture:
             started_at=datetime.now().astimezone().replace(microsecond=0).isoformat(),
             relative_path=normalized,
             metadata=metadata,
+            required_prefix=required_prefix,
+            require_archive_root=require_archive_root,
         )
 
     def write_completed(
@@ -20930,6 +21139,8 @@ class CommandRunResultCapture:
         checked_root, checked_path, checked_normalized = resolve_command_result_output_path(
             self.archive_root,
             self.relative_path,
+            required_prefix=self.required_prefix,
+            require_archive_root=self.require_archive_root,
         )
         if (
             checked_root != self.archive_root
@@ -20978,6 +21189,72 @@ class CommandRunResultCapture:
             run_id=self.run_id,
         )
         return self.metadata
+
+
+def prepare_operation_tracking(
+    capture: CommandRunResultCapture,
+) -> operation_control.OperationRunJournal:
+    journal = operation_control.OperationRunJournal.prepare(
+        capture.archive_root,
+        output_relative=capture.relative_path,
+        command=capture.command,
+        run_id=capture.run_id,
+    )
+    capture.metadata["operation"] = journal.metadata()
+    best_effort_terminal_print(
+        f"[{capture.command}] operation_ref={journal.operation_ref}",
+        file=sys.stderr,
+    )
+    return journal
+
+
+def operation_progress_callback(
+    reporter: CommandProgressReporter,
+    journal: operation_control.OperationRunJournal | None,
+) -> Callable[[str, str, int | None, int | None], None]:
+    if journal is None:
+        return reporter.progress
+
+    def report(
+        stage: str,
+        message: str,
+        current: int | None,
+        total: int | None,
+    ) -> None:
+        journal.progress(stage, message, current, total)
+        reporter.progress(stage, message, current, total)
+
+    return report
+
+
+def complete_operation_tracking(
+    journal: operation_control.OperationRunJournal | None,
+    capture: CommandRunResultCapture | None,
+    *,
+    exit_code: int,
+    result_available: bool,
+    result_ok: bool | None,
+) -> None:
+    if journal is None:
+        return
+    try:
+        tracked = journal.complete(
+            exit_code=exit_code,
+            result_available=result_available,
+            result_ok=result_ok,
+            result_path=(
+                capture.output_path
+                if result_available and capture is not None
+                else None
+            ),
+        )
+        if not tracked:
+            best_effort_terminal_print(
+                f"[{journal.command}] operation tracking requires recovery-plan.",
+                file=sys.stderr,
+            )
+    finally:
+        journal.close()
 
 
 def write_command_result_output_file(
@@ -22302,6 +22579,13 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Stream content-free fetch, verify, checkout, pin, receipt, and 10-second heartbeat progress to stderr.",
     )
+    project_version_update.add_argument(
+        "--output",
+        help=(
+            "Optional complete JSON result: use .zettel-kasten/diagnostics/*.json "
+            "from a project root or .wom-scratch/diagnostics/*.json from an archive root."
+        ),
+    )
     project_version_update.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     project_version_update.set_defaults(func=command_project_version_update)
 
@@ -22509,6 +22793,55 @@ def build_parser() -> argparse.ArgumentParser:
     operation_status_taxonomy.add_argument("--dry-run", action="store_true", help="Required. Preview only; write nothing.")
     operation_status_taxonomy.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     operation_status_taxonomy.set_defaults(func=command_operation_status_taxonomy)
+
+    operation_control_parser = subcommands.add_parser(
+        "operation-control",
+        help=(
+            "Read bounded content-free status, wait, or recovery guidance for "
+            "an output-supervised long command; cancel and resume are unsupported."
+        ),
+    )
+    operation_control_parser.add_argument(
+        "inspection_root",
+        help="The exact project or archive root used to start the operation.",
+    )
+    operation_control_parser.add_argument(
+        "--operation-ref",
+        required=True,
+        help="Opaque op:sha256 reference printed when the supervised command starts.",
+    )
+    operation_control_parser.add_argument(
+        "--action",
+        choices=["status", "wait", "cancel", "recovery-plan"],
+        required=True,
+        help="One canonical operation-control action.",
+    )
+    operation_control_mode = operation_control_parser.add_mutually_exclusive_group(
+        required=True
+    )
+    operation_control_mode.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Required for status, wait, and recovery-plan; writes nothing.",
+    )
+    operation_control_mode.add_argument(
+        "--approve",
+        action="store_true",
+        help="Accepted for cancel, which remains unsupported and writes nothing.",
+    )
+    operation_control_parser.add_argument(
+        "--timeout-seconds",
+        type=int,
+        default=60,
+        help="Bounded wait only: 1 through 60 seconds; timeout is not cancel or failure.",
+    )
+    operation_control_parser.add_argument(
+        "--format",
+        choices=["text", "json"],
+        default="json",
+        help="Output format.",
+    )
+    operation_control_parser.set_defaults(func=command_operation_control)
 
     input_provenance_taxonomy = subcommands.add_parser(
         "input-provenance-taxonomy",
