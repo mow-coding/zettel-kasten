@@ -158,3 +158,27 @@ release-blocking or non-blocking finding. This still does not claim a commit,
 remote CI, merge, tag, GitHub Release, public wheel, beta-client execution, or
 human acceptance; those evidence layers begin only after publication steps
 actually complete.
+
+## First remote-CI portability correction
+
+Draft PR #62 started the repository's full Ubuntu and Windows matrix. The first
+candidate exposed test-environment mistakes, not a product-runtime failure:
+
+- one Windows shard could not create the test's intentionally injected Git
+  commit because the cloned temporary mirror had no repository-local test
+  author identity and the clean runner had no global fallback; and
+- two Ubuntu shards calculated historical-document hashes from LF checkout
+  bytes while the original constants had been captured from a Windows CRLF
+  worktree.
+
+The fixture now assigns its fixed non-personal test name and email inside the
+temporary mirror. The historical-source test now hashes canonical Git text
+after CRLF-to-LF normalization and uses the canonical LF hashes. No product
+implementation, historical source document, or public contract changed.
+
+The exact formerly failing test passed with global Git configuration
+intentionally unavailable. Under that same condition, the complete Letter 129
+focused set passed 50/50 and the 28 existing project-update tests passed 28/28.
+The six v0.3.316 release-document tests also passed on Windows with the
+cross-platform hash rule. A new remote CI run remains required before merge or
+release.
