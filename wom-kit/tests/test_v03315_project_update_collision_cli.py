@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import redirect_stderr, redirect_stdout
 import io
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -521,6 +522,7 @@ class ProjectUpdateCollisionServiceTests(unittest.TestCase):
             reveal_target_relative_path=reveal,
         )
 
+    @unittest.skipUnless(os.name == "nt", "Windows preserve-relocate contract")
     def test_actual_windows_preserve_then_fresh_update_succeeds(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             (
@@ -942,6 +944,7 @@ class ProjectUpdateCollisionServiceTests(unittest.TestCase):
                 "updated_restart_required",
             )
 
+    @unittest.skipUnless(os.name == "nt", "Windows preserve-relocate contract")
     def test_private_read_observer_and_zero_byte_windows_preservation(
         self,
     ) -> None:
@@ -1192,6 +1195,7 @@ class ProjectUpdateCollisionServiceTests(unittest.TestCase):
             self.assertEqual(collision_path.read_bytes(), private_bytes)
             self.assertEqual(hardlink.read_bytes(), private_bytes)
 
+    @unittest.skipUnless(os.name == "nt", "Windows preserve-relocate contract")
     def test_completion_failure_preserves_payload_and_owned_lock(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             (
@@ -1407,6 +1411,7 @@ class ProjectUpdateCollisionServiceTests(unittest.TestCase):
             self.assertNotIn(fixture["collision_name"], rendered)
             self.assertNotIn(private_bytes.decode().strip(), rendered)
 
+    @unittest.skipUnless(os.name == "nt", "Windows preserve-relocate contract")
     def test_post_rename_verifier_interruption_keeps_unknown_outcome(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             (
@@ -1474,6 +1479,7 @@ class ProjectUpdateCollisionServiceTests(unittest.TestCase):
             self.assertNotIn(fixture["collision_name"], rendered)
             self.assertNotIn(private_bytes.decode().strip(), rendered)
 
+    @unittest.skipUnless(os.name == "nt", "Windows preserve-relocate contract")
     def test_reported_lock_release_requires_verified_safe_absence(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             (
