@@ -1,6 +1,6 @@
 # WOM-kit Version Truth Source
 
-Status: v0.3.315 runtime alignment, update-preview parity, and collision recovery
+Status: v0.3.316 runtime alignment and exact-set-bound cache collision recovery
 
 Previous checkpoint: Status: v0.3.291 read-only runtime alignment plus approval-gated project update
 
@@ -292,6 +292,16 @@ separately. Private receipts provide only
 or same-user tamper protection. Nullable write/relocation fields and
 `recovery_required` mean the outcome is uncertain and retained evidence must
 not be deleted or blindly replayed.
+
+From v0.3.316, a complete collision batch can be classified once with
+`project-version-update-collision --action inspect-all`. Only an exact complete
+set of supported ignored Python cache artifacts can route to a separately
+planned and approved `project-bytecode-repair` bound to the same target and
+materialization digest. The repair shares the updater lock but does not fetch,
+change `HEAD` or the installed-version pin, retry the updater, or grant update
+approval. Therefore version truth remains unchanged until a fresh updater
+preview is separately approved and a new process verifies running import,
+source, pin, and exact-tag agreement.
 
 These project-local output paths opt into v0.3.314 operation observation. An
 archive-root invocation instead uses a fresh

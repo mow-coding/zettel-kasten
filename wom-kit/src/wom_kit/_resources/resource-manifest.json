@@ -1,6 +1,6 @@
 {
   "schema": "wom-kit/package-resource-manifest/v0.1",
-  "version": "0.3.315",
+  "version": "0.3.316",
   "source_of_truth": "wom-kit source resource directories",
   "file_count": 145,
   "files": [
@@ -577,8 +577,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/SKILL.md",
       "packaged": "templates/ai-runtime/wom-archive/SKILL.md",
-      "bytes": 8295,
-      "sha256": "9576c15dcf57296849c4ad0c805e1a0fea60893feccc912f648b8691fc8af33a"
+      "bytes": 8487,
+      "sha256": "b71fbefc2e1d0805e5242be8117a822c91384672c4ea6b987840f7b6451026a8"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/capture-draft-and-publication.md",
@@ -595,8 +595,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/references/operator-contract.md",
       "packaged": "templates/ai-runtime/wom-archive/references/operator-contract.md",
-      "bytes": 65816,
-      "sha256": "4171fd8058afcbb3ef82fdd4b9e2577e66ae4dc6874f2c26a525ed3637d1a6a8"
+      "bytes": 66998,
+      "sha256": "e12803fed4429b6b483eb693d1b8eecb5e8d4822ee173cddc48eb00af62131c5"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/reading-memory-and-revision.md",
@@ -613,8 +613,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/references/startup-and-update.md",
       "packaged": "templates/ai-runtime/wom-archive/references/startup-and-update.md",
-      "bytes": 7680,
-      "sha256": "26b1078da4711d0aaefd79c97745e5ac95968c13e2f368e52e5d3f4fe7aec7f0"
+      "bytes": 8473,
+      "sha256": "15b2b7d58ef87f5be83ad999dd8aa34a742e6bd43e6f42d05727ac65d1249c1c"
     },
     {
       "source": "templates/company/AGENTS.md",
@@ -869,10 +869,10 @@
       "sha256": "d619dc26af3216498c8392dfe838b0fe752d4bad9da998a58ca682d668fc510c"
     },
     {
-      "source": "docs/releases/v0.3.315.md",
-      "packaged": "release-notes/v0.3.315.md",
-      "bytes": 6262,
-      "sha256": "daeb6d327bf231dbe366a8936505702fe1c8f374c280249da66bf6bcee9143e8"
+      "source": "docs/releases/v0.3.316.md",
+      "packaged": "release-notes/v0.3.316.md",
+      "bytes": 5159,
+      "sha256": "adca13da21c1a4f560cb53b5a59cac48a7783c949eebe97be99016d0245515b9"
     }
   ]
 }

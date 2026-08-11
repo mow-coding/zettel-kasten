@@ -23,8 +23,9 @@ Commands:
   project-version-update
           Preview or approve one verified project source-mirror and version-pin update.
   project-version-update-collision
-          Inspect one opaque project-update collision or preview/approve a
-          preservation-only relocation; never deletes or retries the update.
+          Inspect one opaque collision or the complete bound batch, or
+          preview/approve a preservation-only relocation; never retries the
+          update.
   operation-control
           Inspect bounded content-free long-operation status, wait, or recovery
           guidance; cancel and resume remain unsupported.
@@ -4656,6 +4657,9 @@ def command_legacy_coordination_cleanup(args: argparse.Namespace) -> int:
 PROJECT_UPDATE_COLLISION_SCHEMA = (
     "wom-kit/project-version-update-collision/v0.1"
 )
+PROJECT_UPDATE_COLLISION_BATCH_SCHEMA = (
+    "wom-kit/project-version-update-collision/v0.2"
+)
 PROJECT_UPDATE_COLLISION_ENTRY_REF_RE = re.compile(
     r"update-entry:(?!0000)[0-9]{4}"
 )
@@ -4664,6 +4668,479 @@ PROJECT_UPDATE_COLLISION_TAG_RE = re.compile(r"v[0-9]+\.[0-9]+\.[0-9]+")
 PROJECT_UPDATE_COLLISION_REVIEWER_RE = re.compile(
     r"[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,127}"
 )
+PROJECT_UPDATE_COLLISION_CODE_RE = re.compile(r"[a-z][a-z0-9_]{0,127}")
+PROJECT_UPDATE_COLLISION_BATCH_ENTRY_KINDS = frozenset(
+    {
+        "missing",
+        "plain_directory",
+        "regular_file",
+        "special",
+        "symlink_or_reparse",
+        "synthetic",
+        "unreadable",
+        "unclassified",
+        "unsafe",
+    }
+)
+PROJECT_UPDATE_COLLISION_BATCH_RUNTIME_KINDS = frozenset(
+    {
+        "bytecode_cache_directory",
+        "derived_bytecode_file",
+        "not_applicable",
+        "other_runtime_shadow",
+    }
+)
+PROJECT_UPDATE_COLLISION_BATCH_REMEDIATION_KINDS = frozenset(
+    {"preserve_relocate", "project_bytecode_repair", "unavailable"}
+)
+
+
+def _project_update_collision_batch_count_map(
+    value: object,
+    *,
+    allowed_keys: frozenset[str],
+) -> dict[str, int]:
+    if not isinstance(value, dict):
+        raise ValueError("project_update_collision_batch_count_map_invalid")
+    projected: dict[str, int] = {}
+    for key, count in value.items():
+        if (
+            not isinstance(key, str)
+            or key not in allowed_keys
+            or isinstance(count, bool)
+            or not isinstance(count, int)
+            or count < 0
+        ):
+            raise ValueError(
+                "project_update_collision_batch_count_map_invalid"
+            )
+        if count:
+            projected[key] = count
+    return dict(sorted(projected.items()))
+
+
+def _project_update_collision_batch_commands(
+    *,
+    target: str,
+    materialization_plan_sha256: str,
+) -> list[dict[str, object]]:
+    """Return path-free, ordered manual commands for the supported route."""
+
+    return [
+        {
+            "step": 1,
+            "kind": "repair_plan",
+            "command": (
+                "archive project-bytecode-repair-plan . "
+                f"--target {target} "
+                "--expected-materialization-plan-sha256 "
+                f"{materialization_plan_sha256} "
+                "--dry-run --format json"
+            ),
+        },
+        {
+            "step": 2,
+            "kind": "repair_approval",
+            "command": (
+                "archive project-bytecode-repair . "
+                f"--target {target} "
+                "--expected-materialization-plan-sha256 "
+                f"{materialization_plan_sha256} "
+                "--expected-plan-sha256 <repair-plan-sha256> "
+                "--approve --reviewed-by <reviewer-id> "
+                "--affirm-external-writers-quiescent --format json"
+            ),
+            "requires_values_from_review": [
+                "repair-plan-sha256",
+                "reviewer-id",
+            ],
+        },
+        {
+            "step": 3,
+            "kind": "fresh_update_preview",
+            "command": (
+                "archive project-version-update . "
+                f"--target {target} --dry-run --format json"
+            ),
+        },
+    ]
+
+
+def _project_update_collision_batch_blocked_result(
+    args: argparse.Namespace,
+    blocker_codes: list[str],
+    *,
+    status: str = "blocked",
+) -> dict[str, Any]:
+    target_value = str(getattr(args, "target", "") or "")
+    expected_value = str(
+        getattr(args, "expected_plan_sha256", "") or ""
+    )
+    safe_target = (
+        target_value
+        if PROJECT_UPDATE_COLLISION_TAG_RE.fullmatch(target_value)
+        else None
+    )
+    safe_expected_plan = (
+        expected_value
+        if PROJECT_UPDATE_COLLISION_PLAN_RE.fullmatch(expected_value)
+        else None
+    )
+    safe_codes = list(
+        dict.fromkeys(
+            code
+            for code in blocker_codes
+            if PROJECT_UPDATE_COLLISION_CODE_RE.fullmatch(code)
+        )
+    )
+    return {
+        "ok": False,
+        "dry_run": bool(getattr(args, "dry_run", False)),
+        "schema": PROJECT_UPDATE_COLLISION_BATCH_SCHEMA,
+        "lifecycle_action": "project_version_update_collision",
+        "status": status,
+        "action": "inspect-all",
+        "mode": "dry_run",
+        "target": {"tag": safe_target},
+        "plan": {
+            "expected_plan_sha256": safe_expected_plan,
+            "materialization_plan_sha256": None,
+            "matches_expected": False,
+        },
+        "summary": {
+            "requested_entry_count": 0,
+            "inspected_entry_count": 0,
+            "entry_kind_counts": {},
+            "runtime_shadow_kind_counts": {},
+            "remediation_counts": {},
+        },
+        "remediation": {
+            "route": None,
+            "route_eligible": False,
+            "collision_entry_count": 0,
+            "derived_bytecode_file_count": 0,
+            "bytecode_cache_directory_count": 0,
+            "unsupported_entry_count": 0,
+            "commands": [],
+            "commands_use_inspection_root_as_dot": True,
+            "commands_must_run_separately": True,
+            "automatic_update_retry": False,
+        },
+        "write_boundary": {
+            "writes": False,
+            "deletes": False,
+            "overwrites": False,
+            "update_retried": False,
+            "repair_attempted": False,
+        },
+        "blocker_codes": safe_codes,
+        "blockers": [f"Inspection blocked: {code}." for code in safe_codes],
+        "privacy_guards": {
+            "local_absolute_paths_echoed": False,
+            "local_relative_paths_echoed": False,
+            "private_entry_names_echoed": False,
+            "private_bytes_echoed": False,
+            "private_byte_hashes_echoed": False,
+            "raw_errors_echoed": False,
+            "provider_or_network_called": False,
+        },
+    }
+
+
+def _project_update_collision_batch_project_result(
+    args: argparse.Namespace,
+    service_result: object,
+) -> dict[str, Any]:
+    """Allowlist one public batch result before CLI serialization."""
+
+    if not isinstance(service_result, dict):
+        raise ValueError("project_update_collision_batch_result_invalid")
+    service_ok = service_result.get("ok")
+    if type(service_ok) is not bool:
+        raise ValueError("project_update_collision_batch_result_invalid")
+    status = service_result.get("status")
+    if status not in {
+        "blocked",
+        "inspected",
+        "inspected_remediation_unavailable",
+    }:
+        raise ValueError("project_update_collision_batch_result_invalid")
+    summary = service_result.get("summary")
+    remediation = service_result.get("remediation")
+    plan = service_result.get("plan")
+    if not all(
+        isinstance(value, dict)
+        for value in (summary, remediation, plan)
+    ):
+        raise ValueError("project_update_collision_batch_result_invalid")
+
+    requested_count = summary.get("requested_entry_count")
+    inspected_count = summary.get("inspected_entry_count")
+    if any(
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or value < 0
+        for value in (requested_count, inspected_count)
+    ):
+        raise ValueError("project_update_collision_batch_result_invalid")
+    entry_kind_counts = _project_update_collision_batch_count_map(
+        summary.get("entry_kind_counts"),
+        allowed_keys=PROJECT_UPDATE_COLLISION_BATCH_ENTRY_KINDS,
+    )
+    runtime_kind_counts = _project_update_collision_batch_count_map(
+        summary.get("runtime_shadow_kind_counts"),
+        allowed_keys=PROJECT_UPDATE_COLLISION_BATCH_RUNTIME_KINDS,
+    )
+    remediation_counts = _project_update_collision_batch_count_map(
+        summary.get("remediation_counts"),
+        allowed_keys=PROJECT_UPDATE_COLLISION_BATCH_REMEDIATION_KINDS,
+    )
+    if (
+        sum(entry_kind_counts.values()) != inspected_count
+        or sum(runtime_kind_counts.values()) != inspected_count
+    ):
+        raise ValueError("project_update_collision_batch_result_invalid")
+
+    expected_plan = str(args.expected_plan_sha256)
+    current_plan_value = plan.get("materialization_plan_sha256")
+    current_plan = (
+        current_plan_value
+        if isinstance(current_plan_value, str)
+        and PROJECT_UPDATE_COLLISION_PLAN_RE.fullmatch(current_plan_value)
+        else None
+    )
+    plan_matches = bool(
+        plan.get("matches_expected") is True
+        and current_plan == expected_plan
+    )
+    route = remediation.get("route")
+    route_eligible = bool(
+        service_ok
+        and status == "inspected"
+        and route == "project_bytecode_repair"
+        and service_result.get(
+            "project_bytecode_repair_route_eligible"
+        )
+        is True
+        and service_result.get("remediation_available") is True
+        and remediation.get("route_eligible") is True
+        and remediation.get("exact_collision_set_covered") is True
+        and remediation.get("all_requested_entries_supported") is True
+        and remediation.get("route_set_counts_complete") is True
+        and plan_matches
+        and requested_count == inspected_count
+        and inspected_count > 0
+    )
+    if route not in {None, "project_bytecode_repair"}:
+        raise ValueError("project_update_collision_batch_result_invalid")
+    if route == "project_bytecode_repair" and not route_eligible:
+        raise ValueError("project_update_collision_batch_result_invalid")
+
+    def safe_remediation_count(key: str) -> int:
+        value = remediation.get(key)
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or value < 0
+        ):
+            raise ValueError(
+                "project_update_collision_batch_result_invalid"
+            )
+        return value
+
+    collision_entry_count = safe_remediation_count(
+        "collision_entry_count"
+    )
+    derived_file_count = safe_remediation_count(
+        "derived_bytecode_file_count"
+    )
+    cache_directory_count = safe_remediation_count(
+        "bytecode_cache_directory_count"
+    )
+    unsupported_count = safe_remediation_count("unsupported_entry_count")
+    if collision_entry_count != inspected_count:
+        raise ValueError("project_update_collision_batch_result_invalid")
+    if route_eligible and (
+        derived_file_count + cache_directory_count != inspected_count
+        or unsupported_count != 0
+    ):
+        raise ValueError("project_update_collision_batch_result_invalid")
+
+    raw_codes = service_result.get("blocker_codes")
+    if not isinstance(raw_codes, list):
+        raise ValueError("project_update_collision_batch_result_invalid")
+    blocker_codes = list(
+        dict.fromkeys(
+            code
+            for code in raw_codes[:32]
+            if isinstance(code, str)
+            and PROJECT_UPDATE_COLLISION_CODE_RE.fullmatch(code)
+        )
+    )
+    if not service_ok and not blocker_codes:
+        blocker_codes = ["project_update_collision_batch_blocked"]
+    commands = (
+        _project_update_collision_batch_commands(
+            target=str(args.target),
+            materialization_plan_sha256=expected_plan,
+        )
+        if route_eligible
+        else []
+    )
+    return {
+        "ok": service_ok,
+        "dry_run": True,
+        "schema": PROJECT_UPDATE_COLLISION_BATCH_SCHEMA,
+        "lifecycle_action": "project_version_update_collision",
+        "status": status,
+        "action": "inspect-all",
+        "mode": "dry_run",
+        "target": {"tag": str(args.target)},
+        "plan": {
+            "expected_plan_sha256": expected_plan,
+            "materialization_plan_sha256": current_plan,
+            "matches_expected": plan_matches,
+        },
+        "summary": {
+            "requested_entry_count": requested_count,
+            "inspected_entry_count": inspected_count,
+            "entry_kind_counts": entry_kind_counts,
+            "runtime_shadow_kind_counts": runtime_kind_counts,
+            "remediation_counts": remediation_counts,
+        },
+        "remediation": {
+            "route": "project_bytecode_repair" if route_eligible else None,
+            "route_eligible": route_eligible,
+            "collision_entry_count": collision_entry_count,
+            "derived_bytecode_file_count": derived_file_count,
+            "bytecode_cache_directory_count": cache_directory_count,
+            "unsupported_entry_count": unsupported_count,
+            "commands": commands,
+            "commands_use_inspection_root_as_dot": True,
+            "commands_must_run_separately": True,
+            "automatic_update_retry": False,
+        },
+        "write_boundary": {
+            "writes": False,
+            "deletes": False,
+            "overwrites": False,
+            "update_retried": False,
+            "repair_attempted": False,
+        },
+        "blocker_codes": blocker_codes,
+        "blockers": [
+            f"Inspection blocked: {code}." for code in blocker_codes
+        ],
+        "privacy_guards": {
+            "local_absolute_paths_echoed": False,
+            "local_relative_paths_echoed": False,
+            "private_entry_names_echoed": False,
+            "private_bytes_echoed": False,
+            "private_byte_hashes_echoed": False,
+            "raw_errors_echoed": False,
+            "provider_or_network_called": False,
+        },
+    }
+
+
+def _print_project_update_collision_batch_text(
+    result: dict[str, Any],
+) -> None:
+    summary = result["summary"]
+    remediation = result["remediation"]
+    print(
+        "Project version-update collisions: "
+        f"{result.get('status') or 'blocked'}"
+    )
+    print(f"Inspected entries: {summary['inspected_entry_count']}")
+    for label, counts in (
+        ("Entry kinds", summary["entry_kind_counts"]),
+        ("Runtime shadow kinds", summary["runtime_shadow_kind_counts"]),
+    ):
+        rendered = ", ".join(
+            f"{kind}={count}" for kind, count in counts.items()
+        )
+        print(f"{label}: {rendered or 'none'}")
+    print(f"Remediation route: {remediation['route'] or 'unavailable'}")
+    for item in remediation["commands"]:
+        print(f"STEP {item['step']} {item['kind']}: {item['command']}")
+    if remediation["commands"]:
+        print(
+            "NOTE: In these commands, '.' means the inspected project root. "
+            "Run the three commands separately, review the repair plan before "
+            "approval, and never automatically retry an old update approval."
+        )
+    for code in result["blocker_codes"]:
+        print(f"BLOCKED: {code}")
+    print("Writes: none")
+
+
+def _command_project_update_collision_inspect_all(
+    args: argparse.Namespace,
+) -> int:
+    cli_blockers: list[str] = []
+    if PROJECT_UPDATE_COLLISION_TAG_RE.fullmatch(str(args.target)) is None:
+        cli_blockers.append("project_update_collision_target_invalid")
+    if (
+        PROJECT_UPDATE_COLLISION_PLAN_RE.fullmatch(
+            str(args.expected_plan_sha256 or "")
+        )
+        is None
+    ):
+        cli_blockers.append(
+            "project_update_collision_requires_expected_plan"
+        )
+    if getattr(args, "entry_ref", None) is not None:
+        cli_blockers.append(
+            "project_update_collision_inspect_all_derives_entry_refs"
+        )
+    if not bool(args.dry_run):
+        cli_blockers.append(
+            "project_update_collision_inspect_all_requires_dry_run"
+        )
+    if bool(args.reveal_target_relative_path):
+        cli_blockers.append(
+            "project_update_collision_inspect_all_path_reveal_forbidden"
+        )
+    if cli_blockers:
+        result = _project_update_collision_batch_blocked_result(
+            args,
+            cli_blockers,
+        )
+    else:
+        service = getattr(
+            archive_services,
+            "wom_kit_project_version_update_collision_inspect_batch",
+            None,
+        )
+        if not callable(service):
+            result = _project_update_collision_batch_blocked_result(
+                args,
+                ["project_update_collision_batch_service_unavailable"],
+                status="deferred_not_available",
+            )
+        else:
+            try:
+                service_result = service(
+                    Path(args.inspection_root),
+                    target=args.target,
+                    expected_plan_sha256=args.expected_plan_sha256,
+                )
+                result = _project_update_collision_batch_project_result(
+                    args,
+                    service_result,
+                )
+            except BaseException:
+                result = _project_update_collision_batch_blocked_result(
+                    args,
+                    ["project_update_collision_batch_command_failed"],
+                    status="failed_safely",
+                )
+    if args.format == "json":
+        print_json(result)
+    else:
+        _print_project_update_collision_batch_text(result)
+    return 0 if result.get("ok") else 1
 
 
 def _project_update_collision_blocked_result(
@@ -4870,6 +5347,8 @@ def _project_update_collision_cli_blockers(
 def command_project_version_update_collision(
     args: argparse.Namespace,
 ) -> int:
+    if args.action == "inspect-all":
+        return _command_project_update_collision_inspect_all(args)
     cli_blockers = _project_update_collision_cli_blockers(args)
     if cli_blockers:
         result = _project_update_collision_blocked_result(args, cli_blockers)
@@ -17856,6 +18335,10 @@ def command_project_bytecode_repair_plan(args: argparse.Namespace) -> int:
         result = completion_workflows.project_bytecode_repair_plan(
             Path(args.project_root),
             max_files=args.max_files,
+            target=args.target,
+            expected_materialization_plan_sha256=(
+                args.expected_materialization_plan_sha256
+            ),
         )
     except Exception:
         print("project-bytecode-repair-plan failed safely.", file=sys.stderr)
@@ -17867,6 +18350,14 @@ def command_project_bytecode_repair_plan(args: argparse.Namespace) -> int:
         print(f"Project bytecode repair: {result.get('state') or '-'}")
         print(f"- files: {summary.get('bytecode_file_count', 0)}")
         print(f"- bytes: {summary.get('bytecode_total_bytes', 0)}")
+        print(
+            "- cache directories: "
+            f"{summary.get('pycache_directory_count', 0)}"
+        )
+        print(
+            "- collision binding verified: "
+            f"{summary.get('collision_binding_verified', False)}"
+        )
         print(f"- plan sha256: {summary.get('plan_sha256') or '-'}")
         for blocker in result.get("blockers", []):
             print(f"BLOCKED: {blocker}")
@@ -17883,20 +18374,66 @@ def command_project_bytecode_repair(args: argparse.Namespace) -> int:
             max_files=args.max_files,
             expected_plan_sha256=args.expected_plan_sha256,
             reviewed_by=args.reviewed_by,
+            affirm_external_writers_quiescent=bool(
+                args.affirm_external_writers_quiescent
+            ),
+            target=args.target,
+            expected_materialization_plan_sha256=(
+                args.expected_materialization_plan_sha256
+            ),
         )
     except Exception:
-        print("project-bytecode-repair failed safely.", file=sys.stderr)
-        return 1
+        result = {
+            "ok": False,
+            "state": "recovery_required",
+            "dry_run": False,
+            "approved": True,
+            "outcome_verified": False,
+            "lifecycle_action": "project_bytecode_repair",
+            "summary": {
+                "removed_count": None,
+                "removed_empty_pycache_directory_count": None,
+                "source_files_modified": None,
+                "receipt_path": None,
+                "recovery": "run_fresh_update_preview_and_reconcile",
+            },
+            "blockers": ["project_bytecode_outcome_unverified"],
+            "warnings": [],
+            "would_change": [],
+            "files_written": [],
+            "writes_may_have_occurred": True,
+            "next_safe_actions": [
+                "Preserve the private repair intent and project update lock state for review.",
+                "Run a fresh project-version-update --dry-run before any new repair or update approval; never auto-retry.",
+            ],
+            "privacy_guards": {
+                "project_absolute_path_echoed": False,
+                "bytecode_filenames_echoed": False,
+                "private_bytes_echoed": False,
+                "raw_errors_echoed": False,
+                "writes": None,
+            },
+        }
     if args.format == "json":
         print_json(result)
     else:
         summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
         print(f"Project bytecode repair: {result.get('state') or '-'}")
         print(f"- removed files: {summary.get('removed_count', 0)}")
+        print(
+            "- removed cache directories: "
+            f"{summary.get('removed_empty_pycache_directory_count', 0)}"
+        )
         print(f"- source files modified: {summary.get('source_files_modified')}")
+        print(
+            "- writes may have occurred: "
+            f"{result.get('writes_may_have_occurred', False)}"
+        )
         print(f"- receipt: {summary.get('receipt_path') or '-'}")
         for blocker in result.get("blockers", []):
             print(f"BLOCKED: {blocker}")
+        for next_action in result.get("next_safe_actions", []):
+            print(f"NEXT: {next_action}")
     return 0 if result.get("ok") else 1
 
 
@@ -22948,8 +23485,8 @@ def build_parser() -> argparse.ArgumentParser:
     project_version_update_collision = subcommands.add_parser(
         "project-version-update-collision",
         help=(
-            "Inspect one opaque project-update collision or separately "
-            "preview/approve preservation-only relocation."
+            "Inspect one opaque project-update collision, inspect the complete "
+            "batch, or separately preview/approve preservation-only relocation."
         ),
     )
     project_version_update_collision.add_argument(
@@ -22963,14 +23500,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     project_version_update_collision.add_argument(
         "--entry-ref",
-        required=True,
-        help="Bounded opaque ordinal such as update-entry:0001; never substitute a local path.",
+        help=(
+            "Required for inspect and preserve-relocate: one bounded opaque "
+            "ordinal such as update-entry:0001. Omit for inspect-all, which "
+            "derives the complete set from the bound plan."
+        ),
     )
     project_version_update_collision.add_argument(
         "--action",
-        choices=["inspect", "preserve-relocate"],
+        choices=["inspect", "inspect-all", "preserve-relocate"],
         required=True,
-        help="Read one collision or separately preserve-relocate an eligible regular entry.",
+        help=(
+            "Read one collision, classify the complete bound collision set, "
+            "or separately preserve-relocate one eligible regular entry."
+        ),
     )
     project_version_update_collision_mode = (
         project_version_update_collision.add_mutually_exclusive_group(
@@ -22980,7 +23523,10 @@ def build_parser() -> argparse.ArgumentParser:
     project_version_update_collision_mode.add_argument(
         "--dry-run",
         action="store_true",
-        help="Required for inspect; previews relocation without writes.",
+        help=(
+            "Required for inspect and inspect-all; previews relocation "
+            "without writes."
+        ),
     )
     project_version_update_collision_mode.add_argument(
         "--approve",
@@ -22989,7 +23535,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     project_version_update_collision.add_argument(
         "--expected-plan-sha256",
-        help="Exact fresh materialization plan digest required for inspect and preserve-relocate.",
+        help=(
+            "Exact fresh materialization plan digest required for inspect, "
+            "inspect-all, and preserve-relocate."
+        ),
     )
     project_version_update_collision.add_argument(
         "--reviewed-by",
@@ -29013,6 +29562,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     project_bytecode_repair_plan.add_argument("project_root", help="Project or mounted archive root.")
     project_bytecode_repair_plan.add_argument("--max-files", type=int, default=completion_workflows.PROJECT_BYTECODE_REPAIR_MAX_FILES)
+    project_bytecode_repair_plan.add_argument(
+        "--target",
+        help="Optional exact stable release tag from collision inspect-all.",
+    )
+    project_bytecode_repair_plan.add_argument(
+        "--expected-materialization-plan-sha256",
+        help="Required together with --target for exact collision-set binding.",
+    )
     project_bytecode_repair_plan.add_argument("--dry-run", action="store_true", help="Required. Write nothing.")
     project_bytecode_repair_plan.add_argument("--format", choices=["text", "json"], default="text")
     project_bytecode_repair_plan.set_defaults(func=command_project_bytecode_repair_plan)
@@ -29024,8 +29581,24 @@ def build_parser() -> argparse.ArgumentParser:
     project_bytecode_repair.add_argument("project_root", help="Project or mounted archive root.")
     project_bytecode_repair.add_argument("--max-files", type=int, default=completion_workflows.PROJECT_BYTECODE_REPAIR_MAX_FILES)
     project_bytecode_repair.add_argument("--expected-plan-sha256", required=True)
+    project_bytecode_repair.add_argument(
+        "--target",
+        help="Exact stable release tag used by the bound repair plan.",
+    )
+    project_bytecode_repair.add_argument(
+        "--expected-materialization-plan-sha256",
+        help="Materialization plan digest used by the bound repair plan.",
+    )
     project_bytecode_repair.add_argument("--approve", action="store_true")
     project_bytecode_repair.add_argument("--reviewed-by", required=True)
+    project_bytecode_repair.add_argument(
+        "--affirm-external-writers-quiescent",
+        action="store_true",
+        help=(
+            "Required for approval: editors, sync, backup, and Git writers "
+            "remain paused while derived bytecode is revalidated and removed."
+        ),
+    )
     project_bytecode_repair.add_argument("--format", choices=["text", "json"], default="text")
     project_bytecode_repair.set_defaults(func=command_project_bytecode_repair)
 

@@ -32,10 +32,10 @@ wom-kit/docs/releases/에만 쌓고, baseline 사다리와 tag 목록을 여기�
 현재 공개 기준:
 
 ```text
-v0.3.315
+v0.3.316
 ```
 
-이전 공개 기준: v0.3.314.
+이전 공개 기준: v0.3.315.
 
 전체 릴리스 이력은 [CHANGELOG.md](CHANGELOG.md)와 [wom-kit/docs/releases/](wom-kit/docs/releases/)를 보세요.
 
@@ -54,7 +54,7 @@ Roadmap 요약: `v0.1.x`는 아이디어/프로토콜 언어 라인, `v0.2.x`는
 파일이 실제 공개되었다는 증거가 되지는 않습니다.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.315/wom_kit-0.3.315-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.316/wom_kit-0.3.316-py3-none-any.whl"
 archive --version
 ```
 
@@ -86,7 +86,7 @@ archive runtime-skill-install --dry-run --format json
 - Windows 기본 마스킹 창과 별도 자식 프로세스를 쓰는 자격증명 수령, 인증된 수명주기, 그리고 Letter 118의 577건+43건 전체 검토 목록을 위한 승인형 Notion 복구를 제공합니다. 미리보기는 비밀값을 읽거나 provider를 호출하거나 파일을 쓰지 않고, 승인된 제한 범위만 정확한 Markdown objet와 재개 가능한 증거로 보존합니다. PAT를 명령 인자·일반 stdin·환경 변수로 받거나 워크스페이스 전체를 검색하거나 Notion에 쓰거나 canonical zet을 자동 수정하지 않습니다. [Letter 118·119 가이드](wom-kit/docs/letter118-119-credential-continuity-and-notion-page-recovery.md)를 보세요.
 - 보호된 search, 구조화된 `view-zets`, mint 계획이 하나의 fail-closed current-index 권한을 공유합니다. `mint-zet --progress`는 stdout을 최종 결과 하나에만 쓰면서 내용 없는 시작·heartbeat 근거를 stderr로 보내고, 별도의 operator-feedback 본문 companion은 외부 제출이나 실제 보관함 복구를 주장하지 않은 채 정확한 6개 섹션 비공개 요청, digest-bound 사람 승인, lifecycle 검사를 제공합니다. [Letter 120·123 가이드](wom-kit/docs/letter120-123-index-lifecycle-and-feedback-body.md)를 보세요.
 - 모든 새 AI-assisted·AI-generated 초안에 비공개 source-fidelity gate를 적용합니다. manifest에 등록된 content-addressed 원문, `verbatim`·`faithful_summary`·`sanitized_derivative` 중 하나, 미리보기 해시, 사람의 명시적 승인 replay가 있어야 파일을 씁니다. `private_self` verbatim은 개인 원문을 보존하지만 자격증명 비밀값은 차단하며, AI provenance를 human 경로로 낮춰 우회할 수 없습니다. 민팅은 비공개 receipt를 다시 검증하고 audience 표시는 공유나 내보내기 권한이 아닙니다. [원문 충실도와 비공개 verbatim 보존](wom-kit/docs/source-fidelity-and-private-verbatim.md)을 보세요.
-- v0.3.315 업데이트·짝지은 캡처 복구를 제공합니다. 긴 `project-version-update`·`index`·`index-health`는 제한된 output 복구 계약을 유지하고, 로컬에 있는 update target은 미리보기와 승인에서 같은 materialization planner를 실행합니다. 정확한 opaque 충돌 ref는 먼저 검사하고, 아주 좁게 허용된 ignored 일반 파일 하나만 별도 승인으로 덮어쓰기와 자동 updater 재시도 없이 보존할 수 있습니다. `objet-capture-batch`는 검토된 paired derived-text 필드를 실제 캡처까지 전달하고 원본과 파생 텍스트의 requested·written/ready·skipped·blocked 수를 따로 증명합니다. [Project Version Update](wom-kit/docs/project-version-update.md), [Derived Text Capture](wom-kit/docs/derived-text.md), [v0.3.315 릴리스 노트](wom-kit/docs/releases/v0.3.315.md)를 보세요.
+- v0.3.316 프로젝트 업데이트 캐시 복구를 제공합니다. 여러 Python 캐시 충돌 때문에 업데이트가 멈추면 `project-version-update-collision --action inspect-all`이 하나의 정확한 계획으로 전체 opaque 충돌 집합을 분류합니다. 전부 지원되는 캐시인 정확한 집합만 별도로 검토한 `project-bytecode-repair`로 이어지며, 복구 뒤에는 새 업데이트 미리보기와 별도 업데이트 승인이 필요합니다. 별도 UI를 추가하지 않고 비공개 경로를 추측하거나 사람이 작성한 원본을 지우거나 target을 fetch하거나 updater를 자동 재시도하지 않습니다. [Project Version Update](wom-kit/docs/project-version-update.md), [업그레이드 가이드](UPGRADE.ko.md), [v0.3.316 릴리스 노트](wom-kit/docs/releases/v0.3.316.md)를 보세요.
 - 고정된 archive 소유 scratch, staging, draft, workpack, generated-index, local content-addressed object 표면을 위한 제한된 읽기 전용 artifact lifecycle inventory. root별 독립 coverage, 내용 없는 안정 review ref, 엄격한 manifest 후보 대조, 삭제를 추론하지 않는 만료 검토, 비정본 in-root 원본 저장소의 존재만 확인하는 보호 경계를 제공합니다.
 - 사람이 선택한 이벤트 anchor와 member 집합을 먼저 검증한 뒤, 정확한 해시에 묶인 `facets.activity_group` 추가와 제거를 서로 분리된 사람 승인·잠금·이전 상태 보존·journal·영수증 기반 CLI writer로 적용하고 각각 별도 승인 복구까지 제공하는 workflow. 추가와 제거는 하나의 전역 writer 잠금과 제한된 두 root 증거 검사를 공유하지만 요청·journal·영수증·복구 계약은 분리되며, 제거의 `already_absent` 항목은 변경 아티팩트에서 제외됩니다. 멤버십을 추론하거나 MCP writer를 제공하지 않습니다.
 - 새 Notion JSON/YAML manifest 항목의 기본 제목이 식별자 모양일 때만, 같은 항목의 정확한 소문자 top-level `index` 문자열을 기존 제목·비공개 정보 안전 검사를 통과한 경우 새 inbox 초안의 제목으로 사용하는 외부 import 보완. 사람이 쓴 일반 제목은 항상 우선하며 기존 zet는 바꾸지 않습니다.
@@ -410,7 +410,7 @@ WOM, `zettel-kasten`, `zet`, `ZET`는 버전이 있는 protocol family로 관리
 Release tag는 compatibility checkpoint입니다.
 
 ```text
-v0.3.315 (현재 checkpoint)
+v0.3.316 (현재 checkpoint)
 ```
 
 `v0.2.5` 이후의 공개 릴리스에는 compatibility checkpoint tag가 붙습니다. 전체

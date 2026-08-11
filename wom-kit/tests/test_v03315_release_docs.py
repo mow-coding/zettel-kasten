@@ -1,10 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-import json
 import unittest
-
-from wom_kit import __version__
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -29,25 +26,11 @@ SKILL = KIT / "templates" / "ai-runtime" / "wom-archive" / "SKILL.md"
 
 
 class V03315ReleaseDocsTests(unittest.TestCase):
-    def test_version_and_current_packaged_release_are_synchronized(self) -> None:
-        self.assertEqual(__version__, "0.3.315")
-        self.assertEqual(RELEASE.read_bytes(), PACKAGED_RELEASE.read_bytes())
+    def test_historical_release_stays_source_only(self) -> None:
+        self.assertTrue(RELEASE.is_file())
+        self.assertFalse(PACKAGED_RELEASE.exists())
         self.assertTrue(HISTORICAL_RELEASE.is_file())
         self.assertFalse(HISTORICAL_PACKAGED_RELEASE.exists())
-
-        manifest = json.loads(
-            (
-                KIT
-                / "src"
-                / "wom_kit"
-                / "_resources"
-                / "resource-manifest.json"
-            ).read_text(encoding="utf-8")
-        )
-        self.assertEqual(manifest["version"], "0.3.315")
-        packaged = {row["packaged"] for row in manifest["files"]}
-        self.assertIn("release-notes/v0.3.315.md", packaged)
-        self.assertNotIn("release-notes/v0.3.314.md", packaged)
 
     def test_release_states_exact_collision_and_batch_boundaries(self) -> None:
         text = RELEASE.read_text(encoding="utf-8")
@@ -118,19 +101,8 @@ class V03315ReleaseDocsTests(unittest.TestCase):
         self.assertIn("ready_to_fetch_on_approve", operation)
         self.assertIn("updated_restart_required", operation)
 
-    def test_current_maps_readmes_and_install_guides_point_to_v03315(self) -> None:
+    def test_public_history_still_points_to_v03315(self) -> None:
         paths = (
-            ROOT / "README.md",
-            ROOT / "README.ko.md",
-            ROOT / "UPGRADE.md",
-            ROOT / "UPGRADE.ko.md",
-            KIT / "README.md",
-            KIT / "cli" / "README.md",
-            KIT / "docs" / "python-tool-install.md",
-            KIT / "docs" / "python-tool-install.ko.md",
-            KIT / "docs" / "runtime-canonical-entrypoints.md",
-            KIT / "docs" / "version-truth-source.md",
-            KIT / "docs" / "ai-command-path-routing.md",
             KIT / "docs" / "public-documentation-map.md",
             KIT / "docs" / "public-documentation-map.ko.md",
         )
@@ -138,12 +110,6 @@ class V03315ReleaseDocsTests(unittest.TestCase):
             with self.subTest(document=path.name):
                 text = path.read_text(encoding="utf-8")
                 self.assertIn("0.3.315", text)
-
-        install = (KIT / "docs" / "python-tool-install.md").read_text(
-            encoding="utf-8"
-        )
-        self.assertIn("wom_kit-0.3.315-py3-none-any.whl", install)
-        self.assertIn("installed v0.3.314 client cannot use", install)
 
     def test_runtime_skill_is_bounded_and_routes_both_recoveries(self) -> None:
         text = SKILL.read_text(encoding="utf-8")

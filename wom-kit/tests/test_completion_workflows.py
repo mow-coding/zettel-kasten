@@ -7087,6 +7087,7 @@ class CompletionWorkflowTests(unittest.TestCase):
                 max_files=100,
                 expected_plan_sha256=plan["summary"]["plan_sha256"],
                 reviewed_by="person:test",
+                affirm_external_writers_quiescent=True,
             )
             self.assertTrue(repaired["ok"], repaired)
             self.assertFalse(bytecode.exists())
