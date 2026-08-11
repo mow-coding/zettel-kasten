@@ -7540,7 +7540,7 @@ class ArchiveCliTests(unittest.TestCase):
                 ),
             )
 
-    def test_project_version_update_partial_materialization_failure_preserves_lock_without_blind_restore(
+    def test_project_version_update_partial_materialization_failure_reports_verified_no_mutation(
         self,
     ) -> None:
         if shutil.which("git") is None:
@@ -7576,6 +7576,10 @@ class ArchiveCliTests(unittest.TestCase):
                     mirror / "installed-version.txt",
                 )
             }
+            before_git_snapshot = (
+                archive_services.wom_kit_project_update_git_snapshot(mirror)
+            )
+            self.assertIsNotNone(before_git_snapshot)
             materialize_calls = 0
             real_materialize_commit = (
                 archive_services.wom_kit_project_update_materialize_commit
@@ -7588,6 +7592,8 @@ class ArchiveCliTests(unittest.TestCase):
                 attach_branch: str | None = None,
                 dry_run: bool = False,
                 directory_guard: object = None,
+                project_root: Path | None = None,
+                expected_source_snapshot: dict[str, Any] | None = None,
             ) -> bool:
                 nonlocal materialize_calls
                 if dry_run:
@@ -7597,6 +7603,8 @@ class ArchiveCliTests(unittest.TestCase):
                         attach_branch=attach_branch,
                         dry_run=True,
                         directory_guard=directory_guard,
+                        project_root=project_root,
+                        expected_source_snapshot=expected_source_snapshot,
                     )
                 materialize_calls += 1
                 if materialize_calls == 1:
@@ -7606,6 +7614,8 @@ class ArchiveCliTests(unittest.TestCase):
                     target_commit,
                     attach_branch=attach_branch,
                     directory_guard=directory_guard,
+                    project_root=project_root,
+                    expected_source_snapshot=expected_source_snapshot,
                 )
 
             with patch.object(
@@ -7625,13 +7635,12 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertFalse(result["ok"])
             self.assertEqual(
                 result["status"],
-                "failed_rollback_incomplete",
+                "failed_before_mutation",
             )
             self.assertEqual(
                 result["blockers"],
                 [
-                    "The project version update failed and rollback could not "
-                    "be fully verified; the lock was preserved."
+                    "The project version update failed before local mutation."
                 ],
             )
             self.assertTrue(
@@ -7652,21 +7661,28 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertFalse(
                 result["source_mirror"]["source_checkout_is_verified_target"]
             )
+            self.assertFalse(
+                result["source_mirror"]["source_checkout_change_attempted"]
+            )
             self.assertEqual(
                 result["source_mirror"]["checkout_mode_after_result"],
                 "unchanged",
             )
-            self.assertTrue(result["rollback"]["attempted"])
-            self.assertFalse(result["rollback"]["succeeded"])
-            self.assertFalse(result["rollback"]["source_restored"])
+            self.assertFalse(result["rollback"]["attempted"])
+            self.assertTrue(result["rollback"]["succeeded"])
+            self.assertTrue(result["rollback"]["source_restored"])
             self.assertTrue(result["rollback"]["pins_restored"])
-            self.assertFalse(result["rollback"]["lock_removed"])
+            self.assertTrue(result["rollback"]["lock_removed"])
             self.assertFalse(result["receipt"]["written"])
             self.assertEqual(result["files_written"], [])
             self.assertFalse(result["runtime"]["restart_required"])
             self.assertEqual(
                 self.git_fixture_command(mirror, "rev-parse", "HEAD"),
                 fixture["old_commit"],
+            )
+            self.assertEqual(
+                archive_services.wom_kit_project_update_git_snapshot(mirror),
+                before_git_snapshot,
             )
             self.assertEqual(
                 {
@@ -7685,7 +7701,7 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertFalse(
                 (fixture["metadata_root"] / "receipts" / "version-updates").exists()
             )
-            self.assertTrue(
+            self.assertFalse(
                 (fixture["metadata_root"] / "version-update.lock").exists()
             )
 
@@ -10549,6 +10565,8 @@ class ArchiveCliTests(unittest.TestCase):
                 attach_branch: str | None = None,
                 dry_run: bool = False,
                 directory_guard: object = None,
+                project_root: Path | None = None,
+                expected_source_snapshot: dict[str, Any] | None = None,
             ) -> bool:
                 materialize_calls.append((target_commit, dry_run))
                 return real_materialize(
@@ -10557,6 +10575,8 @@ class ArchiveCliTests(unittest.TestCase):
                     attach_branch=attach_branch,
                     dry_run=dry_run,
                     directory_guard=directory_guard,
+                    project_root=project_root,
+                    expected_source_snapshot=expected_source_snapshot,
                 )
 
             def change_config_then_fail(

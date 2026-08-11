@@ -10,12 +10,12 @@ It is not a website, SaaS app, dashboard, or visual note-taking product. The int
 
 ## Install The Command-Line Tool
 
-The exact v0.3.314 GitHub Release, when present, uses the self-contained wheel
+The exact v0.3.315 GitHub Release, when present, uses the self-contained wheel
 below. Confirm that the release exists and lists the wheel before installing
 it. The versioned URL alone is not proof that the asset is available.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.314/wom_kit-0.3.314-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.315/wom_kit-0.3.315-py3-none-any.whl"
 archive --version
 ```
 
@@ -212,6 +212,23 @@ broadly, write to Notion, or mutate canonical zets. See
 and [`docs/releases/v0.3.311.md`](docs/releases/v0.3.311.md). Source tests do
 not prove live credential adoption or a completed 620-page recovery; CI, tag,
 Release, wheel, fresh installation, and human execution remain separate gates.
+
+v0.3.315 makes project-update preview and approval use the same exact target
+materialization plan. An unexpected destination collision now blocks with a
+stable item reference and digest; a separate inspect and preserve-relocate
+review can move the current private bytes aside without deleting or
+overwriting them, after which the updater needs a fresh dry-run and a separate
+update approval. The binding is unauthenticated private-state internal
+consistency, not a MAC, signature, ACL, or general same-user tamper defense.
+The same release fixes paired multi-item objet capture so reviewed derived-text
+rows are preserved and completed with separate original and derived outcome
+partitions plus attempt-bound receipts. Interrupted v0.3.314 batches can be
+reconciled without copying already captured originals again. See
+[`docs/project-version-update.md`](docs/project-version-update.md),
+[`docs/derived-text.md`](docs/derived-text.md), and
+[`docs/releases/v0.3.315.md`](docs/releases/v0.3.315.md). Local source tests do
+not prove merge, CI, tag, Release, wheel, fresh install, real-archive use, or
+human acceptance.
 
 v0.3.314 closes the Letter 126 long-operation and generated-index recovery
 gaps. Project target-tree materialization uses bounded Git batch streams
@@ -476,6 +493,9 @@ version
 project-version-update --dry-run --target vX.Y.Z
 project-version-update --approve --target vX.Y.Z --reviewed-by <actor> --affirm-external-writers-quiescent
   Preview locally, then on Windows approval-gate one configured-origin fetch, exact annotated-tag/main-ancestry/version verification, manual complete commit-tree materialization, recognized pin alignment, and an O_EXCL v0.2 project receipt. Windows holds every source/.git/pin/lock/receipt directory path without FILE_SHARE_DELETE; missing receipt parents are created and held in order. Raw worktree/index/flag snapshots avoid git status and filters, but they are checkpointed detection rather than atomic file CAS. After dry-run, keep external editors, sync/backup clients, and other Git writers quiescent for the whole transaction and pass `--affirm-external-writers-quiescent` with the reviewer on every approval. Results say `external_writer_quiescence_required: true`, `external_writer_quiescence_affirmed: true`, `atomic_file_compare_and_swap: false`, and `checkpointed_change_detection: true`; the v0.2 receipt records `external_writer_quiescence: {affirmed: true, scope: complete_project_version_update_transaction}`. The config digest binds effective Git config plus exactly GIT_ASKPASS/GIT_PROXY_COMMAND/GIT_SSH/GIT_SSH_COMMAND; the selected Git executable, PATH, HTTP_PROXY, HTTPS_PROXY, SSL_CERT_FILE, CURL_CA_BUNDLE, SSH_AUTH_SOCK, HOME, and other non-GIT toolchain/transport environment are unbound trusted-stable prerequisites. Config drift immediately before rollback skips restore and preserves the lock. POSIX dry-run remains preview-only and POSIX approval blocks. Runtime scans stream under caps, and ignored `wom-kit/src` shadows block before mutation. v0.3.215 is the bootstrap boundary.
+
+project-version-update-collision --action inspect|preserve-relocate --dry-run
+  Inspect one blocked v0.3.315 target collision by its opaque item reference and materialization-plan digest. `preserve-relocate` has its own reviewed approval and moves the current private bytes to a WOM-owned preservation location without deleting, overwriting, or fetching the target. After preservation, run a fresh updater dry-run and approve that new updater plan separately; WOM never retries the updater automatically.
 
 onboard
   Plan or apply first archive setup. Dry-run writes nothing; --approve creates the archive, provider-bindings.yml, and runs strict doctor.

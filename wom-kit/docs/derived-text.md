@@ -1,7 +1,7 @@
 # Derived Text Capture
 
-Status: implemented local CLI; paired transcript intake and BOM-aware encoding since v0.3.159
-Date: 2026-07-03
+Status: implemented local CLI; paired multi-item batch recovery corrected in v0.3.315
+Date: 2026-08-11
 
 Derived text is text produced from a source objet:
 
@@ -141,6 +141,77 @@ APIs, run OCR, run ASR, run parsers, or run LLM vision.
 
 Batch mode reuses the same write path for each item. Approved batch runs may
 write item-level receipts under `receipts/derived-text-capture/`.
+
+## Paired Multi-Item Objet Capture (v0.3.315)
+
+`objet-capture-batch` can carry an already reviewed original/derived pair in
+each request item. In addition to the ordinary `item_id`, `staged_path`, and
+`source_intake_receipt_path`, a paired row supplies:
+
+- `derived_text_staged_path`;
+- `derivation_kind`, `tool_name`, `tool_version`, and `review_status`;
+- optional `model` or `model_name` (never both), `model_version`,
+  `confidence` including explicit null, `language` including explicit null,
+  and `born_digital`.
+
+The request is a closed JSON shape. Duplicate JSON keys, unknown fields,
+missing paired dependencies, and conflicting legacy/current model names block
+the whole request before source bodies are opened. The batch adapter preserves
+all reviewed pairing fields in the exact generated selection instead of
+reducing the row to an original-only item.
+
+```powershell
+archive objet-capture-batch <archive-root> `
+  --manifest <archive-relative-request.json> `
+  --dry-run --format json
+
+archive objet-capture-batch <archive-root> `
+  --manifest <same-request.json> `
+  --expected-plan-sha256 <exact-plan-sha256> `
+  --approve --reviewed-by <actor> --format json
+```
+
+The plan binds both `request_sha256` and `selection_sha256`. Apply accepts the
+lower result only when it still matches the reviewed archive, selection id and
+digest, exact item set, item shapes, receipt route, and exact `files_written`
+delta. Request and staged text reads use stable, regular-file, no-follow reads
+with a 64 MiB ceiling. A changed identity, size, or exact selection fails
+closed.
+
+Read the original and derived completion partitions separately:
+
+```text
+original_requested = original_written + original_skipped + original_blocked
+derived_requested  = derived_written  + derived_skipped  + derived_blocked
+```
+
+In dry-run, `derived_ready` takes the place of `derived_written`. Text-mode CLI
+output is derived from the actual returned partitions, not plan-time
+expectations. One attempt-specific batch receipt binds the request, selection,
+plan, lower capture receipt, terminal status, partition counts, reviewer, and
+`attempt_sha256`.
+
+Publication observation is tri-state: `verified_exact`, `not_written`, or
+`ambiguous`. Separately, result states include `partial`,
+`evidence_incomplete`, and `recovery_required`, while
+`batch_capture_outcome_unverified` is a blocker code rather than a state. If a
+lower exception or receipt publication ambiguity follows
+possible durable object, manifest, or receipt writes, WOM does not guess what
+happened. It returns fixed `next_safe_actions` such as
+`fresh_dry_run_then_replay`,
+`inspect_selection_collision_then_fresh_dry_run`, or
+`fresh_batch_dry_run_then_reconcile`, and never automatically replays.
+
+### Reconcile an interrupted v0.3.314 pair
+
+Keep the original reviewed request unchanged. Run a fresh v0.3.315 dry-run and
+approve its exact new plan. Existing exact originals converge as skipped while
+missing derived halves can be completed. If the original staging bytes are no
+longer available, read the durable original capture receipts for their source
+object IDs and create a separately reviewed `derive-text capture
+--from-manifest` request. Do not copy originals again merely to obtain those
+IDs. `partial`, `evidence_incomplete`, and `recovery_required` remain review
+states; follow only the safe actions returned for that state.
 
 ## Paired Transcript Intake (v0.3.159)
 

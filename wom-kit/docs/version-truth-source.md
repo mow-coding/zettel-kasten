@@ -1,6 +1,6 @@
 # WOM-kit Version Truth Source
 
-Status: v0.3.314 runtime alignment, bounded project update, and operation recovery
+Status: v0.3.315 runtime alignment, update-preview parity, and collision recovery
 
 Previous checkpoint: Status: v0.3.291 read-only runtime alignment plus approval-gated project update
 
@@ -273,6 +273,25 @@ archive project-version-update <project-or-archive-root> `
   --output .zettel-kasten/diagnostics/update-apply-20260811-001.json `
   --format json
 ```
+
+From v0.3.315, a locally available exact target uses the same digest-bound
+materialization planner in preview and approval. Its cross-map covers the
+current tree, target tree, index, and worktree using NFKC/case-folding,
+HFS-ignored characters, Windows trailing/reserved/`.git` aliases, and
+conservative 8.3-looking-name rejection. Public results carry fixed codes,
+counts, one `materialization_plan_sha256`, and opaque `update-entry:NNNN`
+references, never ignored local paths or hashes.
+
+A bound collision must be inspected through the separate CLI-only
+`project-version-update-collision` surface. An eligible ignored regular entry
+may be preserve-relocated only after its own fresh dry-run and reviewed
+approval. That action never retries the updater. After it completes, the
+operator must run a fresh updater dry-run and approve that new updater plan
+separately. Private receipts provide only
+`unauthenticated_private_state_internal_consistency`; they are not signatures
+or same-user tamper protection. Nullable write/relocation fields and
+`recovery_required` mean the outcome is uncertain and retained evidence must
+not be deleted or blindly replayed.
 
 These project-local output paths opt into v0.3.314 operation observation. An
 archive-root invocation instead uses a fresh

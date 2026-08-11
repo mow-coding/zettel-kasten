@@ -3,9 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 import unittest
 
-from wom_kit import __version__
-
-
 ROOT = Path(__file__).resolve().parents[2]
 KIT = ROOT / "wom-kit"
 RELEASE = KIT / "docs" / "releases" / "v0.3.314.md"
@@ -16,9 +13,9 @@ SKILL = KIT / "templates" / "ai-runtime" / "wom-archive" / "SKILL.md"
 
 
 class V03314ReleaseDocsTests(unittest.TestCase):
-    def test_version_and_current_release_are_synchronized(self) -> None:
-        self.assertEqual(__version__, "0.3.314")
-        self.assertEqual(RELEASE.read_bytes(), PACKAGED_RELEASE.read_bytes())
+    def test_historical_release_stays_source_only(self) -> None:
+        self.assertTrue(RELEASE.is_file())
+        self.assertFalse(PACKAGED_RELEASE.exists())
         historical_packaged = PACKAGED_RELEASE.with_name("v0.3.313.md")
         self.assertFalse(historical_packaged.exists())
 
