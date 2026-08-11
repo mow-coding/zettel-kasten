@@ -6,6 +6,35 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.316 - 2026-08-12
+
+- Closed the v0.3.315 update-recovery gap in which a project could correctly
+  report 25 ignored Python cache collisions but expose no usable official
+  remediation after one-by-one inspection.
+- Added one-plan `project-version-update-collision --action inspect-all` for
+  the complete opaque collision set. Results now distinguish evaluated entry
+  kind and remediation truth while keeping local paths, names, bytes, hashes,
+  and private identities out of public output.
+- Routed only an exact complete set of supported ignored bytecode files and
+  plain `__pycache__` directories to `project-bytecode-repair`. Mixed,
+  unignored, tracked, linked, reparse, special, changed, oversized, or
+  incomplete sets block with a fixed unavailable result.
+- Bound repair preview and approval to the updater target,
+  `materialization_plan_sha256`, exact collision path set, stable file
+  identity, size/link bounds, and a separate repair-plan digest. Counts alone
+  are not authority.
+- Made cache repair share the exclusive project-version-update lock, require
+  reviewer attribution plus explicit external-writer quiescence, remove the
+  exact reviewed file identity, support empty cache-directory cleanup, and
+  preserve truthful intent/completion evidence for partial or uncertain
+  outcomes.
+- Kept repair and update as separate approvals. Repair never fetches a target,
+  changes `HEAD` or a pin, retries the updater, or grants update approval; a
+  fresh updater preview and separately reviewed update remain mandatory.
+- Local source and test evidence does not prove merge, external CI, exact tag,
+  GitHub Release, verified wheel publication, fresh installation, beta-client
+  execution, or human acceptance.
+
 ## v0.3.315 - 2026-08-11
 
 - Made locally available project-update targets use the same bounded

@@ -96,8 +96,8 @@ update still needs attention.
 For `project-version-update`, operation control copies no free-form blocker
 message. It projects only a grammar-checked target tag, fixed blocker codes,
 the exact `materialization_plan_sha256`, and sorted ordinal references such as
-`update-entry:0001`. When all three bindings are available, status and
-recovery-plan return a path-free command like:
+`update-entry:0001`. For one reference, status and recovery-plan return a
+path-free single-entry command like:
 
 ```powershell
 archive project-version-update-collision <project-or-archive-root> `
@@ -106,6 +106,20 @@ archive project-version-update-collision <project-or-archive-root> `
   --expected-plan-sha256 sha256:<64-lowercase-hex> `
   --action inspect --dry-run --format json
 ```
+
+For multiple references, they return one batch command instead of asking the
+operator to run many serial inspections:
+
+```powershell
+archive project-version-update-collision <project-or-archive-root> `
+  --target vX.Y.Z `
+  --expected-plan-sha256 sha256:<64-lowercase-hex> `
+  --action inspect-all --dry-run --format json
+```
+
+`inspect-all` derives the exact complete set from the unchanged plan digest and
+prints only counts, fixed kinds, and the remediation route. It never accepts a
+caller-supplied partial reference list.
 
 The collision command reruns the planner and refuses digest or ordinal drift.
 Do not repeat updater approval merely because operation recovery is false.

@@ -24,6 +24,55 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.316 Python Cache Collision Recovery
+
+v0.3.315 could correctly detect a complete batch of ignored Python cache
+collisions but offered only slow one-entry inspection and no usable recovery
+for that kind. v0.3.316 adds one complete inspection and a narrowly bounded
+official cache-repair route.
+
+Install the exact v0.3.316 wheel only after the matching GitHub Release lists
+it. Start a new process and confirm `archive --version` before working on the
+project. Pause editors, sync/backup clients, and other Git writers for repair
+and update approval.
+
+Keep the target and `materialization_plan_sha256` from a fresh blocked
+`project-version-update --dry-run`. Inspect the complete collision set once;
+do not pass individual `entry_ref` values:
+
+```powershell
+archive project-version-update-collision <project-or-archive-root> --target v0.3.316 --expected-plan-sha256 sha256:<materialization-digest> --action inspect-all --dry-run --format json
+```
+
+Continue only if the result reports the exact complete set as eligible for
+`project_bytecode_repair`. Preview a separate repair bound to the same target
+and digest:
+
+```powershell
+archive project-bytecode-repair-plan <project-or-archive-root> --target v0.3.316 --expected-materialization-plan-sha256 sha256:<materialization-digest> --dry-run --format json
+```
+
+Review its exact counts and `plan_sha256`, then approve that repair plan:
+
+```powershell
+archive project-bytecode-repair <project-or-archive-root> --target v0.3.316 --expected-materialization-plan-sha256 sha256:<materialization-digest> --expected-plan-sha256 <repair-plan-sha256> --approve --reviewed-by <actor> --affirm-external-writers-quiescent --format json
+```
+
+The repair accepts only the exact supported ignored Python bytecode/cache set.
+It does not delete user-authored source, fetch a target, change `HEAD` or the
+project version pin, retry the updater, or approve an update. If inspection or
+repair reports unavailable, blocked, partial, uncertain, or retained-evidence
+state, stop and follow its fixed next action.
+
+After repair, discard the old updater approval context. Run a fresh
+`project-version-update --dry-run`, review the new plan, and approve that update
+separately. Finally start a new process and require `archive version` to show
+running import, project source, pin, and exact tag agreement.
+
+See the [v0.3.316 release note](wom-kit/docs/releases/v0.3.316.md),
+[project update guide](wom-kit/docs/project-version-update.md), and
+[bounded operation-control guide](wom-kit/docs/operation-control.md).
+
 ## v0.3.315 Update-Collision And Paired-Batch Recovery
 
 Install the exact v0.3.315 artifact only after the matching Release lists the

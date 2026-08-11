@@ -38411,6 +38411,7 @@ def delete_activity_group_evidence_exact(
     expected_sha256: str,
     max_bytes: int,
     parent_binding: dict[str, Any] | None = None,
+    expected_identity: tuple[int, int, int] | None = None,
 ) -> None:
     """Delete only the exact non-reparse evidence bytes that were reviewed."""
 
@@ -38495,7 +38496,20 @@ def delete_activity_group_evidence_exact(
                         opened_stat = os.fstat(descriptor)
                         if (
                             not stat.S_ISREG(opened_stat.st_mode)
+                            or int(opened_stat.st_nlink) != 1
                             or opened_stat.st_size > max_bytes
+                            or (
+                                expected_identity is not None
+                                and (
+                                    int(opened_stat.st_dev),
+                                    int(opened_stat.st_ino),
+                                    int(opened_stat.st_size),
+                                )
+                                != tuple(
+                                    int(value)
+                                    for value in expected_identity
+                                )
+                            )
                         ):
                             raise OSError(
                                 "activity_group_evidence_file_unsafe"
@@ -38568,6 +38582,7 @@ def delete_activity_group_evidence_exact(
                                 opened_stat.st_size,
                                 opened_stat.st_mtime_ns,
                                 opened_stat.st_ctime_ns,
+                                opened_stat.st_nlink,
                             )
                             != (
                                 final_descriptor_stat.st_dev,
@@ -38575,7 +38590,10 @@ def delete_activity_group_evidence_exact(
                                 final_descriptor_stat.st_size,
                                 final_descriptor_stat.st_mtime_ns,
                                 final_descriptor_stat.st_ctime_ns,
+                                final_descriptor_stat.st_nlink,
                             )
+                            or int(final_descriptor_stat.st_nlink) != 1
+                            or int(final_entry_stat.st_nlink) != 1
                             or (
                                 final_entry_stat.st_dev,
                                 final_entry_stat.st_ino,
@@ -38744,7 +38762,18 @@ def delete_activity_group_evidence_exact(
             entry_stat = os.stat(path, follow_symlinks=False)
             if (
                 size > max_bytes
+                or int(information.nNumberOfLinks) != 1
+                or int(entry_stat.st_nlink) != 1
                 or entry_stat.st_ino != file_index
+                or (
+                    expected_identity is not None
+                    and (
+                        int(entry_stat.st_dev),
+                        int(entry_stat.st_ino),
+                        int(entry_stat.st_size),
+                    )
+                    != tuple(int(value) for value in expected_identity)
+                )
                 or (
                     information.dwFileAttributes
                     & (
@@ -38780,6 +38809,26 @@ def delete_activity_group_evidence_exact(
             if (
                 "sha256:" + hashlib.sha256(raw).hexdigest()
                 != expected_sha256
+            ):
+                raise OSError("activity_group_evidence_changed")
+            final_information = ByHandleFileInformation()
+            if not get_information(
+                handle,
+                ctypes.byref(final_information),
+            ):
+                raise ctypes.WinError(ctypes.get_last_error())
+            final_size = (
+                int(final_information.nFileSizeHigh) << 32
+            ) | int(final_information.nFileSizeLow)
+            final_file_index = (
+                int(final_information.nFileIndexHigh) << 32
+            ) | int(final_information.nFileIndexLow)
+            if (
+                final_size != size
+                or final_file_index != file_index
+                or int(final_information.dwVolumeSerialNumber)
+                != int(information.dwVolumeSerialNumber)
+                or int(final_information.nNumberOfLinks) != 1
             ):
                 raise OSError("activity_group_evidence_changed")
             disposition = FileDispositionInformation(1)
@@ -97995,6 +98044,9 @@ WOM_KIT_PROJECT_UPDATE_MAX_MATERIALIZATION_CONFLICT_REFS = 64
 WOM_KIT_PROJECT_UPDATE_COLLISION_SCHEMA = (
     "wom-kit/project-version-update-collision/v0.1"
 )
+WOM_KIT_PROJECT_UPDATE_COLLISION_BATCH_SCHEMA = (
+    "wom-kit/project-version-update-collision/v0.2"
+)
 WOM_KIT_PROJECT_UPDATE_COLLISION_ENTRY_REF_RE = re.compile(
     r"update-entry:(?!0000)[0-9]{4}"
 )
@@ -98003,6 +98055,9 @@ WOM_KIT_PROJECT_UPDATE_COLLISION_PLAN_RE = re.compile(
 )
 WOM_KIT_PROJECT_UPDATE_COLLISION_REASON_RE = re.compile(r"[a-z0-9_]{1,128}")
 WOM_KIT_PROJECT_UPDATE_COLLISION_MAX_FILE_BYTES = 64 * 1024 * 1024
+WOM_KIT_PROJECT_UPDATE_COLLISION_MAX_BATCH_ENTRIES = (
+    WOM_KIT_PROJECT_UPDATE_MAX_MATERIALIZATION_CONFLICT_REFS
+)
 WOM_KIT_PROJECT_UPDATE_COLLISION_PRIVATE_RELATIVE = (
     ".zettel-kasten/private/version-update-collisions"
 )
@@ -99386,43 +99441,77 @@ def wom_kit_project_update_worktree_conflicts(
                     relative_path = PurePosixPath(
                         *entry_path.relative_to(mirror_path).parts
                     ).as_posix()
+                    entry_is_reparse = bool(
+                        stat.S_ISLNK(entry_stat.st_mode)
+                        or (
+                            reparse_flag
+                            and getattr(
+                                entry_stat,
+                                "st_file_attributes",
+                                0,
+                            )
+                            & reparse_flag
+                        )
+                    )
+                    entry_kind = (
+                        "symlink_or_reparse"
+                        if entry_is_reparse
+                        else "plain_directory"
+                        if stat.S_ISDIR(entry_stat.st_mode)
+                        else "regular_file"
+                        if stat.S_ISREG(entry_stat.st_mode)
+                        else "special"
+                    )
+                    directory_entry = entry_kind == "plain_directory"
                     authority.append(
                         (
-                            "worktree-entry",
+                            "worktree-entry-v2",
                             "\0".join(
                                 [
                                     relative_path,
+                                    entry_kind,
                                     str(entry_stat.st_mode),
-                                    str(entry_stat.st_size),
                                     str(
-                                        getattr(
-                                            entry_stat,
-                                            "st_mtime_ns",
-                                            int(entry_stat.st_mtime * 1_000_000_000),
-                                        )
+                                        0
+                                        if directory_entry
+                                        else entry_stat.st_size
                                     ),
                                     str(
-                                        getattr(
-                                            entry_stat,
-                                            "st_ctime_ns",
-                                            int(entry_stat.st_ctime * 1_000_000_000),
-                                        )
+                                        0
+                                        if directory_entry
+                                        else getattr(
+                                                entry_stat,
+                                                "st_mtime_ns",
+                                                int(
+                                                    entry_stat.st_mtime
+                                                    * 1_000_000_000
+                                                ),
+                                            )
                                     ),
-                                    str(entry_stat.st_nlink),
+                                    str(
+                                        0
+                                        if directory_entry
+                                        else getattr(
+                                                entry_stat,
+                                                "st_ctime_ns",
+                                                int(
+                                                    entry_stat.st_ctime
+                                                    * 1_000_000_000
+                                                ),
+                                            )
+                                    ),
+                                    str(
+                                        0
+                                        if directory_entry
+                                        else entry_stat.st_nlink
+                                    ),
                                     str(entry_stat.st_dev),
                                     str(entry_stat.st_ino),
                                 ]
                             ),
                         )
                     )
-                    if (
-                        stat.S_ISLNK(entry_stat.st_mode)
-                        or (
-                            reparse_flag
-                            and getattr(entry_stat, "st_file_attributes", 0)
-                            & reparse_flag
-                        )
-                    ):
+                    if entry_is_reparse:
                         conflicts.append(
                             (
                                 relative_path,
@@ -101551,15 +101640,95 @@ def _wom_kit_project_update_collision_authority_matches(
     internal_path: str,
     observed: os.stat_result,
 ) -> bool:
-    matches = [
+    matches_v2 = [
+        value
+        for category, value in authority
+        if category == "worktree-entry-v2"
+        and value.split("\0", 1)[0] == internal_path
+    ]
+    if len(matches_v2) == 1:
+        fields = matches_v2[0].split("\0")
+        if len(fields) != 9:
+            return False
+        expected_kind = fields[1]
+        try:
+            expected = tuple(int(value) for value in fields[2:])
+        except ValueError:
+            return False
+        reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+        observed_reparse = bool(
+            stat.S_ISLNK(observed.st_mode)
+            or (
+                reparse_flag
+                and getattr(observed, "st_file_attributes", 0)
+                & reparse_flag
+            )
+        )
+        observed_kind = (
+            "symlink_or_reparse"
+            if observed_reparse
+            else "plain_directory"
+            if stat.S_ISDIR(observed.st_mode)
+            else "regular_file"
+            if stat.S_ISREG(observed.st_mode)
+            else "special"
+        )
+        if observed_kind != expected_kind:
+            return False
+        observed_values = (
+            int(observed.st_mode),
+            int(observed.st_size),
+            int(
+                getattr(
+                    observed,
+                    "st_mtime_ns",
+                    int(observed.st_mtime * 1_000_000_000),
+                )
+            ),
+            int(
+                getattr(
+                    observed,
+                    "st_ctime_ns",
+                    int(observed.st_ctime * 1_000_000_000),
+                )
+            ),
+            int(observed.st_nlink),
+            int(observed.st_dev),
+            int(observed.st_ino),
+        )
+        if expected_kind == "plain_directory":
+            return bool(
+                expected[0] == observed_values[0]
+                and all(
+                    expected_value in {0, observed_value}
+                    for expected_value, observed_value in zip(
+                        expected[5:],
+                        observed_values[5:],
+                    )
+                )
+            )
+        return bool(
+            expected[:4] == observed_values[:4]
+            and all(
+                expected_value in {0, observed_value}
+                for expected_value, observed_value in zip(
+                    expected[4:],
+                    observed_values[4:],
+                )
+            )
+        )
+
+    # Retain the v0.3.315 internal seam for direct callers that supply a
+    # captured legacy authority.  New planners always emit v2 above.
+    legacy_matches = [
         value
         for category, value in authority
         if category == "worktree-entry"
         and value.split("\0", 1)[0] == internal_path
     ]
-    if len(matches) != 1:
+    if len(legacy_matches) != 1:
         return False
-    fields = matches[0].split("\0")
+    fields = legacy_matches[0].split("\0")
     if len(fields) != 8:
         return False
     try:
@@ -101614,6 +101783,316 @@ def _wom_kit_project_update_collision_git_eligibility(
         max_output_bytes=4096,
     )
     return bool(ignored), bool(index_checked and index_text == "")
+
+
+def _wom_kit_project_update_collision_git_eligibility_batch(
+    mirror_path: Path,
+    internal_paths: Iterable[str],
+) -> dict[str, tuple[bool, bool]] | None:
+    """Classify ignore/index state for one bounded collision batch.
+
+    The batch inspector must not turn 25 opaque refs into 25 complete planner
+    reruns or dozens of per-entry Git subprocesses.  Both Git queries therefore
+    consume the whole strictly bounded path set once.  Raw paths remain private
+    to this internal result.
+    """
+
+    paths = sorted(set(internal_paths))
+    if (
+        not paths
+        or len(paths) > WOM_KIT_PROJECT_UPDATE_COLLISION_MAX_BATCH_ENTRIES
+        or any(
+            not isinstance(path, str)
+            or not path
+            or "\0" in path
+            or "\r" in path
+            or "\n" in path
+            or len(path.encode("utf-8")) > 4096
+            or wom_kit_project_update_worktree_path_canonical_key(path) is None
+            for path in paths
+        )
+    ):
+        return None
+
+    ignore_input = b"".join(path.encode("utf-8") + b"\0" for path in paths)
+    ignore_completed = wom_kit_project_update_run_batch_capped(
+        wom_kit_project_update_git_command(
+            mirror_path,
+            ["check-ignore", "--no-index", "-z", "--stdin"],
+        ),
+        environment=wom_kit_project_update_git_environment(),
+        timeout_seconds=10,
+        max_output_bytes=len(ignore_input),
+        input_bytes=ignore_input,
+    )
+    if ignore_completed is None:
+        return None
+    ignore_return_code, ignore_output = ignore_completed
+    if ignore_return_code not in {0, 1}:
+        return None
+    if ignore_return_code == 1 and ignore_output:
+        return None
+    if ignore_output and not ignore_output.endswith(b"\0"):
+        return None
+    try:
+        ignored_paths = {
+            value.decode("utf-8")
+            for value in ignore_output.split(b"\0")
+            if value
+        }
+    except UnicodeError:
+        return None
+    if not ignored_paths.issubset(set(paths)):
+        return None
+
+    # Read the already bounded index once.  ``ls-files`` does not support
+    # ``--pathspec-from-file`` on all Git versions WOM still supports, while a
+    # 64-path argv can exceed the Windows command-line limit.  A capped full
+    # index stream is deterministic and avoids both failure modes.
+    index_completed = wom_kit_project_update_run_capped(
+        wom_kit_project_update_git_command(
+            mirror_path,
+            [
+                "ls-files",
+                "--stage",
+                "-z",
+            ],
+        ),
+        environment=wom_kit_project_update_git_environment(),
+        timeout_seconds=10,
+        max_output_bytes=WOM_KIT_PROJECT_UPDATE_MAX_GIT_OUTPUT_BYTES,
+    )
+    if index_completed is None:
+        return None
+    index_return_code, index_output = index_completed
+    if index_return_code != 0 or (index_output and not index_output.endswith(b"\0")):
+        return None
+    tracked_paths: set[str] = set()
+    stage_re = re.compile(
+        rb"[0-7]{6} [0-9a-fA-F]{40,64} [0-3]\t(.+)"
+    )
+    try:
+        for record in index_output.split(b"\0"):
+            if not record:
+                continue
+            match = stage_re.fullmatch(record)
+            if match is None:
+                return None
+            tracked_paths.add(match.group(1).decode("utf-8"))
+    except UnicodeError:
+        return None
+
+    def pathspec_has_tracked_match(path: str) -> bool:
+        prefix = path + "/"
+        return any(
+            tracked_path == path or tracked_path.startswith(prefix)
+            for tracked_path in tracked_paths
+        )
+
+    return {
+        path: (path in ignored_paths, not pathspec_has_tracked_match(path))
+        for path in paths
+    }
+
+
+def _wom_kit_project_update_collision_classify_entry(
+    mirror_path: Path,
+    internal_path: str,
+    reason_codes: Iterable[str],
+    *,
+    target_entries: dict[str, tuple[str, str, bytes]],
+    current_entries: dict[str, tuple[str, str, bytes]],
+    authority: Iterable[tuple[str, str]],
+    git_eligibility: tuple[bool, bool] | None = None,
+) -> dict[str, Any]:
+    """Return a content-free, plan-bound classification for one collision."""
+
+    reasons = sorted(set(reason_codes))
+    target_tree_exact_key_verified = internal_path in target_entries
+    current_tree_untracked_verified = internal_path not in current_entries
+    entry_kind = "synthetic"
+    entry_kind_verified = internal_path.startswith("\0")
+    authority_verified = False
+    ignored_verified = False
+    index_untracked_verified = False
+    regular_file_verified = False
+    plain_directory_verified = False
+    single_link_verified = False
+    within_size_bound = False
+    runtime_shadow_kind = "not_applicable"
+    observed: os.stat_result | None = None
+
+    path_key = wom_kit_project_update_worktree_path_canonical_key(internal_path)
+    source_path: Path | None = None
+    parent_components_real = False
+    if not internal_path.startswith("\0") and path_key is not None:
+        source_path = mirror_path.joinpath(*PurePosixPath(internal_path).parts)
+        parent_components_real = bool(
+            is_path_within_root(source_path, mirror_path)
+            and wom_kit_existing_path_components_are_real(
+                mirror_path,
+                source_path.parent,
+            )
+        )
+        if parent_components_real:
+            try:
+                observed = os.lstat(source_path)
+            except FileNotFoundError:
+                entry_kind = "missing"
+                entry_kind_verified = True
+            except OSError:
+                entry_kind = "unreadable"
+            else:
+                reparse_flag = getattr(
+                    stat,
+                    "FILE_ATTRIBUTE_REPARSE_POINT",
+                    0,
+                )
+                is_reparse = bool(
+                    stat.S_ISLNK(observed.st_mode)
+                    or (
+                        reparse_flag
+                        and getattr(observed, "st_file_attributes", 0)
+                        & reparse_flag
+                    )
+                )
+                if is_reparse:
+                    entry_kind = "symlink_or_reparse"
+                elif stat.S_ISREG(observed.st_mode):
+                    entry_kind = "regular_file"
+                    regular_file_verified = True
+                elif stat.S_ISDIR(observed.st_mode):
+                    entry_kind = "plain_directory"
+                    plain_directory_verified = True
+                else:
+                    entry_kind = "special"
+                entry_kind_verified = True
+                authority_verified = (
+                    _wom_kit_project_update_collision_authority_matches(
+                        authority,
+                        internal_path,
+                        observed,
+                    )
+                )
+                single_link_verified = bool(
+                    regular_file_verified and observed.st_nlink == 1
+                )
+                within_size_bound = bool(
+                    regular_file_verified
+                    and 0
+                    <= observed.st_size
+                    <= WOM_KIT_PROJECT_UPDATE_COLLISION_MAX_FILE_BYTES
+                )
+    elif not internal_path.startswith("\0"):
+        entry_kind = "unsafe_path"
+
+    if (
+        observed is not None
+        and parent_components_real
+        and entry_kind not in {"symlink_or_reparse", "special"}
+    ):
+        if git_eligibility is None:
+            ignored_verified, index_untracked_verified = (
+                _wom_kit_project_update_collision_git_eligibility(
+                    mirror_path,
+                    internal_path,
+                )
+            )
+        else:
+            ignored_verified, index_untracked_verified = git_eligibility
+
+    runtime_reason = "ignored_or_untracked_runtime_source_shadow"
+    runtime_prefix = ("wom-kit", "src", "wom_kit")
+    path_parts = (
+        PurePosixPath(internal_path).parts
+        if source_path is not None
+        else ()
+    )
+    beneath_runtime_package = bool(
+        len(path_parts) > len(runtime_prefix)
+        and path_parts[: len(runtime_prefix)] == runtime_prefix
+    )
+    if runtime_reason in reasons:
+        if (
+            beneath_runtime_package
+            and regular_file_verified
+            and path_parts[-1].casefold().endswith((".pyc", ".pyo"))
+        ):
+            runtime_shadow_kind = "derived_bytecode_file"
+        elif (
+            beneath_runtime_package
+            and plain_directory_verified
+            and path_parts[-1].casefold() == "__pycache__"
+        ):
+            runtime_shadow_kind = "bytecode_cache_directory"
+        else:
+            runtime_shadow_kind = "other_runtime_shadow"
+
+    preserve_relocate_eligible = bool(
+        target_tree_exact_key_verified
+        and current_tree_untracked_verified
+        and "untracked_entry_overlaps_target_file" in reasons
+        and regular_file_verified
+        and single_link_verified
+        and within_size_bound
+        and authority_verified
+        and ignored_verified
+        and index_untracked_verified
+    )
+    bytecode_route_eligible = bool(
+        reasons == [runtime_reason]
+        and runtime_shadow_kind
+        in {"derived_bytecode_file", "bytecode_cache_directory"}
+        and current_tree_untracked_verified
+        and entry_kind_verified
+        and authority_verified
+        and ignored_verified
+        and index_untracked_verified
+        and (
+            runtime_shadow_kind == "bytecode_cache_directory"
+            or (single_link_verified and within_size_bound)
+        )
+    )
+    remediation_route = (
+        "project_bytecode_repair"
+        if bytecode_route_eligible
+        else "preserve_relocate"
+        if preserve_relocate_eligible
+        else None
+    )
+    return {
+        "reason_codes": reasons,
+        "entry_kind": entry_kind,
+        "entry_kind_verified": entry_kind_verified,
+        "runtime_shadow_kind": runtime_shadow_kind,
+        "target_tree_exact_key_verified": (
+            target_tree_exact_key_verified
+        ),
+        "current_tree_untracked_verified": (
+            current_tree_untracked_verified
+        ),
+        "authority_matches_plan": authority_verified,
+        "ignored_verified": ignored_verified,
+        "index_untracked_verified": index_untracked_verified,
+        "regular_file_verified": regular_file_verified,
+        "plain_directory_verified": plain_directory_verified,
+        "single_link_verified": single_link_verified,
+        "within_size_bound": within_size_bound,
+        "eligible_for_preserve_relocate": preserve_relocate_eligible,
+        "eligible_for_project_bytecode_repair_route": (
+            bytecode_route_eligible
+        ),
+        "remediation_route": remediation_route,
+        "remediation_blocker_codes": (
+            []
+            if remediation_route is not None
+            else ["project_update_collision_remediation_unavailable"]
+        ),
+        "local_relative_path_echoed": False,
+        "absolute_path_echoed": False,
+        "private_bytes_read": False,
+        "private_byte_hash_echoed": False,
+    }
 
 
 def _wom_kit_project_update_collision_write_private_receipt(
@@ -102423,6 +102902,600 @@ def _wom_kit_project_update_collision_existing_case_state(
     }
 
 
+def _wom_kit_project_version_update_collision_inspect_batch_core(
+    inspection_root: Path | str,
+    *,
+    target: str,
+    entry_refs: Iterable[str] | None = None,
+    expected_plan_sha256: str | None,
+    owned_lock_identity: tuple[int, int] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Inspect a complete opaque collision set with one materialization plan.
+
+    The public half is content- and path-free.  The private half exists only so
+    the separately approved bytecode workflow can prove exact set equivalence;
+    callers must never serialize it.
+    """
+
+    target_tag = str(target or "").strip()
+    expected_plan = str(expected_plan_sha256 or "").strip()
+    blocker_codes: list[str] = []
+    current_plan: str | None = None
+    plan_conflict_count: int | None = None
+    plan_conflict_count_complete = False
+    plan_conflicts_truncated = False
+    requested_refs: list[str] = []
+    derive_complete_ref_set = entry_refs is None
+    entries: list[dict[str, Any]] = []
+    exact_collision_set_covered = False
+    private_entries: list[dict[str, Any]] = []
+    head_before: str | None = None
+    target_ref_snapshot_private: dict[str, str] | None = None
+
+    fixed_messages = {
+        "project_update_collision_target_invalid": "The target must be one exact stable release tag.",
+        "project_update_collision_expected_plan_invalid": "The exact materialization plan digest is required.",
+        "project_update_collision_batch_entry_refs_invalid": "Provide one unique bounded list of opaque collision references.",
+        "project_update_collision_batch_entry_set_incomplete": "Explicit collision references must equal the complete unchanged projected conflict set.",
+        "project_update_collision_root_unsafe": "The project or archive root could not be resolved safely.",
+        "project_update_collision_source_mirror_unsafe": "The project source mirror is missing or unsafe.",
+        "project_update_collision_concurrent_operation": "A concurrent project update or collision operation holds the project lock.",
+        "project_update_collision_git_state_unsafe": "The exact clean local Git authority could not be verified.",
+        "project_update_collision_target_unverified": "The local target tag and origin-main ancestry could not be verified.",
+        "project_update_collision_plan_drifted": "The materialization plan no longer matches the expected digest.",
+        "project_update_collision_entry_ref_not_found": "An opaque entry reference is not present in the unchanged bounded plan.",
+        "project_update_collision_git_batch_inspection_failed": "The bounded ignore and index inspection could not be completed.",
+    }
+
+    def add_blocker(code: str) -> None:
+        if code not in blocker_codes:
+            blocker_codes.append(code)
+
+    try:
+        raw_refs = (
+            []
+            if entry_refs is None
+            else list(entry_refs)
+            if not isinstance(entry_refs, str)
+            else [entry_refs]
+        )
+    except (TypeError, ValueError):
+        raw_refs = [object()]
+    if not raw_refs and entry_refs is not None:
+        derive_complete_ref_set = True
+    if raw_refs:
+        if (
+            len(raw_refs)
+            > WOM_KIT_PROJECT_UPDATE_COLLISION_MAX_BATCH_ENTRIES
+            or any(not isinstance(value, str) for value in raw_refs)
+        ):
+            add_blocker("project_update_collision_batch_entry_refs_invalid")
+        requested_refs = sorted(
+            (
+                str(value).strip()
+                for value in raw_refs
+                if isinstance(value, str)
+            ),
+            key=lambda value: (
+                int(value.rsplit(":", 1)[1])
+                if WOM_KIT_PROJECT_UPDATE_COLLISION_ENTRY_REF_RE.fullmatch(
+                    value
+                )
+                else WOM_KIT_PROJECT_UPDATE_COLLISION_MAX_BATCH_ENTRIES + 1
+            ),
+        )
+        if not blocker_codes and (
+            len(set(requested_refs)) != len(requested_refs)
+            or any(
+                WOM_KIT_PROJECT_UPDATE_COLLISION_ENTRY_REF_RE.fullmatch(
+                    value
+                )
+                is None
+                for value in requested_refs
+            )
+        ):
+            add_blocker("project_update_collision_batch_entry_refs_invalid")
+    if not WOM_KIT_PROJECT_UPDATE_TAG_RE.fullmatch(target_tag):
+        add_blocker("project_update_collision_target_invalid")
+    if not WOM_KIT_PROJECT_UPDATE_COLLISION_PLAN_RE.fullmatch(expected_plan):
+        add_blocker("project_update_collision_expected_plan_invalid")
+
+    project_root: Path | None = None
+    mirror_path: Path | None = None
+    target_commit: str | None = None
+    if not blocker_codes:
+        try:
+            inspection = Path(
+                os.path.abspath(str(Path(inspection_root).expanduser()))
+            )
+            local_metadata_root = inspection / ".zettel-kasten"
+            parent_metadata_root = inspection.parent / ".zettel-kasten"
+            project_root = (
+                inspection.parent
+                if (
+                    wom_kit_real_path_kind(inspection, local_metadata_root)
+                    == "missing"
+                    and wom_kit_real_path_kind(
+                        inspection,
+                        inspection / "archive.yml",
+                    )
+                    == "file"
+                    and wom_kit_real_path_kind(
+                        inspection.parent,
+                        parent_metadata_root,
+                    )
+                    == "directory"
+                )
+                else inspection
+            )
+        except (OSError, RuntimeError, ValueError):
+            add_blocker("project_update_collision_root_unsafe")
+    if project_root is not None and not blocker_codes:
+        metadata_root = project_root / ".zettel-kasten"
+        mirror_path = metadata_root / "source"
+        lock_path = project_root / WOM_KIT_PROJECT_UPDATE_LOCK_RELATIVE
+        if (
+            wom_kit_real_path_kind(project_root, project_root) != "directory"
+            or wom_kit_real_path_kind(project_root, metadata_root)
+            != "directory"
+            or wom_kit_real_path_kind(project_root, mirror_path)
+            != "directory"
+            or not is_path_within_root(mirror_path, project_root)
+            or not wom_kit_path_components_are_real(project_root, mirror_path)
+            or not wom_kit_project_update_git_metadata_is_local_real(
+                project_root,
+                mirror_path,
+            )
+        ):
+            add_blocker("project_update_collision_source_mirror_unsafe")
+        else:
+            lock_path_components_real = (
+                wom_kit_existing_path_components_are_real(
+                    project_root,
+                    lock_path,
+                )
+            )
+            if owned_lock_identity is None:
+                if (
+                    not lock_path_components_real
+                    or wom_kit_real_path_kind(project_root, lock_path)
+                    != "missing"
+                ):
+                    add_blocker(
+                        "project_update_collision_concurrent_operation"
+                    )
+            elif (
+                not isinstance(owned_lock_identity, tuple)
+                or len(owned_lock_identity) != 2
+                or any(
+                    isinstance(value, bool) or not isinstance(value, int)
+                    for value in owned_lock_identity
+                )
+                or not lock_path_components_real
+                or not wom_kit_project_update_owned_lock_present(
+                    project_root,
+                    lock_path,
+                    owned_lock_identity,
+                )
+            ):
+                add_blocker("project_update_collision_concurrent_operation")
+
+    if mirror_path is not None and not blocker_codes:
+        inside_ok, inside_text = wom_kit_project_update_git(
+            mirror_path,
+            ["rev-parse", "--is-inside-work-tree"],
+        )
+        top_ok, top_text = wom_kit_project_update_git(
+            mirror_path,
+            ["rev-parse", "--show-toplevel"],
+        )
+        head_ok, head_text = wom_kit_project_update_git(
+            mirror_path,
+            ["rev-parse", "--verify", "HEAD"],
+        )
+        symbolic_state, original_branch = (
+            wom_kit_project_update_symbolic_head_state(mirror_path)
+        )
+        try:
+            exact_top = bool(
+                top_ok and Path(top_text).resolve() == mirror_path.resolve()
+            )
+        except (OSError, RuntimeError, ValueError):
+            exact_top = False
+        head_before = (
+            head_text.lower()
+            if head_ok and re.fullmatch(r"[0-9a-fA-F]{40,64}", head_text)
+            else None
+        )
+        if (
+            not inside_ok
+            or inside_text != "true"
+            or not exact_top
+            or head_before is None
+            or symbolic_state == "invalid"
+            or not wom_kit_project_update_snapshot_is_clean(
+                wom_kit_project_update_git_snapshot(mirror_path),
+                expected_head=head_before,
+                expected_branch=original_branch,
+            )
+        ):
+            add_blocker("project_update_collision_git_state_unsafe")
+        else:
+            target_evidence = wom_kit_project_update_target_evidence(
+                mirror_path,
+                target_tag,
+            )
+            target_ref_snapshot = wom_kit_project_update_target_ref_snapshot(
+                mirror_path,
+                target_tag,
+            )
+            target_ref_snapshot_private = target_ref_snapshot
+            candidate_commit = target_evidence.get("target_commit")
+            if (
+                target_ref_snapshot is None
+                or not isinstance(candidate_commit, str)
+                or target_ref_snapshot.get("target_commit")
+                != candidate_commit
+                or not target_evidence.get("tag_available_locally")
+                or not target_evidence.get("annotated_tag_verified")
+                or not target_evidence.get("all_source_versions_match_target")
+                or not target_evidence.get("origin_main_available_locally")
+                or not target_evidence.get(
+                    "target_reachable_from_origin_main"
+                )
+            ):
+                add_blocker("project_update_collision_target_unverified")
+            else:
+                target_commit = candidate_commit
+
+    if mirror_path is not None and target_commit is not None and not blocker_codes:
+        (
+            plan,
+            target_entries,
+            current_entries,
+            internal_conflicts,
+            authority,
+        ) = _wom_kit_project_update_materialization_plan_details_internal(
+            mirror_path,
+            target_commit,
+        )
+        current_plan_value = plan.get("materialization_plan_sha256")
+        current_plan = (
+            current_plan_value
+            if isinstance(current_plan_value, str)
+            else None
+        )
+        plan_conflict_count = int(plan.get("conflict_count") or 0)
+        plan_conflict_count_complete = bool(
+            plan.get("conflict_count_complete")
+        )
+        plan_conflicts_truncated = bool(plan.get("conflicts_truncated"))
+        if current_plan != expected_plan:
+            add_blocker("project_update_collision_plan_drifted")
+        else:
+            projected_refs = {
+                str(item.get("entry_ref"))
+                for item in plan.get("conflicts", [])
+                if isinstance(item, dict)
+                and isinstance(item.get("entry_ref"), str)
+            }
+            if derive_complete_ref_set:
+                requested_refs = sorted(
+                    projected_refs,
+                    key=lambda value: int(value.rsplit(":", 1)[1]),
+                )
+            elif (
+                not plan_conflict_count_complete
+                or plan_conflicts_truncated
+                or set(requested_refs) != projected_refs
+                or len(requested_refs) != plan_conflict_count
+            ):
+                add_blocker(
+                    "project_update_collision_batch_entry_set_incomplete"
+                )
+            exact_collision_set_covered = bool(
+                plan_conflict_count_complete
+                and not plan_conflicts_truncated
+                and set(requested_refs) == projected_refs
+                and len(requested_refs) == plan_conflict_count
+            )
+            resolved_entries: list[tuple[str, str, list[str]]] = []
+            if not blocker_codes:
+                for entry_ref in requested_refs:
+                    resolved = _wom_kit_project_update_collision_resolve_ref(
+                        internal_conflicts,
+                        entry_ref,
+                    )
+                    if resolved is None:
+                        add_blocker(
+                            "project_update_collision_entry_ref_not_found"
+                        )
+                        break
+                    resolved_entries.append(
+                        (entry_ref, resolved[0], resolved[1])
+                    )
+            safe_internal_paths = [
+                internal_path
+                for _, internal_path, _ in resolved_entries
+                if not internal_path.startswith("\0")
+                and wom_kit_project_update_worktree_path_canonical_key(
+                    internal_path
+                )
+                is not None
+            ]
+            batch_eligibility = (
+                _wom_kit_project_update_collision_git_eligibility_batch(
+                    mirror_path,
+                    safe_internal_paths,
+                )
+                if safe_internal_paths
+                else {}
+            )
+            if batch_eligibility is None:
+                add_blocker(
+                    "project_update_collision_git_batch_inspection_failed"
+                )
+                batch_eligibility = {}
+            target_entries = target_entries or {}
+            current_entries = current_entries or {}
+            for entry_ref, internal_path, reason_codes in resolved_entries:
+                classification = (
+                    _wom_kit_project_update_collision_classify_entry(
+                        mirror_path,
+                        internal_path,
+                        reason_codes,
+                        target_entries=target_entries,
+                        current_entries=current_entries,
+                        authority=authority,
+                        git_eligibility=batch_eligibility.get(
+                            internal_path,
+                            (False, False),
+                        ),
+                    )
+                )
+                entries.append(
+                    {
+                        "entry_ref": entry_ref,
+                        **classification,
+                    }
+                )
+                private_entries.append(
+                    {
+                        "entry_ref": entry_ref,
+                        "internal_path": internal_path,
+                        "entry_kind": classification["entry_kind"],
+                        "runtime_shadow_kind": classification[
+                            "runtime_shadow_kind"
+                        ],
+                        "eligible_for_project_bytecode_repair_route": (
+                            classification[
+                                "eligible_for_project_bytecode_repair_route"
+                            ]
+                        ),
+                    }
+                )
+
+    entry_kind_counts: dict[str, int] = {}
+    runtime_shadow_kind_counts: dict[str, int] = {}
+    remediation_counts = {
+        "project_bytecode_repair": 0,
+        "preserve_relocate": 0,
+        "unavailable": 0,
+    }
+    for entry in entries:
+        entry_kind = str(entry.get("entry_kind") or "unclassified")
+        runtime_kind = str(
+            entry.get("runtime_shadow_kind") or "not_applicable"
+        )
+        entry_kind_counts[entry_kind] = entry_kind_counts.get(entry_kind, 0) + 1
+        runtime_shadow_kind_counts[runtime_kind] = (
+            runtime_shadow_kind_counts.get(runtime_kind, 0) + 1
+        )
+        route = entry.get("remediation_route")
+        if route in {"project_bytecode_repair", "preserve_relocate"}:
+            remediation_counts[str(route)] += 1
+        else:
+            remediation_counts["unavailable"] += 1
+
+    all_requested_runtime_bytecode_supported = bool(
+        entries
+        and len(entries) == len(requested_refs)
+        and all(
+            entry.get("eligible_for_project_bytecode_repair_route") is True
+            for entry in entries
+        )
+    )
+    project_bytecode_repair_route_eligible = bool(
+        not blocker_codes
+        and exact_collision_set_covered
+        and all_requested_runtime_bytecode_supported
+    )
+    route_unavailable_count = remediation_counts["unavailable"]
+    remediation = {
+        "route": (
+            "project_bytecode_repair"
+            if project_bytecode_repair_route_eligible
+            else None
+        ),
+        "next_action_hint": (
+            "project_bytecode_repair_plan"
+            if project_bytecode_repair_route_eligible
+            else None
+        ),
+        "route_eligible": project_bytecode_repair_route_eligible,
+        "exact_collision_set_covered": exact_collision_set_covered,
+        "all_requested_entries_supported": (
+            all_requested_runtime_bytecode_supported
+        ),
+        "route_set_equivalence_required": True,
+        "route_set_counts_complete": bool(
+            exact_collision_set_covered
+            and len(entries) == len(requested_refs)
+        ),
+        "collision_entry_count": len(entries),
+        "derived_bytecode_file_count": runtime_shadow_kind_counts.get(
+            "derived_bytecode_file",
+            0,
+        ),
+        "bytecode_cache_directory_count": (
+            runtime_shadow_kind_counts.get(
+                "bytecode_cache_directory",
+                0,
+            )
+        ),
+        "unsupported_entry_count": route_unavailable_count,
+        "separate_plan_required": True,
+        "separate_approval_required": True,
+        "repair_performed": False,
+        "deletes": False,
+        "overwrites": False,
+        "fresh_project_version_update_dry_run_required": True,
+        "blocker_codes": (
+            []
+            if project_bytecode_repair_route_eligible
+            else ["project_update_collision_remediation_unavailable"]
+        ),
+    }
+    result = {
+        "ok": not blocker_codes,
+        "dry_run": True,
+        "schema": WOM_KIT_PROJECT_UPDATE_COLLISION_BATCH_SCHEMA,
+        "lifecycle_action": "project_version_update_collision",
+        "status": (
+            "blocked"
+            if blocker_codes
+            else "inspected"
+            if project_bytecode_repair_route_eligible
+            else "inspected_remediation_unavailable"
+        ),
+        "action": "inspect-all",
+        "mode": "dry_run",
+        "target": {
+            "tag": (
+                target_tag
+                if WOM_KIT_PROJECT_UPDATE_TAG_RE.fullmatch(target_tag)
+                else None
+            ),
+            "target_relative_path_echoed": False,
+        },
+        "plan": {
+            "expected_plan_sha256": (
+                expected_plan
+                if WOM_KIT_PROJECT_UPDATE_COLLISION_PLAN_RE.fullmatch(
+                    expected_plan
+                )
+                else None
+            ),
+            "materialization_plan_sha256": current_plan,
+            "current_plan_evaluated": current_plan is not None,
+            "matches_expected": bool(
+                current_plan is not None and current_plan == expected_plan
+            ),
+            "entry_ref_scheme": "update-entry-sorted-ordinal-v1",
+            "conflict_count": plan_conflict_count,
+            "conflict_count_complete": plan_conflict_count_complete,
+            "conflicts_truncated": plan_conflicts_truncated,
+            "fresh_preview_required": True,
+        },
+        "entries": entries,
+        "summary": {
+            "requested_entry_count": len(requested_refs),
+            "inspected_entry_count": len(entries),
+            "entry_kind_counts": dict(sorted(entry_kind_counts.items())),
+            "runtime_shadow_kind_counts": dict(
+                sorted(runtime_shadow_kind_counts.items())
+            ),
+            "remediation_counts": remediation_counts,
+        },
+        "project_bytecode_repair_route_eligible": (
+            project_bytecode_repair_route_eligible
+        ),
+        "remediation_available": project_bytecode_repair_route_eligible,
+        "remediation": remediation,
+        "write_boundary": {
+            "writes": False,
+            "deletes": False,
+            "overwrites": False,
+            "update_retried": False,
+            "repair_attempted": False,
+        },
+        "blocker_codes": list(blocker_codes),
+        "blockers": [
+            fixed_messages.get(
+                code,
+                "The collision batch inspection was blocked by a fixed safety boundary.",
+            )
+            for code in blocker_codes
+        ],
+        "next_safe_actions": (
+            [
+                "Run the separate project-bytecode-repair-plan with the exact target and materialization-plan digest, and require collision_binding_verified=true before any approval; counts alone are not authority.",
+                "After separately approved repair, run a fresh project-version-update --dry-run; never retry the old approval automatically.",
+            ]
+            if project_bytecode_repair_route_eligible
+            else [
+                "Do not delete, overwrite, relocate, or automatically retry unsupported collision entries.",
+                "Resolve fixed inspection blockers, then run a fresh project-version-update --dry-run.",
+            ]
+        ),
+        "privacy_guards": {
+            "local_absolute_paths_echoed": False,
+            "local_relative_paths_echoed": False,
+            "private_entry_names_echoed": False,
+            "private_bytes_read": False,
+            "private_bytes_echoed": False,
+            "private_byte_hashes_echoed": False,
+            "raw_errors_echoed": False,
+            "provider_or_network_called": False,
+        },
+    }
+    private = {
+        "project_root": project_root,
+        "mirror_path": mirror_path,
+        "target_commit": target_commit,
+        "head_before": head_before,
+        "target_ref_snapshot": target_ref_snapshot_private,
+        "owned_lock_identity_verified": bool(
+            owned_lock_identity is not None and not blocker_codes
+        ),
+        "materialization_plan_sha256": current_plan,
+        "exact_collision_set_covered": exact_collision_set_covered,
+        "entries": private_entries,
+        "derived_bytecode_file_paths": sorted(
+            entry["internal_path"]
+            for entry in private_entries
+            if entry["runtime_shadow_kind"] == "derived_bytecode_file"
+        ),
+        "bytecode_cache_directory_paths": sorted(
+            entry["internal_path"]
+            for entry in private_entries
+            if entry["runtime_shadow_kind"]
+            == "bytecode_cache_directory"
+        ),
+    }
+    return result, private
+
+
+def wom_kit_project_version_update_collision_inspect_batch(
+    inspection_root: Path | str,
+    *,
+    target: str,
+    entry_refs: Iterable[str] | None = None,
+    expected_plan_sha256: str | None,
+) -> dict[str, Any]:
+    """Public path-free read-only inspection for a complete collision batch."""
+
+    result, _private = (
+        _wom_kit_project_version_update_collision_inspect_batch_core(
+            inspection_root,
+            target=target,
+            entry_refs=entry_refs,
+            expected_plan_sha256=expected_plan_sha256,
+        )
+    )
+    return result
+
+
 def wom_kit_project_version_update_collision(
     inspection_root: Path | str,
     *,
@@ -102458,9 +103531,17 @@ def wom_kit_project_version_update_collision(
     ignored_verified = False
     index_untracked_verified = False
     current_tree_untracked_verified = False
+    source_entry_kind = "unclassified"
+    source_entry_kind_verified = False
     source_regular_verified = False
+    source_plain_directory_verified = False
     source_single_link_verified = False
     source_within_size_bound = False
+    source_authority_verified = False
+    runtime_shadow_kind = "not_applicable"
+    bytecode_repair_route_eligible = False
+    remediation_route: str | None = None
+    remediation_blocker_codes: list[str] = []
     move_effect = "no_change"
     move_attempted = False
     intent_written = False
@@ -102550,10 +103631,16 @@ def wom_kit_project_version_update_collision(
                 "Review this preview, then replay the same target, entry ref, and plan digest with --approve, reviewer, and quiescence affirmation.",
             ]
         elif status == "inspected":
-            next_actions = [
-                "If eligible, run preserve-relocate with --dry-run before any approval.",
-                "Do not rerun approved project-version-update until a fresh updater dry-run is clean.",
-            ]
+            if bytecode_repair_route_eligible:
+                next_actions = [
+                    "Inspect the complete unchanged collision plan in one batch, then run a separate project-bytecode-repair-plan only if the batch proves exact route-set equivalence.",
+                    "Do not rerun approved project-version-update until repair is separately approved and a fresh updater dry-run is clean.",
+                ]
+            else:
+                next_actions = [
+                    "If eligible, run preserve-relocate with --dry-run before any approval.",
+                    "Do not rerun approved project-version-update until a fresh updater dry-run is clean.",
+                ]
         elif "project_update_collision_plan_drifted" in blocker_codes:
             next_actions = [
                 "Run a fresh project-version-update --dry-run and use only its new opaque ref and exact plan digest.",
@@ -102603,14 +103690,35 @@ def wom_kit_project_version_update_collision(
                 ),
                 "reason_codes": safe_reasons,
                 "eligible_for_preserve_relocate": eligible,
+                "eligible_for_project_bytecode_repair_route": (
+                    bytecode_repair_route_eligible
+                ),
+                "entry_kind": source_entry_kind,
+                "entry_kind_verified": source_entry_kind_verified,
+                "runtime_shadow_kind": runtime_shadow_kind,
+                "remediation_route": remediation_route,
+                "remediation_next_action_hint": (
+                    "project_bytecode_repair_plan"
+                    if bytecode_repair_route_eligible
+                    else "project_version_update_collision_preserve_relocate"
+                    if eligible
+                    else None
+                ),
+                "remediation_blocker_codes": list(
+                    remediation_blocker_codes
+                ),
                 "ignored_verified": ignored_verified,
                 "index_untracked_verified": index_untracked_verified,
                 "current_tree_untracked_verified": (
                     current_tree_untracked_verified
                 ),
                 "regular_file_verified": source_regular_verified,
+                "plain_directory_verified": (
+                    source_plain_directory_verified
+                ),
                 "single_link_verified": source_single_link_verified,
                 "within_size_bound": source_within_size_bound,
+                "authority_matches_plan": source_authority_verified,
                 "local_relative_path_echoed": False,
                 "absolute_path_echoed": False,
                 "private_bytes_read": bool(safe_private_content_read_stages),
@@ -102924,7 +104032,13 @@ def wom_kit_project_version_update_collision(
             target_relative_path = internal_path
             target_relative_path_available = True
             current_tree_untracked_verified = True
+            source_entry_kind = "regular_file"
+            source_entry_kind_verified = True
+            source_regular_verified = True
+            source_single_link_verified = True
             source_within_size_bound = True
+            source_authority_verified = True
+            remediation_route = "preserve_relocate"
             intent_written = True
             completion_written = True
             already_completed = True
@@ -102967,54 +104081,49 @@ def wom_kit_project_version_update_collision(
     )
     current_tree_untracked_verified = internal_path not in current_entries
     source_path = mirror_path.joinpath(*PurePosixPath(internal_path).parts)
-    if (
-        target_relative_path_available
-        and current_tree_untracked_verified
-        and "untracked_entry_overlaps_target_file" in reason_codes
-        and is_path_within_root(source_path, mirror_path)
-        and wom_kit_path_components_are_real(mirror_path, source_path)
-    ):
-        try:
-            observed = os.lstat(source_path)
-        except OSError:
-            observed = None
-        if observed is not None:
-            reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
-            source_regular_verified = bool(
-                stat.S_ISREG(observed.st_mode)
-                and not (
-                    reparse_flag
-                    and getattr(observed, "st_file_attributes", 0)
-                    & reparse_flag
-                )
-            )
-            source_single_link_verified = observed.st_nlink == 1
-            source_within_size_bound = bool(
-                0
-                <= observed.st_size
-                <= WOM_KIT_PROJECT_UPDATE_COLLISION_MAX_FILE_BYTES
-            )
-            authority_verified = (
-                _wom_kit_project_update_collision_authority_matches(
-                    authority,
-                    internal_path,
-                    observed,
-                )
-            )
-            ignored_verified, index_untracked_verified = (
-                _wom_kit_project_update_collision_git_eligibility(
-                    mirror_path,
-                    internal_path,
-                )
-            )
-            eligible = bool(
-                source_regular_verified
-                and source_single_link_verified
-                and source_within_size_bound
-                and authority_verified
-                and ignored_verified
-                and index_untracked_verified
-            )
+    classification = _wom_kit_project_update_collision_classify_entry(
+        mirror_path,
+        internal_path,
+        reason_codes,
+        target_entries=target_entries,
+        current_entries=current_entries,
+        authority=authority,
+    )
+    source_entry_kind = str(classification["entry_kind"])
+    source_entry_kind_verified = bool(
+        classification["entry_kind_verified"]
+    )
+    runtime_shadow_kind = str(classification["runtime_shadow_kind"])
+    ignored_verified = bool(classification["ignored_verified"])
+    index_untracked_verified = bool(
+        classification["index_untracked_verified"]
+    )
+    current_tree_untracked_verified = bool(
+        classification["current_tree_untracked_verified"]
+    )
+    source_regular_verified = bool(
+        classification["regular_file_verified"]
+    )
+    source_plain_directory_verified = bool(
+        classification["plain_directory_verified"]
+    )
+    source_single_link_verified = bool(
+        classification["single_link_verified"]
+    )
+    source_within_size_bound = bool(
+        classification["within_size_bound"]
+    )
+    source_authority_verified = bool(
+        classification["authority_matches_plan"]
+    )
+    eligible = bool(classification["eligible_for_preserve_relocate"])
+    bytecode_repair_route_eligible = bool(
+        classification["eligible_for_project_bytecode_repair_route"]
+    )
+    remediation_route = classification["remediation_route"]
+    remediation_blocker_codes = list(
+        classification["remediation_blocker_codes"]
+    )
 
     if requested_action == "inspect":
         status = "inspected"
