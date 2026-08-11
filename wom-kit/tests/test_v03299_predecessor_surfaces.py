@@ -89,6 +89,7 @@ CLI_ADDITIONS = {
     ("principal-unregister-plan",),
     ("project-bytecode-repair",),
     ("project-bytecode-repair-plan",),
+    ("project-version-update-collision",),
     ("relation-candidate-decide",),
     ("relation-candidate-plan",),
     ("relation-semantics-guide",),
@@ -101,9 +102,9 @@ CLI_ADDITIONS = {
     ("zettel-objet-link",),
     ("zettel-objet-link-revert",),
 }
-CURRENT_CLI_COUNT = 552
+CURRENT_CLI_COUNT = 553
 CURRENT_CLI_CANONICAL_SHA256 = (
-    "7e38d3ede47f27b05df9fd4a47048dd5c93eb11ecc71de3b90eb44fe6baef58f"
+    "ba70474e64b024398c27ec920c5e8c121d71acb78556e2f69fbc7d30971b76ef"
 )
 CURRENT_MCP_COUNT = 121
 CURRENT_MCP_CANONICAL_SHA256 = (
@@ -114,7 +115,7 @@ CURRENT_DATABASE_CANONICAL_SHA256 = (
     "d9a42f08ee12a6d42e40214cfb12441e4077bf50c38c25b2692ec1344328294a"
 )
 RESOURCE_ADDITIONS = {
-    "release-notes/v0.3.314.md",
+    "release-notes/v0.3.315.md",
     "schemas/artifact-lifecycle-inventory.schema.json",
     "schemas/authoring-conventions.schema.json",
     "schemas/draft-discard-receipt.schema.json",
@@ -153,7 +154,7 @@ RESOURCE_ADDITIONS = {
 RESOURCE_REMOVALS = {"release-notes/v0.3.297.md"}
 CURRENT_RESOURCE_COUNT = 145
 CURRENT_RESOURCE_CANONICAL_SHA256 = (
-    "c8505c40edddb254a98a0f202cd2a1b05ea315dd103e0eff6fe6770d21c2fede"
+    "ad00cd0714be1f1d00e7c7158a682f5b01787ebbc21a504212fc9251e7107a17"
 )
 
 
@@ -347,7 +348,7 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
                         f"{module.__name__} was imported outside this worktree's source checkout."
                     )
 
-    def test_cli_paths_are_v03297_plus_exact_v03298_v03314_delta(self) -> None:
+    def test_cli_paths_are_v03297_plus_exact_v03298_v03315_delta(self) -> None:
         predecessor = self.fixture["cli"]["paths"]
         predecessor_set = {tuple(path) for path in predecessor}
         self.assertFalse(CLI_ADDITIONS & predecessor_set)
@@ -450,7 +451,7 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
             after["properties"]["fidelity_source_object_id"]["pattern"],
             "^sha256:[0-9a-f]{64}$",
         )
-    def test_resource_paths_are_v03297_plus_exact_v03298_v03314_delta(self) -> None:
+    def test_resource_paths_are_v03297_plus_exact_v03298_v03315_delta(self) -> None:
         predecessor_paths = set(self.fixture["package_resources"]["packaged_paths"])
         self.assertTrue(
             RESOURCE_REMOVALS <= predecessor_paths,
@@ -480,10 +481,10 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
             actual,
             expected,
             "Current package-resource paths must be the full v0.3.297 set plus "
-            "the exact cumulative v0.3.298 through v0.3.314 delta. "
+            "the exact cumulative v0.3.298 through v0.3.315 delta. "
             f"missing={compact(missing)}; extra={compact(extra)}",
         )
-        self.assertEqual(manifest["version"], "0.3.314")
+        self.assertEqual(manifest["version"], "0.3.315")
         self.assertEqual(len(actual), CURRENT_RESOURCE_COUNT)
         self.assertEqual(
             canonical_sha256(actual),
@@ -502,14 +503,14 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
         self.assertIn("does not undo", predecessor_flat)
         self.assertNotIn("C:\\Users\\", predecessor_text)
 
-    def test_v03314_release_note_is_public_and_synchronized(self) -> None:
-        current_source_release = KIT_ROOT / "docs" / "releases" / "v0.3.314.md"
+    def test_v03315_release_note_is_public_and_synchronized(self) -> None:
+        current_source_release = KIT_ROOT / "docs" / "releases" / "v0.3.315.md"
         current_packaged_release = (
             SRC_ROOT
             / "wom_kit"
             / "_resources"
             / "release-notes"
-            / "v0.3.314.md"
+            / "v0.3.315.md"
         )
         self.assertEqual(
             current_source_release.read_bytes(),
@@ -518,14 +519,13 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
         current_text = current_source_release.read_text(encoding="utf-8")
         current_flat = " ".join(current_text.split())
         for token in (
-            "11,184",
-            "2.538",
-            "operation-control",
-            "operation_cancel_not_supported",
-            "cancel_supported: false",
-            "resume_supported: false",
-            "rollback `DELETE` mode",
-            "no daemon, queue, background launcher",
+            "materialization_plan_sha256",
+            "update-entry:0001",
+            "project-version-update-collision",
+            "unauthenticated_private_state_internal_consistency",
+            "attempt_sha256",
+            "batch_capture_outcome_unverified",
+            "derive-text capture --from-manifest",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, current_flat)
@@ -538,8 +538,8 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, current_text)
 
-        historical_release = KIT_ROOT / "docs" / "releases" / "v0.3.313.md"
-        historical_packaged = current_packaged_release.with_name("v0.3.313.md")
+        historical_release = KIT_ROOT / "docs" / "releases" / "v0.3.314.md"
+        historical_packaged = current_packaged_release.with_name("v0.3.314.md")
         self.assertTrue(historical_release.is_file())
         self.assertFalse(historical_packaged.exists())
 

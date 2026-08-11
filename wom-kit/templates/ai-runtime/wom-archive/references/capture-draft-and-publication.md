@@ -26,6 +26,24 @@ individual source-intake plan records used by later capture and explicitly
 claims only bounded per-item replay convergence, not atomic all-or-nothing
 execution.
 
+For many reviewed originals, optionally paired with extracted text, use one
+closed-shape `objet-capture-batch` request and preserve every pairing field:
+
+```text
+archive objet-capture-batch <archive-root> --manifest <archive-relative-json> --dry-run --format json
+archive objet-capture-batch <archive-root> --manifest <same-json> --expected-plan-sha256 <exact-plan-sha256> --approve --reviewed-by <actor> --format json
+```
+
+A paired item includes `derived_text_staged_path`, derivation/tool/review fields,
+and optional model/confidence/language/born-digital metadata. Do not rebuild the
+reviewed selection. Close original and derived requested, written-or-ready,
+skipped, and blocked counts separately. Result states `partial`,
+`evidence_incomplete`, or `recovery_required`, and blocker
+`batch_capture_outcome_unverified`, require only returned safe actions; never
+guess or replay automatically. The same request may skip existing originals
+and finish derived text. If staging is gone, use durable capture receipt object
+IDs in a reviewed `derive-text capture --from-manifest`, not a recopy.
+
 Stage selected bytes inside the archive root, prepare one reviewed capture
 selection, and preview capture before approval. A source-intake plan is not
 permission to copy, capture, import, or upload anything.

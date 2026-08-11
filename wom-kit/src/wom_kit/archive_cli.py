@@ -22,6 +22,9 @@ Commands:
           traversed or changed.
   project-version-update
           Preview or approve one verified project source-mirror and version-pin update.
+  project-version-update-collision
+          Inspect one opaque project-update collision or preview/approve a
+          preservation-only relocation; never deletes or retries the update.
   operation-control
           Inspect bounded content-free long-operation status, wait, or recovery
           guidance; cancel and resume remain unsupported.
@@ -4647,6 +4650,326 @@ def command_legacy_coordination_cleanup(args: argparse.Namespace) -> int:
         print_json(result)
     else:
         print_legacy_coordination_cleanup_result_text(result)
+    return 0 if result.get("ok") else 1
+
+
+PROJECT_UPDATE_COLLISION_SCHEMA = (
+    "wom-kit/project-version-update-collision/v0.1"
+)
+PROJECT_UPDATE_COLLISION_ENTRY_REF_RE = re.compile(
+    r"update-entry:(?!0000)[0-9]{4}"
+)
+PROJECT_UPDATE_COLLISION_PLAN_RE = re.compile(r"sha256:[0-9a-f]{64}")
+PROJECT_UPDATE_COLLISION_TAG_RE = re.compile(r"v[0-9]+\.[0-9]+\.[0-9]+")
+PROJECT_UPDATE_COLLISION_REVIEWER_RE = re.compile(
+    r"[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,127}"
+)
+
+
+def _project_update_collision_blocked_result(
+    args: argparse.Namespace,
+    blocker_codes: list[str],
+    *,
+    status: str = "blocked",
+) -> dict[str, Any]:
+    """Return one fixed, path-free CLI boundary result.
+
+    This fallback deliberately reflects only values that have passed strict
+    public-safe grammars.  In particular, it never reflects a filesystem path,
+    a local entry name, a raw exception, private bytes, or a private byte hash.
+    """
+
+    target_value = str(getattr(args, "target", "") or "")
+    entry_value = str(getattr(args, "entry_ref", "") or "")
+    expected_value = str(
+        getattr(args, "expected_plan_sha256", "") or ""
+    )
+    action_value = str(getattr(args, "action", "") or "")
+    safe_target = (
+        target_value
+        if PROJECT_UPDATE_COLLISION_TAG_RE.fullmatch(target_value)
+        else None
+    )
+    safe_entry_ref = (
+        entry_value
+        if PROJECT_UPDATE_COLLISION_ENTRY_REF_RE.fullmatch(entry_value)
+        else None
+    )
+    safe_expected_plan = (
+        expected_value
+        if PROJECT_UPDATE_COLLISION_PLAN_RE.fullmatch(expected_value)
+        else None
+    )
+    messages = {
+        "project_update_collision_target_invalid": (
+            "--target must be one exact stable release tag."
+        ),
+        "project_update_collision_entry_ref_invalid": (
+            "--entry-ref must be one opaque collision reference."
+        ),
+        "project_update_collision_inspect_requires_dry_run": (
+            "Collision inspection is read-only and requires --dry-run."
+        ),
+        "project_update_collision_reveal_requires_inspect_dry_run": (
+            "Target-relative path disclosure is available only for an explicit read-only inspect."
+        ),
+        "project_update_collision_requires_expected_plan": (
+            "Collision inspect and preservation relocation require --expected-plan-sha256 from the unchanged bounded preflight."
+        ),
+        "project_update_collision_approve_requires_reviewer": (
+            "Approved preservation relocation requires a safe --reviewed-by actor id."
+        ),
+        "project_update_collision_approve_requires_quiescence": (
+            "Approved preservation relocation requires external writers to remain quiescent."
+        ),
+        "project_update_collision_service_unavailable": (
+            "Collision inspection and preservation relocation are not available in this runtime; no entry was changed."
+        ),
+        "project_update_collision_command_failed": (
+            "The collision command failed before a complete privacy-safe result was available; no retry or deletion was attempted."
+        ),
+        "project_update_collision_outcome_unverified": (
+            "The approved collision command ended without a verified write outcome."
+        ),
+        "project_update_collision_recovery_required": (
+            "Preserve the collision state and coordination lock for recovery review."
+        ),
+    }
+    approved_outcome_unverified = bool(
+        getattr(args, "approve", False)
+        and action_value == "preserve-relocate"
+        and "project_update_collision_outcome_unverified" in blocker_codes
+    )
+    next_actions = [
+        "Preserve the colliding entry and do not rerun approved project-version-update until a fresh collision inspection is available."
+    ]
+    if blocker_codes and all(
+        code
+        in {
+            "project_update_collision_requires_expected_plan",
+            "project_update_collision_approve_requires_reviewer",
+            "project_update_collision_approve_requires_quiescence",
+        }
+        for code in blocker_codes
+    ):
+        next_actions = [
+            "Run preserve-relocate with --dry-run first, review the fresh exact plan, then replay its digest with the required reviewer and quiescence affirmation."
+        ]
+    return {
+        "ok": False,
+        "dry_run": bool(getattr(args, "dry_run", False)),
+        "schema": PROJECT_UPDATE_COLLISION_SCHEMA,
+        "lifecycle_action": "project_version_update_collision",
+        "status": status,
+        "outcome_verified": not approved_outcome_unverified,
+        "action": (
+            action_value
+            if action_value in {"inspect", "preserve-relocate"}
+            else None
+        ),
+        "mode": (
+            "approve" if bool(getattr(args, "approve", False)) else "dry_run"
+        ),
+        "target": {
+            "tag": safe_target,
+            "target_relative_path_echoed": False,
+        },
+        "entry": {
+            "entry_ref": safe_entry_ref,
+            "local_relative_path_echoed": False,
+            "absolute_path_echoed": False,
+            "private_bytes_read": False,
+            "private_byte_hash_echoed": False,
+        },
+        "plan": {
+            "expected_plan_sha256": safe_expected_plan,
+            "fresh_preview_required": True,
+        },
+        "write_boundary": {
+            "writes": None if approved_outcome_unverified else False,
+            "writes_verified": not approved_outcome_unverified,
+            "writes_may_have_occurred": approved_outcome_unverified,
+            "deletes": False,
+            "overwrites": False,
+            "update_retried": False,
+            "preservation_relocation_attempted": (
+                None if approved_outcome_unverified else False
+            ),
+            "preservation_relocation_succeeded": (
+                None if approved_outcome_unverified else False
+            ),
+            "relocation_may_have_been_attempted": (
+                approved_outcome_unverified
+            ),
+        },
+        "blocker_codes": list(dict.fromkeys(blocker_codes)),
+        "blockers": [
+            messages.get(
+                code,
+                "The collision request is blocked by a fixed safety boundary.",
+            )
+            for code in dict.fromkeys(blocker_codes)
+        ],
+        "warnings": [],
+        "next_safe_actions": next_actions,
+        "privacy_guards": {
+            "local_absolute_paths_echoed": False,
+            "local_relative_paths_echoed": False,
+            "private_entry_names_echoed": False,
+            "private_bytes_echoed": False,
+            "private_byte_hashes_echoed": False,
+            "raw_errors_echoed": False,
+            "provider_or_network_called": False,
+        },
+    }
+
+
+def _project_update_collision_cli_blockers(
+    args: argparse.Namespace,
+) -> list[str]:
+    blockers: list[str] = []
+    if PROJECT_UPDATE_COLLISION_TAG_RE.fullmatch(str(args.target)) is None:
+        blockers.append("project_update_collision_target_invalid")
+    if (
+        PROJECT_UPDATE_COLLISION_ENTRY_REF_RE.fullmatch(str(args.entry_ref))
+        is None
+    ):
+        blockers.append("project_update_collision_entry_ref_invalid")
+    if (
+        PROJECT_UPDATE_COLLISION_PLAN_RE.fullmatch(
+            str(args.expected_plan_sha256 or "")
+        )
+        is None
+    ):
+        blockers.append("project_update_collision_requires_expected_plan")
+    if args.action == "inspect" and not bool(args.dry_run):
+        blockers.append("project_update_collision_inspect_requires_dry_run")
+    if bool(args.reveal_target_relative_path) and not (
+        args.action == "inspect" and bool(args.dry_run)
+    ):
+        blockers.append(
+            "project_update_collision_reveal_requires_inspect_dry_run"
+        )
+    if args.action == "preserve-relocate" and bool(args.approve):
+        if (
+            PROJECT_UPDATE_COLLISION_REVIEWER_RE.fullmatch(
+                str(args.reviewed_by or "")
+            )
+            is None
+        ):
+            blockers.append(
+                "project_update_collision_approve_requires_reviewer"
+            )
+        if not bool(args.affirm_external_writers_quiescent):
+            blockers.append(
+                "project_update_collision_approve_requires_quiescence"
+            )
+    return blockers
+
+
+def command_project_version_update_collision(
+    args: argparse.Namespace,
+) -> int:
+    cli_blockers = _project_update_collision_cli_blockers(args)
+    if cli_blockers:
+        result = _project_update_collision_blocked_result(args, cli_blockers)
+    else:
+        service = getattr(
+            archive_services,
+            "wom_kit_project_version_update_collision",
+            None,
+        )
+        if not callable(service):
+            result = _project_update_collision_blocked_result(
+                args,
+                ["project_update_collision_service_unavailable"],
+                status="deferred_not_available",
+            )
+        else:
+            try:
+                result = service(
+                    Path(args.inspection_root),
+                    target=args.target,
+                    entry_ref=args.entry_ref,
+                    action=args.action,
+                    dry_run=bool(args.dry_run),
+                    approve=bool(args.approve),
+                    expected_plan_sha256=args.expected_plan_sha256,
+                    reviewed_by=args.reviewed_by,
+                    affirm_external_writers_quiescent=bool(
+                        args.affirm_external_writers_quiescent
+                    ),
+                    reveal_target_relative_path=bool(
+                        args.reveal_target_relative_path
+                    ),
+                )
+                if not isinstance(result, dict):
+                    raise ValueError("collision_service_result_invalid")
+            except BaseException:
+                approved_outcome_unverified = bool(
+                    getattr(args, "approve", False)
+                    and args.action == "preserve-relocate"
+                )
+                result = _project_update_collision_blocked_result(
+                    args,
+                    [
+                        "project_update_collision_command_failed",
+                        *(
+                            [
+                                "project_update_collision_outcome_unverified",
+                                "project_update_collision_recovery_required",
+                            ]
+                            if approved_outcome_unverified
+                            else []
+                        ),
+                    ],
+                    status=(
+                        "collision_outcome_unverified_recovery_required"
+                        if approved_outcome_unverified
+                        else "failed_safely"
+                    ),
+                )
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        print(
+            "Project version-update collision: "
+            f"{result.get('status') or 'blocked'}"
+        )
+        print(f"Action: {result.get('action') or '-'}")
+        entry = result.get("entry")
+        if isinstance(entry, dict):
+            print(f"Entry ref: {entry.get('entry_ref') or '<invalid>'}")
+        target = result.get("target")
+        if (
+            bool(args.reveal_target_relative_path)
+            and isinstance(target, dict)
+            and target.get("target_tree_exact_key_verified") is True
+            and target.get("target_relative_path_echoed") is True
+            and isinstance(target.get("target_relative_path"), str)
+        ):
+            print(
+                "Verified target-relative path: "
+                + target["target_relative_path"]
+            )
+        for blocker in result.get("blockers", []):
+            print(f"BLOCKED: {blocker}")
+        for next_action in result.get("next_safe_actions", []):
+            print(f"NEXT: {next_action}")
+        write_boundary = result.get("write_boundary")
+        print(
+            "Writes: "
+            + (
+                "yes"
+                if isinstance(write_boundary, dict)
+                and bool(write_boundary.get("writes"))
+                else "unknown"
+                if isinstance(write_boundary, dict)
+                and write_boundary.get("writes") is None
+                else "none"
+            )
+        )
     return 0 if result.get("ok") else 1
 
 
@@ -17154,10 +17477,43 @@ def command_objet_capture_batch(args: argparse.Namespace) -> int:
         print(f"Objet capture batch: {result.get('state') or '-'}")
         print(f"- batch: {summary.get('batch_id') or '-'}")
         print(f"- items: {summary.get('item_count', 0)}")
-        print(f"- ready/blocked: {summary.get('ready_item_count', 0)}/{summary.get('blocked_item_count', 0)}")
+        if args.dry_run:
+            print(f"- ready/blocked: {summary.get('ready_item_count', 0)}/{summary.get('blocked_item_count', 0)}")
+        else:
+            def actual_count(key: str) -> str:
+                value = summary.get(key)
+                return (
+                    str(value)
+                    if isinstance(value, int)
+                    and not isinstance(value, bool)
+                    and value >= 0
+                    else "unknown"
+                )
+
+            print(
+                "- original written/skipped/blocked: "
+                f"{actual_count('original_written_item_count')}/"
+                f"{actual_count('original_skipped_item_count')}/"
+                f"{actual_count('original_blocked_item_count')}"
+            )
+            print(
+                "- derived text written/skipped/blocked: "
+                f"{actual_count('derived_text_written_item_count')}/"
+                f"{actual_count('derived_text_skipped_item_count')}/"
+                f"{actual_count('derived_text_blocked_item_count')}"
+            )
         print(f"- convergence: {summary.get('convergence_model') or '-'}")
         if summary.get("plan_sha256"):
             print(f"- plan sha256: {summary['plan_sha256']}")
+        for key, label in (
+            ("writes_may_have_occurred", "writes may have occurred"),
+            ("outcome_unverified", "outcome unverified"),
+        ):
+            if isinstance(result.get(key), bool):
+                print(f"- {label}: {'yes' if result[key] else 'no'}")
+        for action in result.get("next_safe_actions", []):
+            if isinstance(action, str):
+                print(f"NEXT: {action}")
         for blocker in result.get("blockers", []):
             print(f"BLOCKED: {blocker}")
         for warning in result.get("warnings", []):
@@ -22588,6 +22944,79 @@ def build_parser() -> argparse.ArgumentParser:
     )
     project_version_update.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     project_version_update.set_defaults(func=command_project_version_update)
+
+    project_version_update_collision = subcommands.add_parser(
+        "project-version-update-collision",
+        help=(
+            "Inspect one opaque project-update collision or separately "
+            "preview/approve preservation-only relocation."
+        ),
+    )
+    project_version_update_collision.add_argument(
+        "inspection_root",
+        help="The exact project or archive root used for project-version-update.",
+    )
+    project_version_update_collision.add_argument(
+        "--target",
+        required=True,
+        help="Exact stable release tag bound by the collision plan.",
+    )
+    project_version_update_collision.add_argument(
+        "--entry-ref",
+        required=True,
+        help="Bounded opaque ordinal such as update-entry:0001; never substitute a local path.",
+    )
+    project_version_update_collision.add_argument(
+        "--action",
+        choices=["inspect", "preserve-relocate"],
+        required=True,
+        help="Read one collision or separately preserve-relocate an eligible regular entry.",
+    )
+    project_version_update_collision_mode = (
+        project_version_update_collision.add_mutually_exclusive_group(
+            required=True
+        )
+    )
+    project_version_update_collision_mode.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Required for inspect; previews relocation without writes.",
+    )
+    project_version_update_collision_mode.add_argument(
+        "--approve",
+        action="store_true",
+        help="Preserve-relocate only; never deletes, overwrites, or retries update.",
+    )
+    project_version_update_collision.add_argument(
+        "--expected-plan-sha256",
+        help="Exact fresh materialization plan digest required for inspect and preserve-relocate.",
+    )
+    project_version_update_collision.add_argument(
+        "--reviewed-by",
+        help="Safe non-secret reviewer actor id required for approved preserve-relocate.",
+    )
+    project_version_update_collision.add_argument(
+        "--affirm-external-writers-quiescent",
+        action="store_true",
+        help="Required for approval: editors, sync, backup, and Git writers remain paused.",
+    )
+    project_version_update_collision.add_argument(
+        "--reveal-target-relative-path",
+        action="store_true",
+        help=(
+            "Explicit inspect-only disclosure of a verified release-tree "
+            "target-relative path; never reveals the ignored local path."
+        ),
+    )
+    project_version_update_collision.add_argument(
+        "--format",
+        choices=["text", "json"],
+        default="json",
+        help="Output format.",
+    )
+    project_version_update_collision.set_defaults(
+        func=command_project_version_update_collision
+    )
 
     capabilities = subcommands.add_parser(
         "capabilities",
@@ -31714,6 +32143,7 @@ def main(argv: list[str] | None = None) -> int:
             "notion-reviewed-page-recovery",
             "operator-feedback-compose",
             "operator-feedback-body-check",
+            "project-version-update-collision",
             "create-draft",
         }
     )

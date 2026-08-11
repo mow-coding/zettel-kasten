@@ -84,7 +84,15 @@ def run_git_ls_files(repo_root: Path) -> list[str]:
     )
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or "git ls-files failed")
-    return [line.strip().replace("\\", "/") for line in result.stdout.splitlines() if line.strip()]
+    paths: list[str] = []
+    for line in result.stdout.splitlines():
+        normalized = line.strip().replace("\\", "/")
+        if not normalized:
+            continue
+        candidate = repo_root.joinpath(*normalized.split("/"))
+        if candidate.exists() or candidate.is_symlink():
+            paths.append(normalized)
+    return paths
 
 
 def is_public_text_path(path: str) -> bool:

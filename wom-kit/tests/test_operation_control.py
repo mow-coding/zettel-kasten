@@ -45,6 +45,7 @@ class OperationControlTests(unittest.TestCase):
         *,
         ok: bool = True,
         exit_code: int = 0,
+        payload_fields: dict[str, object] | None = None,
     ) -> None:
         payload = {
             "ok": ok,
@@ -59,6 +60,8 @@ class OperationControlTests(unittest.TestCase):
                 "operation": journal.metadata(),
             },
         }
+        if payload_fields is not None:
+            payload.update(payload_fields)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(
             json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n",
@@ -92,6 +95,147 @@ class OperationControlTests(unittest.TestCase):
             rendered = json.dumps(result)
             self.assertNotIn(str(root), rendered)
             self.assertNotIn("result_sha256", rendered)
+
+    def test_project_update_success_status_routes_are_exact_and_punctuation_free(
+        self,
+    ) -> None:
+        dry_run_actions = [
+            "Treat this completed result as dry-run only and review the full bound output",
+            "If review still supports the update, use a separate fresh project-version-update approval",
+        ]
+        expected_routes = {
+            "ready_for_approval": dry_run_actions,
+            "ready_to_fetch_on_approve": dry_run_actions,
+            "preview_only_platform_unsupported": [
+                "No update was applied; run a fresh project-version-update --dry-run on supported Windows before considering a separate approval"
+            ],
+            "updated_restart_required": [
+                "Start a new process and run archive version <project-or-archive-root> --format json before claiming the update active"
+            ],
+            "no_change": [
+                "No write or restart is required; run archive version <project-or-archive-root> --format json to verify the project is already current"
+            ],
+            "future_success_state": [
+                "Do not infer update, approval, or restart state from this unrecognized successful status",
+                "Review the complete bound output and run a fresh project-version-update --dry-run before taking another action",
+            ],
+        }
+
+        for status, expected in expected_routes.items():
+            with self.subTest(status=status):
+                actions = operation_control._project_update_completed_next_actions(
+                    {
+                        "command": "project-version-update",
+                        "status": status,
+                        "completion_ok": True,
+                    }
+                )
+
+                self.assertEqual(actions, expected)
+                self.assertTrue(actions)
+                self.assertTrue(
+                    all(action == action.rstrip(".!?;:,") for action in actions)
+                )
+
+        failed_domains = [
+            {
+                "target_tag": "v0.3.315",
+                "collision_refs": ["update-entry:0001"],
+                "materialization_plan_sha256": "sha256:" + "b" * 64,
+            },
+            {"blocker_codes": ["materialization_collision"]},
+            {"blocker_codes": ["other_blocker"]},
+        ]
+        for fields in failed_domains:
+            with self.subTest(failed_route=fields):
+                actions = operation_control._project_update_completed_next_actions(
+                    {
+                        "command": "project-version-update",
+                        "status": "blocked",
+                        "completion_ok": False,
+                        **fields,
+                    }
+                )
+
+                self.assertTrue(actions)
+                self.assertTrue(
+                    all(action == action.rstrip(".!?;:,") for action in actions)
+                )
+
+    def test_project_update_success_status_routes_match_status_wait_and_recovery_plan(
+        self,
+    ) -> None:
+        expected_routes = {
+            "ready_for_approval": [
+                "Treat this completed result as dry-run only and review the full bound output",
+                "If review still supports the update, use a separate fresh project-version-update approval",
+            ],
+            "ready_to_fetch_on_approve": [
+                "Treat this completed result as dry-run only and review the full bound output",
+                "If review still supports the update, use a separate fresh project-version-update approval",
+            ],
+            "preview_only_platform_unsupported": [
+                "No update was applied; run a fresh project-version-update --dry-run on supported Windows before considering a separate approval"
+            ],
+            "updated_restart_required": [
+                "Start a new process and run archive version <project-or-archive-root> --format json before claiming the update active"
+            ],
+            "no_change": [
+                "No write or restart is required; run archive version <project-or-archive-root> --format json to verify the project is already current"
+            ],
+            "future_success_state": [
+                "Do not infer update, approval, or restart state from this unrecognized successful status",
+                "Review the complete bound output and run a fresh project-version-update --dry-run before taking another action",
+            ],
+        }
+
+        for status, expected in expected_routes.items():
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp) / "project"
+                journal, output = self.start_journal(
+                    root,
+                    command="project-version-update",
+                    relative=".zettel-kasten/diagnostics/update-result.json",
+                )
+                self.write_result(
+                    journal,
+                    output,
+                    payload_fields={
+                        "status": status,
+                        "target": {"tag": "v0.3.315"},
+                    },
+                )
+                self.assertTrue(
+                    journal.complete(
+                        exit_code=0,
+                        result_available=True,
+                        result_ok=True,
+                        result_path=output,
+                    )
+                )
+
+                status_result = operation_control.inspect_operation(
+                    root, journal.operation_ref
+                )
+                wait_result = operation_control.wait_operation(
+                    root, journal.operation_ref, 1
+                )
+                recovery_result = operation_control.recovery_plan(
+                    root, journal.operation_ref
+                )
+
+                for result in (status_result, wait_result, recovery_result):
+                    self.assertTrue(result["ok"], result)
+                    self.assertEqual(
+                        result["state"], "completed_result_available"
+                    )
+                    self.assertEqual(result["next_safe_actions"], expected)
+                    self.assertTrue(
+                        all(
+                            action == action.rstrip(".!?;:,")
+                            for action in result["next_safe_actions"]
+                        )
+                    )
 
     def test_missing_or_tampered_result_fails_closed(self) -> None:
         for mutation in ("missing", "tampered"):

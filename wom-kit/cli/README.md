@@ -6,6 +6,22 @@ The filesystem folder is `wom-kit/`, the Python import package is `wom_kit`, and
 
 See `wom-kit/docs/concepts/naming-and-terminology.md` for the naming baseline.
 
+v0.3.315 makes `project-version-update` preview and approval share one exact
+target materialization plan. If a destination unexpectedly exists, the updater
+blocks and returns a content-free item reference plus the bound plan digest.
+The separate CLI-only `project-version-update-collision` surface can inspect
+that item or preview and approve a preserve-relocate action; it never deletes,
+overwrites, fetches, or retries the updater. A fresh updater dry-run and a
+separate updater approval are still required. This is unauthenticated
+private-state internal consistency, not cryptographic authentication or a
+general same-user tamper defense. The same release repairs paired batch objet
+capture: reviewed original and derived-text rows remain paired, outcomes are
+reported in separate partitions, and each attempt writes bound evidence or an
+honest incomplete/recovery-required result. See
+`wom-kit/docs/project-version-update.md`, `wom-kit/docs/derived-text.md`, and
+`wom-kit/docs/releases/v0.3.315.md`. Local tests do not prove merge, CI, tag,
+Release, wheel, fresh installation, real-archive use, or human acceptance.
+
 v0.3.314 adds one alias-free `operation-control` surface for output-supervised
 `project-version-update`, `index`, and `index-health` runs. A fresh `--output`
 causes an early opaque operation reference; a later process can request

@@ -9,6 +9,7 @@
     "schema": {"const": "wom-kit/objet-capture-batch-request/v0.1"},
     "batch_id": {"type": "string", "minLength": 1, "maxLength": 200},
     "project_intake_receipt": {"type": "string", "minLength": 1},
+    "project_intake_receipt_path": {"type": "string", "minLength": 1},
     "items": {
       "type": "array",
       "minItems": 1,
@@ -23,16 +24,33 @@
           "source_intake_receipt_path": {"type": "string", "minLength": 1},
           "title": {"type": "string", "minLength": 1, "maxLength": 2000},
           "derived_text_staged_path": {"type": "string", "minLength": 1},
-          "derivation_kind": {"type": "string", "minLength": 1},
+          "derivation_kind": {"type": "string", "enum": ["parser", "ocr", "asr", "llm_vision"]},
           "tool_name": {"type": "string", "minLength": 1},
           "tool_version": {"type": "string", "minLength": 1},
-          "review_status": {"type": "string", "minLength": 1},
+          "review_status": {"type": "string", "enum": ["unreviewed", "human_corrected"]},
           "model": {"type": "string", "minLength": 1},
-          "confidence": {"type": ["number", "string", "null"]},
+          "model_name": {"type": "string", "minLength": 1},
+          "model_version": {"type": "string", "minLength": 1},
+          "confidence": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
           "language": {"type": ["string", "null"]},
           "born_digital": {"type": "boolean"}
-        }
+        },
+        "dependentRequired": {
+          "derived_text_staged_path": ["derivation_kind", "tool_name", "tool_version", "review_status"],
+          "derivation_kind": ["derived_text_staged_path"],
+          "tool_name": ["derived_text_staged_path"],
+          "tool_version": ["derived_text_staged_path"],
+          "review_status": ["derived_text_staged_path"],
+          "model": ["derived_text_staged_path"],
+          "model_name": ["derived_text_staged_path"],
+          "model_version": ["derived_text_staged_path"],
+          "confidence": ["derived_text_staged_path"],
+          "language": ["derived_text_staged_path"],
+          "born_digital": ["derived_text_staged_path"]
+        },
+        "not": {"required": ["model", "model_name"]}
       }
     }
-  }
+  },
+  "not": {"required": ["project_intake_receipt", "project_intake_receipt_path"]}
 }

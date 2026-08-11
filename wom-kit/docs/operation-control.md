@@ -86,6 +86,50 @@ complete output agree, status may report
 CLI result. It does not prove fresh domain truth; follow the command-specific
 verification action.
 
+`completed_result_available` also does not mean that the domain command
+succeeded. For example, a project updater can finish with a complete bound
+result whose own `ok` is false because materialization was safely blocked. In
+that case operation recovery remains false because no output was lost, while
+`result.ok: false` and the allowlisted `result.domain` projection show that the
+update still needs attention.
+
+For `project-version-update`, operation control copies no free-form blocker
+message. It projects only a grammar-checked target tag, fixed blocker codes,
+the exact `materialization_plan_sha256`, and sorted ordinal references such as
+`update-entry:0001`. When all three bindings are available, status and
+recovery-plan return a path-free command like:
+
+```powershell
+archive project-version-update-collision <project-or-archive-root> `
+  --target vX.Y.Z `
+  --entry-ref update-entry:0001 `
+  --expected-plan-sha256 sha256:<64-lowercase-hex> `
+  --action inspect --dry-run --format json
+```
+
+The collision command reruns the planner and refuses digest or ordinal drift.
+Do not repeat updater approval merely because operation recovery is false.
+When the safe projection is incomplete, inspect the bound complete output and
+run only a new updater dry-run after resolving its fixed blocker codes.
+
+Successful transport is also routed by the updater's allowlisted status, not by
+a generic success sentence. `ready_for_approval` and
+`ready_to_fetch_on_approve` remain dry-run review states and point to a separate
+approval only after review. `preview_only_platform_unsupported` says that no
+update was applied and requires a fresh Windows preview.
+`updated_restart_required` points to a new-process `archive version` check,
+while `no_change` says that neither a write nor restart is required and asks
+only for version verification. An unknown successful status is not interpreted;
+it points back to the complete bound output and a fresh dry-run. Status, wait,
+and recovery-plan share these exact punctuation-free routes.
+
+If collision preservation reports `recovery_required`, its deterministic
+private case or owned project-update lock is intentionally retained. Do not
+delete the lock, move the payload back, overwrite a receipt, or rerun either
+approval. Preserve that state for operator review. This is distinct from an
+intact completed updater output whose operation-control recovery flag is
+false.
+
 The journal hash chain detects torn records and ordinary drift. It is not a
 MAC, signature, authority receipt, or defense against a hostile process running
 as the same local user.

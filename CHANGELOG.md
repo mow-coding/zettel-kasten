@@ -6,6 +6,54 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.315 - 2026-08-11
+
+- Made locally available project-update targets use the same bounded
+  materialization planner in dry-run and approval. Ignored or unsafe target
+  collisions now block the preview with fixed codes, an exact plan digest, and
+  opaque ordinal references instead of first appearing during approval. One
+  private NFKC/case-fold/HFS/Windows/`.git`/8.3 canonical cross-map covers
+  current, target, index, and worktree names; ignored aliases and empty ignored
+  descendants fail closed.
+- Added the alias-free, CLI-only `project-version-update-collision` workflow.
+  It can inspect one exact digest-bound reference and can separately preserve
+  only an eligible ignored regular single-link file through a Windows
+  same-volume, no-replace relocation. It never deletes the payload, retries the
+  updater, changes a pin, or grants update approval.
+- Bound collision preservation to private intent and completion evidence made
+  from the exact opened source and destination handles: bounded content hash,
+  Windows volume/file identity, link count, and size. Terminal replay reopens
+  and rehashes the payload. This is unauthenticated same-user internal
+  consistency, not a MAC, signature, ACL, or coordinated-tamper defense.
+- Added pre-HEAD exact target verification and bounded self-rollback, fresh
+  preview versus final lock truth, nullable uncertain write/relocation fields,
+  retained recovery evidence, and status-specific `operation-control` routing
+  so a complete saved output is never confused with domain success.
+- Fixed `objet-capture-batch` so every schema-valid paired derived-text field
+  reaches the existing paired capture engine. Closed-shape validation,
+  duplicate-member rejection, path-alias and hard-link checks, and strict
+  paired metadata checks now finish before source-body reads.
+- Split batch completion evidence into original and derived-text requested,
+  written/ready, skipped, and blocked partitions. Attempt-bound receipts keep
+  partial and repaired replays distinct, while receipt failures and uncertain
+  lower outcomes report `evidence_incomplete` or `recovery_required` instead
+  of guessing success.
+- Bound apply to the exact reviewed selection and lower result identity,
+  stable 64 MiB-bounded reads, and the exact per-attempt `files_written` delta.
+  Publication observation is `verified_exact`, `not_written`, or `ambiguous`;
+  `batch_capture_outcome_unverified` is a blocker code while `partial`,
+  `evidence_incomplete`, and `recovery_required` are result states with fixed
+  safe next actions.
+- Documented the safe v0.3.314 reconciliation path: replay the same reviewed
+  request when staged originals remain so existing originals skip and only
+  missing derived text is registered; otherwise use the existing derived-text
+  manifest capture route with object ids from durable original-capture
+  evidence. Originals are not recopied.
+- Local focused, integration, package, and adversarial checks are
+  implementation evidence only. Merge, required external CI, exact tag,
+  GitHub Release, verified wheel publication, anonymous fresh installation,
+  beta-client update, and human acceptance remain separate gates.
+
 ## v0.3.314 - 2026-08-11
 
 - Replaced per-file target-tree Git materialization with bounded

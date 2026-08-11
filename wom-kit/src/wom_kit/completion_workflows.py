@@ -11,9 +11,11 @@ from __future__ import annotations
 import hashlib
 import html
 import json
+import math
 import os
 import re
 import stat
+import unicodedata
 import urllib.parse
 from datetime import datetime, timezone
 from html.parser import HTMLParser
@@ -79,7 +81,64 @@ OBJET_CAPTURE_BATCH_RECEIPT_SCHEMA = (
 )
 OBJET_CAPTURE_BATCH_RECEIPTS_DIR = "receipts/objet-capture-batches"
 OBJET_CAPTURE_BATCH_MAX_ITEMS = 2000
+OBJET_CAPTURE_BATCH_REQUEST_MAX_BYTES = 64 * 1024 * 1024
 OBJET_CAPTURE_BATCH_TITLE_MAX_CHARACTERS = 2000
+OBJET_CAPTURE_BATCH_EVIDENCE_INCOMPLETE_NEXT_SAFE_ACTIONS = [
+    "Run a fresh objet-capture-batch dry-run with the same request before any retry.",
+    "Approve only that fresh plan so missing batch evidence can be recreated without duplicate originals or derived text.",
+]
+OBJET_CAPTURE_BATCH_SELECTION_RECOVERY_NEXT_SAFE_ACTIONS = [
+    "Inspect the reviewed selection evidence collision before any retry.",
+    "Restore or regenerate the reviewed request, then run a fresh objet-capture-batch dry-run and approve only that fresh plan.",
+]
+OBJET_CAPTURE_BATCH_OUTCOME_UNVERIFIED_NEXT_SAFE_ACTIONS = [
+    "Run a fresh objet-capture-batch dry-run with the same request before any retry.",
+    "Approve only that fresh plan; if staged originals are unavailable, reconcile derived text from the existing original manifest.",
+]
+OBJET_CAPTURE_BATCH_REQUEST_FIELDS = frozenset(
+    {
+        "schema",
+        "batch_id",
+        "project_intake_receipt",
+        "project_intake_receipt_path",
+        "items",
+    }
+)
+OBJET_CAPTURE_BATCH_ITEM_FIELDS = frozenset(
+    {
+        "item_id",
+        "staged_path",
+        "source_intake_receipt_path",
+        "title",
+        "derived_text_staged_path",
+        "derivation_kind",
+        "tool_name",
+        "tool_version",
+        "review_status",
+        # `model` is the shipped v0.1 spelling. model_name/model_version are
+        # additive aliases aligned with the mature derived-text service.
+        "model",
+        "model_name",
+        "model_version",
+        "confidence",
+        "language",
+        "born_digital",
+    }
+)
+OBJET_CAPTURE_BATCH_DERIVED_REQUIRED_FIELDS = frozenset(
+    {"derivation_kind", "tool_name", "tool_version", "review_status"}
+)
+OBJET_CAPTURE_BATCH_DERIVED_METADATA_FIELDS = frozenset(
+    {
+        *OBJET_CAPTURE_BATCH_DERIVED_REQUIRED_FIELDS,
+        "model",
+        "model_name",
+        "model_version",
+        "confidence",
+        "language",
+        "born_digital",
+    }
+)
 MARKUP_NORMALIZATION_PLAN_SCHEMA = (
     "wom-kit/markup-normalization-plan/v0.1"
 )
@@ -3806,16 +3865,35 @@ def _batch_request(
     path, path_error = _resolve_json_input(root, manifest_path)
     if path_error or path is None:
         return None, None, [path_error or "input_path_invalid"]
+    raw, read_reason = archive_services._bounded_stable_regular_file_read(
+        path,
+        max_bytes=OBJET_CAPTURE_BATCH_REQUEST_MAX_BYTES,
+    )
+    read_blockers = {
+        "missing": "input_file_missing_or_not_regular",
+        "unreadable": "input_file_unreadable",
+        "symlink": "input_file_missing_or_not_regular",
+        "reparse": "input_file_missing_or_not_regular",
+        "directory": "input_file_missing_or_not_regular",
+        "special": "input_file_missing_or_not_regular",
+        "too_large": "input_file_too_large",
+        "changed": "input_file_changed_during_read",
+    }
+    if read_reason is not None or raw is None:
+        return None, None, [
+            read_blockers.get(read_reason or "", "input_file_unreadable")
+        ]
     try:
-        raw = path.read_bytes()
-    except OSError:
-        return None, None, ["input_file_unreadable"]
-    try:
-        loaded = json.loads(raw.decode("utf-8"))
+        loaded = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=_reject_duplicate_json_members,
+        )
     except UnicodeDecodeError:
         return None, None, ["input_invalid_utf8"]
     except json.JSONDecodeError:
         return None, None, ["input_invalid_json"]
+    except ValueError:
+        return None, None, ["input_duplicate_json_member"]
     if not isinstance(loaded, dict):
         return None, None, ["input_not_object"]
     return loaded, raw, []
@@ -3845,6 +3923,454 @@ def _safe_batch_title(
     return title, None
 
 
+def _batch_confidence_value(
+    value: Any,
+) -> tuple[float | int | None, str | None]:
+    """Enforce the paired derived-text service's number-or-null contract."""
+
+    if value is None:
+        return None, None
+    if isinstance(value, bool):
+        return None, "confidence_invalid"
+    if isinstance(value, (int, float)):
+        if (
+            not math.isfinite(float(value))
+            or value < 0
+            or value > 1
+        ):
+            return None, "confidence_invalid"
+        return value, None
+    return None, "confidence_invalid"
+
+
+def _batch_path_collision(
+    root: Path,
+    relative: str,
+    *,
+    seen_keys: set[str],
+    seen_file_identities: set[tuple[int, int]],
+) -> tuple[bool, str | None]:
+    """Register one archive-relative target without reading its file body.
+
+    The conservative NFC+casefold key closes Windows case aliases even when a
+    plan is produced on another platform. A regular-file device/inode key also
+    closes hard-link and resolved-name aliases that have different spellings.
+    """
+
+    collision_key = unicodedata.normalize(
+        "NFC",
+        relative.replace("\\", "/"),
+    ).casefold()
+    duplicate = collision_key in seen_keys
+    seen_keys.add(collision_key)
+
+    try:
+        entry_stat = os.lstat(
+            archive_services.archive_internal_path(root, relative)
+        )
+    except FileNotFoundError:
+        # Existence is validated by the lower selection service.  A missing
+        # staged file is not itself an alias/confinement failure.
+        return duplicate, None
+    except (
+        archive_services.ArchivePathError,
+        archive_services.ArchiveServiceError,
+        OSError,
+        ValueError,
+    ):
+        return duplicate, "batch_selection_path_unsafe"
+    if not stat.S_ISREG(entry_stat.st_mode) or not entry_stat.st_ino:
+        return duplicate, None
+    identity = (int(entry_stat.st_dev), int(entry_stat.st_ino))
+    if identity in seen_file_identities:
+        duplicate = True
+    seen_file_identities.add(identity)
+    return duplicate, None
+
+
+def _batch_project_derived_text(
+    value: Any,
+) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    return {
+        "planned_action": value.get("planned_action"),
+        "action": value.get("action"),
+        "item_status": value.get("item_status"),
+        "blockers": list(value.get("blockers", [])),
+        "warnings": list(value.get("warnings", [])),
+    }
+
+
+def _batch_project_capture_item(
+    item: dict[str, Any],
+    *,
+    derived_text_requested: bool,
+) -> dict[str, Any]:
+    projected = {
+        "item_id": item.get("item_id"),
+        "planned_action": item.get("planned_action"),
+        "action": item.get("action"),
+        "status_class": item.get("status_class"),
+        "blockers": list(item.get("blockers", [])),
+        "warnings": list(item.get("warnings", [])),
+        "derived_text_requested": derived_text_requested,
+    }
+    if derived_text_requested:
+        projected["derived_text"] = _batch_project_derived_text(
+            item.get("derived_text")
+        )
+    return projected
+
+
+def _batch_completion_counts(
+    items: list[dict[str, Any]],
+    *,
+    original_requested: int,
+    derived_text_requested_item_ids: list[str],
+    approve: bool,
+) -> dict[str, int]:
+    original_ok_actions = (
+        archive_services.OBJET_CAPTURE_ORIGINAL_OK_ACTIONS
+        if approve
+        else archive_services.OBJET_CAPTURE_ORIGINAL_OK_PLANNED_ACTIONS
+    )
+    original_states = [
+        item.get("action") if approve else item.get("planned_action")
+        for item in items
+    ]
+    original_ok = sum(
+        1 for state in original_states if state in original_ok_actions
+    )
+    original_skipped = sum(
+        1 for state in original_states if state == "skip_already_present"
+    )
+    original_writes = original_ok - original_skipped
+
+    items_by_id = {
+        str(item.get("item_id") or ""): item
+        for item in items
+        if isinstance(item, dict) and item.get("item_id")
+    }
+    derived_statuses: list[str] = []
+    for item_id in derived_text_requested_item_ids:
+        capture_item = items_by_id.get(item_id)
+        derived = (
+            capture_item.get("derived_text")
+            if isinstance(capture_item, dict)
+            else None
+        )
+        derived_statuses.append(
+            str(derived.get("item_status") or "missing")
+            if isinstance(derived, dict)
+            else "missing"
+        )
+
+    counts = {
+        "original_requested_item_count": original_requested,
+        "original_skipped_item_count": original_skipped,
+        "original_blocked_item_count": max(
+            original_requested - original_writes - original_skipped,
+            0,
+        ),
+        "derived_text_requested_item_count": len(
+            derived_text_requested_item_ids
+        ),
+        "derived_text_skipped_item_count": derived_statuses.count("skipped"),
+    }
+    if approve:
+        derived_written = derived_statuses.count("written")
+        counts.update(
+            {
+                "original_written_item_count": original_writes,
+                "derived_text_written_item_count": derived_written,
+                "derived_text_blocked_item_count": max(
+                    len(derived_text_requested_item_ids)
+                    - derived_written
+                    - derived_statuses.count("skipped"),
+                    0,
+                ),
+            }
+        )
+    else:
+        derived_ready = derived_statuses.count("ready")
+        counts.update(
+            {
+                "original_would_write_item_count": original_writes,
+                "derived_text_ready_item_count": derived_ready,
+                "derived_text_blocked_item_count": max(
+                    len(derived_text_requested_item_ids)
+                    - derived_ready
+                    - derived_statuses.count("skipped"),
+                    0,
+                ),
+            }
+        )
+    return counts
+
+
+def _batch_completion_blockers(
+    counts: dict[str, int],
+    *,
+    approve: bool,
+) -> list[str]:
+    original_write_key = (
+        "original_written_item_count"
+        if approve
+        else "original_would_write_item_count"
+    )
+    blockers: list[str] = []
+    original_terminal = counts.get(original_write_key, 0) + counts.get(
+        "original_skipped_item_count",
+        0,
+    )
+    if original_terminal != counts.get("original_requested_item_count", 0):
+        blockers.append("batch_original_completion_incomplete")
+    derived_completed = counts.get(
+        "derived_text_written_item_count"
+        if approve
+        else "derived_text_ready_item_count",
+        0,
+    ) + counts.get("derived_text_skipped_item_count", 0)
+    if derived_completed != counts.get("derived_text_requested_item_count", 0):
+        blockers.append("batch_derived_text_completion_incomplete")
+    return blockers
+
+
+def _batch_capture_result_shape_valid(
+    capture: Any,
+    *,
+    expected_item_ids: list[str],
+    paired_item_ids: set[str],
+    expected_archive_id: str,
+    expected_selection_manifest_id: str,
+    expected_selection_sha256: str,
+) -> bool:
+    """Validate the lower apply result before any completion claim is made."""
+
+    if not isinstance(capture, dict):
+        return False
+    if not isinstance(capture.get("ok"), bool):
+        return False
+    if not isinstance(capture.get("status_class"), str):
+        return False
+    if capture.get("archive_id") != expected_archive_id:
+        return False
+    if (
+        capture.get("selection_manifest_id")
+        != expected_selection_manifest_id
+        or capture.get("selection_manifest_sha256")
+        != expected_selection_sha256
+    ):
+        return False
+    if not isinstance(capture.get("summary"), dict):
+        return False
+    for key in ("blockers", "warnings"):
+        value = capture.get(key)
+        if not isinstance(value, list) or not all(
+            isinstance(entry, str) for entry in value
+        ):
+            return False
+    receipt_path = capture.get("receipt_path")
+    receipt_missing_contract = (
+        receipt_path is None
+        and capture.get("status_class") == "evidence_incomplete"
+        and "objet_capture_receipt_write_failed" in capture.get("blockers", [])
+        and capture.get("ok") is False
+    )
+    if not receipt_missing_contract:
+        if not isinstance(receipt_path, str) or not receipt_path.strip():
+            return False
+        try:
+            normalized_receipt = archive_services.normalize_archive_relative_path(
+                receipt_path
+            )
+        except Exception:
+            return False
+        if (
+            normalized_receipt != receipt_path
+            or not normalized_receipt.startswith(
+                f"{archive_services.OBJET_CAPTURE_RECEIPTS_DIR}/"
+            )
+        ):
+            return False
+    files_written = capture.get("files_written", [])
+    if not isinstance(files_written, list) or not all(
+        isinstance(entry, str) for entry in files_written
+    ):
+        return False
+    try:
+        normalized_files_written = [
+            archive_services.normalize_archive_relative_path(entry)
+            for entry in files_written
+        ]
+    except Exception:
+        return False
+    if (
+        normalized_files_written != files_written
+        or len(set(files_written)) != len(files_written)
+    ):
+        return False
+
+    items = capture.get("items")
+    if not isinstance(items, list) or not all(
+        isinstance(item, dict) for item in items
+    ):
+        return False
+    item_ids = [str(item.get("item_id") or "") for item in items]
+    if sorted(item_ids) != sorted(expected_item_ids) or len(set(item_ids)) != len(
+        item_ids
+    ):
+        return False
+    for item in items:
+        item_id = str(item.get("item_id") or "")
+        if not isinstance(item.get("action"), str):
+            return False
+        if not isinstance(item.get("status_class"), str):
+            return False
+        for key in ("blockers", "warnings"):
+            value = item.get(key)
+            if not isinstance(value, list) or not all(
+                isinstance(entry, str) for entry in value
+            ):
+                return False
+        derived = item.get("derived_text")
+        if item_id in paired_item_ids:
+            if not isinstance(derived, dict):
+                return False
+            if not isinstance(derived.get("item_status"), str):
+                return False
+            for key in ("blockers", "warnings"):
+                value = derived.get(key)
+                if not isinstance(value, list) or not all(
+                    isinstance(entry, str) for entry in value
+                ):
+                    return False
+        elif derived is not None:
+            return False
+    try:
+        expected_summary = archive_services.objet_capture_summary(
+            items,
+            approve=True,
+        )
+        expected_files_written = archive_services.objet_capture_files_written(
+            items,
+            receipt_path=receipt_path,
+        )
+    except Exception:
+        return False
+    if (
+        capture.get("summary") != expected_summary
+        or files_written != expected_files_written
+    ):
+        return False
+    next_safe_actions = capture.get("next_safe_actions")
+    if capture.get("status_class") == "partial":
+        return next_safe_actions == list(
+            archive_services.OBJET_CAPTURE_PARTIAL_NEXT_SAFE_ACTIONS
+        )
+    if capture.get("status_class") == "evidence_incomplete":
+        return next_safe_actions == list(
+            archive_services.OBJET_CAPTURE_EVIDENCE_INCOMPLETE_NEXT_SAFE_ACTIONS
+        )
+    return next_safe_actions is None
+
+
+def _batch_capture_outcome_unverified_result(
+    result: dict[str, Any],
+) -> dict[str, Any]:
+    """Return content-free recovery truth when lower durable state is unknown."""
+
+    uncertain_summary = {
+        key: result["summary"].get(key)
+        for key in (
+            "batch_id",
+            "item_count",
+            "request_sha256",
+            "selection_sha256",
+            "selection_path",
+            "plan_sha256",
+            "original_requested_item_count",
+            "derived_text_requested_item_count",
+        )
+    }
+    uncertain_summary.update(
+        {
+            "capture_outcome_verified": False,
+            "capture_receipt_path": None,
+            "batch_receipt_path": None,
+            "recovery_required": True,
+            "writes_may_have_occurred": True,
+            "next_safe_action": "fresh_batch_dry_run_then_reconcile",
+        }
+    )
+    return {
+        **result,
+        "ok": False,
+        "state": "recovery_required",
+        "dry_run": False,
+        "approved": True,
+        "lifecycle_action": "objet_capture_batch",
+        "outcome_unverified": True,
+        "writes_may_have_occurred": True,
+        "summary": uncertain_summary,
+        "items": [],
+        "blockers": ["batch_capture_outcome_unverified"],
+        "warnings": [],
+        "next_safe_actions": list(
+            OBJET_CAPTURE_BATCH_OUTCOME_UNVERIFIED_NEXT_SAFE_ACTIONS
+        ),
+        "would_change": [],
+        "files_written": [],
+        "privacy_guards": {
+            **result["privacy_guards"],
+            "writes": True,
+            "exception_text_echoed": False,
+        },
+    }
+
+
+def _batch_selection_publication_unverified_result(
+    result: dict[str, Any],
+) -> dict[str, Any]:
+    """Report an ambiguous selection publication without claiming lower writes."""
+
+    uncertain_summary = {
+        **result["summary"],
+        "capture_outcome_verified": False,
+        "capture_receipt_path": None,
+        "batch_receipt_path": None,
+        "selection_evidence_verified": False,
+        "recovery_required": True,
+        "writes_may_have_occurred": True,
+        "next_safe_action": "inspect_selection_collision_then_fresh_dry_run",
+    }
+    return {
+        **result,
+        "ok": False,
+        "state": "recovery_required",
+        "dry_run": False,
+        "approved": False,
+        "lifecycle_action": "objet_capture_batch",
+        "outcome_unverified": True,
+        "writes_may_have_occurred": True,
+        "summary": uncertain_summary,
+        "items": [],
+        "blockers": ["batch_selection_publication_outcome_unverified"],
+        "warnings": [],
+        "next_safe_actions": list(
+            OBJET_CAPTURE_BATCH_SELECTION_RECOVERY_NEXT_SAFE_ACTIONS
+        ),
+        "would_change": [],
+        "files_written": [],
+        "privacy_guards": {
+            **result["privacy_guards"],
+            "writes": True,
+            "exception_text_echoed": False,
+        },
+    }
+
+
 def _batch_plan_core(
     archive_root: Path | str,
     *,
@@ -3855,18 +4381,36 @@ def _batch_plan_core(
     request, request_bytes, blockers = _batch_request(root, manifest_path)
     item_results: list[dict[str, Any]] = []
     selection_items: list[dict[str, Any]] = []
+    request_items: list[Any] = []
+    derived_text_requested_item_ids: list[str] = []
     project_receipt: str | None = None
     batch_id: str | None = None
     if request is not None:
+        if set(request) - OBJET_CAPTURE_BATCH_REQUEST_FIELDS:
+            blockers.append("batch_request_unknown_field")
         if request.get("schema") != OBJET_CAPTURE_BATCH_REQUEST_SCHEMA:
             blockers.append("batch_request_schema_invalid")
-        batch_id_value = str(request.get("batch_id") or "").strip()
+        raw_batch_id = request.get("batch_id")
+        batch_id_value = (
+            raw_batch_id.strip() if isinstance(raw_batch_id, str) else ""
+        )
         if not archive_services.safe_source_intake_ref(batch_id_value):
             blockers.append("batch_id_invalid")
         else:
             batch_id = batch_id_value
-        project_value = request.get("project_intake_receipt_path")
-        if project_value is not None and not isinstance(project_value, str):
+        if (
+            "project_intake_receipt" in request
+            and "project_intake_receipt_path" in request
+        ):
+            blockers.append("project_intake_receipt_fields_conflict")
+        project_value = (
+            request.get("project_intake_receipt")
+            if "project_intake_receipt" in request
+            else request.get("project_intake_receipt_path")
+        )
+        if project_value is not None and (
+            not isinstance(project_value, str) or len(project_value) == 0
+        ):
             blockers.append("project_intake_receipt_invalid")
         elif isinstance(project_value, str):
             project_receipt = project_value
@@ -3877,10 +4421,12 @@ def _batch_plan_core(
         elif len(items) > OBJET_CAPTURE_BATCH_MAX_ITEMS:
             blockers.append("batch_item_limit_exceeded")
             items = []
+        request_items = items
 
         structural: list[dict[str, Any]] = []
         seen_ids: set[str] = set()
-        seen_paths: set[str] = set()
+        seen_path_keys: set[str] = set()
+        seen_file_identities: set[tuple[int, int]] = set()
         for index, item in enumerate(items):
             codes: list[str] = []
             if not isinstance(item, dict):
@@ -3890,11 +4436,26 @@ def _batch_plan_core(
                         "item_id": None,
                         "state": "blocked",
                         "blocker_codes": ["batch_item_not_object"],
+                        "derived_text_requested": False,
                     }
                 )
                 blockers.append("batch_item_not_object")
                 continue
-            item_id = str(item.get("item_id") or "").strip()
+            paired = "derived_text_staged_path" in item
+            raw_item_id = item.get("item_id")
+            item_id = (
+                raw_item_id.strip()
+                if isinstance(raw_item_id, str)
+                else ""
+            )
+            if paired:
+                derived_text_requested_item_ids.append(
+                    item_id
+                    if archive_services.safe_source_intake_ref(item_id)
+                    else f"invalid:{index}"
+                )
+            if set(item) - OBJET_CAPTURE_BATCH_ITEM_FIELDS:
+                codes.append("batch_item_unknown_field")
             if not archive_services.safe_source_intake_ref(item_id):
                 codes.append("batch_item_id_invalid")
             elif item_id in seen_ids:
@@ -3902,27 +4463,126 @@ def _batch_plan_core(
             else:
                 seen_ids.add(item_id)
             raw_staged = item.get("staged_path")
-            try:
-                staged_path = archive_services.normalize_archive_relative_path(
-                    str(raw_staged or "")
-                )
-            except Exception:
+            if not isinstance(raw_staged, str) or not raw_staged.strip():
                 staged_path = ""
                 codes.append("unsafe_staged_path")
+            else:
+                try:
+                    staged_path = archive_services.normalize_archive_relative_path(
+                        raw_staged
+                    )
+                except Exception:
+                    staged_path = ""
+                    codes.append("unsafe_staged_path")
             if staged_path:
-                if staged_path in seen_paths:
+                duplicate_path, path_blocker = _batch_path_collision(
+                    root,
+                    staged_path,
+                    seen_keys=seen_path_keys,
+                    seen_file_identities=seen_file_identities,
+                )
+                if duplicate_path:
                     codes.append("duplicate_selection_target")
-                else:
-                    seen_paths.add(staged_path)
+                if path_blocker:
+                    codes.append(path_blocker)
             source_receipt = item.get("source_intake_receipt_path")
-            if not isinstance(source_receipt, str):
+            if not isinstance(source_receipt, str) or not source_receipt.strip():
                 codes.append("source_intake_evidence_invalid")
                 source_receipt = ""
             safe_title, title_error = _safe_batch_title(item.get("title"))
             if title_error:
                 codes.append(title_error)
+
+            derived_text_staged_path: str | None = None
+            derivation_kind: Any = None
+            tool_name: Any = None
+            tool_version: Any = None
+            review_status: Any = None
+            model_name: Any = None
+            model_version: Any = None
+            confidence: float | int | None = None
+            language: Any = None
+            born_digital: Any = False
+            metadata_without_pair = bool(
+                set(item) & OBJET_CAPTURE_BATCH_DERIVED_METADATA_FIELDS
+            ) and not paired
+            if metadata_without_pair:
+                codes.append("derived_text_staged_path_required")
+            if paired:
+                raw_derived_path = item.get("derived_text_staged_path")
+                if (
+                    not isinstance(raw_derived_path, str)
+                    or not raw_derived_path.strip()
+                ):
+                    codes.append("derived_text_staged_path_invalid")
+                else:
+                    try:
+                        derived_text_staged_path = (
+                            archive_services.normalize_archive_relative_path(
+                                raw_derived_path
+                            )
+                        )
+                    except Exception:
+                        codes.append("derived_text_staged_path_invalid")
+                if derived_text_staged_path:
+                    duplicate_path, path_blocker = _batch_path_collision(
+                        root,
+                        derived_text_staged_path,
+                        seen_keys=seen_path_keys,
+                        seen_file_identities=seen_file_identities,
+                    )
+                    if duplicate_path:
+                        codes.append("duplicate_selection_target")
+                    if path_blocker:
+                        codes.append(path_blocker)
+
+                if not OBJET_CAPTURE_BATCH_DERIVED_REQUIRED_FIELDS.issubset(
+                    item
+                ):
+                    codes.append("derived_text_required_field_missing")
+                derivation_kind = item.get("derivation_kind")
+                tool_name = item.get("tool_name")
+                tool_version = item.get("tool_version")
+                review_status = item.get("review_status")
+                if "model" in item and "model_name" in item:
+                    codes.append("derived_text_model_fields_conflict")
+                model_name = (
+                    item.get("model_name")
+                    if "model_name" in item
+                    else item.get("model")
+                )
+                model_version = item.get("model_version")
+                for label, value in (
+                    ("model_name", model_name),
+                    ("model_version", model_version),
+                ):
+                    if value is not None and (
+                        not isinstance(value, str) or not value.strip()
+                    ):
+                        codes.append(f"{label}_invalid")
+                confidence, confidence_error = _batch_confidence_value(
+                    item.get("confidence")
+                )
+                if confidence_error:
+                    codes.append(confidence_error)
+                language = item.get("language")
+                born_digital = item.get("born_digital", False)
+                codes.extend(
+                    archive_services._derived_text_pair_metadata_blockers(
+                        derivation_kind=derivation_kind,
+                        tool_name=tool_name,
+                        tool_version=tool_version,
+                        review_status=review_status,
+                        confidence=confidence,
+                        language=language,
+                        model_name=model_name,
+                        model_version=model_version,
+                        born_digital=born_digital,
+                    )
+                )
             if codes:
-                blockers.extend(codes)
+                normalized_codes = archive_services.unique_preserve_order(codes)
+                blockers.extend(normalized_codes)
                 item_results.append(
                     {
                         "index": index,
@@ -3932,9 +4592,8 @@ def _batch_plan_core(
                             else None
                         ),
                         "state": "blocked",
-                        "blocker_codes": archive_services.unique_preserve_order(
-                            codes
-                        ),
+                        "blocker_codes": normalized_codes,
+                        "derived_text_requested": paired,
                     }
                 )
             else:
@@ -3945,12 +4604,38 @@ def _batch_plan_core(
                         "staged_path": staged_path,
                         "source_intake_receipt_path": source_receipt,
                         "title": safe_title,
+                        "derived_text_requested": paired,
+                        "derived_text_staged_path": derived_text_staged_path,
+                        "derivation_kind": derivation_kind,
+                        "tool_name": tool_name,
+                        "tool_version": tool_version,
+                        "review_status": review_status,
+                        "model_name": model_name,
+                        "model_version": model_version,
+                        "confidence": confidence,
+                        "language": language,
+                        "born_digital": born_digital,
                     }
                 )
 
         # Whole-manifest structural validation completes before source bytes are
         # opened. A single malformed row therefore blocks the entire batch.
-        if not blockers:
+        if blockers:
+            for item in structural:
+                item_results.append(
+                    {
+                        "index": item["index"],
+                        "item_id": item["item_id"],
+                        "state": "blocked",
+                        "blocker_codes": [
+                            "batch_blocked_by_manifest_preflight"
+                        ],
+                        "derived_text_requested": item[
+                            "derived_text_requested"
+                        ],
+                    }
+                )
+        else:
             for item in structural:
                 individual = archive_services.objet_capture_selection_manifest(
                     root,
@@ -3961,6 +4646,18 @@ def _batch_plan_core(
                     item_id=item["item_id"],
                     project_intake_receipt=project_receipt,
                     dry_run=True,
+                    derived_text_staged_path=item[
+                        "derived_text_staged_path"
+                    ],
+                    derivation_kind=item["derivation_kind"],
+                    tool_name=item["tool_name"],
+                    tool_version=item["tool_version"],
+                    review_status=item["review_status"],
+                    model_name=item["model_name"],
+                    model_version=item["model_version"],
+                    confidence=item["confidence"],
+                    language=item["language"],
+                    born_digital=item["born_digital"],
                 )
                 codes = [
                     str(code) for code in individual.get("blockers", [])
@@ -3971,15 +4668,40 @@ def _batch_plan_core(
                     if isinstance(selection_manifest, dict)
                     else None
                 )
+                expected_schema = (
+                    archive_services.OBJET_CAPTURE_SELECTION_SCHEMA_WITH_DERIVED_TEXT
+                    if item["derived_text_requested"]
+                    else archive_services.OBJET_CAPTURE_SELECTION_SCHEMA
+                )
+                expected_action = (
+                    archive_services.OBJET_CAPTURE_SELECTION_ACTION_WITH_DERIVED_TEXT
+                    if item["derived_text_requested"]
+                    else archive_services.OBJET_CAPTURE_SELECTION_ACTION
+                )
+                if isinstance(selection_manifest, dict) and (
+                    selection_manifest.get("schema") != expected_schema
+                    or selection_manifest.get("action") != expected_action
+                ):
+                    codes.append("batch_selection_contract_mismatch")
+                if isinstance(selected_item, dict) and (
+                    item["derived_text_requested"]
+                    != isinstance(selected_item.get("derived_text"), dict)
+                ):
+                    codes.append("batch_derived_text_projection_missing")
                 if codes or not isinstance(selected_item, dict):
-                    blockers.extend(codes or ["batch_item_preflight_failed"])
+                    normalized_codes = archive_services.unique_preserve_order(
+                        codes or ["batch_item_preflight_failed"]
+                    )
+                    blockers.extend(normalized_codes)
                     item_results.append(
                         {
                             "index": item["index"],
                             "item_id": item["item_id"],
                             "state": "blocked",
-                            "blocker_codes": codes
-                            or ["batch_item_preflight_failed"],
+                            "blocker_codes": normalized_codes,
+                            "derived_text_requested": item[
+                                "derived_text_requested"
+                            ],
                         }
                     )
                     continue
@@ -3992,11 +4714,18 @@ def _batch_plan_core(
                         "item_id": item["item_id"],
                         "state": "ready",
                         "blocker_codes": [],
+                        "derived_text_requested": item[
+                            "derived_text_requested"
+                        ],
                     }
                 )
 
     request_sha256 = (
         _sha256_bytes(request_bytes) if request_bytes is not None else None
+    )
+    paired_selection = any(
+        isinstance(item.get("derived_text"), dict)
+        for item in selection_items
     )
     selection = {
         "manifest_id": (
@@ -4004,8 +4733,16 @@ def _batch_plan_core(
             if request_sha256 is not None
             else "selection-batch:invalid"
         ),
-        "schema": archive_services.OBJET_CAPTURE_SELECTION_SCHEMA,
-        "action": archive_services.OBJET_CAPTURE_SELECTION_ACTION,
+        "schema": (
+            archive_services.OBJET_CAPTURE_SELECTION_SCHEMA_WITH_DERIVED_TEXT
+            if paired_selection
+            else archive_services.OBJET_CAPTURE_SELECTION_SCHEMA
+        ),
+        "action": (
+            archive_services.OBJET_CAPTURE_SELECTION_ACTION_WITH_DERIVED_TEXT
+            if paired_selection
+            else archive_services.OBJET_CAPTURE_SELECTION_ACTION
+        ),
         "archive_id": archive_id,
         "created_at": None,
         "created_by": None,
@@ -4042,6 +4779,67 @@ def _batch_plan_core(
                         for code in entry.get("blockers", [])
                     )
 
+    preview_items = (
+        [
+            item
+            for item in capture_preview.get("items", [])
+            if isinstance(item, dict)
+        ]
+        if isinstance(capture_preview, dict)
+        else []
+    )
+    preview_by_id = {
+        str(item.get("item_id") or ""): item for item in preview_items
+    }
+    for item_result in item_results:
+        if item_result.get("state") != "ready":
+            continue
+        preview_item = preview_by_id.get(str(item_result.get("item_id") or ""))
+        if not isinstance(preview_item, dict):
+            item_result["state"] = "blocked"
+            item_result["blocker_codes"] = [
+                "batch_original_projection_missing"
+            ]
+            blockers.append("batch_original_projection_missing")
+            continue
+        projection = _batch_project_capture_item(
+            preview_item,
+            derived_text_requested=bool(
+                item_result.get("derived_text_requested")
+            ),
+        )
+        item_result.update(
+            {
+                "planned_action": projection["planned_action"],
+                "status_class": projection["status_class"],
+            }
+        )
+        if projection.get("derived_text_requested"):
+            item_result["derived_text"] = projection.get("derived_text")
+        projection_blockers = list(projection.get("blockers", []))
+        derived_projection = projection.get("derived_text")
+        if isinstance(derived_projection, dict):
+            projection_blockers.extend(
+                str(code)
+                for code in derived_projection.get("blockers", [])
+            )
+        if projection_blockers:
+            item_result["state"] = "blocked"
+            item_result["blocker_codes"] = (
+                archive_services.unique_preserve_order(projection_blockers)
+            )
+
+    completion_counts = _batch_completion_counts(
+        preview_items,
+        original_requested=len(request_items),
+        derived_text_requested_item_ids=derived_text_requested_item_ids,
+        approve=False,
+    )
+    if capture_preview is not None:
+        blockers.extend(
+            _batch_completion_blockers(completion_counts, approve=False)
+        )
+
     selection_sha256 = _sha256_bytes(_canonical_json_bytes(selection))
     plan_binding = {
         "schema": "wom-kit/objet-capture-batch-plan-binding/v0.1",
@@ -4072,25 +4870,46 @@ def _batch_plan_core(
             "request_sha256": request_sha256,
             "selection_sha256": selection_sha256,
             "plan_sha256": plan_sha256 if not aggregate_codes else None,
-            "item_count": len(
-                request.get("items", [])
-                if isinstance(request, dict)
-                and isinstance(request.get("items"), list)
-                else []
+            "item_count": len(request_items),
+            "ready_item_count": sum(
+                1 for item in item_results if item["state"] == "ready"
             ),
-            "ready_item_count": len(selection_items),
-            "blocked_item_count": sum(
-                1 for item in item_results if item["state"] == "blocked"
+            "blocked_item_count": max(
+                len(request_items)
+                - sum(
+                    1
+                    for item in item_results
+                    if item["state"] == "ready"
+                ),
+                0,
             ),
             "would_capture": summary.get("would_capture", 0),
+            "would_repair_append": summary.get("would_repair_append", 0),
+            "would_re_materialize": summary.get(
+                "would_re_materialize",
+                0,
+            ),
             "would_skip": summary.get("would_skip", 0),
+            "would_register_derived_text": completion_counts[
+                "derived_text_ready_item_count"
+            ],
+            "would_skip_derived_text": completion_counts[
+                "derived_text_skipped_item_count"
+            ],
+            **completion_counts,
             "selection_path": selection_relative,
             "convergence_model": "bounded_per_item_with_replay",
             "all_or_nothing_claimed": False,
         },
         "items": sorted(item_results, key=lambda item: item["index"]),
         "blockers": aggregate_codes,
-        "warnings": [],
+        "warnings": (
+            archive_services.unique_preserve_order(
+                str(code) for code in capture_preview.get("warnings", [])
+            )
+            if isinstance(capture_preview, dict)
+            else []
+        ),
         "would_change": [selection_relative] if not aggregate_codes else [],
         "privacy_guards": {
             "manifest_path_echoed": False,
@@ -4113,6 +4932,7 @@ def _batch_plan_core(
         "selection_relative": selection_relative,
         "plan_sha256": plan_sha256,
         "project_receipt": project_receipt,
+        "derived_text_requested_item_ids": derived_text_requested_item_ids,
     }
     return result, private
 
@@ -4169,20 +4989,29 @@ def objet_capture_batch_apply(
     )
     selection_written = False
     if selection_path.exists():
-        try:
-            if selection_path.read_bytes() != private["selection_bytes"]:
-                blockers.append("batch_selection_collision")
-        except OSError:
+        observed = archive_services._stable_exact_bytes_observation(
+            selection_path,
+            private["selection_bytes"],
+        )
+        if observed == "not_written":
             blockers.append("batch_selection_unreadable")
+        elif observed != "verified_exact":
+            blockers.append("batch_selection_collision")
     else:
         try:
-            archive_services._write_bytes_create_if_absent(
+            selection_outcome = archive_services._create_only_bytes_outcome_aware(
                 selection_path,
                 private["selection_bytes"],
             )
-            selection_written = True
+        except archive_services.PublicationOutcomeUnverified:
+            return _batch_selection_publication_unverified_result(result)
         except OSError:
             blockers.append("batch_selection_write_failed")
+        else:
+            if selection_outcome == "verified_exact":
+                selection_written = True
+            else:
+                blockers.append("batch_selection_write_failed")
     if blockers:
         return {
             **result,
@@ -4196,116 +5025,292 @@ def objet_capture_batch_apply(
             "files_written": [],
         }
 
-    capture = archive_services.objet_capture_apply(
-        root,
-        selection_path,
-        reviewed_by=reviewer,
-        project_intake_receipt=private["project_receipt"],
-    )
-    timestamp = _now()
-    batch_receipt_relative = (
-        f"{OBJET_CAPTURE_BATCH_RECEIPTS_DIR}/"
-        f"{private['plan_sha256']}.json"
-    )
-    batch_receipt_path = archive_services.archive_internal_path(
-        root,
-        batch_receipt_relative,
-    )
-    batch_receipt = {
-        "schema": OBJET_CAPTURE_BATCH_RECEIPT_SCHEMA,
-        "archive_id": archive_services.read_archive_id(root),
-        "batch_id": result["summary"]["batch_id"],
-        "request_sha256": private["request_sha256"],
-        "selection_sha256": private["selection_sha256"],
-        "plan_sha256": private["plan_sha256"],
-        "selection_path": private["selection_relative"],
-        "capture_receipt_path": capture.get("receipt_path"),
-        "status_class": capture.get("status_class"),
-        "ok": bool(capture.get("ok")),
-        "reviewed_by": reviewer,
-        "created_at": timestamp,
-        "convergence_model": "bounded_per_item_with_replay",
-        "all_or_nothing_claimed": False,
-        "privacy": {
-            "manifest_values_included": False,
-            "staged_paths_included": False,
-            "titles_included": False,
-        },
-    }
-    receipt_written = False
-    if batch_receipt_path.exists():
-        try:
-            prior = json.loads(batch_receipt_path.read_text(encoding="utf-8"))
-            if (
-                not isinstance(prior, dict)
-                or prior.get("plan_sha256") != private["plan_sha256"]
-            ):
-                blockers.append("batch_receipt_collision")
-        except (OSError, json.JSONDecodeError):
-            blockers.append("batch_receipt_unreadable")
-    else:
-        try:
-            archive_services._write_bytes_create_if_absent(
-                batch_receipt_path,
-                _canonical_json_bytes(batch_receipt),
-            )
-            receipt_written = True
-        except OSError:
-            blockers.append("batch_receipt_write_failed")
+    try:
+        capture = archive_services.objet_capture_apply(
+            root,
+            private["selection_relative"],
+            reviewed_by=reviewer,
+            project_intake_receipt=private["project_receipt"],
+            selection_document=private["selection"],
+        )
+    except Exception:
+        # Lower apply can raise after durable original/derived writes but before
+        # a trustworthy result/receipt reaches this wrapper. Never echo the
+        # exception, guess completion counters, or auto-retry.
+        return _batch_capture_outcome_unverified_result(result)
 
-    projected_items = [
-        {
-            "item_id": item.get("item_id"),
-            "planned_action": item.get("planned_action"),
-            "action": item.get("action"),
-            "status_class": item.get("status_class"),
-            "blockers": item.get("blockers", []),
-            "warnings": item.get("warnings", []),
-        }
-        for item in capture.get("items", [])
+    expected_item_ids = [
+        str(item.get("item_id") or "")
+        for item in private["selection"].get("items", [])
         if isinstance(item, dict)
     ]
-    files_written = []
-    if selection_written:
-        files_written.append(private["selection_relative"])
-    files_written.extend(
-        str(path) for path in capture.get("files_written", [])
+    paired_item_ids = set(private["derived_text_requested_item_ids"])
+    try:
+        capture_shape_valid = _batch_capture_result_shape_valid(
+            capture,
+            expected_item_ids=expected_item_ids,
+            paired_item_ids=paired_item_ids,
+            expected_archive_id=str(result.get("archive_id") or ""),
+            expected_selection_manifest_id=str(
+                private["selection"].get("manifest_id") or ""
+            ),
+            expected_selection_sha256=(
+                archive_services.sha256_json_value(private["selection"])
+            ),
+        )
+    except Exception:
+        capture_shape_valid = False
+    if not capture_shape_valid:
+        return _batch_capture_outcome_unverified_result(result)
+
+    selection_evidence_verified = False
+    try:
+        current_selection_path = archive_services.archive_internal_path(
+            root,
+            private["selection_relative"],
+        )
+        selection_evidence_verified = (
+            current_selection_path == selection_path
+            and archive_services._stable_exact_bytes_observation(
+                selection_path,
+                private["selection_bytes"],
+            )
+            == "verified_exact"
+        )
+    except Exception:
+        selection_evidence_verified = False
+    if not selection_evidence_verified:
+        blockers.append("batch_selection_evidence_drift_after_capture")
+
+    try:
+        capture_items = [
+            item
+            for item in capture.get("items", [])
+            if isinstance(item, dict)
+        ]
+        completion_counts = _batch_completion_counts(
+            capture_items,
+            original_requested=result["summary"][
+                "original_requested_item_count"
+            ],
+            derived_text_requested_item_ids=private[
+                "derived_text_requested_item_ids"
+            ],
+            approve=True,
+        )
+        completion_blockers = _batch_completion_blockers(
+            completion_counts,
+            approve=True,
+        )
+        blockers.extend(completion_blockers)
+        batch_status_class = (
+            capture.get("status_class")
+            if selection_evidence_verified
+            else "evidence_incomplete"
+        )
+        capture_contract_ok = (
+            bool(capture.get("ok"))
+            and not completion_blockers
+            and selection_evidence_verified
+        )
+        timestamp = _now()
+        batch_attempt_binding = {
+            "schema": "wom-kit/objet-capture-batch-attempt-binding/v0.1",
+            "plan_sha256": private["plan_sha256"],
+            "capture_receipt_path": capture.get("receipt_path"),
+            "status_class": batch_status_class,
+            "ok": capture_contract_ok,
+            "reviewed_by": reviewer,
+            "created_at": timestamp,
+            **completion_counts,
+        }
+        batch_attempt_sha256 = _sha256_bytes(
+            _canonical_json_bytes(batch_attempt_binding)
+        )
+        batch_receipt_relative = (
+            f"{OBJET_CAPTURE_BATCH_RECEIPTS_DIR}/"
+            f"{private['plan_sha256']}.{batch_attempt_sha256[:16]}.json"
+        )
+        batch_receipt_path = archive_services.archive_internal_path(
+            root,
+            batch_receipt_relative,
+        )
+        batch_receipt = {
+            "schema": OBJET_CAPTURE_BATCH_RECEIPT_SCHEMA,
+            "archive_id": archive_services.read_archive_id(root),
+            "batch_id": result["summary"]["batch_id"],
+            "request_sha256": private["request_sha256"],
+            "selection_sha256": private["selection_sha256"],
+            "plan_sha256": private["plan_sha256"],
+            "attempt_sha256": batch_attempt_sha256,
+            "selection_path": private["selection_relative"],
+            "capture_receipt_path": capture.get("receipt_path"),
+            "status_class": batch_status_class,
+            "ok": capture_contract_ok,
+            "reviewed_by": reviewer,
+            "created_at": timestamp,
+            "convergence_model": "bounded_per_item_with_replay",
+            "all_or_nothing_claimed": False,
+            **completion_counts,
+            "privacy": {
+                "manifest_values_included": False,
+                "staged_paths_included": False,
+                "titles_included": False,
+            },
+        }
+        batch_receipt_bytes = _canonical_json_bytes(batch_receipt)
+    except Exception:
+        return _batch_capture_outcome_unverified_result(result)
+    receipt_written = False
+    receipt_verified = False
+    receipt_outcome_unverified = False
+    try:
+        if batch_receipt_path.exists():
+            observed = archive_services._stable_exact_bytes_observation(
+                batch_receipt_path,
+                batch_receipt_bytes,
+            )
+            if observed == "verified_exact":
+                receipt_verified = True
+            elif observed == "not_written":
+                blockers.append("batch_receipt_unreadable")
+            else:
+                blockers.append("batch_receipt_collision")
+        else:
+            try:
+                receipt_outcome = archive_services._create_only_bytes_outcome_aware(
+                    batch_receipt_path,
+                    batch_receipt_bytes,
+                )
+            except archive_services.PublicationOutcomeUnverified:
+                receipt_outcome_unverified = True
+                blockers.append("batch_receipt_outcome_unverified")
+            except OSError:
+                blockers.append("batch_receipt_write_failed")
+            else:
+                if receipt_outcome == "verified_exact":
+                    receipt_written = True
+                    receipt_verified = True
+                else:
+                    blockers.append("batch_receipt_write_failed")
+    except Exception:
+        return _batch_capture_outcome_unverified_result(result)
+
+    try:
+        projected_items = [
+            _batch_project_capture_item(
+                item,
+                derived_text_requested=str(item.get("item_id") or "")
+                in paired_item_ids,
+            )
+            for item in capture_items
+        ]
+        files_written = []
+        if selection_written:
+            files_written.append(private["selection_relative"])
+        files_written.extend(
+            str(path) for path in capture.get("files_written", [])
+        )
+        if receipt_written:
+            files_written.append(batch_receipt_relative)
+        aggregate_blockers = archive_services.unique_preserve_order(
+            [*blockers, *capture.get("blockers", [])]
+        )
+        aggregate_warnings = archive_services.unique_preserve_order(
+            capture.get("warnings", [])
+        )
+        aggregate_files_written = archive_services.unique_preserve_order(
+            files_written
+        )
+    except Exception:
+        return _batch_capture_outcome_unverified_result(result)
+    evidence_incomplete = not receipt_verified
+    recovery_required = (
+        evidence_incomplete
+        or not selection_evidence_verified
+        or receipt_outcome_unverified
+        or capture.get("status_class") == "evidence_incomplete"
     )
-    if receipt_written:
-        files_written.append(batch_receipt_relative)
-    final_ok = bool(capture.get("ok")) and not blockers
+    final_ok = capture_contract_ok and not blockers and receipt_verified
+    final_state = (
+        "written"
+        if final_ok
+        else "recovery_required"
+        if not selection_evidence_verified or receipt_outcome_unverified
+        else "evidence_incomplete"
+        if evidence_incomplete
+        else capture.get("status_class")
+        or "blocked"
+    )
+    if final_state == "recovery_required":
+        next_safe_actions = list(
+            OBJET_CAPTURE_BATCH_OUTCOME_UNVERIFIED_NEXT_SAFE_ACTIONS
+            if receipt_outcome_unverified
+            else OBJET_CAPTURE_BATCH_SELECTION_RECOVERY_NEXT_SAFE_ACTIONS
+        )
+    elif final_state == "evidence_incomplete":
+        next_safe_actions = list(
+            OBJET_CAPTURE_BATCH_EVIDENCE_INCOMPLETE_NEXT_SAFE_ACTIONS
+        )
+    elif final_state == "partial":
+        next_safe_actions = list(capture.get("next_safe_actions") or [])
+    else:
+        next_safe_actions = []
     return {
         **result,
         "ok": final_ok,
-        "state": (
-            "written"
-            if final_ok
-            else capture.get("status_class")
-            or "blocked"
-        ),
+        "state": final_state,
         "dry_run": False,
         "approved": True,
         "lifecycle_action": "objet_capture_batch",
         "summary": {
             **result["summary"],
             "capture_summary": capture.get("summary", {}),
+            **completion_counts,
             "capture_receipt_path": capture.get("receipt_path"),
-            "batch_receipt_path": batch_receipt_relative,
-            "status_class": capture.get("status_class"),
+            "batch_receipt_path": (
+                batch_receipt_relative if receipt_verified else None
+            ),
+            "batch_receipt_proposed_path": (
+                None if receipt_verified else batch_receipt_relative
+            ),
+            "selection_evidence_verified": selection_evidence_verified,
+            "recovery_required": recovery_required,
+            "next_safe_action": (
+                "inspect_selection_collision_then_fresh_dry_run"
+                if not selection_evidence_verified
+                else "fresh_batch_dry_run_then_reconcile"
+                if receipt_outcome_unverified
+                else "fresh_dry_run_then_replay"
+                if evidence_incomplete
+                or capture.get("status_class") == "evidence_incomplete"
+                else None
+            ),
+            "capture_status_class": capture.get("status_class"),
+            "status_class": batch_status_class,
         },
         "items": projected_items,
-        "blockers": archive_services.unique_preserve_order(
-            [*blockers, *capture.get("blockers", [])]
-        ),
-        "warnings": archive_services.unique_preserve_order(
-            capture.get("warnings", [])
-        ),
+        "blockers": aggregate_blockers,
+        "warnings": aggregate_warnings,
+        "next_safe_actions": next_safe_actions,
         "would_change": [],
-        "files_written": archive_services.unique_preserve_order(files_written),
+        "files_written": aggregate_files_written,
         "privacy_guards": {
             **result["privacy_guards"],
             "writes": True,
         },
+        **(
+            {
+                "writes_may_have_occurred": True,
+                **(
+                    {"outcome_unverified": True}
+                    if receipt_outcome_unverified
+                    else {}
+                ),
+            }
+            if not selection_evidence_verified or receipt_outcome_unverified
+            else {}
+        ),
     }
 
 

@@ -1,6 +1,6 @@
 # AI Command-Path Routing
 
-Status: implemented in v0.3.278, extended through v0.3.314
+Status: implemented in v0.3.278, extended through v0.3.315
 
 ## Purpose
 
@@ -244,6 +244,14 @@ Every write remains preview-first and human-reviewed.
   CLI-only operation observation and host guidance for output-supervised
   project-update/index work; it does not add an MCP route, daemon, queue,
   background launcher, cancel request, resume, or automatic recovery write.
+- v0.3.315 keeps the machine `action_routing` schema at v0.13. The new
+  `project-version-update-collision` command is deliberately CLI-only and is
+  discovered through updater output, `operation-control`, and the runtime
+  Skill rather than a new machine route or MCP method. The existing
+  `objet-capture-batch` route now preserves reviewed original/derived pairing
+  and exposes actual terminal partitions; `partial`, `evidence_incomplete`,
+  and `recovery_required` must stop automatic continuation. A successful
+  preservation still requires a fresh updater preview and separate approval.
 - v0.3.293 advances routing to
   `wom-kit/ai-command-path-routing/v0.7` and adds the complete
   operator-feedback sequence without changing existing action contracts.
