@@ -24,6 +24,65 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.315 Update-Collision And Paired-Batch Recovery
+
+Install the exact v0.3.315 artifact only after the matching Release lists the
+verified wheel. Start a new terminal process and confirm `archive --version`
+before touching a real project or archive.
+
+### If a project update reports a collision
+
+Do not guess the hidden path, delete or move a file by hand, repeat approval,
+or launch another updater. Keep editors, sync/backup clients, and Git writers
+paused. Retain the returned `entry_ref` and `materialization_plan_sha256`, then
+inspect that exact item:
+
+```powershell
+archive project-version-update-collision <project-or-archive-root> --target v0.3.315 --entry-ref update-entry:0001 --expected-plan-sha256 sha256:<digest> --action inspect --dry-run --format json
+```
+
+If inspection says the regular entry is eligible, preview preservation:
+
+```powershell
+archive project-version-update-collision <project-or-archive-root> --target v0.3.315 --entry-ref update-entry:0001 --expected-plan-sha256 sha256:<digest> --action preserve-relocate --dry-run --format json
+```
+
+Review the fresh preservation plan, then approve that same plan with
+`--reviewed-by <actor> --affirm-external-writers-quiescent --approve`. This
+moves the current private bytes to a WOM-owned preservation location. It does
+not delete or overwrite them, fetch the target, or retry the updater. After it
+finishes, run `project-version-update --dry-run` again and approve that new
+updater plan separately. The receipts provide
+`unauthenticated_private_state_internal_consistency`; they are not a MAC,
+signature, ACL, or general defense against a coordinated same-user rewrite.
+
+```powershell
+archive project-version-update-collision <project-or-archive-root> --target v0.3.315 --entry-ref update-entry:0001 --expected-plan-sha256 sha256:<digest> --action preserve-relocate --approve --reviewed-by <actor> --affirm-external-writers-quiescent --format json
+```
+
+### If a v0.3.314 paired capture stopped halfway
+
+Do not copy already captured originals again. Re-run the unchanged
+`objet-capture-batch` request first:
+
+```powershell
+archive objet-capture-batch <archive-root> --manifest <same-archive-relative-json> --dry-run --format json
+archive objet-capture-batch <archive-root> --manifest <same-archive-relative-json> --expected-plan-sha256 <fresh-plan-sha256> --approve --reviewed-by <actor> --format json
+```
+
+The v0.3.315 result separates original and derived requested, written, skipped,
+and blocked counts. Exact existing originals are skipped while missing paired
+derived text is completed. If the original staging files are no longer
+available, use the durable original capture receipts to build a reviewed
+derived-text manifest with their source object IDs, then use
+`derive-text capture --from-manifest`; do not recopy originals just to obtain
+those IDs. Treat `evidence_incomplete`, `recovery_required`, and
+`batch_capture_outcome_unverified` as stop-and-review states, not success.
+
+See the [v0.3.315 release note](wom-kit/docs/releases/v0.3.315.md),
+[project update guide](wom-kit/docs/project-version-update.md), and
+[derived-text guide](wom-kit/docs/derived-text.md).
+
 ## v0.3.314 Letter 126 Long-Operation And Generated-Index Recovery
 
 v0.3.314 does not rewrite canonical zets, objets, manifests, durable private

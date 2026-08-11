@@ -107,6 +107,24 @@ use the required Windows approval form:
 archive project-version-update <project-or-archive-root> --target vX.Y.Z --approve --reviewed-by <actor> --affirm-external-writers-quiescent --progress --output .zettel-kasten/diagnostics/update-apply-20260811-001.json --format json
 ```
 
+If the updater returns a `materialization_plan_sha256` and opaque
+`update-entry:NNNN` collision, do not infer the hidden path, move/delete a file
+by hand, or repeat updater approval. Inspect that exact bound item:
+
+```text
+archive project-version-update-collision <project-or-archive-root> --target vX.Y.Z --entry-ref update-entry:0001 --expected-plan-sha256 sha256:<digest> --action inspect --dry-run --format json
+```
+
+Only when inspection reports an eligible ignored regular entry may you run a
+separate `--action preserve-relocate --dry-run`, review it, and replay with
+`--approve --reviewed-by <actor> --affirm-external-writers-quiescent`. It does
+not delete/overwrite the payload, copy, fetch, retry the updater, or change a
+pin. After success, run a fresh updater dry-run and a separate updater approval.
+Treat nullable write/relocation fields or `recovery_required` as uncertain:
+retain the private case and lock and do not clean up or replay. The private
+binding is unauthenticated internal consistency, not a signature or same-user
+tamper defense.
+
 The result must report `external_writer_quiescence_required: true`,
 `external_writer_quiescence_affirmed: true`,
 `atomic_file_compare_and_swap: false`, and

@@ -2,7 +2,7 @@
 
 Status: public navigation baseline
 Date: 2026-06-02
-Updated: 2026-08-10
+Updated: 2026-08-12
 Philosophy clarified: 2026-07-15
 Harness compatibility clarified: 2026-07-16
 
@@ -53,6 +53,10 @@ Supporting philosophy and model docs:
 - [Source Fidelity And Private Verbatim Preservation](source-fidelity-and-private-verbatim.md)
 - [v0.3.313 Source Fidelity Decision](archive-infra-decision-log-2026-08-10-v03313-source-fidelity.md)
 - [v0.3.314 Letter 126 Recovery Decision](archive-infra-decision-log-2026-08-11-v03314-letter126.md)
+- [v0.3.315 Letter 127 Update-Preview Parity Decision](archive-infra-decision-log-2026-08-11-v03315-letter127.md)
+- [v0.3.315 Letter 128 Paired-Batch Decision](archive-infra-decision-log-2026-08-11-v03315-letter128.md)
+- [Project Version Update](project-version-update.md)
+- [Derived Text Capture And Paired-Batch Recovery](derived-text.md)
 - [Letters 120 and 123 Index Lifecycle And Feedback Body](letter120-123-index-lifecycle-and-feedback-body.md)
 - [v0.3.312 Index Authority And Feedback Body Decision](archive-infra-decision-log-2026-08-10-v03312-index-authority-and-feedback-body.md)
 - [Approval Handoff Lifecycle](approval-handoff-lifecycle.md)
@@ -429,6 +433,7 @@ These documents record public-safe work already performed.
 - [v0.3.312 Release Note](releases/v0.3.312.md)
 - [v0.3.313 Release Note](releases/v0.3.313.md)
 - [v0.3.314 Release Note](releases/v0.3.314.md)
+- [v0.3.315 Release Note](releases/v0.3.315.md)
 
 Work logs are not the same as product specs.
 

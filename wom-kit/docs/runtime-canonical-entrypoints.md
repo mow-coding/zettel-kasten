@@ -1,6 +1,6 @@
 # Runtime Canonical Entry Points
 
-Status: v0.3.314 Letter 126 long-operation and generated-index recovery checkpoint
+Status: v0.3.315 Letters 127-128 update-preview parity and paired-batch recovery checkpoint
 
 When an AI runtime enters a WOM archive, it needs a small, explicit "start
 here" map. The archive may contain zets, source bindings, provider metadata,
@@ -132,6 +132,36 @@ protected literal is not implemented. See
 [Letter 117 Completion](letter117-completion.md). Source documentation and
 external CI, exact-tag, GitHub Release, and wheel evidence remain distinct
 verification layers.
+
+## v0.3.315 Update-Collision And Paired-Batch Entry Points
+
+When `project-version-update` returns a bound collision, do not guess a local
+path or repeat approval. Preserve its `materialization_plan_sha256` and opaque
+`update-entry:NNNN` reference. Use the CLI-only
+`project-version-update-collision --action inspect --dry-run` surface first.
+Only an explicitly eligible ignored regular entry can proceed through a
+separate `preserve-relocate` preview and approval. That action does not delete,
+overwrite, copy, fetch, retry the updater, or change a pin. After a successful
+preservation, always run a fresh updater dry-run and a separate updater
+approval. Treat `recovery_required` and nullable write/relocation fields as a
+stop signal and retain the private case and owned lock.
+
+For one reviewed multi-item request containing originals with paired derived
+text, use `objet-capture-batch` rather than rebuilding selection rows by hand.
+The v0.3.315 result must partition original and derived requested,
+written-or-ready, skipped, and blocked counts separately. `partial`,
+`evidence_incomplete`, `recovery_required`, or
+`batch_capture_outcome_unverified` is not success and must not be replayed
+automatically. A fresh replay of the same request may skip exact existing
+originals and finish derived text. If the staging originals are unavailable,
+use durable original capture receipt object IDs in a separately reviewed
+`derive-text capture --from-manifest` request instead of recopying them.
+
+These routes remain local CLI workflows. The collision surface has no MCP
+method, and the current AI `action_routing` machine schema remains v0.13. See
+[Project Version Update](project-version-update.md),
+[Derived Text Capture](derived-text.md), and the
+[v0.3.315 release note](releases/v0.3.315.md).
 
 ## v0.3.314 Long-Operation And Index-Recovery Entry Points
 

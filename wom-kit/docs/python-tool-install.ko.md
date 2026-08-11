@@ -1,14 +1,19 @@
 # WOM-kit Python 도구 설치
 
-상태: v0.3.314 조건부 GitHub wheel 및 Letter 126 복구 계약
+상태: v0.3.315 조건부 GitHub wheel 및 Letter 127-128 복구 계약
 
 WOM-kit은 명령줄 도구입니다. 일반 앱 프로젝트의 Python 의존성과 섞지 말고
 별도의 격리된 Python 환경에 설치하는 것이 좋습니다.
 
-아래 v0.3.314 URL은 조건부 계약이며 공개 자산이 실제로 존재한다는 증거가
+아래 v0.3.315 URL은 조건부 계약이며 공개 자산이 실제로 존재한다는 증거가
 아닙니다. 정확히 일치하는 GitHub Release가 존재하고 검증된 wheel을 자산으로
 나열한 뒤에만 사용하세요. 소스 상태와 릴리스 증거의 구분은
-[v0.3.314 릴리스 노트](releases/v0.3.314.md)를 보세요.
+[v0.3.315 릴리스 노트](releases/v0.3.315.md)를 보세요.
+
+이미 설치된 v0.3.314 client는 v0.3.315의 충돌 보존 및 paired-batch 복구 수정 기능을
+사용할 수 없습니다. 저장소 파일만 업데이트해도 분리된 `uv tool` 또는 가상환경 wheel은
+바뀌지 않습니다. 검증된 v0.3.315 자산이 실제로 생긴 뒤 그 정확한 wheel을 설치하고
+새 프로세스를 시작하세요.
 
 ## 권장 설치
 
@@ -17,7 +22,7 @@ WOM-kit은 명령줄 도구입니다. 일반 앱 프로젝트의 Python 의존�
 증거가 되지는 않습니다.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.314/wom_kit-0.3.314-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.315/wom_kit-0.3.315-py3-none-any.whl"
 archive --version
 ```
 
@@ -35,7 +40,7 @@ archive --version
 
 ```powershell
 py -m venv "$HOME\.wom-tools\wom-kit"
-& "$HOME\.wom-tools\wom-kit\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.314/wom_kit-0.3.314-py3-none-any.whl"
+& "$HOME\.wom-tools\wom-kit\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.315/wom_kit-0.3.315-py3-none-any.whl"
 & "$HOME\.wom-tools\wom-kit\Scripts\archive.exe" --version
 ```
 
