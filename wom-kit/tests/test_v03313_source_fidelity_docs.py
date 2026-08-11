@@ -91,8 +91,8 @@ class V03313SourceFidelityDocsTests(unittest.TestCase):
 
     def test_current_public_surfaces_link_the_contract_and_predecessor(self) -> None:
         expected_status = (
-            "Status: v0.3.315 Letters 127-128 update-preview parity and "
-            "paired-batch recovery checkpoint"
+            "Status: v0.3.316 Letter 129 complete collision-set inspection and "
+            "cache-repair checkpoint"
         )
         for path in (MATRIX, RUNTIME):
             with self.subTest(document=path.name):

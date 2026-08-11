@@ -1,6 +1,6 @@
 # AI Command-Path Routing
 
-Status: implemented in v0.3.278, extended through v0.3.315
+Status: implemented in v0.3.278, extended through v0.3.316
 
 ## Purpose
 
@@ -252,6 +252,13 @@ Every write remains preview-first and human-reviewed.
   and exposes actual terminal partitions; `partial`, `evidence_incomplete`,
   and `recovery_required` must stop automatic continuation. A successful
   preservation still requires a fresh updater preview and separate approval.
+- v0.3.316 also keeps the machine `action_routing` schema at v0.13. Collision
+  batch inspection and `project-bytecode-repair` remain alias-free CLI-only
+  recovery steps discovered from the updater result, runtime Skill, and public
+  operator guides. `inspect-all` covers the complete opaque set from one exact
+  plan; a separate repair is offered only for exact all-supported cache sets.
+  Neither step adds an MCP method, fetches a target, retries an updater, changes
+  a pin, or combines repair approval with update approval.
 - v0.3.293 advances routing to
   `wom-kit/ai-command-path-routing/v0.7` and adds the complete
   operator-feedback sequence without changing existing action contracts.

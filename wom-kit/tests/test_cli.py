@@ -807,6 +807,13 @@ class ArchiveCliTests(unittest.TestCase):
             "core.autocrlf",
             "true" if crlf_runtime_transition else "false",
         )
+        self.git_fixture_command(mirror, "config", "user.name", "archive-test")
+        self.git_fixture_command(
+            mirror,
+            "config",
+            "user.email",
+            "archive-test.invalid",
+        )
         self.git_fixture_command(mirror, "checkout", "--detach", "--quiet", old_tag)
         (mirror / "installed-version.txt").write_text(old_tag + "\n", encoding="utf-8")
         (metadata_root / "installed-version.txt").write_text(old_tag + "\n", encoding="utf-8")

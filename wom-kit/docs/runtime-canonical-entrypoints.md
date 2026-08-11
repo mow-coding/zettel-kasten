@@ -1,6 +1,6 @@
 # Runtime Canonical Entry Points
 
-Status: v0.3.315 Letters 127-128 update-preview parity and paired-batch recovery checkpoint
+Status: v0.3.316 Letter 129 complete collision-set inspection and cache-repair checkpoint
 
 When an AI runtime enters a WOM archive, it needs a small, explicit "start
 here" map. The archive may contain zets, source bindings, provider metadata,
@@ -132,6 +132,30 @@ protected literal is not implemented. See
 [Letter 117 Completion](letter117-completion.md). Source documentation and
 external CI, exact-tag, GitHub Release, and wheel evidence remain distinct
 verification layers.
+
+## v0.3.316 Complete Collision-Set Recovery Entry Points
+
+When an updater returns many opaque runtime-source-shadow collisions, keep the
+exact target and `materialization_plan_sha256`. Do not loop through entry refs
+or infer local names. Run the alias-free CLI-only
+`project-version-update-collision --action inspect-all --dry-run`; it evaluates
+the complete set from one unchanged plan.
+
+Only `project_bytecode_repair` eligibility for the exact complete set may
+continue. Run `project-bytecode-repair-plan` with the same target and
+materialization digest, review its separate plan digest, then use the approved
+`project-bytecode-repair` form with reviewer attribution and
+`--affirm-external-writers-quiescent`. The repair shares the updater lock and
+removes only exact supported ignored cache artifacts. Mixed or unsupported
+sets remain `inspected_remediation_unavailable`.
+
+Repair success is not update success. The repair does not fetch, change `HEAD`
+or a pin, retry an updater, or grant update approval. Always run a fresh updater
+preview and approve that new update plan separately, then verify import/source/
+pin/tag agreement from a new process. See
+[Project Version Update](project-version-update.md),
+[Bounded Operation Control](operation-control.md), and the
+[v0.3.316 release note](releases/v0.3.316.md).
 
 ## v0.3.315 Update-Collision And Paired-Batch Entry Points
 

@@ -6,6 +6,21 @@ The filesystem folder is `wom-kit/`, the Python import package is `wom_kit`, and
 
 See `wom-kit/docs/concepts/naming-and-terminology.md` for the naming baseline.
 
+v0.3.316 closes the supported Python-cache collision gap left after v0.3.315
+detection. The alias-free CLI-only
+`project-version-update-collision --action inspect-all` surface inspects the
+complete opaque set from one bound plan without requiring one call per entry.
+Only an exact complete set of supported ignored bytecode/cache entries can
+route to a separately previewed and approved `project-bytecode-repair` bound to
+the same target and materialization digest. Repair shares the updater lock,
+requires reviewer attribution and external-writer quiescence, and is followed
+by a fresh updater preview and separate updater approval. It never fetches,
+changes a pin, retries an updater, or turns repair success into update success.
+See `wom-kit/docs/project-version-update.md`,
+`wom-kit/docs/operation-control.md`, and
+`wom-kit/docs/releases/v0.3.316.md`. Local tests do not prove merge, CI, tag,
+Release, wheel, fresh installation, beta-client execution, or human acceptance.
+
 v0.3.315 makes `project-version-update` preview and approval share one exact
 target materialization plan. If a destination unexpectedly exists, the updater
 blocks and returns a content-free item reference plus the bound plan digest.

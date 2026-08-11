@@ -152,7 +152,28 @@ archive project-version-update <project-or-archive-root> --target vX.Y.Z --appro
 ```
 
 When a result carries `materialization_plan_sha256` and an opaque
-`update-entry:NNNN`, use only the separate CLI collision surface:
+`update-entry:NNNN`, use only the separate CLI collision surface. For the
+complete set, do one exact-plan inspection without entry refs:
+
+```bash
+archive project-version-update-collision <project-or-archive-root> --target vX.Y.Z --expected-plan-sha256 sha256:<digest> --action inspect-all --dry-run --format json
+```
+
+Continue only when the exact complete set is eligible for
+`project_bytecode_repair`. Preview and separately approve a repair bound to the
+same target and materialization digest:
+
+```bash
+archive project-bytecode-repair-plan <project-or-archive-root> --target vX.Y.Z --expected-materialization-plan-sha256 sha256:<digest> --dry-run --format json
+archive project-bytecode-repair <project-or-archive-root> --target vX.Y.Z --expected-materialization-plan-sha256 sha256:<digest> --expected-plan-sha256 <repair-plan-sha256> --approve --reviewed-by <actor> --affirm-external-writers-quiescent --format json
+```
+
+Repair shares the updater lock, accepts only the exact supported ignored cache
+set, and never fetches, changes `HEAD`/pin, retries, or grants update approval.
+Run a fresh updater preview and separate approval afterward. Counts alone do
+not authorize repair; mixed or unsupported sets remain unavailable.
+
+For one exact item:
 
 ```bash
 archive project-version-update-collision <project-or-archive-root> --target vX.Y.Z --entry-ref update-entry:0001 --expected-plan-sha256 sha256:<digest> --action inspect --dry-run --format json
