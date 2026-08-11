@@ -169,3 +169,38 @@ protected client archive is not reindexed, repaired, minted, or otherwise writte
 implementation. A final reviewed client sequence will be returned only after
 focused tests, independent review, full regression, package-resource sync, and
 release-artifact verification are complete.
+
+## Release closeout
+
+PR #58 passed all required GitHub Actions checks and was squash-merged into
+`main` as `f0f7794554019303cc249e5fd7c36e0d93e90aaf`. Independent source,
+security, release-documentation, and package audits closed with no open P0,
+P1, or P2 finding. The frozen local regression evidence included 1,375 CLI
+tests and 1,373 explicitly selected non-CLI tests; both suites completed with
+no failure or error.
+
+The annotated tag `v0.3.314` resolves to that exact merge commit. The main-push
+CI run `31473640874` and tag-push CI run `31474162504` both passed. The GitHub
+Release is published as a non-draft, non-prerelease release at
+<https://github.com/mow-coding/zettel-kasten/releases/tag/v0.3.314>.
+
+The exact release asset is
+`wom_kit-0.3.314-py3-none-any.whl`, 1,764,457 bytes, with SHA-256
+`034f65cdb0bda1b9236bd0f27637211cb4626d985b67f8a0e712e687b5833439`.
+The merged-commit wheel check verified version `0.3.314`, all 145 packaged
+resources, all four console entry points, the runtime-skill lifecycle, and
+strict Doctor behavior. Both MCP aliases exposed 121 tools and produced the
+same 102,829-byte canonical inventory with SHA-256
+`931dc2bd42037c41b3bb2bb05b04dec5b4b4c58ebf384b57deb6420ef2d8be98`.
+
+An independent anonymous check downloaded the public asset without GitHub API
+authentication or custom request headers and received HTTP 200. Its byte count
+and SHA-256 matched the verified local wheel. A new Python 3.12 environment
+installed that downloaded wheel with dependencies, passed `pip check`, imported
+`wom_kit` at version `0.3.314`, returned version `0.3.314` through both CLI
+aliases, and repeated the two-alias MCP inventory equality check.
+
+No protected client archive, credential store, external provider, canonical
+zettel, or private source was read or written for this release closeout. The
+release proves the public artifact and synthetic/temporary validation boundary;
+real-archive upgrade execution and human acceptance remain separate evidence.
