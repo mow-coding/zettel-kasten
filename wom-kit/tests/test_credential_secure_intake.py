@@ -21,6 +21,10 @@ from wom_kit.credential_secure_intake import (
     AtomicJsonReceiptCommitter,
     FileOneTimeRequestClaims,
     InMemoryOneTimeRequestClaims,
+    NOTION_PAT_SCOPE_FINGERPRINT_DOMAIN,
+    NOTION_PAT_WORKSPACE_IDENTITY_BASIS,
+    NOTION_WORKSPACE_IDENTITY_BASIS,
+    RECEIPT_SCHEMA_VERSION,
     SecureIntakeProcessLauncher,
     SecureIntakeWorker,
     VerifiedCredentialIdentity,
@@ -257,6 +261,10 @@ class SecureCredentialIntakeTests(unittest.TestCase):
         self.assertEqual(result["lifecycle_status"], "active")
         self.assertEqual(result["rotation_status"], "current")
         self.assertFalse(result["is_default"])
+        self.assertEqual(
+            result["workspace_identity_basis"],
+            NOTION_WORKSPACE_IDENTITY_BASIS,
+        )
         self.assertFalse(result["secret_value_present"])
         self.assertRegex(
             result["verified_workspace_fingerprint"], r"^sha256:[0-9a-f]{64}$"
@@ -271,11 +279,63 @@ class SecureCredentialIntakeTests(unittest.TestCase):
         self.assertEqual(store.received, [SECRET_BYTES])
         self.assertEqual(verifier.received, [SECRET_BYTES])
         self.assertEqual(len(committer.receipts), 1)
+        self.assertEqual(
+            committer.receipts[0]["schema_version"], RECEIPT_SCHEMA_VERSION
+        )
+        self.assertEqual(
+            committer.receipts[0]["workspace_identity_basis"],
+            NOTION_WORKSPACE_IDENTITY_BASIS,
+        )
         self.assertEqual(ui.last_buffer, bytearray(len(SECRET_BYTES)))
         self.assertNotIn("provider-user-id-private", json.dumps(result))
         self.assertNotIn("provider-workspace-id-private", json.dumps(result))
         self.assert_secret_absent(result)
         self.assert_secret_absent(committer.receipts)
+
+    def test_person_pat_scope_is_domain_separated_from_exact_secret_hmac(self) -> None:
+        verifier = FakeVerifier()
+
+        def verify_pat(
+            secret: memoryview,
+            *,
+            provider: str,
+            reviewed_anchor_uuid: str,
+        ) -> VerifiedCredentialIdentity:
+            verifier.received.append(bytes(secret))
+            return VerifiedCredentialIdentity(
+                provider=provider,
+                account_subject="provider-person-id-private",
+                workspace_identity="notion-pat-token-scope",
+                workspace_identity_basis=NOTION_PAT_WORKSPACE_IDENTITY_BASIS,
+                reviewed_anchor_uuid=reviewed_anchor_uuid,
+                capabilities=("read_content", "retrieve_user_identity"),
+            )
+
+        verifier.verify_identity = verify_pat  # type: ignore[method-assign]
+        worker, _, _, _, committer = self.worker(verifier=verifier)
+        result = self.execute(worker)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(
+            result["workspace_identity_basis"],
+            NOTION_PAT_WORKSPACE_IDENTITY_BASIS,
+        )
+        expected = "sha256:" + hashlib.sha256(
+            NOTION_PAT_SCOPE_FINGERPRINT_DOMAIN
+            + str(result["fingerprint_digest"]).encode("ascii")
+        ).hexdigest()
+        self.assertEqual(result["verified_workspace_fingerprint"], expected)
+        self.assertEqual(
+            committer.receipts[0]["verified_workspace_fingerprint"], expected
+        )
+        rendered = json.dumps([result, committer.receipts], ensure_ascii=False)
+        for private in (
+            SECRET_TEXT,
+            "provider-person-id-private",
+            "notion-pat-token-scope",
+            ANCHOR,
+        ):
+            self.assertNotIn(private, rendered)
 
     def test_store_write_failure_attempts_exact_rollback_and_issues_no_id(self) -> None:
         worker, _, store, _, committer = self.worker(store=FakeStore(write_error=True))

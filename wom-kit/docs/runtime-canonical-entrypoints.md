@@ -1,6 +1,6 @@
 # Runtime Canonical Entry Points
 
-Status: v0.3.316 Letter 129 complete collision-set inspection and cache-repair checkpoint
+Status: v0.3.317 credential-console continuity and staged-cleanup evidence checkpoint
 
 When an AI runtime enters a WOM archive, it needs a small, explicit "start
 here" map. The archive may contain zets, source bindings, provider metadata,
@@ -271,17 +271,28 @@ secret reader, provider caller, or archive writer:
 
 | Command | Canonical role |
 | --- | --- |
-| `credential-adopt` | Dry-run hashes one stable public intake request. Exact `request_sha256` approval opens only a native masked Windows dialog in a fresh spawned child; no PAT/token/secret command option exists. |
+| `credential-adopt` | First enrollment or explicit replacement only. Dry-run hashes the helper AI's public-safe current-task and connection-reason sentences together with the stable request. WOM supplies non-overridable security copy. Exact `request_sha256` approval opens one separate Unicode Windows console in the fresh spawned child, disables input echo, and closes the console before the store write. A matching registration returns without another prompt only after authenticated receipt, exact saved-secret fingerprint, and current reviewed-anchor revalidation; no PAT/token/secret command option exists. |
 | `credential-secure-list` | Lists unauthenticated content-free receipt metadata by default. `--verify` reads only the exact archive authentication-key target and verifies receipt/lifecycle MACs; it neither enumerates the native vault nor resolves a provider credential. |
 | `credential-lifecycle` | Authenticates and digest-plans one human-selected active/current/default credential for an exact provider/workspace scope, then records only that unchanged approved decision. It never deletes or revokes another credential. |
 | `notion-page-recovery-plan` | Validates the exact ignored-local two-group request of 577 plus 43 unique page UUIDs, exactly 620, and digest-plans a bounded slice with zero credential reads, provider calls, or writes. |
 | `notion-page-recovery` | Repeats the same plan in dry-run or, with the exact reviewed plan SHA and reviewer, invokes spawned authenticated read-only Notion recovery and writes only content-addressed objets plus private recovery evidence. |
 
+For internal integrations, current scope authority comes from Notion's
+`bot.workspace_id`. A person PAT has no provider-returned workspace ID, so WOM
+uses the archive-keyed fingerprint of the exact saved PAT under
+`notion_pat_token_scope_v1` and also rechecks the current person plus reviewed
+page. The same saved PAT can therefore serve another reviewed page. Another
+PAT is not silently merged into that scope. One compatible authenticated
+v0.3.311-v0.3.316 receipt may receive a
+no-prompt, append-only local scope evolution after exact revalidation; absent
+lifecycle still needs a human
+default, and duplicate or complex lifecycle state stops for review.
+
 The safe command shapes are:
 
 ```powershell
-archive credential-adopt <archive-root> --account-label <safe-label> --workspace-label <safe-label> --reviewed-anchor-page-id <uuid> --interactive --dry-run --format json
-archive credential-adopt <archive-root> --account-label <safe-label> --workspace-label <safe-label> --reviewed-anchor-page-id <uuid> --interactive --expected-request-sha256 <sha256> --approve --format json
+archive credential-adopt <archive-root> --account-label <safe-label> --workspace-label <safe-label> --task-summary "<public-safe current task>" --connection-reason "<public-safe reason>" --reviewed-anchor-page-id <uuid> --interactive --dry-run --format json
+archive credential-adopt <archive-root> --account-label <safe-label> --workspace-label <safe-label> --task-summary "<same public-safe current task>" --connection-reason "<same public-safe reason>" --reviewed-anchor-page-id <uuid> --interactive --expected-request-sha256 <sha256> --approve --format json
 archive credential-secure-list <archive-root> --format json
 archive credential-secure-list <archive-root> --verify --format json
 archive credential-lifecycle <archive-root> --provider notion --workspace-fingerprint <sha256> --default-credential-id <opaque-id> --dry-run --format json

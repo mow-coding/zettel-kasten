@@ -166,7 +166,7 @@ WOM-kit already has safe primitives that can support parts of this flow:
 | Derived text capture | `archive derive-text capture --dry-run|--approve` | Registers already extracted UTF-8 text for an existing `object_id`; single-file and JSONL batch input are supported. |
 | Drafting | `archive create-draft --dry-run` | Previews an inbox draft; can preserve validated source-intake `project_intake_context` as receipt evidence; approved write is separate from minting. |
 | Minting | `archive mint-zet --dry-run` / `--approve` | Mints only after explicit approval and writes receipts/snapshots. |
-| Cleanup verification | `archive staged-cleanup-check --dry-run` | Reports whether staged files are preserved, deferred, or unsafe to remove; never deletes. |
+| Cleanup verification | `archive staged-cleanup-check --dry-run` | Reports whether staged files have complete preservation evidence. A deferred item remains staged and blocks whole-folder cleanup; the command never deletes. |
 | Index | `archive index` / `archive search` | Generated SQLite index; rebuildable local search. |
 
 These primitives now include a dry-run staging guide, a one-screen session guide,
@@ -209,7 +209,9 @@ implemented and approved.
 
 The staged project folder may be removed only after verification that:
 
-- selected originals are preserved as objets or explicitly deferred,
+- every selected original is preserved with verified manifest, store, and
+  receipt evidence; an explicitly deferred item remains unresolved and blocks
+  whole-folder deletion,
 - manifests/source maps/receipts exist for preserved items,
 - intended zets are minted or explicitly left as drafts/deferred work,
 - provenance links zets back to source refs or object ids,

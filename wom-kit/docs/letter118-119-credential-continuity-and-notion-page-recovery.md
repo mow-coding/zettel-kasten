@@ -52,6 +52,75 @@ They are not persistence receipts.
 
 ## Human-only credential intake
 
+### v0.3.317 visible-console and reuse correction
+
+The visible black console is a small WOM-owned security surface, not a generic
+terminal. Its copy has two owners. The helper AI must supply a reviewed,
+public-safe `task_summary` and `connection_reason` that describe the actual
+current work. WOM alone supplies the fixed security notice, including the exact
+promise that the entered credential is not sent to the helper AI or chat. WOM
+also owns the masked-input, cancellation, storage, and reuse wording. The two
+helper sentences and replacement intent are bound into the canonical request
+SHA-256; changing either after review blocks before the console opens.
+
+The console uses Windows Unicode APIs (`SetConsoleTitleW`, `WriteConsoleW`, and
+`ReadConsoleW`) and explicitly selects UTF-8 console code pages, so Korean copy
+does not depend on the launcher terminal's legacy code page. Echo and processed
+Ctrl+C handling are disabled during input. Empty Enter and Ctrl+C are
+safe cancellations, and the original mode/code pages are restored before the
+worker detaches.
+
+Here, “one-use” describes the short approval request and visible input session,
+not the saved credential. A successful first enrollment stores one exact
+Generic Credential in Windows Credential Manager and verifies an authenticated
+local receipt. Later approved recovery uses that exact saved entry through the
+receipt-backed broker and does not open the input console again. A repeated
+matching `credential-adopt` call may skip the prompt only after the worker
+authenticates the receipt, reads the exact saved entry, verifies its secret
+fingerprint, and rechecks the currently reviewed Notion anchor. A missing,
+unreadable, or fingerprint-mismatched saved entry fails closed and requires an
+explicit, separately reviewed `--replace-existing` request. A current-anchor or
+provider check failure preserves the saved entry and routes to page, sharing,
+and connection review before a no-prompt retry. Account/workspace labels are
+not authority and a label-only change never justifies another prompt or
+duplicate credential.
+
+### Notion scope identity and legacy receipt evolution
+
+Notion presents two supported identity shapes. An internal integration returns
+a bot object with `bot.workspace_id`; WOM hashes that provider value under the
+`notion_bot_workspace_id_v1` basis. A person PAT returns a person object and no
+workspace ID. Notion's documented PAT contract says one PAT belongs to one user
+in one workspace, so WOM uses `notion_pat_token_scope_v1`: the worker derives a
+private scope witness from the archive-keyed HMAC fingerprint of the exact
+saved PAT, verifies the current person through `/v1/users/me`, and verifies
+access to the currently reviewed page. It never substitutes a label, email,
+account id, or page UUID for a workspace ID.
+
+That distinction is intentionally conservative. The same saved PAT can be
+reused for another reviewed page without another prompt. A different PAT gets
+a different witness even if a human knows both tokens belong to the same
+workspace. PAT rotation or reconciliation therefore remains a separately
+reviewed lifecycle operation; WOM does not silently merge credentials.
+
+New successful intake writes an authenticated v0.2 receipt carrying the basis.
+Released v0.3.311-v0.3.316 v0.1 receipts used the reviewed page as their old
+scope fingerprint, and they remain byte-immutable. When exactly one compatible
+legacy registration exists, WOM authenticates that receipt, reads only its
+exact saved Credential Manager entry inside the worker, verifies the secret
+HMAC, and performs the current provider/page verification. It may then append
+one authenticated local workspace-scope evolution for the same
+`credential_id`, backend, and PAT. No input window opens and no credential is
+written, deleted, or duplicated.
+
+If the legacy lifecycle contains exactly that one compatible credential, WOM
+can move the signed lifecycle authority to the evolved scope. With no
+lifecycle, the evolved row still requires a human default decision. Duplicate,
+conflicting, tampered, or complex lifecycle/evolution state fails closed before
+first publication. If a process stops after the evolution is durable but
+before the lifecycle transition, the old broker binding remains unusable and a
+retry completes the same idempotent transition.
+
 The v0.3.311 source boundary uses a short-lived, one-use plan. The default
 lifetime is five minutes, with a supported range of 30 to 3,600 seconds. The
 AI-visible parent process receives only safe labels, a plan digest, and fixed
@@ -66,11 +135,16 @@ bytes exist only in the child. That child performs the following transaction:
    Claim the request once through an archive-bound, non-reparse authority file
    whose bytes are fully written, synced, atomically published, and exactly
    revalidated on replay.
-2. Open the OS-native, application-modal masked prompt through
-   `CredUIPromptForCredentialsW` with `CREDUI_FLAGS_DO_NOT_PERSIST`.
+2. Detach the isolated worker from any inherited console, allocate one separate
+   visible Windows console, open only `CONIN$` and `CONOUT$`, and read one line
+   with `ENABLE_ECHO_INPUT` disabled. Empty Enter or Ctrl+C cancels. Escape is
+   not presented as a cancel key because the real cooked Windows console does
+   not reliably wake `ReadConsoleW` for it.
 3. Pass the mutable secret buffer directly to one exact Windows Credential
    Manager Generic Credential target; do not use argv, environment variables,
-   normal stdin, a plaintext file, chat, clipboard, or tool output.
+   normal stdin, a plaintext file, chat, a direct clipboard API read, or tool
+   output. A deliberate human paste into the separate masked console is
+   console input only and is never read by the helper AI.
 4. Prove that exact target exists, then verify the provider identity and one
    human-reviewed workspace anchor.
 5. Commit one authenticated, non-secret local receipt atomically. Only after
@@ -79,7 +153,7 @@ bytes exist only in the child. That child performs the following transaction:
 6. Wipe the mutable secret buffer before the worker exits.
 
 Once the child starts, the parent does not force-terminate it on a timer. The
-human must finish or cancel the native dialog so the child keeps its normal
+human must finish or cancel the visible console prompt so the child keeps its normal
 buffer-wipe and rollback opportunity. A process crash or power loss can still
 interrupt cleanup; the source result therefore does not claim crash-proof
 rollback. If the parent loses the child result after process start, it reports
@@ -95,8 +169,9 @@ entry may remain and must be handled as unresolved local state. A
 `persisted: false` failure result alone must not be interpreted as a successful
 delete receipt. The high-level source preserves a fixed `rollback_status`, a
 separate store-absence proof bit, and a content-free operator action for this
-case. There is no terminal or stdin fallback. This is an OS-native secret-entry
-boundary, not a new WOM web or desktop UI.
+case. There is no parent-console or ordinary-stdin fallback. This is a narrow
+OS-native console secret-entry boundary, not a general shell, WOM web UI, or
+desktop form. The console closes before the Credential Manager write begins.
 
 There is also a distinct post-commit repair state. If the exact store write and
 authenticated receipt commit succeed but immediate authenticated rediscovery
@@ -104,8 +179,9 @@ fails, WOM must report failure with `accepted: true` and `persisted: true`,
 return no usable credential id, and stop for registry repair. It must not call
 that state rolled back or absent.
 
-The source contract follows Microsoft's documented
-[`CredUIPromptForCredentialsW`](https://learn.microsoft.com/en-us/windows/win32/api/wincred/nf-wincred-creduipromptforcredentialsw)
+The corrected source contract follows Microsoft's documented
+[console creation](https://learn.microsoft.com/en-us/windows/console/creation-of-a-console),
+[console modes](https://learn.microsoft.com/en-us/windows/console/setconsolemode),
 and [Credentials Management](https://learn.microsoft.com/en-us/windows/win32/api/wincred/)
 interfaces, including exact `CredWriteW`, `CredReadW`, and `CredDeleteW`
 operations. The test checkpoint uses injected fakes; it has not performed a
@@ -115,13 +191,13 @@ real OS call.
 
 | Capability surface | Intended role | Current source status |
 | --- | --- | --- |
-| Human-only adoption | `credential-adopt --interactive --dry-run` reviews one safe request; `--interactive --approve --expected-request-sha256 ...` creates one fresh worker plan and opens only the native masked dialog. Metadata alone can never set `persisted: true`. | Parser, spawned worker, authenticated receipt composition, and fixed privacy projection are implemented and tested with injected dependencies. |
+| Human-only adoption | `credential-adopt --interactive --dry-run` reviews safe helper task/reason copy plus fixed WOM security copy; `--interactive --approve --expected-request-sha256 ...` opens the separate echo-disabled Windows console only for first enrollment or explicit `--replace-existing`. A matching registration skips the prompt only after exact store, secret-fingerprint, and current-anchor revalidation. Metadata alone can never set `persisted: true`. | Parser, spawned worker, Unicode visible-console input, authenticated receipt composition, idempotent no-prompt reuse gate, and fixed privacy projection are implemented and tested with injected dependencies. |
 | Authenticated listing | `credential-secure-list` lists unauthenticated local metadata without an OS read; `--verify` reads only the exact archive authentication-key target and verifies receipt/lifecycle MACs. It never enumerates vault entries or reads a provider credential. | Parser, registry, and exact-key verification are implemented. |
 | Default lifecycle selection | `credential-lifecycle --dry-run` returns an authenticated plan; `--approve --expected-plan-sha256 ... --reviewed-by ...` records one human-selected current/default credential. Other valid credentials become `legacy_valid` or `revocation_pending`; WOM never deletes or revokes them automatically. | Parser and digest-bound lifecycle write are implemented. |
 
 The exact released artifact remains the final parser authority. No operator
-should paste a PAT into any command: the approved path accepts it only inside
-the Windows-native masked dialog. Authenticated listing and lifecycle planning
+should paste a PAT into any command or AI chat: the approved path accepts it
+only inside the separate black Windows console. Authenticated listing and lifecycle planning
 must read the exact archive authentication key. Once that key boundary is
 entered, a failure reports native/key-read counts as unknown and possibly
 nonzero; it never falsely reports exact-zero OS activity. Lifecycle planning

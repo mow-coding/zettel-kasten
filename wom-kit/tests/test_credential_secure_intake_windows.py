@@ -5,6 +5,7 @@ import io
 import json
 import tempfile
 import unittest
+from unittest.mock import patch
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -20,7 +21,7 @@ from wom_kit import credential_secure_intake_windows as windows_module
 from wom_kit.credential_secure_intake_windows import (
     CtypesWindowsNativeFacade,
     WindowsDllBundle,
-    WindowsNativeMaskedSecretUI,
+    WindowsVisibleConsoleSecretUI,
     WindowsSecureIntakeError,
     build_windows_secure_intake_worker,
     current_windows_owner_binding,
@@ -50,7 +51,7 @@ class FakeWindowsNative:
     stored: dict[str, bytes] = field(default_factory=dict, repr=False)
     last_prompt_buffer: bytearray | None = field(default=None, repr=False)
 
-    def prompt_masked_secret(self, *, request_id: str) -> bytearray | None:
+    def prompt_masked_secret(self, *, request_id: str, context=None) -> bytearray | None:
         self.calls.append(("prompt_masked_secret", request_id))
         if self.prompt_error:
             raise RuntimeError(SYNTHETIC_SECRET.decode("ascii"))
@@ -119,6 +120,8 @@ class FakeDllHarness:
         self.freed: list[int] = []
         self.written_target = ""
         self.written_blob = b""
+        self.written_type: int | None = None
+        self.written_persist: int | None = None
         self.deleted_target = ""
         self.blob = (ctypes.c_ubyte * len(SYNTHETIC_SECRET)).from_buffer_copy(
             SYNTHETIC_SECRET
@@ -129,42 +132,13 @@ class FakeDllHarness:
             self.blob, ctypes.POINTER(ctypes.c_ubyte)
         )
 
-        def prompt(
-            _info,
-            _target,
-            _reserved,
-            _auth_error,
-            _username,
-            _username_size,
-            password,
-            _password_size,
-            _save,
-            _flags,
-        ):
-            password.value = SYNTHETIC_SECRET.decode("ascii")
-            return windows_module.NO_ERROR
-
-        def wide_to_utf8(
-            _code_page,
-            _flags,
-            wide,
-            wide_length,
-            output,
-            output_size,
-            _default,
-            _used_default,
-        ):
-            data = wide.value[: int(wide_length)].encode("utf-8")
-            if output is None or int(output_size) == 0:
-                return len(data)
-            ctypes.memmove(output, data, len(data))
-            return len(data)
-
         def cred_write(credential_pointer, _flags):
             credential = ctypes.cast(
                 credential_pointer, ctypes.POINTER(windows_module._CREDENTIALW)
             ).contents
             self.written_target = credential.TargetName
+            self.written_type = int(credential.Type)
+            self.written_persist = int(credential.Persist)
             self.written_blob = ctypes.string_at(
                 credential.CredentialBlob, credential.CredentialBlobSize
             )
@@ -185,9 +159,6 @@ class FakeDllHarness:
             self.deleted_target = target
             return 1
 
-        self.credui = SimpleNamespace(
-            CredUIPromptForCredentialsW=FakeFunction(prompt)
-        )
         self.advapi32 = SimpleNamespace(
             CredWriteW=FakeFunction(cred_write),
             CredReadW=FakeFunction(cred_read),
@@ -201,13 +172,10 @@ class FakeDllHarness:
             GetCurrentProcess=FakeFunction(lambda: 1),
             CloseHandle=FakeFunction(lambda _handle: 1),
             LocalFree=FakeFunction(lambda _pointer: None),
-            lstrlenW=FakeFunction(lambda value: len(value.value)),
-            WideCharToMultiByte=FakeFunction(wide_to_utf8),
         )
 
     def bundle(self) -> WindowsDllBundle:
         return WindowsDllBundle(
-            credui=self.credui,
             advapi32=self.advapi32,
             kernel32=self.kernel32,
         )
@@ -355,26 +323,50 @@ class WindowsSecureIntakeTests(unittest.TestCase):
             self.assertEqual(native.calls, [])
             self.assertEqual(list(outside.iterdir()), [])
 
-    def test_ctypes_fake_dll_dialog_write_probe_read_and_delete_are_exact(self) -> None:
+    def test_ctypes_fake_dll_console_write_probe_read_and_delete_are_exact(self) -> None:
         self.assertRegex(
             TARGET,
             r"^WOM/credential-intake/[0-9a-f]{64}/backend_[A-Za-z0-9_-]+$",
         )
         self.assertNotIn(ARCHIVE_SCOPE_ID, TARGET)
         harness = FakeDllHarness()
+        prompted_request_ids: list[str] = []
+
+        def fake_console_prompt(*, request_id: str, **_kwargs: object) -> bytearray:
+            prompted_request_ids.append(request_id)
+            return bytearray(SYNTHETIC_SECRET)
+
         native = CtypesWindowsNativeFacade(
             cli_live_approved=True,
             platform_name="nt",
             dlls=harness.bundle(),
+            console_prompt=fake_console_prompt,
         )
 
-        prompted = native.prompt_masked_secret(request_id=REQUEST_ID)
+        prompt_context = windows_module.VisibleConsolePromptContext(
+            provider="notion",
+            purpose="notion_page_recovery",
+            account_label="개인 계정",
+            workspace_label="자료 보관함",
+            task_summary="검토한 Notion 페이지를 WOM 아카이브로 복구하고 있습니다.",
+            connection_reason="복구를 계속하려면 Notion 작업공간 연결을 확인해야 합니다.",
+        )
+        prompted = native.prompt_masked_secret(
+            request_id=REQUEST_ID,
+            context=prompt_context,
+        )
         self.assertEqual(prompted, bytearray(SYNTHETIC_SECRET))
+        self.assertEqual(prompted_request_ids, [REQUEST_ID])
 
         write_buffer = bytearray(SYNTHETIC_SECRET)
         native.write_generic(TARGET, memoryview(write_buffer))
         self.assertEqual(harness.written_target, TARGET)
         self.assertEqual(harness.written_blob, SYNTHETIC_SECRET)
+        self.assertEqual(harness.written_type, windows_module.CRED_TYPE_GENERIC)
+        self.assertEqual(
+            harness.written_persist,
+            windows_module.CRED_PERSIST_LOCAL_MACHINE,
+        )
 
         self.assertTrue(native.generic_exists(TARGET))
         read_buffer = native.read_generic_secret_exact(TARGET)
@@ -396,12 +388,58 @@ class WindowsSecureIntakeTests(unittest.TestCase):
             assert prompted is not None
             prompted[index] = 0
 
+    def test_production_facade_routes_input_to_visible_console_boundary(self) -> None:
+        harness = FakeDllHarness()
+        prompted = bytearray(SYNTHETIC_SECRET)
+        with patch.object(
+            windows_module,
+            "prompt_masked_secret_in_new_console",
+            return_value=prompted,
+        ) as console_prompt:
+            native = CtypesWindowsNativeFacade(
+                cli_live_approved=True,
+                platform_name="nt",
+                dlls=harness.bundle(),
+            )
+            prompt_context = windows_module.VisibleConsolePromptContext(
+                provider="notion",
+                purpose="notion_page_recovery",
+                account_label="개인 계정",
+                workspace_label="자료 보관함",
+                task_summary="검토한 Notion 페이지를 WOM 아카이브로 복구하고 있습니다.",
+                connection_reason="복구를 계속하려면 Notion 작업공간 연결을 확인해야 합니다.",
+            )
+            result = native.prompt_masked_secret(
+                request_id=REQUEST_ID,
+                context=prompt_context,
+            )
+
+        self.assertIs(result, prompted)
+        console_prompt.assert_called_once_with(
+            request_id=REQUEST_ID,
+            context=prompt_context,
+            kernel32=harness.kernel32,
+            platform_name="nt",
+            max_secret_bytes=windows_module.CRED_MAX_CREDENTIAL_BLOB_SIZE,
+        )
+        self.assertFalse(hasattr(harness, "credui"))
+
     def test_masked_ui_and_owner_errors_are_fixed_and_redacted(self) -> None:
         native = FakeWindowsNative(prompt_error=True)
-        ui = WindowsNativeMaskedSecretUI(native)
+        ui = WindowsVisibleConsoleSecretUI(
+            native,
+            windows_module.VisibleConsolePromptContext(
+                provider="notion",
+                purpose="notion_page_recovery",
+                account_label="개인 계정",
+                workspace_label="자료 보관함",
+                task_summary="검토한 Notion 페이지를 WOM 아카이브로 복구하고 있습니다.",
+                connection_reason="복구를 계속하려면 Notion 작업공간 연결을 확인해야 합니다.",
+            ),
+        )
         with self.assertRaises(WindowsSecureIntakeError) as dialog_error:
             ui.request_secret(request_id=REQUEST_ID)
-        self.assertEqual(dialog_error.exception.code, "windows_masked_dialog_failed")
+        self.assertEqual(dialog_error.exception.code, "windows_visible_console_failed")
         self.assertNotIn(SYNTHETIC_SECRET.decode("ascii"), str(dialog_error.exception))
         self.assertNotIn(SYNTHETIC_SECRET.decode("ascii"), repr(ui))
 

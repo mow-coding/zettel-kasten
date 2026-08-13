@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+import hashlib
 import json
 from pathlib import Path
 import tempfile
@@ -11,7 +12,16 @@ from unittest.mock import patch
 import uuid
 
 import wom_kit.credential_workflows as credential_workflows
-from wom_kit.credential_secure_registry import StableArchiveFingerprintKeyProvider
+from wom_kit.credential_secure_intake import (
+    AtomicJsonReceiptCommitter,
+    NOTION_PAT_SCOPE_FINGERPRINT_DOMAIN,
+    NOTION_PAT_WORKSPACE_IDENTITY_BASIS,
+)
+from wom_kit.credential_secure_registry import (
+    _receipt_mac,
+    RECEIPT_AUTHENTICATION_SCHEMA,
+    StableArchiveFingerprintKeyProvider,
+)
 from wom_kit.credential_workflows import (
     CredentialAdoptionWorkerInvocation,
     InjectedCredentialAdoptionWorkerSpawner,
@@ -24,7 +34,7 @@ from wom_kit.credential_workflows import (
     plan_authenticated_credential_lifecycle,
     plan_secure_credential_adoption,
 )
-from wom_kit.notion_http_adapter import NotionHttpAdapter
+from wom_kit.notion_http_adapter import NOTION_API_VERSION, NotionHttpAdapter
 from wom_kit.notion_page_recovery import REQUEST_SCHEMA, plan_recovery
 
 
@@ -32,8 +42,10 @@ NOW = datetime(2026, 8, 10, 8, 0, tzinfo=timezone.utc)
 ARCHIVE_ID = "archive:test"
 SID = "S-1-5-21-111111111-222222222-333333333-1001"
 ANCHOR = str(uuid.UUID(int=101))
+OTHER_ANCHOR = str(uuid.UUID(int=102))
 USER_ID = str(uuid.UUID(int=202))
 PAGE_ID = str(uuid.UUID(int=303))
+WORKSPACE_ID = str(uuid.UUID(int=404))
 REQUEST_ID = "intake_workflow1234567890"
 CREDENTIAL_ID = "cred_workflow1234567890"
 BACKEND_ID = "backend_workflow1234567890"
@@ -141,7 +153,11 @@ class NotStartedRecoveryWorkerSpawner:
 @dataclass
 class FakeWindowsNative:
     cancelled: bool = False
+    secret_text: str = SECRET_TEXT
     delete_fails: bool = False
+    probe_fails: bool = False
+    probe_fail_targets: set[str] = field(default_factory=set, repr=False)
+    read_fail_targets: set[str] = field(default_factory=set, repr=False)
     values: dict[str, bytearray] = field(default_factory=dict, repr=False)
     writes: list[str] = field(default_factory=list)
     reads: list[str] = field(default_factory=list)
@@ -149,11 +165,11 @@ class FakeWindowsNative:
     prompts: int = 0
     sid_reads: int = 0
 
-    def prompt_masked_secret(self, *, request_id: str) -> bytearray | None:
+    def prompt_masked_secret(self, *, request_id: str, context=None) -> bytearray | None:
         self.prompts += 1
         if self.cancelled:
             return None
-        return bytearray(SECRET_TEXT.encode("utf-8"))
+        return bytearray(self.secret_text.encode("utf-8"))
 
     def write_generic(self, target_name: str, secret: memoryview) -> None:
         self.writes.append(target_name)
@@ -161,10 +177,14 @@ class FakeWindowsNative:
 
     def generic_exists(self, target_name: str) -> bool:
         self.probes.append(target_name)
+        if self.probe_fails or target_name in self.probe_fail_targets:
+            raise RuntimeError("synthetic probe detail must not escape")
         return target_name in self.values
 
     def read_generic_secret_exact(self, target_name: str) -> bytearray:
         self.reads.append(target_name)
+        if target_name in self.read_fail_targets:
+            raise RuntimeError("synthetic read detail must not escape")
         return bytearray(self.values[target_name])
 
     def delete_generic(self, target_name: str) -> None:
@@ -231,13 +251,33 @@ def make_archive(base: Path) -> Path:
     return root
 
 
-def intake_transport(*, include_recovery: bool = False) -> FakeTransport:
+def intake_transport(
+    *,
+    include_recovery: bool = False,
+    anchor: str = ANCHOR,
+    person: bool = False,
+) -> FakeTransport:
+    identity = (
+        {
+            "object": "user",
+            "id": USER_ID,
+            "type": "person",
+            "person": {},
+        }
+        if person
+        else {
+            "object": "user",
+            "id": USER_ID,
+            "type": "bot",
+            "bot": {"workspace_id": WORKSPACE_ID},
+        }
+    )
     outcomes = [
-        FakeResponse({"object": "user", "id": USER_ID, "type": "bot"}),
+        FakeResponse(identity),
         FakeResponse(
             {
                 "object": "page",
-                "id": ANCHOR,
+                "id": anchor,
                 "last_edited_time": "2026-08-10T00:00:00.000Z",
                 "in_trash": False,
             }
@@ -274,6 +314,8 @@ def make_plan(**overrides: object) -> dict[str, object]:
         "account_label": "organization account",
         "workspace_label": "reviewed workspace",
         "purpose": "source_recovery",
+        "task_summary": "검토한 Notion 페이지를 WOM 아카이브로 복구하고 있습니다.",
+        "connection_reason": "복구를 계속하려면 해당 Notion 작업공간 연결을 확인해야 합니다.",
         "reviewed_anchor_uuid": ANCHOR,
         "requested_capabilities": CAPABILITIES,
         "ttl_seconds": 300,
@@ -362,6 +404,14 @@ class CredentialWorkflowPlanningTests(unittest.TestCase):
                 result["approved_execution_steps"],
             )
             self.assertEqual(result["expected_archive_id"], ARCHIVE_ID)
+            self.assertEqual(
+                result["interaction_context"]["task_summary"],
+                "검토한 Notion 페이지를 WOM 아카이브로 복구하고 있습니다.",
+            )
+            self.assertRegex(
+                result["interaction_context_sha256"],
+                r"^sha256:[0-9a-f]{64}$",
+            )
             rendered = json.dumps(result, ensure_ascii=False, sort_keys=True)
             self.assertNotIn(ANCHOR, rendered)
             self.assertNotIn(SECRET_TEXT, rendered)
@@ -374,6 +424,21 @@ class CredentialWorkflowPlanningTests(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertEqual(result["reason_code"], "credential_adoption_plan_invalid")
         self.assertNotIn(unsafe, json.dumps(result, ensure_ascii=False))
+
+        for private_context in (
+            "ntn_" + "A" * 32,
+            "https://example.invalid/private-page",
+            "C:\\private\\credential.txt",
+        ):
+            with self.subTest(private_context=private_context[:8]):
+                context_result = make_plan(task_summary=private_context)
+                rendered = json.dumps(context_result, ensure_ascii=False)
+                self.assertFalse(context_result["ok"])
+                self.assertEqual(
+                    context_result["reason_code"],
+                    "credential_adoption_plan_invalid",
+                )
+                self.assertNotIn(private_context, rendered)
 
     def test_not_approved_and_plan_drift_block_before_worker_spawn(self) -> None:
         plan = make_plan()
@@ -462,6 +527,30 @@ class CredentialWorkflowPlanningTests(unittest.TestCase):
             "credential_adoption_plan_digest_mismatch",
         )
         self.assertEqual(archive_blocked["operations"], ZERO_LIVE_OPERATIONS)
+        self.assertEqual(spawner.calls, 0)
+
+        context_contract_drift = dict(plan)
+        context_contract_drift["interaction_context"] = dict(
+            plan["interaction_context"]
+        )
+        context_contract_drift["interaction_context"]["task_summary"] = (
+            "승인되지 않은 다른 작업을 진행하고 있습니다."
+        )
+        context_blocked = execute_windows_notion_credential_adoption(
+            "not-even-inspected",
+            context_contract_drift,
+            expected_plan_digest=str(plan["plan_digest"]),
+            expected_archive_id=ARCHIVE_ID,
+            reviewed_anchor_uuid=ANCHOR,
+            requested_capabilities=CAPABILITIES,
+            approved=True,
+            worker_spawner=spawner,
+        )
+        self.assertFalse(context_blocked["ok"])
+        self.assertEqual(
+            context_blocked["reason_code"],
+            "credential_adoption_plan_digest_mismatch",
+        )
         self.assertEqual(spawner.calls, 0)
 
     def test_parent_rejects_arbitrary_or_nested_worker_output(self) -> None:
@@ -650,6 +739,46 @@ class CredentialWorkflowEndToEndTests(unittest.TestCase):
         )
         return result, selected_transport
 
+    def _replace_current_receipt_with_released_v01(
+        self, *, anchor: str
+    ) -> dict[str, object]:
+        """Build an authenticated release-era artifact from an adopted fixture."""
+
+        receipt_path = (
+            self.root
+            / "profiles"
+            / "local"
+            / "credential-intake"
+            / "receipts"
+            / f"{CREDENTIAL_ID}.json"
+        )
+        current = json.loads(receipt_path.read_text(encoding="utf-8"))
+        current.pop("receipt_authentication")
+        current.pop("workspace_identity_basis")
+        current["schema_version"] = (
+            "wom-credential-secure-intake-receipt/v0.1"
+        )
+        old_adapter_scope = "sha256:" + hashlib.sha256(
+            (
+                f"wom:notion:{NOTION_API_VERSION}:workspace-anchor:{anchor}"
+            ).encode("utf-8")
+        ).hexdigest()
+        current["verified_workspace_fingerprint"] = (
+            "sha256:"
+            + hashlib.sha256(old_adapter_scope.encode("utf-8")).hexdigest()
+        )
+        receipt_path.unlink()
+        authenticated = dict(current)
+        authenticated["receipt_authentication"] = {
+            "schema_version": RECEIPT_AUTHENTICATION_SCHEMA,
+            "algorithm": "hmac-sha256",
+            "mac": _receipt_mac(current, ARCHIVE_KEY),
+        }
+        AtomicJsonReceiptCommitter(receipt_path.parent).commit_atomic(
+            authenticated
+        )
+        return current
+
     def test_success_is_authenticated_rediscoverable_and_failure_has_no_id(self) -> None:
         result, _transport = self._adopt()
         self.assertTrue(result["ok"])
@@ -706,6 +835,780 @@ class CredentialWorkflowEndToEndTests(unittest.TestCase):
         self.assertEqual(len(cancelled_native.writes), 1)
         self.assertEqual(len(cancelled_native.reads), 1)
         self.assertEqual(cancelled_transport.calls, [])
+
+    def test_repeat_adoption_preserves_authenticated_registration_without_prompt(self) -> None:
+        first, _first_transport = self._adopt()
+        self.assertTrue(first["ok"])
+        self.assertEqual(self.native.prompts, 1)
+        repeat_transport = intake_transport()
+
+        repeat_plan = make_plan(
+            request_id_factory=lambda: "intake_repeat_no_prompt123456"
+        )
+        repeat = execute_windows_notion_credential_adoption(
+            self.root,
+            repeat_plan,
+            expected_plan_digest=str(repeat_plan["plan_digest"]),
+            expected_archive_id=ARCHIVE_ID,
+            reviewed_anchor_uuid=ANCHOR,
+            requested_capabilities=CAPABILITIES,
+            approved=True,
+            worker_spawner=InjectedCredentialAdoptionWorkerSpawner(
+                native=self.native,
+                notion_adapter=NotionHttpAdapter(transport=repeat_transport),
+                key_provider=self.key_provider,
+                now_factory=lambda: NOW,
+            ),
+        )
+
+        self.assertTrue(repeat["ok"])
+        self.assertFalse(repeat["accepted"])
+        self.assertTrue(repeat["persisted"])
+        self.assertEqual(
+            repeat["reason_code"],
+            "credential_adoption_existing_registration_preserved_without_prompt",
+        )
+        self.assertFalse(repeat["secret_prompt_performed"])
+        self.assertTrue(repeat["existing_registration_reused"])
+        self.assertEqual(self.native.prompts, 1)
+        self.assertEqual(len(repeat_transport.calls), 2)
+
+    def test_repeat_adoption_reuses_saved_secret_for_another_anchor_in_same_workspace(self) -> None:
+        first, _first_transport = self._adopt()
+        self.assertTrue(first["ok"])
+        prompts_before = self.native.prompts
+        writes_before = len(self.native.writes)
+        repeat_transport = intake_transport(anchor=OTHER_ANCHOR)
+        repeat_plan = make_plan(
+            reviewed_anchor_uuid=OTHER_ANCHOR,
+            request_id_factory=lambda: "intake_repeat_other_anchor1234",
+        )
+
+        repeat = execute_windows_notion_credential_adoption(
+            self.root,
+            repeat_plan,
+            expected_plan_digest=str(repeat_plan["plan_digest"]),
+            expected_archive_id=ARCHIVE_ID,
+            reviewed_anchor_uuid=OTHER_ANCHOR,
+            requested_capabilities=CAPABILITIES,
+            approved=True,
+            worker_spawner=InjectedCredentialAdoptionWorkerSpawner(
+                native=self.native,
+                notion_adapter=NotionHttpAdapter(transport=repeat_transport),
+                key_provider=self.key_provider,
+                now_factory=lambda: NOW,
+            ),
+        )
+
+        self.assertTrue(repeat["ok"])
+        self.assertEqual(
+            repeat["reason_code"],
+            "credential_adoption_existing_registration_preserved_without_prompt",
+        )
+        self.assertTrue(repeat["existing_registration_reused"])
+        self.assertFalse(repeat["secret_prompt_performed"])
+        self.assertEqual(self.native.prompts, prompts_before)
+        self.assertEqual(len(self.native.writes), writes_before)
+        self.assertEqual(len(repeat_transport.calls), 2)
+        rendered = json.dumps(repeat, ensure_ascii=False, sort_keys=True)
+        for private in (ANCHOR, OTHER_ANCHOR, WORKSPACE_ID, USER_ID, SECRET_TEXT):
+            self.assertNotIn(private, rendered)
+
+    def test_person_pat_first_intake_reuses_same_pat_for_another_anchor_without_prompt(self) -> None:
+        first, _ = self._adopt(transport=intake_transport(person=True))
+        self.assertTrue(first["ok"])
+        listed = list_authenticated_secure_credentials(
+            self.root,
+            native=self.native,
+            key_provider=self.key_provider,
+        )
+        row = listed["credentials"][0]
+        self.assertEqual(
+            row["workspace_identity_basis"],
+            NOTION_PAT_WORKSPACE_IDENTITY_BASIS,
+        )
+        expected_scope = "sha256:" + hashlib.sha256(
+            NOTION_PAT_SCOPE_FINGERPRINT_DOMAIN
+            + str(row["credential_fingerprint"]).encode("ascii")
+        ).hexdigest()
+        self.assertEqual(row["verified_workspace_fingerprint"], expected_scope)
+
+        prompts_before = self.native.prompts
+        writes_before = list(self.native.writes)
+        repeat_transport = intake_transport(
+            person=True,
+            anchor=OTHER_ANCHOR,
+        )
+        repeat_plan = make_plan(
+            reviewed_anchor_uuid=OTHER_ANCHOR,
+            request_id_factory=lambda: "intake_person_pat_other_anchor1",
+        )
+        repeat = execute_windows_notion_credential_adoption(
+            self.root,
+            repeat_plan,
+            expected_plan_digest=str(repeat_plan["plan_digest"]),
+            expected_archive_id=ARCHIVE_ID,
+            reviewed_anchor_uuid=OTHER_ANCHOR,
+            requested_capabilities=CAPABILITIES,
+            approved=True,
+            worker_spawner=InjectedCredentialAdoptionWorkerSpawner(
+                native=self.native,
+                notion_adapter=NotionHttpAdapter(transport=repeat_transport),
+                key_provider=self.key_provider,
+                now_factory=lambda: NOW,
+            ),
+        )
+        self.assertTrue(repeat["ok"])
+        self.assertEqual(
+            repeat["reason_code"],
+            "credential_adoption_existing_registration_preserved_without_prompt",
+        )
+        self.assertFalse(repeat["secret_prompt_performed"])
+        self.assertEqual(self.native.prompts, prompts_before)
+        self.assertEqual(self.native.writes, writes_before)
+
+        second_root = make_archive(Path(self.temporary.name) / "different-pat")
+        second_secret = "synthetic_other_notion_pat_only_in_worker"
+        second_native = FakeWindowsNative(secret_text=second_secret)
+        second_key_provider = StableArchiveFingerprintKeyProvider(
+            second_native,
+            random_bytes=lambda size: ARCHIVE_KEY if size == 32 else b"",
+        )
+        second_plan = make_plan(
+            request_id_factory=lambda: "intake_person_pat_separate_scope1"
+        )
+        second = execute_windows_notion_credential_adoption(
+            second_root,
+            second_plan,
+            expected_plan_digest=str(second_plan["plan_digest"]),
+            expected_archive_id=ARCHIVE_ID,
+            reviewed_anchor_uuid=ANCHOR,
+            requested_capabilities=CAPABILITIES,
+            approved=True,
+            worker_spawner=InjectedCredentialAdoptionWorkerSpawner(
+                native=second_native,
+                notion_adapter=NotionHttpAdapter(
+                    transport=intake_transport(person=True)
+                ),
+                key_provider=second_key_provider,
+                now_factory=lambda: NOW,
+                credential_id_factory=lambda: CREDENTIAL_ID,
+                backend_id_factory=lambda: BACKEND_ID,
+            ),
+        )
+        self.assertTrue(second["ok"])
+        second_row = list_authenticated_secure_credentials(
+            second_root,
+            native=second_native,
+            key_provider=second_key_provider,
+        )["credentials"][0]
+        self.assertNotEqual(
+            row["verified_workspace_fingerprint"],
+            second_row["verified_workspace_fingerprint"],
+        )
+        rendered = json.dumps(
+            [first, listed, repeat, second, second_row],
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        for private in (
+            SECRET_TEXT,
+            second_secret,
+            USER_ID,
+            ANCHOR,
+            OTHER_ANCHOR,
+        ):
+            self.assertNotIn(private, rendered)
+
+    def test_released_v01_person_pat_evolves_without_prompt_and_preserves_singleton_lifecycle(self) -> None:
+        first, _ = self._adopt(transport=intake_transport(person=True))
+        self.assertTrue(first["ok"])
+        legacy = self._replace_current_receipt_with_released_v01(anchor=ANCHOR)
+        legacy_list = list_authenticated_secure_credentials(
+            self.root,
+            native=self.native,
+            key_provider=self.key_provider,
+        )
+        legacy_row = legacy_list["credentials"][0]
+        self.assertEqual(
+            legacy_row["workspace_identity_basis"],
+            "legacy_reviewed_anchor_v1",
+        )
+        lifecycle_plan = plan_authenticated_credential_lifecycle(
+            self.root,
+            provider="notion",
+            workspace_fingerprint=str(
+                legacy["verified_workspace_fingerprint"]
+            ),
+            selected_default_credential_id=CREDENTIAL_ID,
+            revocation_pending_credential_ids=(),
+            native=self.native,
+            key_provider=self.key_provider,
+        )
+        lifecycle = approve_authenticated_credential_lifecycle(
+            self.root,
+            provider="notion",
+            workspace_fingerprint=str(
+                legacy["verified_workspace_fingerprint"]
+            ),
+            selected_default_credential_id=CREDENTIAL_ID,
+            revocation_pending_credential_ids=(),
+            expected_plan_sha256=str(lifecycle_plan["plan_sha256"]),
+            reviewed_by="tester-legacy-pat",
+            native=self.native,
+            key_provider=self.key_provider,
+        )
+        self.assertTrue(lifecycle["ok"])
+
+        prompts_before = self.native.prompts
+        writes_before = list(self.native.writes)
+        saved_targets_before = {
+            target: bytes(value) for target, value in self.native.values.items()
+        }
+        repeat_transport = intake_transport(
+            person=True,
+            anchor=OTHER_ANCHOR,
+        )
+        repeat_plan = make_plan(
+            reviewed_anchor_uuid=OTHER_ANCHOR,
+            request_id_factory=lambda: "intake_legacy_pat_scope_evolve1",
+        )
+        repeat = execute_windows_notion_credential_adoption(
+            self.root,
+            repeat_plan,
+            expected_plan_digest=str(repeat_plan["plan_digest"]),
+            expected_archive_id=ARCHIVE_ID,
+            reviewed_anchor_uuid=OTHER_ANCHOR,
+            requested_capabilities=CAPABILITIES,
+            approved=True,
+            worker_spawner=InjectedCredentialAdoptionWorkerSpawner(
+                native=self.native,
+                notion_adapter=NotionHttpAdapter(transport=repeat_transport),
+                key_provider=self.key_provider,
+                now_factory=lambda: NOW,
+            ),
+        )
+        self.assertTrue(repeat["ok"])
+        self.assertEqual(
+            repeat["reason_code"],
+            "credential_adoption_legacy_scope_evolved_without_prompt",
+        )
+        self.assertTrue(repeat["workspace_scope_migrated"])
+        self.assertFalse(repeat["secret_prompt_performed"])
+        self.assertEqual(self.native.prompts, prompts_before)
+        self.assertEqual(self.native.writes, writes_before)
+        self.assertEqual(
+            {target: bytes(value) for target, value in self.native.values.items()},
+            saved_targets_before,
+        )
+        current = list_authenticated_secure_credentials(
+            self.root,
+            native=self.native,
+            key_provider=self.key_provider,
+        )["credentials"][0]
+        self.assertEqual(
+            current["workspace_identity_basis"],
+            NOTION_PAT_WORKSPACE_IDENTITY_BASIS,
+        )
+        self.assertTrue(current["workspace_scope_evolved"])
+        self.assertTrue(current["broker_authoritative"])
+        self.assertFalse(repeat["human_default_decision_required"])
+        evolution_files = list(
+            (
+                self.root
+                / "profiles"
+                / "local"
+                / "credential-intake"
+                / "evolutions"
+            ).glob("*.workspace-scope-v1.json")
+        )
+        self.assertEqual(len(evolution_files), 1)
+        rendered = json.dumps(
+            [repeat, current], ensure_ascii=False, sort_keys=True
+        )
+        for private in (SECRET_TEXT, USER_ID, ANCHOR, OTHER_ANCHOR, BACKEND_ID):
+            self.assertNotIn(private, rendered)
+
+    def test_released_v01_migration_interruption_retries_pending_lifecycle_without_prompt(self) -> None:
+        first, _ = self._adopt(transport=intake_transport(person=True))
+        self.assertTrue(first["ok"])
+        legacy = self._replace_current_receipt_with_released_v01(anchor=ANCHOR)
+        lifecycle_plan = plan_authenticated_credential_lifecycle(
+            self.root,
+            provider="notion",
+            workspace_fingerprint=str(
+                legacy["verified_workspace_fingerprint"]
+            ),
+            selected_default_credential_id=CREDENTIAL_ID,
+            revocation_pending_credential_ids=(),
+            native=self.native,
+            key_provider=self.key_provider,
+        )
+        approved_lifecycle = approve_authenticated_credential_lifecycle(
+            self.root,
+            provider="notion",
+            workspace_fingerprint=str(
+                legacy["verified_workspace_fingerprint"]
+            ),
+            selected_default_credential_id=CREDENTIAL_ID,
+            revocation_pending_credential_ids=(),
+            expected_plan_sha256=str(lifecycle_plan["plan_sha256"]),
+            reviewed_by="tester-crash-retry",
+            native=self.native,
+            key_provider=self.key_provider,
+        )
+        self.assertTrue(approved_lifecycle["ok"])
+        real_evolve = credential_workflows.evolve_legacy_authenticated_workspace_scope
+
+        def interrupting_evolve(*args, **kwargs):
+            def interrupt_after_publication() -> None:
+                raise RuntimeError("private synthetic interruption")
+
+            kwargs["after_evolution_commit"] = interrupt_after_publication
+            return real_evolve(*args, **kwargs)
+
+        prompts_before = self.native.prompts
+        writes_before = list(self.native.writes)
+        interrupted_plan = make_plan(
+            reviewed_anchor_uuid=OTHER_ANCHOR,
+            request_id_factory=lambda: "intake_legacy_scope_interrupted1",
+        )
+        with patch.object(
+            credential_workflows,
+            "evolve_legacy_authenticated_workspace_scope",
+            side_effect=interrupting_evolve,
+        ):
+            interrupted = execute_windows_notion_credential_adoption(
+                self.root,
+                interrupted_plan,
+                expected_plan_digest=str(interrupted_plan["plan_digest"]),
+                expected_archive_id=ARCHIVE_ID,
+                reviewed_anchor_uuid=OTHER_ANCHOR,
+                requested_capabilities=CAPABILITIES,
+                approved=True,
+                worker_spawner=InjectedCredentialAdoptionWorkerSpawner(
+                    native=self.native,
+                    notion_adapter=NotionHttpAdapter(
+                        transport=intake_transport(
+                            person=True, anchor=OTHER_ANCHOR
+                        )
+                    ),
+                    key_provider=self.key_provider,
+                    now_factory=lambda: NOW,
+                ),
+            )
+        self.assertFalse(interrupted["ok"])
+        self.assertEqual(
+            interrupted["reason_code"],
+            "credential_adoption_existing_scope_migration_failed",
+        )
+        pending = list_authenticated_secure_credentials(
+            self.root,
+            native=self.native,
+            key_provider=self.key_provider,
+        )["credentials"][0]
+        self.assertTrue(pending["workspace_scope_evolved"])
+        self.assertTrue(pending["workspace_scope_transition_pending"])
+        self.assertFalse(pending["broker_authoritative"])
+
+        retry_plan = make_plan(
+            reviewed_anchor_uuid=OTHER_ANCHOR,
+            request_id_factory=lambda: "intake_legacy_scope_retry12345",
+        )
+        retry = execute_windows_notion_credential_adoption(
+            self.root,
+            retry_plan,
+            expected_plan_digest=str(retry_plan["plan_digest"]),
+            expected_archive_id=ARCHIVE_ID,
+            reviewed_anchor_uuid=OTHER_ANCHOR,
+            requested_capabilities=CAPABILITIES,
+            approved=True,
+            worker_spawner=InjectedCredentialAdoptionWorkerSpawner(
+                native=self.native,
+                notion_adapter=NotionHttpAdapter(
+                    transport=intake_transport(
+                        person=True, anchor=OTHER_ANCHOR
+                    )
+                ),
+                key_provider=self.key_provider,
+                now_factory=lambda: NOW,
+            ),
+        )
+        self.assertTrue(retry["ok"])
+        self.assertEqual(
+            retry["reason_code"],
+            "credential_adoption_legacy_scope_evolved_without_prompt",
+        )
+        self.assertTrue(retry["workspace_scope_migrated"])
+        self.assertFalse(retry["human_default_decision_required"])
+        current = list_authenticated_secure_credentials(
+            self.root,
+            native=self.native,
+            key_provider=self.key_provider,
+        )["credentials"][0]
+        self.assertFalse(current["workspace_scope_transition_pending"])
+        self.assertTrue(current["broker_authoritative"])
+        self.assertEqual(self.native.prompts, prompts_before)
+        self.assertEqual(self.native.writes, writes_before)
+        rendered = json.dumps(
+            [interrupted, pending, retry, current],
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        for private in (SECRET_TEXT, USER_ID, ANCHOR, OTHER_ANCHOR, BACKEND_ID):
+            self.assertNotIn(private, rendered)
+
+    def test_repeat_adoption_ignores_display_label_drift_and_reuses_exact_secret(self) -> None:
+        first, _first_transport = self._adopt()
+        self.assertTrue(first["ok"])
+        prompts_before = self.native.prompts
+        writes_before = len(self.native.writes)
+        repeat_transport = intake_transport()
+
+        repeat_plan = make_plan(
+            account_label="renamed display account",
+            workspace_label="renamed display workspace",
+            request_id_factory=lambda: "intake_label_drift_no_prompt123",
+        )
+        repeat = execute_windows_notion_credential_adoption(
+            self.root,
+            repeat_plan,
+            expected_plan_digest=str(repeat_plan["plan_digest"]),
+            expected_archive_id=ARCHIVE_ID,
+            reviewed_anchor_uuid=ANCHOR,
+            requested_capabilities=CAPABILITIES,
+            approved=True,
+            worker_spawner=InjectedCredentialAdoptionWorkerSpawner(
+                native=self.native,
+                notion_adapter=NotionHttpAdapter(transport=repeat_transport),
+                key_provider=self.key_provider,
+                now_factory=lambda: NOW,
+            ),
+        )
+        self.assertTrue(repeat["ok"])
+        self.assertTrue(repeat["existing_registration_reused"])
+        self.assertFalse(repeat["secret_prompt_performed"])
+        self.assertEqual(self.native.prompts, prompts_before)
+        self.assertEqual(len(self.native.writes), writes_before)
+        self.assertEqual(len(repeat_transport.calls), 2)
+
+        listed = list_authenticated_secure_credentials(
+            self.root,
+            native=self.native,
+            key_provider=StableArchiveFingerprintKeyProvider(self.native),
+        )
+        self.assertEqual(listed["credential_count"], 1)
+
+    def test_multiple_provider_purpose_registrations_require_lifecycle_review(self) -> None:
+        first, _first_transport = self._adopt()
+        self.assertTrue(first["ok"])
+
+        replacement_transport = intake_transport()
+        replacement_plan = make_plan(
+            replace_existing=True,
+            account_label="second display account",
+            workspace_label="second display workspace",
+            request_id_factory=lambda: "intake_second_registration1234",
+        )
+        replacement = execute_windows_notion_credential_adoption(
+            self.root,
+            replacement_plan,
+            expected_plan_digest=str(replacement_plan["plan_digest"]),
+            expected_archive_id=ARCHIVE_ID,
+            reviewed_anchor_uuid=ANCHOR,
+            requested_capabilities=CAPABILITIES,
+            approved=True,
+            worker_spawner=InjectedCredentialAdoptionWorkerSpawner(
+                native=self.native,
+                notion_adapter=NotionHttpAdapter(transport=replacement_transport),
+                key_provider=self.key_provider,
+                now_factory=lambda: NOW,
+                credential_id_factory=lambda: "cred_secondregistration123456",
+                backend_id_factory=lambda: "backend_secondregistration1234",
+            ),
+        )
+        self.assertTrue(replacement["ok"])
+        prompts_before = self.native.prompts
+        reads_before = len(self.native.reads)
+        writes_before = len(self.native.writes)
+        blocked_transport = FakeTransport([])
+
+        repeat_plan = make_plan(
+            account_label="third display account",
+            workspace_label="third display workspace",
+            request_id_factory=lambda: "intake_multiple_requires_review1",
+        )
+        blocked = execute_windows_notion_credential_adoption(
+            self.root,
+            repeat_plan,
+            expected_plan_digest=str(repeat_plan["plan_digest"]),
+            expected_archive_id=ARCHIVE_ID,
+            reviewed_anchor_uuid=ANCHOR,
+            requested_capabilities=CAPABILITIES,
+            approved=True,
+            worker_spawner=InjectedCredentialAdoptionWorkerSpawner(
+                native=self.native,
+                notion_adapter=NotionHttpAdapter(transport=blocked_transport),
+                key_provider=self.key_provider,
+                now_factory=lambda: NOW,
+            ),
+        )
+        self.assertFalse(blocked["ok"])
+        self.assertEqual(
+            blocked["reason_code"],
+            "credential_adoption_existing_registrations_require_lifecycle_review",
+        )
+        self.assertEqual(self.native.prompts, prompts_before)
+        # One exact archive-key read happens before authenticated registry
+        # inspection; no saved provider credential is read on this branch.
+        self.assertEqual(len(self.native.reads), reads_before + 1)
+        self.assertEqual(len(self.native.writes), writes_before)
+        self.assertEqual(blocked_transport.calls, [])
+
+    def test_repeat_adoption_requires_explicit_replacement_when_store_entry_is_missing(self) -> None:
+        first, first_transport = self._adopt()
+        self.assertTrue(first["ok"])
+        secret_targets = [
+            target
+            for target in self.native.values
+            if "/backend_" in target and "backend_key_" not in target
+        ]
+        self.assertEqual(len(secret_targets), 1)
+        self.native.values.pop(secret_targets[0])
+        prompts_before = self.native.prompts
+        writes_before = len(self.native.writes)
+        provider_calls_before = len(first_transport.calls)
+
+        repeat_plan = make_plan(
+            request_id_factory=lambda: "intake_missing_store_no_prompt12"
+        )
+        repeat = execute_windows_notion_credential_adoption(
+            self.root,
+            repeat_plan,
+            expected_plan_digest=str(repeat_plan["plan_digest"]),
+            expected_archive_id=ARCHIVE_ID,
+            reviewed_anchor_uuid=ANCHOR,
+            requested_capabilities=CAPABILITIES,
+            approved=True,
+            worker_spawner=InjectedCredentialAdoptionWorkerSpawner(
+                native=self.native,
+                notion_adapter=NotionHttpAdapter(transport=first_transport),
+                key_provider=self.key_provider,
+                now_factory=lambda: NOW,
+            ),
+        )
+        self.assertFalse(repeat["ok"])
+        self.assertFalse(repeat["persisted"])
+        self.assertEqual(
+            repeat["reason_code"], "credential_adoption_existing_store_missing"
+        )
+        self.assertEqual(
+            repeat["operator_action"],
+            "create_and_review_fresh_replace_existing_plan",
+        )
+        self.assertFalse(repeat["credential_id_present"])
+        self.assertEqual(self.native.prompts, prompts_before)
+        self.assertEqual(len(self.native.writes), writes_before)
+        self.assertEqual(len(first_transport.calls), provider_calls_before)
+
+        replacement_transport = intake_transport()
+        replacement_plan = make_plan(
+            replace_existing=True,
+            request_id_factory=lambda: "intake_explicit_replacement12345",
+        )
+        replacement = execute_windows_notion_credential_adoption(
+            self.root,
+            replacement_plan,
+            expected_plan_digest=str(replacement_plan["plan_digest"]),
+            expected_archive_id=ARCHIVE_ID,
+            reviewed_anchor_uuid=ANCHOR,
+            requested_capabilities=CAPABILITIES,
+            approved=True,
+            worker_spawner=InjectedCredentialAdoptionWorkerSpawner(
+                native=self.native,
+                notion_adapter=NotionHttpAdapter(transport=replacement_transport),
+                key_provider=self.key_provider,
+                now_factory=lambda: NOW,
+                credential_id_factory=lambda: "cred_replacement1234567890",
+                backend_id_factory=lambda: "backend_replacement1234567890",
+            ),
+        )
+        self.assertTrue(replacement["ok"])
+        self.assertTrue(replacement["persisted"])
+        self.assertEqual(self.native.prompts, prompts_before + 1)
+
+    def test_repeat_adoption_store_probe_failure_never_prompts_or_calls_provider(self) -> None:
+        first, first_transport = self._adopt()
+        self.assertTrue(first["ok"])
+        prompts_before = self.native.prompts
+        writes_before = len(self.native.writes)
+        provider_calls_before = len(first_transport.calls)
+        secret_targets = [
+            target
+            for target in self.native.values
+            if "/backend_" in target and "backend_key_" not in target
+        ]
+        self.assertEqual(len(secret_targets), 1)
+        self.native.probe_fail_targets.add(secret_targets[0])
+
+        repeat_plan = make_plan(
+            request_id_factory=lambda: "intake_probe_failure_no_prompt123"
+        )
+        repeat = execute_windows_notion_credential_adoption(
+            self.root,
+            repeat_plan,
+            expected_plan_digest=str(repeat_plan["plan_digest"]),
+            expected_archive_id=ARCHIVE_ID,
+            reviewed_anchor_uuid=ANCHOR,
+            requested_capabilities=CAPABILITIES,
+            approved=True,
+            worker_spawner=InjectedCredentialAdoptionWorkerSpawner(
+                native=self.native,
+                notion_adapter=NotionHttpAdapter(transport=first_transport),
+                key_provider=self.key_provider,
+                now_factory=lambda: NOW,
+            ),
+        )
+        self.assertFalse(repeat["ok"])
+        self.assertEqual(
+            repeat["reason_code"],
+            "credential_adoption_existing_store_probe_failed",
+        )
+        self.assertEqual(self.native.prompts, prompts_before)
+        self.assertEqual(len(self.native.writes), writes_before)
+        self.assertEqual(len(first_transport.calls), provider_calls_before)
+
+    def test_repeat_adoption_rejects_replaced_secret_before_provider_or_prompt(self) -> None:
+        first, _first_transport = self._adopt()
+        self.assertTrue(first["ok"])
+        secret_targets = [
+            target
+            for target in self.native.values
+            if "/backend_" in target and "backend_key_" not in target
+        ]
+        self.assertEqual(len(secret_targets), 1)
+        self.native.values[secret_targets[0]] = bytearray(b"different synthetic token")
+        prompts_before = self.native.prompts
+        writes_before = len(self.native.writes)
+        repeat_transport = FakeTransport([])
+
+        repeat_plan = make_plan(
+            request_id_factory=lambda: "intake_replaced_store_no_prompt1"
+        )
+        repeat = execute_windows_notion_credential_adoption(
+            self.root,
+            repeat_plan,
+            expected_plan_digest=str(repeat_plan["plan_digest"]),
+            expected_archive_id=ARCHIVE_ID,
+            reviewed_anchor_uuid=ANCHOR,
+            requested_capabilities=CAPABILITIES,
+            approved=True,
+            worker_spawner=InjectedCredentialAdoptionWorkerSpawner(
+                native=self.native,
+                notion_adapter=NotionHttpAdapter(transport=repeat_transport),
+                key_provider=self.key_provider,
+                now_factory=lambda: NOW,
+            ),
+        )
+        self.assertFalse(repeat["ok"])
+        self.assertEqual(
+            repeat["reason_code"],
+            "credential_adoption_existing_store_fingerprint_mismatch",
+        )
+        self.assertEqual(self.native.prompts, prompts_before)
+        self.assertEqual(len(self.native.writes), writes_before)
+        self.assertEqual(repeat_transport.calls, [])
+        self.assertNotIn(SECRET_TEXT, json.dumps(repeat, ensure_ascii=False))
+
+    def test_repeat_adoption_exact_secret_read_failure_never_prompts(self) -> None:
+        first, _first_transport = self._adopt()
+        self.assertTrue(first["ok"])
+        secret_targets = [
+            target
+            for target in self.native.values
+            if "/backend_" in target and "backend_key_" not in target
+        ]
+        self.assertEqual(len(secret_targets), 1)
+        self.native.read_fail_targets.add(secret_targets[0])
+        prompts_before = self.native.prompts
+        repeat_transport = FakeTransport([])
+
+        repeat_plan = make_plan(
+            request_id_factory=lambda: "intake_store_read_failure12345"
+        )
+        repeat = execute_windows_notion_credential_adoption(
+            self.root,
+            repeat_plan,
+            expected_plan_digest=str(repeat_plan["plan_digest"]),
+            expected_archive_id=ARCHIVE_ID,
+            reviewed_anchor_uuid=ANCHOR,
+            requested_capabilities=CAPABILITIES,
+            approved=True,
+            worker_spawner=InjectedCredentialAdoptionWorkerSpawner(
+                native=self.native,
+                notion_adapter=NotionHttpAdapter(transport=repeat_transport),
+                key_provider=self.key_provider,
+                now_factory=lambda: NOW,
+            ),
+        )
+        self.assertFalse(repeat["ok"])
+        self.assertEqual(
+            repeat["reason_code"],
+            "credential_adoption_existing_store_probe_failed",
+        )
+        self.assertEqual(self.native.prompts, prompts_before)
+        self.assertEqual(repeat_transport.calls, [])
+
+    def test_repeat_adoption_revalidates_the_current_reviewed_anchor(self) -> None:
+        first, _first_transport = self._adopt()
+        self.assertTrue(first["ok"])
+        different_anchor = str(uuid.UUID(int=103))
+        repeat_transport = FakeTransport(
+            [
+                FakeResponse(
+                    {
+                        "object": "user",
+                        "id": USER_ID,
+                        "type": "bot",
+                        "bot": {"workspace_id": WORKSPACE_ID},
+                    }
+                ),
+                FakeResponse({"object": "error"}, status=404),
+            ]
+        )
+        prompts_before = self.native.prompts
+
+        repeat_plan = make_plan(
+            reviewed_anchor_uuid=different_anchor,
+            request_id_factory=lambda: "intake_changed_anchor_no_prompt12",
+        )
+        repeat = execute_windows_notion_credential_adoption(
+            self.root,
+            repeat_plan,
+            expected_plan_digest=str(repeat_plan["plan_digest"]),
+            expected_archive_id=ARCHIVE_ID,
+            reviewed_anchor_uuid=different_anchor,
+            requested_capabilities=CAPABILITIES,
+            approved=True,
+            worker_spawner=InjectedCredentialAdoptionWorkerSpawner(
+                native=self.native,
+                notion_adapter=NotionHttpAdapter(transport=repeat_transport),
+                key_provider=self.key_provider,
+                now_factory=lambda: NOW,
+            ),
+        )
+        self.assertFalse(repeat["ok"])
+        self.assertEqual(
+            repeat["reason_code"],
+            "credential_adoption_existing_scope_revalidation_failed",
+        )
+        self.assertEqual(
+            repeat["operator_action"],
+            "review_current_notion_anchor_and_connection_before_retry",
+        )
+        self.assertEqual(self.native.prompts, prompts_before)
+        self.assertEqual(len(repeat_transport.calls), 2)
+        self.assertNotIn(different_anchor, json.dumps(repeat, ensure_ascii=False))
 
     def test_archive_identity_drift_blocks_before_sid_key_ui_or_provider(self) -> None:
         plan = make_plan()
@@ -930,6 +1833,7 @@ class CredentialWorkflowEndToEndTests(unittest.TestCase):
         transport = intake_transport(include_recovery=True)
         adopted, _ = self._adopt(transport=transport)
         self.assertTrue(adopted["ok"])
+        self.assertEqual(self.native.prompts, 1)
         initial_list = list_authenticated_secure_credentials(
             self.root,
             native=self.native,
@@ -967,6 +1871,7 @@ class CredentialWorkflowEndToEndTests(unittest.TestCase):
             key_provider=self.key_provider,
         )
         self.assertTrue(lifecycle["ok"])
+        self.assertEqual(self.native.prompts, 1)
         self.assertEqual(lifecycle["status"], "decision_recorded")
         self.assertFalse(lifecycle["delete_performed"])
         self.assertFalse(lifecycle["revoke_performed"])
@@ -1028,6 +1933,7 @@ class CredentialWorkflowEndToEndTests(unittest.TestCase):
         self.assertEqual(len(derived_fingerprint_keys), 1)
         self.assertTrue(all(value == 0 for value in derived_fingerprint_keys[0]))
         self.assertEqual(len(transport.calls), 5)
+        self.assertEqual(self.native.prompts, 1)
 
         native_reads_before = len(self.native.reads)
         provider_calls_before = len(transport.calls)
@@ -1046,6 +1952,7 @@ class CredentialWorkflowEndToEndTests(unittest.TestCase):
         self.assertEqual(replay["operations"]["credential_reads"], 0)
         self.assertEqual(len(self.native.reads), native_reads_before)
         self.assertEqual(len(transport.calls), provider_calls_before)
+        self.assertEqual(self.native.prompts, 1)
 
     def test_spawned_recovery_projection_rejects_child_covert_channels(self) -> None:
         manifest = make_manifest(
